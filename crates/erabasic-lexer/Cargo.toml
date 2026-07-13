@@ -1,0 +1,12 @@
+[package]
+name = "erabasic-lexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+erabasic-ast = { path = "../erabasic-ast" }
+
+[lints]
+workspace = true
+

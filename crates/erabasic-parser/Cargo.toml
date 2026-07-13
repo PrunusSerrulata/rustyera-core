@@ -1,0 +1,13 @@
+[package]
+name = "erabasic-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+erabasic-ast = { path = "../erabasic-ast" }
+erabasic-lexer = { path = "../erabasic-lexer" }
+
+[lints]
+workspace = true
+

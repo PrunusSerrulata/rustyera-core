@@ -1,0 +1,18 @@
+[package]
+name = "erabasic-repl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rustyera"
+path = "src/main.rs"
+
+[dependencies]
+erabasic-ast = { path = "../erabasic-ast" }
+erabasic-lexer = { path = "../erabasic-lexer" }
+erabasic-parser = { path = "../erabasic-parser" }
+
+[lints]
+workspace = true
+
