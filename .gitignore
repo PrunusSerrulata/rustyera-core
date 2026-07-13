@@ -1,12 +1,16 @@
-/target
-#/reference
-Cargo.lock
+.vs/*
+.vscode/*
+.idea/*
 .DS_Store
-/tools/**/bin
-/tools/**/obj
+
+/target
+Cargo.lock
+
+#/reference
 
 # Local Emuera reference oracle, its macOS/Wine harness, and generated output.
 #/tools/emuera-reference-cli/
-
+/tools/**/bin
+/tools/**/obj
 /.wine-prefix/
 /.wine-tmp/
