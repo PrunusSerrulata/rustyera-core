@@ -2,8 +2,8 @@
 //! `RustyEra` runtime components.
 //!
 //! This crate deliberately does not know how CSV files are discovered or parsed. It
-//! represents project-loading results as deterministic Serde values. A Rust validator,
-//! VM, and runtime are outside the current implementation.
+//! represents project-loading results as deterministic Serde values. The VM consumes
+//! this contract, while the higher-level runtime remains a separate component.
 
 mod catalog;
 mod deferred;

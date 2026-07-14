@@ -51,5 +51,14 @@ pub struct HostImport {
     pub import: RuntimeImport,
     pub effect: HostEffect,
     pub capability: HostCapability,
-    pub snapshot_safe: bool,
+    /// This is the maximum wait stability the host is allowed to report. The
+    /// result of an individual call can still downgrade a wait to transient.
+    pub snapshot_capability: HostSnapshotCapability,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostSnapshotCapability {
+    Never,
+    StableWait,
 }

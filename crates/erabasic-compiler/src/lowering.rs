@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use erabasic_ast::{AssignOp, BinaryOp, PostfixOp, UnaryOp};
 use erabasic_bytecode::{
-    BytecodeFunction, BytecodeType, Digest, EncodedInstruction, FunctionImport, HostEffect,
-    HostImport, ImportKind, NativeImport, Opcode, RuntimeImport, SourceMapEntry, SymbolKey, opcode,
+    BytecodeFunction, BytecodeParameter, BytecodeType, Digest, EncodedInstruction, FunctionImport,
+    HostEffect, HostImport, ImportKind, NativeImport, Opcode, RuntimeImport, SourceMapEntry,
+    SymbolKey, opcode,
 };
 use erabasic_hir::{
     CallTarget, ControlFlowKind, Function, FunctionId, HirArgument, HirExpr, HirExprKind,
@@ -172,7 +173,18 @@ pub(crate) fn lower_function(
     let parameters = function
         .parameters
         .iter()
-        .filter_map(|parameter| bytecode_type(parameter.target.value_type))
+        .filter_map(|parameter| {
+            let variable = context
+                .program
+                .variables
+                .get(parameter.target.variable.0 as usize)?;
+            let value_type = bytecode_type(parameter.target.value_type)?;
+            Some(BytecodeParameter {
+                key: *context.variable_keys.get(&parameter.target.variable)?,
+                value_type,
+                by_reference: variable.reference,
+            })
+        })
         .collect();
     let result = bytecode_type(function.return_type);
     LoweredFunction {
@@ -705,7 +717,7 @@ impl<'a> Builder<'a> {
                 import,
                 effect: binding.effect,
                 capability: binding.capability,
-                snapshot_safe: binding.snapshot_safe,
+                snapshot_capability: binding.snapshot_capability,
             });
             let index = self.add_import(ImportKind::Host, key);
             self.emit(

@@ -1,4 +1,4 @@
-//! Stable executable representation used between the compiler and a future VM.
+//! Stable executable representation used between the compiler and VM.
 //!
 //! The persisted format is deliberately independent from Rust's memory layout.
 //! Host-facing operations all use [`Opcode::CallHost`]; presentation or device
@@ -14,12 +14,14 @@ mod source_map;
 mod version;
 
 pub use artifact::{
-    ArtifactManifest, BytecodeArtifact, BytecodeFunction, BytecodeGlobal, DecodeLimits,
-    FunctionImport, ImportKind, UnvalidatedArtifact,
+    ArtifactManifest, BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeGlobal,
+    BytecodeParameter, BytecodePersistence, BytecodeStorage, DecodeLimits, FunctionImport,
+    ImportKind, UnvalidatedArtifact,
 };
 pub use codec::{DecodeError, EncodeError, decode_artifact, encode_artifact};
 pub use host::{
-    HostCapability, HostEffect, HostImport, NativeImport, RuntimeImport, RuntimeImportKind,
+    HostCapability, HostEffect, HostImport, HostSnapshotCapability, NativeImport, RuntimeImport,
+    RuntimeImportKind,
 };
 pub use ids::{Digest, SymbolKey};
 pub use isa::{BytecodeType, EncodedInstruction, Opcode, opcode};

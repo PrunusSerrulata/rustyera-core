@@ -2,10 +2,15 @@ use std::collections::BTreeMap;
 
 use erabasic_analyzer::AnalyzedProject;
 use erabasic_bytecode::{
-    ArtifactManifest, BytecodeArtifact, BytecodeGlobal, BytecodePatch, BytecodeType, Digest,
-    HostImport, NativeImport, SourceMap, SourceRecord, SymbolKey, create_patch,
+    ArtifactManifest, BytecodeArtifact, BytecodeConstant, BytecodeGlobal, BytecodePatch,
+    BytecodePersistence, BytecodeStorage, BytecodeType, Digest, HostImport, NativeImport,
+    SourceMap, SourceRecord, SymbolKey, create_patch,
 };
-use erabasic_hir::{Function, FunctionId, FunctionKind, SemanticType, Variable, VariableId};
+use erabasic_data::{Persistence, StorageScope};
+use erabasic_hir::{
+    ConstantValue, Function, FunctionId, FunctionKind, SemanticType, Variable, VariableId,
+    VariableScope,
+};
 use erabasic_validator::{ValidationContext, validate_bytecode, validate_hir};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -213,7 +218,7 @@ pub fn compile_project(
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(compiler_options),
         project_data: project.data.clone(),
-        globals: globals(&project.program.variables, &variable_keys),
+        globals: globals(&project.program.variables, &variable_keys, &function_keys),
         native_imports: native_imports.into_values().collect(),
         host_imports: host_imports.into_values().collect(),
         functions: cached
@@ -348,23 +353,22 @@ fn variable_keys(
             let owner = variable
                 .owner
                 .and_then(|owner| functions.get(&owner).copied());
-            let identity = serde_json::to_vec(&(
-                variable.name.to_ascii_uppercase(),
-                variable.scope,
-                owner,
-                variable.value_type,
-                &variable.dimensions,
-            ))
-            .expect("variable identity is serializable");
+            let identity =
+                serde_json::to_vec(&(variable.name.to_ascii_uppercase(), variable.scope, owner))
+                    .expect("variable identity is serializable");
             (
                 variable.id,
-                SymbolKey::derive("rustyera.bytecode.variable.v1", &identity),
+                SymbolKey::derive("rustyera.bytecode.variable.v2", &identity),
             )
         })
         .collect()
 }
 
-fn globals(variables: &[Variable], keys: &BTreeMap<VariableId, SymbolKey>) -> Vec<BytecodeGlobal> {
+fn globals(
+    variables: &[Variable],
+    keys: &BTreeMap<VariableId, SymbolKey>,
+    functions: &BTreeMap<FunctionId, SymbolKey>,
+) -> Vec<BytecodeGlobal> {
     variables
         .iter()
         .filter_map(|variable| {
@@ -378,9 +382,52 @@ fn globals(variables: &[Variable], keys: &BTreeMap<VariableId, SymbolKey>) -> Ve
                     .map(|dimension| *dimension as u64)
                     .collect(),
                 mutable: variable.mutable,
+                storage: variable_storage(variable),
+                persistence: persistence(variable.persistence),
+                initial_values: variable
+                    .initial_values
+                    .iter()
+                    .map(|value| match value {
+                        ConstantValue::Integer(value) => BytecodeConstant::Integer(*value),
+                        ConstantValue::String(value) => BytecodeConstant::String(value.clone()),
+                    })
+                    .collect(),
+                owner: variable
+                    .owner
+                    .and_then(|owner| functions.get(&owner).copied()),
             })
         })
         .collect()
+}
+
+const fn variable_storage(variable: &Variable) -> BytecodeStorage {
+    if matches!(
+        variable.scope,
+        VariableScope::Function | VariableScope::Parameter
+    ) {
+        return if variable.static_lifetime {
+            BytecodeStorage::FunctionStatic
+        } else {
+            BytecodeStorage::FunctionLocal
+        };
+    }
+    match variable.storage {
+        StorageScope::Normal | StorageScope::Global | StorageScope::Local => {
+            BytecodeStorage::Project
+        }
+        StorageScope::Character => BytecodeStorage::Character,
+        StorageScope::Constant => BytecodeStorage::Constant,
+        StorageScope::Calculated => BytecodeStorage::Calculated,
+    }
+}
+
+const fn persistence(value: Persistence) -> BytecodePersistence {
+    match value {
+        Persistence::None => BytecodePersistence::None,
+        Persistence::GameSave => BytecodePersistence::GameSave,
+        Persistence::GlobalSave => BytecodePersistence::GlobalSave,
+        Persistence::ExtendedSave => BytecodePersistence::ExtendedSave,
+    }
 }
 
 const fn function_kind_tag(kind: FunctionKind) -> u8 {

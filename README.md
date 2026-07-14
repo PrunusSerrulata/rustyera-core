@@ -25,6 +25,7 @@ The workspace currently contains these implemented components:
 | `erabasic-bytecode` | Versioned VM-native instructions, the single `CallHost` boundary, source maps, canonical `.erbc` containers, and patches. |
 | `erabasic-compiler` | Deterministic parallel HIR lowering with function-level incremental reuse. |
 | `erabasic-validator` | Structural, type, control-flow, stack, capability, and ABI validation for HIR and untrusted bytecode. |
+| `erabasic-vm` | Deterministic interpretation, cooperative multi-fiber scheduling, Host/native calls, snapshots, traditional save-state views, and generation-pinned hot reload. |
 | `erabasic-repl` | A small development REPL for manually inspecting lexer and parser behavior. |
 
 The currently implemented data flows are:
@@ -39,6 +40,8 @@ ProjectData + frontend ERH/ERB paths + UTF-8 contents/I/O errors
 
 AnalyzedProject -> erabasic-compiler -> erabasic-validator
     -> self-contained .erbc bytes + incremental cache/patch
+
+ValidatedArtifact -> erabasic-vm <-> runtime-provided Host/native services
 ```
 
 Public types are re-exported from each crate root. Larger implementations are split
@@ -46,14 +49,14 @@ into modules by syntax, data domain, executable format, or compilation phase.
 
 ## Scope and unimplemented components
 
-The Rust implementation does **not** currently include a VM or runtime.
+The Rust implementation does **not** currently include the host runtime.
 
 The parser still produces a syntax AST. `ParserContext` supports syntax decisions
 that depend on registries, while `erabasic-analyzer` owns the project-level semantic
 passes and produces HIR. CSV loading checks and normalizes project data, but it is
 separate from executable artifact validation. The C# reference CLI can invoke Emuera's existing evaluator
-and VM for oracle purposes; those operations do not imply equivalent Rust components
-exist.
+and VM for oracle purposes. The Rust VM is a separate implementation; the reference
+runtime operations do not imply that an equivalent Rust runtime exists.
 
 RustyEra does not implement a concrete application frontend: no GUI, TUI, game
 launcher, filesystem scanner, renderer, audio system, or input loop belongs in
@@ -75,15 +78,15 @@ receive dedicated VM opcodes.
 
 Decoded bytes are intentionally returned as `UnvalidatedArtifact`. A caller must bind
 the declared native and Host imports and pass the value through `validate_bytecode`
-before a future VM may execute it. Source maps resolve function/code offsets to a
+before `erabasic-vm` may execute it. Source maps resolve function/code offsets to a
 relative path, UTF-8 byte span, line, and byte column.
 
 The intended project boundary is a runtime library plus public interfaces
 between that runtime and an external frontend. The frontend owns filesystem
 I/O and submits relative paths together with decoded UTF-8 content or the I/O
-error it observed. The current repository implements the project-loading side
-of that boundary; the runtime side will be defined when the runtime is
-implemented. No specific frontend architecture is prescribed here.
+error it observed. The VM is already runtime-independent; the higher-level runtime
+and its frontend event contract remain to be implemented. No specific frontend
+architecture is prescribed here.
 
 ## Library use
 

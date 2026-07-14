@@ -10,6 +10,7 @@ use crate::{
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BytecodePatch {
+    pub base_artifact_id: Digest,
     pub base_execution_id: Digest,
     pub target_manifest: ArtifactManifest,
     pub project_data: Option<ProjectData>,
@@ -48,6 +49,7 @@ pub fn create_patch(base: &BytecodeArtifact, target: &BytecodeArtifact) -> Bytec
         .map(|function| (function.key, function))
         .collect();
     BytecodePatch {
+        base_artifact_id: base.manifest.artifact_id,
         base_execution_id: base.manifest.program_version.execution_id,
         target_manifest: target.manifest.clone(),
         project_data: (base.project_data != target.project_data)
@@ -73,7 +75,7 @@ pub fn create_patch(base: &BytecodeArtifact, target: &BytecodeArtifact) -> Bytec
     }
 }
 
-/// Apply a patch only to the exact base execution identity it names.
+/// Apply a patch only to the exact base artifact and execution identity it names.
 ///
 /// # Errors
 ///
@@ -82,7 +84,9 @@ pub fn apply_patch(
     base: &BytecodeArtifact,
     patch: &BytecodePatch,
 ) -> Result<BytecodeArtifact, PatchError> {
-    if base.manifest.program_version.execution_id != patch.base_execution_id {
+    if base.manifest.artifact_id != patch.base_artifact_id
+        || base.manifest.program_version.execution_id != patch.base_execution_id
+    {
         return Err(PatchError::BaseMismatch);
     }
     let mut functions: BTreeMap<_, _> = base

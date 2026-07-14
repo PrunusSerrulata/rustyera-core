@@ -2,9 +2,9 @@ use erabasic_data::ProjectData;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    COMPILER_ABI_VERSION, CONTAINER_VERSION, Digest, FormatVersion, HOST_ABI_VERSION, HostImport,
-    ISA_VERSION, NATIVE_ABI_VERSION, NativeImport, ProgramVersion, SourceMap, SymbolKey,
-    VM_ABI_VERSION,
+    BytecodeType, COMPILER_ABI_VERSION, CONTAINER_VERSION, Digest, FormatVersion, HOST_ABI_VERSION,
+    HostImport, ISA_VERSION, NATIVE_ABI_VERSION, NativeImport, ProgramVersion, SourceMap,
+    SymbolKey, VM_ABI_VERSION,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -21,6 +21,35 @@ pub struct FunctionImport {
     pub key: SymbolKey,
 }
 
+/// The storage class is explicit in bytecode so a VM never has to reconstruct
+/// lifetime rules from source names or project CSV metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BytecodeStorage {
+    Project,
+    FunctionLocal,
+    FunctionStatic,
+    Character,
+    Constant,
+    Calculated,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BytecodePersistence {
+    None,
+    GameSave,
+    GlobalSave,
+    ExtendedSave,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum BytecodeConstant {
+    Integer(i64),
+    String(String),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BytecodeGlobal {
     pub key: SymbolKey,
@@ -28,14 +57,26 @@ pub struct BytecodeGlobal {
     pub value_type: crate::BytecodeType,
     pub dimensions: Vec<u64>,
     pub mutable: bool,
+    pub storage: BytecodeStorage,
+    pub persistence: BytecodePersistence,
+    pub initial_values: Vec<BytecodeConstant>,
+    /// Function-local and function-static variables name their owning function.
+    pub owner: Option<SymbolKey>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BytecodeParameter {
+    pub key: SymbolKey,
+    pub value_type: BytecodeType,
+    pub by_reference: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BytecodeFunction {
     pub key: SymbolKey,
     pub name: String,
-    pub parameters: Vec<crate::BytecodeType>,
-    pub result: Option<crate::BytecodeType>,
+    pub parameters: Vec<BytecodeParameter>,
+    pub result: Option<BytecodeType>,
     pub imports: Vec<FunctionImport>,
     pub code: Vec<crate::EncodedInstruction>,
     pub max_stack: u32,

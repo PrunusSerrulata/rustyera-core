@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use erabasic_bytecode::{
-    BytecodeArtifact, BytecodeFunction, BytecodeType, COMPILER_ABI_VERSION, CONTAINER_VERSION,
-    FormatVersion, HOST_ABI_VERSION, HostCapability, HostImport, ISA_VERSION, ImportKind,
-    NATIVE_ABI_VERSION, NativeImport, Opcode, SymbolKey, UnvalidatedArtifact, VM_ABI_VERSION,
-    opcode,
+    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeStorage, BytecodeType,
+    COMPILER_ABI_VERSION, CONTAINER_VERSION, FormatVersion, HOST_ABI_VERSION, HostCapability,
+    HostImport, ISA_VERSION, ImportKind, NATIVE_ABI_VERSION, NativeImport, Opcode, SymbolKey,
+    UnvalidatedArtifact, VM_ABI_VERSION, opcode,
 };
 
 use crate::{ValidationCode, ValidationDiagnostic, ValidationLimits, ValidationReport};
@@ -155,6 +155,28 @@ fn validate_limits(
             "artifact exceeds a project resource limit",
         ));
     }
+    let mut total_elements = 0u64;
+    for global in &artifact.globals {
+        let elements = global
+            .dimensions
+            .iter()
+            .try_fold(1u64, |total, dimension| total.checked_mul(*dimension));
+        if global.dimensions.len() > limits.maximum_dimensions_per_variable
+            || elements.is_none_or(|elements| elements > limits.maximum_elements_per_variable)
+        {
+            diagnostics.push(ValidationDiagnostic::project(
+                ValidationCode::ResourceLimit,
+                format!("variable {} exceeds a storage resource limit", global.name),
+            ));
+        }
+        total_elements = total_elements.saturating_add(elements.unwrap_or(u64::MAX));
+    }
+    if total_elements > limits.maximum_total_variable_elements {
+        diagnostics.push(ValidationDiagnostic::project(
+            ValidationCode::ResourceLimit,
+            "artifact exceeds the total variable storage limit",
+        ));
+    }
     for function in &artifact.functions {
         if function.code.len() > limits.maximum_instructions_per_function
             || function.imports.len() > limits.maximum_imports_per_function
@@ -195,24 +217,7 @@ fn validate_symbols(
         "global",
         diagnostics,
     );
-    ensure_unique(
-        artifact.functions.iter().map(|function| function.key),
-        "function",
-        diagnostics,
-    );
-    ensure_unique(
-        artifact
-            .native_imports
-            .iter()
-            .map(|import| import.import.key),
-        "native import",
-        diagnostics,
-    );
-    ensure_unique(
-        artifact.host_imports.iter().map(|import| import.import.key),
-        "host import",
-        diagnostics,
-    );
+    validate_runtime_layout(artifact, diagnostics);
     for import in &artifact.native_imports {
         if context.native_imports.get(&import.import.key) != Some(import) {
             diagnostics.push(ValidationDiagnostic::project(
@@ -241,6 +246,91 @@ fn validate_symbols(
             ));
         }
     }
+}
+
+fn validate_runtime_layout(
+    artifact: &BytecodeArtifact,
+    diagnostics: &mut Vec<ValidationDiagnostic>,
+) {
+    let function_keys: BTreeSet<_> = artifact
+        .functions
+        .iter()
+        .map(|function| function.key)
+        .collect();
+    for global in &artifact.globals {
+        let function_storage = matches!(
+            global.storage,
+            BytecodeStorage::FunctionLocal | BytecodeStorage::FunctionStatic
+        );
+        if function_storage != global.owner.is_some()
+            || global
+                .owner
+                .is_some_and(|owner| !function_keys.contains(&owner))
+            || (global.storage != BytecodeStorage::Calculated && global.dimensions.contains(&0))
+        {
+            diagnostics.push(ValidationDiagnostic::project(
+                ValidationCode::InvalidOperand,
+                format!("variable {} has an invalid runtime layout", global.name),
+            ));
+        }
+        let element_count = global
+            .dimensions
+            .iter()
+            .try_fold(1u64, |total, dimension| total.checked_mul(*dimension))
+            .unwrap_or(0);
+        let initial_types_match = global.initial_values.iter().all(|value| {
+            matches!(
+                (global.value_type, value),
+                (BytecodeType::Integer, BytecodeConstant::Integer(_))
+                    | (BytecodeType::String, BytecodeConstant::String(_))
+            )
+        });
+        if !initial_types_match || global.initial_values.len() as u64 > element_count {
+            diagnostics.push(ValidationDiagnostic::project(
+                ValidationCode::TypeMismatch,
+                format!("variable {} has invalid initial values", global.name),
+            ));
+        }
+    }
+    for function in &artifact.functions {
+        let mut parameter_keys = BTreeSet::new();
+        for parameter in &function.parameters {
+            let valid = parameter_keys.insert(parameter.key)
+                && artifact.globals.iter().any(|global| {
+                    global.key == parameter.key
+                        && global.owner == Some(function.key)
+                        && global.storage == BytecodeStorage::FunctionLocal
+                        && global.value_type == parameter.value_type
+                });
+            if !valid {
+                diagnostics.push(ValidationDiagnostic::project(
+                    ValidationCode::InvalidOperand,
+                    format!(
+                        "function {} has an invalid parameter binding",
+                        function.name
+                    ),
+                ));
+            }
+        }
+    }
+    ensure_unique(
+        artifact.functions.iter().map(|function| function.key),
+        "function",
+        diagnostics,
+    );
+    ensure_unique(
+        artifact
+            .native_imports
+            .iter()
+            .map(|import| import.import.key),
+        "native import",
+        diagnostics,
+    );
+    ensure_unique(
+        artifact.host_imports.iter().map(|import| import.import.key),
+        "host import",
+        diagnostics,
+    );
 }
 
 fn ensure_unique(
@@ -590,7 +680,14 @@ fn apply_instruction(
                         ValidationCode::MissingReference,
                         "called function does not resolve".into(),
                     ))?;
-                    (target.parameters.clone(), target.result)
+                    (
+                        target
+                            .parameters
+                            .iter()
+                            .map(|parameter| parameter.value_type)
+                            .collect(),
+                        target.result,
+                    )
                 }
                 (Opcode::CallNative, ImportKind::Native) => {
                     let target = native.get(&import.key).ok_or((

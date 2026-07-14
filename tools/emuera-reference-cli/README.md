@@ -8,9 +8,10 @@ modal dialog. The wrapper is intended for differential tests, not as a
 replacement game launcher.
 
 This tool exposes semantic analysis and VM behavior from the **C# reference
-implementation**. RustyEra does not yet implement a Rust semantic analyzer,
-bytecode, compiler, validator, VM, or runtime; successful calls to these oracle
-operations must not be described as Rust implementation progress.
+implementation**. RustyEra now has separate Rust analyzer, bytecode, compiler,
+validator, and VM crates, but not the higher-level runtime; successful oracle calls
+must not be described as validation of a Rust component without a matching
+differential comparison.
 
 ## Build and run
 
