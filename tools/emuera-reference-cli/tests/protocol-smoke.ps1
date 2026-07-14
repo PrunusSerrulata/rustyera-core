@@ -62,6 +62,12 @@ try {
     Assert-True $load.ok "fixture game failed to load"
     Assert-True ($load.result.termination -eq "waitingInput") "fixture title did not request input"
 
+    $project = Invoke-Oracle @{ id = "project"; op = "analyzeProject" }
+    Assert-True $project.ok "project semantic projection failed"
+    Assert-True (($project.result.functions.name -contains "SYSTEM_TITLE") -and
+        ($project.result.functions.name -contains "ORACLE_TEST") -and
+        ($project.result.functions.name -contains "ORACLE_INPUT")) "project function projection differs"
+
     $varSize = Invoke-Oracle @{ id = "csv-varsize"; op = "eval"; source = 'VARSIZE("ABL")' }
     Assert-True ($varSize.ok -and $varSize.result.value -eq 120) "VariableSize.CSV did not resize ABL"
     $nameIndex = Invoke-Oracle @{ id = "csv-name"; op = "eval"; source = 'GETNUM(ABL, "later")' }

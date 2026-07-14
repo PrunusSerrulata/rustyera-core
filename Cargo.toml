@@ -3,6 +3,8 @@ members = [
     "crates/erabasic-ast",
     "crates/erabasic-data",
     "crates/erabasic-csv",
+    "crates/erabasic-hir",
+    "crates/erabasic-analyzer",
     "crates/erabasic-lexer",
     "crates/erabasic-parser",
     "crates/erabasic-repl",

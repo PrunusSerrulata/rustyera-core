@@ -1,6 +1,6 @@
 use erabasic_ast::{
-    Argument, Diagnostic, DiagnosticCode, Directive, Expr, ExprKind, Function, Parameter,
-    ParseOutput, Script, SourceKind, Span, Statement, StatementKind,
+    Diagnostic, DiagnosticCode, Directive, Function, Parameter, ParseOutput, Script, SourceKind,
+    Span, Statement, StatementKind,
 };
 use erabasic_lexer::{LexEnd, LexFlags, MacroTable, Operator, Token, TokenKind, lex_with};
 
@@ -8,7 +8,9 @@ use crate::context::ParserContext;
 use crate::expression::ExpressionParser;
 use crate::line::{parse_directive, parse_line_at};
 use crate::preprocessor::{PreprocessorFrame, handle_preprocessor};
-use crate::util::{lines_with_offsets, shift_diagnostics, shift_tokens, split_top_level};
+use crate::util::{
+    expr_to_variable, lines_with_offsets, shift_diagnostics, shift_tokens, split_top_level,
+};
 
 pub fn parse_erh(source: &str, context: &mut dyn ParserContext) -> ParseOutput<Script> {
     parse_script(source, SourceKind::Erh, context)
@@ -146,30 +148,56 @@ fn parse_function_header(
         }
     };
     let mut parameters = Vec::new();
-    for segment in split_top_level(tokens.get(1..).unwrap_or_default(), ',') {
-        let Some(Token {
-            kind: TokenKind::Identifier(param_name),
-            span,
-            ..
-        }) = segment.first()
-        else {
+    let tail = tokens.get(1..).unwrap_or_default();
+    let parameter_tokens = if matches!(
+        tail.first().map(|token| &token.kind),
+        Some(TokenKind::Symbol('('))
+    ) && matches!(
+        tail.last().map(|token| &token.kind),
+        Some(TokenKind::Symbol(')'))
+    ) {
+        &tail[1..tail.len().saturating_sub(1)]
+    } else if matches!(
+        tail.first().map(|token| &token.kind),
+        Some(TokenKind::Symbol(','))
+    ) {
+        &tail[1..]
+    } else {
+        &[]
+    };
+    for segment in split_top_level(parameter_tokens, ',') {
+        let assignment = segment
+            .iter()
+            .position(|token| matches!(token.kind, TokenKind::Operator(Operator::Assign)));
+        let left_tokens = assignment.map_or(segment, |index| &segment[..index]);
+        let mut left_parser = ExpressionParser::new(left_tokens);
+        let target = left_parser.parse().and_then(expr_to_variable);
+        let Some(target) = target else {
             continue;
         };
-        let default = segment
-            .iter()
-            .position(|token| matches!(token.kind, TokenKind::Operator(Operator::Assign)))
-            .and_then(|index| ExpressionParser::new(&segment[index + 1..]).parse());
+        let default =
+            assignment.and_then(|index| ExpressionParser::new(&segment[index + 1..]).parse());
         parameters.push(Parameter {
-            name: param_name.clone(),
+            name: target.name.clone(),
+            span: target.span,
+            target: Some(target),
             default,
             is_reference: false,
-            span: *span,
         });
     }
     ParseOutput {
         value: Some(Function {
             name,
             parameters,
+            raw_parameters: header_body
+                .get(
+                    tokens
+                        .first()
+                        .map_or(0, |token| token.span.end.saturating_sub(base + 1))..,
+                )
+                .unwrap_or_default()
+                .trim_start()
+                .to_string(),
             attributes: Vec::new(),
             body: Vec::new(),
             span: Span::new(base, base + source.len()),
@@ -209,7 +237,7 @@ fn apply_erh_directive(
             context.macros_mut().insert(name, lexed.tokens);
         }
         "DIM" | "DIMS" => {
-            if let Some(name) = directive.arguments.first().and_then(argument_identifier)
+            if let Some(name) = declaration_name(&directive.raw_arguments)
                 && !context.register_variable(name)
             {
                 diagnostics.push(Diagnostic::error(
@@ -223,14 +251,24 @@ fn apply_erh_directive(
     }
 }
 
-fn argument_identifier(argument: &Argument) -> Option<&str> {
-    match argument {
-        Argument::Expression(Expr {
-            kind: ExprKind::Identifier(name) | ExprKind::Variable { name, .. },
-            ..
-        }) => Some(name),
-        _ => None,
-    }
+fn declaration_name(source: &str) -> Option<&str> {
+    const KEYWORDS: &[&str] = &[
+        "CONST",
+        "REF",
+        "DYNAMIC",
+        "STATIC",
+        "GLOBAL",
+        "SAVEDATA",
+        "CHARADATA",
+    ];
+    source
+        .split(|character: char| character.is_whitespace() || matches!(character, ',' | '='))
+        .filter(|part| !part.is_empty())
+        .find(|part| {
+            !KEYWORDS
+                .iter()
+                .any(|keyword| part.eq_ignore_ascii_case(keyword))
+        })
 }
 
 fn check_structure(

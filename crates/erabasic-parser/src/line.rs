@@ -221,7 +221,12 @@ pub(crate) fn parse_directive(
     let name = rest[..name_end].to_uppercase();
     let args_text = rest[name_end..].trim_start();
     let offset = base + source.find(args_text).unwrap_or(source.len());
-    let style = if matches!(name.as_str(), "DEFINE") {
+    // Declaration grammars contain keywords, dimensions and initializers that are
+    // not one normal expression. Preserve them verbatim for the semantic pass.
+    let style = if matches!(
+        name.as_str(),
+        "DEFINE" | "DIM" | "DIMS" | "FUNCTION" | "FUNCTIONS"
+    ) {
         ArgumentStyle::Raw
     } else {
         ArgumentStyle::Expressions
@@ -231,6 +236,7 @@ pub(crate) fn parse_directive(
         value: Some(Directive {
             name,
             arguments: output.value.unwrap_or_default(),
+            raw_arguments: args_text.to_string(),
             span: Span::new(base, base + source.len()),
         }),
         diagnostics: output.diagnostics,

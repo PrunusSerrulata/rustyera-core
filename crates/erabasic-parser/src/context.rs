@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use erabasic_lexer::{LexerConfig, MacroTable};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ArgumentStyle {
     None,
     Expressions,
@@ -10,7 +11,7 @@ pub enum ArgumentStyle {
     Raw,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstructionSpec {
     pub argument_style: ArgumentStyle,
 }

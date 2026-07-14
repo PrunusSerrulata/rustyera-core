@@ -29,6 +29,7 @@ internal sealed class OracleService : IDisposable
                 "parseExpression" => ParseExpression(request, false),
                 "parseLine" => ParseLine(request, request["reduceArguments"]?.GetValue<bool>() == true),
                 "analyzeLine" => AnalyzeLine(request),
+                "analyzeProject" => host.AnalyzeProject(),
                 "load" => await host.Load(request),
                 "eval" => ParseExpression(request, true),
                 "execute" => host.Execute(request),
@@ -47,7 +48,7 @@ internal sealed class OracleService : IDisposable
     {
         ["protocol"] = "ndjson",
         ["platform"] = "windows",
-        ["operations"] = new JsonArray("capabilities", "reset", "lex", "parseExpression", "parseLine", "analyzeLine", "load", "eval", "execute", "run"),
+        ["operations"] = new JsonArray("capabilities", "reset", "lex", "parseExpression", "parseLine", "analyzeLine", "analyzeProject", "load", "eval", "execute", "run"),
         ["emueraVersion"] = AssemblyData.EmueraVersionText,
     };
 
