@@ -58,6 +58,7 @@ printf '%s\n' \
 jq -nc --arg gameDir "$FIXTURE_WINDOWS_PATH" \
     '{id:"wine-load",op:"load",gameDir:$gameDir}' >>"$REQUEST_FILE"
 printf '%s\n' \
+    '{"id":"wine-project","op":"analyzeProject"}' \
     '{"id":"wine-csv-varsize","op":"eval","source":"VARSIZE(\"ABL\")"}' \
     '{"id":"wine-csv-name","op":"eval","source":"GETNUM(ABL, \"later\")"}' \
     '{"id":"wine-csv-price","op":"eval","source":"ITEMPRICE:5"}' \
@@ -80,15 +81,17 @@ perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 15 and
+    length == 16 and
     map(.id) == [
-        "wine-capabilities", "wine-lex", "wine-expression", "wine-load",
+        "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-project",
         "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
         "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
         "wine-run", "wine-input", "wine-reset"
     ] and
     all(.[]; .ok == true) and
     (map(select(.id == "wine-load"))[0].result.termination == "waitingInput") and
+    (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["ORACLE_INPUT", "ORACLE_TEST", "SYSTEM_TITLE"]) and
+    (map(select(.id == "wine-project"))[0].result.functions | map(select(.name == "SYSTEM_TITLE"))[0].lines | map(.functionCode) | contains(["IF", "CALL", "CALL", "ENDIF", "INPUT", "RETURN"])) and
     (map(select(.id == "wine-csv-varsize"))[0].result.value == 120) and
     (map(select(.id == "wine-csv-name"))[0].result.value == 2) and
     (map(select(.id == "wine-csv-price"))[0].result.value == 120) and

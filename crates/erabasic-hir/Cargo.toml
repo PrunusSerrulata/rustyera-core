@@ -1,12 +1,12 @@
 [package]
-name = "erabasic-parser"
+name = "erabasic-hir"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 erabasic-ast = { path = "../erabasic-ast" }
-erabasic-lexer = { path = "../erabasic-lexer" }
+erabasic-data = { path = "../erabasic-data" }
 serde.workspace = true
 
 [lints]

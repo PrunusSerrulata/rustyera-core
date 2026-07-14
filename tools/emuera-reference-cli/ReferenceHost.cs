@@ -51,6 +51,12 @@ internal sealed class ReferenceHost : IDisposable
         return Snapshot(ReadWatches(request));
     }
 
+    internal JsonNode AnalyzeProject()
+    {
+        RequireLoaded();
+        return JsonProjection.Project(console!.HeadlessProcess.LabelDictionary);
+    }
+
     internal JsonNode Run(JsonObject request)
     {
         RequireLoaded();

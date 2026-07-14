@@ -7,8 +7,10 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// A half-open UTF-8 byte range in one source file.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -32,14 +34,14 @@ impl Span {
 }
 
 /// Diagnostic severity follows Emuera's warning levels while exposing names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Severity {
     Warning,
     Error,
 }
 
 /// Stable, language-independent diagnostic categories.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DiagnosticCode {
     UnexpectedCharacter,
     UnexpectedToken,
@@ -61,7 +63,7 @@ pub enum DiagnosticCode {
     TrailingInput,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub code: DiagnosticCode,
     pub severity: Severity,
@@ -91,7 +93,7 @@ impl Diagnostic {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum UnaryOp {
     Plus,
     Minus,
@@ -101,13 +103,13 @@ pub enum UnaryOp {
     PreDecrement,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PostfixOp {
     Increment,
     Decrement,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BinaryOp {
     Multiply,
     Divide,
@@ -132,7 +134,7 @@ pub enum BinaryOp {
     Nor,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AssignOp {
     Assign,
     Add,
@@ -147,13 +149,13 @@ pub enum AssignOp {
     ShiftRight,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ExprKind {
     Integer(i64),
     String(String),
@@ -189,13 +191,13 @@ pub enum ExprKind {
     Error,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FormattedString {
     pub parts: Vec<FormPart>,
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum FormPart {
     Text(String),
     StringInterpolation {
@@ -222,26 +224,26 @@ pub enum FormPart {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Alignment {
     Left,
     Right,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VariableRef {
     pub name: String,
     pub indices: Vec<Expr>,
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Statement {
     pub kind: StatementKind,
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum StatementKind {
     Instruction {
         name: String,
@@ -260,7 +262,7 @@ pub enum StatementKind {
     Invalid,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Argument {
     Expression(Expr),
     Formatted(FormattedString),
@@ -268,37 +270,44 @@ pub enum Argument {
     Omitted(Span),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Directive {
     pub name: String,
     pub arguments: Vec<Argument>,
+    /// Exact UTF-8 text after the directive name, retained for semantic grammars
+    /// such as `#DIM` that are intentionally richer than normal expressions.
+    pub raw_arguments: String,
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Function {
     pub name: String,
     pub parameters: Vec<Parameter>,
+    /// Exact UTF-8 text following the function label name.
+    pub raw_parameters: String,
     pub attributes: Vec<Directive>,
     pub body: Vec<Statement>,
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Parameter {
     pub name: String,
+    /// Assignable destination used by Emuera function labels (for example `ARG:0`).
+    pub target: Option<VariableRef>,
     pub default: Option<Expr>,
     pub is_reference: bool,
     pub span: Span,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourceKind {
     Erb,
     Erh,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Script {
     pub kind: SourceKind,
     pub functions: Vec<Function>,
@@ -308,7 +317,7 @@ pub struct Script {
 }
 
 /// A parser result can contain a value and recoverable diagnostics together.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ParseOutput<T> {
     pub value: Option<T>,
     pub diagnostics: Vec<Diagnostic>,

@@ -1,0 +1,831 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use erabasic_hir::SemanticType;
+use erabasic_parser::ArgumentStyle;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArgumentConstraint {
+    Integer,
+    String,
+    Any,
+    MutableInteger,
+    MutableString,
+    MutableAny,
+    Formatted,
+    Raw,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionCallableKind {
+    Instruction,
+    ExpressionFunction,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CallableSignature {
+    pub name: String,
+    pub return_type: SemanticType,
+    pub arguments: Vec<ArgumentConstraint>,
+    pub minimum_arguments: usize,
+    pub variadic: bool,
+    pub allow_omitted: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct InstructionSignature {
+    pub name: String,
+    pub argument_style: ArgumentStyle,
+    pub arguments: Vec<ArgumentConstraint>,
+    pub minimum_arguments: usize,
+    pub variadic: bool,
+    pub allow_omitted: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExtensionRegistry {
+    pub instructions: BTreeMap<String, InstructionSignature>,
+    pub functions: BTreeMap<String, CallableSignature>,
+}
+
+impl ExtensionRegistry {
+    pub fn register_instruction(&mut self, mut signature: InstructionSignature) -> bool {
+        let key = signature.name.to_ascii_uppercase();
+        signature.name.clone_from(&key);
+        self.instructions.insert(key, signature).is_none()
+    }
+
+    pub fn register_function(&mut self, mut signature: CallableSignature) -> bool {
+        let key = signature.name.to_ascii_uppercase();
+        signature.name.clone_from(&key);
+        self.functions.insert(key, signature).is_none()
+    }
+}
+
+pub(crate) struct Catalog {
+    pub instructions: BTreeMap<String, InstructionSignature>,
+    pub functions: BTreeMap<String, CallableSignature>,
+    pub extension_functions: BTreeSet<String>,
+}
+
+impl Catalog {
+    pub fn build(extensions: &ExtensionRegistry) -> Self {
+        let mut catalog = Self {
+            instructions: builtin_instructions(),
+            functions: builtin_functions(),
+            extension_functions: extensions
+                .functions
+                .keys()
+                .map(|name| name.to_ascii_uppercase())
+                .collect(),
+        };
+        // Emuera plugins are registered after built-ins. They may add names but may
+        // not silently replace the core instruction identity used by the loader.
+        for (name, signature) in &extensions.instructions {
+            catalog
+                .instructions
+                .entry(name.to_ascii_uppercase())
+                .or_insert_with(|| signature.clone());
+        }
+        for (name, signature) in &extensions.functions {
+            catalog
+                .functions
+                .entry(name.to_ascii_uppercase())
+                .or_insert_with(|| signature.clone());
+        }
+        catalog
+    }
+}
+
+fn instruction(
+    name: &str,
+    style: ArgumentStyle,
+    arguments: &[ArgumentConstraint],
+    minimum_arguments: usize,
+    variadic: bool,
+    allow_omitted: bool,
+) -> InstructionSignature {
+    InstructionSignature {
+        name: name.to_owned(),
+        argument_style: style,
+        arguments: arguments.to_vec(),
+        minimum_arguments,
+        variadic,
+        allow_omitted,
+    }
+}
+
+#[allow(clippy::items_after_statements, clippy::too_many_lines)]
+fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
+    use ArgumentConstraint::{Any, Formatted, Integer, MutableAny, MutableInteger, String};
+    use ArgumentStyle::{Expressions, Formatted as FormStyle, None as NoArgs, Raw};
+
+    let mut result = BTreeMap::new();
+    let mut add =
+        |name: &str, style, arguments: &[ArgumentConstraint], minimum, variadic, omitted| {
+            result.insert(
+                name.to_owned(),
+                instruction(name, style, arguments, minimum, variadic, omitted),
+            );
+        };
+
+    for name in [
+        "ELSE",
+        "ENDIF",
+        "REND",
+        "NEXT",
+        "WEND",
+        "LOOP",
+        "CASEELSE",
+        "ENDSELECT",
+        "CATCH",
+        "ENDCATCH",
+        "ENDFUNC",
+        "ENDLIST",
+        "BREAK",
+        "CONTINUE",
+        "RESTART",
+        "QUIT",
+        "WAIT",
+        "WAITANYKEY",
+        "TWAIT",
+        "DRAWLINE",
+        "RESETCOLOR",
+        "NOSKIP",
+        "ENDNOSKIP",
+        "ENDDATA",
+    ] {
+        add(name, NoArgs, &[], 0, false, false);
+    }
+    for name in [
+        "PRINT",
+        "PRINTL",
+        "PRINTW",
+        "PRINTFORM",
+        "PRINTFORML",
+        "PRINTFORMW",
+        "PRINTFORMS",
+        "PRINTFORMSL",
+        "PRINTFORMSW",
+        "PRINTPLAIN",
+        "PRINTPLAINFORM",
+        "PRINTSINGLE",
+        "PRINTSINGLEFORM",
+        "RETURNFORM",
+        "DATA",
+        "DATALIST",
+    ] {
+        add(name, FormStyle, &[Formatted], 0, false, true);
+    }
+    for name in ["PRINTV", "PRINTVL", "PRINTVW"] {
+        add(name, Expressions, &[Any], 1, true, false);
+    }
+    for name in ["PRINTS", "PRINTSL", "PRINTSW"] {
+        add(name, Expressions, &[String], 1, true, false);
+    }
+    for name in ["IF", "ELSEIF", "SIF", "WHILE", "REPEAT", "SELECTCASE"] {
+        add(name, Expressions, &[Integer], 1, false, false);
+    }
+    add("CASE", Expressions, &[Any], 1, true, false);
+    add(
+        "FOR",
+        Expressions,
+        &[MutableInteger, Integer, Integer, Integer],
+        3,
+        false,
+        true,
+    );
+    for name in ["SET", "SETVAR"] {
+        add(name, Expressions, &[MutableAny, Any], 2, false, false);
+    }
+    for name in ["TIMES", "POWER"] {
+        add(
+            name,
+            Expressions,
+            &[MutableInteger, Integer],
+            2,
+            true,
+            false,
+        );
+    }
+    for name in ["SWAP", "SWAPVAR"] {
+        add(
+            name,
+            Expressions,
+            &[MutableAny, MutableAny],
+            2,
+            false,
+            false,
+        );
+    }
+    for name in [
+        "CALL",
+        "CALLF",
+        "JUMP",
+        "BEGIN",
+        "TRYCALL",
+        "TRYJUMP",
+        "CALLFORM",
+        "JUMPFORM",
+        "TRYCALLFORM",
+        "TRYJUMPFORM",
+        "GOTO",
+        "TRYGOTO",
+        "GOTOFORM",
+        "TRYGOTOFORM",
+    ] {
+        add(name, Expressions, &[Any], 1, true, true);
+    }
+    for name in ["RETURNF", "INPUT", "ONEINPUT", "TINPUT", "AWAIT"] {
+        add(name, Expressions, &[Integer], 0, true, true);
+    }
+    add("RETURN", Expressions, &[Integer], 0, false, true);
+    for name in ["INPUTS", "ONEINPUTS", "TINPUTS"] {
+        add(name, Expressions, &[String], 0, true, true);
+    }
+
+    // Known instructions without a specialized signature still remain known. Their
+    // arguments are preserved and type checked as general expressions.
+    for name in [
+        "ADDCHARA",
+        "DELCHARA",
+        "COPYCHARA",
+        "SORTCHARA",
+        "BAR",
+        "BARL",
+        "SPLIT",
+        "VARSIZE",
+        "SAVEDATA",
+        "LOADDATA",
+        "DELDATA",
+        "SAVEGLOBAL",
+        "LOADGLOBAL",
+        "RESETDATA",
+        "RESETGLOBAL",
+        "SETCOLOR",
+        "SETBGCOLOR",
+        "FONTBOLD",
+        "FONTITALIC",
+        "FONTREGULAR",
+        "ALIGNMENT",
+        "REDRAW",
+        "DOTRAIN",
+        "DO",
+        "TRYC",
+        "PRINTDATA",
+        "STRDATA",
+        "TRYLIST",
+        "FUNC",
+        "RANDOMIZE",
+        "DUMPRAND",
+        "INITRAND",
+    ] {
+        add(name, Expressions, &[Any], 0, true, true);
+    }
+    // Raw is used only for host/plugin statements whose grammar is intentionally
+    // opaque to the core analyzer.
+    add("CALLSHARP", Raw, &[], 0, false, true);
+
+    // Keep the complete pinned instruction namespace even where the first HIR
+    // version represents a specialized ArgumentBuilder as variadic expressions.
+    // Focused signatures above take precedence over these catalog fallbacks.
+    const KNOWN: &[&str] = &[
+        "ADDCOPYCHARA",
+        "ADDDEFCHARA",
+        "ADDSPCHARA",
+        "ADDVOIDCHARA",
+        "ARRAYCOPY",
+        "ARRAYREMOVE",
+        "ARRAYSHIFT",
+        "ARRAYSORT",
+        "ASSERT",
+        "BINPUT",
+        "BINPUTS",
+        "BREAKBUTTON",
+        "CALLEVENT",
+        "CALLFORMF",
+        "CALLTRAIN",
+        "CLEARBIT",
+        "CLEARLINE",
+        "CLEARBGIMAGE",
+        "CLEARTEXTBOX",
+        "CUPCHECK",
+        "CUSTOMDRAWLINE",
+        "CVARSET",
+        "DATAFORM",
+        "DEBUGCLEAR",
+        "DEBUGPRINT",
+        "DEBUGPRINTFORM",
+        "DEBUGPRINTFORML",
+        "DEBUGPRINTL",
+        "DELALLCHARA",
+        "DRAWLINEFORM",
+        "DT_COLUMN_OPTIONS",
+        "ENCODETOUNI",
+        "FONTSTYLE",
+        "FORCEKANA",
+        "FORCEWAIT",
+        "FORCE_BEGIN",
+        "FORCE_QUIT",
+        "FORCE_QUIT_AND_RESTART",
+        "GETTIME",
+        "HTML_PRINT",
+        "HTML_PRINT_ISLAND",
+        "HTML_PRINT_ISLAND_CLEAR",
+        "HTML_TAGSPLIT",
+        "INPUTANY",
+        "INPUTMOUSEKEY",
+        "INVERTBIT",
+        "JUMPFORM",
+        "LOADCHARA",
+        "LOADGAME",
+        "LOADVAR",
+        "ONEBINPUT",
+        "ONEBINPUTS",
+        "OUTPUTLOG",
+        "PICKUPCHARA",
+        "PLAYBGM",
+        "PLAYSOUND",
+        "PRINTBUTTON",
+        "PRINTBUTTONC",
+        "PRINTBUTTONLC",
+        "PRINTCPERLINE",
+        "PRINT_IMG",
+        "PRINT_RECT",
+        "PRINT_SPACE",
+        "PUTFORM",
+        "QUIT_AND_RESTART",
+        "REF",
+        "REFBYNAME",
+        "REMOVEBGIMAGE",
+        "RESETBGCOLOR",
+        "RESET_STAIN",
+        "REUSELASTLINE",
+        "SAVECHARA",
+        "SAVEGAME",
+        "SAVENOS",
+        "SAVEVAR",
+        "SETBGCOLORBYNAME",
+        "SETBGIMAGE",
+        "SETBGMVOLUME",
+        "SETBIT",
+        "SETCOLORBYNAME",
+        "SETFONT",
+        "SETSOUNDVOLUME",
+        "SKIPDISP",
+        "SKIPLOG",
+        "STOPBGM",
+        "STOPCALLTRAIN",
+        "STOPSOUND",
+        "THROW",
+        "TONEINPUT",
+        "TONEINPUTS",
+        "TOOLTIP_CUSTOM",
+        "TOOLTIP_FORMAT",
+        "TOOLTIP_IMG",
+        "TOOLTIP_SETCOLOR",
+        "TOOLTIP_SETDELAY",
+        "TOOLTIP_SETDURATION",
+        "TOOLTIP_SETFONT",
+        "TOOLTIP_SETFONTSIZE",
+        "TRYCALLF",
+        "TRYCALLFORMF",
+        "TRYCALLLIST",
+        "TRYCCALL",
+        "TRYCCALLFORM",
+        "TRYCGOTO",
+        "TRYCGOTOFORM",
+        "TRYCJUMP",
+        "TRYCJUMPFORM",
+        "TRYGOTOLIST",
+        "TRYJUMPLIST",
+        "UPDATECHECK",
+        "VARI",
+        "VARS",
+        "VARSET",
+    ];
+    for name in KNOWN {
+        result
+            .entry((*name).to_owned())
+            .or_insert_with(|| instruction(name, Expressions, &[Any], 0, true, true));
+    }
+
+    const PRINT_FAMILY: &[&str] = &[
+        "PRINTC",
+        "PRINTCD",
+        "PRINTCK",
+        "PRINTD",
+        "PRINTDL",
+        "PRINTDW",
+        "PRINTFORMC",
+        "PRINTFORMCD",
+        "PRINTFORMCK",
+        "PRINTFORMD",
+        "PRINTFORMDL",
+        "PRINTFORMDW",
+        "PRINTFORMK",
+        "PRINTFORMKL",
+        "PRINTFORMKW",
+        "PRINTFORMLC",
+        "PRINTFORMLCD",
+        "PRINTFORMLCK",
+        "PRINTFORMN",
+        "PRINTFORMSD",
+        "PRINTFORMSDL",
+        "PRINTFORMSDW",
+        "PRINTFORMSK",
+        "PRINTFORMSKL",
+        "PRINTFORMSKW",
+        "PRINTFORMSN",
+        "PRINTK",
+        "PRINTKL",
+        "PRINTKW",
+        "PRINTLC",
+        "PRINTLCD",
+        "PRINTLCK",
+        "PRINTN",
+        "PRINTSINGLEFORMD",
+        "PRINTSINGLEFORMK",
+        "PRINTSINGLEFORMS",
+        "PRINTSINGLEFORMSD",
+        "PRINTSINGLEFORMSK",
+        "PRINTSINGLEK",
+        "PRINTSINGLED",
+    ];
+    for name in PRINT_FAMILY {
+        result.insert(
+            (*name).to_owned(),
+            instruction(name, FormStyle, &[Formatted], 0, false, true),
+        );
+    }
+    const PRINT_VALUE_FAMILY: &[&str] = &[
+        "PRINTVD",
+        "PRINTVDL",
+        "PRINTVDW",
+        "PRINTVK",
+        "PRINTVKL",
+        "PRINTVKW",
+        "PRINTVN",
+        "PRINTSINGLEV",
+        "PRINTSINGLEVD",
+        "PRINTSINGLEVK",
+    ];
+    for name in PRINT_VALUE_FAMILY {
+        result.insert(
+            (*name).to_owned(),
+            instruction(name, Expressions, &[Any], 1, true, false),
+        );
+    }
+    const PRINT_STRING_FAMILY: &[&str] = &[
+        "PRINTSD",
+        "PRINTSDL",
+        "PRINTSDW",
+        "PRINTSK",
+        "PRINTSKL",
+        "PRINTSKW",
+        "PRINTSN",
+        "PRINTSINGLES",
+        "PRINTSINGLESD",
+        "PRINTSINGLESK",
+    ];
+    for name in PRINT_STRING_FAMILY {
+        result.insert(
+            (*name).to_owned(),
+            instruction(name, Expressions, &[String], 1, true, false),
+        );
+    }
+    const PRINT_DATA_FAMILY: &[&str] = &[
+        "PRINTDATAD",
+        "PRINTDATADL",
+        "PRINTDATADW",
+        "PRINTDATAK",
+        "PRINTDATAKL",
+        "PRINTDATAKW",
+        "PRINTDATAL",
+        "PRINTDATAW",
+    ];
+    for name in PRINT_DATA_FAMILY {
+        result.insert(
+            (*name).to_owned(),
+            instruction(name, Expressions, &[Any], 0, true, true),
+        );
+    }
+    result
+}
+
+#[allow(clippy::items_after_statements, clippy::too_many_lines)]
+fn builtin_functions() -> BTreeMap<String, CallableSignature> {
+    use ArgumentConstraint::{Any, Integer, String};
+    use SemanticType::{Integer as IntType, String as StrType};
+
+    let mut result = BTreeMap::new();
+    let mut add = |name: &str, return_type, arguments: &[ArgumentConstraint], minimum, variadic| {
+        result.insert(
+            name.to_owned(),
+            CallableSignature {
+                name: name.to_owned(),
+                return_type,
+                arguments: arguments.to_vec(),
+                minimum_arguments: minimum,
+                variadic,
+                allow_omitted: false,
+            },
+        );
+    };
+    for name in [
+        "ABS",
+        "SIGN",
+        "SQRT",
+        "CBRT",
+        "LOG",
+        "LOG10",
+        "EXPONENT",
+        "GETBIT",
+        "BITCOUNT",
+        "CHARANUM",
+        "GETTIME",
+        "GETMILLISECOND",
+        "VARSIZE",
+        "EXISTCSV",
+        "FINDELEMENT",
+        "FINDLASTELEMENT",
+        "STRLEN",
+        "STRLENU",
+        "TOINT",
+        "ISNUMERIC",
+        "UNICODE",
+    ] {
+        add(name, IntType, &[Any], 1, true);
+    }
+    for name in ["RAND", "MAX", "MIN", "LIMIT", "POWER", "INRANGE"] {
+        add(name, IntType, &[Integer], 1, true);
+    }
+    for name in [
+        "TOSTR",
+        "SUBSTRING",
+        "SUBSTRINGU",
+        "STRFORM",
+        "REPLACE",
+        "UNICODETOSTR",
+        "GETCONFIG",
+    ] {
+        add(name, StrType, &[Any], 1, true);
+    }
+    add("STRFIND", IntType, &[String, String, Integer], 2, true);
+
+    const INTEGER_FALLBACKS: &[&str] = &[
+        "ALLSAMES",
+        "ARRAYMSORT",
+        "ARRAYMSORTEX",
+        "BITMAP_CACHE_ENABLE",
+        "CBGCLEAR",
+        "CBGCLEARBUTTON",
+        "CBGREMOVEBMAP",
+        "CBGREMOVERANGE",
+        "CBGSETBMAPG",
+        "CBGSETBUTTONSPRITE",
+        "CBGSETG",
+        "CBGSETSPRITE",
+        "CHKCHARADATA",
+        "CHKDATA",
+        "CHKFONT",
+        "CLIENTHEIGHT",
+        "CLIENTWIDTH",
+        "CMATCH",
+        "COLOR_FROMNAME",
+        "COLOR_FROMRGB",
+        "CONVERT",
+        "CSVABL",
+        "CSVBASE",
+        "CSVCFLAG",
+        "CSVEQUIP",
+        "CSVEXP",
+        "CSVJUEL",
+        "CSVMARK",
+        "CSVRELATION",
+        "CSVTALENT",
+        "CURRENTREDRAW",
+        "DT_CELL_GET",
+        "DT_CELL_ISNULL",
+        "DT_CELL_SET",
+        "DT_CLEAR",
+        "DT_COLUMN_ADD",
+        "DT_COLUMN_EXIST",
+        "DT_COLUMN_LENGTH",
+        "DT_COLUMN_REMOVE",
+        "DT_CREATE",
+        "DT_EXIST",
+        "DT_FROMXML",
+        "DT_NOCASE",
+        "DT_RELEASE",
+        "DT_ROW_ADD",
+        "DT_ROW_LENGTH",
+        "DT_ROW_REMOVE",
+        "DT_ROW_SET",
+        "EXISTFILE",
+        "EXISTFUNCTION",
+        "EXISTMETH",
+        "EXISTSOUND",
+        "EXISTVAR",
+        "FINDCHARA",
+        "FINDLASTCHARA",
+        "GCLEAR",
+        "GCREATE",
+        "GCREATED",
+        "GCREATEFROMFILE",
+        "GDISPOSE",
+        "GDRAWG",
+        "GDRAWGWITHMASK",
+        "GDRAWGWITHROTATE",
+        "GDRAWLINE",
+        "GDRAWSPRITE",
+        "GDRAWTEXT",
+        "GETBGCOLOR",
+        "GETCHARA",
+        "GETCOLOR",
+        "GETCONFIG",
+        "GETDEFBGCOLOR",
+        "GETDEFCOLOR",
+        "GETEXPLV",
+        "GETFOCUSCOLOR",
+        "GETKEY",
+        "GETKEYTRIGGERED",
+        "GETMEMORYUSAGE",
+        "GETMETH",
+        "GETNUM",
+        "GETNUMB",
+        "GETPALAMLV",
+        "GETSECOND",
+        "GETSPCHARA",
+        "GETSTYLE",
+        "GHEIGHT",
+        "GLOAD",
+        "GROUPMATCH",
+        "GSAVE",
+        "GSETBRUSH",
+        "GSETCOLOR",
+        "GSETFONT",
+        "GSETPEN",
+        "GWIDTH",
+        "HOTKEY_STATE",
+        "HOTKEY_STATE_INIT",
+        "HTML_STRINGLEN",
+        "HTML_STRINGLINES",
+        "INRANGEARRAY",
+        "INRANGECARRAY",
+        "ISACTIVE",
+        "ISDEFINED",
+        "ISSKIP",
+        "LINEISEMPTY",
+        "MAP_CLEAR",
+        "MAP_CREATE",
+        "MAP_EXIST",
+        "MAP_FROMXML",
+        "MAP_HAS",
+        "MAP_RELEASE",
+        "MAP_REMOVE",
+        "MAP_SET",
+        "MAP_SIZE",
+        "MATCH",
+        "MAXARRAY",
+        "MAXCARRAY",
+        "MESSKIP",
+        "MINARRAY",
+        "MINCARRAY",
+        "MOUSEB",
+        "MOUSESKIP",
+        "MOUSEX",
+        "MOUSEY",
+        "NOSAMES",
+        "OUTPUTLOG",
+        "PRINTCLENGTH",
+        "PRINTCPERLINE",
+        "REGEXPMATCH",
+        "SAVENOS",
+        "SAVETEXT",
+        "SETANIMETIMER",
+        "SETTEXTBOX",
+        "SETVAR",
+        "SPRITEANIMEADDFRAME",
+        "SPRITEANIMECREATE",
+        "SPRITECREATE",
+        "SPRITECREATED",
+        "SPRITEDISPOSE",
+        "SPRITEDISPOSEALL",
+        "SPRITEGETCOLOR",
+        "SPRITEHEIGHT",
+        "SPRITEMOVE",
+        "SPRITEPOSX",
+        "SPRITEPOSY",
+        "SPRITESETPOS",
+        "SPRITEWIDTH",
+        "STRCOUNT",
+        "STRFINDU",
+        "STRLENS",
+        "STRLENSU",
+        "SUMARRAY",
+        "SUMCARRAY",
+        "UNICODEBYTE",
+        "VARSETEX",
+        "XML_ADDATTRIBUTE",
+        "XML_ADDATTRIBUTE_BYNAME",
+        "XML_ADDNODE",
+        "XML_ADDNODE_BYNAME",
+        "XML_DOCUMENT",
+        "XML_EXIST",
+        "XML_GET",
+        "XML_GET_BYNAME",
+        "XML_RELEASE",
+        "XML_REMOVEATTRIBUTE",
+        "XML_REMOVEATTRIBUTE_BYNAME",
+        "XML_REMOVENODE",
+        "XML_REMOVENODE_BYNAME",
+        "XML_REPLACE",
+        "XML_REPLACE_BYNAME",
+        "XML_SET",
+        "XML_SET_BYNAME",
+    ];
+    for name in INTEGER_FALLBACKS {
+        result
+            .entry((*name).to_owned())
+            .or_insert_with(|| CallableSignature {
+                name: (*name).to_owned(),
+                return_type: IntType,
+                arguments: vec![Any],
+                minimum_arguments: 0,
+                variadic: true,
+                allow_omitted: true,
+            });
+    }
+    const STRING_FALLBACKS: &[&str] = &[
+        "BARSTR",
+        "CHARATU",
+        "CSVCALLNAME",
+        "CSVCSTR",
+        "CSVMASTERNAME",
+        "CSVNAME",
+        "CSVNICKNAME",
+        "CURRENTALIGN",
+        "DT_CELL_GETS",
+        "DT_COLUMN_NAMES",
+        "DT_SELECT",
+        "DT_TOXML",
+        "ENCODETOUNI",
+        "ENUMFILES",
+        "ENUMFUNCBEGINSWITH",
+        "ENUMFUNCENDSWITH",
+        "ENUMFUNCWITH",
+        "ENUMMACROBEGINSWITH",
+        "ENUMMACROENDSWITH",
+        "ENUMMACROWITH",
+        "ENUMVARBEGINSWITH",
+        "ENUMVARENDSWITH",
+        "ENUMVARWITH",
+        "ERDNAME",
+        "ESCAPE",
+        "FLOWINPUTS",
+        "GETCONFIGS",
+        "GETDISPLAYLINE",
+        "GETDOINGFUNCTION",
+        "GETFONT",
+        "GETLINESTR",
+        "GETMETHS",
+        "GETTEXTBOX",
+        "GETTIMES",
+        "GETVARS",
+        "GGETBRUSH",
+        "GGETFONT",
+        "GGETPEN",
+        "HTML_ESCAPE",
+        "HTML_GETPRINTEDSTR",
+        "HTML_POPPRINTINGSTR",
+        "HTML_SUBSTRING",
+        "HTML_TOPLAINTEXT",
+        "LOADTEXT",
+        "MAP_GET",
+        "MAP_GETKEYS",
+        "MAP_TOXML",
+        "MONEYSTR",
+        "STRJOIN",
+        "TOFULL",
+        "TOHALF",
+        "TOLOWER",
+        "TOUPPER",
+        "XML_TOSTR",
+    ];
+    for name in STRING_FALLBACKS {
+        result
+            .entry((*name).to_owned())
+            .or_insert_with(|| CallableSignature {
+                name: (*name).to_owned(),
+                return_type: StrType,
+                arguments: vec![Any],
+                minimum_arguments: 0,
+                variadic: true,
+                allow_omitted: true,
+            });
+    }
+    result
+}

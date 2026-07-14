@@ -49,6 +49,7 @@ any JSON value.
 | `parseExpression` | `source` | Deterministic reflection graph and operand type |
 | `parseLine` | `source`; optional `reduceArguments` | Logical-line summary and graph; reduction defaults off |
 | `analyzeLine` | `source`; loaded game required | Parses and semantically reduces instruction arguments |
+| `analyzeProject` | loaded game required | Returns a deterministic summary of loaded functions, reduced lines, argument types, and jump links |
 | `load` | `gameDir`; optional `debug` | Loads `csv/` and `erb/`, then returns a VM snapshot |
 | `eval` | `source` | Parsed expression plus its current runtime value |
 | `execute` | `statement`; optional limits and `watch` | Executes one non-control-flow instruction in the loaded VM |

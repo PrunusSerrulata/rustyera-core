@@ -20,6 +20,8 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言前端、项目数据加�
   加载器；自身不执行文件 I/O。
 - `crates/erabasic-lexer`：EraBasic lexer，包括上下文终止规则和格式化字符串。
 - `crates/erabasic-parser`：表达式、逻辑行、ERH、ERB、预处理器和块结构 parser。
+- `crates/erabasic-hir`：稳定、可序列化的类型化高级中间表示。
+- `crates/erabasic-analyzer`：项目级声明、符号、类型、指令参数和控制流语义分析。
 - `crates/erabasic-repl`：用于人工检查的 Read-Parse-Print Loop。
 - `reference/emuera.em`：固定版本的 C# Emuera 参考实现。
 - `tools/emuera-reference-cli`：绕过 UI 调用参考实现的 NDJSON 测试工具及平台脚本。
@@ -30,13 +32,12 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言前端、项目数据加�
 
 ## 当前实现状态与范围
 
-当前已实现的是 AST、lexer、parser、项目数据契约、CSV 加载器和用于人工检查的
-REPL。这里的 AST 是语法 AST；`ParserContext` 提供语法解析所需的注册表上下文，
-不等同于语义分析。
+当前已实现的是 AST、lexer、parser、项目数据契约、CSV 加载器、类型化 HIR、
+项目级语义分析器和用于人工检查的 REPL。这里的 AST 是语法 AST；`ParserContext`
+提供语法解析所需的注册表上下文，项目级符号解析和类型检查由 analyzer 完成。
 
 以下 Rust 组件尚未实现：
 
-- 语义分析器；
 - 字节码或其他可执行中间表示；
 - 编译器；
 - 项目/程序验证器；

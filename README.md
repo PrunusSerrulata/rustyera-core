@@ -20,6 +20,8 @@ The workspace currently contains these implemented components:
 | `erabasic-parser` | Expressions, logical lines, ERH declarations, ERB functions, preprocessors, and block structure. |
 | `erabasic-data` | Deterministic, Serde-compatible project schema, static data, and initialization/save-loading contracts for future consumers. |
 | `erabasic-csv` | Emuera-compatible loading of an in-memory project file snapshot. It performs no filesystem I/O. |
+| `erabasic-hir` | Deterministic, Serde-compatible typed expressions, variables, functions, lines, and control-flow links. |
+| `erabasic-analyzer` | Project-level ERH/ERB symbol resolution, type checking, declaration processing, instruction reduction, and control-flow analysis. |
 | `erabasic-repl` | A small development REPL for manually inspecting lexer and parser behavior. |
 
 The two currently implemented data flows are:
@@ -28,6 +30,9 @@ The two currently implemented data flows are:
 EraBasic UTF-8 source -> erabasic-lexer -> erabasic-parser -> erabasic-ast
 
 frontend paths + UTF-8 contents/I/O errors -> erabasic-csv -> erabasic-data
+
+ProjectData + frontend ERH/ERB paths + UTF-8 contents/I/O errors
+    -> erabasic-analyzer -> enriched ProjectData + erabasic-hir
 ```
 
 Public types are re-exported from each crate root. Larger lexer, parser, CSV,
@@ -37,18 +42,17 @@ and data implementations are split into modules by syntax or data domain.
 
 The Rust implementation does **not** currently include:
 
-- a semantic analyzer;
 - bytecode or another executable intermediate representation;
 - a compiler;
 - a project or program validator;
 - a VM;
 - a runtime.
 
-The parser produces a syntax AST. `ParserContext` supports syntax decisions
-that depend on registries, but it is not a semantic-analysis pass. Likewise,
-CSV loading checks and normalizes project data, but it is not the future
-validator. The C# reference CLI can invoke Emuera's existing evaluator and VM
-for oracle purposes; those operations do not imply equivalent Rust components
+The parser still produces a syntax AST. `ParserContext` supports syntax decisions
+that depend on registries, while `erabasic-analyzer` owns the project-level semantic
+passes and produces HIR. CSV loading checks and normalizes project data, but it is
+not the future validator. The C# reference CLI can invoke Emuera's existing evaluator
+and VM for oracle purposes; those operations do not imply equivalent Rust components
 exist.
 
 RustyEra does not implement a concrete application frontend: no GUI, TUI, game
@@ -110,6 +114,7 @@ line. Explicit modes are also available:
 :expr SOURCE
 :line SOURCE
 :file PATH
+:analyze PATH...
 :help
 :quit
 ```

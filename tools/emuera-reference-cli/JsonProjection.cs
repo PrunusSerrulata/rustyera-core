@@ -1,4 +1,5 @@
 using MinorShift.Emuera;
+using MinorShift.Emuera.Runtime.Script.Data;
 using MinorShift.Emuera.Runtime.Script.Parser;
 using MinorShift.Emuera.Runtime.Script.Statements;
 using System.Collections;
@@ -105,6 +106,71 @@ internal static class JsonProjection
         else if (line is GotoLabelLine label) result["label"] = label.LabelName;
         result["rawGraph"] = Graph(line);
         return result;
+    }
+
+    internal static JsonNode Project(LabelDictionary labels)
+    {
+        var functions = new JsonArray();
+        var ordered = labels.GetAllLabels(true)
+            .OrderBy(label => label.FileIndex)
+            .ThenBy(label => label.Position?.LineNo ?? -1)
+            .ThenBy(label => label.Index);
+        foreach (var function in ordered)
+        {
+            var logicalLines = new List<LogicalLine>();
+            var current = function.NextLine;
+            while (current is not null and not NullLine and not FunctionLabelLine)
+            {
+                logicalLines.Add(current);
+                current = current.NextLine;
+            }
+            var lineIndices = logicalLines
+                .Select((line, index) => (line, index))
+                .ToDictionary(pair => pair.line, pair => pair.index);
+            var lines = new JsonArray();
+            for (var index = 0; index < logicalLines.Count; index++)
+            {
+                var line = logicalLines[index];
+                var projected = new JsonObject
+                {
+                    ["index"] = index,
+                    ["type"] = line.GetType().Name,
+                    ["isError"] = line.IsError,
+                    ["error"] = string.IsNullOrEmpty(line.ErrMes) ? null : line.ErrMes,
+                    ["position"] = line.Position is { } position
+                        ? new JsonObject { ["file"] = position.Filename, ["line"] = position.LineNo }
+                        : null,
+                };
+                if (line is InstructionLine instruction)
+                {
+                    projected["functionCode"] = instruction.FunctionCode.ToString();
+                    projected["functionName"] = instruction.Function.Name;
+                    projected["assignmentOperator"] = instruction.AssignOperator.ToString();
+                    projected["argumentType"] = instruction.Argument?.GetType().Name;
+                    projected["argument"] = Graph(instruction.Argument, 4);
+                    projected["jumpTo"] = instruction.JumpTo is not null
+                        && lineIndices.TryGetValue(instruction.JumpTo, out var jumpTo) ? jumpTo : null;
+                    projected["jumpToEndCatch"] = instruction.JumpToEndCatch is not null
+                        && lineIndices.TryGetValue(instruction.JumpToEndCatch, out var jumpToEndCatch)
+                        ? jumpToEndCatch : null;
+                }
+                else if (line is GotoLabelLine label) projected["label"] = label.LabelName;
+                lines.Add(projected);
+            }
+            functions.Add(new JsonObject
+            {
+                ["name"] = function.LabelName,
+                ["isError"] = function.IsError,
+                ["isEvent"] = function.IsEvent,
+                ["isSystem"] = function.IsSystem,
+                ["isMethod"] = function.IsMethod,
+                ["returnType"] = function.MethodType.FullName,
+                ["parameters"] = Graph(function.Arg, 4),
+                ["defaults"] = Graph(function.Def, 4),
+                ["lines"] = lines,
+            });
+        }
+        return new JsonObject { ["functions"] = functions };
     }
 
     internal static JsonNode? Graph(object? value, int maxDepth = 8) =>
