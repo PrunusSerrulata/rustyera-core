@@ -15,7 +15,9 @@ pub struct InstructionSpec {
     pub argument_style: ArgumentStyle,
 }
 
-/// Parser-side symbol services needed by syntax and early semantic checks.
+/// Parser-side symbol services needed for context-dependent syntax decisions.
+///
+/// This registry interface is not a semantic-analysis pass.
 pub trait ParserContext {
     fn lexer_config(&self) -> &LexerConfig;
     fn macros(&self) -> &MacroTable;

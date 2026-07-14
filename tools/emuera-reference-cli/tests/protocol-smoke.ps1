@@ -62,6 +62,19 @@ try {
     Assert-True $load.ok "fixture game failed to load"
     Assert-True ($load.result.termination -eq "waitingInput") "fixture title did not request input"
 
+    $varSize = Invoke-Oracle @{ id = "csv-varsize"; op = "eval"; source = 'VARSIZE("ABL")' }
+    Assert-True ($varSize.ok -and $varSize.result.value -eq 120) "VariableSize.CSV did not resize ABL"
+    $nameIndex = Invoke-Oracle @{ id = "csv-name"; op = "eval"; source = 'GETNUM(ABL, "later")' }
+    Assert-True ($nameIndex.ok -and $nameIndex.result.value -eq 2) "ABL name lookup differs"
+    $itemPrice = Invoke-Oracle @{ id = "csv-price"; op = "eval"; source = "ITEMPRICE:5" }
+    Assert-True ($itemPrice.ok -and $itemPrice.result.value -eq 120) "ITEM price differs"
+    $strValue = Invoke-Oracle @{ id = "csv-str"; op = "eval"; source = "STR:0" }
+    Assert-True ($strValue.ok -and $strValue.result.value -eq "initial text") "STR initial data differs"
+    $character = Invoke-Oracle @{ id = "csv-character"; op = "eval"; source = "CSVABL(10, 2)" }
+    Assert-True ($character.ok -and $character.result.value -eq 5) "character CSV data differs"
+    $gameCode = Invoke-Oracle @{ id = "csv-gamebase"; op = "eval"; source = "GAMEBASE_GAMECODE" }
+    Assert-True ($gameCode.ok -and $gameCode.result.value -eq 42) "GAMEBASE code differs"
+
     $analyzed = Invoke-Oracle @{ id = 7; op = "analyzeLine"; source = "RESULT = 9" }
     Assert-True $analyzed.ok "semantic line analysis failed"
     Assert-True ($null -ne $analyzed.result.argument) "semantic argument was not produced"

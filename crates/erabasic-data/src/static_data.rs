@@ -1,0 +1,338 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    CharacterSelection, DeferredIndexCatalog, NewGameSeed, ProjectSchema, RuntimeDefaults,
+    SaveCompatibility, SaveLoadContext,
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NameTableKind {
+    Abl,
+    Exp,
+    Talent,
+    Palam,
+    Train,
+    Mark,
+    Item,
+    Base,
+    Source,
+    Ex,
+    Str,
+    Equip,
+    Tequip,
+    Flag,
+    Tflag,
+    Cflag,
+    Tcvar,
+    Cstr,
+    Stain,
+    Cdflag1,
+    Cdflag2,
+    Strname,
+    Tstr,
+    Savestr,
+    Global,
+    Globals,
+    Day,
+    Time,
+    Money,
+}
+
+impl NameTableKind {
+    pub const ALL: [Self; 29] = [
+        Self::Abl,
+        Self::Exp,
+        Self::Talent,
+        Self::Palam,
+        Self::Train,
+        Self::Mark,
+        Self::Item,
+        Self::Base,
+        Self::Source,
+        Self::Ex,
+        Self::Str,
+        Self::Equip,
+        Self::Tequip,
+        Self::Flag,
+        Self::Tflag,
+        Self::Cflag,
+        Self::Tcvar,
+        Self::Cstr,
+        Self::Stain,
+        Self::Cdflag1,
+        Self::Cdflag2,
+        Self::Strname,
+        Self::Tstr,
+        Self::Savestr,
+        Self::Global,
+        Self::Globals,
+        Self::Day,
+        Self::Time,
+        Self::Money,
+    ];
+
+    #[must_use]
+    pub const fn variable_name(self) -> &'static str {
+        match self {
+            Self::Abl => "ABLNAME",
+            Self::Exp => "EXPNAME",
+            Self::Talent => "TALENTNAME",
+            Self::Palam => "PALAMNAME",
+            Self::Train => "TRAINNAME",
+            Self::Mark => "MARKNAME",
+            Self::Item => "ITEMNAME",
+            Self::Base => "BASENAME",
+            Self::Source => "SOURCENAME",
+            Self::Ex => "EXNAME",
+            Self::Str => "__DUMMY_STR__",
+            Self::Equip => "EQUIPNAME",
+            Self::Tequip => "TEQUIPNAME",
+            Self::Flag => "FLAGNAME",
+            Self::Tflag => "TFLAGNAME",
+            Self::Cflag => "CFLAGNAME",
+            Self::Tcvar => "TCVARNAME",
+            Self::Cstr => "CSTRNAME",
+            Self::Stain => "STAINNAME",
+            Self::Cdflag1 => "CDFLAGNAME1",
+            Self::Cdflag2 => "CDFLAGNAME2",
+            Self::Strname => "STRNAME",
+            Self::Tstr => "TSTRNAME",
+            Self::Savestr => "SAVESTRNAME",
+            Self::Global => "GLOBALNAME",
+            Self::Globals => "GLOBALSNAME",
+            Self::Day => "DAYNAME",
+            Self::Time => "TIMENAME",
+            Self::Money => "MONEYNAME",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NameAlias {
+    pub name: String,
+    pub index: i32,
+}
+
+/// Names preserve declared holes. `lookup` records Emuera's first-name-wins followed by
+/// aliases-that-do-not-shadow-names rule.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NameTable {
+    pub names: Vec<Option<String>>,
+    pub aliases: Vec<NameAlias>,
+    pub lookup: BTreeMap<String, i32>,
+}
+
+impl NameTable {
+    #[must_use]
+    pub fn empty(length: usize) -> Self {
+        Self {
+            names: vec![None; length],
+            aliases: Vec::new(),
+            lookup: BTreeMap::new(),
+        }
+    }
+
+    pub fn rebuild_lookup(&mut self) {
+        self.lookup.clear();
+        for (index, name) in self.names.iter().enumerate() {
+            if let Some(name) = name.as_ref().filter(|name| !name.is_empty())
+                && let Ok(index) = i32::try_from(index)
+            {
+                self.lookup.entry(name.clone()).or_insert(index);
+            }
+        }
+        for alias in &self.aliases {
+            if !alias.name.is_empty() {
+                self.lookup.entry(alias.name.clone()).or_insert(alias.index);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct GameBase {
+    pub unique_code: i64,
+    pub version: i64,
+    pub version_defined: bool,
+    pub compatible_min_version: i64,
+    pub default_character: i64,
+    pub no_item: i64,
+    pub title: String,
+    pub author: String,
+    pub year: String,
+    pub info: String,
+    pub window_title: Option<String>,
+    pub required_emuera_version: String,
+    pub update_url: String,
+    pub version_name: String,
+}
+
+impl Default for GameBase {
+    fn default() -> Self {
+        Self {
+            unique_code: 0,
+            version: 0,
+            version_defined: false,
+            compatible_min_version: -1,
+            default_character: -1,
+            no_item: 0,
+            title: String::new(),
+            author: String::new(),
+            year: String::new(),
+            info: String::new(),
+            window_title: None,
+            required_emuera_version: "0.000.0.0".into(),
+            update_url: String::new(),
+            version_name: String::new(),
+        }
+    }
+}
+
+impl GameBase {
+    #[must_use]
+    pub fn unique_code_matches(&self, saved_code: i64) -> bool {
+        saved_code == 0 || saved_code == self.unique_code
+    }
+
+    #[must_use]
+    pub fn version_matches(&self, saved_version: i64) -> bool {
+        (!self.version_defined && saved_version != 1000)
+            || self.compatible_min_version <= saved_version
+            || self.version == saved_version
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReplaceSettings {
+    pub money_label: String,
+    pub money_first: bool,
+    pub load_label: String,
+    pub max_shop_item: i32,
+    pub draw_line_string: String,
+    pub bar_char_1: char,
+    pub bar_char_2: char,
+    pub title_menu_string_0: String,
+    pub title_menu_string_1: String,
+    pub com_able_default: i32,
+    pub stain_default: Vec<i64>,
+    pub timeup_label: String,
+    pub exp_lv_default: Vec<i64>,
+    pub palam_lv_default: Vec<i64>,
+    pub pband_default: i64,
+    pub relation_default: i64,
+}
+
+impl Default for ReplaceSettings {
+    fn default() -> Self {
+        Self {
+            money_label: "$".into(),
+            money_first: true,
+            load_label: "Now Loading...".into(),
+            max_shop_item: 100,
+            draw_line_string: "-".into(),
+            bar_char_1: '*',
+            bar_char_2: '.',
+            title_menu_string_0: "最初からはじめる".into(),
+            title_menu_string_1: "ロードしてはじめる".into(),
+            com_able_default: 1,
+            stain_default: vec![0, 0, 2, 1, 8],
+            timeup_label: "時間切れ".into(),
+            exp_lv_default: vec![0, 1, 4, 20, 50, 200],
+            palam_lv_default: vec![
+                0, 100, 500, 3000, 10_000, 30_000, 60_000, 100_000, 150_000, 250_000,
+            ],
+            pband_default: 4,
+            relation_default: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CharacterTemplate {
+    pub no: i64,
+    pub csv_no: i64,
+    pub name: String,
+    pub call_name: String,
+    pub nick_name: String,
+    pub master_name: String,
+    pub is_sp_character: bool,
+    pub max_base: BTreeMap<usize, i64>,
+    pub mark: BTreeMap<usize, i64>,
+    pub exp: BTreeMap<usize, i64>,
+    pub abl: BTreeMap<usize, i64>,
+    pub talent: BTreeMap<usize, i64>,
+    pub relation: BTreeMap<usize, i64>,
+    pub cflag: BTreeMap<usize, i64>,
+    pub equip: BTreeMap<usize, i64>,
+    pub juel: BTreeMap<usize, i64>,
+    pub cstr: BTreeMap<usize, String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExtensionData {
+    pub global_maps: BTreeSet<String>,
+    pub save_maps: BTreeSet<String>,
+    pub static_maps: BTreeSet<String>,
+    pub global_xmls: BTreeSet<String>,
+    pub save_xmls: BTreeSet<String>,
+    pub static_xmls: BTreeSet<String>,
+    pub global_data_tables: BTreeSet<String>,
+    pub save_data_tables: BTreeSet<String>,
+    pub static_data_tables: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProjectStaticData {
+    pub game_base: GameBase,
+    pub name_tables: BTreeMap<NameTableKind, NameTable>,
+    pub item_prices: Vec<i64>,
+    pub characters: Vec<CharacterTemplate>,
+    pub relation_lookup: BTreeMap<String, i64>,
+    pub extensions: ExtensionData,
+    /// Keys include the `[[...]]` delimiters because that is the exact lookup form used
+    /// by the reference lexer.
+    pub rename: BTreeMap<String, String>,
+    pub replace: ReplaceSettings,
+    pub deferred_indices: DeferredIndexCatalog,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProjectData {
+    pub format_version: u32,
+    pub schema: ProjectSchema,
+    pub static_data: ProjectStaticData,
+}
+
+impl ProjectData {
+    #[must_use]
+    pub fn new_game_seed(&self) -> NewGameSeed {
+        let mut characters = vec![CharacterSelection::CsvNumber(0)];
+        if self.static_data.game_base.default_character > 0 {
+            characters.push(CharacterSelection::CsvNumber(
+                self.static_data.game_base.default_character,
+            ));
+        }
+        NewGameSeed {
+            defaults: RuntimeDefaults::from_project(self),
+            initial_characters: characters,
+        }
+    }
+
+    #[must_use]
+    pub fn save_load_context(&self) -> SaveLoadContext {
+        SaveLoadContext {
+            defaults_before_overlay: RuntimeDefaults::from_project(self),
+            clear_characters_before_overlay: true,
+            copy_and_truncate_arrays: true,
+            compatibility: SaveCompatibility {
+                unique_code: self.static_data.game_base.unique_code,
+                version: self.static_data.game_base.version,
+                version_defined: self.static_data.game_base.version_defined,
+                compatible_min_version: self.static_data.game_base.compatible_min_version,
+            },
+        }
+    }
+}

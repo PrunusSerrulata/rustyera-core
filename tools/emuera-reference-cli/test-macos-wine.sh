@@ -14,8 +14,10 @@ EXECUTABLE="$PUBLISH_DIR/Emuera.ReferenceCli.exe"
 OUTPUT_FILE="${1:-$WORK_DIR/wine-smoke.ndjson}"
 REQUEST_FILE="$WORK_DIR/requests.ndjson"
 STDERR_FILE="$WORK_DIR/wine-stderr.log"
+FIXTURE_SOURCE_DIR="$SCRIPT_DIR/tests/fixture"
+ORACLE_TIMEOUT_SECONDS="${EMUERA_REFERENCE_TIMEOUT_SECONDS:-30}"
 
-for command_name in dotnet wine jq; do
+for command_name in dotnet wine winepath jq perl; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "required command not found: $command_name" >&2
         exit 127
@@ -23,6 +25,9 @@ for command_name in dotnet wine jq; do
 done
 
 mkdir -p "$WINE_PREFIX" "$WORK_DIR" "$(dirname "$OUTPUT_FILE")"
+FIXTURE_DIR="$(mktemp -d "$WORK_DIR/fixture.XXXXXX")"
+trap 'rm -rf "$FIXTURE_DIR"' EXIT
+cp -R "$FIXTURE_SOURCE_DIR/." "$FIXTURE_DIR"
 
 export WINEPREFIX="$WINE_PREFIX"
 export WINEDEBUG=-all
@@ -31,6 +36,8 @@ export MVK_CONFIG_LOG_LEVEL=0
 if [[ ! -f "$WINE_PREFIX/system.reg" ]]; then
     wineboot -u
 fi
+
+FIXTURE_WINDOWS_PATH="$(winepath -w "$FIXTURE_DIR")"
 
 # A framework-dependent build cannot locate macOS's .NET installation from
 # inside Wine, so publish the Windows runtime beside the executable.
@@ -48,18 +55,55 @@ printf '%s\n' \
     '{"id":"wine-lex","op":"lex","source":"1 + 2"}' \
     '{"id":"wine-expression","op":"parseExpression","source":"1 + 2 * 3"}' \
     >"$REQUEST_FILE"
+jq -nc --arg gameDir "$FIXTURE_WINDOWS_PATH" \
+    '{id:"wine-load",op:"load",gameDir:$gameDir}' >>"$REQUEST_FILE"
+printf '%s\n' \
+    '{"id":"wine-csv-varsize","op":"eval","source":"VARSIZE(\"ABL\")"}' \
+    '{"id":"wine-csv-name","op":"eval","source":"GETNUM(ABL, \"later\")"}' \
+    '{"id":"wine-csv-price","op":"eval","source":"ITEMPRICE:5"}' \
+    '{"id":"wine-csv-str","op":"eval","source":"STR:0"}' \
+    '{"id":"wine-csv-character","op":"eval","source":"CSVABL(10, 2)"}' \
+    '{"id":"wine-csv-gamebase","op":"eval","source":"GAMEBASE_GAMECODE"}' \
+    '{"id":"wine-analyze","op":"analyzeLine","source":"RESULT = 9"}' \
+    '{"id":"wine-execute","op":"execute","statement":"RESULT = 9","watch":["RESULT"]}' \
+    '{"id":"wine-run","op":"run","entry":"ORACLE_TEST","watch":["RESULT"]}' \
+    '{"id":"wine-input","op":"run","entry":"ORACLE_INPUT","inputs":["42"],"watch":["RESULT"]}' \
+    '{"id":"wine-reset","op":"reset"}' \
+    >>"$REQUEST_FILE"
 
 # Wine emits CRLF on stdout. Normalize it so the saved file is ordinary NDJSON
-# on macOS while keeping Wine diagnostics separate from protocol output.
-wine "$EXECUTABLE" <"$REQUEST_FILE" 2>"$STDERR_FILE" \
+# on macOS while keeping Wine diagnostics separate from protocol output. Keep a
+# watchdog around the process so a native UI regression fails instead of
+# blocking differential tests indefinitely.
+perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
+    wine "$EXECUTABLE" <"$REQUEST_FILE" 2>"$STDERR_FILE" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 3 and
-    map(.id) == ["wine-capabilities", "wine-lex", "wine-expression"] and
-    all(.[]; .ok == true)
+    length == 15 and
+    map(.id) == [
+        "wine-capabilities", "wine-lex", "wine-expression", "wine-load",
+        "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
+        "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
+        "wine-run", "wine-input", "wine-reset"
+    ] and
+    all(.[]; .ok == true) and
+    (map(select(.id == "wine-load"))[0].result.termination == "waitingInput") and
+    (map(select(.id == "wine-csv-varsize"))[0].result.value == 120) and
+    (map(select(.id == "wine-csv-name"))[0].result.value == 2) and
+    (map(select(.id == "wine-csv-price"))[0].result.value == 120) and
+    (map(select(.id == "wine-csv-str"))[0].result.value == "initial text") and
+    (map(select(.id == "wine-csv-character"))[0].result.value == 5) and
+    (map(select(.id == "wine-csv-gamebase"))[0].result.value == 42) and
+    (map(select(.id == "wine-analyze"))[0].result.argument != null) and
+    (map(select(.id == "wine-execute"))[0].result.watches.RESULT == 9) and
+    (map(select(.id == "wine-run"))[0].result.termination == "completed") and
+    (map(select(.id == "wine-run"))[0].result.output | join("\n") | contains("ORACLE_OK")) and
+    (map(select(.id == "wine-input"))[0].result.termination == "completed") and
+    (map(select(.id == "wine-input"))[0].result.watches.RESULT == 42) and
+    (map(select(.id == "wine-reset"))[0].result.reset == true)
 ' "$OUTPUT_FILE" >/dev/null
 
-echo "Wine reference CLI smoke test passed."
+echo "Wine reference CLI and CSV oracle smoke test passed."
 echo "NDJSON: $OUTPUT_FILE"
 echo "Wine stderr: $STDERR_FILE"
