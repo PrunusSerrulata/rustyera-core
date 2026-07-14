@@ -1,0 +1,21 @@
+[package]
+name = "erabasic-vm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+blake3.workspace = true
+erabasic-bytecode = { path = "../erabasic-bytecode" }
+erabasic-data = { path = "../erabasic-data" }
+erabasic-validator = { path = "../erabasic-validator" }
+serde.workspace = true
+serde_json = "1.0.112"
+
+[dev-dependencies]
+erabasic-analyzer = { path = "../erabasic-analyzer" }
+erabasic-compiler = { path = "../erabasic-compiler" }
+erabasic-csv = { path = "../erabasic-csv" }
+
+[lints]
+workspace = true

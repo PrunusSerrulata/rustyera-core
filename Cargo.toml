@@ -11,6 +11,7 @@ members = [
     "crates/erabasic-parser",
     "crates/erabasic-repl",
     "crates/erabasic-validator",
+    "crates/erabasic-vm",
 ]
 resolver = "2"
 

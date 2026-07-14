@@ -25,6 +25,8 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言前端、项目数据加�
 - `crates/erabasic-bytecode`：版本化 VM 指令、Host ABI、自包含容器、源码映射和补丁。
 - `crates/erabasic-compiler`：确定性、可并行并支持函数级缓存的 HIR 到字节码编译器。
 - `crates/erabasic-validator`：HIR 与不可信字节码的结构、类型、控制流和 ABI 验证。
+- `crates/erabasic-vm`：确定性解释器、协作式多 fiber 调度、Host/Native 边界、双轨
+  状态保存与多代热替换。
 - `crates/erabasic-repl`：用于人工检查的 Read-Parse-Print Loop。
 - `reference/emuera.em`：固定版本的 C# Emuera 参考实现。
 - `tools/emuera-reference-cli`：绕过 UI 调用参考实现的 NDJSON 测试工具及平台脚本。
@@ -36,18 +38,17 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言前端、项目数据加�
 ## 当前实现状态与范围
 
 当前已实现的是 AST、lexer、parser、项目数据契约、CSV 加载器、类型化 HIR、
-项目级语义分析器、字节码、编译器、验证器和用于人工检查的 REPL。这里的 AST
+项目级语义分析器、字节码、编译器、验证器、VM 和用于人工检查的 REPL。这里的 AST
 是语法 AST；`ParserContext`
 提供语法解析所需的注册表上下文，项目级符号解析和类型检查由 analyzer 完成。
 
 以下 Rust 组件尚未实现：
 
-- VM；
 - runtime。
 
 在这些组件实际落地前，不得在 README、crate 文档、测试结果或交付说明中将其
 描述为已实现。CSV 加载期间的格式检查不是字节码验证器；C# reference CLI 能够
-调用参考实现的 evaluator、VM 和 runtime，也不代表 Rust 侧已有对应实现。未实现
+调用参考实现的 evaluator、VM 和 runtime，也不代表 Rust 侧已有对应 runtime。未实现
 组件的说明只记录范围和状态，不预先承诺具体内部架构。
 
 本项目不实现具体的应用前端/宿主：GUI、TUI、游戏启动器、文件扫描、渲染、音频

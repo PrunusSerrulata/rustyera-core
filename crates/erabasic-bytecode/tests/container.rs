@@ -1,6 +1,6 @@
 use erabasic_bytecode::{
-    ArtifactManifest, BytecodeArtifact, DecodeError, DecodeLimits, Digest, SourceMap,
-    decode_artifact, encode_artifact,
+    ArtifactManifest, BytecodeArtifact, DecodeError, DecodeLimits, Digest, PatchError, SourceMap,
+    SourceRecord, apply_patch, create_patch, decode_artifact, encode_artifact,
 };
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
 
@@ -19,6 +19,32 @@ fn artifact() -> BytecodeArtifact {
     };
     artifact.refresh_ids().unwrap();
     artifact
+}
+
+#[test]
+fn patch_rejects_a_source_different_base_with_the_same_execution_id() {
+    let base = artifact();
+    let patch = create_patch(&base, &base);
+    let mut source_different = base.clone();
+    source_different.source_map.sources.push(SourceRecord {
+        relative_path: "different.erb".into(),
+        content_hash: Digest::default(),
+        byte_len: 0,
+        line_starts: vec![0],
+    });
+    source_different.refresh_ids().unwrap();
+    assert_eq!(
+        source_different.manifest.program_version.execution_id,
+        base.manifest.program_version.execution_id
+    );
+    assert_ne!(
+        source_different.manifest.artifact_id,
+        base.manifest.artifact_id
+    );
+    assert_eq!(
+        apply_patch(&source_different, &patch),
+        Err(PatchError::BaseMismatch)
+    );
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use erabasic_bytecode::{HostCapability, HostEffect};
+use erabasic_bytecode::{HostCapability, HostEffect, HostSnapshotCapability};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -10,7 +10,7 @@ pub struct HostBinding {
     pub abi_version: u32,
     pub effect: HostEffect,
     pub capability: HostCapability,
-    pub snapshot_safe: bool,
+    pub snapshot_capability: HostSnapshotCapability,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -93,7 +93,11 @@ fn default_binding(name: &str) -> Option<HostBinding> {
             mutates_runtime,
         },
         capability,
-        snapshot_safe: !may_suspend,
+        snapshot_capability: if may_suspend && matches!(name, "TWAIT" | "AWAIT" | "FORCEWAIT") {
+            HostSnapshotCapability::Never
+        } else {
+            HostSnapshotCapability::StableWait
+        },
     })
 }
 
@@ -109,6 +113,6 @@ pub(crate) fn extension_binding(name: &str) -> HostBinding {
             mutates_runtime: true,
         },
         capability: HostCapability::Extension,
-        snapshot_safe: false,
+        snapshot_capability: HostSnapshotCapability::Never,
     }
 }

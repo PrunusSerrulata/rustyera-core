@@ -3,7 +3,8 @@ use erabasic_analyzer::{
     analyze_project,
 };
 use erabasic_bytecode::{
-    DecodeLimits, HostCapability, HostEffect, Opcode, apply_patch, decode_artifact, encode_artifact,
+    DecodeLimits, HostCapability, HostEffect, HostSnapshotCapability, Opcode, apply_patch,
+    decode_artifact, encode_artifact,
 };
 use erabasic_compiler::{CompilerOptions, HostBinding, compile_project, default_host_registry};
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
@@ -229,7 +230,7 @@ fn image_style_host_binding_still_uses_the_single_call_host_opcode() {
                 mutates_runtime: true,
             },
             capability: HostCapability::Graphics,
-            snapshot_safe: true,
+            snapshot_capability: HostSnapshotCapability::StableWait,
         },
     ));
     let artifact = compile_project(
