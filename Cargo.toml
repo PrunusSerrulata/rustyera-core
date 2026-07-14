@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/erabasic-ast",
+    "crates/erabasic-bytecode",
+    "crates/erabasic-compiler",
     "crates/erabasic-data",
     "crates/erabasic-csv",
     "crates/erabasic-hir",
@@ -8,6 +10,7 @@ members = [
     "crates/erabasic-lexer",
     "crates/erabasic-parser",
     "crates/erabasic-repl",
+    "crates/erabasic-validator",
 ]
 resolver = "2"
 
@@ -24,4 +27,6 @@ all = "warn"
 pedantic = "warn"
 
 [workspace.dependencies]
+blake3 = "1.5.5"
+rayon = "1.10.0"
 serde = { version = "1.0.210", features = ["derive"] }
