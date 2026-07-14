@@ -22,9 +22,12 @@ The workspace currently contains these implemented components:
 | `erabasic-csv` | Emuera-compatible loading of an in-memory project file snapshot. It performs no filesystem I/O. |
 | `erabasic-hir` | Deterministic, Serde-compatible typed expressions, variables, functions, lines, and control-flow links. |
 | `erabasic-analyzer` | Project-level ERH/ERB symbol resolution, type checking, declaration processing, instruction reduction, and control-flow analysis. |
+| `erabasic-bytecode` | Versioned VM-native instructions, the single `CallHost` boundary, source maps, canonical `.erbc` containers, and patches. |
+| `erabasic-compiler` | Deterministic parallel HIR lowering with function-level incremental reuse. |
+| `erabasic-validator` | Structural, type, control-flow, stack, capability, and ABI validation for HIR and untrusted bytecode. |
 | `erabasic-repl` | A small development REPL for manually inspecting lexer and parser behavior. |
 
-The two currently implemented data flows are:
+The currently implemented data flows are:
 
 ```text
 EraBasic UTF-8 source -> erabasic-lexer -> erabasic-parser -> erabasic-ast
@@ -33,25 +36,22 @@ frontend paths + UTF-8 contents/I/O errors -> erabasic-csv -> erabasic-data
 
 ProjectData + frontend ERH/ERB paths + UTF-8 contents/I/O errors
     -> erabasic-analyzer -> enriched ProjectData + erabasic-hir
+
+AnalyzedProject -> erabasic-compiler -> erabasic-validator
+    -> self-contained .erbc bytes + incremental cache/patch
 ```
 
-Public types are re-exported from each crate root. Larger lexer, parser, CSV,
-and data implementations are split into modules by syntax or data domain.
+Public types are re-exported from each crate root. Larger implementations are split
+into modules by syntax, data domain, executable format, or compilation phase.
 
 ## Scope and unimplemented components
 
-The Rust implementation does **not** currently include:
-
-- bytecode or another executable intermediate representation;
-- a compiler;
-- a project or program validator;
-- a VM;
-- a runtime.
+The Rust implementation does **not** currently include a VM or runtime.
 
 The parser still produces a syntax AST. `ParserContext` supports syntax decisions
 that depend on registries, while `erabasic-analyzer` owns the project-level semantic
 passes and produces HIR. CSV loading checks and normalizes project data, but it is
-not the future validator. The C# reference CLI can invoke Emuera's existing evaluator
+separate from executable artifact validation. The C# reference CLI can invoke Emuera's existing evaluator
 and VM for oracle purposes; those operations do not imply equivalent Rust components
 exist.
 
@@ -59,6 +59,24 @@ RustyEra does not implement a concrete application frontend: no GUI, TUI, game
 launcher, filesystem scanner, renderer, audio system, or input loop belongs in
 this repository. Here, “application frontend” means the host/UI layer and is
 distinct from the implemented EraBasic *language* front end.
+
+## Bytecode contract
+
+The compiler emits a deterministic, self-contained `.erbc` container. Its execution
+identity covers code, project data, variable layout, semantic compiler options, and
+native/Host ABI requirements; debug source locations use a separate artifact identity.
+The bytecode and compiler crates perform no filesystem I/O.
+
+VM-native instructions own data, arithmetic, control flow, EraBasic calls, yielding,
+and continuation values. Every operation that crosses into an application frontend
+uses the one `CallHost` opcode plus a typed, capability-tagged import. Printing text,
+showing images, audio, input, clocks, storage, and extension plugins therefore do not
+receive dedicated VM opcodes.
+
+Decoded bytes are intentionally returned as `UnvalidatedArtifact`. A caller must bind
+the declared native and Host imports and pass the value through `validate_bytecode`
+before a future VM may execute it. Source maps resolve function/code offsets to a
+relative path, UTF-8 byte span, line, and byte column.
 
 The intended project boundary is a runtime library plus public interfaces
 between that runtime and an external frontend. The frontend owns filesystem

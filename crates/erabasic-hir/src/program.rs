@@ -52,6 +52,7 @@ pub struct Function {
     pub id: FunctionId,
     pub name: String,
     pub kind: FunctionKind,
+    pub return_type: SemanticType,
     pub parameters: Vec<Parameter>,
     pub lines: Vec<HirStatement>,
     pub labels: Vec<(LabelId, String, LineId)>,
@@ -67,10 +68,27 @@ pub struct HirStatement {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "name", rename_all = "snake_case")]
+pub enum InstructionTarget {
+    Builtin(String),
+    Extension(String),
+    Unresolved(String),
+}
+
+impl InstructionTarget {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Builtin(name) | Self::Extension(name) | Self::Unresolved(name) => name,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HirStatementKind {
     Instruction {
-        name: String,
+        target: InstructionTarget,
         arguments: Vec<HirArgument>,
     },
     Assignment {

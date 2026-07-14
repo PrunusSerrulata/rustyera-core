@@ -1,0 +1,176 @@
+use erabasic_data::ProjectData;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    COMPILER_ABI_VERSION, CONTAINER_VERSION, Digest, FormatVersion, HOST_ABI_VERSION, HostImport,
+    ISA_VERSION, NATIVE_ABI_VERSION, NativeImport, ProgramVersion, SourceMap, SymbolKey,
+    VM_ABI_VERSION,
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportKind {
+    Function,
+    Native,
+    Host,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FunctionImport {
+    pub kind: ImportKind,
+    pub key: SymbolKey,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BytecodeGlobal {
+    pub key: SymbolKey,
+    pub name: String,
+    pub value_type: crate::BytecodeType,
+    pub dimensions: Vec<u64>,
+    pub mutable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BytecodeFunction {
+    pub key: SymbolKey,
+    pub name: String,
+    pub parameters: Vec<crate::BytecodeType>,
+    pub result: Option<crate::BytecodeType>,
+    pub imports: Vec<FunctionImport>,
+    pub code: Vec<crate::EncodedInstruction>,
+    pub max_stack: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactManifest {
+    pub container_version: FormatVersion,
+    pub isa_version: FormatVersion,
+    pub compiler_abi: u32,
+    pub native_abi: u32,
+    pub program_version: ProgramVersion,
+    pub artifact_id: Digest,
+    pub compiler_options: Digest,
+    pub required_features: Vec<String>,
+}
+
+impl ArtifactManifest {
+    #[must_use]
+    pub fn new(compiler_options: Digest) -> Self {
+        Self {
+            container_version: CONTAINER_VERSION,
+            isa_version: ISA_VERSION,
+            compiler_abi: COMPILER_ABI_VERSION,
+            native_abi: NATIVE_ABI_VERSION,
+            program_version: ProgramVersion {
+                vm_abi: VM_ABI_VERSION,
+                host_abi: HOST_ABI_VERSION,
+                execution_id: Digest::default(),
+            },
+            artifact_id: Digest::default(),
+            compiler_options,
+            required_features: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BytecodeArtifact {
+    pub manifest: ArtifactManifest,
+    pub project_data: ProjectData,
+    pub globals: Vec<BytecodeGlobal>,
+    pub native_imports: Vec<NativeImport>,
+    pub host_imports: Vec<HostImport>,
+    pub functions: Vec<BytecodeFunction>,
+    pub source_map: SourceMap,
+}
+
+impl BytecodeArtifact {
+    /// Canonical ordering is part of the compiler ABI and is applied before hashing.
+    pub fn canonicalize(&mut self) {
+        self.manifest.required_features.sort();
+        self.manifest.required_features.dedup();
+        self.globals.sort_by_key(|global| global.key);
+        self.native_imports.sort_by_key(|import| import.import.key);
+        self.host_imports.sort_by_key(|import| import.import.key);
+        self.functions.sort_by_key(|function| function.key);
+        self.source_map
+            .entries
+            .sort_by_key(|entry| (entry.function, entry.code_start, entry.code_end));
+    }
+
+    /// Recompute execution and artifact identities after canonical ordering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if one of the canonical section values cannot be encoded.
+    pub fn refresh_ids(&mut self) -> Result<(), serde_json::Error> {
+        self.canonicalize();
+        let versions = serde_json::to_vec(&(
+            self.manifest.isa_version,
+            self.manifest.compiler_abi,
+            self.manifest.native_abi,
+            self.manifest.program_version.vm_abi,
+            self.manifest.program_version.host_abi,
+            &self.manifest.compiler_options,
+            &self.manifest.required_features,
+        ))?;
+        let project = serde_json::to_vec(&self.project_data)?;
+        let globals = serde_json::to_vec(&self.globals)?;
+        let native = serde_json::to_vec(&self.native_imports)?;
+        let host = serde_json::to_vec(&self.host_imports)?;
+        let functions = serde_json::to_vec(&self.functions)?;
+        let execution_id = Digest::hash(
+            "rustyera.bytecode.execution.v1",
+            &[&versions, &project, &globals, &native, &host, &functions],
+        );
+        self.manifest.program_version.execution_id = execution_id;
+
+        let sources = serde_json::to_vec(&self.source_map)?;
+        self.manifest.artifact_id = Digest::hash(
+            "rustyera.bytecode.artifact.v1",
+            &[&execution_id.0, &sources],
+        );
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn into_unvalidated(self) -> UnvalidatedArtifact {
+        UnvalidatedArtifact(self)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnvalidatedArtifact(pub(crate) BytecodeArtifact);
+
+impl UnvalidatedArtifact {
+    #[must_use]
+    pub fn artifact(&self) -> &BytecodeArtifact {
+        &self.0
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> BytecodeArtifact {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DecodeLimits {
+    pub maximum_bytes: u64,
+    pub maximum_section_bytes: u64,
+    pub maximum_sections: u32,
+    pub maximum_functions: u32,
+    pub maximum_instructions: u64,
+}
+
+impl Default for DecodeLimits {
+    fn default() -> Self {
+        Self {
+            maximum_bytes: 1024 * 1024 * 1024,
+            maximum_section_bytes: 512 * 1024 * 1024,
+            maximum_sections: 64,
+            maximum_functions: 1_000_000,
+            maximum_instructions: 100_000_000,
+        }
+    }
+}

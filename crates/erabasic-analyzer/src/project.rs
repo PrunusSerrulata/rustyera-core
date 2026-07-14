@@ -8,7 +8,8 @@ use erabasic_csv::{CsvDiagnosticSeverity, CsvLoadOptions, resolve_deferred_indic
 use erabasic_data::ProjectData;
 use erabasic_hir::{
     Function, FunctionId, FunctionKind, HirArgument, HirExprKind, HirStatement, HirStatementKind,
-    LabelId, LineId, Parameter, Program, SemanticType, SourceFile, SourceId, SourceLocation,
+    InstructionTarget, LabelId, LineId, Parameter, Program, SemanticType, SourceFile, SourceId,
+    SourceLocation,
 };
 use erabasic_parser::{parse_erb, parse_erh};
 use serde::{Deserialize, Serialize};
@@ -83,12 +84,9 @@ pub fn analyze_project(
             &output,
         );
         if let Some(script) = output.value {
+            let source_file = source_file(source.id, source.path, source.kind, &source.text);
             parsed.push(ParsedProjectSource {
-                source: SourceFile {
-                    id: source.id,
-                    relative_path: source.path,
-                    kind: source.kind,
-                },
+                source: source_file,
                 text: source.text,
                 script,
             });
@@ -254,6 +252,7 @@ fn analyze_with_context(
                     function_index,
                     id,
                     kind,
+                    return_type,
                 }),
                 Err(_) => diagnostics.push(at_function(
                     source,
@@ -287,6 +286,7 @@ fn analyze_with_context(
             analyze_function(
                 definition.id,
                 definition.kind,
+                definition.return_type,
                 source,
                 function,
                 &symbols,
@@ -297,7 +297,13 @@ fn analyze_with_context(
                 &mut diagnostics,
             )
         } else {
-            uncalled_function(definition.id, definition.kind, source, function)
+            uncalled_function(
+                definition.id,
+                definition.kind,
+                definition.return_type,
+                source,
+                function,
+            )
         };
         if !reachable.contains(&definition.id) {
             report_uncalled(source, function, options, &mut diagnostics);
@@ -352,6 +358,7 @@ struct FunctionDefinition {
     function_index: usize,
     id: FunctionId,
     kind: FunctionKind,
+    return_type: SemanticType,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -359,6 +366,7 @@ struct FunctionDefinition {
 fn analyze_function(
     id: FunctionId,
     kind: FunctionKind,
+    return_type: SemanticType,
     source: &ParsedProjectSource,
     function: &AstFunction,
     symbols: &Symbols,
@@ -471,6 +479,7 @@ fn analyze_function(
         id,
         name: function.name.clone(),
         kind,
+        return_type,
         parameters,
         lines,
         labels,
@@ -703,9 +712,33 @@ fn analyze_instruction(
             ));
         }
     }
+    let target = if signature.is_none() {
+        InstructionTarget::Unresolved(key)
+    } else if catalog.extension_instructions.contains(&key) {
+        InstructionTarget::Extension(key)
+    } else {
+        InstructionTarget::Builtin(key)
+    };
     HirStatementKind::Instruction {
-        name: key,
+        target,
         arguments: lowered,
+    }
+}
+
+fn source_file(id: SourceId, relative_path: String, kind: SourceKind, text: &str) -> SourceFile {
+    let mut line_starts = vec![0];
+    line_starts.extend(
+        text.bytes()
+            .enumerate()
+            .filter_map(|(index, byte)| (byte == b'\n').then_some((index + 1) as u64)),
+    );
+    SourceFile {
+        id,
+        relative_path,
+        kind,
+        content_hash: *blake3::hash(text.as_bytes()).as_bytes(),
+        byte_len: text.len() as u64,
+        line_starts,
     }
 }
 
@@ -892,6 +925,7 @@ fn uses_dynamic_call(statement: &Statement) -> bool {
 fn uncalled_function(
     id: FunctionId,
     kind: FunctionKind,
+    return_type: SemanticType,
     source: &ParsedProjectSource,
     function: &AstFunction,
 ) -> Function {
@@ -899,6 +933,7 @@ fn uncalled_function(
         id,
         name: function.name.clone(),
         kind,
+        return_type,
         parameters: Vec::new(),
         lines: Vec::new(),
         labels: Vec::new(),

@@ -67,6 +67,7 @@ impl ExtensionRegistry {
 pub(crate) struct Catalog {
     pub instructions: BTreeMap<String, InstructionSignature>,
     pub functions: BTreeMap<String, CallableSignature>,
+    pub extension_instructions: BTreeSet<String>,
     pub extension_functions: BTreeSet<String>,
 }
 
@@ -75,6 +76,11 @@ impl Catalog {
         let mut catalog = Self {
             instructions: builtin_instructions(),
             functions: builtin_functions(),
+            extension_instructions: extensions
+                .instructions
+                .keys()
+                .map(|name| name.to_ascii_uppercase())
+                .collect(),
             extension_functions: extensions
                 .functions
                 .keys()

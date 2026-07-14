@@ -1,21 +1,18 @@
 [package]
-name = "erabasic-analyzer"
+name = "erabasic-bytecode"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 blake3.workspace = true
-erabasic-ast = { path = "../erabasic-ast" }
-erabasic-csv = { path = "../erabasic-csv" }
 erabasic-data = { path = "../erabasic-data" }
 erabasic-hir = { path = "../erabasic-hir" }
-erabasic-lexer = { path = "../erabasic-lexer" }
-erabasic-parser = { path = "../erabasic-parser" }
 serde.workspace = true
+serde_json = "1.0.112"
 
 [dev-dependencies]
-serde_json = "1.0.112"
+erabasic-csv = { path = "../erabasic-csv" }
 
 [lints]
 workspace = true

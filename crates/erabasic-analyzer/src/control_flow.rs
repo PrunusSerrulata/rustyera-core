@@ -48,13 +48,14 @@ pub(crate) fn build_control_flow(
 
     let mut blocks: Vec<OpenBlock> = Vec::new();
     for line in lines {
-        let HirStatementKind::Instruction { name, arguments } = &line.kind else {
+        let HirStatementKind::Instruction { target, arguments } = &line.kind else {
             continue;
         };
-        match name.as_str() {
+        let name = target.name();
+        match name {
             "IF" | "SELECTCASE" | "REPEAT" | "FOR" | "WHILE" | "DO" | "TRYC" | "PRINTDATA"
             | "STRDATA" | "TRYLIST" | "NOSKIP" => blocks.push(OpenBlock {
-                name: name.clone(),
+                name: name.to_owned(),
                 line: line.id,
                 alternatives: Vec::new(),
             }),
@@ -239,7 +240,7 @@ pub(crate) fn build_control_flow(
                     && let Some(function) = symbols.function(target)
                 {
                     edges.push(ControlFlowEdge {
-                        kind: if matches!(name.as_str(), "JUMP" | "TRYJUMP" | "BEGIN") {
+                        kind: if matches!(name, "JUMP" | "TRYJUMP" | "BEGIN") {
                             ControlFlowKind::Jump
                         } else {
                             ControlFlowKind::Call
@@ -369,9 +370,9 @@ fn raw_target(arguments: &[HirArgument]) -> Option<&str> {
 fn falls_through(line: &HirStatement) -> bool {
     !matches!(
         &line.kind,
-        HirStatementKind::Instruction { name, .. }
+        HirStatementKind::Instruction { target, .. }
             if matches!(
-                name.as_str(),
+                target.name(),
                 "RETURN" | "RETURNF" | "RETURNFORM" | "JUMP" | "BEGIN" | "GOTO" | "QUIT"
                     | "BREAK" | "CONTINUE"
             )
