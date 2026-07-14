@@ -251,8 +251,8 @@ internal sealed partial class EmueraConsole : IDisposable
 		cbgList.Sort();
 		return true;
 	}
-	public int ClientWidth { get { return window.MainPicBox.Width; } }
-	public int ClientHeight { get { return window.MainPicBox.Height; } }
+	public int ClientWidth { get { return Program.HeadlessMode ? Config.WindowX : window.MainPicBox.Width; } }
+	public int ClientHeight { get { return Program.HeadlessMode ? Config.WindowY - Config.LineHeight : window.MainPicBox.Height; } }
 	#endregion
 
 	const string ErrorButtonsText = "__openFileWithDebug__";
@@ -289,13 +289,13 @@ internal sealed partial class EmueraConsole : IDisposable
 		}
 	}
 	#endregion
-	public bool Enabled { get { return window.Created; } }
+	public bool Enabled { get { return Program.HeadlessMode || window.Created; } }
 
 	/// <summary>
 	/// 現在、Emueraがアクティブかどうか
 	/// </summary>
 	internal bool IsActive
-	{ get { return !(window == null || !window.Created || Form.ActiveForm == null); } }
+	{ get { return !Program.HeadlessMode && !(window == null || !window.Created || Form.ActiveForm == null); } }
 
 	/// <summary>
 	/// スクリプトが継続中かどうか
@@ -451,7 +451,7 @@ internal sealed partial class EmueraConsole : IDisposable
 		// GlobalStatic.MainWindow = window;
 		process = new GameProc.Process(this);
 		GlobalStatic.Process = process;
-		if (Program.DebugMode && Config.DebugShowWindow)
+		if (!Program.HeadlessMode && Program.DebugMode && Config.DebugShowWindow)
 		{
 			OpenDebugDialog();
 			window.Focus();
@@ -763,6 +763,8 @@ internal sealed partial class EmueraConsole : IDisposable
 	/// </summary>
 	public void setRedrawTimer(int tickcount)
 	{
+		if (Program.HeadlessMode)
+			return;
 		if (tickcount <= 0)
 		{
 			redrawTimer.Enabled = false;
@@ -1095,7 +1097,7 @@ internal sealed partial class EmueraConsole : IDisposable
 		PrintFlush(false);
 		#region EM_textbox位置指定拡張
 		// 入力成功した
-		if (window.TextBoxPosChanged)
+		if (!Program.HeadlessMode && window.TextBoxPosChanged)
 			window.ResetTextBoxPos();
 		#endregion
 		return true;
@@ -1556,6 +1558,11 @@ internal sealed partial class EmueraConsole : IDisposable
 	string debugTitle;
 	public void SetWindowTitle(string str)
 	{
+		if (Program.HeadlessMode)
+		{
+			headlessWindowTitle = str;
+			return;
+		}
 		if (Program.DebugMode)
 		{
 			debugTitle = str;
@@ -1567,10 +1574,14 @@ internal sealed partial class EmueraConsole : IDisposable
 
 	public void SetEmueraVersionInfo(string str)
 	{
+		if (Program.HeadlessMode)
+			return;
 		window.TextBox.Text = str;
 	}
 	public string GetWindowTitle()
 	{
+		if (Program.HeadlessMode)
+			return headlessWindowTitle;
 		if (Program.DebugMode && debugTitle != null)
 			return debugTitle;
 		return window.Text;
@@ -1582,6 +1593,8 @@ internal sealed partial class EmueraConsole : IDisposable
 	/// </summary>
 	public void RefreshStrings(bool force_Paint)
 	{
+		if (Program.HeadlessMode)
+			return;
 		bool isBackLog = window.ScrollBar.Value != window.ScrollBar.Maximum;
 		//ログ表示はREDRAWの設定に関係なく行うようにする
 		if ((redraw == ConsoleRedraw.None) && (!force_Paint) && (!isBackLog))
@@ -2539,6 +2552,8 @@ internal sealed partial class EmueraConsole : IDisposable
 	#region EM_textbox位置指定拡張
 	private void verticalScrollBarUpdate()
 	{
+		if (Program.HeadlessMode)
+			return;
 		int max = displayLineList.Count;
 		int move = max - window.ScrollBar.Maximum;
 		if (move == 0)

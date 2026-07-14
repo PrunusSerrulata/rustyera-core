@@ -1,22 +1,71 @@
-# RustyEra parser
+# RustyEra
 
-RustyEra is a UTF-8 Rust implementation of the EraBasic syntax used by
-Emuera.EM. Compatibility is pinned to reference commit
-`26a35dc9334bb67590b96f7b8efbefbf199e391e` (Emuera 1.824 family).
+RustyEra is a UTF-8 Rust implementation of the EraBasic language front end and
+project-data loading contracts used by Emuera.EM. Compatibility is pinned to
+reference commit `26a35dc9334bb67590b96f7b8efbefbf199e391e` (the Emuera 1.824
+family). Compatibility with that fixed implementation takes priority over
+redesigning the language.
 
-The workspace deliberately separates the public layers:
-
-- `erabasic-ast` contains source spans, diagnostics, and the semantic AST.
-- `erabasic-lexer` implements context-sensitive EraBasic tokenization and FORM
-  string decomposition.
-- `erabasic-parser` parses expressions, logical lines, ERH declarations, ERB
-  functions, preprocessors, and block structure.
-- `erabasic-repl` builds the `rustyera` demonstration binary.
-
-Only UTF-8 input is supported. The crates do not attempt to detect or decode
+Only UTF-8 input is supported. The Rust crates do not detect or decode
 Shift-JIS, GBK, or other legacy encodings.
 
+## Current architecture
+
+The workspace currently contains these implemented components:
+
+| Crate | Responsibility |
+| --- | --- |
+| `erabasic-ast` | Syntax AST, UTF-8 byte spans, and stable diagnostics shared by the lexer and parser. |
+| `erabasic-lexer` | Context-sensitive tokenization, caller-selected terminators, macros, and FORM string decomposition. |
+| `erabasic-parser` | Expressions, logical lines, ERH declarations, ERB functions, preprocessors, and block structure. |
+| `erabasic-data` | Deterministic, Serde-compatible project schema, static data, and initialization/save-loading contracts for future consumers. |
+| `erabasic-csv` | Emuera-compatible loading of an in-memory project file snapshot. It performs no filesystem I/O. |
+| `erabasic-repl` | A small development REPL for manually inspecting lexer and parser behavior. |
+
+The two currently implemented data flows are:
+
+```text
+EraBasic UTF-8 source -> erabasic-lexer -> erabasic-parser -> erabasic-ast
+
+frontend paths + UTF-8 contents/I/O errors -> erabasic-csv -> erabasic-data
+```
+
+Public types are re-exported from each crate root. Larger lexer, parser, CSV,
+and data implementations are split into modules by syntax or data domain.
+
+## Scope and unimplemented components
+
+The Rust implementation does **not** currently include:
+
+- a semantic analyzer;
+- bytecode or another executable intermediate representation;
+- a compiler;
+- a project or program validator;
+- a VM;
+- a runtime.
+
+The parser produces a syntax AST. `ParserContext` supports syntax decisions
+that depend on registries, but it is not a semantic-analysis pass. Likewise,
+CSV loading checks and normalizes project data, but it is not the future
+validator. The C# reference CLI can invoke Emuera's existing evaluator and VM
+for oracle purposes; those operations do not imply equivalent Rust components
+exist.
+
+RustyEra does not implement a concrete application frontend: no GUI, TUI, game
+launcher, filesystem scanner, renderer, audio system, or input loop belongs in
+this repository. Here, “application frontend” means the host/UI layer and is
+distinct from the implemented EraBasic *language* front end.
+
+The intended project boundary is a runtime library plus public interfaces
+between that runtime and an external frontend. The frontend owns filesystem
+I/O and submits relative paths together with decoded UTF-8 content or the I/O
+error it observed. The current repository implements the project-loading side
+of that boundary; the runtime side will be defined when the runtime is
+implemented. No specific frontend architecture is prescribed here.
+
 ## Library use
+
+Parse ERH and ERB source with one persistent parser context:
 
 ```rust
 use erabasic_parser::{DefaultParserContext, parse_erb, parse_erh};
@@ -31,13 +80,30 @@ println!("{:#?}", script.value);
 ```
 
 Applications with their own instruction, variable, function, or configuration
-registries can implement `ParserContext`. This reflects Emuera's original
-separation between syntax parsing and runtime symbol tables.
+registries can implement `ParserContext`.
+
+Load project data without giving the CSV crate filesystem access:
+
+```rust
+use erabasic_csv::{CsvLoadOptions, FilePayload, FrontendFile, ProjectFiles, load_project};
+
+let report = load_project(
+    &ProjectFiles {
+        csv: vec![FrontendFile {
+            relative_path: "ABL.csv".into(),
+            payload: FilePayload::Utf8("0,Strength\n".into()),
+        }],
+        erb: vec![],
+    },
+    &CsvLoadOptions::default(),
+);
+assert!(report.data.is_some());
+```
 
 ## REPL
 
 Run `cargo run -p erabasic-repl`. A plain line is parsed as one EraBasic logical
-line. The following explicit modes are also available:
+line. Explicit modes are also available:
 
 ```text
 :lex SOURCE
@@ -50,28 +116,58 @@ line. The following explicit modes are also available:
 
 `:file` treats `.erh` files as headers and all other extensions as ERB. The REPL
 keeps one parser context, so declarations and macros loaded from an ERH file are
-visible to files parsed later.
+visible to files parsed later. The REPL is a developer tool, not an application
+frontend or runtime.
+
+## Compatibility and testing
+
+Every change must have focused Rust tests and pass the workspace checks:
+
+```sh
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Compatibility work also uses the pinned C# implementation through the
+persistent NDJSON [reference CLI](tools/emuera-reference-cli/README.md):
+
+```powershell
+# Windows
+tools/emuera-reference-cli/tests/protocol-smoke.ps1
+```
+
+```sh
+# macOS through the repository Wine prefix
+tools/emuera-reference-cli/test-macos-wine.sh
+```
+
+A platform smoke test proves only that the oracle works. Differential tests
+must also give the Rust and C# implementations the same source or fixture and
+compare the relevant tokens, syntax shape, diagnostics, schema/static data,
+output, state, values, and termination reason. Request IDs, absolute paths, and
+other explicitly environmental metadata may be ignored.
+
+If `emuera-reference-cli` fails to start, exits unexpectedly, or hangs, it must
+be repaired instead of skipping the oracle comparison. A repair may add a
+minimal headless/reference-only hook under `reference/emuera.em` when necessary,
+but it must not change the normal game's backend execution semantics. Every
+reference-tree modification must be listed separately in both the task handoff
+and [the reference CLI change log](tools/emuera-reference-cli/REFERENCE_CHANGES.md).
+
+Detailed contributor rules and the required test/reporting workflow are in
+[AGENTS.md](AGENTS.md).
 
 ## Design notes
 
 Emuera's lexer changes terminators according to its caller and permits nested
 expressions inside FORM strings. Object-like macro expansion also modifies the
-token stream. These behaviors are not a good fit for a single regular lexer, so
-the implementation uses an explicit UTF-8 cursor. Expressions use a Pratt
-parser whose binding powers correspond to `OperatorCode.cs`.
+token stream. These behaviors are not a good fit for one regular lexer, so the
+implementation uses an explicit UTF-8 cursor. Expressions use a Pratt parser
+whose binding powers correspond to the pinned `OperatorCode.cs` behavior.
 
-The output is a semantic AST: meaningful names and byte spans are retained,
-while whitespace and comments are discarded. Diagnostics use stable English
-categories and UTF-8 byte spans rather than reproducing localized C# messages.
-
-## Verification
-
-For differential tests against the pinned C# engine, see the Windows-only
-[reference CLI](tools/emuera-reference-cli/README.md). It exposes the original
-lexer, parser, evaluator, and VM through a persistent NDJSON process without
-starting the normal UI.
-
-```sh
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-```
+Whitespace and comments are discarded from the syntax AST, while meaningful
+nodes retain UTF-8 byte spans. Diagnostics use stable English categories and
+byte spans rather than reproducing localized C# messages. C# projections must
+distinguish those offsets from the reference implementation's UTF-16 code-unit
+positions.

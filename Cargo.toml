@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/erabasic-ast",
+    "crates/erabasic-data",
+    "crates/erabasic-csv",
     "crates/erabasic-lexer",
     "crates/erabasic-parser",
     "crates/erabasic-repl",
@@ -19,3 +21,5 @@ unsafe_code = "forbid"
 all = "warn"
 pedantic = "warn"
 
+[workspace.dependencies]
+serde = { version = "1.0.210", features = ["derive"] }

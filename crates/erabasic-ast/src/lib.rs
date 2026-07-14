@@ -1,8 +1,9 @@
-//! Semantic syntax tree shared by the `EraBasic` lexer and parser.
+//! Syntax tree shared by the `EraBasic` lexer and parser.
 //!
 //! The tree intentionally omits trivia. Every meaningful node retains a UTF-8
 //! byte span, so clients can slice the original source without converting
 //! between Emuera's UTF-16 indexing and Rust's string representation.
+//! This crate does not implement semantic analysis.
 
 use std::fmt;
 

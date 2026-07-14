@@ -1,0 +1,15 @@
+[package]
+name = "erabasic-csv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+erabasic-data = { path = "../erabasic-data" }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json = "1.0.112"
+
+[lints]
+workspace = true

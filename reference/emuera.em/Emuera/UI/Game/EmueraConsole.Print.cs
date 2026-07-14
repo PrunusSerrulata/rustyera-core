@@ -60,7 +60,8 @@ internal sealed partial class EmueraConsole : IDisposable
 		lineNo = 0;
 		lastDrawnLineNo = -1;
 		verticalScrollBarUpdate();
-		window.Refresh();//OnPaint発行
+		if (!Program.HeadlessMode)
+			window.Refresh();//OnPaint発行
 	}
 
 
@@ -112,6 +113,8 @@ internal sealed partial class EmueraConsole : IDisposable
 	{
 		bgColor = color;
 		forceTextBoxColor = true;
+		if (Program.HeadlessMode)
+			return;
 		//REDRAWされない場合はTextBoxの色は変えずにフラグだけ立てる
 		//最初の再描画時に現在の背景色に合わせる
 		if (redraw == ConsoleRedraw.None && window.ScrollBar.Value == window.ScrollBar.Maximum)
@@ -644,7 +647,8 @@ internal sealed partial class EmueraConsole : IDisposable
 	}
 	public void ClearText()
 	{
-		window.clear_richText();
+		if (!Program.HeadlessMode)
+			window.clear_richText();
 	}
 
 	public void PrintPlainWithSingleLineFix(string str)
@@ -786,7 +790,7 @@ internal sealed partial class EmueraConsole : IDisposable
 
 		if (outputLog(filename, hideInfo))
 		{
-			if (window.Created)
+			if (!Program.HeadlessMode && window.Created)
 			{
 				PrintSystemLine(string.Format(trsl.LogFileHasBeenCreated.Text, filename.Replace(Program.ExeDir, "")));
 				RefreshStrings(true);
@@ -810,7 +814,7 @@ internal sealed partial class EmueraConsole : IDisposable
 
 		if (outputLog(filename, false))
 		{
-			if (window.Created)
+			if (!Program.HeadlessMode && window.Created)
 			{
 				PrintSystemLine(string.Format(trsl.LogFileHasBeenCreated.Text, filename.Replace(Program.ExeDir, "")));
 				RefreshStrings(true);

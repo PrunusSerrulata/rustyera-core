@@ -1,5 +1,4 @@
 using MinorShift.Emuera;
-using MinorShift.Emuera.Forms;
 using MinorShift.Emuera.GameView;
 using MinorShift.Emuera.Runtime.Config;
 using MinorShift.Emuera.Runtime.Config.JSON;
@@ -9,16 +8,13 @@ using MinorShift.Emuera.Runtime.Utils;
 using MinorShift.Emuera.Runtime.Utils.EvilMask;
 using System.Globalization;
 using System.Text.Json.Nodes;
-using System.Windows.Forms;
 
 namespace Emuera.ReferenceCli;
 
 internal sealed class ReferenceHost : IDisposable
 {
-    MainWindow? window;
     EmueraConsole? console;
     string? gameDirectory;
-    static bool windowsFormsInitialized;
 
     internal EmueraConsole? ConsoleOrNull => console;
     internal bool IsLoaded => console?.HeadlessProcess is not null;
@@ -32,20 +28,15 @@ internal sealed class ReferenceHost : IDisposable
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
         CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
         CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
-        if (!windowsFormsInitialized)
-        {
-            // Match the startup policy generated for the reference WinForms app.
-            ApplicationConfiguration.Initialize();
-            windowsFormsInitialized = true;
-        }
         MinorShift.Emuera.Program.ConfigureHeadless(directory, request["debug"]?.GetValue<bool>() ?? false);
         ConfigData.Instance.LoadConfig();
         JSONConfig.Load();
         Lang.LoadLanguageFiles();
         Lang.SetLanguage();
-        window = new MainWindow([]) { ShowInTaskbar = false, Opacity = 0 };
-        _ = window.Handle;
-        console = window.HeadlessConsole;
+        // Construct the regular Emuera backend without creating a native
+        // WinForms handle. Creating a hidden Form still blocks under Wine when
+        // no interactive desktop is available.
+        console = EmueraConsole.CreateHeadless();
         console.noOutputLog = true;
         await console.Initialize();
         gameDirectory = directory;
@@ -153,9 +144,7 @@ internal sealed class ReferenceHost : IDisposable
     internal void Reset()
     {
         console?.Dispose();
-        window?.Dispose();
         console = null;
-        window = null;
         gameDirectory = null;
         GlobalStatic.Reset();
     }
