@@ -14,6 +14,7 @@ mod memory;
 mod runtime_port;
 mod runtime_vm;
 mod save;
+mod sfmt;
 mod snapshot;
 mod state;
 mod value;

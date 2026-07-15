@@ -5,7 +5,7 @@
 
 use std::ffi::{c_char, c_void};
 
-pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 1, minor: 0 };
+pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 2, minor: 0 };
 pub const ERA_RUNTIME_GET_API_SYMBOL: &str = "era_runtime_get_api";
 
 #[repr(C)]

@@ -131,6 +131,43 @@ fn input_wait_and_getkey_bindings_preserve_dynamic_stability() {
 }
 
 #[test]
+fn mutable_arguments_are_lowered_as_places_in_hir_v3() {
+    let project = analyze("@SYSTEM_TITLE\nSWAP FLAG:0, FLAG:1\nRETURN\n");
+    let arguments = project.program.functions[0]
+        .lines
+        .iter()
+        .find_map(|line| match &line.kind {
+            erabasic_hir::HirStatementKind::Instruction { arguments, .. }
+                if !arguments.is_empty() =>
+            {
+                Some(arguments)
+            }
+            _ => None,
+        })
+        .expect("SWAP arguments");
+    assert!(
+        arguments
+            .iter()
+            .all(|argument| matches!(argument, erabasic_hir::HirArgument::Place(_)))
+    );
+
+    let artifact = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .expect("place fixture should compile");
+    assert!(
+        artifact.functions[0]
+            .code
+            .iter()
+            .any(|instruction| instruction.opcode == Opcode::MakePlace as u16)
+    );
+}
+
+#[test]
 fn every_analyzer_builtin_has_one_explicit_execution_class() {
     let registry = default_host_registry();
     for name in builtin_instruction_names()

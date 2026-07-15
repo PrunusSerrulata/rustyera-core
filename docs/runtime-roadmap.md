@@ -20,18 +20,54 @@ backward compatible until the project explicitly changes that policy.
 - Configuration, resource manifests and resource payloads are no longer silently discarded:
   invalid I/O/encoding is diagnosed and valid deferred handling has a stable warning.
 
-## Batch 2: deterministic Native, input and text runtime
+## Completed: batch 2, deterministic Native, input and text foundation
 
-- Implement reference SFMT/RAND, seed/RANDDATA, RANDOMIZE/INITRAND/DUMPRAND and snapshot-capable
-  Native state, followed by core string, array, character, map, XML and DataTable operations.
-- Complete INPUT/TINPUT/BINPUT/TWAIT/AWAIT/FORCEWAIT/GETKEY/primitive input, message-skip,
-  ISTIMEOUT, countdown updates and concurrent runnable fibers during QTE waits.
-- Implement the text presentation reducer: PRINT suffixes, waits, style/alignment, buttons,
-  line mutation, skip/log, HTML text semantics and script-observable presentation queries.
-- Add typed cancellation, operation-specific service errors and pending-operation deadlines.
+Completed in the first Batch 2 implementation slice:
+
+- Runtime protocol 4.0 and C ABI 2.0 add semantic column/separator capability negotiation.
+  Wire 2.0 and debug protocol 2.0 are unchanged.
+- HIR format 3 preserves mutable instruction arguments as places. Container 3.0, ISA 2.0,
+  compiler ABI 3 and Native ABI 2 add `MakePlace`; bytecode validation and the interpreter
+  understand the operand. Compiler control placeholders now fault instead of returning defaults.
+- SFMT-19937 uses the pinned 624-word algorithm, high-word-first `u64`, low-32-bit seeds and
+  snapshot state. New-game seed acquisition initializes the Native registry. `RAND` and
+  `RANDOMIZE` share this state and reject invalid operands.
+- The initial stateless Native set covers integer/bit operations, UTF-8 and scalar string lengths,
+  conversions, Unicode, MIN/MAX/LIMIT/INRANGE, search, replace and byte/scalar substring. Non-U
+  positions use UTF-8 bytes and advance partial positions to valid boundaries; this is the
+  documented difference from reference code-page mode.
+- Primitive input deliberately remains frontend-normalized. The frontend sends EraBasic-shaped
+  device fields and an optional opaque selection token; runtime atomically commits `RESULT[0..5]`
+  and `RESULTS`. Only runtime can synthesize timeout type 4. This is an explicit exception to raw
+  device collection, not delegation of acceptance, timeout or game rules.
+- INPUTMOUSEKEY uses its positive deadline. Timed completions update sticky `ISTIMEOUT`; untimed
+  waits leave it unchanged. `AWAIT` accepts 0..10000 ms and positive values use logical deadlines.
+- One wait is visible and later fiber waits queue in scheduler order. A foreground wait no longer
+  stops runnable fibers; stable `WaitingInput` begins after runnable work is exhausted. PRINTW
+  commits its logical line before opening an Enter wait.
+- Presentation has an uncommitted logical-line buffer. PRINTC/PRINTFORMC retain right-aligned
+  cells, PRINTLC/PRINTFORMLC left-aligned cells, and DRAWLINE is an independent separator after a
+  flush. Capability fallback uses one ASCII space and deterministic plain separator text.
+- `GETLINESTR` uses 75 deterministic Unicode logical columns, does not split graphemes and rejects
+  empty/zero-width patterns. Deferred display/HTML queries fault as
+  `UnsupportedRuntimeFeature` rather than returning placeholders.
+
+Batch 2 closes at the reusable execution, input-wait and presentation foundations above. Work
+that requires authoritative game state, storage transactions, full presentation services or
+debugger source inspection is assigned to the corresponding later batch below.
 
 ## Batch 3: reference system controller
 
+- Add VM-mediated Native place transactions. Use them to make `INITRAND`/`DUMPRAND` atomically
+  exchange all 625 RANDDATA cells and to implement mutable array/sort/find operations. Runtime
+  always uses SFMT; `UseNewRandom=true` is ignored with one stable compatibility warning.
+- Complete the remaining game-rule input behavior: TINPUT sixth-argument message-skip, actual
+  message-skip state, countdown updates, queued-wait deadline activation, BINPUT button
+  construction, INPUTANY parsing and cancellation. Preserve normalized `PrimitiveInput`; runtime
+  must not map operating-system keys, buttons or coordinates.
+- Add the remaining math, regex and CSV Native functions, followed by character, Map, XML and
+  DataTable state needed by system functions. Define deterministic snapshot schemas for every
+  stateful Native service. Missing functions must fault rather than return type-default values.
 - Implement pure runtime states for TITLE, TRAIN, AFTERTRAIN, ABLUP, TURNEND, SHOP, FIRST and
   NORMAL, including BEGIN/QUIT/restart legality and system function transitions.
 - Drive VM entrypoints only through runtime ports and atomically commit RESULT, SOURCE, BOUGHT,
@@ -41,6 +77,8 @@ backward compatible until the project explicitly changes that policy.
 
 ## Batch 4: current traditional saves and storage
 
+- Generalize input waits, frontend services and storage work into a typed pending-operation
+  registry with deadlines, operation-specific errors, cancellation policies and atomic shutdown.
 - Add an I/O-free `era-runtime-save` crate for the pinned current ordinary/global save formats,
   variable/character DAT, text and log formats.
 - Implement slots, SAVEINFO, overwrite, autosave, TITLE_LOADGAME, SYSTEM_LOAD and EVENTLOAD.
@@ -58,6 +96,9 @@ backward compatible until the project explicitly changes that policy.
 
 ## Batch 6: media and platform services
 
+- Complete canonical text presentation semantics: style and alignment state, buttons, line
+  mutation, skip/log behavior and HTML_PRINT logical text. Keep GETDISPLAYLINE and the deferred
+  HTML query family unavailable until a deterministic non-GDI contract is approved.
 - Implement images, shapes, backgrounds, sprite/canvas, font/image metrics, tooltips, logical
   audio/BGM, video, URL, network update and focus/device services.
 - Runtime owns resource identities, canonical scene and logical channels. Frontends only measure,
@@ -66,6 +107,8 @@ backward compatible until the project explicitly changes that policy.
 
 ## Batch 7: debugger implementation
 
+- Resolve runtime-generated UnsupportedRuntimeFeature, input and Native faults through bytecode
+  source maps so every available fault carries its command and UTF-8 source location.
 - Dispatch the independent debug channel with explicit scope grants.
 - Implement VM inspection/control ports, runtime game-field descriptors, global pause, stepping,
   breakpoints and hot-reload rebinding.

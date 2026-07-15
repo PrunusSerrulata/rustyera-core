@@ -38,6 +38,12 @@ pub struct ClientCapabilities {
     pub video: bool,
     #[n(6)]
     pub font_metrics: bool,
+    /// The frontend can lay out PRINTC-family semantic column cells.
+    #[n(7)]
+    pub column_cells: bool,
+    /// The frontend can render a semantic separator independently of text width.
+    #[n(8)]
+    pub separators: bool,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -289,6 +295,8 @@ pub enum FaultCode {
     ResourceLimit,
     #[n(6)]
     Internal,
+    #[n(7)]
+    UnsupportedRuntimeFeature,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

@@ -26,8 +26,9 @@ pub use lifecycle::{
 };
 pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage, RuntimeResynchronized};
 pub use presentation::{
-    AudioState, Color, DisplayLine, DisplayRun, LineAlignment, MediaPlacement, PresentationDelta,
-    PresentationOperation, PresentationSettings, PresentationSnapshot, RunLayout, Shape, TextStyle,
+    AudioState, CellAlignment, Color, DisplayLine, DisplayRun, LineAlignment, MediaPlacement,
+    PresentationDelta, PresentationOperation, PresentationSettings, PresentationSnapshot,
+    RunLayout, SeparatorRole, Shape, TextStyle,
 };
 pub use project::{
     DiagnosticSeverity, FileCategory, FileChange, FilePayload, FrontendIoError,

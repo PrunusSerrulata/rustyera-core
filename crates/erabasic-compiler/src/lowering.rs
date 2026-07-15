@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use erabasic_ast::{AssignOp, BinaryOp, PostfixOp, UnaryOp};
 use erabasic_bytecode::{
     BytecodeFunction, BytecodeParameter, BytecodeType, Digest, EncodedInstruction, FunctionImport,
-    HostEffect, HostImport, ImportKind, NativeImport, Opcode, RuntimeImport, SourceMapEntry,
-    SymbolKey, opcode,
+    HostEffect, HostImport, ImportKind, NATIVE_ABI_VERSION, NativeImport, Opcode, RuntimeImport,
+    SourceMapEntry, SymbolKey, opcode,
 };
 use erabasic_hir::{
     CallTarget, ControlFlowKind, Function, FunctionId, HirArgument, HirExpr, HirExprKind,
@@ -477,6 +477,34 @@ impl<'a> Builder<'a> {
     fn lower_argument(&mut self, argument: &HirArgument, location: SourceLocation) -> BytecodeType {
         match argument {
             HirArgument::Expression(expression) => self.lower_expression(expression, location),
+            HirArgument::Place(place) => {
+                for index in &place.indices {
+                    self.lower_expression(index, location);
+                }
+                let value_type = match place.value_type {
+                    SemanticType::String => BytecodeType::StringPlace,
+                    SemanticType::Integer | SemanticType::Void | SemanticType::Error => {
+                        BytecodeType::IntegerPlace
+                    }
+                };
+                if let Some(key) = self.context.variable_keys.get(&place.variable).copied() {
+                    self.emit(
+                        opcode::variable(
+                            Opcode::MakePlace,
+                            key,
+                            u16::try_from(place.indices.len()).unwrap_or(u16::MAX),
+                            0,
+                        ),
+                        location,
+                    );
+                } else {
+                    self.emit(
+                        EncodedInstruction::new(Opcode::Trap, b"missing variable place".to_vec()),
+                        location,
+                    );
+                }
+                value_type
+            }
             HirArgument::Formatted(formatted) => self.lower_formatted(formatted, location),
             HirArgument::Raw(value) => {
                 self.emit(opcode::push_string(value), location);
@@ -761,7 +789,7 @@ impl<'a> Builder<'a> {
         let import = runtime_import(
             "rustyera.vm",
             &name.to_ascii_lowercase(),
-            1,
+            NATIVE_ABI_VERSION,
             parameters,
             result,
         );

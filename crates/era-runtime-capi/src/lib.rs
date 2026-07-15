@@ -48,7 +48,7 @@ fn registry() -> &'static Mutex<Registry> {
     REGISTRY.get_or_init(|| Mutex::new(Registry::default()))
 }
 
-/// Return the ABI v1 function table. The table itself contains no Rust layout.
+/// Return the ABI v2 function table. The table itself contains no Rust layout.
 #[unsafe(no_mangle)]
 /// # Safety
 ///
@@ -311,7 +311,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exports_a_complete_v1_function_table() {
+    fn exports_a_complete_v2_function_table() {
         let mut api = std::mem::MaybeUninit::<EraRuntimeApi>::uninit();
         assert_eq!(
             // SAFETY: MaybeUninit provides writable storage for the complete table.

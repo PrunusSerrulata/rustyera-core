@@ -113,7 +113,10 @@ pub struct PrimitiveInput {
     #[n(3)]
     pub result_3: i32,
     #[n(4)]
-    pub result_4: i64,
+    pub result_4: i32,
+    /// Optional runtime-issued selection token. The frontend never supplies RESULT[5].
+    #[n(5)]
+    pub selection_token: Option<InteractionToken>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

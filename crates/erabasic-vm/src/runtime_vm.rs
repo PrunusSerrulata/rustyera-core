@@ -28,12 +28,30 @@ impl RuntimeVm {
     }
 
     #[must_use]
+    pub fn new_with_seed(artifact: ValidatedArtifact, config: VmConfig, seed: u64) -> Self {
+        let natives = NativeServiceRegistry::for_artifact_with_seed(artifact.artifact(), seed);
+        Self {
+            vm: Vm::new(artifact, config),
+            natives,
+        }
+    }
+
+    #[must_use]
     pub const fn vm(&self) -> &Vm {
         &self.vm
     }
 
     pub const fn vm_mut(&mut self) -> &mut Vm {
         &mut self.vm
+    }
+
+    /// Whether at least one fiber can make progress without a host completion.
+    #[must_use]
+    pub fn has_runnable_fibers(&self) -> bool {
+        self.vm
+            .fibers
+            .values()
+            .any(|fiber| matches!(fiber.state, FiberState::Runnable))
     }
 }
 
@@ -293,9 +311,11 @@ fn validate_ready(
             .iter()
             .find(|definition| definition.key == write.target.variable)
             .ok_or_else(|| VmError::InvalidState("host write variable is missing".into()))?;
-        if !definition.mutable || definition.value_type != write.value.value_type() {
+        // Host completions are constructed by the trusted runtime and must update
+        // reference pseudo-variables such as immutable-to-script ISTIMEOUT.
+        if definition.value_type != write.value.value_type() {
             return Err(VmError::InvalidArguments(
-                "host write type or mutability differs".into(),
+                "host write value type differs".into(),
             ));
         }
         let _ = vm.read_place(fiber, &write.target)?;

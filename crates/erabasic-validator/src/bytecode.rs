@@ -552,7 +552,7 @@ fn apply_instruction(
             }
             stack.push(BytecodeType::String);
         }
-        Opcode::LoadVariable | Opcode::StoreVariable => {
+        Opcode::LoadVariable | Opcode::StoreVariable | Opcode::MakePlace => {
             expect_payload(&instruction.payload, 19)?;
             let key = read_key(&instruction.payload)?;
             let indices = read_u16(&instruction.payload, 16)? as usize;
@@ -566,7 +566,9 @@ fn apply_instruction(
                     "variable index count exceeds its schema".into(),
                 ));
             }
-            if opcode_value == Opcode::LoadVariable && instruction.payload[18] != 0 {
+            if matches!(opcode_value, Opcode::LoadVariable | Opcode::MakePlace)
+                && instruction.payload[18] != 0
+            {
                 return Err((
                     ValidationCode::InvalidOperand,
                     "load instruction has a store operation tag".into(),
@@ -594,6 +596,17 @@ fn apply_instruction(
             }
             if opcode_value == Opcode::LoadVariable {
                 stack.push(global.value_type);
+            } else if opcode_value == Opcode::MakePlace {
+                stack.push(match global.value_type {
+                    BytecodeType::Integer => BytecodeType::IntegerPlace,
+                    BytecodeType::String => BytecodeType::StringPlace,
+                    BytecodeType::IntegerPlace | BytecodeType::StringPlace => {
+                        return Err((
+                            ValidationCode::InvalidOperand,
+                            "a variable schema cannot contain place values".into(),
+                        ));
+                    }
+                });
             }
         }
         Opcode::Unary => {
