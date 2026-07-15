@@ -18,6 +18,8 @@ pub struct Color {
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
+// These are independent font attributes in Emuera's observable console state.
+#[allow(clippy::struct_excessive_bools)]
 pub struct TextStyle {
     #[n(0)]
     pub foreground: Color,
@@ -30,10 +32,41 @@ pub struct TextStyle {
     #[n(4)]
     pub underline: bool,
     #[n(5)]
+    pub strikeout: bool,
+    #[n(6)]
     pub font_family: Option<String>,
     /// Font size in 1/1000 point units; the wire contract contains no floats.
-    #[n(6)]
+    #[n(7)]
     pub font_millipoints: u32,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum LineAlignment {
+    #[n(0)]
+    Left,
+    #[n(1)]
+    Center,
+    #[n(2)]
+    Right,
+}
+
+/// Deterministic layout produced after the runtime has obtained font metrics.
+/// Coordinates use 1/1000 pixel units and are relative to the logical line.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct RunLayout {
+    #[n(0)]
+    pub x_millipixels: i64,
+    #[n(1)]
+    pub y_millipixels: i64,
+    #[n(2)]
+    pub width_millipixels: i64,
+    #[n(3)]
+    pub height_millipixels: i64,
+    #[n(4)]
+    pub depth: i64,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -75,17 +108,23 @@ pub enum DisplayRun {
         text: String,
         #[n(1)]
         style: TextStyle,
+        #[n(2)]
+        layout: RunLayout,
     },
     #[n(1)]
     Button {
         #[n(0)]
-        text: String,
+        runs: Vec<DisplayRun>,
         #[n(1)]
         value: ProtocolValue,
         #[n(2)]
         generation: u64,
         #[n(3)]
-        style: TextStyle,
+        title: Option<String>,
+        #[n(4)]
+        layout: RunLayout,
+        #[n(5)]
+        hover_style: Option<TextStyle>,
     },
     #[n(2)]
     Html {
@@ -103,6 +142,8 @@ pub enum DisplayRun {
     Shape {
         #[n(0)]
         shape: Shape,
+        #[n(1)]
+        layout: RunLayout,
     },
 }
 
@@ -114,7 +155,28 @@ pub struct DisplayLine {
     #[n(1)]
     pub temporary: bool,
     #[n(2)]
+    pub logical_line_start: bool,
+    #[n(3)]
+    pub line_end: bool,
+    #[n(4)]
+    pub alignment: LineAlignment,
+    #[n(5)]
+    pub layout_width_millipixels: Option<i64>,
+    #[n(6)]
     pub runs: Vec<DisplayRun>,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct PresentationSettings {
+    #[n(0)]
+    pub drawable_width_millipixels: i64,
+    #[n(1)]
+    pub line_height_millipixels: i64,
+    #[n(2)]
+    pub background: Color,
+    #[n(3)]
+    pub button_focus_foreground: Color,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -149,6 +211,8 @@ pub struct PresentationSnapshot {
     pub audio: Vec<AudioState>,
     #[n(5)]
     pub input_wait: Option<InputWait>,
+    #[n(6)]
+    pub settings: PresentationSettings,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -185,6 +249,18 @@ pub enum PresentationOperation {
     SetInputWait {
         #[n(0)]
         input_wait: Option<InputWait>,
+    },
+    #[n(7)]
+    ReplaceLine {
+        #[n(0)]
+        line_id: u64,
+        #[n(1)]
+        line: DisplayLine,
+    },
+    #[n(8)]
+    SetSettings {
+        #[n(0)]
+        settings: PresentationSettings,
     },
 }
 

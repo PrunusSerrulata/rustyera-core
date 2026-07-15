@@ -7,6 +7,64 @@ use crate::{
     VmSnapshot, VmValue,
 };
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VmRuntimeRead {
+    pub variable: SymbolKey,
+    pub indices: Vec<u64>,
+    pub character: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VmRuntimeWrite {
+    pub variable: SymbolKey,
+    pub indices: Vec<u64>,
+    pub character: Option<u64>,
+    pub value: VmValue,
+}
+
+/// Mutations needed by the reference system controller. Script instructions keep
+/// using regular bytecode operations; this transaction is only legal between slices.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VmRuntimeStateTransaction {
+    ResetNewGame,
+    Mutate {
+        writes: Vec<VmRuntimeWrite>,
+        clear_characters: bool,
+        add_characters_from_csv: Vec<i64>,
+    },
+}
+
+/// Opaque commit token containing a fully validated candidate memory image.
+pub struct PreparedRuntimeState {
+    pub(crate) generation: GenerationId,
+    pub(crate) memory: crate::Memory,
+    pub(crate) reset_execution: bool,
+}
+
+/// Transactional state access used by the runtime's built-in system controller.
+/// It intentionally excludes frame-local places and exposes no VM-owned references.
+pub trait VmRuntimeStatePort {
+    /// # Errors
+    ///
+    /// Returns an error for frame-local, missing, or out-of-bounds storage.
+    fn read_runtime_state(&self, reads: &[VmRuntimeRead]) -> Result<Vec<VmValue>, VmError>;
+
+    /// Validate the entire operation against a cloned memory image.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without changing the VM when any mutation is invalid.
+    fn prepare_runtime_state(
+        &self,
+        transaction: VmRuntimeStateTransaction,
+    ) -> Result<PreparedRuntimeState, VmError>;
+
+    /// # Errors
+    ///
+    /// Returns an error if the program generation changed after preparation.
+    fn commit_runtime_state(&mut self, prepared: PreparedRuntimeState) -> Result<(), VmError>;
+}
+
 /// Prospective execution mode used by a runtime actor or debugger. Normal scheduling
 /// remains fair; selected-fiber mode is only valid while every other fiber is paused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,15 +123,15 @@ pub struct VmWaitRebind {
     pub payload: Vec<u8>,
 }
 
-/// Normative future runtime/VM port.
+/// Runtime/VM port used by the caller-pumped runtime actor.
 ///
 /// This trait intentionally contains no runtime callback. `drive` first returns host
 /// requests; the runtime stages its own state transition and asks the VM to validate a
 /// completion. With one serialized owner, committing the returned token cannot observe
 /// an intervening VM mutation.
 ///
-/// `Vm` does not implement this trait yet. The existing callback-based interpreter is
-/// retained until the runtime itself is implemented and can exercise this contract.
+/// [`crate::RuntimeVm`] adapts the interpreter to this contract. The lower-level `Vm`
+/// callback API remains available for embedders that do not use the runtime actor.
 pub trait VmRuntimePort {
     type PreparedCompletion;
 

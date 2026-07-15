@@ -142,7 +142,7 @@ impl Vm {
         Ok(report)
     }
 
-    fn clear_execution(&mut self) {
+    pub(crate) fn clear_execution(&mut self) {
         for fiber in self.fibers.values_mut() {
             fiber.state = FiberState::Cancelled;
         }

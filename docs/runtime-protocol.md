@@ -1,7 +1,11 @@
 # Runtime and frontend protocol
 
-This document specifies interfaces for a future RustyEra runtime. The repository does
-not yet contain that runtime or a usable dynamic library.
+面向应用前端开发的中文 ABI、参数、返回值和消息流程说明见
+[Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
+
+This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
+dynamic library. Protocol 2.0 is a development contract: by explicit project policy it
+does not promise backward compatibility until a frontend exists.
 
 ## Authority and ownership
 
@@ -81,10 +85,10 @@ Runtime-initiated work is asynchronous:
   may carry an expected revision.
 
 The runtime and all lower crates perform no concrete file I/O and sample no system clock.
-Traditional save bytes are serialized/deserialized by a future runtime but persisted by
-storage requests. `StateExportRequest` selects traditional data or a VM snapshot; an
-ineligible snapshot returns structured reasons instead of silently falling back. VM
-snapshots are accepted only for the exact artifact identity.
+Traditional save bytes remain a reserved, unimplemented runtime feature and would be
+persisted by storage requests. `StateExportRequest` currently returns structured
+ineligibility reasons for both formats. A later exact VM snapshot implementation must
+accept snapshots only for the exact artifact identity.
 
 ## Input, QTE and presentation
 
@@ -114,17 +118,29 @@ responses and update the runtime's logical resource revision.
 
 ## Runtime and VM boundary
 
-`VmRuntimePort` is the normative prospective interface. `drive` executes a bounded slice
+`VmRuntimePort` is the runtime execution interface. `drive` executes a bounded slice
 and returns `VmHostRequest` values only after instruction dispatch has unwound. The runtime
 then stages its own transition, asks the VM to validate a typed completion, commits the VM
 completion and finally publishes runtime events. No VM instruction invokes a callback that
 can mutate runtime state.
 
-Snapshot restore uses the same prepare/rebind/commit shape. VM-native services may only
+`RuntimeVm` adapts the interpreter to this caller-pumped interface. Snapshot restore uses
+the same prepare/rebind/commit shape. VM-native services may only
 touch deterministic VM-owned state; anything involving runtime or frontend capabilities
-is a `CallHost` request. Existing `VmHost` remains temporarily available for the current
-interpreter, and `Vm` intentionally does not implement the prospective port yet.
+is a `CallHost` request. Existing `VmHost` remains available for lower-level embedding;
+the runtime itself uses the adapter and never invokes runtime code from instruction
+dispatch.
 
-Hot reload is supplied as a project revision/delta, compiled and validated by a future
-runtime, and committed only between VM slices. Old frames remain generation-pinned.
-Presentation waits and source breakpoints are rebound only after successful commit.
+The VM implements generation-pinned hot reload, but runtime project-delta orchestration is
+not enabled in this stage. When enabled it must compile and validate between VM slices;
+presentation waits and source breakpoints are rebound only after successful commit.
+
+## Implemented stage
+
+The current runtime implements handshake, full in-memory project load/analyze/compile/
+validate, deterministic new-game startup, bounded VM driving, basic text presentation,
+reference-shaped input waits and timeouts, fresh GETKEY-family queries, frontend-owned
+local time and new-game seed acquisition, state resynchronization, explicit feature rejection, faults, and
+shutdown. It does not advertise save/snapshot, reload, media/audio, mouse, or debugger
+features. The seed is retained as runtime state, but the compiler/VM does not yet expose a
+seeded RAND native service. Unsupported Host imports fault instead of being guessed.

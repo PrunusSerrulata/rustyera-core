@@ -6,14 +6,14 @@ use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AdvanceTime, ClientHello, FrontendInput, PresentationDelta, PresentationSnapshot,
-    ProjectLoadReport, ProjectManifest, ReloadProject, RuntimeFault, RuntimeStateChanged,
-    ServerHello, ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
-    StateExportReady, StateExportRequest, StorageRequest, StorageResponse, VersionRejected,
-    WaitChange,
+    AdvanceTime, ClientHello, CommandRejected, FrontendInput, PresentationDelta,
+    PresentationSnapshot, ProjectLoadReport, ProjectManifest, ReloadProject, RuntimeFault,
+    RuntimeStateChanged, ServerHello, ServiceRequest, ServiceResponse, ShutdownReady,
+    ShutdownRequest, StartRequest, StateExportReady, StateExportRequest, StorageRequest,
+    StorageResponse, VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 1);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(2, 0);
 
 /// Stable runtime message variants. Numeric discriminants are wire IDs and must
 /// never be reused, even after a message is retired.
@@ -68,6 +68,8 @@ pub enum RuntimeMessage {
     Acknowledge(#[n(0)] u64),
     #[n(94)]
     Resynchronize(#[n(0)] u64),
+    #[n(95)]
+    CommandRejected(#[n(0)] CommandRejected),
 }
 
 impl RuntimeMessage {
@@ -98,6 +100,7 @@ impl RuntimeMessage {
             Self::Fault(_) => 92,
             Self::Acknowledge(_) => 93,
             Self::Resynchronize(_) => 94,
+            Self::CommandRejected(_) => 95,
         }
     }
 

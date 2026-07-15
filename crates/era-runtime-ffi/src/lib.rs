@@ -1,8 +1,7 @@
-//! C ABI declarations for a future runtime dynamic library.
+//! C ABI declarations shared by the runtime dynamic library and its frontends.
 //!
-//! This crate deliberately exports no symbol and does not implement a runtime. It is
-//! the Rust source for the checked-in C header and fixes ownership, versioning and
-//! caller-driven pumping before an implementation is introduced.
+//! This safe crate fixes ownership, versioning and caller-driven pumping. The audited
+//! raw-pointer implementation lives in `era-runtime-capi`.
 
 use std::ffi::{c_char, c_void};
 
@@ -146,10 +145,10 @@ impl Default for EraDriveResult {
 
 /// Opaque slot for a C function pointer. The checked C header supplies the typed
 /// signatures. Rust callers must not receive a safe function type accepting arbitrary
-/// raw pointers; a future implementation crate will expose audited unsafe bindings.
+/// raw pointers; `era-runtime-capi` exposes the audited unsafe bindings.
 pub type EraFunctionPointer = *const c_void;
 
-/// Versioned function table returned by the future `era_runtime_get_api` symbol.
+/// Versioned function table returned by the `era_runtime_get_api` symbol.
 /// No callback into the frontend appears here; all communication uses submit/poll.
 #[repr(C)]
 pub struct EraRuntimeApi {

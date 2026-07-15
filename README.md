@@ -30,7 +30,9 @@ The workspace currently contains these implemented components:
 | `era-protocol` | Deterministic CBOR envelope, version negotiation, identifiers, limits, and diagnostic JSON projection for future runtime transports. |
 | `era-runtime-protocol` | Normal runtime/frontend lifecycle, project, input, presentation, storage, and service interface definitions. |
 | `era-debug-protocol` | Separately versioned, capability-gated EraBasic debugger interface definitions. |
-| `era-runtime-ffi` | C ABI function-table and header declarations for a future dynamic library; it contains no runtime implementation. |
+| `era-runtime` | Caller-pumped runtime actor for handshake, in-memory project compilation, new-game startup, bounded VM execution, text/input waits, clock/key/entropy services, and shutdown. |
+| `era-runtime-ffi` | Safe C ABI function-table and checked header declarations. |
+| `era-runtime-capi` | Dynamic-library implementation of the C ABI; this is the only crate that audits raw pointers and uses `unsafe`. |
 
 The currently implemented data flows are:
 
@@ -45,19 +47,26 @@ ProjectData + frontend ERH/ERB paths + UTF-8 contents/I/O errors
 AnalyzedProject -> erabasic-compiler -> erabasic-validator
     -> self-contained .erbc bytes + incremental cache/patch
 
-ValidatedArtifact -> erabasic-vm <-> runtime-provided Host/native services
+frontend envelopes -> era-runtime -> erabasic-vm
+                   <- presentation/input/service envelopes
 ```
 
 Public types are re-exported from each crate root. Larger implementations are split
 into modules by syntax, data domain, executable format, or compilation phase.
 
-## Scope and unimplemented components
+## Runtime scope and staged compatibility
 
-The Rust implementation does **not** currently include the host runtime.
+The first host-runtime stage is implemented as a transport-neutral actor and a C ABI
+dynamic library. It never performs file I/O or samples a clock/device directly. The
+frontend submits project contents and pumps versioned envelopes through
+`session_submit`, `session_drive`, and `session_poll`.
 
-The `era-*` protocol and FFI crates are compile-time interface specifications only.
-They do not export a dynamic library, drive the VM, perform file I/O, or implement any
-of the lifecycle and debugger behavior they describe. The design is documented in
+This stage does not yet implement traditional save serialization/restoration, exact VM
+snapshot restoration, hot reload orchestration, primitive mouse input, the reference
+system process beyond title/new-game entry, the debugger protocol, or the complete set
+of presentation/storage/media Host calls. These capabilities are not advertised during
+handshake and requests for reserved lifecycle features are rejected explicitly. The
+interfaces and current boundary are documented in
 [`docs/runtime-protocol.md`](docs/runtime-protocol.md),
 [`docs/debug-protocol.md`](docs/debug-protocol.md), and the
 [`reference mapping`](docs/runtime-reference-mapping.md).
@@ -66,8 +75,8 @@ The parser still produces a syntax AST. `ParserContext` supports syntax decision
 that depend on registries, while `erabasic-analyzer` owns the project-level semantic
 passes and produces HIR. CSV loading checks and normalizes project data, but it is
 separate from executable artifact validation. The C# reference CLI can invoke Emuera's existing evaluator
-and VM for oracle purposes. The Rust VM is a separate implementation; the reference
-runtime operations do not imply that an equivalent Rust runtime exists.
+and VM for oracle purposes. The Rust VM and staged runtime are separate implementations;
+an unlisted reference runtime operation must not be inferred to be supported.
 
 RustyEra does not implement a concrete application frontend: no GUI, TUI, game
 launcher, filesystem scanner, renderer, audio system, or input loop belongs in
@@ -92,11 +101,10 @@ the declared native and Host imports and pass the value through `validate_byteco
 before `erabasic-vm` may execute it. Source maps resolve function/code offsets to a
 relative path, UTF-8 byte span, line, and byte column.
 
-The intended project boundary is a runtime library plus public interfaces
+The project boundary is a runtime library plus public interfaces
 between that runtime and an external frontend. The frontend owns filesystem
 I/O and submits relative paths together with decoded UTF-8 content or the I/O
-error it observed. The VM is already runtime-independent; the higher-level runtime
-and its frontend event contract remain to be implemented. No specific frontend
+error it observed. The VM remains runtime-independent and no specific frontend
 architecture is prescribed here.
 
 ## Library use

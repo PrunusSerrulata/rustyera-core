@@ -12,6 +12,7 @@ mod hot_reload;
 mod interpreter;
 mod memory;
 mod runtime_port;
+mod runtime_vm;
 mod save;
 mod snapshot;
 mod state;
@@ -34,9 +35,11 @@ pub use host::{
 };
 pub use hot_reload::{HotReloadPlan, HotReloadReport};
 pub use runtime_port::{
-    VmDriveMode, VmHostCompletion, VmHostRequest, VmPortDriveReport, VmPortEvent, VmPortStop,
-    VmRestorePort, VmRuntimePort, VmWaitRebind,
+    PreparedRuntimeState, VmDriveMode, VmHostCompletion, VmHostRequest, VmPortDriveReport,
+    VmPortEvent, VmPortStop, VmRestorePort, VmRuntimePort, VmRuntimeRead, VmRuntimeStatePort,
+    VmRuntimeStateTransaction, VmRuntimeWrite, VmWaitRebind,
 };
+pub use runtime_vm::{PreparedHostCompletion, RuntimeVm};
 pub use save::{EraState, EraStateReport, EraVariableState};
 pub use snapshot::{
     SNAPSHOT_FORMAT_VERSION, SNAPSHOT_MAGIC, SnapshotBlocker, SnapshotEligibility, VmSnapshot,
