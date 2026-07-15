@@ -100,6 +100,27 @@ pub struct SessionId {
     pub low: u64,
 }
 
+/// Identifies one authoritative game timeline within a session.
+///
+/// Restores, new games and committed code replacement advance this value so a
+/// delayed input or service response can never affect the replacement timeline.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Decode,
+    Encode,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+)]
+#[cbor(transparent)]
+pub struct SessionEpoch(#[n(0)] pub u64);
+
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct Envelope {
@@ -121,6 +142,8 @@ pub struct Envelope {
     pub payload_tag: u32,
     #[n(8)]
     pub payload: ProtocolBytes,
+    #[n(9)]
+    pub session_epoch: Option<SessionEpoch>,
 }
 
 impl Envelope {
@@ -143,6 +166,7 @@ impl Envelope {
             correlation_id: None,
             payload_tag,
             payload,
+            session_epoch: None,
         }
     }
 
@@ -179,6 +203,7 @@ impl Envelope {
             correlation_id: self.correlation_id,
             payload_tag: self.payload_tag,
             payload_hex: hex(&self.payload.0),
+            session_epoch: self.session_epoch,
         }
     }
 }
@@ -194,6 +219,7 @@ pub struct EnvelopeJsonProjection {
     pub correlation_id: Option<u64>,
     pub payload_tag: u32,
     pub payload_hex: String,
+    pub session_epoch: Option<SessionEpoch>,
 }
 
 fn hex(bytes: &[u8]) -> String {

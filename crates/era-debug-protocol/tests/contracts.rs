@@ -41,7 +41,7 @@ fn stateful_debug_commands_carry_a_stop_token() {
 
 #[test]
 fn debug_protocol_has_an_independent_version() {
-    assert_eq!(DEBUG_PROTOCOL_VERSION.major, 1);
+    assert_eq!(DEBUG_PROTOCOL_VERSION.major, 2);
 }
 
 #[test]

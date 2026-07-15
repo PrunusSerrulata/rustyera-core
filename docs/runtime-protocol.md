@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
-dynamic library. Protocol 2.0 is a development contract: by explicit project policy it
+dynamic library. Runtime protocol 3.0 over common wire 2.0 is a development contract: by explicit project policy it
 does not promise backward compatibility until a frontend exists.
 
 ## Authority and ownership
@@ -27,7 +27,7 @@ and event carries:
 
 - common wire and channel-specific major/minor versions;
 - runtime or debug channel;
-- session identity, direction sequence and message identity;
+- session identity, timeline `SessionEpoch`, direction sequence and message identity;
 - optional correlation identity;
 - stable payload tag and payload bytes.
 
@@ -62,7 +62,8 @@ Only diagnostic, resynchronization and shutdown traffic is accepted there. Destr
 session without `ShutdownReady` is an emergency operation and may abandon unacknowledged
 storage requests.
 
-Messages in each direction have strictly increasing sequence numbers. Message IDs are
+Messages in each direction have strictly increasing sequence numbers. Active-session envelopes
+must carry the current epoch. Message IDs are
 never zero. A response copies the initiating ID into `correlation_id`. Retransmission
 uses the same message and idempotency IDs; a runtime must not apply it twice. The
 frontend acknowledges runtime sequence numbers. A journal gap is repaired with a full
@@ -95,8 +96,9 @@ accept snapshots only for the exact artifact identity.
 The wait contract represents all reference input kinds: enter, any key, integer,
 string, void, any value, integer/string button and primitive mouse/key input. It retains
 one-input, message-skip, system-input, mouse-input, default-value, timeout-display and
-timeout-message fields. Every input includes the wait ID, button generation and frontend
-monotonic timestamp. Stale IDs and generations are rejected.
+timeout-message fields. The frontend submits normalized UI intents such as committed text,
+continue, primitive input or activation of an opaque token. The runtime parses EraBasic values
+and validates the wait, token, epoch and frontend monotonic timestamp.
 
 The runtime accepts frontend messages in sequence order. If input and a deadline share a
 timestamp, the lower sequence wins. Timed/QTE waits are transient and block VM snapshots.
@@ -112,7 +114,8 @@ while deadline-free Enter/value input can be stable.
 The runtime stores a revisioned semantic presentation snapshot and emits deltas based on
 that revision. It includes text/styles/buttons, HTML, image/shape placement, backgrounds,
 logical audio state, title and the current wait. Numeric media measurements use fixed
-integer units rather than floating point. Pixel buffers, font objects and audio devices
+integer units rather than floating point. Recoverable state is separate from acknowledged
+one-shot `EffectBatch` events. Pixel buffers, font objects and audio devices
 remain frontend caches; script-observable service results return through ordered service
 responses and update the runtime's logical resource revision.
 
@@ -137,10 +140,12 @@ presentation waits and source breakpoints are rebound only after successful comm
 
 ## Implemented stage
 
-The current runtime implements handshake, full in-memory project load/analyze/compile/
-validate, deterministic new-game startup, bounded VM driving, basic text presentation,
-reference-shaped input waits and timeouts, fresh GETKEY-family queries, frontend-owned
-local time and new-game seed acquisition, state resynchronization, explicit feature rejection, faults, and
-shutdown. It does not advertise save/snapshot, reload, media/audio, mouse, or debugger
-features. The seed is retained as runtime state, but the compiler/VM does not yet expose a
-seeded RAND native service. Unsupported Host imports fault instead of being guessed.
+The current runtime implements handshake, epoch-scoped sessions, normalized text input,
+capability intersection, bounded journals with idempotent retransmission, full-state
+resynchronization, full in-memory project load/analyze/compile/validate, deterministic new-game
+startup, bounded VM driving, basic text presentation, reference-shaped waits and timeouts,
+fresh GETKEY-family queries, frontend-owned local time, seed acquisition, faults and shutdown.
+The compiler uses an explicit execution catalog rather than Host-name heuristics. Configuration
+and resource inputs receive stable deferred diagnostics but are not applied yet. Save/snapshot,
+reload, media/audio execution, complete primitive-input semantics, debugger execution and seeded
+RAND remain unavailable and are not advertised.

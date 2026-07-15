@@ -3,6 +3,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::ProtocolValue;
 
+/// Opaque, epoch-scoped capability authorizing one interaction.
+///
+/// Frontends must return the token they received and must not derive game values
+/// from it. The runtime additionally checks that the token is currently active.
+#[derive(
+    Clone, Copy, Debug, Decode, Encode, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
+#[cbor(map)]
+pub struct InteractionToken {
+    #[n(0)]
+    pub epoch: u64,
+    #[n(1)]
+    pub id: u64,
+}
+
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]
@@ -83,7 +98,7 @@ pub struct InputWait {
     #[n(10)]
     pub timeout_message: Option<String>,
     #[n(11)]
-    pub button_generation: u64,
+    pub submission_token: InteractionToken,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -103,19 +118,19 @@ pub struct PrimitiveInput {
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
-pub enum InputValue {
+pub enum InputIntent {
     #[n(0)]
     Enter,
     #[n(1)]
     AnyKey(#[n(0)] String),
     #[n(2)]
-    Integer(#[n(0)] i64),
+    CommitText(#[n(0)] String),
     #[n(3)]
-    String(#[n(0)] String),
+    Activate(#[n(0)] InteractionToken),
     #[n(4)]
-    IntegerButton(#[n(0)] i64),
+    Continue,
     #[n(5)]
-    StringButton(#[n(0)] String),
+    Cancel,
     #[n(6)]
     Primitive(#[n(0)] PrimitiveInput),
 }
@@ -126,11 +141,43 @@ pub struct FrontendInput {
     #[n(0)]
     pub wait_id: u64,
     #[n(1)]
-    pub button_generation: u64,
+    pub token: InteractionToken,
     #[n(2)]
     pub monotonic_time_ns: u64,
     #[n(3)]
-    pub value: InputValue,
+    pub intent: InputIntent,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum InputDeviceKind {
+    #[n(0)]
+    Keyboard,
+    #[n(1)]
+    Mouse,
+    #[n(2)]
+    Touch,
+    #[n(3)]
+    Gamepad,
+}
+
+/// Ordered frontend-owned device state. `EraBasic` interpretation remains in the runtime.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct DeviceStateChanged {
+    #[n(0)]
+    pub device: InputDeviceKind,
+    #[n(1)]
+    pub code: u32,
+    #[n(2)]
+    pub pressed: bool,
+    #[n(3)]
+    pub x: i32,
+    #[n(4)]
+    pub y: i32,
+    #[n(5)]
+    pub monotonic_time_ns: u64,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

@@ -13,7 +13,8 @@ use erabasic_hir::{
 };
 
 use crate::{
-    CompilerDiagnostic, CompilerDiagnosticCode, HostRegistry, registry::extension_binding,
+    CompilerDiagnostic, CompilerDiagnosticCode, ExecutionBinding, HostRegistry,
+    registry::extension_binding,
 };
 
 pub(crate) struct LoweringContext<'a> {
@@ -699,12 +700,18 @@ impl<'a> Builder<'a> {
         extension: bool,
         location: SourceLocation,
     ) {
-        let binding = if extension {
-            Some(extension_binding(name))
+        let classification = if extension {
+            ExecutionBinding::Host(extension_binding(name))
         } else {
-            self.context.host_registry.resolve(name)
+            self.context
+                .host_registry
+                .classification(name)
+                .cloned()
+                .unwrap_or(ExecutionBinding::Unsupported {
+                    reason: "the callable has no execution catalog entry".into(),
+                })
         };
-        if let Some(binding) = binding {
+        if let ExecutionBinding::Host(binding) = classification {
             let import = runtime_import(
                 &binding.namespace,
                 &binding.name,
@@ -729,8 +736,18 @@ impl<'a> Builder<'a> {
                 ),
                 location,
             );
-        } else {
+        } else if matches!(classification, ExecutionBinding::Native) {
             self.emit_native_call(name, parameters, result, location);
+        } else if let ExecutionBinding::Unsupported { reason } = classification {
+            self.diagnostics.push(CompilerDiagnostic::at(
+                CompilerDiagnosticCode::UnsupportedConstruct,
+                location,
+                format!("{name} is unsupported: {reason}"),
+            ));
+            self.emit(
+                EncodedInstruction::new(Opcode::Trap, format!("unsupported {name}").into_bytes()),
+                location,
+            );
         }
     }
 

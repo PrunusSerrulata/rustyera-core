@@ -102,9 +102,30 @@ pub(crate) fn build_project(
                     .push(csv_file(path.clone(), file.payload.clone()));
                 sources.push(analyzer_source(path, file.payload));
             }
-            FileCategory::Configuration
-            | FileCategory::ResourceManifest
-            | FileCategory::Resource => {}
+            FileCategory::Configuration => inspect_deferred_file(
+                &mut diagnostics,
+                &path,
+                &file.payload,
+                true,
+                "runtime.configuration_deferred",
+                "configuration input is validated but is not applied by this runtime stage",
+            ),
+            FileCategory::ResourceManifest => inspect_deferred_file(
+                &mut diagnostics,
+                &path,
+                &file.payload,
+                true,
+                "runtime.resource_manifest_deferred",
+                "resource manifest input is validated but is not applied by this runtime stage",
+            ),
+            FileCategory::Resource => inspect_deferred_file(
+                &mut diagnostics,
+                &path,
+                &file.payload,
+                false,
+                "runtime.resource_deferred",
+                "resource bytes are retained by the frontend until resource services are enabled",
+            ),
         }
     }
 
@@ -221,6 +242,43 @@ pub(crate) fn build_project(
             success,
             diagnostics,
         },
+    }
+}
+
+fn inspect_deferred_file(
+    diagnostics: &mut Vec<ProtocolDiagnostic>,
+    path: &str,
+    payload: &FilePayload,
+    require_utf8: bool,
+    code: &str,
+    message: &str,
+) {
+    let location = || SourceLocation {
+        relative_path: path.into(),
+        byte_start: 0,
+        byte_end: 0,
+        line: None,
+        byte_column: None,
+    };
+    match payload {
+        FilePayload::IoError(error) => diagnostics.push(project_diagnostic(
+            "runtime.frontend_io_error",
+            DiagnosticSeverity::Error,
+            error.message.clone(),
+            Some(location()),
+        )),
+        FilePayload::Bytes(_) if require_utf8 => diagnostics.push(project_diagnostic(
+            "runtime.expected_utf8",
+            DiagnosticSeverity::Error,
+            "configuration and resource manifests must be submitted as UTF-8",
+            Some(location()),
+        )),
+        FilePayload::Utf8(_) | FilePayload::Bytes(_) => diagnostics.push(project_diagnostic(
+            code,
+            DiagnosticSeverity::Warning,
+            message,
+            Some(location()),
+        )),
     }
 }
 

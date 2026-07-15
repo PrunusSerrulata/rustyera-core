@@ -6,14 +6,28 @@ use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AdvanceTime, ClientHello, CommandRejected, FrontendInput, PresentationDelta,
-    PresentationSnapshot, ProjectLoadReport, ProjectManifest, ReloadProject, RuntimeFault,
-    RuntimeStateChanged, ServerHello, ServiceRequest, ServiceResponse, ShutdownReady,
-    ShutdownRequest, StartRequest, StateExportReady, StateExportRequest, StorageRequest,
-    StorageResponse, VersionRejected, WaitChange,
+    AdvanceTime, ClientHello, ClientStateChanged, CommandRejected, DeviceStateChanged,
+    EffectAcknowledgement, EffectBatch, FrontendInput, PresentationDelta, PresentationSnapshot,
+    ProjectLoadReport, ProjectManifest, ReloadProject, ResynchronizeRequest, RuntimeFault,
+    RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceRequest,
+    ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest, StateExportReady,
+    StateExportRequest, StorageRequest, StorageResponse, VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(2, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(3, 0);
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct RuntimeResynchronized {
+    #[n(0)]
+    pub epoch: u64,
+    #[n(1)]
+    pub phase: RuntimePhase,
+    #[n(2)]
+    pub runtime_revision: u64,
+    #[n(3)]
+    pub presentation: PresentationSnapshot,
+}
 
 /// Stable runtime message variants. Numeric discriminants are wire IDs and must
 /// never be reused, even after a message is retired.
@@ -42,10 +56,18 @@ pub enum RuntimeMessage {
     AdvanceTime(#[n(0)] AdvanceTime),
     #[n(32)]
     WaitChanged(#[n(0)] WaitChange),
+    #[n(33)]
+    DeviceStateChanged(#[n(0)] DeviceStateChanged),
+    #[n(34)]
+    ClientStateChanged(#[n(0)] ClientStateChanged),
     #[n(40)]
     PresentationSnapshot(#[n(0)] PresentationSnapshot),
     #[n(41)]
     PresentationDelta(#[n(0)] PresentationDelta),
+    #[n(42)]
+    EffectBatch(#[n(0)] EffectBatch),
+    #[n(43)]
+    EffectAcknowledgement(#[n(0)] EffectAcknowledgement),
     #[n(50)]
     StorageRequest(#[n(0)] StorageRequest),
     #[n(51)]
@@ -65,11 +87,13 @@ pub enum RuntimeMessage {
     #[n(92)]
     Fault(#[n(0)] RuntimeFault),
     #[n(93)]
-    Acknowledge(#[n(0)] u64),
+    Acknowledge(#[n(0)] SequenceAcknowledgement),
     #[n(94)]
-    Resynchronize(#[n(0)] u64),
+    Resynchronize(#[n(0)] ResynchronizeRequest),
     #[n(95)]
     CommandRejected(#[n(0)] CommandRejected),
+    #[n(96)]
+    RuntimeResynchronized(#[n(0)] RuntimeResynchronized),
 }
 
 impl RuntimeMessage {
@@ -87,8 +111,12 @@ impl RuntimeMessage {
             Self::Input(_) => 30,
             Self::AdvanceTime(_) => 31,
             Self::WaitChanged(_) => 32,
+            Self::DeviceStateChanged(_) => 33,
+            Self::ClientStateChanged(_) => 34,
             Self::PresentationSnapshot(_) => 40,
             Self::PresentationDelta(_) => 41,
+            Self::EffectBatch(_) => 42,
+            Self::EffectAcknowledgement(_) => 43,
             Self::StorageRequest(_) => 50,
             Self::StorageResponse(_) => 51,
             Self::ServiceRequest(_) => 52,
@@ -101,6 +129,7 @@ impl RuntimeMessage {
             Self::Acknowledge(_) => 93,
             Self::Resynchronize(_) => 94,
             Self::CommandRejected(_) => 95,
+            Self::RuntimeResynchronized(_) => 96,
         }
     }
 
@@ -121,6 +150,7 @@ impl RuntimeMessage {
     pub fn envelope(
         &self,
         session: Option<SessionId>,
+        session_epoch: Option<era_protocol::SessionEpoch>,
         sequence: u64,
         message_id: u64,
         correlation_id: Option<u64>,
@@ -134,6 +164,7 @@ impl RuntimeMessage {
             ProtocolBytes::new(self.encode_payload()?),
         );
         envelope.session = session;
+        envelope.session_epoch = session_epoch;
         envelope.correlation_id = correlation_id;
         Ok(envelope)
     }

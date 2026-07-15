@@ -1,6 +1,6 @@
 use era_runtime_protocol::{
-    Color, DisplayLine, DisplayRun, InputWait, LineAlignment, PresentationSettings,
-    PresentationSnapshot, ProtocolValue, RunLayout, TextStyle,
+    Color, DisplayLine, DisplayRun, InputWait, InteractionToken, LineAlignment,
+    PresentationSettings, PresentationSnapshot, RunLayout, TextStyle,
 };
 use erabasic_vm::VmValue;
 
@@ -72,7 +72,7 @@ impl PresentationModel {
         self.bump();
     }
 
-    pub(crate) fn append_button(&mut self, text: String, value: ProtocolValue, generation: u64) {
+    pub(crate) fn append_button(&mut self, text: String, token: InteractionToken) {
         let layout = RunLayout {
             x_millipixels: 0,
             y_millipixels: 0,
@@ -93,8 +93,7 @@ impl PresentationModel {
                     style: default_style(),
                     layout,
                 }],
-                value,
-                generation,
+                token,
                 title: None,
                 layout,
                 hover_style: None,

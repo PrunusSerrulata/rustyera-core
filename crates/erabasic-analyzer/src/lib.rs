@@ -17,7 +17,7 @@ mod symbols;
 
 pub use catalog::{
     ArgumentConstraint, CallableSignature, ExtensionCallableKind, ExtensionRegistry,
-    InstructionSignature,
+    InstructionSignature, builtin_function_names, builtin_instruction_names,
 };
 pub use diagnostic::{
     AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerDiagnosticSeverity, AnalyzerSourceLocation,
