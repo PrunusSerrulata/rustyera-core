@@ -114,15 +114,40 @@ pub fn validate_hir(program: &Program, _data: &ProjectData) -> ValidationReport<
                 }
                 HirStatementKind::Instruction { arguments, .. } => {
                     for argument in arguments {
-                        if let erabasic_hir::HirArgument::Expression(expression) = argument {
-                            validate_expression(
-                                expression,
-                                &function_ids,
-                                &variable_ids,
-                                &function.name,
-                                index,
-                                &mut diagnostics,
-                            );
+                        match argument {
+                            erabasic_hir::HirArgument::Expression(expression) => {
+                                validate_expression(
+                                    expression,
+                                    &function_ids,
+                                    &variable_ids,
+                                    &function.name,
+                                    index,
+                                    &mut diagnostics,
+                                );
+                            }
+                            erabasic_hir::HirArgument::Place(place) => {
+                                if !variable_ids.contains(&place.variable) {
+                                    diagnostics.push(ValidationDiagnostic::instruction(
+                                        ValidationCode::MissingReference,
+                                        &function.name,
+                                        index,
+                                        "place argument refers to an unknown variable",
+                                    ));
+                                }
+                                for expression in &place.indices {
+                                    validate_expression(
+                                        expression,
+                                        &function_ids,
+                                        &variable_ids,
+                                        &function.name,
+                                        index,
+                                        &mut diagnostics,
+                                    );
+                                }
+                            }
+                            erabasic_hir::HirArgument::Formatted(_)
+                            | erabasic_hir::HirArgument::Raw(_)
+                            | erabasic_hir::HirArgument::Omitted => {}
                         }
                     }
                 }

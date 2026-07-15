@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define ERA_RUNTIME_ABI_MAJOR 1u
+#define ERA_RUNTIME_ABI_MAJOR 2u
 #define ERA_RUNTIME_ABI_MINOR 0u
 
 typedef struct EraAbiVersion { uint16_t major; uint16_t minor; } EraAbiVersion;

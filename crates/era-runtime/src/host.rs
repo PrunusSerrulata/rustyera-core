@@ -84,7 +84,8 @@ pub(crate) fn input_wait(
         }
         _ => return None,
     };
-    let timed = name.starts_with('T');
+    // INPUTMOUSEKEY is reference-timed even though its name has no T prefix.
+    let timed = name.starts_with('T') || name == "INPUTMOUSEKEY";
     let timelimit_ms = if timed {
         integer(arguments.first()).unwrap_or(-1)
     } else {

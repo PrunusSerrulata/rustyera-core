@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
-use erabasic_bytecode::{BytecodeArtifact, BytecodeType, RuntimeImport, SymbolKey};
+use erabasic_bytecode::{BytecodeArtifact, RuntimeImport, SymbolKey};
 use serde::{Deserialize, Serialize};
 
+use crate::sfmt::Sfmt19937;
 use crate::{FiberId, HostRequestId, HostWrite, VmValue};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -118,17 +120,48 @@ impl NativeServiceRegistry {
     /// Project-specific builtins remain explicit services and fail closed when absent.
     #[must_use]
     pub fn for_artifact(artifact: &BytecodeArtifact) -> Self {
+        Self::for_artifact_with_seed(artifact, 0)
+    }
+
+    #[must_use]
+    pub fn for_artifact_with_seed(artifact: &BytecodeArtifact, seed: u64) -> Self {
         let mut registry = Self::default();
+        let random = Arc::new(Mutex::new(Sfmt19937::new(seed)));
         for native in &artifact.native_imports {
             let name = native.import.name.as_str();
             if matches!(name, "format_integer" | "format_string") || name.starts_with("control_") {
+                registry.register(native.import.key, CompilerNative { name: name.into() });
+            } else if matches!(name, "rand" | "randomize" | "initrand" | "dumprand") {
                 registry.register(
                     native.import.key,
-                    CompilerNative {
+                    RandomNative {
                         name: name.into(),
-                        result: native.import.result,
+                        state: Arc::clone(&random),
                     },
                 );
+            } else if matches!(
+                name,
+                "abs"
+                    | "sign"
+                    | "getbit"
+                    | "bitcount"
+                    | "strlen"
+                    | "strlenu"
+                    | "toint"
+                    | "isnumeric"
+                    | "unicode"
+                    | "max"
+                    | "min"
+                    | "limit"
+                    | "inrange"
+                    | "tostr"
+                    | "substring"
+                    | "substringu"
+                    | "strfind"
+                    | "replace"
+                    | "unicodetostr"
+            ) {
+                registry.register(native.import.key, CoreNative { name: name.into() });
             }
         }
         registry
@@ -184,9 +217,157 @@ impl NativeServiceRegistry {
     }
 }
 
+struct CoreNative {
+    name: String,
+}
+
+impl NativeService for CoreNative {
+    #[allow(clippy::too_many_lines)]
+    fn call(&mut self, request: NativeCallRequest) -> Result<Option<VmValue>, String> {
+        let args = &request.arguments;
+        let integer = |index: usize| match args.get(index) {
+            Some(VmValue::Integer(value)) => Ok(*value),
+            _ => Err(format!(
+                "{} argument {} must be integer",
+                self.name,
+                index + 1
+            )),
+        };
+        let string = |index: usize| match args.get(index) {
+            Some(VmValue::String(value)) => Ok(value.as_str()),
+            _ => Err(format!(
+                "{} argument {} must be string",
+                self.name,
+                index + 1
+            )),
+        };
+        let result = match self.name.as_str() {
+            "abs" => VmValue::Integer(integer(0)?.wrapping_abs()),
+            "sign" => VmValue::Integer(integer(0)?.signum()),
+            "getbit" => {
+                let bit = u32::try_from(integer(1)?).map_err(|_| "GETBIT index is negative")?;
+                VmValue::Integer(if bit < 64 {
+                    (integer(0)? >> bit) & 1
+                } else {
+                    0
+                })
+            }
+            "bitcount" => VmValue::Integer(i64::from(integer(0)?.count_ones())),
+            "strlen" => VmValue::Integer(i64::try_from(string(0)?.len()).unwrap_or(i64::MAX)),
+            "strlenu" => {
+                VmValue::Integer(i64::try_from(string(0)?.chars().count()).unwrap_or(i64::MAX))
+            }
+            "toint" => VmValue::Integer(
+                string(0)?
+                    .trim()
+                    .parse()
+                    .map_err(|_| "TOINT input is not an integer")?,
+            ),
+            "isnumeric" => VmValue::Integer(i64::from(string(0)?.trim().parse::<i64>().is_ok())),
+            "unicode" => VmValue::Integer(
+                string(0)?
+                    .chars()
+                    .next()
+                    .map_or(0, |character| i64::from(u32::from(character))),
+            ),
+            "max" => VmValue::Integer(
+                args.iter()
+                    .enumerate()
+                    .map(|(index, _)| integer(index))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .max()
+                    .ok_or("MAX requires an argument")?,
+            ),
+            "min" => VmValue::Integer(
+                args.iter()
+                    .enumerate()
+                    .map(|(index, _)| integer(index))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .min()
+                    .ok_or("MIN requires an argument")?,
+            ),
+            "limit" => {
+                let minimum = integer(1)?;
+                let maximum = integer(2)?;
+                if minimum > maximum {
+                    return Err("LIMIT minimum exceeds maximum".into());
+                }
+                VmValue::Integer(integer(0)?.clamp(minimum, maximum))
+            }
+            "inrange" => VmValue::Integer(i64::from(
+                (integer(1)?..=integer(2)?).contains(&integer(0)?),
+            )),
+            "tostr" => VmValue::String(integer(0)?.to_string()),
+            "substring" => VmValue::String(substring_utf8_bytes(
+                string(0)?,
+                integer(1)?,
+                args.get(2).map(|_| integer(2)).transpose()?,
+            )?),
+            "substringu" => VmValue::String(substring_scalars(
+                string(0)?,
+                integer(1)?,
+                args.get(2).map(|_| integer(2)).transpose()?,
+            )?),
+            "strfind" => {
+                let start = usize::try_from(integer(2).unwrap_or(0)).unwrap_or(usize::MAX);
+                let haystack = string(0)?;
+                let start = utf8_boundary_at_or_after(haystack, start).min(haystack.len());
+                VmValue::Integer(
+                    haystack[start..]
+                        .find(string(1)?)
+                        .and_then(|offset| i64::try_from(start + offset).ok())
+                        .unwrap_or(-1),
+                )
+            }
+            "replace" => VmValue::String(string(0)?.replace(string(1)?, string(2)?)),
+            "unicodetostr" => {
+                let scalar = u32::try_from(integer(0)?)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .ok_or("UNICODETOSTR argument is not a Unicode scalar")?;
+                VmValue::String(scalar.to_string())
+            }
+            _ => return Err(format!("unknown core-native service {}", self.name)),
+        };
+        Ok(Some(result))
+    }
+}
+
+fn substring_utf8_bytes(value: &str, start: i64, length: Option<i64>) -> Result<String, String> {
+    let start = usize::try_from(start).map_err(|_| "SUBSTRING start is negative")?;
+    let start = utf8_boundary_at_or_after(value, start.min(value.len()));
+    let requested_end = match length {
+        Some(length) => start
+            .saturating_add(usize::try_from(length).map_err(|_| "SUBSTRING length is negative")?),
+        None => value.len(),
+    };
+    let end = utf8_boundary_at_or_after(value, requested_end.min(value.len()));
+    Ok(value[start..end].into())
+}
+
+fn substring_scalars(value: &str, start: i64, length: Option<i64>) -> Result<String, String> {
+    let start = usize::try_from(start).map_err(|_| "SUBSTRINGU start is negative")?;
+    let length = length
+        .map(|length| usize::try_from(length).map_err(|_| "SUBSTRINGU length is negative"))
+        .transpose()?;
+    Ok(value
+        .chars()
+        .skip(start)
+        .take(length.unwrap_or(usize::MAX))
+        .collect())
+}
+
+fn utf8_boundary_at_or_after(value: &str, mut offset: usize) -> usize {
+    while offset < value.len() && !value.is_char_boundary(offset) {
+        offset += 1;
+    }
+    offset
+}
+
 struct CompilerNative {
     name: String,
-    result: Option<BytecodeType>,
 }
 
 impl NativeService for CompilerNative {
@@ -217,9 +398,67 @@ impl NativeService for CompilerNative {
                     request.arguments.get(1),
                 )?)))
             }
-            name if name.starts_with("control_") => Ok(self.result.map(VmValue::default_for)),
+            name if name.starts_with("control_") => Err(format!(
+                "compiler control placeholder {name} reached execution"
+            )),
             _ => Err(format!("unknown compiler-native service {}", self.name)),
         }
+    }
+}
+
+struct RandomNative {
+    name: String,
+    state: Arc<Mutex<Sfmt19937>>,
+}
+
+impl NativeService for RandomNative {
+    fn call(&mut self, request: NativeCallRequest) -> Result<Option<VmValue>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "SFMT state lock is poisoned".to_owned())?;
+        match self.name.as_str() {
+            "rand" => {
+                let Some(VmValue::Integer(maximum)) = request.arguments.first() else {
+                    return Err("RAND expects an integer maximum".into());
+                };
+                if *maximum <= 0 {
+                    return Err("RAND maximum must be positive".into());
+                }
+                let value = state.next_u64() % (*maximum).cast_unsigned();
+                Ok(Some(VmValue::Integer(
+                    i64::try_from(value).expect("RAND modulo positive i64 fits i64"),
+                )))
+            }
+            "randomize" => {
+                let seed = match request.arguments.first() {
+                    Some(VmValue::Integer(seed)) => (*seed).cast_unsigned(),
+                    None => 0,
+                    _ => return Err("RANDOMIZE seed must be an integer".into()),
+                };
+                state.reseed(seed);
+                Ok(None)
+            }
+            "initrand" | "dumprand" => Err(format!(
+                "{} requires RANDDATA place arguments in HIR v3",
+                self.name.to_ascii_uppercase()
+            )),
+            _ => Err(format!("unknown random-native service {}", self.name)),
+        }
+    }
+
+    fn snapshot(&self) -> Result<Option<Vec<u8>>, String> {
+        self.state
+            .lock()
+            .map(|state| Some(state.encode()))
+            .map_err(|_| "SFMT state lock is poisoned".into())
+    }
+
+    fn restore(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.state
+            .lock()
+            .map_err(|_| "SFMT state lock is poisoned".to_owned())?
+            .decode(bytes)
     }
 }
 
@@ -243,4 +482,39 @@ fn apply_width(value: &str, width: Option<&VmValue>) -> Result<String, String> {
     } else {
         format!("{padding}{value}")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_u_substring_uses_utf8_bytes_and_advances_to_boundaries() {
+        assert_eq!(substring_utf8_bytes("A界B", 1, Some(1)), Ok("界".into()));
+        assert_eq!(substring_utf8_bytes("A界B", 2, Some(1)), Ok("B".into()));
+        assert_eq!(substring_scalars("A界B", 1, Some(1)), Ok("界".into()));
+    }
+
+    #[test]
+    fn random_native_rejects_non_positive_modulus() {
+        let mut native = RandomNative {
+            name: "rand".into(),
+            state: Arc::new(Mutex::new(Sfmt19937::new(1))),
+        };
+        assert!(
+            native
+                .call(NativeCallRequest {
+                    import: RuntimeImport {
+                        key: SymbolKey([0; 16]),
+                        namespace: "test".into(),
+                        name: "rand".into(),
+                        abi_version: 1,
+                        parameters: vec![],
+                        result: None,
+                    },
+                    arguments: vec![VmValue::Integer(0)],
+                })
+                .is_err()
+        );
+    }
 }

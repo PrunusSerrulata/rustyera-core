@@ -52,6 +52,24 @@ pub enum LineAlignment {
     Right,
 }
 
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum CellAlignment {
+    #[n(0)]
+    Left,
+    #[n(1)]
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum SeparatorRole {
+    #[n(0)]
+    Rule,
+}
+
 /// Deterministic layout produced after the runtime has obtained font metrics.
 /// Coordinates use 1/1000 pixel units and are relative to the logical line.
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -142,6 +160,24 @@ pub enum DisplayRun {
         shape: Shape,
         #[n(1)]
         layout: RunLayout,
+    },
+    /// A PRINTC-family layout intent. Runtime state contains no font-dependent padding.
+    #[n(5)]
+    ColumnCell {
+        #[n(0)]
+        content: Vec<DisplayRun>,
+        #[n(1)]
+        alignment: CellAlignment,
+        #[n(2)]
+        preferred_columns: u32,
+    },
+    /// A width-independent DRAWLINE intent.
+    #[n(6)]
+    Separator {
+        #[n(0)]
+        pattern: String,
+        #[n(1)]
+        role: SeparatorRole,
     },
 }
 

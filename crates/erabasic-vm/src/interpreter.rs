@@ -305,7 +305,7 @@ impl Vm {
                 })?;
                 frame.stack.push(VmValue::String(value.into()));
             }
-            Opcode::LoadVariable | Opcode::StoreVariable => {
+            Opcode::LoadVariable | Opcode::StoreVariable | Opcode::MakePlace => {
                 let key = read_key(&position.encoded.payload)?;
                 let count = read_u16(&position.encoded.payload, 16)? as usize;
                 let operation = *position.encoded.payload.get(18).ok_or_else(|| {
@@ -340,7 +340,24 @@ impl Vm {
                     frame: (definition.storage == BytecodeStorage::FunctionLocal)
                         .then_some(frame.id),
                 };
-                if opcode == Opcode::LoadVariable {
+                if opcode == Opcode::MakePlace {
+                    let value = match definition.value_type {
+                        BytecodeType::Integer => VmValue::IntegerPlace(place),
+                        BytecodeType::String => VmValue::StringPlace(place),
+                        BytecodeType::IntegerPlace | BytecodeType::StringPlace => {
+                            return Err(StepError::new(
+                                VmFaultCode::InvalidInstruction,
+                                "a variable schema cannot contain place values",
+                            ));
+                        }
+                    };
+                    fiber
+                        .frames
+                        .last_mut()
+                        .expect("frame exists")
+                        .stack
+                        .push(value);
+                } else if opcode == Opcode::LoadVariable {
                     let value = self.read_place(fiber, &place).map_err(map_vm_error)?;
                     fiber
                         .frames

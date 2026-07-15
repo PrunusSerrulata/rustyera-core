@@ -5,8 +5,8 @@ use era_protocol::{
 use era_runtime_protocol::{
     AdvanceTime, EffectBatch, EffectEvent, EffectKind, FrontendInput, GET_KEY_STATE_OPERATION,
     GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
-    InteractionToken, RUNTIME_PROTOCOL_VERSION, RuntimeMessage, ServiceKind, ServiceRequest,
-    StorageNamespace, StorageOperation, StorageRequest, validate_relative_path,
+    InteractionToken, PrimitiveInput, RUNTIME_PROTOCOL_VERSION, RuntimeMessage, ServiceKind,
+    ServiceRequest, StorageNamespace, StorageOperation, StorageRequest, validate_relative_path,
 };
 
 #[test]
@@ -47,6 +47,21 @@ fn input_carries_interaction_token_and_monotonic_time() {
 }
 
 #[test]
+fn primitive_input_carries_device_fields_but_not_result_five() {
+    let selection = InteractionToken { epoch: 2, id: 8 };
+    let intent = InputIntent::Primitive(PrimitiveInput {
+        input_type: 1,
+        result_1: 10,
+        result_2: 20,
+        result_3: 1,
+        result_4: 3,
+        selection_token: Some(selection),
+    });
+    let bytes = encode_canonical(&intent).expect("encode primitive intent");
+    assert_eq!(decode_canonical::<InputIntent>(&bytes), Ok(intent));
+}
+
+#[test]
 fn storage_write_is_correlated_and_idempotent() {
     let request = StorageRequest {
         request_id: 10,
@@ -80,7 +95,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(3, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(4, 0));
 }
 
 #[test]

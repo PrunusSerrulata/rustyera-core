@@ -29,7 +29,8 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言前端、项目数据加�
   状态保存与多代热替换。
 - `crates/erabasic-repl`：用于人工检查的 Read-Parse-Print Loop。
 - `reference/emuera.em`：固定版本的 C# Emuera 参考实现。
-- `reference/real-erb`：真实游戏eraTW中使用的完整脚本集，包含csv、erh和erb（当前暂不存在，后续添加）。由于文本量过大（80余MB），一般不要全量引用。
+- `reference/real-erb`：真实游戏eraTW中使用的完整脚本集，包含csv、erh和erb。由于文本量过大（80余MB），一般不要全量引用。
+- `reference/eraTW-minimal`：用于测试游戏功能的最小脚本子集。
 - `tools/emuera-reference-cli`：绕过 UI 调用参考实现的 NDJSON 测试工具及平台脚本。
 
 保持各 crate 的职责边界。较大的实现应按语法领域拆分为 module，不要把 lexer
@@ -104,6 +105,11 @@ reference CLI 能够调用参考实现的 evaluator、VM 和 runtime，也不代
 - 源码中的实现思路、兼容性原因和非显然算法应使用英文注释说明。
 - 优先复用成熟库，但上下文相关 lexer/parser 行为无法由库准确表达时，应选择
   清晰、可测试的手写实现。
+- 当 runtime 难以精确复刻参考实现中某条指令的行为时，应先检查该指令在真实游戏
+  脚本中的实际使用方式，并从脚本开发者的角度推断其意图。对于与具体界面和排版
+  强相关的行为，应优先围绕该意图设计 Runtime 持有的规范化展示语义和前端投影，
+  以支持不同前端和跨平台运行，无需强行进行像素级复刻。此原则不放宽游戏规则、
+  输入判定或脚本可观察副作用的兼容要求；有意差异仍须记录并测试。
 - 源码位置统一使用 UTF-8 byte offset；涉及 C# 输出时要明确区分 UTF-8 byte
   offset 与 UTF-16 code-unit offset。
 - 诊断必须保留足以定位问题的 span 和稳定类别。不要仅依赖本地化错误文本。

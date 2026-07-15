@@ -436,7 +436,7 @@ impl Vm {
             }
         }
         for write in ready.writes {
-            self.write_place(fiber, &write.target, write.value)?;
+            self.write_place_internal(fiber, &write.target, write.value, true)?;
         }
         Ok(())
     }
@@ -477,6 +477,16 @@ impl Vm {
         place: &PlaceDescriptor,
         value: VmValue,
     ) -> Result<(), VmError> {
+        self.write_place_internal(fiber, place, value, false)
+    }
+
+    fn write_place_internal(
+        &mut self,
+        fiber: &mut Fiber,
+        place: &PlaceDescriptor,
+        value: VmValue,
+        trusted_runtime: bool,
+    ) -> Result<(), VmError> {
         if place.fiber.is_some_and(|owner| owner != fiber.id) {
             return Err(VmError::InvalidState(
                 "place belongs to another fiber".into(),
@@ -484,7 +494,7 @@ impl Vm {
         }
         let (generation, definition) = self.place_definition(fiber, place)?;
         let definition = definition.clone();
-        if !definition.mutable {
+        if !definition.mutable && !trusted_runtime {
             return Err(VmError::InvalidState("place is immutable".into()));
         }
         if definition.storage == BytecodeStorage::FunctionLocal {

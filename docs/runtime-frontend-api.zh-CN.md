@@ -53,10 +53,10 @@ Runtime 不回调前端，也不执行文件 I/O、窗口绘制、操作系统�
 
 ## 2. 动态库与 ABI 协商
 
-ABI 当前版本为 `1.0`：
+ABI 当前版本为 `2.0`：
 
 ```c
-#define ERA_RUNTIME_ABI_MAJOR 1u
+#define ERA_RUNTIME_ABI_MAJOR 2u
 #define ERA_RUNTIME_ABI_MINOR 0u
 ```
 
@@ -335,7 +335,7 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 | 字段 | 含义 |
 | --- | --- |
 | `wire_version` | 公共信封版本，当前为 `2.0`。 |
-| `channel_version` | Runtime protocol 版本，当前为 `3.0`。 |
+| `channel_version` | Runtime protocol 版本，当前为 `4.0`。 |
 | `channel` | 正常运行必须为 `Runtime`；调试使用独立 `Debug` channel。 |
 | `session` | 首次 `ClientHello` 可为空；握手成功后必须等于 `ServerHello.session`。 |
 | `session_epoch` | 首次握手可为空；之后必须等于当前时间线 epoch。新游戏、恢复或热替换提交后旧 epoch 消息失效。 |

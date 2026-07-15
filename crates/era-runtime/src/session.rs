@@ -7,11 +7,11 @@ use era_protocol::{
     negotiate_version,
 };
 use era_runtime_protocol::{
-    AdvanceTime, ClientCapabilities, ClientHello, CommandErrorCode, CommandRejected, FaultCode,
-    FrontendInput, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
-    GetKeyStateResponse, InputIntent, InputWait, InteractionToken, LOCAL_DATE_TIME_OPERATION,
-    LOCAL_DATE_TIME_OPERATION_VERSION, LocalDateTimeRequest, LocalDateTimeResponse,
-    ProjectManifest, RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION,
+    AdvanceTime, CellAlignment, ClientCapabilities, ClientHello, CommandErrorCode, CommandRejected,
+    FaultCode, FrontendInput, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
+    GetKeyStateRequest, GetKeyStateResponse, InputIntent, InputWait, InteractionToken,
+    LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION, LocalDateTimeRequest,
+    LocalDateTimeResponse, ProjectManifest, RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION,
     RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse, RuntimeFault, RuntimeFeature,
     RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized, RuntimeStateChanged,
     ServerHello, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady,
@@ -28,7 +28,7 @@ use erabasic_vm::{
 };
 
 use crate::host::{ClockOperation, ExternalCompletion, PendingInput, input_wait};
-use crate::presentation::{PresentationModel, display_value};
+use crate::presentation::{PresentationModel, display_value, logical_line_string};
 use crate::project::build_project;
 
 #[derive(Clone, Copy, Debug)]
@@ -156,7 +156,9 @@ pub struct RuntimeSession {
     vm: Option<RuntimeVm>,
     presentation: PresentationModel,
     pending_input: Option<PendingInput>,
+    queued_inputs: VecDeque<PendingInput>,
     pending_services: BTreeMap<u64, PendingService>,
+    pending_delays: BTreeMap<erabasic_vm::HostRequestId, u64>,
     key_toggle_state: [u8; 256],
 }
 
@@ -186,7 +188,9 @@ impl RuntimeSession {
             vm: None,
             presentation: PresentationModel::default(),
             pending_input: None,
+            queued_inputs: VecDeque::new(),
             pending_services: BTreeMap::new(),
+            pending_delays: BTreeMap::new(),
             key_toggle_state: [0; 256],
         }
     }
@@ -277,6 +281,12 @@ impl RuntimeSession {
                 let stop = report.stop;
                 for event in report.events {
                     self.handle_vm_event(&mut vm, event)?;
+                }
+                if self.pending_input.is_some()
+                    && !vm.has_runnable_fibers()
+                    && self.phase == RuntimePhase::Running
+                {
+                    self.set_phase(RuntimePhase::WaitingInput)?;
                 }
                 self.vm = Some(vm);
                 transitions += 1;
@@ -412,7 +422,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 2.0 is required".into(),
+                    message: "runtime protocol 4.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -434,6 +444,11 @@ impl RuntimeSession {
             .into_iter()
             .filter(|feature| hello.features.contains(feature))
             .collect();
+        let selected_capabilities = selected_capabilities(&hello.capabilities);
+        self.presentation.set_projection(
+            selected_capabilities.column_cells,
+            selected_capabilities.separators,
+        );
         self.emit(
             RuntimeMessage::ServerHello(ServerHello {
                 selected_version: selected,
@@ -441,7 +456,7 @@ impl RuntimeSession {
                 features,
                 limits,
                 epoch: self.epoch.0,
-                selected_capabilities: selected_capabilities(&hello.capabilities),
+                selected_capabilities,
             }),
             Some(message_id),
         )
@@ -531,7 +546,7 @@ impl RuntimeSession {
             .clone();
         let entry = function_key(&artifact, "SYSTEM_TITLE");
         self.presentation.set_title(title);
-        let mut vm = RuntimeVm::new(artifact, self.options.vm_config);
+        let mut vm = RuntimeVm::new_with_seed(artifact, self.options.vm_config, seed);
         let prepared = vm
             .prepare_runtime_state(VmRuntimeStateTransaction::ResetNewGame)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
@@ -571,12 +586,15 @@ impl RuntimeSession {
                 (start_token, VmValue::Integer(0)),
                 (load_token, VmValue::Integer(1)),
             ]);
-            self.open_wait(PendingInput {
-                host_request: None,
-                wait,
-                result_name: None,
-                choices,
-            })
+            self.open_wait(
+                PendingInput {
+                    host_request: None,
+                    wait,
+                    result_name: None,
+                    choices,
+                },
+                true,
+            )
         }
     }
 
@@ -594,11 +612,47 @@ impl RuntimeSession {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_host_call(
         &mut self,
         vm: &mut RuntimeVm,
         request: &VmHostRequest,
     ) -> Result<(), RuntimeError> {
+        let name = request.import.import.name.to_ascii_uppercase();
+        if name == "AWAIT" {
+            let milliseconds = match request.arguments.first() {
+                None | Some(VmValue::Integer(0)) => 0,
+                Some(VmValue::Integer(value @ 1..=10_000)) => *value,
+                _ => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        "AWAIT duration must be between 0 and 10000 milliseconds",
+                        None,
+                    );
+                }
+            };
+            if milliseconds == 0 {
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady::empty()),
+                );
+            }
+            commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Pending {
+                    stability: HostWaitStability::Transient,
+                    rebind_payload: Vec::new(),
+                },
+            )?;
+            self.pending_delays.insert(
+                request.id,
+                self.logical_time_ns
+                    .saturating_add(milliseconds.cast_unsigned().saturating_mul(1_000_000)),
+            );
+            return Ok(());
+        }
         if let Some(pending) = input_wait(
             request,
             self.allocate_wait(),
@@ -617,16 +671,101 @@ impl RuntimeSession {
                     rebind_payload: encode_canonical(&pending.wait)?,
                 },
             )?;
-            return self.open_wait(pending);
+            return self.open_wait(pending, false);
         }
-        let name = request.import.import.name.to_ascii_uppercase();
+        if name == "GETLINESTR" {
+            let Some(VmValue::String(pattern)) = request.arguments.first() else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "GETLINESTR expects a string pattern",
+                    None,
+                );
+            };
+            let value = match logical_line_string(pattern, 75) {
+                Ok(value) => value,
+                Err(message) => return self.fault(FaultCode::VmFault, message, None),
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "GETDISPLAYLINE"
+                | "HTML_GETPRINTEDSTR"
+                | "HTML_POPPRINTINGSTR"
+                | "HTML_STRINGLEN"
+                | "HTML_SUBSTRING"
+                | "HTML_STRINGLINES"
+        ) {
+            return self.fault(
+                FaultCode::UnsupportedRuntimeFeature,
+                &format!("unsupported runtime presentation query: {name}"),
+                None,
+            );
+        }
+        if name == "DRAWLINE" {
+            let pattern = request
+                .arguments
+                .first()
+                .map_or_else(|| "-".into(), display_value);
+            self.presentation.append_separator(pattern);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
         if is_print(&name) {
             let text = request
                 .arguments
                 .iter()
                 .map(display_value)
                 .collect::<String>();
-            self.presentation.append_text(text, false);
+            if is_column_print(&name) {
+                let alignment = if name.ends_with("LC") {
+                    CellAlignment::Left
+                } else {
+                    CellAlignment::Right
+                };
+                self.presentation.append_column_cell(text, alignment);
+            } else {
+                self.presentation
+                    .append_print_text(text, false, print_commits_line(&name));
+            }
+            if name.ends_with('W') {
+                let wait = InputWait {
+                    wait_id: self.allocate_wait(),
+                    kind: WaitKind::EnterKey,
+                    stability: WaitStability::StableInput,
+                    one_input: false,
+                    stop_message_skip: false,
+                    system_input: false,
+                    mouse_input: false,
+                    default_value: None,
+                    deadline_ns: None,
+                    display_time: false,
+                    timeout_message: None,
+                    submission_token: self.allocate_interaction(),
+                };
+                let pending = PendingInput {
+                    host_request: Some(request.id),
+                    wait,
+                    result_name: None,
+                    choices: BTreeMap::new(),
+                };
+                commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Pending {
+                        stability: HostWaitStability::StableInput,
+                        rebind_payload: encode_canonical(&pending.wait)?,
+                    },
+                )?;
+                return self.open_wait(pending, false);
+            }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
@@ -866,7 +1005,7 @@ impl RuntimeSession {
                 },
             );
         }
-        let Some(value) = input_value(pending, input.token, input.intent) else {
+        let Some(submission) = input_value(pending, input.token, input.intent) else {
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidValue,
@@ -874,11 +1013,27 @@ impl RuntimeSession {
             );
         };
         self.logical_time_ns = self.logical_time_ns.max(input.monotonic_time_ns);
-        self.finish_input(&value)
+        self.finish_input(submission, false)
     }
 
     fn advance_time(&mut self, _message_id: u64, time: AdvanceTime) -> Result<(), RuntimeError> {
         self.logical_time_ns = self.logical_time_ns.max(time.monotonic_time_ns);
+        let ready_delays: Vec<_> = self
+            .pending_delays
+            .iter()
+            .filter_map(|(request, deadline)| {
+                (*deadline <= self.logical_time_ns).then_some(*request)
+            })
+            .collect();
+        for request in ready_delays {
+            self.pending_delays.remove(&request);
+            let vm = self
+                .vm
+                .as_mut()
+                .ok_or_else(|| RuntimeError::Internal("pending AWAIT has no VM".into()))?;
+            commit_completion(vm, request, VmHostCompletion::Ready(HostReady::empty()))?;
+            self.set_phase(RuntimePhase::Running)?;
+        }
         let timed_out = self
             .pending_input
             .as_ref()
@@ -889,23 +1044,41 @@ impl RuntimeSession {
             if let Some(message) = &pending.wait.timeout_message {
                 self.presentation.append_text(message.clone(), false);
             }
-            let value = pending
-                .wait
-                .default_value
-                .as_ref()
-                .map_or(VmValue::Integer(0), protocol_to_vm);
-            self.finish_input(&value)?;
+            let submission = if pending.wait.kind == WaitKind::PrimitiveMouseKey {
+                InputSubmission::Primitive(PrimitiveResult {
+                    fields: [4, 0, 0, 0, 0],
+                    selection: None,
+                })
+            } else {
+                InputSubmission::Value(
+                    pending
+                        .wait
+                        .default_value
+                        .as_ref()
+                        .map_or(VmValue::Integer(0), protocol_to_vm),
+                )
+            };
+            self.finish_input(submission, true)?;
         }
         Ok(())
     }
 
-    fn finish_input(&mut self, value: &VmValue) -> Result<(), RuntimeError> {
+    fn finish_input(
+        &mut self,
+        submission: InputSubmission,
+        timed_out: bool,
+    ) -> Result<(), RuntimeError> {
         let pending = self
             .pending_input
             .take()
             .ok_or_else(|| RuntimeError::Internal("input wait disappeared".into()))?;
         if pending.wait.system_input {
-            return self.finish_system_input(pending, value);
+            let InputSubmission::Value(value) = submission else {
+                return Err(RuntimeError::Internal(
+                    "system input cannot accept primitive fields".into(),
+                ));
+            };
+            return self.finish_system_input(pending, &value);
         }
         let request = pending
             .host_request
@@ -914,15 +1087,57 @@ impl RuntimeSession {
             .vm
             .as_mut()
             .ok_or_else(|| RuntimeError::Internal("input wait has no VM".into()))?;
-        let writes = pending
-            .result_name
-            .and_then(|name| global_place(vm, name))
-            .map(|target| HostWrite {
+        let mut writes = Vec::new();
+        match submission {
+            InputSubmission::Value(value) => {
+                if let Some(target) = pending.result_name.and_then(|name| global_place(vm, name)) {
+                    writes.push(HostWrite { target, value });
+                }
+            }
+            InputSubmission::Primitive(primitive) => {
+                for (index, value) in primitive.fields.into_iter().enumerate() {
+                    if let Some(target) = global_place_at(vm, "RESULT", index) {
+                        writes.push(HostWrite {
+                            target,
+                            value: VmValue::Integer(i64::from(value)),
+                        });
+                    }
+                }
+                let result_5 = match primitive.selection {
+                    Some(VmValue::Integer(value)) => value,
+                    Some(VmValue::String(value)) => {
+                        if let Some(target) = global_place(vm, "RESULTS") {
+                            writes.push(HostWrite {
+                                target,
+                                value: VmValue::String(value),
+                            });
+                        }
+                        0
+                    }
+                    None => 0,
+                    Some(VmValue::IntegerPlace(_) | VmValue::StringPlace(_)) => {
+                        return Err(RuntimeError::Internal(
+                            "an interaction token resolved to a VM place".into(),
+                        ));
+                    }
+                };
+                if let Some(target) = global_place_at(vm, "RESULT", 5) {
+                    writes.push(HostWrite {
+                        target,
+                        value: VmValue::Integer(result_5),
+                    });
+                }
+            }
+        }
+        // ISTIMEOUT is only changed by a timed input completion; untimed waits leave it sticky.
+        if pending.wait.deadline_ns.is_some()
+            && let Some(target) = global_place(vm, "ISTIMEOUT")
+        {
+            writes.push(HostWrite {
                 target,
-                value: value.clone(),
-            })
-            .into_iter()
-            .collect();
+                value: VmValue::Integer(i64::from(timed_out)),
+            });
+        }
         commit_completion(
             vm,
             request,
@@ -931,8 +1146,13 @@ impl RuntimeSession {
                 writes,
             }),
         )?;
+        let pause_next_wait = !vm.has_runnable_fibers();
         self.close_wait(pending.wait.wait_id)?;
-        self.set_phase(RuntimePhase::Running)
+        if let Some(next) = self.queued_inputs.pop_front() {
+            self.activate_wait(next, pause_next_wait)
+        } else {
+            self.set_phase(RuntimePhase::Running)
+        }
     }
 
     fn finish_system_input(
@@ -978,7 +1198,23 @@ impl RuntimeSession {
         }
     }
 
-    fn open_wait(&mut self, pending: PendingInput) -> Result<(), RuntimeError> {
+    fn open_wait(
+        &mut self,
+        pending: PendingInput,
+        pause_runtime: bool,
+    ) -> Result<(), RuntimeError> {
+        if self.pending_input.is_some() {
+            self.queued_inputs.push_back(pending);
+            return Ok(());
+        }
+        self.activate_wait(pending, pause_runtime)
+    }
+
+    fn activate_wait(
+        &mut self,
+        pending: PendingInput,
+        pause_runtime: bool,
+    ) -> Result<(), RuntimeError> {
         self.presentation.set_wait(Some(pending.wait.clone()));
         self.emit(
             RuntimeMessage::WaitChanged(WaitChange::Opened(pending.wait.clone())),
@@ -986,7 +1222,11 @@ impl RuntimeSession {
         )?;
         self.pending_input = Some(pending);
         self.emit_presentation()?;
-        self.set_phase(RuntimePhase::WaitingInput)
+        if pause_runtime {
+            self.set_phase(RuntimePhase::WaitingInput)
+        } else {
+            Ok(())
+        }
     }
 
     fn close_wait(&mut self, wait_id: u64) -> Result<(), RuntimeError> {
@@ -1019,9 +1259,14 @@ impl RuntimeSession {
 
     fn shutdown(&mut self, message_id: u64) -> Result<(), RuntimeError> {
         self.set_phase(RuntimePhase::Stopping)?;
-        let cancelled = self.pending_services.len() + usize::from(self.pending_input.is_some());
+        let cancelled = self.pending_services.len()
+            + self.pending_delays.len()
+            + self.queued_inputs.len()
+            + usize::from(self.pending_input.is_some());
         self.pending_services.clear();
+        self.pending_delays.clear();
         self.pending_input = None;
+        self.queued_inputs.clear();
         self.vm = None;
         self.set_phase(RuntimePhase::Stopped)?;
         self.emit(
@@ -1183,18 +1428,51 @@ fn global_place(vm: &RuntimeVm, name: &str) -> Option<PlaceDescriptor> {
         })
 }
 
+fn global_place_at(vm: &RuntimeVm, name: &str, index: usize) -> Option<PlaceDescriptor> {
+    let mut place = global_place(vm, name)?;
+    let first = place.indices.first_mut()?;
+    *first = u64::try_from(index).ok()?;
+    Some(place)
+}
+
 fn is_print(name: &str) -> bool {
-    name.starts_with("PRINT") || matches!(name, "DRAWLINE" | "REUSELASTLINE")
+    name.starts_with("PRINT") || name == "REUSELASTLINE"
+}
+
+fn is_column_print(name: &str) -> bool {
+    matches!(name, "PRINTC" | "PRINTLC" | "PRINTFORMC" | "PRINTFORMLC")
+}
+
+fn print_commits_line(name: &str) -> bool {
+    name.ends_with('L') || name.ends_with('W')
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum InputSubmission {
+    Value(VmValue),
+    Primitive(PrimitiveResult),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PrimitiveResult {
+    fields: [i32; 5],
+    selection: Option<VmValue>,
 }
 
 fn input_value(
     pending: &PendingInput,
     token: InteractionToken,
     intent: InputIntent,
-) -> Option<VmValue> {
+) -> Option<InputSubmission> {
     if let InputIntent::Activate(activated) = intent {
-        return (activated == token)
-            .then(|| pending.choices.get(&activated).cloned())
+        return (token == pending.wait.submission_token)
+            .then(|| {
+                pending
+                    .choices
+                    .get(&activated)
+                    .cloned()
+                    .map(InputSubmission::Value)
+            })
             .flatten();
     }
     if token != pending.wait.submission_token {
@@ -1203,18 +1481,39 @@ fn input_value(
     match (pending.wait.kind, intent) {
         (WaitKind::EnterKey | WaitKind::AnyKey, InputIntent::Continue)
         | (WaitKind::EnterKey, InputIntent::Enter)
-        | (WaitKind::AnyKey, InputIntent::AnyKey(_)) => Some(VmValue::Integer(0)),
-        (WaitKind::IntegerValue, InputIntent::CommitText(value)) => {
-            value.parse().ok().map(VmValue::Integer)
+        | (WaitKind::AnyKey, InputIntent::AnyKey(_)) => {
+            Some(InputSubmission::Value(VmValue::Integer(0)))
         }
-        (WaitKind::StringValue, InputIntent::CommitText(value)) => Some(VmValue::String(value)),
-        (WaitKind::AnyValue, InputIntent::CommitText(value)) => Some(
+        (WaitKind::IntegerValue, InputIntent::CommitText(value)) => value
+            .parse()
+            .ok()
+            .map(VmValue::Integer)
+            .map(InputSubmission::Value),
+        (WaitKind::StringValue, InputIntent::CommitText(value)) => {
+            Some(InputSubmission::Value(VmValue::String(value)))
+        }
+        (WaitKind::AnyValue, InputIntent::CommitText(value)) => Some(InputSubmission::Value(
             value
                 .parse()
                 .map_or_else(|_| VmValue::String(value), VmValue::Integer),
-        ),
-        (WaitKind::PrimitiveMouseKey, InputIntent::Primitive(value)) => {
-            Some(VmValue::Integer(i64::from(value.result_1)))
+        )),
+        (WaitKind::PrimitiveMouseKey, InputIntent::Primitive(value))
+            if matches!(value.input_type, 1..=3) =>
+        {
+            let selection = match value.selection_token {
+                Some(token) => Some(pending.choices.get(&token)?.clone()),
+                None => None,
+            };
+            Some(InputSubmission::Primitive(PrimitiveResult {
+                fields: [
+                    value.input_type,
+                    value.result_1,
+                    value.result_2,
+                    value.result_3,
+                    value.result_4,
+                ],
+                selection,
+            }))
         }
         _ => None,
     }
@@ -1231,6 +1530,8 @@ fn selected_capabilities(client: &ClientCapabilities) -> ClientCapabilities {
         audio: false,
         video: false,
         font_metrics: false,
+        column_cells: client.column_cells,
+        separators: client.separators,
     }
 }
 
@@ -1316,6 +1617,8 @@ mod tests {
             audio: false,
             video: false,
             font_metrics: false,
+            column_cells: true,
+            separators: true,
         }
     }
 
@@ -1651,5 +1954,72 @@ mod tests {
             0
         );
         assert_eq!(milliseconds_since_year_one(time) / 1_000, 63_919_717_445);
+    }
+
+    #[test]
+    fn primitive_input_uses_runtime_selection_tokens_and_rejects_timeout_spoofing() {
+        let submission = InteractionToken { epoch: 7, id: 1 };
+        let selection = InteractionToken { epoch: 7, id: 2 };
+        let pending = PendingInput {
+            host_request: None,
+            wait: InputWait {
+                wait_id: 9,
+                kind: WaitKind::PrimitiveMouseKey,
+                stability: WaitStability::Transient,
+                one_input: false,
+                stop_message_skip: false,
+                system_input: false,
+                mouse_input: true,
+                default_value: None,
+                deadline_ns: Some(10),
+                display_time: false,
+                timeout_message: None,
+                submission_token: submission,
+            },
+            result_name: Some("RESULT"),
+            choices: BTreeMap::from([(selection, VmValue::Integer(42))]),
+        };
+        let input = era_runtime_protocol::PrimitiveInput {
+            input_type: 1,
+            result_1: 10,
+            result_2: 20,
+            result_3: 1,
+            result_4: 3,
+            selection_token: Some(selection),
+        };
+        assert_eq!(
+            input_value(&pending, submission, InputIntent::Primitive(input)),
+            Some(InputSubmission::Primitive(PrimitiveResult {
+                fields: [1, 10, 20, 1, 3],
+                selection: Some(VmValue::Integer(42)),
+            }))
+        );
+        assert_eq!(
+            input_value(&pending, submission, InputIntent::Activate(selection)),
+            Some(InputSubmission::Value(VmValue::Integer(42)))
+        );
+        assert!(
+            input_value(
+                &pending,
+                InteractionToken { epoch: 7, id: 99 },
+                InputIntent::Activate(selection),
+            )
+            .is_none()
+        );
+        assert!(
+            input_value(
+                &pending,
+                submission,
+                InputIntent::Primitive(era_runtime_protocol::PrimitiveInput {
+                    input_type: 4,
+                    result_1: 0,
+                    result_2: 0,
+                    result_3: 0,
+                    result_4: 0,
+                    selection_token: None,
+                }),
+            )
+            .is_none()
+        );
     }
 }

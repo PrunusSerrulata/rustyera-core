@@ -656,7 +656,26 @@ fn analyze_instruction(
         }
         lowered.push(match argument {
             Argument::Expression(expression) => {
-                HirArgument::Expression(analyzer.analyze(expression))
+                let expression = analyzer.analyze(expression);
+                let mutable = signature
+                    .and_then(|signature| signature.arguments.get(index))
+                    .is_some_and(|constraint| {
+                        matches!(
+                            constraint,
+                            crate::ArgumentConstraint::MutableInteger
+                                | crate::ArgumentConstraint::MutableString
+                                | crate::ArgumentConstraint::MutableAny
+                        )
+                    });
+                if mutable {
+                    if let HirExprKind::Variable { place } = expression.kind {
+                        HirArgument::Place(place)
+                    } else {
+                        HirArgument::Expression(expression)
+                    }
+                } else {
+                    HirArgument::Expression(expression)
+                }
             }
             Argument::Formatted(formatted) => {
                 HirArgument::Formatted(analyzer.analyze_formatted(formatted))
@@ -680,6 +699,14 @@ fn analyze_instruction(
             .iter()
             .map(|argument| match argument {
                 HirArgument::Expression(expression) => Some(expression.clone()),
+                HirArgument::Place(place) => Some(erabasic_hir::HirExpr {
+                    kind: HirExprKind::Variable {
+                        place: place.clone(),
+                    },
+                    value_type: place.value_type,
+                    constant: None,
+                    location: place.location,
+                }),
                 HirArgument::Omitted | HirArgument::Formatted(_) | HirArgument::Raw(_) => None,
             })
             .collect();

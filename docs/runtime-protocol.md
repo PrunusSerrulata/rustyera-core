@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 3.0 over common wire 2.0 is a development contract: by explicit project policy it
+dynamic library. Runtime protocol 4.0 over common wire 2.0 is a development contract: by explicit project policy it
 does not promise backward compatibility until a frontend exists.
 
 ## Authority and ownership
@@ -97,7 +97,11 @@ The wait contract represents all reference input kinds: enter, any key, integer,
 string, void, any value, integer/string button and primitive mouse/key input. It retains
 one-input, message-skip, system-input, mouse-input, default-value, timeout-display and
 timeout-message fields. The frontend submits normalized UI intents such as committed text,
-continue, primitive input or activation of an opaque token. The runtime parses EraBasic values
+continue, primitive input or activation of an opaque token. Primitive input intentionally uses
+frontend-normalized EraBasic-shaped `input_type` and `result_1..result_4` device fields. The
+frontend never supplies game-internal `RESULT[5]`; an optional runtime-issued selection token
+maps to integer `RESULT[5]`, or to `RESULTS` with `RESULT[5]=0`. Only runtime synthesizes timeout
+type 4. The runtime parses EraBasic values
 and validates the wait, token, epoch and frontend monotonic timestamp.
 
 The runtime accepts frontend messages in sequence order. If input and a deadline share a
@@ -115,7 +119,9 @@ The runtime stores a revisioned semantic presentation snapshot and emits deltas 
 that revision. It includes text/styles/buttons, HTML, image/shape placement, backgrounds,
 logical audio state, title and the current wait. Numeric media measurements use fixed
 integer units rather than floating point. Recoverable state is separate from acknowledged
-one-shot `EffectBatch` events. Pixel buffers, font objects and audio devices
+one-shot `EffectBatch` events. `ColumnCell` and `Separator` preserve PRINTC/DRAWLINE intent
+without font-dependent padding, with deterministic plain projection for clients that do not
+negotiate those nodes. Pixel buffers, font objects and audio devices
 remain frontend caches; script-observable service results return through ordered service
 responses and update the runtime's logical resource revision.
 
@@ -143,9 +149,10 @@ presentation waits and source breakpoints are rebound only after successful comm
 The current runtime implements handshake, epoch-scoped sessions, normalized text input,
 capability intersection, bounded journals with idempotent retransmission, full-state
 resynchronization, full in-memory project load/analyze/compile/validate, deterministic new-game
-startup, bounded VM driving, basic text presentation, reference-shaped waits and timeouts,
-fresh GETKEY-family queries, frontend-owned local time, seed acquisition, faults and shutdown.
+startup, bounded VM driving, logical-line text/column/separator presentation, reference-shaped
+waits and timeouts, fresh GETKEY-family queries, frontend-owned local time, seed acquisition,
+SFMT-backed RAND/RANDOMIZE, an initial deterministic core Native set, faults and shutdown.
 The compiler uses an explicit execution catalog rather than Host-name heuristics. Configuration
-and resource inputs receive stable deferred diagnostics but are not applied yet. Save/snapshot,
-reload, media/audio execution, complete primitive-input semantics, debugger execution and seeded
-RAND remain unavailable and are not advertised.
+and resource inputs receive stable deferred diagnostics but are not applied yet. Complex mutable
+Native families, RANDDATA INIT/DUMP transactions, saves/reload, media/audio execution, complete
+primitive-input semantics and debugger execution remain unavailable and are not advertised.
