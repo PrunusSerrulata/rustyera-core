@@ -71,6 +71,21 @@ pub(crate) struct Catalog {
     pub extension_functions: BTreeSet<String>,
 }
 
+/// Return the pinned built-in instruction namespace in deterministic order.
+///
+/// Execution layers use this inventory to require an explicit Native/Host or
+/// unsupported classification for every analyzer-visible built-in.
+#[must_use]
+pub fn builtin_instruction_names() -> Vec<String> {
+    builtin_instructions().into_keys().collect()
+}
+
+/// Return the pinned built-in expression-function namespace in deterministic order.
+#[must_use]
+pub fn builtin_function_names() -> Vec<String> {
+    builtin_functions().into_keys().collect()
+}
+
 impl Catalog {
     pub fn build(extensions: &ExtensionRegistry) -> Self {
         let mut catalog = Self {

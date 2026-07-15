@@ -2,20 +2,21 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
 use era_protocol::{
-    ProtocolBytes, ProtocolError, ProtocolVersion, SessionId, VersionRange, WireLimits,
-    decode_canonical, decode_envelope, encode_canonical, encode_envelope, negotiate_version,
+    ProtocolBytes, ProtocolError, ProtocolVersion, SessionEpoch, SessionId, VersionRange,
+    WireLimits, decode_canonical, decode_envelope, encode_canonical, encode_envelope,
+    negotiate_version,
 };
 use era_runtime_protocol::{
-    AdvanceTime, ClientHello, CommandErrorCode, CommandRejected, FaultCode, FrontendInput,
-    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
-    GetKeyStateResponse, InputValue, InputWait, LOCAL_DATE_TIME_OPERATION,
+    AdvanceTime, ClientCapabilities, ClientHello, CommandErrorCode, CommandRejected, FaultCode,
+    FrontendInput, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
+    GetKeyStateResponse, InputIntent, InputWait, InteractionToken, LOCAL_DATE_TIME_OPERATION,
     LOCAL_DATE_TIME_OPERATION_VERSION, LocalDateTimeRequest, LocalDateTimeResponse,
     ProjectManifest, RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION,
     RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse, RuntimeFault, RuntimeFeature,
-    RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeStateChanged, ServerHello, ServiceKind,
-    ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady, StartMode, StartRequest,
-    StateExportReady, StateExportRequest, StateExportResult, VersionRejected, WaitChange, WaitKind,
-    WaitStability,
+    RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized, RuntimeStateChanged,
+    ServerHello, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady,
+    StartMode, StartRequest, StateExportReady, StateExportRequest, StateExportResult,
+    VersionRejected, WaitChange, WaitKind, WaitStability,
 };
 use erabasic_bytecode::SymbolKey;
 use erabasic_compiler::IncrementalState;
@@ -137,16 +138,19 @@ pub struct RuntimeSession {
     state: SessionState,
     phase: RuntimePhase,
     revision: u64,
+    epoch: SessionEpoch,
     expected_inbound_sequence: u64,
     outbound_sequence: u64,
     next_message_id: u64,
     next_request_id: u64,
     next_wait_id: u64,
-    button_generation: u64,
+    next_interaction_id: u64,
     logical_time_ns: u64,
     random_seed: Option<u64>,
     inbound: VecDeque<(u64, RuntimeMessage)>,
     outbound: VecDeque<Vec<u8>>,
+    outbound_journal: BTreeMap<u64, Vec<u8>>,
+    accepted_message_ids: BTreeMap<u64, (u64, blake3::Hash)>,
     artifact: Option<ValidatedArtifact>,
     incremental: IncrementalState,
     vm: Option<RuntimeVm>,
@@ -164,16 +168,19 @@ impl RuntimeSession {
             state: SessionState::Negotiating,
             phase: RuntimePhase::Negotiating,
             revision: 0,
+            epoch: SessionEpoch(0),
             expected_inbound_sequence: 0,
             outbound_sequence: 0,
             next_message_id: 1,
             next_request_id: 1,
             next_wait_id: 1,
-            button_generation: 1,
+            next_interaction_id: 1,
             logical_time_ns: 0,
             random_seed: None,
             inbound: VecDeque::new(),
             outbound: VecDeque::new(),
+            outbound_journal: BTreeMap::new(),
+            accepted_message_ids: BTreeMap::new(),
             artifact: None,
             incremental: IncrementalState::default(),
             vm: None,
@@ -191,8 +198,23 @@ impl RuntimeSession {
     /// Rejects malformed, oversized, out-of-sequence, or wrong-session envelopes.
     pub fn submit_envelope(&mut self, bytes: &[u8]) -> Result<(), RuntimeError> {
         let envelope = decode_envelope(bytes, self.options.wire_limits)?;
-        if self.state == SessionState::Active && envelope.session != Some(self.options.session_id) {
+        if self.state == SessionState::Active
+            && (envelope.session != Some(self.options.session_id)
+                || envelope.session_epoch != Some(self.epoch))
+        {
             return Err(RuntimeError::SessionMismatch);
+        }
+        let envelope_hash = blake3::hash(bytes);
+        if envelope.sequence < self.expected_inbound_sequence {
+            if self.accepted_message_ids.get(&envelope.message_id)
+                == Some(&(envelope.sequence, envelope_hash))
+            {
+                return Ok(());
+            }
+            return Err(RuntimeError::InvalidSequence {
+                expected: self.expected_inbound_sequence,
+                actual: envelope.sequence,
+            });
         }
         if envelope.sequence != self.expected_inbound_sequence {
             return Err(RuntimeError::InvalidSequence {
@@ -206,6 +228,12 @@ impl RuntimeSession {
         let message_id = envelope.message_id;
         let message = RuntimeMessage::from_envelope(&envelope)?;
         self.expected_inbound_sequence = self.expected_inbound_sequence.saturating_add(1);
+        self.accepted_message_ids
+            .insert(message_id, (envelope.sequence, envelope_hash));
+        while self.accepted_message_ids.len() > self.options.limits.maximum_journal_entries as usize
+        {
+            self.accepted_message_ids.pop_first();
+        }
         self.inbound.push_back((message_id, message));
         Ok(())
     }
@@ -319,6 +347,13 @@ impl RuntimeSession {
             RuntimeMessage::Start(start) => self.start(message_id, &start),
             RuntimeMessage::Input(input) => self.complete_input(message_id, input),
             RuntimeMessage::AdvanceTime(time) => self.advance_time(message_id, time),
+            RuntimeMessage::DeviceStateChanged(state) => {
+                self.logical_time_ns = self.logical_time_ns.max(state.monotonic_time_ns);
+                Ok(())
+            }
+            RuntimeMessage::ClientStateChanged(_) | RuntimeMessage::EffectAcknowledgement(_) => {
+                Ok(())
+            }
             RuntimeMessage::ServiceResponse(response) => {
                 self.complete_service(message_id, response)
             }
@@ -329,8 +364,18 @@ impl RuntimeSession {
                 "hot reload is not enabled by this runtime stage",
             ),
             RuntimeMessage::ShutdownRequest(_) => self.shutdown(message_id),
+            RuntimeMessage::Acknowledge(ack) => {
+                self.outbound_journal
+                    .retain(|sequence, _| *sequence > ack.through_sequence);
+                Ok(())
+            }
             RuntimeMessage::Resynchronize(_) => self.emit(
-                RuntimeMessage::PresentationSnapshot(self.presentation.snapshot()),
+                RuntimeMessage::RuntimeResynchronized(RuntimeResynchronized {
+                    epoch: self.epoch.0,
+                    phase: self.phase,
+                    runtime_revision: self.revision,
+                    presentation: self.presentation.snapshot(),
+                }),
                 Some(message_id),
             ),
             RuntimeMessage::StorageResponse(_) => self.reject(
@@ -346,13 +391,14 @@ impl RuntimeSession {
             | RuntimeMessage::WaitChanged(_)
             | RuntimeMessage::PresentationSnapshot(_)
             | RuntimeMessage::PresentationDelta(_)
+            | RuntimeMessage::EffectBatch(_)
             | RuntimeMessage::StorageRequest(_)
             | RuntimeMessage::ServiceRequest(_)
             | RuntimeMessage::StateExportReady(_)
             | RuntimeMessage::ShutdownReady(_)
             | RuntimeMessage::Fault(_)
-            | RuntimeMessage::Acknowledge(_)
-            | RuntimeMessage::CommandRejected(_) => self.reject(
+            | RuntimeMessage::CommandRejected(_)
+            | RuntimeMessage::RuntimeResynchronized(_) => self.reject(
                 message_id,
                 CommandErrorCode::InvalidValue,
                 "message direction is frontend-incompatible",
@@ -372,23 +418,30 @@ impl RuntimeSession {
             );
         };
         self.state = SessionState::Active;
+        self.epoch = SessionEpoch(1);
         let limits = intersect_limits(self.options.limits, hello.requested_limits);
         self.options.limits = limits;
         self.options.wire_limits.maximum_envelope_bytes =
             usize::try_from(limits.maximum_envelope_bytes).unwrap_or(usize::MAX);
         self.options.wire_limits.maximum_payload_bytes =
             usize::try_from(limits.maximum_payload_bytes).unwrap_or(usize::MAX);
+        let implemented = [
+            RuntimeFeature::TimedInput,
+            RuntimeFeature::ExternalServices,
+            RuntimeFeature::StateResynchronization,
+        ];
+        let features = implemented
+            .into_iter()
+            .filter(|feature| hello.features.contains(feature))
+            .collect();
         self.emit(
             RuntimeMessage::ServerHello(ServerHello {
                 selected_version: selected,
                 session: self.options.session_id,
-                features: vec![
-                    RuntimeFeature::TimedInput,
-                    RuntimeFeature::RichText,
-                    RuntimeFeature::ExternalServices,
-                    RuntimeFeature::StateResynchronization,
-                ],
+                features,
                 limits,
+                epoch: self.epoch.0,
+                selected_capabilities: selected_capabilities(&hello.capabilities),
             }),
             Some(message_id),
         )
@@ -432,6 +485,9 @@ impl RuntimeSession {
                 CommandErrorCode::InvalidState,
                 "start requires a successfully loaded project",
             );
+        }
+        if matches!(request.mode, StartMode::NewGame { .. }) {
+            self.advance_epoch();
         }
         match request.mode {
             StartMode::NewGame { seed: Some(seed) } => self.start_new_game(seed),
@@ -490,16 +546,13 @@ impl RuntimeSession {
             self.vm = Some(vm);
             self.presentation
                 .append_text("[0] Start a new game".into(), false);
-            self.presentation.append_button(
-                "Start a new game".into(),
-                era_runtime_protocol::ProtocolValue::Integer(0),
-                self.button_generation,
-            );
-            self.presentation.append_button(
-                "Load game".into(),
-                era_runtime_protocol::ProtocolValue::Integer(1),
-                self.button_generation,
-            );
+            let start_token = self.allocate_interaction();
+            let load_token = self.allocate_interaction();
+            let submission_token = self.allocate_interaction();
+            self.presentation
+                .append_button("Start a new game".into(), start_token);
+            self.presentation
+                .append_button("Load game".into(), load_token);
             let wait = InputWait {
                 wait_id: self.allocate_wait(),
                 kind: WaitKind::IntegerButton,
@@ -512,12 +565,17 @@ impl RuntimeSession {
                 deadline_ns: None,
                 display_time: false,
                 timeout_message: None,
-                button_generation: self.button_generation,
+                submission_token,
             };
+            let choices = BTreeMap::from([
+                (start_token, VmValue::Integer(0)),
+                (load_token, VmValue::Integer(1)),
+            ]);
             self.open_wait(PendingInput {
                 host_request: None,
                 wait,
                 result_name: None,
+                choices,
             })
         }
     }
@@ -544,7 +602,7 @@ impl RuntimeSession {
         if let Some(pending) = input_wait(
             request,
             self.allocate_wait(),
-            self.button_generation,
+            self.allocate_interaction(),
             self.logical_time_ns,
         ) {
             let stability = match pending.wait.stability {
@@ -611,10 +669,14 @@ impl RuntimeSession {
                 GET_KEY_STATE_OPERATION_VERSION,
                 &GetKeyStateRequest { key_code: key },
             )
-        } else if matches!(name.as_str(), "GETTIME" | "GETTIMES" | "GETMILLISECOND") {
+        } else if matches!(
+            name.as_str(),
+            "GETTIME" | "GETTIMES" | "GETMILLISECOND" | "GETSECOND"
+        ) {
             let operation = match name.as_str() {
                 "GETTIMES" => ClockOperation::Times,
                 "GETMILLISECOND" => ClockOperation::Millisecond,
+                "GETSECOND" => ClockOperation::Second,
                 _ => ClockOperation::Time,
             };
             self.issue_host_service(
@@ -748,6 +810,9 @@ impl RuntimeSession {
                                 ClockOperation::Millisecond => {
                                     VmValue::Integer(milliseconds_since_year_one(time))
                                 }
+                                ClockOperation::Second => {
+                                    VmValue::Integer(milliseconds_since_year_one(time) / 1_000)
+                                }
                             })
                         }
                     }
@@ -782,16 +847,26 @@ impl RuntimeSession {
                 "no input is pending",
             );
         };
-        if pending.wait.wait_id != input.wait_id
-            || pending.wait.button_generation != input.button_generation
-        {
+        if pending.wait.wait_id != input.wait_id {
             return self.reject(
                 message_id,
                 CommandErrorCode::StaleRequest,
-                "input wait identity or button generation is stale",
+                "input wait identity is stale",
             );
         }
-        let Some(value) = input_value(&pending.wait, input.value) else {
+        if pending
+            .wait
+            .deadline_ns
+            .is_some_and(|deadline| input.monotonic_time_ns > deadline)
+        {
+            return self.advance_time(
+                message_id,
+                AdvanceTime {
+                    monotonic_time_ns: input.monotonic_time_ns,
+                },
+            );
+        }
+        let Some(value) = input_value(pending, input.token, input.intent) else {
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidValue,
@@ -972,6 +1047,7 @@ impl RuntimeSession {
             RuntimeMessage::StateChanged(RuntimeStateChanged {
                 phase,
                 revision: self.revision,
+                epoch: self.epoch.0,
             }),
             None,
         )
@@ -1021,15 +1097,17 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         let envelope = message.envelope(
             Some(self.options.session_id),
+            Some(self.epoch),
             self.outbound_sequence,
             self.next_message_id,
             correlation_id,
         )?;
         let bytes = encode_envelope(&envelope, self.options.wire_limits)?;
-        if self.outbound.len() >= self.options.limits.maximum_journal_entries as usize {
+        if self.outbound_journal.len() >= self.options.limits.maximum_journal_entries as usize {
             return Err(RuntimeError::ResourceLimit("outbound journal is full"));
         }
-        self.outbound.push_back(bytes);
+        self.outbound.push_back(bytes.clone());
+        self.outbound_journal.insert(self.outbound_sequence, bytes);
         self.outbound_sequence = self.outbound_sequence.saturating_add(1);
         self.next_message_id = self.next_message_id.saturating_add(1);
         Ok(())
@@ -1050,6 +1128,21 @@ impl RuntimeSession {
         let id = self.next_wait_id;
         self.next_wait_id = self.next_wait_id.saturating_add(1);
         id
+    }
+
+    fn allocate_interaction(&mut self) -> InteractionToken {
+        let token = InteractionToken {
+            epoch: self.epoch.0,
+            id: self.next_interaction_id,
+        };
+        self.next_interaction_id = self.next_interaction_id.saturating_add(1);
+        token
+    }
+
+    fn advance_epoch(&mut self) {
+        self.epoch.0 = self.epoch.0.saturating_add(1);
+        self.next_interaction_id = 1;
+        self.accepted_message_ids.clear();
     }
 }
 
@@ -1094,18 +1187,50 @@ fn is_print(name: &str) -> bool {
     name.starts_with("PRINT") || matches!(name, "DRAWLINE" | "REUSELASTLINE")
 }
 
-fn input_value(wait: &InputWait, value: InputValue) -> Option<VmValue> {
-    match (wait.kind, value) {
-        (WaitKind::EnterKey, InputValue::Enter) | (WaitKind::AnyKey, InputValue::AnyKey(_)) => {
-            Some(VmValue::Integer(0))
+fn input_value(
+    pending: &PendingInput,
+    token: InteractionToken,
+    intent: InputIntent,
+) -> Option<VmValue> {
+    if let InputIntent::Activate(activated) = intent {
+        return (activated == token)
+            .then(|| pending.choices.get(&activated).cloned())
+            .flatten();
+    }
+    if token != pending.wait.submission_token {
+        return None;
+    }
+    match (pending.wait.kind, intent) {
+        (WaitKind::EnterKey | WaitKind::AnyKey, InputIntent::Continue)
+        | (WaitKind::EnterKey, InputIntent::Enter)
+        | (WaitKind::AnyKey, InputIntent::AnyKey(_)) => Some(VmValue::Integer(0)),
+        (WaitKind::IntegerValue, InputIntent::CommitText(value)) => {
+            value.parse().ok().map(VmValue::Integer)
         }
-        (WaitKind::IntegerValue | WaitKind::AnyValue, InputValue::Integer(value))
-        | (WaitKind::IntegerButton, InputValue::IntegerButton(value)) => {
-            Some(VmValue::Integer(value))
+        (WaitKind::StringValue, InputIntent::CommitText(value)) => Some(VmValue::String(value)),
+        (WaitKind::AnyValue, InputIntent::CommitText(value)) => Some(
+            value
+                .parse()
+                .map_or_else(|_| VmValue::String(value), VmValue::Integer),
+        ),
+        (WaitKind::PrimitiveMouseKey, InputIntent::Primitive(value)) => {
+            Some(VmValue::Integer(i64::from(value.result_1)))
         }
-        (WaitKind::StringValue | WaitKind::AnyValue, InputValue::String(value))
-        | (WaitKind::StringButton, InputValue::StringButton(value)) => Some(VmValue::String(value)),
         _ => None,
+    }
+}
+
+fn selected_capabilities(client: &ClientCapabilities) -> ClientCapabilities {
+    // Stage one exposes the normalized text projection only. Capabilities are
+    // intersected here instead of echoing unsupported renderer promises.
+    ClientCapabilities {
+        input_modalities: client.input_modalities.clone(),
+        rich_text: false,
+        html: false,
+        graphics: false,
+        audio: false,
+        video: false,
+        font_metrics: false,
     }
 }
 
@@ -1182,6 +1307,18 @@ mod tests {
 
     use super::*;
 
+    fn capabilities() -> ClientCapabilities {
+        ClientCapabilities {
+            input_modalities: vec![era_runtime_protocol::InputModality::Keyboard],
+            rich_text: false,
+            html: false,
+            graphics: false,
+            audio: false,
+            video: false,
+            font_metrics: false,
+        }
+    }
+
     #[allow(clippy::needless_pass_by_value)]
     fn submit(session: &mut RuntimeSession, sequence: u64, message: RuntimeMessage) {
         let mut envelope = Envelope::new(
@@ -1194,6 +1331,7 @@ mod tests {
         );
         if sequence != 0 {
             envelope.session = Some(session.options.session_id);
+            envelope.session_epoch = Some(session.epoch);
         }
         let bytes = encode_envelope(&envelope, WireLimits::default()).expect("encode envelope");
         session.submit_envelope(&bytes).expect("submit envelope");
@@ -1219,6 +1357,7 @@ mod tests {
                 client_name: "test".into(),
                 features: vec![RuntimeFeature::Audio, RuntimeFeature::TimedInput],
                 requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
             }),
         );
         session.drive(RuntimeDriveBudget::default()).expect("drive");
@@ -1242,6 +1381,7 @@ mod tests {
                 client_name: "test".into(),
                 features: Vec::new(),
                 requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
             }),
         );
         session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -1302,6 +1442,7 @@ mod tests {
                 client_name: "test".into(),
                 features: vec![RuntimeFeature::TimedInput],
                 requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
             }),
         );
         session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -1353,9 +1494,9 @@ mod tests {
             3,
             RuntimeMessage::Input(FrontendInput {
                 wait_id: wait.wait_id,
-                button_generation: wait.button_generation,
+                token: wait.submission_token,
                 monotonic_time_ns: 10,
-                value: InputValue::Integer(42),
+                intent: InputIntent::CommitText("42".into()),
             }),
         );
         for _ in 0..4 {
@@ -1383,8 +1524,11 @@ mod tests {
             client_name: "test".into(),
             features: Vec::new(),
             requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
         });
-        let envelope = message.envelope(None, 2, 1, None).expect("create envelope");
+        let envelope = message
+            .envelope(None, None, 2, 1, None)
+            .expect("create envelope");
         let bytes = encode_envelope(&envelope, WireLimits::default()).expect("encode envelope");
         assert!(matches!(
             session.submit_envelope(&bytes),
@@ -1393,6 +1537,90 @@ mod tests {
                 actual: 2
             })
         ));
+    }
+
+    #[test]
+    fn active_session_rejects_stale_epochs_and_acknowledges_journal_entries() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        submit(
+            &mut session,
+            0,
+            RuntimeMessage::ClientHello(ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "test".into(),
+                features: vec![RuntimeFeature::StateResynchronization],
+                requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).expect("hello");
+        drain(&mut session);
+        assert_eq!(session.outbound_journal.len(), 1);
+
+        let ack = RuntimeMessage::Acknowledge(era_runtime_protocol::SequenceAcknowledgement {
+            through_sequence: 0,
+        });
+        submit(&mut session, 1, ack);
+        session.drive(RuntimeDriveBudget::default()).expect("ack");
+        assert!(session.outbound_journal.is_empty());
+
+        let message = RuntimeMessage::AdvanceTime(AdvanceTime {
+            monotonic_time_ns: 1,
+        });
+        let mut envelope = message
+            .envelope(
+                Some(session.options.session_id),
+                Some(SessionEpoch(session.epoch.0.saturating_sub(1))),
+                2,
+                3,
+                None,
+            )
+            .expect("stale envelope");
+        envelope.session = Some(session.options.session_id);
+        let bytes = encode_envelope(&envelope, WireLimits::default()).expect("encode envelope");
+        assert!(matches!(
+            session.submit_envelope(&bytes),
+            Err(RuntimeError::SessionMismatch)
+        ));
+    }
+
+    #[test]
+    fn deferred_configuration_and_resources_are_reported_instead_of_ignored() {
+        let build = build_project(
+            &ProjectManifest {
+                project_revision: 1,
+                files: vec![
+                    SubmittedFile {
+                        relative_path: "main.erb".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                        content_hash: None,
+                    },
+                    SubmittedFile {
+                        relative_path: "emuera.config".into(),
+                        category: FileCategory::Configuration,
+                        payload: FilePayload::Utf8("Language=Chinese".into()),
+                        content_hash: None,
+                    },
+                    SubmittedFile {
+                        relative_path: "resources.csv".into(),
+                        category: FileCategory::ResourceManifest,
+                        payload: FilePayload::Utf8("name,path".into()),
+                        content_hash: None,
+                    },
+                ],
+            },
+            None,
+        );
+        assert!(build.report.success);
+        let codes: Vec<_> = build
+            .report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert!(codes.contains(&"runtime.configuration_deferred"));
+        assert!(codes.contains(&"runtime.resource_manifest_deferred"));
     }
 
     #[test]
@@ -1422,5 +1650,6 @@ mod tests {
             }),
             0
         );
+        assert_eq!(milliseconds_since_year_one(time) / 1_000, 63_919_717_445);
     }
 }

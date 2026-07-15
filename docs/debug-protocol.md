@@ -1,7 +1,8 @@
 # EraBasic debugger protocol
 
-`era-debug-protocol` is independent from normal runtime control. It shares only the
-common envelope and has its own version negotiation, payload tags and authorization.
+`era-debug-protocol` 2.0 is independent from normal runtime control. It shares only the
+common envelope and has its own version negotiation, payload tags and authorization. Active
+debug traffic is bound to the runtime's current `SessionEpoch`.
 No debugger functionality is enabled merely because a runtime session exists.
 
 ## Authorization

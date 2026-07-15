@@ -1,7 +1,7 @@
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::{InputWait, ProtocolValue};
+use crate::{InputWait, InteractionToken};
 
 #[derive(Clone, Copy, Debug, Default, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -116,14 +116,12 @@ pub enum DisplayRun {
         #[n(0)]
         runs: Vec<DisplayRun>,
         #[n(1)]
-        value: ProtocolValue,
+        token: InteractionToken,
         #[n(2)]
-        generation: u64,
-        #[n(3)]
         title: Option<String>,
-        #[n(4)]
+        #[n(3)]
         layout: RunLayout,
-        #[n(5)]
+        #[n(4)]
         hover_style: Option<TextStyle>,
     },
     #[n(2)]

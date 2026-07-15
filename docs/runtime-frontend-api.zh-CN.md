@@ -334,10 +334,11 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 
 | 字段 | 含义 |
 | --- | --- |
-| `wire_version` | 公共信封版本，当前为 `1.0`。 |
-| `channel_version` | Runtime protocol 版本，当前为 `2.0`。 |
+| `wire_version` | 公共信封版本，当前为 `2.0`。 |
+| `channel_version` | Runtime protocol 版本，当前为 `3.0`。 |
 | `channel` | 正常运行必须为 `Runtime`；调试使用独立 `Debug` channel。 |
 | `session` | 首次 `ClientHello` 可为空；握手成功后必须等于 `ServerHello.session`。 |
+| `session_epoch` | 首次握手可为空；之后必须等于当前时间线 epoch。新游戏、恢复或热替换提交后旧 epoch 消息失效。 |
 | `sequence` | 每个方向独立、从 `0` 开始、严格连续递增。 |
 | `message_id` | 非零消息标识，在该方向保持唯一。 |
 | `correlation_id` | 响应关联的请求 `message_id`，无关联事件为空。 |
@@ -359,10 +360,11 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `2.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `3.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
+| `capabilities` | 输入模态、富文本、HTML、图形、音视频和字体度量能力。 |
 
 Runtime 返回：
 
@@ -407,7 +409,7 @@ Runtime 返回 `ProjectLoadReport`（tag `11`）：原 revision、`success` 和�
 
 Runtime 使用 `StateChanged`（tag `21`）报告 `Negotiating`、`LoadingProject`、`Ready`、
 `Starting`、`Running`、`WaitingInput`、`Paused`、`Reloading`、`Stopping`、`Stopped` 或
-`Faulted`；`revision` 在每次 phase 变化时递增。
+`Faulted`；`revision` 在每次 phase 变化时递增，消息同时报告当前 epoch。
 
 ### 关闭
 
@@ -425,8 +427,8 @@ Runtime 是展示语义状态的权威持有者；前端只负责渲染投影。
 
 Snapshot 包含标题、行、背景、逻辑音频状态、当前输入等待和全局展示设置。
 
-`DisplayRun` 支持文本、嵌套按钮、HTML、图片和形状。按钮的 `value` 是提交输入时的
-语义值，`generation` 用于拒绝旧按钮点击。尺寸使用整数固定单位：
+`DisplayRun` 支持文本、嵌套按钮、HTML、图片和形状。按钮只携带 opaque
+`InteractionToken`，前端不得读取或推导游戏值。尺寸使用整数固定单位：
 
 - `millipixels`：1/1000 pixel；
 - `font_millipoints`：1/1000 point；
@@ -445,8 +447,8 @@ Runtime 通过 `WaitChanged`（tag `32`）报告 wait 打开、更新或关闭�
 | 字段 | 前端处理 |
 | --- | --- |
 | `wait_id` | 每次提交输入时原样带回。 |
-| `button_generation` | 按钮输入时必须与当前展示代数一致。 |
-| `kind` | 决定 `InputValue` 变体。 |
+| `submission_token` | 文本提交、继续或 primitive 输入时必须原样带回。 |
+| `kind` | 决定 runtime 如何解释规范化输入意图。 |
 | `stability` | `Transient` 表示当前状态不适合精确 VM snapshot。 |
 | `one_input` | 参考实现的一次输入模式。 |
 | `stop_message_skip` | 需要终止消息跳过状态。 |
@@ -457,8 +459,10 @@ Runtime 通过 `WaitChanged`（tag `32`）报告 wait 打开、更新或关闭�
 | `display_time` | 是否显示剩余时间。 |
 | `timeout_message` | 超时提示文本。 |
 
-前端提交 `Input`（tag `30`），参数包括 `wait_id`、`button_generation`、当前
-`monotonic_time_ns` 和匹配 wait kind 的 `InputValue`。ID、代数或值类型不匹配会收到
+前端提交 `Input`（tag `30`），参数包括 `wait_id`、交互 token、当前
+`monotonic_time_ns` 和 `CommitText`、`Activate`、`Continue`、`Cancel` 或
+`Primitive` 意图。前端负责设备/IME 编辑，runtime 负责整数、默认值和选项语义。
+ID、epoch、token 或意图不匹配会收到
 可恢复的 `CommandRejected(StaleRequest/InvalidValue)`。
 
 即使没有用户输入，前端也必须按需要提交 `AdvanceTime`（tag `31`），让 runtime 推进
@@ -521,8 +525,8 @@ runtime；应先取出消息，再异步或同步完成平台工作，最后通�
 文本执行逻辑。
 
 当输出 sequence、展示 revision 或本地投影发生缺口时，前端可发送
-`Resynchronize`。当前 runtime 会返回完整 `PresentationSnapshot`；前端收到后替换本地
-展示缓存。
+`Resynchronize`。当前 runtime 返回 `RuntimeResynchronized`，其中包含 epoch、phase、
+runtime revision 和完整 `PresentationSnapshot`；前端收到后替换本地展示缓存。
 
 ## 12. C 前端循环示意
 
@@ -660,7 +664,7 @@ runtime 不变量被破坏。
 - 文件 I/O、UTF-8 解码结果或 I/O error 都由前端放入 manifest。
 - 使用 UTF-8 byte offset，不把 UTF-16 code-unit 当作源码偏移。
 - 展示 delta 只应用到匹配的 revision，否则请求完整同步。
-- 输入必须携带当前 wait ID、button generation 和单调时钟时间。
+- 输入必须携带当前 wait ID、opaque interaction token 和单调时钟时间。
 - 每个 Service/Storage response 都关联当前待处理 request ID。
 - `EraStatus`、`CommandRejected.code`、`Fault.code` 用于机器逻辑，文本仅用于日志。
 - 正常退出先等待 `ShutdownReady`，紧急退出才直接 destroy。

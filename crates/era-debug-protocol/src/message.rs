@@ -12,7 +12,7 @@ use crate::{
     VariableWrite,
 };
 
-pub const DEBUG_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const DEBUG_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(2, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -233,6 +233,7 @@ impl DebugMessage {
     pub fn envelope(
         &self,
         session: Option<SessionId>,
+        session_epoch: Option<era_protocol::SessionEpoch>,
         sequence: u64,
         message_id: u64,
         correlation_id: Option<u64>,
@@ -246,6 +247,7 @@ impl DebugMessage {
             ProtocolBytes::new(self.encode_payload()?),
         );
         envelope.session = session;
+        envelope.session_epoch = session_epoch;
         envelope.correlation_id = correlation_id;
         Ok(envelope)
     }

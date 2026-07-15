@@ -1,4 +1,4 @@
-use era_runtime_protocol::{InputWait, ProtocolValue, WaitKind, WaitStability};
+use era_runtime_protocol::{InputWait, InteractionToken, ProtocolValue, WaitKind, WaitStability};
 use erabasic_bytecode::BytecodeType;
 use erabasic_vm::{HostRequestId, VmHostRequest, VmValue};
 
@@ -7,6 +7,7 @@ pub(crate) struct PendingInput {
     pub(crate) host_request: Option<HostRequestId>,
     pub(crate) wait: InputWait,
     pub(crate) result_name: Option<&'static str>,
+    pub(crate) choices: std::collections::BTreeMap<InteractionToken, VmValue>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,12 +29,13 @@ pub(crate) enum ClockOperation {
     Time,
     Times,
     Millisecond,
+    Second,
 }
 
 pub(crate) fn input_wait(
     request: &VmHostRequest,
     wait_id: u64,
-    button_generation: u64,
+    submission_token: InteractionToken,
     logical_time_ns: u64,
 ) -> Option<PendingInput> {
     let name = request.import.import.name.to_ascii_uppercase();
@@ -119,9 +121,10 @@ pub(crate) fn input_wait(
             deadline_ns,
             display_time,
             timeout_message,
-            button_generation,
+            submission_token,
         },
         result_name,
+        choices: std::collections::BTreeMap::new(),
     })
 }
 
@@ -187,7 +190,7 @@ mod tests {
                 ],
             ),
             7,
-            3,
+            InteractionToken { epoch: 1, id: 3 },
             5_000_000,
         )
         .expect("known input instruction");
@@ -206,15 +209,20 @@ mod tests {
 
     #[test]
     fn forcewait_and_twait_keep_distinct_reference_semantics() {
-        let force =
-            input_wait(&request("FORCEWAIT", Vec::new()), 1, 1, 0).expect("known wait instruction");
+        let force = input_wait(
+            &request("FORCEWAIT", Vec::new()),
+            1,
+            InteractionToken { epoch: 1, id: 1 },
+            0,
+        )
+        .expect("known wait instruction");
         assert!(force.wait.stop_message_skip);
         assert_eq!(force.wait.stability, WaitStability::StableInput);
 
         let timed = input_wait(
             &request("TWAIT", vec![VmValue::Integer(100), VmValue::Integer(1)]),
             2,
-            1,
+            InteractionToken { epoch: 1, id: 1 },
             0,
         )
         .expect("known timed wait");

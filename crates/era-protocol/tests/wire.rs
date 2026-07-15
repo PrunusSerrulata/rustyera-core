@@ -1,11 +1,12 @@
 use era_protocol::{
-    Channel, Envelope, ProtocolBytes, ProtocolErrorCode, ProtocolVersion, VersionRange, WireLimits,
-    decode_canonical, decode_envelope, encode_canonical, encode_envelope, negotiate_version,
+    Channel, Envelope, ProtocolBytes, ProtocolErrorCode, ProtocolVersion, SessionEpoch,
+    VersionRange, WireLimits, decode_canonical, decode_envelope, encode_canonical, encode_envelope,
+    negotiate_version,
 };
 
 #[test]
 fn envelope_round_trip_is_byte_stable() {
-    let envelope = Envelope::new(
+    let mut envelope = Envelope::new(
         Channel::Runtime,
         ProtocolVersion::new(1, 0),
         3,
@@ -13,10 +14,15 @@ fn envelope_round_trip_is_byte_stable() {
         10,
         ProtocolBytes::new([0x01, 0x02]),
     );
+    envelope.session_epoch = Some(SessionEpoch(9));
     let bytes = encode_canonical(&envelope).expect("encode envelope");
     let decoded: Envelope = decode_canonical(&bytes).expect("decode envelope");
     assert_eq!(decoded, envelope);
     assert_eq!(decoded.json_projection().payload_hex, "0102");
+    assert_eq!(
+        decoded.json_projection().session_epoch,
+        Some(SessionEpoch(9))
+    );
 }
 
 #[test]

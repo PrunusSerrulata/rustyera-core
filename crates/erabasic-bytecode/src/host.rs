@@ -11,6 +11,8 @@ pub enum HostCapability {
     Input,
     Clock,
     Storage,
+    Network,
+    System,
     Extension,
 }
 

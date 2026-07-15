@@ -3,10 +3,10 @@ use era_protocol::{
     decode_canonical, encode_canonical,
 };
 use era_runtime_protocol::{
-    AdvanceTime, FrontendInput, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
-    GetKeyStateRequest, GetKeyStateResponse, InputValue, RUNTIME_PROTOCOL_VERSION, RuntimeMessage,
-    ServiceKind, ServiceRequest, StorageNamespace, StorageOperation, StorageRequest,
-    validate_relative_path,
+    AdvanceTime, EffectBatch, EffectEvent, EffectKind, FrontendInput, GET_KEY_STATE_OPERATION,
+    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
+    InteractionToken, RUNTIME_PROTOCOL_VERSION, RuntimeMessage, ServiceKind, ServiceRequest,
+    StorageNamespace, StorageOperation, StorageRequest, validate_relative_path,
 };
 
 #[test]
@@ -31,12 +31,12 @@ fn runtime_payload_and_envelope_tags_agree() {
 }
 
 #[test]
-fn input_carries_wait_generation_and_monotonic_time() {
+fn input_carries_interaction_token_and_monotonic_time() {
     let input = FrontendInput {
         wait_id: 7,
-        button_generation: 3,
+        token: InteractionToken { epoch: 2, id: 3 },
         monotonic_time_ns: 99,
-        value: InputValue::IntegerButton(2),
+        intent: InputIntent::CommitText("2".into()),
     };
     let message = RuntimeMessage::Input(input.clone());
     let encoded = message.encode_payload().expect("encode input");
@@ -80,7 +80,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(2, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(3, 0));
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn runtime_decoder_rejects_the_debug_channel() {
         monotonic_time_ns: 1,
     });
     let mut envelope = message
-        .envelope(Some(SessionId { high: 1, low: 1 }), 1, 1, None)
+        .envelope(Some(SessionId { high: 1, low: 1 }), None, 1, 1, None)
         .expect("wrap message");
     envelope.channel = Channel::Debug;
     assert_eq!(
@@ -127,4 +127,16 @@ fn runtime_decoder_rejects_the_debug_channel() {
             .code,
         ProtocolErrorCode::ChannelMismatch
     );
+}
+
+#[test]
+fn transient_effects_have_an_independent_idempotent_stream() {
+    let message = RuntimeMessage::EffectBatch(EffectBatch {
+        effects: vec![EffectEvent {
+            effect_id: 4,
+            kind: EffectKind::PlaySound("click".into()),
+        }],
+    });
+    let encoded = message.encode_payload().expect("encode effect batch");
+    assert_eq!(RuntimeMessage::decode_payload(42, &encoded), Ok(message));
 }

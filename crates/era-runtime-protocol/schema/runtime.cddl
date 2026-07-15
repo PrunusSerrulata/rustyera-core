@@ -11,8 +11,12 @@ runtime-message =
   [30, frontend-input] /
   [31, advance-time] /
   [32, wait-change] /
+  [33, any] /
+  [34, any] /
   [40, presentation-snapshot] /
   [41, presentation-delta] /
+  [42, any] /
+  [43, any] /
   [50, storage-request] /
   [51, storage-response] /
   [52, service-request] /
@@ -22,18 +26,19 @@ runtime-message =
   [90, shutdown-request] /
   [91, shutdown-ready] /
   [92, runtime-fault] /
-  [93, uint] /
-  [94, uint]
-  / [95, command-rejected]
+  [93, any] /
+  [94, any] /
+  [95, command-rejected] /
+  [96, any]
 
-client-hello = { 0: any, 1: tstr, 2: [* uint], 3: any }
-server-hello = { 0: any, 1: any, 2: [* uint], 3: any }
+client-hello = { 0: any, 1: tstr, 2: [* uint], 3: any, 4: any }
+server-hello = { 0: any, 1: any, 2: [* uint], 3: any, 4: uint, 5: any }
 version-rejected = { 0: any, 1: tstr }
 project-manifest = { 0: uint, 1: [* any] }
 project-load-report = { 0: uint, 1: bool, 2: [* any] }
 reload-project = { 0: uint, 1: uint, 2: [* any] }
 start-request = { 0: any }
-runtime-state = { 0: uint, 1: uint }
+runtime-state = { 0: uint, 1: uint, 2: uint }
 frontend-input = { 0: uint, 1: uint, 2: uint, 3: any }
 advance-time = { 0: uint }
 wait-change = any

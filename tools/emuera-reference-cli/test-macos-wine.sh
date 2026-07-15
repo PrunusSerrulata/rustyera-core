@@ -59,6 +59,8 @@ jq -nc --arg gameDir "$FIXTURE_WINDOWS_PATH" \
     '{id:"wine-load",op:"load",gameDir:$gameDir}' >>"$REQUEST_FILE"
 printf '%s\n' \
     '{"id":"wine-toneinput","op":"execute","statement":"TONEINPUTS 1000, \"DEFAULT\", 1, \"timeout\", 0, 0"}' \
+    '{"id":"wine-getmillisecond","op":"eval","source":"GETMILLISECOND()"}' \
+    '{"id":"wine-getsecond","op":"eval","source":"GETSECOND()"}' \
     '{"id":"wine-project","op":"analyzeProject"}' \
     '{"id":"wine-csv-varsize","op":"eval","source":"VARSIZE(\"ABL\")"}' \
     '{"id":"wine-csv-name","op":"eval","source":"GETNUM(ABL, \"later\")"}' \
@@ -82,9 +84,10 @@ perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 17 and
+    length == 19 and
     map(.id) == [
-        "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-toneinput", "wine-project",
+        "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-toneinput",
+        "wine-getmillisecond", "wine-getsecond", "wine-project",
         "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
         "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
         "wine-run", "wine-input", "wine-reset"
@@ -109,6 +112,9 @@ jq -e -s '
     (map(select(.id == "wine-toneinput"))[0].result.inputRequest.InputType == "StrValue") and
     (map(select(.id == "wine-toneinput"))[0].result.inputRequest.OneInput == true) and
     (map(select(.id == "wine-toneinput"))[0].result.inputRequest.Timelimit == "1000") and
+    (((map(select(.id == "wine-getmillisecond"))[0].result.value / 1000 | floor) as $milliseconds |
+        map(select(.id == "wine-getsecond"))[0].result.value as $seconds |
+        (($milliseconds - $seconds) >= -1 and ($milliseconds - $seconds) <= 1))) and
     (map(select(.id == "wine-reset"))[0].result.reset == true)
 ' "$OUTPUT_FILE" >/dev/null
 

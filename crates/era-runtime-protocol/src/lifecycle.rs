@@ -9,6 +9,60 @@ use crate::SourceLocation;
 )]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]
+pub enum InputModality {
+    #[n(0)]
+    Keyboard,
+    #[n(1)]
+    Mouse,
+    #[n(2)]
+    Touch,
+    #[n(3)]
+    Gamepad,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct ClientCapabilities {
+    #[n(0)]
+    pub input_modalities: Vec<InputModality>,
+    #[n(1)]
+    pub rich_text: bool,
+    #[n(2)]
+    pub html: bool,
+    #[n(3)]
+    pub graphics: bool,
+    #[n(4)]
+    pub audio: bool,
+    #[n(5)]
+    pub video: bool,
+    #[n(6)]
+    pub font_metrics: bool,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct ClientStateChanged {
+    #[n(0)]
+    pub focused: bool,
+    #[n(1)]
+    pub visible: bool,
+    #[n(2)]
+    pub audio_available: bool,
+    #[n(3)]
+    pub reduce_motion: bool,
+    #[n(4)]
+    pub high_contrast: bool,
+    #[n(5)]
+    pub screen_reader: bool,
+}
+
+#[derive(
+    Clone, Copy, Debug, Decode, Encode, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
 pub enum RuntimeFeature {
     #[n(0)]
     ProjectReload,
@@ -60,6 +114,8 @@ pub struct ClientHello {
     pub features: Vec<RuntimeFeature>,
     #[n(3)]
     pub requested_limits: RuntimeLimits,
+    #[n(4)]
+    pub capabilities: ClientCapabilities,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -73,6 +129,10 @@ pub struct ServerHello {
     pub features: Vec<RuntimeFeature>,
     #[n(3)]
     pub limits: RuntimeLimits,
+    #[n(4)]
+    pub epoch: u64,
+    #[n(5)]
+    pub selected_capabilities: ClientCapabilities,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -121,6 +181,22 @@ pub struct RuntimeStateChanged {
     pub phase: RuntimePhase,
     #[n(1)]
     pub revision: u64,
+    #[n(2)]
+    pub epoch: u64,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct SequenceAcknowledgement {
+    #[n(0)]
+    pub through_sequence: u64,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ResynchronizeRequest {
+    #[n(0)]
+    pub after_sequence: Option<u64>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

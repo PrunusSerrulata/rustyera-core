@@ -1,12 +1,14 @@
 use erabasic_analyzer::{
     AnalysisInput, AnalyzerOptions, ExtensionRegistry, ProjectSource, SourcePayload,
-    analyze_project,
+    analyze_project, builtin_function_names, builtin_instruction_names,
 };
 use erabasic_bytecode::{
     BytecodeType, DecodeLimits, HostCapability, HostEffect, HostSnapshotCapability, Opcode,
     apply_patch, decode_artifact, encode_artifact,
 };
-use erabasic_compiler::{CompilerOptions, HostBinding, compile_project, default_host_registry};
+use erabasic_compiler::{
+    CompilerOptions, ExecutionBinding, HostBinding, compile_project, default_host_registry,
+};
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
 use erabasic_validator::{ValidationContext, validate_bytecode};
 
@@ -126,6 +128,44 @@ fn input_wait_and_getkey_bindings_preserve_dynamic_stability() {
     assert!(import("forcewait").import.parameters.is_empty());
     assert_eq!(import("getkey").import.parameters, [BytecodeType::Integer]);
     assert_eq!(import("getkey").import.result, Some(BytecodeType::Integer));
+}
+
+#[test]
+fn every_analyzer_builtin_has_one_explicit_execution_class() {
+    let registry = default_host_registry();
+    for name in builtin_instruction_names()
+        .into_iter()
+        .chain(builtin_function_names())
+    {
+        assert!(
+            registry.classification(&name).is_some(),
+            "missing execution catalog entry for {name}"
+        );
+    }
+    assert!(matches!(
+        registry.classification("GETTEXTBOX"),
+        Some(ExecutionBinding::Host(binding)) if binding.namespace == "rustyera.input"
+    ));
+    for (name, namespace) in [
+        ("PRINTFORMK", "rustyera.text"),
+        ("BEGIN", "rustyera.system"),
+        ("SAVETEXT", "rustyera.storage"),
+        ("SPRITECREATE", "rustyera.graphics"),
+        ("GETSECOND", "rustyera.clock"),
+    ] {
+        assert!(matches!(
+            registry.classification(name),
+            Some(ExecutionBinding::Host(binding)) if binding.namespace == namespace
+        ));
+    }
+    assert!(matches!(
+        registry.classification("RAND"),
+        Some(ExecutionBinding::Native)
+    ));
+    assert!(matches!(
+        registry.classification("CALLSHARP"),
+        Some(ExecutionBinding::Unsupported { .. })
+    ));
 }
 
 #[test]

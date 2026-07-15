@@ -3,6 +3,7 @@
 //! This development protocol intentionally has no backward-compatibility promise until
 //! a frontend exists. Filesystem, clock, rendering and device work remain outside it.
 
+mod effect;
 mod input;
 mod lifecycle;
 mod message;
@@ -11,17 +12,19 @@ mod project;
 mod service;
 mod value;
 
+pub use effect::{EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind};
 pub use input::{
-    AdvanceTime, FrontendInput, InputValue, InputWait, PrimitiveInput, WaitChange, WaitKind,
-    WaitStability,
+    AdvanceTime, DeviceStateChanged, FrontendInput, InputDeviceKind, InputIntent, InputWait,
+    InteractionToken, PrimitiveInput, WaitChange, WaitKind, WaitStability,
 };
 pub use lifecycle::{
-    ClientHello, CommandErrorCode, CommandRejected, FaultCode, RuntimeFault, RuntimeFeature,
-    RuntimeLimits, RuntimePhase, RuntimeStateChanged, ServerHello, ShutdownReady, ShutdownRequest,
-    StartMode, StartRequest, StateExportKind, StateExportReady, StateExportRequest,
-    StateExportResult, VersionRejected,
+    ClientCapabilities, ClientHello, ClientStateChanged, CommandErrorCode, CommandRejected,
+    FaultCode, InputModality, ResynchronizeRequest, RuntimeFault, RuntimeFeature, RuntimeLimits,
+    RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ShutdownReady,
+    ShutdownRequest, StartMode, StartRequest, StateExportKind, StateExportReady,
+    StateExportRequest, StateExportResult, VersionRejected,
 };
-pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage};
+pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage, RuntimeResynchronized};
 pub use presentation::{
     AudioState, Color, DisplayLine, DisplayRun, LineAlignment, MediaPlacement, PresentationDelta,
     PresentationOperation, PresentationSettings, PresentationSnapshot, RunLayout, Shape, TextStyle,
