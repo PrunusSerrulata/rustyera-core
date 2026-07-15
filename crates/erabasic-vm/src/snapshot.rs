@@ -378,7 +378,8 @@ fn validate_snapshot(
             | erabasic_bytecode::BytecodeStorage::Calculated => {
                 snapshot.memory.shared.get(&definition.key)
             }
-            erabasic_bytecode::BytecodeStorage::FunctionStatic => {
+            erabasic_bytecode::BytecodeStorage::FunctionStatic
+            | erabasic_bytecode::BytecodeStorage::FunctionPersistent => {
                 snapshot.memory.statics.get(&definition.key)
             }
             erabasic_bytecode::BytecodeStorage::FunctionLocal

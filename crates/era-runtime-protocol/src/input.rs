@@ -99,6 +99,10 @@ pub struct InputWait {
     pub timeout_message: Option<String>,
     #[n(11)]
     pub submission_token: InteractionToken,
+    /// Runtime-computed remaining countdown. The frontend may render it but must
+    /// not use it to decide timeout completion.
+    #[n(12)]
+    pub countdown_remaining_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -149,6 +153,10 @@ pub struct FrontendInput {
     pub monotonic_time_ns: u64,
     #[n(3)]
     pub intent: InputIntent,
+    /// Frontend-observed message-skip mode. This is presentation intent only;
+    /// the runtime remains authoritative for whether a command may skip.
+    #[n(4)]
+    pub message_skip: bool,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

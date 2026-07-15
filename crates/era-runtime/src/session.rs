@@ -8,15 +8,15 @@ use era_protocol::{
 };
 use era_runtime_protocol::{
     AdvanceTime, CellAlignment, ClientCapabilities, ClientHello, CommandErrorCode, CommandRejected,
-    FaultCode, FrontendInput, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
-    GetKeyStateRequest, GetKeyStateResponse, InputIntent, InputWait, InteractionToken,
-    LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION, LocalDateTimeRequest,
-    LocalDateTimeResponse, ProjectManifest, RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION,
-    RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse, RuntimeFault, RuntimeFeature,
-    RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized, RuntimeStateChanged,
-    ServerHello, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady,
-    StartMode, StartRequest, StateExportReady, StateExportRequest, StateExportResult,
-    VersionRejected, WaitChange, WaitKind, WaitStability,
+    ExitReason, ExitRequested, FaultCode, FrontendInput, GET_KEY_STATE_OPERATION,
+    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
+    InputWait, InteractionToken, LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION,
+    LocalDateTimeRequest, LocalDateTimeResponse, ProjectManifest, RANDOM_SEED_OPERATION,
+    RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse,
+    RuntimeFault, RuntimeFeature, RuntimeLimits, RuntimeMessage, RuntimePhase,
+    RuntimeResynchronized, RuntimeStateChanged, ServerHello, ServiceKind, ServiceRequest,
+    ServiceResponse, ServiceResult, ShutdownReady, StartMode, StartRequest, StateExportReady,
+    StateExportRequest, StateExportResult, VersionRejected, WaitChange, WaitKind, WaitStability,
 };
 use erabasic_bytecode::SymbolKey;
 use erabasic_compiler::IncrementalState;
@@ -27,9 +27,10 @@ use erabasic_vm::{
     VmRuntimeStatePort, VmRuntimeStateTransaction, VmValue,
 };
 
+use crate::controller::{SystemController, SystemFlow};
 use crate::host::{ClockOperation, ExternalCompletion, PendingInput, input_wait};
 use crate::presentation::{PresentationModel, display_value, logical_line_string};
-use crate::project::build_project;
+use crate::project::{NormalizedProjectSnapshot, build_project};
 
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeOptions {
@@ -160,6 +161,10 @@ pub struct RuntimeSession {
     pending_services: BTreeMap<u64, PendingService>,
     pending_delays: BTreeMap<erabasic_vm::HostRequestId, u64>,
     key_toggle_state: [u8; 256],
+    message_skip: bool,
+    exit_requested: Option<ExitRequested>,
+    controller: SystemController,
+    project_snapshot: Option<NormalizedProjectSnapshot>,
 }
 
 impl RuntimeSession {
@@ -192,6 +197,10 @@ impl RuntimeSession {
             pending_services: BTreeMap::new(),
             pending_delays: BTreeMap::new(),
             key_toggle_state: [0; 256],
+            message_skip: false,
+            exit_requested: None,
+            controller: SystemController::default(),
+            project_snapshot: None,
         }
     }
 
@@ -337,6 +346,28 @@ impl RuntimeSession {
         self.random_seed
     }
 
+    /// Revision retained for deterministic reload staging without filesystem access.
+    #[must_use]
+    pub fn project_revision(&self) -> Option<u64> {
+        self.project_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.manifest.project_revision)
+    }
+
+    #[must_use]
+    pub fn project_sorts_filenames(&self) -> Option<bool> {
+        self.project_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.sort_with_filename)
+    }
+
+    #[must_use]
+    pub fn project_ignored_new_random(&self) -> Option<bool> {
+        self.project_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.use_new_random_ignored)
+    }
+
     fn handle_message(
         &mut self,
         message_id: u64,
@@ -385,6 +416,7 @@ impl RuntimeSession {
                     phase: self.phase,
                     runtime_revision: self.revision,
                     presentation: self.presentation.snapshot(),
+                    exit_requested: self.exit_requested,
                 }),
                 Some(message_id),
             ),
@@ -398,6 +430,7 @@ impl RuntimeSession {
             | RuntimeMessage::VersionRejected(_)
             | RuntimeMessage::ProjectLoadReport(_)
             | RuntimeMessage::StateChanged(_)
+            | RuntimeMessage::ExitRequested(_)
             | RuntimeMessage::WaitChanged(_)
             | RuntimeMessage::PresentationSnapshot(_)
             | RuntimeMessage::PresentationDelta(_)
@@ -422,7 +455,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 4.0 is required".into(),
+                    message: "runtime protocol 5.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -482,6 +515,7 @@ impl RuntimeSession {
         let success = build.report.success;
         self.incremental = build.incremental;
         self.artifact = build.artifact;
+        self.project_snapshot = build.snapshot;
         self.emit(
             RuntimeMessage::ProjectLoadReport(build.report),
             Some(message_id),
@@ -581,6 +615,7 @@ impl RuntimeSession {
                 display_time: false,
                 timeout_message: None,
                 submission_token,
+                countdown_remaining_ms: None,
             };
             let choices = BTreeMap::from([
                 (start_token, VmValue::Integer(0)),
@@ -592,6 +627,7 @@ impl RuntimeSession {
                     wait,
                     result_name: None,
                     choices,
+                    timeout_duration_ns: None,
                 },
                 true,
             )
@@ -608,7 +644,13 @@ impl RuntimeSession {
             VmPortEvent::FiberFaulted(_, fault) => {
                 self.fault(FaultCode::VmFault, &fault.message, None)
             }
-            VmPortEvent::FiberYielded(_) | VmPortEvent::FiberCompleted(_, _) => Ok(()),
+            VmPortEvent::FiberCompleted(fiber, value) => {
+                if self.controller.completed(fiber, value.as_ref()) {
+                    self.spawn_next_event(vm)?;
+                }
+                Ok(())
+            }
+            VmPortEvent::FiberYielded(_) => Ok(()),
         }
     }
 
@@ -653,12 +695,85 @@ impl RuntimeSession {
             );
             return Ok(());
         }
+        if matches!(
+            name.as_str(),
+            "QUIT" | "FORCE_QUIT" | "QUIT_AND_RESTART" | "FORCE_QUIT_AND_RESTART"
+        ) {
+            let exit = ExitRequested {
+                reason: if name.ends_with("AND_RESTART") {
+                    ExitReason::Restart
+                } else {
+                    ExitReason::Quit
+                },
+                force: name.starts_with("FORCE_"),
+                runtime_revision: self.revision.saturating_add(1),
+            };
+            vm.cancel_fiber(request.fiber)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            self.exit_requested = Some(exit);
+            self.emit(RuntimeMessage::ExitRequested(exit), None)?;
+            return self.set_phase(RuntimePhase::Stopping);
+        }
+        if matches!(name.as_str(), "BEGIN" | "FORCE_BEGIN") {
+            let Some(VmValue::String(keyword)) = request.arguments.first() else {
+                return self.fault(FaultCode::VmFault, "BEGIN expects a system keyword", None);
+            };
+            let Some(flow) = SystemFlow::parse(keyword) else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    &format!("unknown BEGIN system keyword: {keyword}"),
+                    None,
+                );
+            };
+            // The pinned fork treats BEGIN and FORCE_BEGIN as the same forced
+            // transition. The current fiber cannot resume after changing systems.
+            vm.cancel_fiber(request.fiber)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            self.controller.clear();
+            self.controller.flow = Some(flow);
+            return self.begin_flow(vm, flow);
+        }
         if let Some(pending) = input_wait(
             request,
             self.allocate_wait(),
             self.allocate_interaction(),
             self.logical_time_ns,
         ) {
+            if pending.wait.stop_message_skip {
+                self.message_skip = false;
+            }
+            if self.message_skip
+                && matches!(
+                    name.as_str(),
+                    "TINPUT" | "TONEINPUT" | "TINPUTS" | "TONEINPUTS"
+                )
+                && request.arguments.len() >= 6
+            {
+                let mouse = matches!(request.arguments.get(4), Some(VmValue::Integer(1)));
+                let target = pending.result_name.and_then(|result| {
+                    if mouse {
+                        global_place_at(vm, result, 1)
+                    } else {
+                        global_place(vm, result)
+                    }
+                });
+                let value = pending
+                    .wait
+                    .default_value
+                    .as_ref()
+                    .map_or(VmValue::Integer(0), protocol_to_vm);
+                let writes = target
+                    .map(|target| vec![HostWrite { target, value }])
+                    .unwrap_or_default();
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady {
+                        value: None,
+                        writes,
+                    }),
+                );
+            }
             let stability = match pending.wait.stability {
                 WaitStability::StableInput => HostWaitStability::StableInput,
                 WaitStability::Transient => HostWaitStability::Transient,
@@ -749,12 +864,14 @@ impl RuntimeSession {
                     display_time: false,
                     timeout_message: None,
                     submission_token: self.allocate_interaction(),
+                    countdown_remaining_ms: None,
                 };
                 let pending = PendingInput {
                     host_request: Some(request.id),
                     wait,
                     result_name: None,
                     choices: BTreeMap::new(),
+                    timeout_duration_ns: None,
                 };
                 commit_completion(
                     vm,
@@ -1005,6 +1122,7 @@ impl RuntimeSession {
                 },
             );
         }
+        self.message_skip = input.message_skip;
         let Some(submission) = input_value(pending, input.token, input.intent) else {
             return self.reject(
                 message_id,
@@ -1039,6 +1157,21 @@ impl RuntimeSession {
             .as_ref()
             .and_then(|pending| pending.wait.deadline_ns)
             .is_some_and(|deadline| self.logical_time_ns >= deadline);
+        if !timed_out
+            && let Some(pending) = self.pending_input.as_mut()
+            && pending.wait.display_time
+            && let Some(deadline) = pending.wait.deadline_ns
+        {
+            let remaining = deadline
+                .saturating_sub(self.logical_time_ns)
+                .saturating_add(999_999)
+                / 1_000_000;
+            pending.wait.countdown_remaining_ms = Some(remaining);
+            let wait = pending.wait.clone();
+            self.presentation.set_wait(Some(wait.clone()));
+            self.emit(RuntimeMessage::WaitChanged(WaitChange::Updated(wait)), None)?;
+            self.emit_presentation()?;
+        }
         if timed_out {
             let pending = self.pending_input.as_ref().expect("checked above");
             if let Some(message) = &pending.wait.timeout_message {
@@ -1090,7 +1223,15 @@ impl RuntimeSession {
         let mut writes = Vec::new();
         match submission {
             InputSubmission::Value(value) => {
-                if let Some(target) = pending.result_name.and_then(|name| global_place(vm, name)) {
+                let result_name = if pending.wait.kind == WaitKind::AnyValue {
+                    Some(match &value {
+                        VmValue::String(_) => "RESULTS",
+                        _ => "RESULT",
+                    })
+                } else {
+                    pending.result_name
+                };
+                if let Some(target) = result_name.and_then(|name| global_place(vm, name)) {
                     writes.push(HostWrite { target, value });
                 }
             }
@@ -1167,16 +1308,18 @@ impl RuntimeSession {
                     .vm
                     .as_mut()
                     .ok_or_else(|| RuntimeError::Internal("system wait has no VM".into()))?;
-                let entry = vm
-                    .vm()
-                    .artifact()
-                    .functions
-                    .iter()
-                    .find(|function| function.name.eq_ignore_ascii_case("EVENTFIRST"))
-                    .map(|function| function.key)
-                    .ok_or_else(|| RuntimeError::Internal("EVENTFIRST is not defined".into()))?;
-                vm.spawn_entry(entry, Vec::new())
+                self.controller.flow = Some(SystemFlow::First);
+                if !self
+                    .controller
+                    .prepare_event(vm.vm().artifact(), "EVENTFIRST")
+                {
+                    return Err(RuntimeError::Internal("EVENTFIRST is not defined".into()));
+                }
+                let entry = self.controller.next().expect("prepared EVENTFIRST entry");
+                let fiber = vm
+                    .spawn_entry(entry, Vec::new())
                     .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+                self.controller.started(fiber);
                 self.set_phase(RuntimePhase::Running)
             }
             VmValue::Integer(1) => {
@@ -1198,6 +1341,54 @@ impl RuntimeSession {
         }
     }
 
+    fn spawn_next_event(&mut self, vm: &mut RuntimeVm) -> Result<(), RuntimeError> {
+        if let Some(entry) = self.controller.next() {
+            let fiber = vm
+                .spawn_entry(entry, Vec::new())
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            self.controller.started(fiber);
+        }
+        Ok(())
+    }
+
+    fn begin_flow(&mut self, vm: &mut RuntimeVm, flow: SystemFlow) -> Result<(), RuntimeError> {
+        self.message_skip = false;
+        let (entry, event, required) = match flow {
+            SystemFlow::Title => ("SYSTEM_TITLE", false, false),
+            SystemFlow::First => ("EVENTFIRST", true, true),
+            SystemFlow::Train => ("EVENTTRAIN", true, false),
+            SystemFlow::AfterTrain => ("EVENTEND", true, true),
+            SystemFlow::Ablup => ("SHOW_JUEL", false, true),
+            SystemFlow::TurnEnd => ("EVENTTURNEND", true, true),
+            SystemFlow::Shop => ("EVENTSHOP", true, false),
+            SystemFlow::Normal => {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "NORMAL is an internal system state and is not a BEGIN target",
+                    None,
+                );
+            }
+        };
+        if event {
+            if self.controller.prepare_event(vm.vm().artifact(), entry) {
+                return self.spawn_next_event(vm);
+            }
+        } else if let Some(function) = function_key_from_artifact(vm.vm().artifact(), entry) {
+            vm.spawn_entry(function, Vec::new())
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            return Ok(());
+        }
+        if required {
+            self.fault(
+                FaultCode::VmFault,
+                &format!("required system function {entry} is not defined"),
+                None,
+            )
+        } else {
+            Ok(())
+        }
+    }
+
     fn open_wait(
         &mut self,
         pending: PendingInput,
@@ -1212,9 +1403,15 @@ impl RuntimeSession {
 
     fn activate_wait(
         &mut self,
-        pending: PendingInput,
+        mut pending: PendingInput,
         pause_runtime: bool,
     ) -> Result<(), RuntimeError> {
+        if let Some(duration) = pending.timeout_duration_ns {
+            pending.wait.deadline_ns = Some(self.logical_time_ns.saturating_add(duration));
+            if pending.wait.display_time {
+                pending.wait.countdown_remaining_ms = Some(duration / 1_000_000);
+            }
+        }
         self.presentation.set_wait(Some(pending.wait.clone()));
         self.emit(
             RuntimeMessage::WaitChanged(WaitChange::Opened(pending.wait.clone())),
@@ -1405,8 +1602,14 @@ fn commit_completion(
 }
 
 fn function_key(artifact: &ValidatedArtifact, name: &str) -> Option<SymbolKey> {
+    function_key_from_artifact(artifact.artifact(), name)
+}
+
+fn function_key_from_artifact(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    name: &str,
+) -> Option<SymbolKey> {
     artifact
-        .artifact()
         .functions
         .iter()
         .find(|function| function.name.eq_ignore_ascii_case(name))
@@ -1735,7 +1938,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_input_atomically_updates_result_and_resumes_the_vm() {
+    fn typed_input_updates_result_and_sixth_argument_honors_message_skip() {
         let mut session = RuntimeSession::new(RuntimeOptions::default());
         submit(
             &mut session,
@@ -1759,7 +1962,7 @@ mod tests {
                     relative_path: "input.erb".into(),
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\nTINPUT 1000, 7, 1, \"timeout\", 0, 0\nPRINTFORML got={RESULT}\nRETURN\n"
+                        "@SYSTEM_TITLE\nTINPUT 1000, 7, 1, \"timeout\", 0, 0\nTINPUT 1000, 9, 1, \"timeout\", 0, 0\nPRINTFORML got={RESULT}\nRETURN\n"
                             .into(),
                     ),
                     content_hash: None,
@@ -1800,6 +2003,7 @@ mod tests {
                 token: wait.submission_token,
                 monotonic_time_ns: 10,
                 intent: InputIntent::CommitText("42".into()),
+                message_skip: true,
             }),
         );
         for _ in 0..4 {
@@ -1812,7 +2016,7 @@ mod tests {
             RuntimeMessage::PresentationSnapshot(snapshot) => snapshot.lines.iter().any(|line| {
                 line.runs.iter().any(|run| matches!(
                     run,
-                    era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("got=42")
+                    era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("got=9")
                 ))
             }),
             _ => false,
@@ -1888,7 +2092,7 @@ mod tests {
     }
 
     #[test]
-    fn deferred_configuration_and_resources_are_reported_instead_of_ignored() {
+    fn configuration_is_parsed_while_resource_manifests_remain_deferred() {
         let build = build_project(
             &ProjectManifest {
                 project_revision: 1,
@@ -1922,7 +2126,7 @@ mod tests {
             .iter()
             .map(|diagnostic| diagnostic.code.as_str())
             .collect();
-        assert!(codes.contains(&"runtime.configuration_deferred"));
+        assert!(codes.contains(&"runtime.invalid_configuration"));
         assert!(codes.contains(&"runtime.resource_manifest_deferred"));
     }
 
@@ -1975,9 +2179,11 @@ mod tests {
                 display_time: false,
                 timeout_message: None,
                 submission_token: submission,
+                countdown_remaining_ms: None,
             },
             result_name: Some("RESULT"),
             choices: BTreeMap::from([(selection, VmValue::Integer(42))]),
+            timeout_duration_ns: Some(10),
         };
         let input = era_runtime_protocol::PrimitiveInput {
             input_type: 1,

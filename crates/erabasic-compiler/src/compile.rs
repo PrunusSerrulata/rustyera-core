@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use erabasic_analyzer::AnalyzedProject;
 use erabasic_bytecode::{
-    ArtifactManifest, BytecodeArtifact, BytecodeConstant, BytecodeGlobal, BytecodePatch,
-    BytecodePersistence, BytecodeStorage, BytecodeType, Digest, HostImport, NativeImport,
-    SourceMap, SourceRecord, SymbolKey, create_patch,
+    ArtifactManifest, BytecodeArtifact, BytecodeConstant, BytecodeEventEntry, BytecodeEventGroup,
+    BytecodeGlobal, BytecodePatch, BytecodePersistence, BytecodeStorage, BytecodeType, Digest,
+    HostImport, NativeImport, SourceMap, SourceRecord, SymbolKey, create_patch,
 };
 use erabasic_data::{Persistence, StorageScope};
 use erabasic_hir::{
@@ -225,6 +225,7 @@ pub fn compile_project(
             .values()
             .map(|entry| entry.function.clone())
             .collect(),
+        event_groups: event_groups(&project.program.functions, &function_keys),
         source_map: SourceMap {
             sources: project
                 .program
@@ -294,6 +295,57 @@ pub fn compile_project(
         diagnostics,
         stats,
     }
+}
+
+fn event_groups(
+    functions: &[Function],
+    keys: &BTreeMap<FunctionId, SymbolKey>,
+) -> Vec<BytecodeEventGroup> {
+    let mut groups: BTreeMap<String, Vec<&Function>> = BTreeMap::new();
+    for function in functions
+        .iter()
+        .filter(|function| function.kind == FunctionKind::Event)
+    {
+        groups
+            .entry(function.name.to_ascii_uppercase())
+            .or_default()
+            .push(function);
+    }
+    groups
+        .into_iter()
+        .map(|(name, mut members)| {
+            members.sort_by_key(|function| function.definition_order);
+            let mut group = BytecodeEventGroup {
+                name,
+                only: Vec::new(),
+                priority: Vec::new(),
+                normal: Vec::new(),
+                later: Vec::new(),
+            };
+            for function in members {
+                let Some(function_key) = keys.get(&function.id).copied() else {
+                    continue;
+                };
+                let entry = BytecodeEventEntry {
+                    function: function_key,
+                    single: function.event_attributes.single,
+                };
+                if function.event_attributes.only {
+                    group.only.push(entry);
+                }
+                if function.event_attributes.priority {
+                    group.priority.push(entry);
+                }
+                if function.event_attributes.later {
+                    group.later.push(entry);
+                }
+                if !function.event_attributes.priority && !function.event_attributes.later {
+                    group.normal.push(entry);
+                }
+            }
+            group
+        })
+        .collect()
 }
 
 fn cached_function(result: LoweredFunction) -> CachedFunction {
@@ -400,11 +452,14 @@ fn globals(
         .collect()
 }
 
-const fn variable_storage(variable: &Variable) -> BytecodeStorage {
+fn variable_storage(variable: &Variable) -> BytecodeStorage {
     if matches!(
         variable.scope,
-        VariableScope::Function | VariableScope::Parameter
+        VariableScope::EraFunction | VariableScope::Function | VariableScope::Parameter
     ) {
+        if variable.scope == VariableScope::EraFunction {
+            return BytecodeStorage::FunctionPersistent;
+        }
         return if variable.static_lifetime {
             BytecodeStorage::FunctionStatic
         } else {

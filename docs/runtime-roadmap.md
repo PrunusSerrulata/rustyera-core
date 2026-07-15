@@ -56,27 +56,38 @@ Batch 2 closes at the reusable execution, input-wait and presentation foundation
 that requires authoritative game state, storage transactions, full presentation services or
 debugger source inspection is assigned to the corresponding later batch below.
 
-## Batch 3: reference system controller
+## Completed: batch 3, reference system controller foundation
 
-- Add VM-mediated Native place transactions. Use them to make `INITRAND`/`DUMPRAND` atomically
-  exchange all 625 RANDDATA cells and to implement mutable array/sort/find operations. Runtime
-  always uses SFMT; `UseNewRandom=true` is ignored with one stable compatibility warning.
-- Complete the remaining game-rule input behavior: TINPUT sixth-argument message-skip, actual
-  message-skip state, countdown updates, queued-wait deadline activation, BINPUT button
-  construction, INPUTANY parsing and cancellation. Preserve normalized `PrimitiveInput`; runtime
-  must not map operating-system keys, buttons or coordinates.
-- Add the remaining math, regex and CSV Native functions, followed by character, Map, XML and
-  DataTable state needed by system functions. Define deterministic snapshot schemas for every
-  stateful Native service. Missing functions must fault rather than return type-default values.
-- Implement pure runtime states for TITLE, TRAIN, AFTERTRAIN, ABLUP, TURNEND, SHOP, FIRST and
-  NORMAL, including BEGIN/QUIT/restart legality and system function transitions.
-- Drive VM entrypoints only through runtime ports and atomically commit RESULT, SOURCE, BOUGHT,
-  training/shop and other authoritative game fields.
-- Parse and apply submitted configuration/resource manifests; retain the normalized project
-  snapshot required for reload.
+- HIR 4 and container 4 retain event attributes/definition order. Bytecode event groups preserve
+  `ONLY`, `PRI`, normal and `LATER` ordering (including PRI+LATER duplication), and the runtime
+  controller implements exact-one `#SINGLE` group skipping.
+- `LOCAL`, `LOCALS`, `ARG` and `ARGS` use persistent storage keyed by normalized function name;
+  same-name event definitions share it, while private dynamic variables remain frame-local.
+- Native ABI 3 adds VM-mediated RANDDATA exchange. `INITRAND`/`DUMPRAND` validate and atomically
+  exchange all 625 cells; `SWAP` uses the same prevalidated-place transaction rule. The initial
+  remaining math set is implemented and `UseNewRandom=true` produces one stable warning while
+  SFMT remains authoritative.
+- Runtime protocol 5.0 carries message-skip state, runtime countdown values and persistent
+  `ExitRequested` state. Sixth-argument timed-input shortcuts, queued deadline activation,
+  INPUTANY integer/string routing and forced wait skip cancellation are implemented.
+- Submitted configuration is parsed in manifest order, semantic loader/analyzer options are
+  applied, `SortWithFilename=false` preserves manifest order, and filename sorting gives
+  directories containing `#` reference priority. The normalized project snapshot is retained.
+- `BEGIN`/`FORCE_BEGIN` share the pinned fork's forced-transition behavior. Initial entry dispatch
+  exists for TITLE/FIRST/TRAIN/AFTERTRAIN/ABLUP/TURNEND/SHOP; QUIT/restart variants emit the
+  persistent exit intent.
 
-## Batch 4: current traditional saves and storage
+## Batch 4: game rules, current traditional saves and storage
 
+- Extend VM place transactions to ARRAYSHIFT/ARRAYREMOVE/ARRAYSORT/ARRAYCOPY and the mutable
+  array/find family. Complete pinned math, regex, CSV and character Native behavior required by
+  reference system functions; unsupported names must keep faulting rather than return defaults.
+- Parse the remaining semantic configuration keys before system-flow decisions. GUI, device and
+  accessibility configuration remains frontend/capability state.
+- Complete TITLE, FIRST, TRAIN, AFTERTRAIN, ABLUP, TURNEND, SHOP and NORMAL substates. Runtime
+  drives every entry through VM ports and atomically commits RESULT, SOURCE, BOUGHT and
+  training/shop fields. SHOP performs SYSTEM_AUTOSAVE when defined, otherwise the selected
+  reference-compatible failure prompt/any-key continuation.
 - Generalize input waits, frontend services and storage work into a typed pending-operation
   registry with deadlines, operation-specific errors, cancellation policies and atomic shutdown.
 - Add an I/O-free `era-runtime-save` crate for the pinned current ordinary/global save formats,
@@ -87,6 +98,11 @@ debugger source inspection is assigned to the corresponding later batch below.
 
 ## Batch 5: exact snapshot restore and hot replacement
 
+- Implement Map, XML and DataTable Native state after the ordinary game-rule Native layer is
+  stable. Give every stateful Native service a deterministic schema and migration policy before
+  exact snapshots or hot replacement can include it.
+- Normalize submitted resource manifests and payload identities as opaque project state before
+  reload is implemented. Media-specific validation and capability projection remain deferred.
 - Wrap VM snapshot plus runtime system state, presentation, stable waits, logical clock, IDs and
   Native state in a checksummed exact-artifact container.
 - Implement `VmRestorePort`, wait rebinding and atomic restore; reject every transient QTE,
@@ -97,8 +113,11 @@ debugger source inspection is assigned to the corresponding later batch below.
 ## Batch 6: media and platform services
 
 - Complete canonical text presentation semantics: style and alignment state, buttons, line
-  mutation, skip/log behavior and HTML_PRINT logical text. Keep GETDISPLAYLINE and the deferred
-  HTML query family unavailable until a deterministic non-GDI contract is approved.
+  mutation, skip/log behavior and HTML_PRINT logical text. Build BINPUT choices from canonical
+  runtime buttons and finish message-skip suppression/retention rules. Keep GETDISPLAYLINE and
+  the deferred HTML query family unavailable until a deterministic non-GDI contract is approved.
+- Consume the normalized resource identities from Batch 5 and apply media-specific validation,
+  capability projection and deterministic fallback here.
 - Implement images, shapes, backgrounds, sprite/canvas, font/image metrics, tooltips, logical
   audio/BGM, video, URL, network update and focus/device services.
 - Runtime owns resource identities, canonical scene and logical channels. Frontends only measure,

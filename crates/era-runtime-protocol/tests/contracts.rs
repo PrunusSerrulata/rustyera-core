@@ -3,10 +3,11 @@ use era_protocol::{
     decode_canonical, encode_canonical,
 };
 use era_runtime_protocol::{
-    AdvanceTime, EffectBatch, EffectEvent, EffectKind, FrontendInput, GET_KEY_STATE_OPERATION,
-    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
-    InteractionToken, PrimitiveInput, RUNTIME_PROTOCOL_VERSION, RuntimeMessage, ServiceKind,
-    ServiceRequest, StorageNamespace, StorageOperation, StorageRequest, validate_relative_path,
+    AdvanceTime, EffectBatch, EffectEvent, EffectKind, ExitReason, ExitRequested, FrontendInput,
+    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
+    GetKeyStateResponse, InputIntent, InteractionToken, PrimitiveInput, RUNTIME_PROTOCOL_VERSION,
+    RuntimeMessage, ServiceKind, ServiceRequest, StorageNamespace, StorageOperation,
+    StorageRequest, validate_relative_path,
 };
 
 #[test]
@@ -31,12 +32,28 @@ fn runtime_payload_and_envelope_tags_agree() {
 }
 
 #[test]
+fn exit_intent_is_a_persistent_versioned_runtime_message() {
+    let exit = ExitRequested {
+        reason: ExitReason::Restart,
+        force: true,
+        runtime_revision: 17,
+    };
+    let message = RuntimeMessage::ExitRequested(exit);
+    let encoded = message.encode_payload().expect("encode exit intent");
+    assert_eq!(
+        RuntimeMessage::decode_payload(22, &encoded),
+        Ok(RuntimeMessage::ExitRequested(exit))
+    );
+}
+
+#[test]
 fn input_carries_interaction_token_and_monotonic_time() {
     let input = FrontendInput {
         wait_id: 7,
         token: InteractionToken { epoch: 2, id: 3 },
         monotonic_time_ns: 99,
         intent: InputIntent::CommitText("2".into()),
+        message_skip: false,
     };
     let message = RuntimeMessage::Input(input.clone());
     let encoded = message.encode_payload().expect("encode input");
@@ -95,7 +112,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(4, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(5, 0));
 }
 
 #[test]

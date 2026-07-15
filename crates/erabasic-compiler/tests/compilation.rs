@@ -168,6 +168,34 @@ fn mutable_arguments_are_lowered_as_places_in_hir_v3() {
 }
 
 #[test]
+fn event_dispatch_metadata_and_persistent_locals_survive_container_round_trip() {
+    let artifact = compile_project(
+        &analyze(
+            "@EVENTFIRST\n#PRI\nLOCAL:0 = 1\nRETURN\n@EVENTFIRST\n#LATER\n#SINGLE\nLOCAL:0 += 1\nRETURN\n",
+        ),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .expect("event fixture should compile");
+    let group = artifact.event_groups.first().expect("EVENTFIRST group");
+    assert_eq!(group.name, "EVENTFIRST");
+    assert_eq!(group.priority.len(), 1);
+    assert!(group.normal.is_empty());
+    assert_eq!(group.later.len(), 1);
+    assert!(group.later[0].single);
+    assert!(artifact.globals.iter().any(|global| {
+        global.name.eq_ignore_ascii_case("LOCAL")
+            && global.storage == erabasic_bytecode::BytecodeStorage::FunctionPersistent
+    }));
+
+    let bytes = encode_artifact(&artifact).expect("artifact encoding");
+    let decoded = decode_artifact(&bytes, &DecodeLimits::default()).expect("artifact decoding");
+    assert_eq!(decoded.into_inner().event_groups, artifact.event_groups);
+}
+
+#[test]
 fn every_analyzer_builtin_has_one_explicit_execution_class() {
     let registry = default_host_registry();
     for name in builtin_instruction_names()

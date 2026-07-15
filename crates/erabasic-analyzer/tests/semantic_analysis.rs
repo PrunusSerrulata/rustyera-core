@@ -116,6 +116,52 @@ fn registers_private_variables_and_function_parameter_places() {
 }
 
 #[test]
+fn event_definitions_share_era_local_storage_and_keep_dispatch_attributes() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "events.erb",
+                "@EVENTFIRST\n#PRI\nLOCAL:0 = 1\nRETURN\n@EVENTFIRST\n#LATER\n#SINGLE\nLOCAL:0 += 1\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let program = report.project.unwrap().program;
+    assert_eq!(program.functions.len(), 2);
+    assert!(program.functions[0].event_attributes.priority);
+    assert!(program.functions[1].event_attributes.later);
+    assert!(program.functions[1].event_attributes.single);
+    assert_eq!(program.functions[0].definition_order, 0);
+    assert_eq!(program.functions[1].definition_order, 1);
+
+    let local_ids: Vec<_> = program
+        .functions
+        .iter()
+        .map(|function| match &function.lines[0].kind {
+            HirStatementKind::Assignment { target, .. } => target.variable,
+            other => panic!("expected LOCAL assignment, found {other:?}"),
+        })
+        .collect();
+    assert_eq!(local_ids[0], local_ids[1]);
+    let local = program
+        .variables
+        .iter()
+        .find(|variable| variable.id == local_ids[0])
+        .expect("shared LOCAL definition");
+    assert_eq!(local.scope, erabasic_hir::VariableScope::EraFunction);
+}
+
+#[test]
 fn semantic_errors_recover_to_error_lines_and_stable_diagnostics() {
     let input = || AnalysisInput {
         project_data: empty_project(),

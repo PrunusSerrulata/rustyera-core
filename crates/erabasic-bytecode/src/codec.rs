@@ -3,8 +3,9 @@ use std::{collections::BTreeMap, fmt};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
-    ArtifactManifest, BYTECODE_MAGIC, BytecodeArtifact, BytecodeFunction, BytecodeGlobal,
-    CONTAINER_VERSION, DecodeLimits, HostImport, NativeImport, SourceMap, UnvalidatedArtifact,
+    ArtifactManifest, BYTECODE_MAGIC, BytecodeArtifact, BytecodeEventGroup, BytecodeFunction,
+    BytecodeGlobal, CONTAINER_VERSION, DecodeLimits, HostImport, NativeImport, SourceMap,
+    UnvalidatedArtifact,
 };
 
 const MANIFEST: u16 = 1;
@@ -14,6 +15,7 @@ const NATIVE_IMPORTS: u16 = 4;
 const HOST_IMPORTS: u16 = 5;
 const FUNCTIONS: u16 = 6;
 const SOURCE_MAP: u16 = 7;
+const EVENT_GROUPS: u16 = 8;
 
 #[derive(Debug)]
 pub enum EncodeError {
@@ -75,6 +77,7 @@ pub fn encode_artifact(artifact: &BytecodeArtifact) -> Result<Vec<u8>, EncodeErr
         section(NATIVE_IMPORTS, &artifact.native_imports)?,
         section(HOST_IMPORTS, &artifact.host_imports)?,
         section(FUNCTIONS, &artifact.functions)?,
+        section(EVENT_GROUPS, &artifact.event_groups)?,
         section(SOURCE_MAP, &artifact.source_map)?,
     ];
     let mut output = Vec::new();
@@ -137,7 +140,7 @@ pub fn decode_artifact(
         if blake3::hash(payload).as_bytes() != expected {
             return Err(DecodeError::CorruptSection(kind));
         }
-        if !(MANIFEST..=SOURCE_MAP).contains(&kind) {
+        if !(MANIFEST..=EVENT_GROUPS).contains(&kind) {
             if required {
                 return Err(DecodeError::UnknownRequiredSection(kind));
             }
@@ -162,6 +165,7 @@ pub fn decode_artifact(
         native_imports: parse::<Vec<NativeImport>>(&sections, NATIVE_IMPORTS)?,
         host_imports: parse::<Vec<HostImport>>(&sections, HOST_IMPORTS)?,
         functions: parse::<Vec<BytecodeFunction>>(&sections, FUNCTIONS)?,
+        event_groups: parse::<Vec<BytecodeEventGroup>>(&sections, EVENT_GROUPS)?,
         source_map: parse::<SourceMap>(&sections, SOURCE_MAP)?,
     };
     if artifact.functions.len() > usize::try_from(limits.maximum_functions).unwrap_or(usize::MAX)

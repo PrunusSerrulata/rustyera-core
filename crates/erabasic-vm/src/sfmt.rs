@@ -35,6 +35,33 @@ impl Sfmt19937 {
         *self = Self::new(seed);
     }
 
+    pub(crate) fn era_values(&self) -> Vec<i64> {
+        self.state
+            .iter()
+            .map(|word| i64::from(*word))
+            .chain(std::iter::once(
+                i64::try_from(self.index).expect("SFMT index fits i64"),
+            ))
+            .collect()
+    }
+
+    pub(crate) fn from_era_values(values: &[i64]) -> Result<Self, String> {
+        if values.len() != STATE_WORDS + 1 {
+            return Err("RANDDATA must contain exactly 625 values".into());
+        }
+        let mut state = [0_u32; STATE_WORDS];
+        for (target, value) in state.iter_mut().zip(values) {
+            // Reference SetRand uses an unchecked low-32-bit conversion.
+            *target = u32::from_le_bytes(value.to_le_bytes()[..4].try_into().expect("low word"));
+        }
+        let index =
+            usize::try_from(values[STATE_WORDS]).map_err(|_| "RANDDATA index is negative")?;
+        if index > STATE_WORDS {
+            return Err("RANDDATA index exceeds 624".into());
+        }
+        Ok(Self { state, index })
+    }
+
     pub(crate) fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(STATE_WORDS * 4 + 4);
         for word in self.state {
@@ -163,6 +190,19 @@ mod tests {
         let mut restored = Sfmt19937::new(0);
         restored.decode(&bytes).expect("valid state");
         assert_eq!(source.next_u64(), restored.next_u64());
+    }
+
+    #[test]
+    fn era_randdata_round_trip_is_exact_and_validates_index() {
+        let mut source = Sfmt19937::new(1234);
+        let _ = source.next_u64();
+        let values = source.era_values();
+        let mut restored = Sfmt19937::from_era_values(&values).expect("valid RANDDATA");
+        assert_eq!(source.next_u64(), restored.next_u64());
+
+        let mut invalid = values;
+        invalid[STATE_WORDS] = 625;
+        assert!(Sfmt19937::from_era_values(&invalid).is_err());
     }
 
     #[test]

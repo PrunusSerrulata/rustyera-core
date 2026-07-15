@@ -14,9 +14,9 @@ mod source_map;
 mod version;
 
 pub use artifact::{
-    ArtifactManifest, BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeGlobal,
-    BytecodeParameter, BytecodePersistence, BytecodeStorage, DecodeLimits, FunctionImport,
-    ImportKind, UnvalidatedArtifact,
+    ArtifactManifest, BytecodeArtifact, BytecodeConstant, BytecodeEventEntry, BytecodeEventGroup,
+    BytecodeFunction, BytecodeGlobal, BytecodeParameter, BytecodePersistence, BytecodeStorage,
+    DecodeLimits, FunctionImport, ImportKind, UnvalidatedArtifact,
 };
 pub use codec::{DecodeError, EncodeError, decode_artifact, encode_artifact};
 pub use host::{

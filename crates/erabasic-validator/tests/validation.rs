@@ -33,6 +33,7 @@ fn rejects_stack_type_mismatches_before_vm_execution() {
             ],
             max_stack: 1,
         }],
+        event_groups: Vec::new(),
         source_map: SourceMap::default(),
     };
     artifact.refresh_ids().unwrap();
@@ -70,6 +71,7 @@ fn rejects_unknown_opcodes() {
             }],
             max_stack: 0,
         }],
+        event_groups: Vec::new(),
         source_map: SourceMap::default(),
     };
     artifact.refresh_ids().unwrap();
@@ -109,6 +111,7 @@ fn rejects_snapshot_vm_abi_mismatch() {
             code: vec![opcode::return_value(false)],
             max_stack: 0,
         }],
+        event_groups: Vec::new(),
         source_map: SourceMap::default(),
     };
     artifact.manifest.program_version.vm_abi += 1;

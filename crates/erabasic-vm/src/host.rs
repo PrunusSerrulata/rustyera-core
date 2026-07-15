@@ -113,6 +113,7 @@ pub trait NativeService: Send {
 #[derive(Default)]
 pub struct NativeServiceRegistry {
     services: BTreeMap<SymbolKey, Box<dyn NativeService>>,
+    random: Option<Arc<Mutex<Sfmt19937>>>,
 }
 
 impl NativeServiceRegistry {
@@ -127,6 +128,7 @@ impl NativeServiceRegistry {
     pub fn for_artifact_with_seed(artifact: &BytecodeArtifact, seed: u64) -> Self {
         let mut registry = Self::default();
         let random = Arc::new(Mutex::new(Sfmt19937::new(seed)));
+        registry.random = Some(Arc::clone(&random));
         for native in &artifact.native_imports {
             let name = native.import.name.as_str();
             if matches!(name, "format_integer" | "format_string") || name.starts_with("control_") {
@@ -143,6 +145,12 @@ impl NativeServiceRegistry {
                 name,
                 "abs"
                     | "sign"
+                    | "sqrt"
+                    | "cbrt"
+                    | "log"
+                    | "log10"
+                    | "exponent"
+                    | "power"
                     | "getbit"
                     | "bitcount"
                     | "strlen"
@@ -180,6 +188,27 @@ impl NativeServiceRegistry {
             .get_mut(&key)
             .ok_or_else(|| format!("native service {key:?} is not registered"))?
             .call(request)
+    }
+
+    pub(crate) fn random_values(&self) -> Result<Vec<i64>, String> {
+        self.random
+            .as_ref()
+            .ok_or_else(|| "random native service is not registered".to_owned())?
+            .lock()
+            .map(|state| state.era_values())
+            .map_err(|_| "SFMT state lock is poisoned".into())
+    }
+
+    pub(crate) fn set_random_values(&mut self, values: &[i64]) -> Result<(), String> {
+        let candidate = Sfmt19937::from_era_values(values)?;
+        let mut state = self
+            .random
+            .as_ref()
+            .ok_or_else(|| "random native service is not registered".to_owned())?
+            .lock()
+            .map_err(|_| "SFMT state lock is poisoned".to_owned())?;
+        *state = candidate;
+        Ok(())
     }
 
     pub(crate) fn snapshots(&self) -> Result<BTreeMap<SymbolKey, Vec<u8>>, String> {
@@ -222,7 +251,11 @@ struct CoreNative {
 }
 
 impl NativeService for CoreNative {
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::too_many_lines
+    )]
     fn call(&mut self, request: NativeCallRequest) -> Result<Option<VmValue>, String> {
         let args = &request.arguments;
         let integer = |index: usize| match args.get(index) {
@@ -242,8 +275,32 @@ impl NativeService for CoreNative {
             )),
         };
         let result = match self.name.as_str() {
-            "abs" => VmValue::Integer(integer(0)?.wrapping_abs()),
+            "abs" => VmValue::Integer(
+                integer(0)?
+                    .checked_abs()
+                    .ok_or("ABS cannot accept the minimum signed integer")?,
+            ),
             "sign" => VmValue::Integer(integer(0)?.signum()),
+            "sqrt" => {
+                let value = integer(0)?;
+                if value < 0 {
+                    return Err("SQRT argument 1 is negative".into());
+                }
+                VmValue::Integer((value as f64).sqrt() as i64)
+            }
+            "cbrt" => {
+                let value = integer(0)?;
+                if value < 0 {
+                    return Err("CBRT argument 1 is negative".into());
+                }
+                VmValue::Integer((value as f64).powf(1.0 / 3.0) as i64)
+            }
+            "log" => checked_float_to_integer((integer(0)? as f64).ln(), "LOG")?,
+            "log10" => checked_float_to_integer((integer(0)? as f64).log10(), "LOG10")?,
+            "exponent" => checked_float_to_integer((integer(0)? as f64).exp(), "EXPONENT")?,
+            "power" => {
+                checked_float_to_integer((integer(0)? as f64).powf(integer(1)? as f64), "POWER")?
+            }
             "getbit" => {
                 let bit = u32::try_from(integer(1)?).map_err(|_| "GETBIT index is negative")?;
                 VmValue::Integer(if bit < 64 {
@@ -333,6 +390,20 @@ impl NativeService for CoreNative {
         };
         Ok(Some(result))
     }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn checked_float_to_integer(value: f64, operation: &str) -> Result<VmValue, String> {
+    if value.is_nan() {
+        return Err(format!("{operation} result is NaN"));
+    }
+    if value.is_infinite() {
+        return Err(format!("{operation} result is infinite"));
+    }
+    if value >= i64::MAX as f64 || value <= i64::MIN as f64 {
+        return Err(format!("{operation} result is outside signed 64-bit range"));
+    }
+    Ok(VmValue::Integer(value as i64))
 }
 
 fn substring_utf8_bytes(value: &str, start: i64, length: Option<i64>) -> Result<String, String> {
@@ -440,7 +511,7 @@ impl NativeService for RandomNative {
                 Ok(None)
             }
             "initrand" | "dumprand" => Err(format!(
-                "{} requires RANDDATA place arguments in HIR v3",
+                "{} must be executed through the VM place transaction",
                 self.name.to_ascii_uppercase()
             )),
             _ => Err(format!("unknown random-native service {}", self.name)),
