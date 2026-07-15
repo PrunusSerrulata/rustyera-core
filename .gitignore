@@ -7,6 +7,10 @@
 Cargo.lock
 
 #/reference
+/reference/**/bin
+/reference/**/obj
+/reference/real-erb
+/reference/eraTW-minimal
 
 # Local Emuera reference oracle, its macOS/Wine harness, and generated output.
 #/tools/emuera-reference-cli/
