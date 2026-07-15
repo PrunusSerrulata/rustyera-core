@@ -5,11 +5,13 @@
 //! files, clocks, rendering and input delivery.
 
 mod config;
+mod debug_port;
 mod fault;
 mod host;
 mod hot_reload;
 mod interpreter;
 mod memory;
+mod runtime_port;
 mod save;
 mod snapshot;
 mod state;
@@ -19,12 +21,22 @@ pub use config::{
     FiberId, FiberStatus, FrameId, GenerationId, HostRequestId, RunBudget, VmBacktraceFrame,
     VmConfig, VmEvent, VmRunReport, VmRunStop,
 };
+pub use debug_port::{
+    VmBreakpoint, VmBreakpointBinding, VmBreakpointLocation, VmDebugControl, VmDebugFiber,
+    VmDebugFrame, VmDebugInspect, VmDebugOperand, VmDebugPage, VmDebugStop, VmDebugStopReason,
+    VmDebugVariable, VmDebugVariableRef, VmDebugVariableWrite, VmResolvedBreakpoint, VmStepKind,
+    VmStopToken,
+};
 pub use fault::{VmError, VmFault, VmFaultCode};
 pub use host::{
     HostCallRequest, HostCallResult, HostReady, HostRebindRequest, HostWaitStability,
     NativeCallRequest, NativeService, NativeServiceRegistry, VmHost,
 };
 pub use hot_reload::{HotReloadPlan, HotReloadReport};
+pub use runtime_port::{
+    VmDriveMode, VmHostCompletion, VmHostRequest, VmPortDriveReport, VmPortEvent, VmPortStop,
+    VmRestorePort, VmRuntimePort, VmWaitRebind,
+};
 pub use save::{EraState, EraStateReport, EraVariableState};
 pub use snapshot::{
     SNAPSHOT_FORMAT_VERSION, SNAPSHOT_MAGIC, SnapshotBlocker, SnapshotEligibility, VmSnapshot,

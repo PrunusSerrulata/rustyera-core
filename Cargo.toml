@@ -1,5 +1,9 @@
 [workspace]
 members = [
+    "crates/era-debug-protocol",
+    "crates/era-protocol",
+    "crates/era-runtime-ffi",
+    "crates/era-runtime-protocol",
     "crates/erabasic-ast",
     "crates/erabasic-bytecode",
     "crates/erabasic-compiler",
@@ -31,3 +35,4 @@ pedantic = "warn"
 blake3 = "1.5.5"
 rayon = "1.10.0"
 serde = { version = "1.0.210", features = ["derive"] }
+minicbor = { version = "2.2.2", features = ["derive", "std"] }

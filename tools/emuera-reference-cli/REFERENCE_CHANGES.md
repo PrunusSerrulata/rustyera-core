@@ -91,6 +91,24 @@ The Wine test completed all requests with empty stderr. The matching Rust/C#
 CSV projections agreed on ABL size/name lookup, item price, initial STR data,
 character ABL data, and GAMEBASE code.
 
+### 2026-07-15: Timed one-input wait in the no-window oracle
+
+Symptom: loading a minimal project whose `SYSTEM_TITLE` executed a positive-time
+`TONEINPUTS` constructed the correct `InputRequest`, then threw
+`NullReferenceException` while updating `MainWindow`'s last-input marker.
+
+Reference-tree change:
+
+- `Emuera/UI/Game/EmueraConsole.cs`: skips `window.update_lastinput()` only when
+  `Program.HeadlessMode` is active. The input request, timer setup and backend
+  state transition are unchanged. Normal games still execute the original UI
+  call because `HeadlessMode` is false on the ordinary startup path.
+
+The wrapper cannot supply this UI object without reintroducing the hidden-window
+dependency that headless mode exists to avoid. Verification uses the minimal
+timed `TONEINPUTS` load request, the complete macOS Wine smoke test, and the
+same-input Rust analyzer fixture `reference-input-signatures.json`.
+
 ## Template for future entries
 
 Append a dated section containing:

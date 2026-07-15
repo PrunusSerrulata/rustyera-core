@@ -1,0 +1,12 @@
+language = "C"
+include_guard = "ERA_RUNTIME_H"
+pragma_once = false
+documentation = true
+usize_is_size_t = true
+
+[export]
+include = [
+  "EraAbiVersion", "EraCallHeader", "EraSessionHandle", "EraByteSlice",
+  "EraOwnedBuffer", "EraStatus", "EraCreateOptions", "EraDriveOptions",
+  "EraDriveState", "EraDriveResult", "EraRuntimeApi"
+]

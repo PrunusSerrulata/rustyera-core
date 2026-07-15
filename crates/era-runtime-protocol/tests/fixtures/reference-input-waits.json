@@ -1,0 +1,75 @@
+{
+  "referenceCommit": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+  "observations": [
+    {
+      "operation": "TINPUT",
+      "inputType": "IntValue",
+      "defaultInt": 8,
+      "defaultStr": null,
+      "hasDefault": true,
+      "oneInput": false,
+      "stopMesskip": false,
+      "mouseInput": true,
+      "timelimit": 1000,
+      "displayTime": true,
+      "timeoutMessage": "timeout",
+      "expectedStability": "transient"
+    },
+    {
+      "operation": "TINPUT",
+      "inputType": "IntValue",
+      "defaultInt": 7,
+      "defaultStr": null,
+      "hasDefault": true,
+      "oneInput": false,
+      "stopMesskip": false,
+      "mouseInput": false,
+      "timelimit": 0,
+      "displayTime": false,
+      "timeoutMessage": "zero",
+      "expectedStability": "stable_input"
+    },
+    {
+      "operation": "TONEINPUTS",
+      "inputType": "StrValue",
+      "defaultInt": 0,
+      "defaultStr": "DEFAULT",
+      "hasDefault": true,
+      "oneInput": true,
+      "stopMesskip": false,
+      "mouseInput": false,
+      "timelimit": 1000,
+      "displayTime": true,
+      "timeoutMessage": "timeout",
+      "expectedStability": "transient"
+    },
+    {
+      "operation": "TWAIT",
+      "inputType": "Void",
+      "defaultInt": 0,
+      "defaultStr": null,
+      "hasDefault": false,
+      "oneInput": false,
+      "stopMesskip": false,
+      "mouseInput": false,
+      "timelimit": 1000,
+      "displayTime": false,
+      "timeoutMessage": null,
+      "expectedStability": "transient"
+    },
+    {
+      "operation": "FORCEWAIT",
+      "inputType": "EnterKey",
+      "defaultInt": 0,
+      "defaultStr": null,
+      "hasDefault": false,
+      "oneInput": false,
+      "stopMesskip": true,
+      "mouseInput": false,
+      "timelimit": -1,
+      "displayTime": false,
+      "timeoutMessage": null,
+      "expectedStability": "stable_input"
+    }
+  ]
+}

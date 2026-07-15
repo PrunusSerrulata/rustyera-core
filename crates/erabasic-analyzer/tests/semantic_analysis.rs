@@ -161,6 +161,57 @@ fn semantic_errors_recover_to_error_lines_and_stable_diagnostics() {
 }
 
 #[test]
+fn timed_input_wait_and_getkey_signatures_match_the_reference() {
+    let valid = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "input.erb",
+                "@SYSTEM_TITLE\nTINPUT 100, 0, 1, \"timeout\", 0, 0\nTINPUTS 100, \"D\", 1, \"timeout\", 0, 0\nTONEINPUT 100, 0\nTONEINPUTS 100, \"N\"\nTWAIT 100, 0\nFORCEWAIT\nRESULT = GETKEY(65)\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !valid
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        valid.diagnostics
+    );
+
+    let invalid = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "bad-input.erb",
+                "@SYSTEM_TITLE\nTWAIT\nTINPUT 100, \"bad\"\nTONEINPUTS 100, 1\nFORCEWAIT 1\nRESULT = GETKEY()\nTINPUTNF 100, 0\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        invalid
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == AnalyzerDiagnosticCode::InvalidArgumentCount })
+    );
+    assert!(
+        invalid
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == AnalyzerDiagnosticCode::TypeMismatch })
+    );
+    assert!(invalid.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == AnalyzerDiagnosticCode::UnknownInstruction
+            && diagnostic.message.contains("TINPUTNF")
+    }));
+}
+
+#[test]
 fn extension_signatures_participate_without_executing_plugin_code() {
     let mut extensions = ExtensionRegistry::default();
     assert!(extensions.register_function(CallableSignature {
@@ -284,6 +335,50 @@ fn reference_analyze_line_assignment_projection_matches() {
             "constant": { "type": "integer", "value": 9 },
         })
     );
+}
+
+#[test]
+fn reference_input_signature_observations_match_rust_diagnostics() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/reference-input-signatures.json"))
+            .expect("reference input fixture should be valid JSON");
+    assert_eq!(
+        fixture["referenceCommit"],
+        "26a35dc9334bb67590b96f7b8efbefbf199e391e"
+    );
+    for observation in fixture["observations"].as_array().unwrap() {
+        let line = observation["source"].as_str().unwrap();
+        let report = analyze_project(
+            AnalysisInput {
+                project_data: empty_project(),
+                sources: vec![source(
+                    "reference-input.erb",
+                    &format!("@SYSTEM_TITLE\n{line}\nRETURN\n"),
+                )],
+            },
+            &AnalyzerOptions::analysis_mode(),
+            &ExtensionRegistry::default(),
+        );
+        let errors: Vec<_> = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.reference_level >= 2)
+            .collect();
+        if observation["accepted"].as_bool().unwrap() {
+            assert!(errors.is_empty(), "{line}: {errors:#?}");
+            continue;
+        }
+        let expected = match observation["rustDiagnostic"].as_str().unwrap() {
+            "invalid_argument_count" => AnalyzerDiagnosticCode::InvalidArgumentCount,
+            "type_mismatch" => AnalyzerDiagnosticCode::TypeMismatch,
+            "unknown_instruction" => AnalyzerDiagnosticCode::UnknownInstruction,
+            value => panic!("unknown fixture diagnostic {value}"),
+        };
+        assert!(
+            errors.iter().any(|diagnostic| diagnostic.code == expected),
+            "{line}: expected {expected:?}, got {errors:#?}"
+        );
+    }
 }
 
 #[test]

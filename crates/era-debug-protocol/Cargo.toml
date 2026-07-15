@@ -1,0 +1,13 @@
+[package]
+name = "era-debug-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+era-protocol = { path = "../era-protocol" }
+minicbor.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true
