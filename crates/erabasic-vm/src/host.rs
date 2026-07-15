@@ -44,6 +44,9 @@ pub enum HostCallResult {
         rebind_payload: Vec<u8>,
     },
     Error(String),
+    /// Runtime-port adapter sentinel. Unlike `Pending`, this only unwinds the
+    /// interpreter; the runtime must immediately classify the captured request.
+    Deferred,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

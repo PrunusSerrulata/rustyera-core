@@ -24,6 +24,7 @@ runtime-message =
   [92, runtime-fault] /
   [93, uint] /
   [94, uint]
+  / [95, command-rejected]
 
 client-hello = { 0: any, 1: tstr, 2: [* uint], 3: any }
 server-hello = { 0: any, 1: any, 2: [* uint], 3: any }
@@ -47,3 +48,4 @@ state-export-ready = { 0: uint, 1: any }
 shutdown-request = { 0: bool }
 shutdown-ready = { 0: uint, 1: uint }
 runtime-fault = { 0: uint, 1: tstr, 2: any / null }
+command-rejected = { 0: uint, 1: tstr, 2: bool, 3: any / null }

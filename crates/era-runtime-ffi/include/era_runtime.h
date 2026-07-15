@@ -1,4 +1,4 @@
-/* Checked C projection of era-runtime-ffi. No runtime implementation exists yet. */
+/* Checked C projection of the caller-pumped RustyEra runtime ABI. */
 #ifndef ERA_RUNTIME_H
 #define ERA_RUNTIME_H
 

@@ -215,6 +215,40 @@ pub enum FaultCode {
     Internal,
 }
 
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandErrorCode {
+    #[n(0)]
+    InvalidState,
+    #[n(1)]
+    InvalidValue,
+    #[n(2)]
+    StaleRequest,
+    #[n(3)]
+    VersionMismatch,
+    #[n(4)]
+    PermissionDenied,
+    #[n(5)]
+    FeatureUnavailable,
+    #[n(6)]
+    ResourceLimit,
+}
+
+/// A semantic command rejection does not fault the runtime session.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct CommandRejected {
+    #[n(0)]
+    pub code: CommandErrorCode,
+    #[n(1)]
+    pub message: String,
+    #[n(2)]
+    pub recoverable: bool,
+    #[n(3)]
+    pub source: Option<SourceLocation>,
+}
+
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct RuntimeFault {

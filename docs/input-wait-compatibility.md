@@ -1,9 +1,9 @@
 # Input and wait compatibility
 
-This document fixes the behavior expected from a future runtime for the input
+This document fixes the behavior expected from the runtime for the input
 operations audited against Emuera commit
 `26a35dc9334bb67590b96f7b8efbefbf199e391e`. The analyzer, compiler, protocol and
-VM capability checks exist today; the runtime behavior described below does not.
+VM capability checks and the basic runtime wait/service paths exist today.
 
 ## Meaning of transient
 
@@ -30,9 +30,9 @@ is already active. Arguments used to construct the request are evaluated before
 that shortcut is selected. Display defaults to enabled and the timeout message
 defaults to the configured time-up label.
 
-## Future runtime requirements
+## Runtime status
 
-The runtime must decide the shortcut and `WaitStability` before publishing an
+The runtime decides `WaitStability` before publishing an
 `InputWait`. A positive millisecond limit is converted to a monotonic deadline;
 zero and negative values create no deadline. Timeout commits the typed default
 and applies the configured display/message behavior before resuming the fiber.
@@ -45,3 +45,10 @@ the VM or runtime library itself.
 
 Exact snapshots remain legal only at stable input waits. Traditional Era saves
 do not serialize VM stacks or pending input/service requests.
+
+The current stage implements typed waits, positive monotonic deadlines, defaults,
+timeout messages, FORCEWAIT flags, TWAIT Void classification, fresh GETKEY queries and
+the shared GETKEYTRIGGERED toggle observation. The message-skip shortcut controlled by
+the sixth TINPUT-family slot and primitive mouse/key completion are still unimplemented;
+until the runtime gains the corresponding authoritative message-skip and primitive-input
+state, those paths must not be described as reference-complete.

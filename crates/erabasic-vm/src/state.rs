@@ -11,6 +11,7 @@ use crate::{
     Memory, PlaceDescriptor, VariableCell, VmConfig, VmError, VmFault, VmValue,
     hot_reload::HotReloadPlan,
 };
+use crate::{PreparedRuntimeState, VmRuntimeRead, VmRuntimeStatePort, VmRuntimeStateTransaction};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ProgramGeneration {
@@ -532,6 +533,86 @@ impl Vm {
             .ok_or_else(|| VmError::InvalidState("place generation was reclaimed".into()))?
             .artifact;
         Ok((generation, find_global(artifact, place.variable)?))
+    }
+}
+
+impl VmRuntimeStatePort for Vm {
+    fn read_runtime_state(&self, reads: &[VmRuntimeRead]) -> Result<Vec<VmValue>, VmError> {
+        reads
+            .iter()
+            .map(|read| self.read_variable(read.variable, &read.indices, read.character))
+            .collect()
+    }
+
+    fn prepare_runtime_state(
+        &self,
+        transaction: VmRuntimeStateTransaction,
+    ) -> Result<PreparedRuntimeState, VmError> {
+        let artifact = self.artifact();
+        let reset_execution = matches!(transaction, VmRuntimeStateTransaction::ResetNewGame);
+        let mut memory = match &transaction {
+            VmRuntimeStateTransaction::ResetNewGame => Memory::new_game(artifact),
+            VmRuntimeStateTransaction::Mutate { .. } => self.memory.clone(),
+        };
+        if let VmRuntimeStateTransaction::Mutate {
+            writes,
+            clear_characters,
+            add_characters_from_csv,
+        } = transaction
+        {
+            if clear_characters {
+                memory.characters.clear();
+            }
+            for csv_number in add_characters_from_csv {
+                let template = artifact
+                    .project_data
+                    .static_data
+                    .characters
+                    .iter()
+                    .find(|template| template.csv_no == csv_number)
+                    .ok_or_else(|| {
+                        VmError::InvalidArguments(format!(
+                            "character CSV number {csv_number} does not exist"
+                        ))
+                    })?;
+                memory.push_character(artifact, Some(template));
+            }
+            for write in writes {
+                let definition = find_global(artifact, write.variable)?;
+                if !definition.mutable || definition.storage == BytecodeStorage::FunctionLocal {
+                    return Err(VmError::InvalidState(
+                        "runtime state transaction cannot write this variable".into(),
+                    ));
+                }
+                let character = write.character.map_or_else(
+                    || memory.target_character(artifact, self.current_generation),
+                    |value| usize::try_from(value).unwrap_or(usize::MAX),
+                );
+                memory
+                    .cell_mut(self.current_generation, definition, character)
+                    .ok_or_else(|| VmError::InvalidState("variable storage is unavailable".into()))?
+                    .write(&write.indices, write.value)
+                    .map_err(VmError::InvalidState)?;
+            }
+        }
+        Ok(PreparedRuntimeState {
+            generation: self.current_generation,
+            memory,
+            reset_execution,
+        })
+    }
+
+    fn commit_runtime_state(&mut self, prepared: PreparedRuntimeState) -> Result<(), VmError> {
+        if prepared.generation != self.current_generation {
+            return Err(VmError::InvalidState(
+                "runtime state transaction belongs to a stale generation".into(),
+            ));
+        }
+        self.memory = prepared.memory;
+        if prepared.reset_execution {
+            self.clear_execution();
+        }
+        Ok(())
     }
 }
 

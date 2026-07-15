@@ -1,7 +1,7 @@
-//! Versioned message contract between a future game runtime and application frontend.
+//! Versioned message contract between the game runtime and application frontend.
 //!
-//! The runtime remains unimplemented. These types define the transport-neutral
-//! lifecycle and keep all filesystem, clock, rendering and device work outside it.
+//! This development protocol intentionally has no backward-compatibility promise until
+//! a frontend exists. Filesystem, clock, rendering and device work remain outside it.
 
 mod input;
 mod lifecycle;
@@ -16,14 +16,15 @@ pub use input::{
     WaitStability,
 };
 pub use lifecycle::{
-    ClientHello, FaultCode, RuntimeFault, RuntimeFeature, RuntimeLimits, RuntimePhase,
-    RuntimeStateChanged, ServerHello, ShutdownReady, ShutdownRequest, StartMode, StartRequest,
-    StateExportKind, StateExportReady, StateExportRequest, StateExportResult, VersionRejected,
+    ClientHello, CommandErrorCode, CommandRejected, FaultCode, RuntimeFault, RuntimeFeature,
+    RuntimeLimits, RuntimePhase, RuntimeStateChanged, ServerHello, ShutdownReady, ShutdownRequest,
+    StartMode, StartRequest, StateExportKind, StateExportReady, StateExportRequest,
+    StateExportResult, VersionRejected,
 };
 pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage};
 pub use presentation::{
-    AudioState, Color, DisplayLine, DisplayRun, MediaPlacement, PresentationDelta,
-    PresentationOperation, PresentationSnapshot, Shape, TextStyle,
+    AudioState, Color, DisplayLine, DisplayRun, LineAlignment, MediaPlacement, PresentationDelta,
+    PresentationOperation, PresentationSettings, PresentationSnapshot, RunLayout, Shape, TextStyle,
 };
 pub use project::{
     DiagnosticSeverity, FileCategory, FileChange, FilePayload, FrontendIoError,
@@ -32,8 +33,10 @@ pub use project::{
 };
 pub use service::{
     GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
-    GetKeyStateResponse, ServiceError, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult,
-    StorageEntry, StorageNamespace, StorageOperation, StorageRequest, StorageResponse,
-    StorageResult,
+    GetKeyStateResponse, LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION,
+    LocalDateTimeRequest, LocalDateTimeResponse, RANDOM_SEED_OPERATION,
+    RANDOM_SEED_OPERATION_VERSION, RandomSeedRequest, RandomSeedResponse, ServiceError,
+    ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, StorageEntry, StorageNamespace,
+    StorageOperation, StorageRequest, StorageResponse, StorageResult,
 };
 pub use value::ProtocolValue;

@@ -2,7 +2,8 @@
 
 Compatibility is pinned to reference commit
 `26a35dc9334bb67590b96f7b8efbefbf199e391e`. This inventory records what shaped the
-interface; it does not claim that a Rust runtime implements the behavior yet.
+interface and the first runtime stage. A row describes the target contract, not a claim
+that every reference system state or Host operation is already implemented.
 
 | Reference area | Observed behavior | Contract representation |
 | --- | --- | --- |

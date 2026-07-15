@@ -574,6 +574,17 @@ impl Vm {
                             HostCallResult::Error(error) => {
                                 return Err(StepError::new(VmFaultCode::Host, error));
                             }
+                            HostCallResult::Deferred => {
+                                let result = target.import.result;
+                                fiber.state = FiberState::WaitingHost(WaitingHost {
+                                    request,
+                                    import: target.import,
+                                    result,
+                                    stability: HostWaitStability::Transient,
+                                    rebind_payload: Vec::new(),
+                                });
+                                return Ok(StepOutcome::Blocked);
+                            }
                         }
                     }
                     _ => {

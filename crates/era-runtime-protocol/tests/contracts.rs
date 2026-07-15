@@ -80,7 +80,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(1, 1));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(2, 0));
 }
 
 #[test]

@@ -133,6 +133,53 @@ pub enum ServiceKind {
     /// Fresh frontend-owned keyboard state used by GETKEY-family functions.
     #[n(7)]
     InputState,
+    /// Frontend-owned local calendar time. Timed waits never use this service.
+    #[n(8)]
+    Clock,
+    /// Frontend-owned nondeterminism used only when the caller omitted a seed.
+    #[n(9)]
+    Entropy,
+}
+
+pub const LOCAL_DATE_TIME_OPERATION: &str = "local_date_time";
+pub const LOCAL_DATE_TIME_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const RANDOM_SEED_OPERATION: &str = "random_seed";
+pub const RANDOM_SEED_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct LocalDateTimeRequest {}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct LocalDateTimeResponse {
+    #[n(0)]
+    pub year: i32,
+    #[n(1)]
+    pub month: u8,
+    #[n(2)]
+    pub day: u8,
+    #[n(3)]
+    pub hour: u8,
+    #[n(4)]
+    pub minute: u8,
+    #[n(5)]
+    pub second: u8,
+    #[n(6)]
+    pub millisecond: u16,
+    #[n(7)]
+    pub utc_offset_minutes: i16,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct RandomSeedRequest {}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct RandomSeedResponse {
+    #[n(0)]
+    pub seed: u64,
 }
 
 pub const GET_KEY_STATE_OPERATION: &str = "get_key_state";
