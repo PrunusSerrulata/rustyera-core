@@ -1,0 +1,72 @@
+{
+  "referenceCommit": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+  "observations": [
+    {
+      "source": "TINPUT 100, 0, 1, \"timeout\", 0, 0",
+      "referenceType": "InstructionLine",
+      "functionCode": "TINPUT",
+      "argumentType": "SpTInputsArgument",
+      "argumentTypes": ["Int64", "Int64", "Int64", "String", "Int64", "Int64"],
+      "accepted": true
+    },
+    {
+      "source": "TONEINPUTS 100, \"N\", 1, \"timeout\", 0, 0",
+      "referenceType": "InstructionLine",
+      "functionCode": "TONEINPUTS",
+      "argumentType": "SpTInputsArgument",
+      "argumentTypes": ["Int64", "String", "Int64", "String", "Int64", "Int64"],
+      "accepted": true
+    },
+    {
+      "source": "TWAIT 100, 0",
+      "referenceType": "InstructionLine",
+      "functionCode": "TWAIT",
+      "argumentType": "SpSwapCharaArgument",
+      "argumentTypes": ["Int64", "Int64"],
+      "accepted": true
+    },
+    {
+      "source": "FORCEWAIT",
+      "referenceType": "InstructionLine",
+      "functionCode": "FORCEWAIT",
+      "argumentType": "VoidArgument",
+      "argumentTypes": [],
+      "accepted": true
+    },
+    {
+      "source": "RESULT = GETKEY(65)",
+      "referenceType": "InstructionLine",
+      "functionCode": "SET",
+      "argumentType": "SpSetArgument/GetKeyStateMethod",
+      "argumentTypes": ["Int64"],
+      "accepted": true
+    },
+    {
+      "source": "TWAIT",
+      "referenceType": "InstructionLine",
+      "functionCode": "TWAIT",
+      "accepted": false,
+      "rustDiagnostic": "invalid_argument_count"
+    },
+    {
+      "source": "TINPUT 100, \"bad\"",
+      "referenceType": "InstructionLine",
+      "functionCode": "TINPUT",
+      "accepted": false,
+      "rustDiagnostic": "type_mismatch"
+    },
+    {
+      "source": "RESULT = GETKEY()",
+      "referenceType": "InstructionLine",
+      "functionCode": "SET",
+      "accepted": false,
+      "rustDiagnostic": "invalid_argument_count"
+    },
+    {
+      "source": "TINPUTNF 100, 0",
+      "referenceType": "InvalidLine",
+      "accepted": false,
+      "rustDiagnostic": "unknown_instruction"
+    }
+  ]
+}

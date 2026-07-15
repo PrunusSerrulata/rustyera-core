@@ -1,0 +1,18 @@
+; Rust types in era-protocol are normative. This schema documents their numeric keys.
+protocol-version = { 0: uint .size 2, 1: uint .size 2 }
+session-id = { 0: uint .size 8, 1: uint .size 8 }
+channel = 0 / 1 ; runtime / debug
+
+envelope = {
+  0: protocol-version,
+  1: protocol-version,
+  2: channel,
+  3: session-id / null,
+  4: uint,
+  5: uint .ne 0,
+  6: uint / null,
+  7: uint,
+  8: bstr
+}
+
+; All maps use definite lengths, ascending integer keys and shortest scalar forms.

@@ -29,6 +29,7 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言前端、项目数据加�
   状态保存与多代热替换。
 - `crates/erabasic-repl`：用于人工检查的 Read-Parse-Print Loop。
 - `reference/emuera.em`：固定版本的 C# Emuera 参考实现。
+- `reference/real-erb`：真实游戏eraTW中使用的完整脚本集，包含csv、erh和erb。
 - `tools/emuera-reference-cli`：绕过 UI 调用参考实现的 NDJSON 测试工具及平台脚本。
 
 保持各 crate 的职责边界。较大的实现应按语法领域拆分为 module，不要把 lexer

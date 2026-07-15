@@ -41,47 +41,52 @@ pub fn default_host_registry() -> HostRegistry {
 }
 
 fn default_binding(name: &str) -> Option<HostBinding> {
-    let (namespace, operation, capability, may_suspend, mutates_runtime) = if name
-        .starts_with("PRINT")
-        || name.starts_with("DEBUGPRINT")
-        || name.starts_with("HTML_PRINT")
-        || matches!(name, "DRAWLINE" | "CLEARLINE" | "REUSELASTLINE")
-    {
-        ("rustyera.text", name, HostCapability::Text, false, true)
-    } else if matches!(name, "GETTIME" | "GETTIMES" | "GETMILLISECOND") {
-        ("rustyera.clock", name, HostCapability::Clock, false, false)
-    } else if name.starts_with('G') || name.contains("SPRITE") || name.contains("BGIMAGE") {
-        (
-            "rustyera.graphics",
-            name,
-            HostCapability::Graphics,
-            false,
-            true,
-        )
-    } else if name.contains("SOUND") || name.contains("BGM") {
-        ("rustyera.audio", name, HostCapability::Audio, false, true)
-    } else if name.contains("INPUT")
-        || matches!(
-            name,
-            "WAIT" | "WAITANYKEY" | "TWAIT" | "AWAIT" | "FORCEWAIT"
-        )
-    {
-        ("rustyera.input", name, HostCapability::Input, true, true)
-    } else if name.contains("SAVE")
-        || name.contains("LOAD")
-        || name.contains("FILE")
-        || name.contains("TEXT")
-    {
-        (
-            "rustyera.storage",
-            name,
-            HostCapability::Storage,
-            true,
-            true,
-        )
-    } else {
-        return None;
-    };
+    let (namespace, operation, capability, may_suspend, mutates_runtime) =
+        if matches!(name, "GETKEY" | "GETKEYTRIGGERED") {
+            // These functions sample frontend-owned key state. They must be matched
+            // before the broad graphics G* rule and unwind through CallHost while a
+            // fresh frontend query is outstanding.
+            ("rustyera.input", name, HostCapability::Input, true, true)
+        } else if name.starts_with("PRINT")
+            || name.starts_with("DEBUGPRINT")
+            || name.starts_with("HTML_PRINT")
+            || matches!(name, "DRAWLINE" | "CLEARLINE" | "REUSELASTLINE")
+        {
+            ("rustyera.text", name, HostCapability::Text, false, true)
+        } else if matches!(name, "GETTIME" | "GETTIMES" | "GETMILLISECOND") {
+            ("rustyera.clock", name, HostCapability::Clock, false, false)
+        } else if name.starts_with('G') || name.contains("SPRITE") || name.contains("BGIMAGE") {
+            (
+                "rustyera.graphics",
+                name,
+                HostCapability::Graphics,
+                false,
+                true,
+            )
+        } else if name.contains("SOUND") || name.contains("BGM") {
+            ("rustyera.audio", name, HostCapability::Audio, false, true)
+        } else if name.contains("INPUT")
+            || matches!(
+                name,
+                "WAIT" | "WAITANYKEY" | "TWAIT" | "AWAIT" | "FORCEWAIT"
+            )
+        {
+            ("rustyera.input", name, HostCapability::Input, true, true)
+        } else if name.contains("SAVE")
+            || name.contains("LOAD")
+            || name.contains("FILE")
+            || name.contains("TEXT")
+        {
+            (
+                "rustyera.storage",
+                name,
+                HostCapability::Storage,
+                true,
+                true,
+            )
+        } else {
+            return None;
+        };
     Some(HostBinding {
         namespace: namespace.into(),
         name: operation.to_ascii_lowercase(),
@@ -93,9 +98,14 @@ fn default_binding(name: &str) -> Option<HostBinding> {
             mutates_runtime,
         },
         capability,
-        snapshot_capability: if may_suspend && matches!(name, "TWAIT" | "AWAIT" | "FORCEWAIT") {
+        snapshot_capability: if may_suspend
+            && matches!(name, "AWAIT" | "GETKEY" | "GETKEYTRIGGERED")
+        {
             HostSnapshotCapability::Never
         } else {
+            // This is a maximum capability. Timed input calls downgrade their
+            // individual pending result to Transient; deadline-free input may
+            // report StableInput and participate in exact VM snapshots.
             HostSnapshotCapability::StableWait
         },
     })

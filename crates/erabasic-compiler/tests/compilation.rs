@@ -3,8 +3,8 @@ use erabasic_analyzer::{
     analyze_project,
 };
 use erabasic_bytecode::{
-    DecodeLimits, HostCapability, HostEffect, HostSnapshotCapability, Opcode, apply_patch,
-    decode_artifact, encode_artifact,
+    BytecodeType, DecodeLimits, HostCapability, HostEffect, HostSnapshotCapability, Opcode,
+    apply_patch, decode_artifact, encode_artifact,
 };
 use erabasic_compiler::{CompilerOptions, HostBinding, compile_project, default_host_registry};
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
@@ -72,6 +72,60 @@ fn host_operations_use_only_call_host_and_round_trip() {
     let validation = validate_bytecode(decoded, &ValidationContext::for_artifact(&artifact));
     assert!(validation.is_valid(), "{:#?}", validation.diagnostics);
     assert_eq!(validation.value.unwrap().into_inner(), artifact);
+}
+
+#[test]
+fn input_wait_and_getkey_bindings_preserve_dynamic_stability() {
+    let registry = default_host_registry();
+    for name in ["TINPUT", "TONEINPUTS", "TWAIT", "FORCEWAIT"] {
+        let binding = registry.resolve(name).expect("input binding should exist");
+        assert_eq!(binding.namespace, "rustyera.input");
+        assert_eq!(binding.capability, HostCapability::Input);
+        assert!(binding.effect.may_suspend);
+        assert_eq!(
+            binding.snapshot_capability,
+            HostSnapshotCapability::StableWait
+        );
+    }
+    let getkey = registry.resolve("GETKEY").expect("GETKEY binding");
+    assert_eq!(getkey.namespace, "rustyera.input");
+    assert_eq!(getkey.capability, HostCapability::Input);
+    assert!(getkey.effect.may_suspend);
+    assert!(getkey.effect.mutates_runtime);
+    assert_eq!(getkey.snapshot_capability, HostSnapshotCapability::Never);
+
+    let artifact = compile_project(
+        &analyze(
+            "@SYSTEM_TITLE\nTINPUT 100, 0\nTONEINPUTS 100, \"N\"\nTWAIT 100, 0\nFORCEWAIT\nRESULT = GETKEY(65)\nRETURN\n",
+        ),
+        &CompilerOptions::default(),
+        &registry,
+        None,
+    )
+    .artifact
+    .expect("input fixture should compile");
+    let import = |name: &str| {
+        artifact
+            .host_imports
+            .iter()
+            .find(|import| import.import.name == name)
+            .unwrap_or_else(|| panic!("missing host import {name}"))
+    };
+    assert_eq!(
+        import("tinput").import.parameters,
+        [BytecodeType::Integer, BytecodeType::Integer]
+    );
+    assert_eq!(
+        import("toneinputs").import.parameters,
+        [BytecodeType::Integer, BytecodeType::String]
+    );
+    assert_eq!(
+        import("twait").import.parameters,
+        [BytecodeType::Integer, BytecodeType::Integer]
+    );
+    assert!(import("forcewait").import.parameters.is_empty());
+    assert_eq!(import("getkey").import.parameters, [BytecodeType::Integer]);
+    assert_eq!(import("getkey").import.result, Some(BytecodeType::Integer));
 }
 
 #[test]

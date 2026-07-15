@@ -1,0 +1,18 @@
+; DebugMessage is independently versioned and uses the common debug envelope channel.
+debug-message =
+  [0, debug-hello] /
+  [1, debug-grant] /
+  [2, debug-revoke] /
+  [10, authorized-request] /
+  [11, debug-response] /
+  [12, debug-stop] /
+  [13, debug-error]
+
+debug-hello = { 0: any, 1: [* uint] }
+debug-grant = { 0: any, 1: any, 2: [* uint] }
+debug-revoke = { 0: any, 1: tstr }
+authorized-request = { 0: any, 1: any }
+debug-response = any
+debug-stop = { 0: stop-token, 1: any, 2: uint / null, 3: any / null }
+debug-error = { 0: uint, 1: tstr }
+stop-token = { 0: uint, 1: uint, 2: uint }

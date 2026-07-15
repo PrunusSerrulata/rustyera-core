@@ -1,0 +1,25 @@
+{
+  "referenceCommit": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+  "load": {
+    "state": "WaitInput",
+    "termination": "waitingInput",
+    "lastOutput": "ORACLE_READY",
+    "inputRequest": {
+      "id": 0,
+      "inputType": "IntValue",
+      "oneInput": false,
+      "stopMesskip": false,
+      "isSystemInput": false,
+      "mouseInput": false,
+      "timelimit": -1,
+      "displayTime": false
+    }
+  },
+  "run": {
+    "entry": "ORACLE_INPUT",
+    "input": "42",
+    "termination": "completed",
+    "lastOutput": "ORACLE_GOT=42",
+    "result": 42
+  }
+}

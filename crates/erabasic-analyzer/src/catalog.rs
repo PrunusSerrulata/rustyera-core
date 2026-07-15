@@ -156,7 +156,7 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "QUIT",
         "WAIT",
         "WAITANYKEY",
-        "TWAIT",
+        "FORCEWAIT",
         "DRAWLINE",
         "RESETCOLOR",
         "NOSKIP",
@@ -244,13 +244,37 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     ] {
         add(name, Expressions, &[Any], 1, true, true);
     }
-    for name in ["RETURNF", "INPUT", "ONEINPUT", "TINPUT", "AWAIT"] {
+    for name in ["RETURNF", "INPUT", "ONEINPUT", "AWAIT"] {
         add(name, Expressions, &[Integer], 0, true, true);
     }
     add("RETURN", Expressions, &[Integer], 0, false, true);
-    for name in ["INPUTS", "ONEINPUTS", "TINPUTS"] {
+    for name in ["INPUTS", "ONEINPUTS"] {
         add(name, Expressions, &[String], 0, true, true);
     }
+    // The timed input builders in the reference implementation share a strict
+    // six-slot layout. Optional trailing slots may be absent, but an interior
+    // omission is not accepted by ArgumentBuilder.checkArgumentType.
+    for name in ["TINPUT", "TONEINPUT"] {
+        add(
+            name,
+            Expressions,
+            &[Integer, Integer, Integer, String, Integer, Integer],
+            2,
+            false,
+            false,
+        );
+    }
+    for name in ["TINPUTS", "TONEINPUTS"] {
+        add(
+            name,
+            Expressions,
+            &[Integer, String, Integer, String, Integer, Integer],
+            2,
+            false,
+            false,
+        );
+    }
+    add("TWAIT", Expressions, &[Integer, Integer], 2, false, false);
 
     // Known instructions without a specialized signature still remain known. Their
     // arguments are preserved and type checked as general expressions.
@@ -332,7 +356,6 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "ENCODETOUNI",
         "FONTSTYLE",
         "FORCEKANA",
-        "FORCEWAIT",
         "FORCE_BEGIN",
         "FORCE_QUIT",
         "FORCE_QUIT_AND_RESTART",
@@ -580,6 +603,10 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         add(name, StrType, &[Any], 1, true);
     }
     add("STRFIND", IntType, &[String, String, Integer], 2, true);
+    // GETKEY is deliberately non-constant in Emuera and accepts exactly one
+    // integer virtual-key code. HIR calls are never folded, so the signature is
+    // sufficient to retain that behavior in the current analyzer.
+    add("GETKEY", IntType, &[Integer], 1, false);
 
     const INTEGER_FALLBACKS: &[&str] = &[
         "ALLSAMES",

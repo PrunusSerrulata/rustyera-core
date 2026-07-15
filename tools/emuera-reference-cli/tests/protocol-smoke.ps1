@@ -62,6 +62,17 @@ try {
     Assert-True $load.ok "fixture game failed to load"
     Assert-True ($load.result.termination -eq "waitingInput") "fixture title did not request input"
 
+    $timedOneInput = Invoke-Oracle @{
+        id = "toneinput"
+        op = "execute"
+        statement = 'TONEINPUTS 1000, "DEFAULT", 1, "timeout", 0, 0'
+    }
+    Assert-True $timedOneInput.ok "timed one-input execution failed"
+    Assert-True ($timedOneInput.result.termination -eq "waitingInput") "timed one-input did not wait"
+    Assert-True ($timedOneInput.result.inputRequest.InputType -eq "StrValue") "timed one-input type differs"
+    Assert-True $timedOneInput.result.inputRequest.OneInput "timed one-input flag differs"
+    Assert-True ($timedOneInput.result.inputRequest.Timelimit -eq "1000") "timed one-input limit differs"
+
     $project = Invoke-Oracle @{ id = "project"; op = "analyzeProject" }
     Assert-True $project.ok "project semantic projection failed"
     Assert-True (($project.result.functions.name -contains "SYSTEM_TITLE") -and

@@ -306,6 +306,40 @@ fn transient_qte_wait_cannot_be_snapshotted() {
 }
 
 #[test]
+fn never_snapshot_capability_accepts_only_transient_host_waits() {
+    let (artifact, entry) = host_artifact(HostSnapshotCapability::Never);
+    let mut stable_vm = Vm::new(validated(&artifact), VmConfig::default());
+    let stable_fiber = stable_vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut stable_host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let mut natives = NativeServiceRegistry::default();
+    stable_vm.run_slice(&mut stable_host, &mut natives, RunBudget::default());
+    assert!(matches!(
+        stable_vm.fiber_status(stable_fiber),
+        Some(FiberStatus::Faulted(ref fault)) if fault.code == VmFaultCode::Host
+    ));
+
+    let mut transient_vm = Vm::new(validated(&artifact), VmConfig::default());
+    let transient_fiber = transient_vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut transient_host = PendingHost {
+        stability: HostWaitStability::Transient,
+        rebound: Vec::new(),
+    };
+    transient_vm.run_slice(&mut transient_host, &mut natives, RunBudget::default());
+    assert!(matches!(
+        transient_vm.fiber_status(transient_fiber),
+        Some(FiberStatus::WaitingHost(_))
+    ));
+    assert!(matches!(
+        transient_vm.snapshot_eligibility(&natives),
+        SnapshotEligibility::Ineligible(ref blockers)
+            if blockers.contains(&SnapshotBlocker::TransientHostWait(transient_fiber))
+    ));
+}
+
+#[test]
 fn host_resume_is_typed_and_late_responses_are_stale() {
     let (artifact, entry) = host_artifact(HostSnapshotCapability::StableWait);
     let mut vm = Vm::new(validated(&artifact), VmConfig::default());

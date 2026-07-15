@@ -27,6 +27,10 @@ The workspace currently contains these implemented components:
 | `erabasic-validator` | Structural, type, control-flow, stack, capability, and ABI validation for HIR and untrusted bytecode. |
 | `erabasic-vm` | Deterministic interpretation, cooperative multi-fiber scheduling, Host/native calls, snapshots, traditional save-state views, and generation-pinned hot reload. |
 | `erabasic-repl` | A small development REPL for manually inspecting lexer and parser behavior. |
+| `era-protocol` | Deterministic CBOR envelope, version negotiation, identifiers, limits, and diagnostic JSON projection for future runtime transports. |
+| `era-runtime-protocol` | Normal runtime/frontend lifecycle, project, input, presentation, storage, and service interface definitions. |
+| `era-debug-protocol` | Separately versioned, capability-gated EraBasic debugger interface definitions. |
+| `era-runtime-ffi` | C ABI function-table and header declarations for a future dynamic library; it contains no runtime implementation. |
 
 The currently implemented data flows are:
 
@@ -50,6 +54,13 @@ into modules by syntax, data domain, executable format, or compilation phase.
 ## Scope and unimplemented components
 
 The Rust implementation does **not** currently include the host runtime.
+
+The `era-*` protocol and FFI crates are compile-time interface specifications only.
+They do not export a dynamic library, drive the VM, perform file I/O, or implement any
+of the lifecycle and debugger behavior they describe. The design is documented in
+[`docs/runtime-protocol.md`](docs/runtime-protocol.md),
+[`docs/debug-protocol.md`](docs/debug-protocol.md), and the
+[`reference mapping`](docs/runtime-reference-mapping.md).
 
 The parser still produces a syntax AST. `ParserContext` supports syntax decisions
 that depend on registries, while `erabasic-analyzer` owns the project-level semantic

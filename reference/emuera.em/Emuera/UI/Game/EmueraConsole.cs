@@ -648,7 +648,9 @@ internal sealed partial class EmueraConsole : IDisposable
 		inputReq = req;
 		if (req.Timelimit > 0)
 		{
-			if (req.OneInput)
+			// The reference CLI has no MainWindow. Updating its last-input marker is
+			// a UI-only side effect; the real game path keeps the original call.
+			if (req.OneInput && !Program.HeadlessMode)
 				window.update_lastinput();
 			presetTimer();
 			//				setTimer();
