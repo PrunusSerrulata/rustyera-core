@@ -45,6 +45,7 @@ impl Vm {
                     && !matches!(
                         definition.storage,
                         BytecodeStorage::FunctionLocal
+                            | BytecodeStorage::FunctionPersistent
                             | BytecodeStorage::Character
                             | BytecodeStorage::Constant
                             | BytecodeStorage::Calculated

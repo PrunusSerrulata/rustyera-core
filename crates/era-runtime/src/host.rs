@@ -8,6 +8,7 @@ pub(crate) struct PendingInput {
     pub(crate) wait: InputWait,
     pub(crate) result_name: Option<&'static str>,
     pub(crate) choices: std::collections::BTreeMap<InteractionToken, VmValue>,
+    pub(crate) timeout_duration_ns: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,7 +56,7 @@ pub(crate) fn input_wait(
             false,
             Some("RESULTS"),
         ),
-        "INPUTANY" => (WaitKind::AnyValue, false, false, Some("RESULT")),
+        "INPUTANY" => (WaitKind::AnyValue, false, false, None),
         "BINPUT" | "ONEBINPUT" => (
             WaitKind::IntegerButton,
             name.starts_with("ONE"),
@@ -123,9 +124,14 @@ pub(crate) fn input_wait(
             display_time,
             timeout_message,
             submission_token,
+            countdown_remaining_ms: deadline_ns
+                .filter(|_| display_time)
+                .map(|_| timelimit_ms.cast_unsigned()),
         },
         result_name,
         choices: std::collections::BTreeMap::new(),
+        timeout_duration_ns: (timelimit_ms > 0)
+            .then(|| timelimit_ms.cast_unsigned().saturating_mul(1_000_000)),
     })
 }
 

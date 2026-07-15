@@ -192,6 +192,29 @@ pub struct RuntimeStateChanged {
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitReason {
+    #[n(0)]
+    Quit,
+    #[n(1)]
+    Restart,
+}
+
+/// Persistent terminal intent. It remains part of resynchronization until the
+/// frontend acknowledges it by shutting down the session.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ExitRequested {
+    #[n(0)]
+    pub reason: ExitReason,
+    #[n(1)]
+    pub force: bool,
+    #[n(2)]
+    pub runtime_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct SequenceAcknowledgement {
     #[n(0)]

@@ -28,6 +28,7 @@ pub struct FunctionImport {
 pub enum BytecodeStorage {
     Project,
     FunctionLocal,
+    FunctionPersistent,
     FunctionStatic,
     Character,
     Constant,
@@ -82,6 +83,22 @@ pub struct BytecodeFunction {
     pub max_stack: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BytecodeEventEntry {
+    pub function: SymbolKey,
+    pub single: bool,
+}
+
+/// Ordered reference dispatch groups for one case-insensitive event name.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BytecodeEventGroup {
+    pub name: String,
+    pub only: Vec<BytecodeEventEntry>,
+    pub priority: Vec<BytecodeEventEntry>,
+    pub normal: Vec<BytecodeEventEntry>,
+    pub later: Vec<BytecodeEventEntry>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactManifest {
     pub container_version: FormatVersion,
@@ -122,6 +139,7 @@ pub struct BytecodeArtifact {
     pub native_imports: Vec<NativeImport>,
     pub host_imports: Vec<HostImport>,
     pub functions: Vec<BytecodeFunction>,
+    pub event_groups: Vec<BytecodeEventGroup>,
     pub source_map: SourceMap,
 }
 
@@ -134,6 +152,8 @@ impl BytecodeArtifact {
         self.native_imports.sort_by_key(|import| import.import.key);
         self.host_imports.sort_by_key(|import| import.import.key);
         self.functions.sort_by_key(|function| function.key);
+        self.event_groups
+            .sort_by_key(|group| (group.name.to_ascii_uppercase(), group.name.clone()));
         self.source_map
             .entries
             .sort_by_key(|entry| (entry.function, entry.code_start, entry.code_end));
@@ -160,9 +180,12 @@ impl BytecodeArtifact {
         let native = serde_json::to_vec(&self.native_imports)?;
         let host = serde_json::to_vec(&self.host_imports)?;
         let functions = serde_json::to_vec(&self.functions)?;
+        let events = serde_json::to_vec(&self.event_groups)?;
         let execution_id = Digest::hash(
             "rustyera.bytecode.execution.v1",
-            &[&versions, &project, &globals, &native, &host, &functions],
+            &[
+                &versions, &project, &globals, &native, &host, &functions, &events,
+            ],
         );
         self.manifest.program_version.execution_id = execution_id;
 

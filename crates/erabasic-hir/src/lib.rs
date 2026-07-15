@@ -15,10 +15,10 @@ pub use expression::{
 };
 pub use ids::{FunctionId, LabelId, LineId, SourceId, VariableId};
 pub use program::{
-    ControlFlowEdge, ControlFlowKind, Function, FunctionKind, HirArgument, HirStatement,
-    HirStatementKind, InstructionTarget, Parameter, Program, Variable, VariableScope,
+    ControlFlowEdge, ControlFlowKind, EventAttributes, Function, FunctionKind, HirArgument,
+    HirStatement, HirStatementKind, InstructionTarget, Parameter, Program, Variable, VariableScope,
 };
 pub use source::{SourceFile, SourceLocation};
 
 /// Version of the serialized HIR contract.
-pub const HIR_FORMAT_VERSION: u32 = 3;
+pub const HIR_FORMAT_VERSION: u32 = 4;

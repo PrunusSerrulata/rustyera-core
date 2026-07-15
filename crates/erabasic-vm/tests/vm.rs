@@ -47,6 +47,7 @@ fn artifact(functions: Vec<BytecodeFunction>, globals: Vec<BytecodeGlobal>) -> B
         native_imports: Vec::new(),
         host_imports: Vec::new(),
         functions,
+        event_groups: Vec::new(),
         source_map: SourceMap::default(),
     };
     artifact.refresh_ids().unwrap();
@@ -120,6 +121,99 @@ fn run_compiled_result(artifact: &BytecodeArtifact) -> VmValue {
         RunBudget::default(),
     );
     vm.read_variable(result, &[0], None).unwrap()
+}
+
+#[test]
+fn era_function_local_persists_across_calls() {
+    let artifact = compile_source("@COUNTER\nLOCAL:0 += 1\nRESULT = LOCAL:0\nRETURN\n");
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let local = artifact
+        .globals
+        .iter()
+        .find(|global| {
+            global.name == "LOCAL" && global.storage == BytecodeStorage::FunctionPersistent
+        })
+        .expect("persistent LOCAL")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let mut host = ReadyHost::default();
+    for expected in [1, 2] {
+        vm.spawn_entry(entry, Vec::new()).unwrap();
+        vm.run_slice(&mut host, &mut natives, RunBudget::default());
+        assert_eq!(
+            vm.read_variable(result, &[0], None),
+            Ok(VmValue::Integer(expected))
+        );
+        assert_eq!(
+            vm.read_variable(local, &[0], None),
+            Ok(VmValue::Integer(expected))
+        );
+    }
+}
+
+#[test]
+fn swap_native_commits_both_places() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nFLAG:0 = 10\nFLAG:1 = 20\nSWAP FLAG:0, FLAG:1\nRESULT = FLAG:0 * 100 + FLAG:1\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .unwrap()
+        .key;
+    assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(20)));
+    assert_eq!(vm.read_variable(flag, &[1], None), Ok(VmValue::Integer(10)));
+}
+
+#[test]
+fn initrand_and_dumprand_exchange_all_randdata_state_atomically() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nDUMPRAND\nRESULT:0 = RAND:1000000\nINITRAND\nRESULT:1 = RAND:1000000\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 1234);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        vm.read_variable(result, &[1], None)
+    );
 }
 
 #[derive(Default)]

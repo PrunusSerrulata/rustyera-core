@@ -260,7 +260,9 @@ fn validate_runtime_layout(
     for global in &artifact.globals {
         let function_storage = matches!(
             global.storage,
-            BytecodeStorage::FunctionLocal | BytecodeStorage::FunctionStatic
+            BytecodeStorage::FunctionLocal
+                | BytecodeStorage::FunctionStatic
+                | BytecodeStorage::FunctionPersistent
         );
         if function_storage != global.owner.is_some()
             || global
@@ -297,9 +299,20 @@ fn validate_runtime_layout(
         for parameter in &function.parameters {
             let valid = parameter_keys.insert(parameter.key)
                 && artifact.globals.iter().any(|global| {
+                    let owner_matches = global.owner == Some(function.key)
+                        || (global.storage == BytecodeStorage::FunctionPersistent
+                            && global.owner.is_some_and(|owner| {
+                                artifact.functions.iter().any(|candidate| {
+                                    candidate.key == owner
+                                        && candidate.name.eq_ignore_ascii_case(&function.name)
+                                })
+                            }));
                     global.key == parameter.key
-                        && global.owner == Some(function.key)
-                        && global.storage == BytecodeStorage::FunctionLocal
+                        && owner_matches
+                        && matches!(
+                            global.storage,
+                            BytecodeStorage::FunctionLocal | BytecodeStorage::FunctionPersistent
+                        )
                         && global.value_type == parameter.value_type
                 });
             if !valid {
@@ -318,6 +331,7 @@ fn validate_runtime_layout(
         "function",
         diagnostics,
     );
+    validate_event_groups(artifact, &function_keys, diagnostics);
     ensure_unique(
         artifact
             .native_imports
@@ -331,6 +345,31 @@ fn validate_runtime_layout(
         "host import",
         diagnostics,
     );
+}
+
+fn validate_event_groups(
+    artifact: &BytecodeArtifact,
+    function_keys: &BTreeSet<SymbolKey>,
+    diagnostics: &mut Vec<ValidationDiagnostic>,
+) {
+    let mut event_names = BTreeSet::new();
+    for group in &artifact.event_groups {
+        let valid_name =
+            !group.name.is_empty() && event_names.insert(group.name.to_ascii_uppercase());
+        let members_valid = group
+            .only
+            .iter()
+            .chain(&group.priority)
+            .chain(&group.normal)
+            .chain(&group.later)
+            .all(|entry| function_keys.contains(&entry.function));
+        if !valid_name || !members_valid {
+            diagnostics.push(ValidationDiagnostic::project(
+                ValidationCode::InvalidOperand,
+                format!("event group {} has an invalid dispatch table", group.name),
+            ));
+        }
+    }
 }
 
 fn ensure_unique(

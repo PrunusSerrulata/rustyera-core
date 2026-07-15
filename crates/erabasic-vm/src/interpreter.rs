@@ -523,15 +523,32 @@ impl Vm {
                             .import
                             .clone();
                         let result_type = target.result;
-                        let value = natives
-                            .call(
-                                import.key,
-                                NativeCallRequest {
-                                    import: target,
-                                    arguments,
-                                },
+                        let native_name = target.name.to_ascii_lowercase();
+                        let value = if matches!(native_name.as_str(), "initrand" | "dumprand") {
+                            execute_random_place_transaction(
+                                &mut self.memory,
+                                position.generation,
+                                artifact,
+                                natives,
+                                &native_name,
                             )
                             .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
+                            None
+                        } else if matches!(native_name.as_str(), "swap" | "swapvar") {
+                            execute_swap_transaction(self, fiber, &arguments)
+                                .map_err(map_vm_error)?;
+                            None
+                        } else {
+                            natives
+                                .call(
+                                    import.key,
+                                    NativeCallRequest {
+                                        import: target,
+                                        arguments,
+                                    },
+                                )
+                                .map_err(|error| StepError::new(VmFaultCode::Native, error))?
+                        };
                         push_call_result(
                             &mut fiber.frames.last_mut().expect("frame exists").stack,
                             result_type,
@@ -689,6 +706,80 @@ impl Vm {
             instruction: u32::try_from(position.instruction).unwrap_or(u32::MAX),
             source,
         }
+    }
+}
+
+fn execute_swap_transaction(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    arguments: &[VmValue],
+) -> Result<(), VmError> {
+    let place = |index: usize| match arguments.get(index) {
+        Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) => Ok(place),
+        _ => Err(VmError::InvalidArguments(
+            "SWAP requires two mutable places".into(),
+        )),
+    };
+    let left = place(0)?;
+    let right = place(1)?;
+    let left_value = vm.read_place(fiber, left)?;
+    let right_value = vm.read_place(fiber, right)?;
+    if left_value.value_type() != right_value.value_type() {
+        return Err(VmError::InvalidArguments(
+            "SWAP places have different value types".into(),
+        ));
+    }
+    // Both targets are fully resolved before the first write. Since EraBasic is
+    // single-owner here, the validated writes form one observable transaction.
+    vm.write_place(fiber, left, right_value)?;
+    vm.write_place(fiber, right, left_value)
+}
+
+fn execute_random_place_transaction(
+    memory: &mut crate::Memory,
+    generation: crate::GenerationId,
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    natives: &mut NativeServiceRegistry,
+    operation: &str,
+) -> Result<(), String> {
+    let definition = artifact
+        .globals
+        .iter()
+        .find(|definition| definition.name.eq_ignore_ascii_case("RANDDATA"))
+        .ok_or_else(|| "RANDDATA is not defined".to_owned())?;
+    if definition.storage != BytecodeStorage::Project
+        || definition.value_type != BytecodeType::Integer
+        || definition.dimensions != [625]
+    {
+        return Err("RANDDATA must be a mutable one-dimensional integer[625] variable".into());
+    }
+    if operation == "initrand" {
+        let cell = memory
+            .cell(generation, definition, 0)
+            .ok_or_else(|| "RANDDATA storage is unavailable".to_owned())?;
+        let values = cell
+            .values
+            .iter()
+            .map(|value| match value {
+                VmValue::Integer(value) => Ok(*value),
+                _ => Err("RANDDATA contains a non-integer value".to_owned()),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // Native state is only replaced after the entire array and index validate.
+        natives.set_random_values(&values)
+    } else {
+        let values = natives.random_values()?;
+        let cell = memory
+            .cell_mut(generation, definition, 0)
+            .ok_or_else(|| "RANDDATA storage is unavailable".to_owned())?;
+        if cell.values.len() != values.len() {
+            return Err("RANDDATA storage changed during DUMPRAND".into());
+        }
+        // Every target slot was validated above, so this commit cannot partially fail.
+        for (target, value) in cell.values.iter_mut().zip(values) {
+            *target = VmValue::Integer(value);
+        }
+        Ok(())
     }
 }
 

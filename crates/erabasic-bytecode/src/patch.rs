@@ -4,8 +4,8 @@ use erabasic_data::ProjectData;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ArtifactManifest, BytecodeArtifact, BytecodeFunction, BytecodeGlobal, Digest, HostImport,
-    NativeImport, SourceMap, SymbolKey,
+    ArtifactManifest, BytecodeArtifact, BytecodeEventGroup, BytecodeFunction, BytecodeGlobal,
+    Digest, HostImport, NativeImport, SourceMap, SymbolKey,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -19,6 +19,7 @@ pub struct BytecodePatch {
     pub host_imports: Option<Vec<HostImport>>,
     pub changed_functions: Vec<BytecodeFunction>,
     pub removed_functions: Vec<SymbolKey>,
+    pub event_groups: Option<Vec<BytecodeEventGroup>>,
     pub source_map: SourceMap,
 }
 
@@ -71,6 +72,8 @@ pub fn create_patch(base: &BytecodeArtifact, target: &BytecodeArtifact) -> Bytec
             .filter(|function| !target_keys.contains_key(&function.key))
             .map(|function| function.key)
             .collect(),
+        event_groups: (base.event_groups != target.event_groups)
+            .then(|| target.event_groups.clone()),
         source_map: target.source_map.clone(),
     }
 }
@@ -120,6 +123,10 @@ pub fn apply_patch(
             .clone()
             .unwrap_or_else(|| base.host_imports.clone()),
         functions: functions.into_values().collect(),
+        event_groups: patch
+            .event_groups
+            .clone()
+            .unwrap_or_else(|| base.event_groups.clone()),
         source_map: patch.source_map.clone(),
     };
     target

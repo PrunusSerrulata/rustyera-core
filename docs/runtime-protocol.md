@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 4.0 over common wire 2.0 is a development contract: by explicit project policy it
+dynamic library. Runtime protocol 5.0 over common wire 2.0 is a development contract: by explicit project policy it
 does not promise backward compatibility until a frontend exists.
 
 ## Authority and ownership
@@ -106,6 +106,10 @@ and validates the wait, token, epoch and frontend monotonic timestamp.
 
 The runtime accepts frontend messages in sequence order. If input and a deadline share a
 timestamp, the lower sequence wins. Timed/QTE waits are transient and block VM snapshots.
+`FrontendInput.message_skip` updates the runtime-owned message-skip state. A timed input with
+its sixth argument present may take the reference shortcut using its default; `FORCEWAIT`
+clears that state. Countdown values are computed by the runtime, and a queued wait does not
+receive a deadline until it becomes the visible active wait.
 Stable input waits are snapshot candidates only when every other VM/runtime eligibility
 condition also succeeds. Debug pause freezes logical time; time spent paused does not
 consume a QTE deadline.
@@ -114,6 +118,10 @@ The instruction-level rules for `TINPUT`, `TONEINPUTS`, `TWAIT`, `FORCEWAIT` and
 `GETKEY` are fixed in [input-wait-compatibility.md](input-wait-compatibility.md).
 In particular, positive deadlines and fresh key-state queries are transient,
 while deadline-free Enter/value input can be stable.
+
+`QUIT` and restart variants publish a persistent `ExitRequested` intent. It is repeated in
+resynchronization state until the frontend completes the normal shutdown lifecycle; restart
+creates a new session rather than reusing VM or runtime state.
 
 The runtime stores a revisioned semantic presentation snapshot and emits deltas based on
 that revision. It includes text/styles/buttons, HTML, image/shape placement, backgrounds,

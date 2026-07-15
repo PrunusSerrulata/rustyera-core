@@ -15,6 +15,7 @@ fn artifact() -> BytecodeArtifact {
         native_imports: Vec::new(),
         host_imports: Vec::new(),
         functions: Vec::new(),
+        event_groups: Vec::new(),
         source_map: SourceMap::default(),
     };
     artifact.refresh_ids().unwrap();

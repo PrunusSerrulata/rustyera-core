@@ -11,6 +11,8 @@ use crate::{
 #[serde(rename_all = "snake_case")]
 pub enum VariableScope {
     Project,
+    /// Emuera LOCAL/LOCALS/ARG/ARGS storage, persistent per normalized function name.
+    EraFunction,
     Function,
     Parameter,
 }
@@ -41,6 +43,17 @@ pub enum FunctionKind {
     Method,
 }
 
+/// Reference event modifiers retained after parsing. They affect dispatch order rather
+/// than the body of an individual function definition.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct EventAttributes {
+    pub priority: bool,
+    pub later: bool,
+    pub single: bool,
+    pub only: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Parameter {
     pub target: HirPlace,
@@ -52,6 +65,9 @@ pub struct Function {
     pub id: FunctionId,
     pub name: String,
     pub kind: FunctionKind,
+    pub event_attributes: EventAttributes,
+    /// Definition order after applying Emuera's source loading policy.
+    pub definition_order: u32,
     pub return_type: SemanticType,
     pub parameters: Vec<Parameter>,
     pub lines: Vec<HirStatement>,

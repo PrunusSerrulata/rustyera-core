@@ -7,14 +7,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AdvanceTime, ClientHello, ClientStateChanged, CommandRejected, DeviceStateChanged,
-    EffectAcknowledgement, EffectBatch, FrontendInput, PresentationDelta, PresentationSnapshot,
-    ProjectLoadReport, ProjectManifest, ReloadProject, ResynchronizeRequest, RuntimeFault,
-    RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceRequest,
-    ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest, StateExportReady,
-    StateExportRequest, StorageRequest, StorageResponse, VersionRejected, WaitChange,
+    EffectAcknowledgement, EffectBatch, ExitRequested, FrontendInput, PresentationDelta,
+    PresentationSnapshot, ProjectLoadReport, ProjectManifest, ReloadProject, ResynchronizeRequest,
+    RuntimeFault, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello,
+    ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
+    StateExportReady, StateExportRequest, StorageRequest, StorageResponse, VersionRejected,
+    WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(4, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(5, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -27,6 +28,8 @@ pub struct RuntimeResynchronized {
     pub runtime_revision: u64,
     #[n(3)]
     pub presentation: PresentationSnapshot,
+    #[n(4)]
+    pub exit_requested: Option<ExitRequested>,
 }
 
 /// Stable runtime message variants. Numeric discriminants are wire IDs and must
@@ -50,6 +53,8 @@ pub enum RuntimeMessage {
     Start(#[n(0)] StartRequest),
     #[n(21)]
     StateChanged(#[n(0)] RuntimeStateChanged),
+    #[n(22)]
+    ExitRequested(#[n(0)] ExitRequested),
     #[n(30)]
     Input(#[n(0)] FrontendInput),
     #[n(31)]
@@ -108,6 +113,7 @@ impl RuntimeMessage {
             Self::ReloadProject(_) => 12,
             Self::Start(_) => 20,
             Self::StateChanged(_) => 21,
+            Self::ExitRequested(_) => 22,
             Self::Input(_) => 30,
             Self::AdvanceTime(_) => 31,
             Self::WaitChanged(_) => 32,

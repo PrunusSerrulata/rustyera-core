@@ -4,6 +4,7 @@
 //! rendering, audio, or operating-system input work. Those operations cross the
 //! versioned frontend protocol and are committed only after correlated responses.
 
+mod controller;
 mod host;
 mod presentation;
 mod project;

@@ -75,6 +75,7 @@ fn pinned_reference_wait_and_output_are_losslessly_representable() {
         display_time: observed.load.input_request.display_time,
         timeout_message: None,
         submission_token: era_runtime_protocol::InteractionToken { epoch: 1, id: 1 },
+        countdown_remaining_ms: None,
     };
     assert_eq!(input.kind, WaitKind::IntegerValue);
     assert_eq!(input.deadline_ns, None);

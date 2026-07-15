@@ -7,9 +7,9 @@ use erabasic_ast::{
 use erabasic_csv::{CsvDiagnosticSeverity, CsvLoadOptions, resolve_deferred_indices};
 use erabasic_data::ProjectData;
 use erabasic_hir::{
-    Function, FunctionId, FunctionKind, HirArgument, HirExprKind, HirStatement, HirStatementKind,
-    InstructionTarget, LabelId, LineId, Parameter, Program, SemanticType, SourceFile, SourceId,
-    SourceLocation,
+    EventAttributes, Function, FunctionId, FunctionKind, HirArgument, HirExprKind, HirStatement,
+    HirStatementKind, InstructionTarget, LabelId, LineId, Parameter, Program, SemanticType,
+    SourceFile, SourceId, SourceLocation,
 };
 use erabasic_parser::{parse_erb, parse_erh};
 use serde::{Deserialize, Serialize};
@@ -253,6 +253,7 @@ fn analyze_with_context(
                     id,
                     kind,
                     return_type,
+                    definition_order: u32::try_from(definitions.len()).unwrap_or(u32::MAX),
                 }),
                 Err(_) => diagnostics.push(at_function(
                     source,
@@ -269,7 +270,7 @@ fn analyze_with_context(
     for definition in &definitions {
         let source = &sources[definition.source_index];
         let function = &source.script.functions[definition.function_index];
-        symbols.prepare_function_locals(definition.id);
+        symbols.prepare_function_locals(definition.id, &function.name);
         register_private_variables(
             definition.id,
             source,
@@ -287,6 +288,7 @@ fn analyze_with_context(
                 definition.id,
                 definition.kind,
                 definition.return_type,
+                definition.definition_order,
                 source,
                 function,
                 &symbols,
@@ -301,6 +303,7 @@ fn analyze_with_context(
                 definition.id,
                 definition.kind,
                 definition.return_type,
+                definition.definition_order,
                 source,
                 function,
             )
@@ -359,6 +362,7 @@ struct FunctionDefinition {
     id: FunctionId,
     kind: FunctionKind,
     return_type: SemanticType,
+    definition_order: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -367,6 +371,7 @@ fn analyze_function(
     id: FunctionId,
     kind: FunctionKind,
     return_type: SemanticType,
+    definition_order: u32,
     source: &ParsedProjectSource,
     function: &AstFunction,
     symbols: &Symbols,
@@ -479,6 +484,8 @@ fn analyze_function(
         id,
         name: function.name.clone(),
         kind,
+        event_attributes: event_attributes(kind, function),
+        definition_order,
         return_type,
         parameters,
         lines,
@@ -953,6 +960,7 @@ fn uncalled_function(
     id: FunctionId,
     kind: FunctionKind,
     return_type: SemanticType,
+    definition_order: u32,
     source: &ParsedProjectSource,
     function: &AstFunction,
 ) -> Function {
@@ -960,6 +968,8 @@ fn uncalled_function(
         id,
         name: function.name.clone(),
         kind,
+        event_attributes: event_attributes(kind, function),
+        definition_order,
         return_type,
         parameters: Vec::new(),
         lines: Vec::new(),
@@ -967,6 +977,28 @@ fn uncalled_function(
         control_flow: Vec::new(),
         location: SourceLocation::new(source.source.id, function.span),
     }
+}
+
+fn event_attributes(kind: FunctionKind, function: &AstFunction) -> EventAttributes {
+    if kind != FunctionKind::Event {
+        return EventAttributes::default();
+    }
+    let mut attributes = EventAttributes::default();
+    for directive in &function.attributes {
+        match directive.name.as_str() {
+            "ONLY" if !attributes.only => {
+                attributes = EventAttributes {
+                    only: true,
+                    ..EventAttributes::default()
+                };
+            }
+            "PRI" if !attributes.only => attributes.priority = true,
+            "LATER" if !attributes.only => attributes.later = true,
+            "SINGLE" if !attributes.only => attributes.single = true,
+            _ => {}
+        }
+    }
+    attributes
 }
 
 fn report_uncalled(

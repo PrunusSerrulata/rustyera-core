@@ -19,6 +19,7 @@ pub(crate) struct Symbols {
     pub variables: Vec<Variable>,
     globals: BTreeMap<String, VariableId>,
     locals: BTreeMap<(FunctionId, String), VariableId>,
+    era_locals: BTreeMap<(String, String), VariableId>,
     local_templates: Vec<VariableSchema>,
     functions: Vec<FunctionSymbol>,
     functions_by_name: BTreeMap<String, usize>,
@@ -35,6 +36,7 @@ impl Symbols {
             variables: Vec::new(),
             globals: BTreeMap::new(),
             locals: BTreeMap::new(),
+            era_locals: BTreeMap::new(),
             local_templates: Vec::new(),
             functions: Vec::new(),
             functions_by_name: BTreeMap::new(),
@@ -104,17 +106,27 @@ impl Symbols {
             .and_then(|index| self.functions.get(*index))
     }
 
-    pub fn prepare_function_locals(&mut self, function: FunctionId) {
+    pub fn prepare_function_locals(&mut self, function: FunctionId, function_name: &str) {
+        let scope_name = self.key(function_name);
         for schema in self.local_templates.clone() {
-            self.add_variable(
-                &schema,
-                Some(function),
-                VariableScope::Function,
-                false,
-                false,
-                Vec::new(),
-                None,
-            );
+            let variable_name = self.key(schema.id.name());
+            let group = (scope_name.clone(), variable_name.clone());
+            let id = if let Some(existing) = self.era_locals.get(&group).copied() {
+                existing
+            } else {
+                let id = self.add_variable(
+                    &schema,
+                    Some(function),
+                    VariableScope::EraFunction,
+                    false,
+                    false,
+                    Vec::new(),
+                    None,
+                );
+                self.era_locals.insert(group, id);
+                id
+            };
+            self.locals.insert((function, variable_name), id);
         }
     }
 

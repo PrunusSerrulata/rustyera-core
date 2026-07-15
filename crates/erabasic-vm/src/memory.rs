@@ -185,7 +185,7 @@ impl Memory {
                         .shared
                         .insert(definition.key, VariableCell::new(definition));
                 }
-                BytecodeStorage::FunctionStatic => {
+                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
                     result
                         .statics
                         .insert(definition.key, VariableCell::new(definition));
@@ -304,7 +304,7 @@ impl Memory {
                     .and_then(|memory| memory.shared.get(&definition.key))
                     .or_else(|| self.shared.get(&definition.key))
             }
-            BytecodeStorage::FunctionStatic => legacy
+            BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => legacy
                 .and_then(|memory| memory.statics.get(&definition.key))
                 .or_else(|| self.statics.get(&definition.key)),
             BytecodeStorage::Character => legacy
@@ -332,7 +332,9 @@ impl Memory {
                     BytecodeStorage::Project
                     | BytecodeStorage::Constant
                     | BytecodeStorage::Calculated => memory.shared.contains_key(&definition.key),
-                    BytecodeStorage::FunctionStatic => memory.statics.contains_key(&definition.key),
+                    BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
+                        memory.statics.contains_key(&definition.key)
+                    }
                     BytecodeStorage::Character => memory
                         .characters
                         .get(character)
@@ -345,7 +347,9 @@ impl Memory {
                 BytecodeStorage::Project
                 | BytecodeStorage::Constant
                 | BytecodeStorage::Calculated => memory.shared.get_mut(&definition.key),
-                BytecodeStorage::FunctionStatic => memory.statics.get_mut(&definition.key),
+                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
+                    memory.statics.get_mut(&definition.key)
+                }
                 BytecodeStorage::Character => memory
                     .characters
                     .get_mut(character)
@@ -357,7 +361,9 @@ impl Memory {
             BytecodeStorage::Project | BytecodeStorage::Constant | BytecodeStorage::Calculated => {
                 self.shared.get_mut(&definition.key)
             }
-            BytecodeStorage::FunctionStatic => self.statics.get_mut(&definition.key),
+            BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
+                self.statics.get_mut(&definition.key)
+            }
             BytecodeStorage::Character => self
                 .characters
                 .get_mut(character)
@@ -399,7 +405,7 @@ impl Memory {
                         legacy.shared.insert(definition.key, cell.clone());
                     }
                 }
-                BytecodeStorage::FunctionStatic => {
+                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
                     if let Some(cell) = self.statics.get(&definition.key) {
                         legacy.statics.insert(definition.key, cell.clone());
                     }
@@ -430,7 +436,7 @@ impl Memory {
                     );
                     self.shared.insert(definition.key, cell);
                 }
-                BytecodeStorage::FunctionStatic => {
+                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
                     let cell = self.statics.get(&definition.key).map_or_else(
                         || VariableCell::new(definition),
                         |cell| cell.migrate(definition),
