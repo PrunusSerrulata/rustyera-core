@@ -342,7 +342,9 @@ impl ExpressionAnalyzer<'_> {
                                     | ArgumentConstraint::ReferenceAny
                                     | ArgumentConstraint::ReferenceOrString
                                     | ArgumentConstraint::MutableReferenceOrString
-                            ) || key == "REGEXPMATCH" && argument_count == 4 && index == 2
+                            ) || *constraint == ArgumentConstraint::IntegerOrMutableString
+                                && expression.value_type == SemanticType::String
+                                || key == "REGEXPMATCH" && argument_count == 4 && index == 2
                         }) =>
                 {
                     match expression.kind {
@@ -579,6 +581,7 @@ impl ExpressionAnalyzer<'_> {
             | ArgumentConstraint::ReferenceAny
             | ArgumentConstraint::ReferenceOrString
             | ArgumentConstraint::MutableReferenceOrString
+            | ArgumentConstraint::IntegerOrMutableString
             | ArgumentConstraint::Formatted
             | ArgumentConstraint::Raw => None,
         };
@@ -615,6 +618,16 @@ impl ExpressionAnalyzer<'_> {
                 self.expect_type(
                     expression,
                     SemanticType::String,
+                    &format!("argument {index}"),
+                );
+            }
+        } else if constraint == ArgumentConstraint::IntegerOrMutableString {
+            if expression.value_type == SemanticType::String {
+                self.expect_mutable_place(expression, &format!("argument {index}"));
+            } else {
+                self.expect_type(
+                    expression,
+                    SemanticType::Integer,
                     &format!("argument {index}"),
                 );
             }

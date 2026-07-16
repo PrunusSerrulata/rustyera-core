@@ -10,6 +10,7 @@ erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-data = { path = "../erabasic-data" }
 erabasic-validator = { path = "../erabasic-validator" }
 regex.workspace = true
+quick-xml.workspace = true
 serde.workspace = true
 serde_json = "1.0.112"
 

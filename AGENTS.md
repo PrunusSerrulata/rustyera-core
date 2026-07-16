@@ -44,10 +44,11 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言前端、项目数据加�
 caller-pumped runtime 和 C ABI 动态库。这里的 AST 是语法 AST；`ParserContext`
 提供语法解析所需的注册表上下文，项目级符号解析和类型检查由 analyzer 完成。
 
-当前 runtime 只实现握手、内存项目加载与编译、新游戏启动、受限 VM 驱动、文本与
-输入等待、时钟/按键/熵服务和退出等首阶段能力。传统存档序列化与恢复、精确 VM
-snapshot 恢复、runtime 热替换编排、完整系统流程、调试器协议以及完整的展示、存储和
-媒体 Host 调用仍未实现。在这些能力实际落地前，不得在 README、crate 文档、测试结果
+当前 runtime 已实现握手、内存项目加载与编译、新游戏启动、受限 VM 驱动、文本与
+输入等待、时钟/按键/熵服务、当前格式传统存档、稳定等待 VM snapshot、增量热替换、
+部分系统流程，以及 Map 和受限 XML/DataTable Native、VAREXT 与规范化展示状态。
+候选 `SAVEINFO` 事务、完整存档菜单、可变 XML、参考 DataTable XML、调试器协议以及
+完整的资源、媒体和平台 Host 调用仍未实现。在这些能力实际落地前，不得在 README、crate 文档、测试结果
 或交付说明中将其描述为已实现。CSV 加载期间的格式检查不是字节码验证器；C#
 reference CLI 能够调用参考实现的 evaluator、VM 和 runtime，也不代表 Rust 侧已实现
 参考 runtime 的全部能力。未实现组件的说明只记录范围和状态，不预先承诺具体内部架构。

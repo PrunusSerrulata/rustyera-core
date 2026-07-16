@@ -17,6 +17,10 @@ pub enum ArgumentConstraint {
     ReferenceOrString,
     MutableReferenceOrString,
     IntegerOrReference,
+    /// An integer value or a mutable string place. This models legacy APIs
+    /// which use a nonzero integer to select RESULTS and a string array as an
+    /// explicit output target.
+    IntegerOrMutableString,
     Formatted,
     Raw,
 }
@@ -638,7 +642,8 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
 #[allow(clippy::items_after_statements, clippy::too_many_lines)]
 fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     use ArgumentConstraint::{
-        Any, Integer, IntegerOrReference, MutableString, ReferenceAny, ReferenceOrString, String,
+        Any, Integer, IntegerOrMutableString, IntegerOrReference, MutableString, ReferenceAny,
+        ReferenceOrString, String,
     };
     use SemanticType::{Integer as IntType, String as StrType};
 
@@ -785,6 +790,152 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     // integer virtual-key code. HIR calls are never folded, so the signature is
     // sufficient to retain that behavior in the current analyzer.
     add("GETKEY", IntType, &[Integer], 1, false);
+
+    // Structured native functions are declared explicitly. The older fallback
+    // catalog accepted any arity and hid both reference mistakes and missing
+    // output places until execution.
+    for name in [
+        "MAP_CREATE",
+        "MAP_EXIST",
+        "MAP_RELEASE",
+        "MAP_CLEAR",
+        "MAP_SIZE",
+    ] {
+        add(name, IntType, &[String], 1, false);
+    }
+    for name in ["MAP_HAS", "MAP_REMOVE", "MAP_FROMXML"] {
+        add(name, IntType, &[String, String], 2, false);
+    }
+    add("MAP_SET", IntType, &[String, String, String], 3, false);
+    add("MAP_GET", StrType, &[String, String], 2, false);
+    add("MAP_TOXML", StrType, &[String], 1, false);
+    add(
+        "MAP_GETKEYS",
+        StrType,
+        &[String, IntegerOrMutableString, Integer],
+        1,
+        false,
+    );
+
+    for name in ["XML_EXIST", "XML_RELEASE"] {
+        add(name, IntType, &[Any], 1, false);
+    }
+    add("XML_DOCUMENT", IntType, &[Any, String], 2, false);
+    add("XML_TOSTR", StrType, &[Any], 1, false);
+    for name in ["XML_GET", "XML_GET_BYNAME"] {
+        add(
+            name,
+            IntType,
+            &[Any, String, IntegerOrMutableString, Integer],
+            2,
+            false,
+        );
+    }
+    for name in ["XML_SET", "XML_SET_BYNAME"] {
+        add(
+            name,
+            IntType,
+            &[Any, String, String, Integer, Integer],
+            3,
+            false,
+        );
+    }
+    for name in ["XML_ADDNODE", "XML_ADDNODE_BYNAME"] {
+        add(
+            name,
+            IntType,
+            &[Any, String, String, Integer, Integer],
+            3,
+            false,
+        );
+    }
+    for name in ["XML_ADDATTRIBUTE", "XML_ADDATTRIBUTE_BYNAME"] {
+        add(
+            name,
+            IntType,
+            &[Any, String, String, String, Integer, Integer],
+            3,
+            false,
+        );
+    }
+    for name in [
+        "XML_REMOVENODE",
+        "XML_REMOVENODE_BYNAME",
+        "XML_REMOVEATTRIBUTE",
+        "XML_REMOVEATTRIBUTE_BYNAME",
+    ] {
+        add(name, IntType, &[Any, String, Integer], 2, false);
+    }
+    for name in ["XML_REPLACE", "XML_REPLACE_BYNAME"] {
+        add(name, IntType, &[Any, String, String, Integer], 2, false);
+    }
+
+    for name in [
+        "DT_CREATE",
+        "DT_EXIST",
+        "DT_RELEASE",
+        "DT_CLEAR",
+        "DT_COLUMN_LENGTH",
+        "DT_ROW_LENGTH",
+    ] {
+        add(name, IntType, &[String], 1, false);
+    }
+    add("DT_NOCASE", IntType, &[String, Integer], 2, false);
+    for name in ["DT_COLUMN_EXIST", "DT_COLUMN_REMOVE"] {
+        add(name, IntType, &[String, String], 2, false);
+    }
+    add(
+        "DT_COLUMN_ADD",
+        IntType,
+        &[String, String, Any, Integer],
+        2,
+        false,
+    );
+    add(
+        "DT_COLUMN_NAMES",
+        IntType,
+        &[String, ReferenceAny],
+        1,
+        false,
+    );
+    add("DT_ROW_ADD", IntType, &[Any], 1, true);
+    add("DT_ROW_SET", IntType, &[Any], 2, true);
+    add("DT_ROW_REMOVE", IntType, &[String, Any, Integer], 2, false);
+    for name in ["DT_CELL_GET", "DT_CELL_GETS", "DT_CELL_ISNULL"] {
+        add(
+            name,
+            if name == "DT_CELL_GETS" {
+                StrType
+            } else {
+                IntType
+            },
+            &[String, Integer, String, Integer],
+            3,
+            false,
+        );
+    }
+    add(
+        "DT_CELL_SET",
+        IntType,
+        &[String, Integer, String, Any, Integer],
+        3,
+        false,
+    );
+    add(
+        "DT_SELECT",
+        IntType,
+        &[String, String, String, ReferenceAny],
+        1,
+        false,
+    );
+    add("DT_TOXML", StrType, &[String, MutableString], 1, false);
+    add("DT_FROMXML", IntType, &[String, String, String], 3, false);
+    for name in ["DT_SELECT", "DT_ROW_ADD", "DT_ROW_SET", "DT_CELL_SET"] {
+        result
+            .get_mut(name)
+            .expect("structured signature was inserted")
+            .allow_omitted = true;
+    }
 
     const INTEGER_FALLBACKS: &[&str] = &[
         "ALLSAMES",

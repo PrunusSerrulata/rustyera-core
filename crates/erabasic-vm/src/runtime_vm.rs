@@ -1,6 +1,7 @@
 use erabasic_bytecode::{Digest, HostSnapshotCapability, SymbolKey};
 use erabasic_validator::ValidatedArtifact;
 
+use crate::structured::{StructuredExtension, StructuredScope};
 use crate::{
     EraState, EraStateReport, FiberId, FiberState, FiberStatus, GenerationId, HostCallRequest,
     HostCallResult, HostReady, HostRequestId, HostWaitStability, HotReloadReport,
@@ -9,6 +10,7 @@ use crate::{
     VmPortStop, VmRestorePort, VmRuntimePort, VmRuntimeRead, VmRuntimeStatePort,
     VmRuntimeStateTransaction, VmSnapshot, VmValue, VmWaitRebind,
 };
+use std::collections::BTreeSet;
 
 /// Runtime-facing VM owner. It keeps native services beside the interpreter so the
 /// caller-pumped runtime port never needs a callback parameter.
@@ -56,6 +58,42 @@ impl RuntimeVm {
             .values()
             .any(|fiber| matches!(fiber.state, FiberState::Runnable))
     }
+
+    /// Export only VAREXT values declared for the requested save scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the shared structured state cannot be serialized.
+    pub fn structured_extensions(
+        &self,
+        scope: StructuredScope,
+    ) -> Result<Vec<StructuredExtension>, VmError> {
+        self.natives
+            .structured_extensions(scope)
+            .map_err(VmError::InvalidState)
+    }
+
+    /// Prepare ordinary VM memory and VAREXT data as one atomic transaction.
+    /// Unknown or undeclared records are deliberately ignored and can be retained
+    /// losslessly by the runtime save adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without mutation when either memory or extension data is invalid.
+    pub fn prepare_runtime_state_with_extensions(
+        &self,
+        transaction: VmRuntimeStateTransaction,
+        scope: StructuredScope,
+        values: &[StructuredExtension],
+    ) -> Result<(PreparedRuntimeState, BTreeSet<(u8, String)>), VmError> {
+        let (structured_state, imported) = self
+            .natives
+            .prepare_structured_import(&transaction, scope, values)
+            .map_err(VmError::InvalidState)?;
+        let mut prepared = self.vm.prepare_runtime_state(transaction)?;
+        prepared.structured_state = structured_state;
+        Ok((prepared, imported))
+    }
 }
 
 impl VmRuntimeStatePort for RuntimeVm {
@@ -67,10 +105,26 @@ impl VmRuntimeStatePort for RuntimeVm {
         &self,
         transaction: VmRuntimeStateTransaction,
     ) -> Result<PreparedRuntimeState, VmError> {
-        self.vm.prepare_runtime_state(transaction)
+        let structured_state = self
+            .natives
+            .prepare_structured_transaction(&transaction)
+            .map_err(VmError::InvalidState)?;
+        let mut prepared = self.vm.prepare_runtime_state(transaction)?;
+        prepared.structured_state = structured_state;
+        Ok(prepared)
     }
 
     fn commit_runtime_state(&mut self, prepared: PreparedRuntimeState) -> Result<(), VmError> {
+        if prepared.generation != self.vm.current_generation() {
+            return Err(VmError::InvalidState(
+                "runtime state transaction belongs to a stale generation".into(),
+            ));
+        }
+        if let Some(structured_state) = &prepared.structured_state {
+            self.natives
+                .commit_structured_state(structured_state)
+                .map_err(VmError::InvalidState)?;
+        }
         self.vm.commit_runtime_state(prepared)
     }
 }

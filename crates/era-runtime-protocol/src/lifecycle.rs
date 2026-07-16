@@ -44,6 +44,10 @@ pub struct ClientCapabilities {
     /// The frontend can render a semantic separator independently of text width.
     #[n(8)]
     pub separators: bool,
+    /// Session-fixed canonical family names used only by CHKFONT. Runtime layout
+    /// never depends on frontend measurements.
+    #[n(9)]
+    pub available_fonts: Vec<String>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

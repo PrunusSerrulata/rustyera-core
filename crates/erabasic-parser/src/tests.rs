@@ -73,6 +73,19 @@ fn printform_argument_becomes_formatted_ast() {
 }
 
 #[test]
+fn string_assignment_uses_percent_form_interpolation() {
+    let output = parse_line(
+        "RESULTS:0 = %MAP_GET(\"m\", \"k\")%",
+        &DefaultParserContext::default(),
+    );
+    assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+    let StatementKind::Assignment { value, .. } = output.value.unwrap().kind else {
+        panic!("expected assignment");
+    };
+    assert!(matches!(value.kind, ExprKind::Formatted(_)));
+}
+
+#[test]
 fn preprocessor_omits_inactive_branch() {
     let source = "[IF 0]\n@OMITTED\n[ELSE]\n@KEPT\n[ENDIF]\nRETURN\n";
     let output = parse_erb(source, &mut DefaultParserContext::default());

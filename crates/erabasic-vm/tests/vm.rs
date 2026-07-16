@@ -134,6 +134,110 @@ fn run_compiled_result(artifact: &BytecodeArtifact) -> VmValue {
 }
 
 #[test]
+fn structured_map_native_preserves_order_and_commits_array_outputs() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n#DIMS KEYS, 4\nRESULT:0 = MAP_CREATE(\"m\")\nRESULT:1 = MAP_SET(\"m\", \"b\", \"1\")\nRESULT:2 = MAP_SET(\"m\", \"a\", \"2\")\nRESULT:3 = MAP_SET(\"m\", \"b\", \"3\")\nRESULTS:0 = %MAP_GET(\"m\", \"b\")%\nRESULTS:1 = %MAP_GETKEYS(\"m\")%\nRESULTS:2 = %MAP_GETKEYS(\"m\", KEYS, 1)%\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .expect("RESULTS")
+        .key;
+    let keys = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "KEYS")
+        .expect("KEYS")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(2))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[0], None),
+        Ok(VmValue::String("3".into()))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[1], None),
+        Ok(VmValue::String("b,a".into()))
+    );
+    assert_eq!(
+        vm.read_variable(keys, &[0], None),
+        Ok(VmValue::String("b".into()))
+    );
+    assert_eq!(
+        vm.read_variable(keys, &[1], None),
+        Ok(VmValue::String("a".into()))
+    );
+}
+
+#[test]
+fn structured_data_table_uses_deterministic_ids_and_updates_rows() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULT:0 = DT_CREATE(\"t\")\nRESULT:1 = DT_COLUMN_ADD(\"t\", \"score\", \"int32\", 0)\nRESULT:2 = DT_ROW_ADD(\"t\", \"score\", 7)\nRESULT:3 = DT_ROW_SET(\"t\", RESULT:2, \"score\", 9)\nRESULT:4 = DT_CELL_GET(\"t\", RESULT:2, \"score\", 1)\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[2], None),
+        Ok(VmValue::Integer(1))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[3], None),
+        Ok(VmValue::Integer(1))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[4], None),
+        Ok(VmValue::Integer(9))
+    );
+}
+
+#[test]
 fn era_function_local_persists_across_calls() {
     let artifact = compile_source("@COUNTER\nLOCAL:0 += 1\nRESULT = LOCAL:0\nRETURN\n");
     let entry = artifact.functions[0].key;

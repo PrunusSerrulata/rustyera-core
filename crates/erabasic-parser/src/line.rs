@@ -1,5 +1,6 @@
 use erabasic_ast::{
-    Argument, Diagnostic, DiagnosticCode, Directive, ParseOutput, Span, Statement, StatementKind,
+    Argument, Diagnostic, DiagnosticCode, Directive, Expr, ExprKind, ParseOutput, Span, Statement,
+    StatementKind,
 };
 use erabasic_lexer::{LexEnd, LexFlags, Token, TokenKind, lex_formatted, lex_with};
 
@@ -15,6 +16,7 @@ pub fn parse_line(source: &str, context: &dyn ParserContext) -> ParseOutput<Stat
     parse_line_at(source, 0, context)
 }
 
+#[allow(clippy::too_many_lines)]
 pub(crate) fn parse_line_at(
     source: &str,
     base: usize,
@@ -61,15 +63,18 @@ pub(crate) fn parse_line_at(
         let mut left_parser = ExpressionParser::new(&tokens[..index]);
         let left = left_parser.parse();
         let op_token = &tokens[index];
-        // A formatted PRINT argument may contain a top-level '='. Emuera first
-        // recognizes known instruction names, so only commit to assignment
-        // parsing when the complete left token slice is one variable.
+        // Commit to assignment parsing only when the complete left slice is one variable.
         if left_parser.diagnostics.is_empty()
             && let Some(target) = left.and_then(expr_to_variable)
         {
-            let mut right_parser = ExpressionParser::new(&tokens[index + 1..]);
-            let right = right_parser.parse();
-            diagnostics.append(&mut right_parser.diagnostics);
+            let right = parse_assignment_right(
+                line,
+                line_base,
+                op_token,
+                &tokens[index + 1..],
+                context,
+                &mut diagnostics,
+            );
             if let (Some(value), TokenKind::Operator(op)) = (right, &op_token.kind) {
                 return ParseOutput {
                     value: Some(Statement {
@@ -122,6 +127,39 @@ pub(crate) fn parse_line_at(
         }),
         diagnostics,
     }
+}
+
+fn parse_assignment_right(
+    line: &str,
+    line_base: usize,
+    operator: &Token,
+    tokens: &[Token],
+    context: &dyn ParserContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Expr> {
+    let right_start = operator.span.end.saturating_sub(line_base);
+    let raw_right = &line[right_start..];
+    let whitespace = raw_right.len() - raw_right.trim_start().len();
+    let right_source = &raw_right[whitespace..];
+    let right_base = line_base + right_start + whitespace;
+    if right_source.starts_with('%') {
+        // String assignments use FORM interpolation syntax even though '%' is
+        // the modulo operator in ordinary expressions.
+        let (form, lex_diagnostics) =
+            lex_formatted(right_source, context.lexer_config(), context.macros());
+        let mut output = lower_formatted(&form);
+        output.diagnostics.splice(0..0, lex_diagnostics);
+        shift_formatted(&mut output, right_base);
+        diagnostics.append(&mut output.diagnostics);
+        return output.value.map(|value| Expr {
+            kind: ExprKind::Formatted(value),
+            span: Span::new(right_base, line_base + line.len()),
+        });
+    }
+    let mut parser = ExpressionParser::new(tokens);
+    let right = parser.parse();
+    diagnostics.append(&mut parser.diagnostics);
+    right
 }
 
 trait OutputMap<T> {

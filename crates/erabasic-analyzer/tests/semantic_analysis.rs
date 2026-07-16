@@ -327,16 +327,16 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             .iter()
             .map(|function| function.name.as_str())
             .collect::<Vec<_>>(),
-        ["SYSTEM_TITLE", "ORACLE_TEST", "ORACLE_INPUT"]
+        ["SYSTEM_TITLE", "ORACLE_TEST", "ORACLE_INPUT", "ORACLE_MAP"]
     );
-    assert_eq!(program.functions[0].lines.len(), 7);
+    assert_eq!(program.functions[0].lines.len(), 8);
     assert_eq!(
         program.functions[0]
             .control_flow
             .iter()
             .filter(|edge| edge.kind == erabasic_hir::ControlFlowKind::Call)
             .count(),
-        2
+        3
     );
 }
 
@@ -503,5 +503,48 @@ fn user_character_data_requires_binary_save_configuration() {
             .any(|diagnostic| diagnostic.reference_level >= 2),
         "{:#?}",
         binary.diagnostics
+    );
+}
+
+#[test]
+fn structured_native_signatures_require_mutable_array_outputs() {
+    let valid = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "structured.erb",
+                "@SYSTEM_TITLE\n#DIMS KEYS, 4\nRESULTS = MAP_GETKEYS(\"m\", KEYS, 1)\nRESULT = DT_COLUMN_NAMES(\"t\", KEYS)\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !valid
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        valid.diagnostics
+    );
+
+    let invalid = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "structured-invalid.erb",
+                "@SYSTEM_TITLE\nRESULTS = MAP_GETKEYS(\"m\", \"not a place\", 1)\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        invalid
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == AnalyzerDiagnosticCode::InvalidAssignment }),
+        "{:#?}",
+        invalid.diagnostics
     );
 }
