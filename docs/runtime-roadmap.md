@@ -242,24 +242,25 @@ Implementation checkpoint:
 
 ## Batch 8: media and platform services
 
-- First implement executable Map, XML and DataTable Native services, before media broadens the
-  Native/Host surface. Replace fallback signatures with exact Analyzer contracts; make multi-place
-  and array-output operations transactional; preserve Map insertion order; provide XPath behavior
-  and deterministic DataTable filtering/sorting; use deterministic opaque DataTable row handles.
-- Connect declared VAREXT scopes to the typed `0x20`--`0x22` binary-save codecs. New game and
-  `RESETDATA`/`RESETGLOBAL` clear the reference scopes, text saves omit structured extensions, and
-  snapshots/hot reload migrate the versioned Native bundle. Preserve unknown extension payloads.
-- Complete canonical text presentation semantics: style and alignment state, buttons, line
-  mutation, skip/log behavior and HTML_PRINT logical text. Build BINPUT choices from canonical
-  runtime buttons and finish message-skip suppression/retention rules. Keep GETDISPLAYLINE and
-  the deferred HTML query family unavailable until a deterministic non-GDI contract is approved.
-- Consume the normalized resource identities from Batch 7 and apply media-specific validation,
-  capability projection and deterministic fallback here.
-- Implement images, shapes, backgrounds, sprite/canvas, font/image metrics, tooltips, logical
-  audio/BGM, video, URL, network update and focus/device services.
-- Runtime owns resource identities, canonical scene and logical channels. Frontends only measure,
-  cache, render and play; deterministic fallback is used unless missing capability changes an
-  observable script result, in which case startup is rejected.
+Implementation checkpoint:
+
+- Native ABI 8 now supports immutable place views and transactional multi-place writes. Map is
+  executable with insertion order and array outputs; the pinned XML read subset preserves mixed
+  content and rejects unsupported XPath forms deterministically; DataTable supports typed columns,
+  deterministic row handles, row/cell mutation and the approved filter/sort subset.
+- Declared VAREXT state participates in ordinary/global reset and load transactions, binary
+  `0x20`--`0x22` records, snapshots and hot reload. Unknown records are retained losslessly. VM
+  snapshot v3 and Runtime Snapshot v2 reject older incompatible state.
+- Runtime protocol 9.0 freezes the CHKFONT family set at handshake. Project configuration owns the
+  logical viewport and PRINTC dimensions. Canonical presentation now retains style, alignment,
+  HTML, image/shape and logical audio state and deterministically projects unsupported media to
+  text/omission without moving game-rule decisions into the frontend.
+- Batch 8 closes at this checkpoint. The remaining compatibility-heavy tail is assigned to the
+  beginning of Batch 10: mutable XML operations and wider XPath, reference XSD/XML DataTable
+  interchange, exact presentation line/button/message-skip behavior, resource-manifest sprite and
+  canvas replay graphs, intrinsic image metrics, backgrounds/tooltips, typed audio/video effects,
+  URL/update/focus services and their capability-failure matrix. These items must not be described
+  as implemented before Batch 10 lands. They do not block the debugger work in Batch 9.
 
 ## Batch 9: debugger implementation
 
@@ -277,6 +278,10 @@ Implementation checkpoint:
 
 ## Batch 10: legacy saves and compatibility closure
 
+- First close Batch 8's compatibility-heavy tail: mutable XML and reference DataTable XML,
+  remaining canonical presentation behavior, resource/sprite/canvas command graphs and intrinsic
+  metrics, then media and platform services. This must precede candidate-save transactions so every
+  stateful Native and Host operation has a final rollback and persistence classification.
 - Implement the candidate save transaction after all stateful Native and Host classifications are
   fixed. Obtain one frontend Clock sample, run `SAVEINFO` against cloned mutable VM/Native and
   buffered presentation state, allow only rollback-safe calls, and commit those effects only after

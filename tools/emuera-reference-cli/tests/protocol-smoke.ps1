@@ -77,7 +77,8 @@ try {
     Assert-True $project.ok "project semantic projection failed"
     Assert-True (($project.result.functions.name -contains "SYSTEM_TITLE") -and
         ($project.result.functions.name -contains "ORACLE_TEST") -and
-        ($project.result.functions.name -contains "ORACLE_INPUT")) "project function projection differs"
+        ($project.result.functions.name -contains "ORACLE_INPUT") -and
+        ($project.result.functions.name -contains "ORACLE_MAP")) "project function projection differs"
 
     $varSize = Invoke-Oracle @{ id = "csv-varsize"; op = "eval"; source = 'VARSIZE("ABL")' }
     Assert-True ($varSize.ok -and $varSize.result.value -eq 120) "VariableSize.CSV did not resize ABL"
@@ -109,6 +110,11 @@ try {
     Assert-True $run.ok "isolated function run failed"
     Assert-True ($run.result.termination -eq "completed") "function did not complete"
     Assert-True (($run.result.output -join "`n") -match "ORACLE_OK") "function output missing"
+
+    $mapRun = Invoke-Oracle @{ id = "map"; op = "run"; entry = "ORACLE_MAP"; watch = @("RESULT", "RESULTS") }
+    Assert-True $mapRun.ok "map function run failed"
+    Assert-True ($mapRun.result.termination -eq "completed") "map function did not complete"
+    Assert-True (($mapRun.result.output -join "`n") -match [regex]::Escape("MAP=2,1,1,1|3|b,a")) "map output differs"
 
     $inputRun = Invoke-Oracle @{ id = 10; op = "run"; entry = "ORACLE_INPUT"; inputs = @("42"); watch = @("RESULT") }
     Assert-True $inputRun.ok "input function run failed"

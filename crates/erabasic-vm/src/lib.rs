@@ -18,6 +18,7 @@ mod save;
 mod sfmt;
 mod snapshot;
 mod state;
+mod structured;
 mod value;
 
 pub use config::{
@@ -33,7 +34,7 @@ pub use debug_port::{
 pub use fault::{VmError, VmFault, VmFaultCode};
 pub use host::{
     HostCallRequest, HostCallResult, HostReady, HostRebindRequest, HostWaitStability,
-    NativeCallRequest, NativeService, NativeServiceRegistry, VmHost,
+    NativeCallRequest, NativePlaceView, NativeReady, NativeService, NativeServiceRegistry, VmHost,
 };
 pub use hot_reload::{HotReloadPlan, HotReloadReport};
 pub use runtime_port::{
@@ -47,6 +48,7 @@ pub use snapshot::{
     SNAPSHOT_FORMAT_VERSION, SNAPSHOT_MAGIC, SnapshotBlocker, SnapshotEligibility, VmSnapshot,
 };
 pub use state::Vm;
+pub use structured::{StructuredExtension, StructuredScope};
 pub use value::{HostWrite, PlaceDescriptor, VmValue};
 
 pub(crate) use memory::{Memory, VariableCell};

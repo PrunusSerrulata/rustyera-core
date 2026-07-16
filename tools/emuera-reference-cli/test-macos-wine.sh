@@ -73,6 +73,7 @@ printf '%s\n' \
     '{"id":"wine-putform","op":"execute","statement":"PUTFORM suffix","watch":["SAVEDATA_TEXT"]}' \
     '{"id":"wine-savenos","op":"eval","source":"SAVENOS()"}' \
     '{"id":"wine-run","op":"run","entry":"ORACLE_TEST","watch":["RESULT"]}' \
+    '{"id":"wine-map","op":"run","entry":"ORACLE_MAP","watch":["RESULT","RESULTS"]}' \
     '{"id":"wine-input","op":"run","entry":"ORACLE_INPUT","inputs":["42"],"watch":["RESULT"]}' \
     '{"id":"wine-reset","op":"reset"}' \
     >>"$REQUEST_FILE"
@@ -86,18 +87,18 @@ perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 21 and
+    length == 22 and
     map(.id) == [
         "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-toneinput",
         "wine-getmillisecond", "wine-getsecond", "wine-project",
         "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
         "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
         "wine-putform", "wine-savenos",
-        "wine-run", "wine-input", "wine-reset"
+        "wine-run", "wine-map", "wine-input", "wine-reset"
     ] and
     all(.[]; .ok == true) and
     (map(select(.id == "wine-load"))[0].result.termination == "waitingInput") and
-    (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["ORACLE_INPUT", "ORACLE_TEST", "SYSTEM_TITLE"]) and
+    (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["ORACLE_INPUT", "ORACLE_MAP", "ORACLE_TEST", "SYSTEM_TITLE"]) and
     (map(select(.id == "wine-project"))[0].result.functions | map(select(.name == "SYSTEM_TITLE"))[0].lines | map(.functionCode) | contains(["IF", "CALL", "CALL", "ENDIF", "INPUT", "RETURN"])) and
     (map(select(.id == "wine-csv-varsize"))[0].result.value == 120) and
     (map(select(.id == "wine-csv-name"))[0].result.value == 2) and
@@ -111,6 +112,8 @@ jq -e -s '
     (map(select(.id == "wine-savenos"))[0].result.value == 20) and
     (map(select(.id == "wine-run"))[0].result.termination == "completed") and
     (map(select(.id == "wine-run"))[0].result.output | join("\n") | contains("ORACLE_OK")) and
+    (map(select(.id == "wine-map"))[0].result.termination == "completed") and
+    (map(select(.id == "wine-map"))[0].result.output | join("\n") | contains("MAP=2,1,1,1|3|b,a")) and
     (map(select(.id == "wine-input"))[0].result.termination == "completed") and
     (map(select(.id == "wine-input"))[0].result.watches.RESULT == 42) and
     (map(select(.id == "wine-toneinput"))[0].result.termination == "waitingInput") and

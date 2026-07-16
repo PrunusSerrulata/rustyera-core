@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 8.0 over common wire 2.0 is a development contract: by explicit project policy it
+dynamic library. Runtime protocol 9.0 over common wire 2.0 is a development contract: by explicit project policy it
 does not promise backward compatibility until a frontend exists.
 
 ## Authority and ownership
@@ -188,6 +188,11 @@ input waits, normalized incremental reload with generation-pinned VM commit, cor
 listing/loading, faults and cancellation-aware shutdown.
 The compiler uses an explicit execution catalog rather than Host-name heuristics. Configuration
 and resource inputs receive deterministic identities and diagnostics; semantic configuration needed
-by save/shop flow is retained while GUI/device options remain frontend state. Candidate SAVEINFO
-transactions, the complete slot/delete controller, executable Map/XML/DataTable Native services,
-runtime-owned menu snapshots, media/audio execution and debugger execution remain unavailable.
+by save/shop and logical layout is retained while GUI/device options remain frontend state. Map and
+the documented XML/DataTable subsets execute through transactional Native place writes. Canonical
+presentation includes projected HTML/image/shape and logical audio state. Candidate SAVEINFO
+transactions, the complete slot/delete controller, mutable XML, reference DataTable XML,
+sprite/canvas/media services, platform services and debugger execution remain unavailable.
+Protocol 9.0 adds a session-fixed `available_fonts` list to `ClientCapabilities`. It is used only
+for the script-observable `CHKFONT` result. Font metrics and canonical layout remain runtime-owned;
+the frontend cannot change this list after the handshake.

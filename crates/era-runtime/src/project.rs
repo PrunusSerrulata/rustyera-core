@@ -38,6 +38,10 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) money_label: String,
     pub(crate) money_first: bool,
     pub(crate) maximum_shop_items: u32,
+    pub(crate) viewport_width: u32,
+    pub(crate) viewport_height: u32,
+    pub(crate) print_c_per_line: u32,
+    pub(crate) print_c_length: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,6 +64,10 @@ struct SemanticConfig {
     money_label: String,
     money_first: bool,
     maximum_shop_items: u32,
+    viewport_width: u32,
+    viewport_height: u32,
+    print_c_per_line: u32,
+    print_c_length: u32,
 }
 
 impl Default for SemanticConfig {
@@ -75,6 +83,10 @@ impl Default for SemanticConfig {
             money_label: "$".into(),
             money_first: true,
             maximum_shop_items: 100,
+            viewport_width: 760,
+            viewport_height: 480,
+            print_c_per_line: 3,
+            print_c_length: 25,
         }
     }
 }
@@ -311,6 +323,10 @@ pub(crate) fn build_project(
             money_label: config.money_label,
             money_first: config.money_first,
             maximum_shop_items: config.maximum_shop_items,
+            viewport_width: config.viewport_width,
+            viewport_height: config.viewport_height,
+            print_c_per_line: config.print_c_per_line,
+            print_c_length: config.print_c_length,
         }),
     }
 }
@@ -411,7 +427,7 @@ fn project_identity(
     config: &SemanticConfig,
     resources: &[NormalizedResourceIdentity],
 ) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new_derive_key("rustyera.runtime.project.v1");
+    let mut hasher = blake3::Hasher::new_derive_key("rustyera.runtime.project.v2");
     hasher.update(&artifact.artifact().manifest.artifact_id.bytes());
     hasher.update(&[
         u8::from(config.auto_save),
@@ -421,6 +437,10 @@ fn project_identity(
     ]);
     hasher.update(&config.save_slot_count.to_le_bytes());
     hasher.update(&config.maximum_shop_items.to_le_bytes());
+    hasher.update(&config.viewport_width.to_le_bytes());
+    hasher.update(&config.viewport_height.to_le_bytes());
+    hasher.update(&config.print_c_per_line.to_le_bytes());
+    hasher.update(&config.print_c_length.to_le_bytes());
     hasher.update(&(config.money_label.len() as u64).to_le_bytes());
     hasher.update(config.money_label.as_bytes());
     for resource in resources {
@@ -565,6 +585,30 @@ fn parse_configuration(
                     }
                     continue;
                 }
+                "ウィンドウ幅" | "Window width" => {
+                    if let Ok(value) = value.parse::<u32>() {
+                        config.viewport_width = value.max(128);
+                    }
+                    continue;
+                }
+                "ウィンドウ高さ" | "Window height" => {
+                    if let Ok(value) = value.parse::<u32>() {
+                        config.viewport_height = value.max(128);
+                    }
+                    continue;
+                }
+                "PRINTCを並べる数" | "Items per line for PRINTC" => {
+                    if let Ok(value) = value.parse::<u32>() {
+                        config.print_c_per_line = value.max(1);
+                    }
+                    continue;
+                }
+                "PRINTCの文字数" | "Number of Item characters for PRINTC" => {
+                    if let Ok(value) = value.parse::<u32>() {
+                        config.print_c_length = value.max(1);
+                    }
+                    continue;
+                }
                 _ => {}
             }
             let Some(boolean) = parse_bool(value) else {
@@ -664,6 +708,20 @@ fn parse_json_configuration(
                 .and_then(|value| u32::try_from(value).ok())
             {
                 config.save_slot_count = number.clamp(20, 80);
+            }
+            for (key, target, minimum) in [
+                ("WindowX", &mut config.viewport_width, 128),
+                ("WindowY", &mut config.viewport_height, 128),
+                ("PrintCPerLine", &mut config.print_c_per_line, 1),
+                ("PrintCLength", &mut config.print_c_length, 1),
+            ] {
+                if let Some(number) = value
+                    .get(key)
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|number| u32::try_from(number).ok())
+                {
+                    *target = number.max(minimum);
+                }
             }
         }
         Err(error) => diagnostics.push(project_diagnostic(

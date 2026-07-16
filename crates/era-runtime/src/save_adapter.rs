@@ -1,18 +1,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use era_runtime_save::{
-    OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveFileKind,
-    SaveFormat, SaveMetadata, SaveValue, Text1808Layout, Text1808ValueType, Text1808Variable,
-    decode, decode_text_with_layout, encode, encode_text_with_layout,
+    OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveExtension,
+    SaveFileKind, SaveFormat, SaveMetadata, SaveValue, Text1808Layout, Text1808ValueType,
+    Text1808Variable, decode, decode_save_extension, decode_text_with_layout, encode,
+    encode_save_extension, encode_text_with_layout,
 };
 use erabasic_bytecode::{BytecodeArtifact, BytecodePersistence, BytecodeStorage, BytecodeType};
 use erabasic_data::VariableId;
-use erabasic_vm::{EraState, EraVariableState, VmValue};
+use erabasic_vm::{EraState, EraVariableState, StructuredExtension, VmValue};
 
 pub(crate) struct DecodedEraSave {
     pub(crate) state: EraState,
     pub(crate) description: String,
     pub(crate) opaque_extensions: Vec<OpaqueSaveExtension>,
+    pub(crate) structured_extensions: Vec<StructuredExtension>,
 }
 
 pub(crate) fn decode_era_save(
@@ -40,6 +42,7 @@ pub(crate) fn decode_era_save(
         .iter()
         .map(|entries| decode_entries(entries, artifact, true))
         .collect::<Result<Vec<_>, _>>()?;
+    let (structured_extensions, opaque_extensions) = decode_extensions(document.opaque_extensions)?;
     Ok(DecodedEraSave {
         state: EraState {
             unique_code: document.metadata.unique_code,
@@ -48,7 +51,8 @@ pub(crate) fn decode_era_save(
             characters,
         },
         description: document.metadata.description,
-        opaque_extensions: document.opaque_extensions,
+        opaque_extensions,
+        structured_extensions,
     })
 }
 
@@ -77,6 +81,7 @@ pub(crate) fn decode_scoped_save(
         .iter()
         .map(|entries| decode_entries(entries, artifact, true))
         .collect::<Result<Vec<_>, _>>()?;
+    let (structured_extensions, opaque_extensions) = decode_extensions(document.opaque_extensions)?;
     Ok(DecodedEraSave {
         state: EraState {
             unique_code: document.metadata.unique_code,
@@ -85,8 +90,73 @@ pub(crate) fn decode_scoped_save(
             characters,
         },
         description: document.metadata.description,
-        opaque_extensions: document.opaque_extensions,
+        opaque_extensions,
+        structured_extensions,
     })
+}
+
+pub(crate) fn merge_structured_extensions(
+    opaque: &[OpaqueSaveExtension],
+    structured: Vec<StructuredExtension>,
+) -> Result<Vec<OpaqueSaveExtension>, SaveCodecError> {
+    let mut output = opaque.to_vec();
+    for value in structured {
+        let typed = match value {
+            StructuredExtension::Map { key, entries } => SaveExtension::Map { key, entries },
+            StructuredExtension::Xml { key, document } => SaveExtension::Xml { key, document },
+            StructuredExtension::DataTable { key, schema, data } => {
+                SaveExtension::DataTable { key, schema, data }
+            }
+        };
+        let encoded = encode_save_extension(&typed, SaveCodecLimits::default())?;
+        output.retain(|existing| {
+            existing.type_tag != encoded.type_tag || existing.key != encoded.key
+        });
+        output.push(encoded);
+    }
+    output.sort_by(|left, right| (left.type_tag, &left.key).cmp(&(right.type_tag, &right.key)));
+    Ok(output)
+}
+
+pub(crate) fn merge_opaque_extensions(
+    current: &[OpaqueSaveExtension],
+    incoming: Vec<OpaqueSaveExtension>,
+) -> Vec<OpaqueSaveExtension> {
+    let mut output = current.to_vec();
+    for extension in incoming {
+        output.retain(|existing| {
+            existing.type_tag != extension.type_tag || existing.key != extension.key
+        });
+        output.push(extension);
+    }
+    output.sort_by(|left, right| (left.type_tag, &left.key).cmp(&(right.type_tag, &right.key)));
+    output
+}
+
+fn decode_extensions(
+    extensions: Vec<OpaqueSaveExtension>,
+) -> Result<(Vec<StructuredExtension>, Vec<OpaqueSaveExtension>), SaveCodecError> {
+    let mut structured = Vec::new();
+    let mut opaque = Vec::new();
+    for extension in extensions {
+        opaque.push(extension.clone());
+        if matches!(extension.type_tag, 0x20..=0x22) {
+            structured.push(
+                match decode_save_extension(&extension, SaveCodecLimits::default())? {
+                    SaveExtension::Map { key, entries } => {
+                        StructuredExtension::Map { key, entries }
+                    }
+                    SaveExtension::Xml { key, document } => {
+                        StructuredExtension::Xml { key, document }
+                    }
+                    SaveExtension::DataTable { key, schema, data } => {
+                        StructuredExtension::DataTable { key, schema, data }
+                    }
+                },
+            );
+        }
+    }
+    Ok((structured, opaque))
 }
 
 pub(crate) fn encode_era_save(
@@ -129,6 +199,7 @@ pub(crate) fn encode_scoped_save(
     artifact: &BytecodeArtifact,
     kind: SaveFileKind,
     description: String,
+    opaque_extensions: Vec<OpaqueSaveExtension>,
     format: SaveFormat,
 ) -> Result<Vec<u8>, SaveCodecError> {
     let document = SaveDocument {
@@ -145,7 +216,7 @@ pub(crate) fn encode_scoped_save(
             .map(|variables| encode_entries(variables.values()))
             .collect::<Result<Vec<_>, _>>()?,
         variables: encode_entries(state.variables.values())?,
-        opaque_extensions: Vec::new(),
+        opaque_extensions,
         text_payload: None,
     };
     if format == SaveFormat::Text1808 {
@@ -382,5 +453,49 @@ fn string_at(variable: &EraVariableState, index: usize) -> Result<&str, SaveCode
             "saved variable {} contains a non-string value",
             variable.name
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structured_merge_replaces_declared_record_and_preserves_unknown_payload() {
+        let unknown = OpaqueSaveExtension {
+            type_tag: 0x7f,
+            key: "future".into(),
+            payload: vec![1, 2, 3],
+        };
+        let stale = encode_save_extension(
+            &SaveExtension::Map {
+                key: "state".into(),
+                entries: vec![("old".into(), "value".into())],
+            },
+            SaveCodecLimits::default(),
+        )
+        .unwrap();
+        let merged = merge_structured_extensions(
+            &[unknown.clone(), stale],
+            vec![StructuredExtension::Map {
+                key: "state".into(),
+                entries: vec![("new".into(), "value".into())],
+            }],
+        )
+        .unwrap();
+
+        assert!(merged.contains(&unknown));
+        let map = merged
+            .iter()
+            .find(|value| value.type_tag == 0x20)
+            .map(|value| decode_save_extension(value, SaveCodecLimits::default()).unwrap())
+            .unwrap();
+        assert_eq!(
+            map,
+            SaveExtension::Map {
+                key: "state".into(),
+                entries: vec![("new".into(), "value".into())],
+            }
+        );
     }
 }

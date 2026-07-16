@@ -639,6 +639,7 @@ impl VmRuntimeStatePort for Vm {
             generation: self.current_generation,
             memory,
             reset_execution,
+            structured_state: None,
         })
     }
 

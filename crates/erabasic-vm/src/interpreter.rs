@@ -4,10 +4,10 @@ use erabasic_bytecode::{
 };
 
 use crate::{
-    Fiber, FiberId, FiberState, HostCallRequest, HostCallResult, HostWaitStability,
-    NativeCallRequest, NativeServiceRegistry, PlaceDescriptor, RunBudget, Vm, VmError, VmEvent,
-    VmFault, VmFaultCode, VmHost, VmRunReport, VmRunStop, VmValue, WaitingHost, find_global,
-    make_frame, validate_arguments,
+    Fiber, FiberId, FiberState, HostCallRequest, HostCallResult, HostReady, HostWaitStability,
+    NativeCallRequest, NativePlaceView, NativeReady, NativeServiceRegistry, PlaceDescriptor,
+    RunBudget, Vm, VmError, VmEvent, VmFault, VmFaultCode, VmHost, VmRunReport, VmRunStop, VmValue,
+    WaitingHost, find_global, make_frame, validate_arguments,
 };
 
 enum StepOutcome {
@@ -524,7 +524,8 @@ impl Vm {
                             .clone();
                         let result_type = target.result;
                         let native_name = target.name.to_ascii_lowercase();
-                        let value = if matches!(native_name.as_str(), "initrand" | "dumprand") {
+                        let mut rollback = None;
+                        let ready = if matches!(native_name.as_str(), "initrand" | "dumprand") {
                             execute_random_place_transaction(
                                 &mut self.memory,
                                 position.generation,
@@ -533,38 +534,38 @@ impl Vm {
                                 &native_name,
                             )
                             .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
-                            None
+                            NativeReady::default()
                         } else if matches!(native_name.as_str(), "swap" | "swapvar") {
                             execute_swap_transaction(self, fiber, &arguments)
                                 .map_err(map_vm_error)?;
-                            None
+                            NativeReady::default()
                         } else if matches!(
                             native_name.as_str(),
                             "arrayremove" | "arrayshift" | "arraysort"
                         ) {
                             execute_array_mutation(self, fiber, &native_name, &arguments)
                                 .map_err(map_vm_error)?;
-                            None
+                            NativeReady::default()
                         } else if native_name == "arraycopy" {
                             execute_array_copy(self, fiber, &arguments).map_err(map_vm_error)?;
-                            None
+                            NativeReady::default()
                         } else if matches!(native_name.as_str(), "varset" | "cvarset") {
                             execute_variable_fill(self, fiber, &native_name, &arguments)
                                 .map_err(map_vm_error)?;
-                            None
+                            NativeReady::default()
                         } else if native_name == "arraymsort" {
-                            Some(
+                            NativeReady::value(
                                 execute_array_multi_sort(self, fiber, &arguments)
                                     .map_err(map_vm_error)?,
                             )
                         } else if native_name == "arraymsortex" {
-                            Some(
+                            NativeReady::value(
                                 execute_array_multi_sort_ex(self, fiber, &arguments)
                                     .map_err(map_vm_error)?,
                             )
                         } else if matches!(native_name.as_str(), "findelement" | "findlastelement")
                         {
-                            Some(
+                            NativeReady::value(
                                 execute_find_element(
                                     self,
                                     fiber,
@@ -574,7 +575,7 @@ impl Vm {
                                 .map_err(map_vm_error)?,
                             )
                         } else if native_name == "regexpmatch" {
-                            Some(
+                            NativeReady::value(
                                 execute_regex_match(self, fiber, &arguments)
                                     .map_err(map_vm_error)?,
                             )
@@ -594,7 +595,7 @@ impl Vm {
                                 | "nosames"
                                 | "allsames"
                         ) {
-                            Some(
+                            NativeReady::value(
                                 execute_array_query(self, fiber, &native_name, &arguments)
                                     .map_err(map_vm_error)?,
                             )
@@ -621,7 +622,7 @@ impl Vm {
                                 | "findchara"
                                 | "findlastchara"
                         ) {
-                            Some(
+                            NativeReady::value(
                                 execute_character_query(self, fiber, &native_name, &arguments)
                                     .map_err(map_vm_error)?,
                             )
@@ -642,24 +643,44 @@ impl Vm {
                         ) {
                             execute_character_mutation(self, &native_name, &arguments)
                                 .map_err(map_vm_error)?;
-                            None
+                            NativeReady::default()
                         } else {
+                            let places = native_place_views(self, fiber, &arguments)
+                                .map_err(map_vm_error)?;
+                            let implicit_places =
+                                native_implicit_place_views(self, fiber).map_err(map_vm_error)?;
+                            rollback = natives
+                                .checkpoint(import.key)
+                                .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
                             natives
                                 .call(
                                     import.key,
                                     NativeCallRequest {
                                         import: target,
                                         arguments,
+                                        places,
+                                        implicit_places,
                                     },
                                 )
                                 .map_err(|error| StepError::new(VmFaultCode::Native, error))?
                         };
-                        push_call_result(
-                            &mut fiber.frames.last_mut().expect("frame exists").stack,
-                            result_type,
-                            value,
-                            "native",
-                        )?;
+                        let result = validate_native_ready(self, fiber, result_type, &ready)
+                            .and_then(|()| {
+                                self.apply_host_ready(
+                                    fiber,
+                                    result_type,
+                                    HostReady {
+                                        value: ready.value,
+                                        writes: ready.writes,
+                                    },
+                                )
+                            });
+                        if let Err(error) = result {
+                            if let Some(state) = rollback {
+                                let _ = natives.rollback(import.key, &state);
+                            }
+                            return Err(map_vm_error(error));
+                        }
                     }
                     (Opcode::CallHost, ImportKind::Host) => {
                         let target = artifact
@@ -838,6 +859,95 @@ fn execute_swap_transaction(
     // single-owner here, the validated writes form one observable transaction.
     vm.write_place(fiber, left, right_value)?;
     vm.write_place(fiber, right, left_value)
+}
+
+fn native_place_views(
+    vm: &Vm,
+    fiber: &Fiber,
+    arguments: &[VmValue],
+) -> Result<Vec<NativePlaceView>, VmError> {
+    arguments
+        .iter()
+        .enumerate()
+        .filter_map(|(argument_index, argument)| match argument {
+            VmValue::IntegerPlace(target) | VmValue::StringPlace(target) => {
+                Some((argument_index, target))
+            }
+            VmValue::Integer(_) | VmValue::String(_) => None,
+        })
+        .map(|(argument_index, target)| native_place_view(vm, fiber, argument_index, target))
+        .collect()
+}
+
+fn native_implicit_place_views(
+    vm: &Vm,
+    fiber: &Fiber,
+) -> Result<std::collections::BTreeMap<String, NativePlaceView>, VmError> {
+    ["RESULT", "RESULTS"]
+        .into_iter()
+        .filter_map(|name| {
+            global_unindexed_place(vm, fiber, name)
+                .ok()
+                .map(|place| (name, place))
+        })
+        .map(|(name, target)| {
+            Ok((
+                name.to_owned(),
+                native_place_view(vm, fiber, usize::MAX, &target)?,
+            ))
+        })
+        .collect()
+}
+
+fn native_place_view(
+    vm: &Vm,
+    fiber: &Fiber,
+    argument_index: usize,
+    target: &PlaceDescriptor,
+) -> Result<NativePlaceView, VmError> {
+    let values = if target.indices.is_empty() {
+        array_snapshot_any_rank(vm, fiber, target)
+            .or_else(|_| vm.read_place(fiber, target).map(|value| vec![value]))?
+    } else {
+        vec![vm.read_place(fiber, target)?]
+    };
+    Ok(NativePlaceView {
+        argument_index,
+        target: target.clone(),
+        values,
+    })
+}
+
+fn validate_native_ready(
+    vm: &Vm,
+    fiber: &Fiber,
+    expected: Option<BytecodeType>,
+    ready: &NativeReady,
+) -> Result<(), VmError> {
+    if expected != ready.value.as_ref().map(VmValue::value_type) {
+        return Err(VmError::InvalidArguments(
+            "native result type differs from its import".into(),
+        ));
+    }
+    for write in &ready.writes {
+        if write.target.fiber.is_some_and(|owner| owner != fiber.id) {
+            return Err(VmError::InvalidState(
+                "native write belongs to another fiber".into(),
+            ));
+        }
+        let current = vm.read_place(fiber, &write.target)?;
+        if current.value_type() != write.value.value_type()
+            || matches!(
+                write.value,
+                VmValue::IntegerPlace(_) | VmValue::StringPlace(_)
+            )
+        {
+            return Err(VmError::InvalidArguments(
+                "native write value type differs from its place".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn array_place(arguments: &[VmValue]) -> Result<&PlaceDescriptor, VmError> {
@@ -2495,28 +2605,6 @@ fn pop_arguments(stack: &mut Vec<VmValue>, count: usize) -> Result<Vec<VmValue>,
     }
     arguments.reverse();
     Ok(arguments)
-}
-
-fn push_call_result(
-    stack: &mut Vec<VmValue>,
-    expected: Option<BytecodeType>,
-    value: Option<VmValue>,
-    source: &str,
-) -> Result<(), StepError> {
-    match (expected, value) {
-        (None, None) => Ok(()),
-        (Some(expected), Some(value)) if value.value_type() == expected => {
-            stack.push(value);
-            Ok(())
-        }
-        (expected, value) => Err(StepError::new(
-            VmFaultCode::TypeMismatch,
-            format!(
-                "{source} result mismatch: expected {expected:?}, found {:?}",
-                value.as_ref().map(VmValue::value_type)
-            ),
-        )),
-    }
 }
 
 #[allow(clippy::needless_pass_by_value)]

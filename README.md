@@ -64,8 +64,10 @@ frontend submits project contents and pumps versioned envelopes through
 The runtime now includes current-format traditional saves, frontend-normalized primitive input,
 core system flows, stable-wait exact snapshots, and normalized incremental hot reload. It does not
 yet implement candidate `SAVEINFO` transactions, the complete save/delete controller,
-Map/XML/DataTable execution, runtime-owned menu snapshots, the debugger protocol, or the complete
-set of presentation/storage/media Host calls. Only implemented capabilities are advertised during
+mutable XML and reference DataTable XML compatibility, runtime-owned menu snapshots, the debugger
+protocol, or the complete set of presentation/storage/media Host calls. Map and the documented
+XML/DataTable subsets now execute transactionally, and VAREXT participates in binary saves. Only
+implemented capabilities are advertised during
 handshake. The
 interfaces and current boundary are documented in
 [`docs/runtime-protocol.md`](docs/runtime-protocol.md),

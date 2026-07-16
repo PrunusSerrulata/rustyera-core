@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use era_protocol::{
@@ -12,25 +12,25 @@ use era_runtime_protocol::{
     ExternalRequestKind, FaultCode, FrontendInput, FrontendIoErrorKind, GET_KEY_STATE_OPERATION,
     GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
     InputWait, InteractionToken, LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION,
-    LocalDateTimeRequest, LocalDateTimeResponse, ProjectManifest, ProtocolDiagnostic,
-    RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION,
-    RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault, RuntimeFeature,
-    RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized, RuntimeStateChanged,
-    ServerHello, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady,
-    SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk, StateExportChunkRequest,
-    StateExportKind, StateExportReady, StateExportRequest, StateExportResult, StateImportAccepted,
-    StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
-    StateTransferDescriptor, StorageNamespace, StorageOperation, StoragePrecondition,
-    StorageRequest, StorageResponse, StorageResult, SystemTextArgument, SystemTextKey,
-    VersionRejected, WaitChange, WaitKind, WaitStability,
+    LineAlignment, LocalDateTimeRequest, LocalDateTimeResponse, ProjectManifest,
+    ProtocolDiagnostic, RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION,
+    RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault,
+    RuntimeFeature, RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized,
+    RuntimeStateChanged, ServerHello, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult,
+    ShutdownReady, SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk,
+    StateExportChunkRequest, StateExportKind, StateExportReady, StateExportRequest,
+    StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit,
+    StateImportReady, StateTransferCancel, StateTransferDescriptor, StorageNamespace,
+    StorageOperation, StoragePrecondition, StorageRequest, StorageResponse, StorageResult,
+    SystemTextArgument, SystemTextKey, VersionRejected, WaitChange, WaitKind, WaitStability,
 };
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
 use erabasic_vm::{
     EraSaveScope, EraState, HostReady, HostWaitStability, HostWrite, PlaceDescriptor, RunBudget,
-    RuntimeVm, VmConfig, VmDriveMode, VmHostCompletion, VmHostRequest, VmPortEvent, VmPortStop,
-    VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction,
-    VmRuntimeWrite, VmSnapshot, VmValue,
+    RuntimeVm, StructuredScope, VmConfig, VmDriveMode, VmHostCompletion, VmHostRequest,
+    VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
+    VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot, VmValue,
 };
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +42,7 @@ use crate::project::{NormalizedProjectSnapshot, apply_project_delta, build_proje
 use crate::runtime_snapshot::{self, RUNTIME_SNAPSHOT_FORMAT_VERSION, RuntimeSnapshotPayload};
 use crate::save_adapter::{
     decode_era_save, decode_scoped_save, encode_era_save, encode_scoped_save,
+    merge_opaque_extensions, merge_structured_extensions,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -195,6 +196,7 @@ pub struct RuntimeSession {
     controller: SystemController,
     project_snapshot: Option<NormalizedProjectSnapshot>,
     selected_locale: String,
+    available_fonts: BTreeSet<String>,
     save_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
     system_menu: SystemMenuState,
     load_slot_paths: Vec<String>,
@@ -238,6 +240,7 @@ impl RuntimeSession {
             controller: SystemController::default(),
             project_snapshot: None,
             selected_locale: "ja".into(),
+            available_fonts: BTreeSet::new(),
             save_extensions: Vec::new(),
             system_menu: SystemMenuState::Title,
             load_slot_paths: Vec::new(),
@@ -544,7 +547,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 8.0 is required".into(),
+                    message: "runtime protocol 9.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -571,10 +574,18 @@ impl RuntimeSession {
             .filter(|feature| hello.features.contains(feature))
             .collect();
         let selected_capabilities = selected_capabilities(&hello.capabilities);
+        self.available_fonts = selected_capabilities
+            .available_fonts
+            .iter()
+            .map(|name| name.to_lowercase())
+            .collect();
         self.selected_locale = select_locale(&hello.preferred_locales).into();
         self.presentation.set_projection(
             selected_capabilities.column_cells,
             selected_capabilities.separators,
+            selected_capabilities.html,
+            selected_capabilities.graphics,
+            selected_capabilities.audio,
         );
         self.emit(
             RuntimeMessage::ServerHello(ServerHello {
@@ -611,6 +622,13 @@ impl RuntimeSession {
         self.incremental = build.incremental;
         self.artifact = build.artifact;
         self.project_snapshot = build.snapshot;
+        if let Some(snapshot) = &self.project_snapshot {
+            self.presentation.configure_layout(
+                snapshot.viewport_width,
+                snapshot.print_c_per_line,
+                snapshot.print_c_length,
+            );
+        }
         self.emit(
             RuntimeMessage::ProjectLoadReport(build.report),
             Some(message_id),
@@ -692,6 +710,13 @@ impl RuntimeSession {
         self.artifact = Some(target);
         self.incremental = build.incremental;
         self.project_snapshot = build.snapshot;
+        if let Some(snapshot) = &self.project_snapshot {
+            self.presentation.configure_layout(
+                snapshot.viewport_width,
+                snapshot.print_c_per_line,
+                snapshot.print_c_length,
+            );
+        }
         let new_epoch = self.epoch.0.saturating_add(1);
         let (tokens, waits) = self.operations.rebind_stable_inputs(
             new_epoch,
@@ -799,10 +824,12 @@ impl RuntimeSession {
         );
         let version = decoded.state.version;
         let description = decoded.description.clone();
-        let prepared = match vm.prepare_runtime_state(VmRuntimeStateTransaction::RestoreOrdinary(
-            Box::new(decoded.state),
-        )) {
-            Ok(prepared) => prepared,
+        let prepared = match vm.prepare_runtime_state_with_extensions(
+            VmRuntimeStateTransaction::RestoreOrdinary(Box::new(decoded.state)),
+            StructuredScope::Ordinary,
+            &decoded.structured_extensions,
+        ) {
+            Ok((prepared, _)) => prepared,
             Err(error) => {
                 return self.reject(
                     message_id,
@@ -1142,6 +1169,18 @@ impl RuntimeSession {
             self.emit(RuntimeMessage::ExitRequested(exit), None)?;
             return self.set_phase(RuntimePhase::Stopping);
         }
+        if name == "CHKFONT" {
+            let font = string_argument_value(&request.arguments, 0, "CHKFONT")?;
+            let available = self.available_fonts.contains(&font.to_lowercase());
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(i64::from(available))),
+                    writes: Vec::new(),
+                }),
+            );
+        }
         if name == "CALLTRAIN" {
             let count =
                 usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
@@ -1295,6 +1334,12 @@ impl RuntimeSession {
                 vm.vm().artifact(),
                 era_runtime_save::SaveFileKind::Normal,
                 description.to_owned(),
+                merge_structured_extensions(
+                    &self.save_extensions,
+                    vm.structured_extensions(StructuredScope::Ordinary)
+                        .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                )
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?,
                 self.traditional_save_format(),
             )
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
@@ -1346,6 +1391,12 @@ impl RuntimeSession {
                 vm.vm().artifact(),
                 era_runtime_save::SaveFileKind::Global,
                 String::new(),
+                merge_structured_extensions(
+                    &self.save_extensions,
+                    vm.structured_extensions(StructuredScope::Global)
+                        .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                )
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?,
                 self.traditional_save_format(),
             )
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
@@ -1415,6 +1466,7 @@ impl RuntimeSession {
                 vm.vm().artifact(),
                 era_runtime_save::SaveFileKind::Character,
                 description.to_owned(),
+                Vec::new(),
                 era_runtime_save::SaveFormat::Binary1808,
             )
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
@@ -1700,6 +1752,28 @@ impl RuntimeSession {
         }
         if matches!(
             name.as_str(),
+            "CLIENTWIDTH" | "CLIENTHEIGHT" | "PRINTCPERLINE" | "PRINTCLENGTH"
+        ) {
+            let project = self.project_snapshot.as_ref().ok_or_else(|| {
+                RuntimeError::Internal("layout query has no loaded project".into())
+            })?;
+            let value = match name.as_str() {
+                "CLIENTWIDTH" => project.viewport_width,
+                "CLIENTHEIGHT" => project.viewport_height,
+                "PRINTCPERLINE" => project.print_c_per_line,
+                _ => project.print_c_length,
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(i64::from(value))),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(
+            name.as_str(),
             "GETDISPLAYLINE"
                 | "HTML_GETPRINTEDSTR"
                 | "HTML_POPPRINTINGSTR"
@@ -1719,6 +1793,97 @@ impl RuntimeSession {
                 .first()
                 .map_or_else(|| "-".into(), display_value);
             self.presentation.append_separator(pattern);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "CLEARLINE" {
+            let count = request
+                .arguments
+                .first()
+                .and_then(|value| match value {
+                    VmValue::Integer(value) => usize::try_from(*value).ok(),
+                    _ => None,
+                })
+                .unwrap_or(1);
+            self.presentation.delete_last_lines(count);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "HTML_PRINT" {
+            self.presentation.append_html(
+                request
+                    .arguments
+                    .first()
+                    .map_or_else(String::new, display_value),
+            );
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "ALIGNMENT" {
+            let alignment = match request.arguments.first() {
+                Some(VmValue::Integer(1)) => LineAlignment::Center,
+                Some(VmValue::Integer(2)) => LineAlignment::Right,
+                _ => LineAlignment::Left,
+            };
+            self.presentation.set_alignment(alignment);
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "FONTSTYLE" {
+            let bits = integer_argument_value(&request.arguments, 0)?;
+            self.presentation.set_font_style(bits);
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "SETFONT" {
+            let family = request.arguments.first().map(display_value);
+            self.presentation.set_font(family);
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "SETCOLOR" {
+            self.presentation
+                .set_foreground(integer_argument_value(&request.arguments, 0)?);
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "SETBGCOLOR" {
+            self.presentation
+                .set_background(integer_argument_value(&request.arguments, 0)?);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "PRINT_IMG" {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            self.presentation.append_image(resource, None);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "PRINT_RECT" {
+            let parameters = request
+                .arguments
+                .iter()
+                .filter_map(|value| match value {
+                    VmValue::Integer(value) => Some(*value),
+                    _ => None,
+                })
+                .collect();
+            self.presentation.append_rectangle(parameters);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if matches!(name.as_str(), "PLAYBGM" | "PLAYSOUND") {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            self.presentation
+                .set_audio(resource, name == "PLAYBGM", true);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if matches!(name.as_str(), "STOPBGM" | "STOPSOUND") {
+            self.presentation
+                .set_audio(String::new(), name == "STOPBGM", false);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
@@ -2354,13 +2519,17 @@ impl RuntimeSession {
             era_runtime_save::SaveFileKind::Global,
         )
         .map_err(|error| RuntimeError::Internal(format!("invalid global save: {error}")))?;
-        let prepared = vm
-            .prepare_runtime_state(VmRuntimeStateTransaction::OverlayGlobal(Box::new(
-                decoded.state,
-            )))
+        let (prepared, _) = vm
+            .prepare_runtime_state_with_extensions(
+                VmRuntimeStateTransaction::OverlayGlobal(Box::new(decoded.state)),
+                StructuredScope::Global,
+                &decoded.structured_extensions,
+            )
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         vm.commit_runtime_state(prepared)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        self.save_extensions =
+            merge_opaque_extensions(&self.save_extensions, decoded.opaque_extensions);
         let writes = global_place(&vm, "RESULT")
             .map(|target| {
                 vec![HostWrite {
@@ -2394,10 +2563,12 @@ impl RuntimeSession {
         .map_err(|error| RuntimeError::Internal(format!("invalid ordinary save: {error}")))?;
         let version = decoded.state.version;
         let description = decoded.description.clone();
-        let prepared = vm
-            .prepare_runtime_state(VmRuntimeStateTransaction::RestoreOrdinary(Box::new(
-                decoded.state,
-            )))
+        let (prepared, _) = vm
+            .prepare_runtime_state_with_extensions(
+                VmRuntimeStateTransaction::RestoreOrdinary(Box::new(decoded.state)),
+                StructuredScope::Ordinary,
+                &decoded.structured_extensions,
+            )
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         vm.commit_runtime_state(prepared)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
@@ -3217,6 +3388,12 @@ impl RuntimeSession {
                             vm.vm().artifact(),
                             era_runtime_save::SaveFileKind::Normal,
                             description,
+                            merge_structured_extensions(
+                                &self.save_extensions,
+                                vm.structured_extensions(StructuredScope::Ordinary)
+                                    .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                            )
+                            .map_err(|error| RuntimeError::Internal(error.to_string()))?,
                             self.traditional_save_format(),
                         )
                         .map_err(|error| RuntimeError::Internal(error.to_string()))?;
@@ -3386,7 +3563,12 @@ impl RuntimeSession {
                     &vm.export_era_state(),
                     vm.vm().artifact(),
                     String::new(),
-                    self.save_extensions.clone(),
+                    merge_structured_extensions(
+                        &self.save_extensions,
+                        vm.structured_extensions(StructuredScope::Ordinary)
+                            .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                    )
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?,
                     self.traditional_save_format(),
                 )
                 .map_err(|error| RuntimeError::Internal(error.to_string()))?,
@@ -4456,18 +4638,23 @@ fn input_value(
 }
 
 fn selected_capabilities(client: &ClientCapabilities) -> ClientCapabilities {
-    // Stage one exposes the normalized text projection only. Capabilities are
-    // intersected here instead of echoing unsupported renderer promises.
     ClientCapabilities {
         input_modalities: client.input_modalities.clone(),
-        rich_text: false,
-        html: false,
-        graphics: false,
-        audio: false,
+        rich_text: client.rich_text,
+        html: client.html,
+        graphics: client.graphics,
+        audio: client.audio,
+        // Video and frontend-dependent font metrics still require typed services.
         video: false,
         font_metrics: false,
         column_cells: client.column_cells,
         separators: client.separators,
+        available_fonts: {
+            let mut fonts = client.available_fonts.clone();
+            fonts.sort_by_key(|name| name.to_lowercase());
+            fonts.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+            fonts
+        },
     }
 }
 
@@ -4621,6 +4808,7 @@ mod tests {
             font_metrics: false,
             column_cells: true,
             separators: true,
+            available_fonts: vec!["sans-serif".into()],
         }
     }
 
@@ -5879,5 +6067,13 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn font_profile_is_session_fixed_case_insensitive_and_deterministic() {
+        let mut requested = capabilities();
+        requested.available_fonts = vec!["Zeta".into(), "alpha".into(), "ALPHA".into()];
+        let selected = selected_capabilities(&requested);
+        assert_eq!(selected.available_fonts, vec!["alpha", "Zeta"]);
     }
 }

@@ -360,11 +360,11 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `8.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `9.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
-| `capabilities` | 输入模态、富文本、HTML、图形、音视频和字体度量能力。 |
+| `capabilities` | 输入模态、富文本、HTML、图形、音视频、字体度量能力，以及握手后冻结的 `available_fonts` 字体族名称列表。 |
 
 Runtime 返回：
 
@@ -523,7 +523,7 @@ runtime；应先取出消息，再异步或同步完成平台工作，最后通�
 `recursive`；`Stat` 只返回长度和 revision，不传输文件内容。
 读取/写入/列表/元数据结果可以携带前端生成的 revision。
 
-协议 8.0 通过 `RuntimeFeature::Storage` 协商该能力。只有握手协商且实际收到
+协议 9.0 通过 `RuntimeFeature::Storage` 协商该能力。只有握手协商且实际收到
 `StorageRequest` 时前端才应执行 I/O；前端不得主动发送无对应 request ID 的
 `StorageResponse`。
 

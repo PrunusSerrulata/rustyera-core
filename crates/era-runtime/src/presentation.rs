@@ -1,7 +1,7 @@
 use era_runtime_protocol::{
-    CellAlignment, Color, DisplayLine, DisplayRun, InputWait, InteractionToken, LineAlignment,
-    PresentationSettings, PresentationSnapshot, RunLayout, SeparatorRole, SystemTextArgument,
-    SystemTextKey, SystemTextRef, TextStyle,
+    AudioState, CellAlignment, Color, DisplayLine, DisplayRun, InputWait, InteractionToken,
+    LineAlignment, MediaPlacement, PresentationSettings, PresentationSnapshot, RunLayout,
+    SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
 };
 use erabasic_vm::VmValue;
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct PresentationModel {
     revision: u64,
     title: String,
@@ -21,6 +22,16 @@ pub(crate) struct PresentationModel {
     settings: PresentationSettings,
     project_column_cells: bool,
     project_separators: bool,
+    project_html: bool,
+    project_graphics: bool,
+    project_audio: bool,
+    current_style: TextStyle,
+    current_alignment: LineAlignment,
+    backgrounds: Vec<MediaPlacement>,
+    audio: Vec<AudioState>,
+    print_c_per_line: u32,
+    print_c_length: u32,
+    pending_column_cells: u32,
 }
 
 impl Default for PresentationModel {
@@ -51,6 +62,16 @@ impl Default for PresentationModel {
             },
             project_column_cells: true,
             project_separators: true,
+            project_html: false,
+            project_graphics: false,
+            project_audio: false,
+            current_style: default_style(),
+            current_alignment: LineAlignment::Left,
+            backgrounds: Vec::new(),
+            audio: Vec::new(),
+            print_c_per_line: 3,
+            print_c_length: 25,
+            pending_column_cells: 0,
         }
     }
 }
@@ -126,6 +147,7 @@ impl PresentationModel {
         if count != 0 && !self.pending_runs.is_empty() {
             self.pending_runs.clear();
             self.pending_temporary = false;
+            self.pending_column_cells = 0;
             count -= 1;
         }
         let keep = self.lines.len().saturating_sub(count);
@@ -171,9 +193,13 @@ impl PresentationModel {
             content,
             alignment,
             // Emuera's default PrintCLength is 25. This is layout intent, not padding.
-            preferred_columns: 25,
+            preferred_columns: self.print_c_length,
         });
+        self.pending_column_cells = self.pending_column_cells.saturating_add(1);
         self.bump();
+        if self.pending_column_cells >= self.print_c_per_line {
+            self.commit_line();
+        }
     }
 
     pub(crate) fn append_separator(&mut self, pattern: String) {
@@ -188,9 +214,116 @@ impl PresentationModel {
         self.commit_line();
     }
 
-    pub(crate) fn set_projection(&mut self, column_cells: bool, separators: bool) {
+    pub(crate) fn append_html(&mut self, markup: String) {
+        self.pending_runs.push(DisplayRun::Html { markup });
+        self.bump();
+        self.commit_line();
+    }
+
+    pub(crate) fn append_image(&mut self, resource_id: String, alt_text: Option<String>) {
+        self.pending_runs.push(DisplayRun::Image {
+            placement: MediaPlacement {
+                resource_id,
+                x_millipixels: 0,
+                y_millipixels: 0,
+                width_millipixels: 0,
+                height_millipixels: self.settings.line_height_millipixels,
+                depth: 0,
+                opacity_millionths: 1_000_000,
+                revision: self.revision.saturating_add(1),
+            },
+            alt_text,
+        });
+        self.bump();
+    }
+
+    pub(crate) fn append_rectangle(&mut self, parameters: Vec<i64>) {
+        self.pending_runs.push(DisplayRun::Shape {
+            shape: Shape {
+                kind: "rectangle".into(),
+                parameters,
+            },
+            layout: RunLayout {
+                x_millipixels: 0,
+                y_millipixels: 0,
+                width_millipixels: 0,
+                height_millipixels: self.settings.line_height_millipixels,
+                depth: 0,
+            },
+        });
+        self.bump();
+    }
+
+    pub(crate) fn set_alignment(&mut self, alignment: LineAlignment) {
+        self.current_alignment = alignment;
+        self.bump();
+    }
+
+    pub(crate) fn set_font_style(&mut self, bits: i64) {
+        self.current_style.bold = bits & 1 != 0;
+        self.current_style.italic = bits & 2 != 0;
+        self.current_style.strikeout = bits & 4 != 0;
+        self.current_style.underline = bits & 8 != 0;
+        self.bump();
+    }
+
+    pub(crate) fn set_font(&mut self, family: Option<String>) {
+        self.current_style.font_family = family.filter(|value| !value.is_empty());
+        self.bump();
+    }
+
+    pub(crate) fn set_foreground(&mut self, rgb: i64) {
+        self.current_style.foreground = rgb_color(rgb);
+        self.bump();
+    }
+
+    pub(crate) fn set_background(&mut self, rgb: i64) {
+        self.settings.background = rgb_color(rgb);
+        self.bump();
+    }
+
+    pub(crate) fn set_audio(&mut self, resource_id: String, bgm: bool, playing: bool) {
+        let channel_id = u64::from(bgm);
+        self.audio.retain(|state| state.channel_id != channel_id);
+        if playing {
+            self.audio.push(AudioState {
+                channel_id,
+                resource_id,
+                repeat_count: if bgm { -1 } else { 1 },
+                volume_millionths: 1_000_000,
+                playing: true,
+                revision: self.revision.saturating_add(1),
+            });
+        }
+        self.bump();
+    }
+
+    #[allow(clippy::fn_params_excessive_bools)]
+    pub(crate) fn set_projection(
+        &mut self,
+        column_cells: bool,
+        separators: bool,
+        html: bool,
+        graphics: bool,
+        audio: bool,
+    ) {
         self.project_column_cells = column_cells;
         self.project_separators = separators;
+        self.project_html = html;
+        self.project_graphics = graphics;
+        self.project_audio = audio;
+    }
+
+    pub(crate) fn configure_layout(
+        &mut self,
+        width: u32,
+        print_c_per_line: u32,
+        print_c_length: u32,
+    ) {
+        self.settings.drawable_width_millipixels = i64::from(width).saturating_mul(1_000);
+        self.print_c_per_line = print_c_per_line.max(1);
+        self.print_c_length = print_c_length.max(1);
+        self.bump();
     }
 
     fn commit_line(&mut self) {
@@ -199,11 +332,12 @@ impl PresentationModel {
             temporary: self.pending_temporary,
             logical_line_start: true,
             line_end: true,
-            alignment: LineAlignment::Left,
+            alignment: self.current_alignment,
             layout_width_millipixels: None,
             runs: std::mem::take(&mut self.pending_runs),
         };
         self.pending_temporary = false;
+        self.pending_column_cells = 0;
         self.next_line = self.next_line.saturating_add(1);
         self.lines.push(line);
         self.bump();
@@ -212,7 +346,7 @@ impl PresentationModel {
     fn text_run(&self, text: String) -> DisplayRun {
         DisplayRun::Text {
             text,
-            style: default_style(),
+            style: self.current_style.clone(),
             layout: RunLayout {
                 x_millipixels: 0,
                 y_millipixels: 0,
@@ -256,12 +390,12 @@ impl PresentationModel {
             temporary: false,
             logical_line_start: true,
             line_end: true,
-            alignment: LineAlignment::Left,
+            alignment: self.current_alignment,
             layout_width_millipixels: None,
             runs: vec![DisplayRun::Button {
                 runs: vec![DisplayRun::Text {
                     text,
-                    style: default_style(),
+                    style: self.current_style.clone(),
                     layout,
                     system_text,
                 }],
@@ -289,7 +423,7 @@ impl PresentationModel {
                 temporary: self.pending_temporary,
                 logical_line_start: true,
                 line_end: false,
-                alignment: LineAlignment::Left,
+                alignment: self.current_alignment,
                 layout_width_millipixels: None,
                 runs: self.pending_runs.clone(),
             });
@@ -299,13 +433,23 @@ impl PresentationModel {
             self.project_column_cells,
             self.project_separators,
             self.settings.line_height_millipixels,
+            self.project_html,
+            self.project_graphics,
         );
         PresentationSnapshot {
             revision: self.revision,
             title: self.title.clone(),
             lines,
-            backgrounds: Vec::new(),
-            audio: Vec::new(),
+            backgrounds: if self.project_graphics {
+                self.backgrounds.clone()
+            } else {
+                Vec::new()
+            },
+            audio: if self.project_audio {
+                self.audio.clone()
+            } else {
+                Vec::new()
+            },
             input_wait: self.input_wait.clone(),
             settings: self.settings.clone(),
         }
@@ -367,7 +511,15 @@ fn run_is_empty(run: &DisplayRun) -> bool {
     }
 }
 
-fn project_lines(lines: &mut [DisplayLine], cells: bool, separators: bool, line_height: i64) {
+#[allow(clippy::fn_params_excessive_bools)]
+fn project_lines(
+    lines: &mut [DisplayLine],
+    cells: bool,
+    separators: bool,
+    line_height: i64,
+    html: bool,
+    graphics: bool,
+) {
     for line in lines {
         let mut projected = Vec::new();
         for run in std::mem::take(&mut line.runs) {
@@ -386,10 +538,43 @@ fn project_lines(lines: &mut [DisplayLine], cells: bool, separators: bool, line_
                         line_height,
                     ));
                 }
+                DisplayRun::Html { markup } if !html => {
+                    projected.push(plain_text(strip_markup(&markup), line_height));
+                }
+                DisplayRun::Image { alt_text, .. } if !graphics => {
+                    if let Some(text) = alt_text {
+                        projected.push(plain_text(text, line_height));
+                    }
+                }
+                DisplayRun::Shape { .. } if !graphics => {}
                 other => projected.push(other),
             }
         }
         line.runs = projected;
+    }
+}
+
+fn strip_markup(markup: &str) -> String {
+    let mut output = String::new();
+    let mut in_tag = false;
+    for character in markup.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => output.push(character),
+            _ => {}
+        }
+    }
+    output
+}
+
+fn rgb_color(value: i64) -> Color {
+    let value = u32::try_from(value).unwrap_or_default();
+    Color {
+        red: ((value >> 16) & 0xff) as u8,
+        green: ((value >> 8) & 0xff) as u8,
+        blue: (value & 0xff) as u8,
+        alpha: 255,
     }
 }
 
@@ -489,7 +674,7 @@ mod tests {
     #[test]
     fn plain_projection_keeps_cell_content_and_inserts_one_ascii_space() {
         let mut model = PresentationModel::default();
-        model.set_projection(false, false);
+        model.set_projection(false, false, false, false, false);
         model.append_column_cell("A".into(), CellAlignment::Right);
         model.append_column_cell("B".into(), CellAlignment::Right);
         let snapshot = model.snapshot();
@@ -539,5 +724,35 @@ mod tests {
         );
         assert!(logical_line_string("\u{301}", 10).is_err());
         assert!(logical_line_string("", 10).is_err());
+    }
+
+    #[test]
+    fn style_and_media_are_canonical_but_capability_projected() {
+        let mut model = PresentationModel::default();
+        model.set_font_style(1 | 8);
+        model.set_alignment(LineAlignment::Center);
+        model.append_print_text("styled".into(), false, true);
+        model.append_html("<b>fallback</b>".into());
+        model.append_image("image.png".into(), Some("image".into()));
+        model.set_audio("sound.ogg".into(), false, true);
+
+        let fallback = model.snapshot();
+        assert!(fallback.audio.is_empty());
+        assert_eq!(fallback.lines[0].alignment, LineAlignment::Center);
+        let DisplayRun::Text { style, .. } = &fallback.lines[0].runs[0] else {
+            panic!("first run must be text");
+        };
+        assert!(style.bold);
+        assert!(style.underline);
+        assert!(matches!(
+            &fallback.lines[1].runs[0],
+            DisplayRun::Text { text, .. } if text == "fallback"
+        ));
+
+        model.set_projection(true, true, true, true, true);
+        let rich = model.snapshot();
+        assert_eq!(rich.audio.len(), 1);
+        assert!(matches!(rich.lines[1].runs[0], DisplayRun::Html { .. }));
+        assert!(matches!(rich.lines[2].runs[0], DisplayRun::Image { .. }));
     }
 }

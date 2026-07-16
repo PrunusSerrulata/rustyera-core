@@ -59,6 +59,7 @@ pub struct PreparedRuntimeState {
     pub(crate) generation: GenerationId,
     pub(crate) memory: crate::Memory,
     pub(crate) reset_execution: bool,
+    pub(crate) structured_state: Option<Vec<u8>>,
 }
 
 /// Transactional state access used by the runtime's built-in system controller.

@@ -1,11 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use erabasic_bytecode::{BytecodeArtifact, RuntimeImport, SymbolKey};
 use serde::{Deserialize, Serialize};
 
 use crate::sfmt::Sfmt19937;
-use crate::{FiberId, HostRequestId, HostWrite, VmValue};
+use crate::structured::{StructuredExtension, StructuredScope};
+use crate::structured::{StructuredNative, StructuredState, bundle_key, is_structured_name};
+use crate::{FiberId, HostRequestId, HostWrite, PlaceDescriptor, VmValue};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -81,13 +83,42 @@ pub trait VmHost {
 pub struct NativeCallRequest {
     pub import: RuntimeImport,
     pub arguments: Vec<VmValue>,
+    /// Immutable snapshots of place arguments. Native services cannot dereference
+    /// VM places themselves; the interpreter resolves every view before calling
+    /// the service and validates returned writes again before committing them.
+    pub places: Vec<NativePlaceView>,
+    /// Reference pseudo-variables used by legacy multi-result functions.
+    pub implicit_places: BTreeMap<String, NativePlaceView>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativePlaceView {
+    pub argument_index: usize,
+    pub target: PlaceDescriptor,
+    pub values: Vec<VmValue>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NativeReady {
+    pub value: Option<VmValue>,
+    pub writes: Vec<HostWrite>,
+}
+
+impl NativeReady {
+    #[must_use]
+    pub const fn value(value: VmValue) -> Self {
+        Self {
+            value: Some(value),
+            writes: Vec::new(),
+        }
+    }
 }
 
 pub trait NativeService: Send {
     /// # Errors
     ///
     /// Returns an error when the service rejects the request or cannot produce a result.
-    fn call(&mut self, request: NativeCallRequest) -> Result<Option<VmValue>, String>;
+    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String>;
 
     /// `None` marks state that cannot participate in a VM snapshot.
     ///
@@ -114,7 +145,12 @@ pub trait NativeService: Send {
 pub struct NativeServiceRegistry {
     services: BTreeMap<SymbolKey, Box<dyn NativeService>>,
     random: Option<Arc<Mutex<Sfmt19937>>>,
+    structured: Option<Arc<Mutex<StructuredState>>>,
+    structured_keys: BTreeSet<SymbolKey>,
+    extensions: erabasic_data::ExtensionData,
 }
+
+type PreparedStructuredImport = (Option<Vec<u8>>, BTreeSet<(u8, String)>);
 
 impl NativeServiceRegistry {
     /// Register the small VM-native services emitted directly by the compiler.
@@ -126,12 +162,25 @@ impl NativeServiceRegistry {
 
     #[must_use]
     pub fn for_artifact_with_seed(artifact: &BytecodeArtifact, seed: u64) -> Self {
-        let mut registry = Self::default();
+        let mut registry = Self {
+            extensions: artifact.project_data.static_data.extensions.clone(),
+            ..Self::default()
+        };
         let random = Arc::new(Mutex::new(Sfmt19937::new(seed)));
+        let structured = Arc::new(Mutex::new(StructuredState::default()));
         registry.random = Some(Arc::clone(&random));
         for native in &artifact.native_imports {
             let name = native.import.name.as_str();
-            if matches!(name, "format_integer" | "format_string") || name.starts_with("control_") {
+            if is_structured_name(name) {
+                registry.structured = Some(Arc::clone(&structured));
+                registry.structured_keys.insert(native.import.key);
+                registry.register(
+                    native.import.key,
+                    StructuredNative::new(name, Arc::clone(&structured)),
+                );
+            } else if matches!(name, "format_integer" | "format_string")
+                || name.starts_with("control_")
+            {
                 registry.register(native.import.key, CompilerNative { name: name.into() });
             } else if matches!(name, "rand" | "randomize" | "initrand" | "dumprand") {
                 registry.register(
@@ -183,11 +232,104 @@ impl NativeServiceRegistry {
         &mut self,
         key: SymbolKey,
         request: NativeCallRequest,
-    ) -> Result<Option<VmValue>, String> {
+    ) -> Result<NativeReady, String> {
         self.services
             .get_mut(&key)
             .ok_or_else(|| format!("native service {key:?} is not registered"))?
             .call(request)
+    }
+
+    pub(crate) fn checkpoint(&self, key: SymbolKey) -> Result<Option<Vec<u8>>, String> {
+        if self.structured_keys.contains(&key) {
+            return self
+                .structured
+                .as_ref()
+                .ok_or_else(|| "structured native bundle is not registered".to_owned())?
+                .lock()
+                .map_err(|_| "structured native state lock is poisoned".to_owned())?
+                .encode()
+                .map(Some);
+        }
+        self.services
+            .get(&key)
+            .ok_or_else(|| format!("native service {key:?} is not registered"))?
+            .snapshot()
+    }
+
+    pub(crate) fn rollback(&mut self, key: SymbolKey, state: &[u8]) -> Result<(), String> {
+        if self.structured_keys.contains(&key) {
+            let decoded = StructuredState::decode(state)?;
+            *self
+                .structured
+                .as_ref()
+                .ok_or_else(|| "structured native bundle is not registered".to_owned())?
+                .lock()
+                .map_err(|_| "structured native state lock is poisoned".to_owned())? = decoded;
+            return Ok(());
+        }
+        self.services
+            .get_mut(&key)
+            .ok_or_else(|| format!("native service {key:?} is not registered"))?
+            .restore(state)
+    }
+
+    pub(crate) fn prepare_structured_transaction(
+        &self,
+        transaction: &crate::VmRuntimeStateTransaction,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let Some(structured) = &self.structured else {
+            return Ok(None);
+        };
+        let mut candidate = structured
+            .lock()
+            .map_err(|_| "structured native state lock is poisoned".to_owned())?
+            .clone();
+        candidate.clear_for_transaction(&self.extensions, transaction);
+        candidate.encode().map(Some)
+    }
+
+    pub(crate) fn prepare_structured_import(
+        &self,
+        transaction: &crate::VmRuntimeStateTransaction,
+        scope: StructuredScope,
+        values: &[StructuredExtension],
+    ) -> Result<PreparedStructuredImport, String> {
+        let Some(structured) = &self.structured else {
+            return Ok((None, BTreeSet::new()));
+        };
+        let mut candidate = structured
+            .lock()
+            .map_err(|_| "structured native state lock is poisoned".to_owned())?
+            .clone();
+        candidate.clear_for_transaction(&self.extensions, transaction);
+        let imported = candidate.import_extensions(&self.extensions, scope, values)?;
+        Ok((Some(candidate.encode()?), imported))
+    }
+
+    pub(crate) fn structured_extensions(
+        &self,
+        scope: StructuredScope,
+    ) -> Result<Vec<StructuredExtension>, String> {
+        self.structured.as_ref().map_or_else(
+            || Ok(Vec::new()),
+            |structured| {
+                structured
+                    .lock()
+                    .map_err(|_| "structured native state lock is poisoned".to_owned())?
+                    .export_extensions(&self.extensions, scope)
+            },
+        )
+    }
+
+    pub(crate) fn commit_structured_state(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let decoded = StructuredState::decode(bytes)?;
+        *self
+            .structured
+            .as_ref()
+            .ok_or_else(|| "structured native bundle is not registered".to_owned())?
+            .lock()
+            .map_err(|_| "structured native state lock is poisoned".to_owned())? = decoded;
+        Ok(())
     }
 
     pub(crate) fn random_values(&self) -> Result<Vec<i64>, String> {
@@ -212,7 +354,8 @@ impl NativeServiceRegistry {
     }
 
     pub(crate) fn snapshots(&self) -> Result<BTreeMap<SymbolKey, Vec<u8>>, String> {
-        self.services
+        let mut snapshots = self
+            .services
             .iter()
             .map(|(key, service)| {
                 service
@@ -220,7 +363,17 @@ impl NativeServiceRegistry {
                     .map(|state| (*key, state))
                     .ok_or_else(|| format!("native service {key:?} is not snapshot-capable"))
             })
-            .collect()
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        if let Some(structured) = &self.structured {
+            snapshots.insert(
+                bundle_key(),
+                structured
+                    .lock()
+                    .map_err(|_| "structured native state lock is poisoned".to_owned())?
+                    .encode()?,
+            );
+        }
+        Ok(snapshots)
     }
 
     pub(crate) fn restore_snapshots(
@@ -229,13 +382,34 @@ impl NativeServiceRegistry {
     ) -> Result<(), String> {
         let previous = self.snapshots()?;
         for (key, state) in states {
-            let outcome = self.services.get_mut(key).map_or_else(
-                || Err(format!("native service {key:?} is not registered")),
-                |service| service.restore(state),
-            );
+            let outcome = if *key == bundle_key() {
+                self.structured.as_ref().map_or_else(
+                    || Err("structured native bundle is not registered".into()),
+                    |structured| {
+                        let decoded = StructuredState::decode(state)?;
+                        *structured
+                            .lock()
+                            .map_err(|_| "structured native state lock is poisoned".to_owned())? =
+                            decoded;
+                        Ok(())
+                    },
+                )
+            } else {
+                self.services.get_mut(key).map_or_else(
+                    || Err(format!("native service {key:?} is not registered")),
+                    |service| service.restore(state),
+                )
+            };
             if let Err(error) = outcome {
                 for (rollback_key, rollback) in &previous {
-                    if let Some(service) = self.services.get_mut(rollback_key) {
+                    if *rollback_key == bundle_key() {
+                        if let (Some(structured), Ok(decoded)) =
+                            (&self.structured, StructuredState::decode(rollback))
+                            && let Ok(mut state) = structured.lock()
+                        {
+                            *state = decoded;
+                        }
+                    } else if let Some(service) = self.services.get_mut(rollback_key) {
                         let _ = service.restore(rollback);
                     }
                 }
@@ -257,7 +431,10 @@ impl NativeServiceRegistry {
         let mut target = Self::for_artifact(artifact);
         let retained = previous
             .into_iter()
-            .filter(|(key, _)| target.services.contains_key(key))
+            .filter(|(key, _)| {
+                target.services.contains_key(key)
+                    || (*key == bundle_key() && target.structured.is_some())
+            })
             .collect();
         target.restore_snapshots(&retained)?;
         Ok(target)
@@ -274,7 +451,7 @@ impl NativeService for CoreNative {
         clippy::cast_precision_loss,
         clippy::too_many_lines
     )]
-    fn call(&mut self, request: NativeCallRequest) -> Result<Option<VmValue>, String> {
+    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String> {
         let args = &request.arguments;
         let integer = |index: usize| match args.get(index) {
             Some(VmValue::Integer(value)) => Ok(*value),
@@ -406,7 +583,7 @@ impl NativeService for CoreNative {
             }
             _ => return Err(format!("unknown core-native service {}", self.name)),
         };
-        Ok(Some(result))
+        Ok(NativeReady::value(result))
     }
 }
 
@@ -460,13 +637,13 @@ struct CompilerNative {
 }
 
 impl NativeService for CompilerNative {
-    fn call(&mut self, request: NativeCallRequest) -> Result<Option<VmValue>, String> {
+    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String> {
         match self.name.as_str() {
             "format_integer" => {
                 let Some(VmValue::Integer(value)) = request.arguments.first() else {
                     return Err("format_integer expects an integer".into());
                 };
-                Ok(Some(VmValue::String(apply_width(
+                Ok(NativeReady::value(VmValue::String(apply_width(
                     &value.to_string(),
                     request.arguments.get(1),
                 )?)))
@@ -482,7 +659,7 @@ impl NativeService for CompilerNative {
                         return Err("format_string cannot dereference a place".into());
                     }
                 };
-                Ok(Some(VmValue::String(apply_width(
+                Ok(NativeReady::value(VmValue::String(apply_width(
                     &value,
                     request.arguments.get(1),
                 )?)))
@@ -501,7 +678,7 @@ struct RandomNative {
 }
 
 impl NativeService for RandomNative {
-    fn call(&mut self, request: NativeCallRequest) -> Result<Option<VmValue>, String> {
+    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String> {
         let mut state = self
             .state
             .lock()
@@ -515,7 +692,7 @@ impl NativeService for RandomNative {
                     return Err("RAND maximum must be positive".into());
                 }
                 let value = state.next_u64() % (*maximum).cast_unsigned();
-                Ok(Some(VmValue::Integer(
+                Ok(NativeReady::value(VmValue::Integer(
                     i64::try_from(value).expect("RAND modulo positive i64 fits i64"),
                 )))
             }
@@ -526,7 +703,7 @@ impl NativeService for RandomNative {
                     _ => return Err("RANDOMIZE seed must be an integer".into()),
                 };
                 state.reseed(seed);
-                Ok(None)
+                Ok(NativeReady::default())
             }
             "initrand" | "dumprand" => Err(format!(
                 "{} must be executed through the VM place transaction",
@@ -602,6 +779,8 @@ mod tests {
                         result: None,
                     },
                     arguments: vec![VmValue::Integer(0)],
+                    places: Vec::new(),
+                    implicit_places: BTreeMap::new(),
                 })
                 .is_err()
         );
