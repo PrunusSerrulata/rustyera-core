@@ -3,8 +3,8 @@ use std::io::{Read, Write};
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 
 use crate::{
-    OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveFileKind,
-    SaveFormat, SaveMetadata, SaveValue,
+    OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveExtension,
+    SaveFileKind, SaveFormat, SaveMetadata, SaveValue,
 };
 
 const HEADER: u64 = 0x0A1A_0A0D_4152_4589;
@@ -215,6 +215,96 @@ pub fn encode_binary(
         return Err(SaveCodecError::LimitExceeded("maximum bytes"));
     }
     Ok(output)
+}
+
+/// Decode one already-delimited Emuera extension record without losing entry order.
+///
+/// # Errors
+///
+/// Returns an error when the tag, payload shape, or configured limits are invalid.
+pub fn decode_save_extension(
+    extension: &OpaqueSaveExtension,
+    limits: SaveCodecLimits,
+) -> Result<SaveExtension, SaveCodecError> {
+    let mut reader = Cursor::new(&extension.payload, limits);
+    let decoded = match extension.type_tag {
+        0x20 => {
+            let count = reader.u32()? as usize;
+            if count > limits.maximum_entries {
+                return Err(SaveCodecError::LimitExceeded("map entries"));
+            }
+            let mut entries = Vec::with_capacity(count);
+            for _ in 0..count {
+                entries.push((reader.string()?, reader.string()?));
+            }
+            SaveExtension::Map {
+                key: extension.key.clone(),
+                entries,
+            }
+        }
+        0x21 => SaveExtension::Xml {
+            key: extension.key.clone(),
+            document: reader.string()?,
+        },
+        0x22 => SaveExtension::DataTable {
+            key: extension.key.clone(),
+            schema: reader.string()?,
+            data: reader.string()?,
+        },
+        _ => {
+            return Err(SaveCodecError::InvalidFormat(
+                "unknown save extension tag".into(),
+            ));
+        }
+    };
+    if !reader.remaining().is_empty() {
+        return Err(SaveCodecError::InvalidFormat(
+            "save extension has trailing bytes".into(),
+        ));
+    }
+    Ok(decoded)
+}
+
+/// Encode one typed Emuera extension as the exact payload consumed by the binary codec.
+///
+/// # Errors
+///
+/// Returns an error when a string or entry count exceeds the configured limits.
+pub fn encode_save_extension(
+    extension: &SaveExtension,
+    limits: SaveCodecLimits,
+) -> Result<OpaqueSaveExtension, SaveCodecError> {
+    let (type_tag, key, payload) = match extension {
+        SaveExtension::Map { key, entries } => {
+            if entries.len() > limits.maximum_entries {
+                return Err(SaveCodecError::LimitExceeded("map entries"));
+            }
+            let count = u32::try_from(entries.len())
+                .map_err(|_| SaveCodecError::LimitExceeded("map entries"))?;
+            let mut payload = count.to_le_bytes().to_vec();
+            for (entry_key, value) in entries {
+                write_string(&mut payload, entry_key, limits)?;
+                write_string(&mut payload, value, limits)?;
+            }
+            (0x20, key, payload)
+        }
+        SaveExtension::Xml { key, document } => {
+            let mut payload = Vec::new();
+            write_string(&mut payload, document, limits)?;
+            (0x21, key, payload)
+        }
+        SaveExtension::DataTable { key, schema, data } => {
+            let mut payload = Vec::new();
+            write_string(&mut payload, schema, limits)?;
+            write_string(&mut payload, data, limits)?;
+            (0x22, key, payload)
+        }
+    };
+    Ok(OpaqueSaveExtension {
+        type_tag,
+        key: key.clone(),
+        payload,
+    })
 }
 
 fn write_entries(

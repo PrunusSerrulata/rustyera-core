@@ -61,11 +61,12 @@ dynamic library. It never performs file I/O or samples a clock/device directly. 
 frontend submits project contents and pumps versioned envelopes through
 `session_submit`, `session_drive`, and `session_poll`.
 
-This stage does not yet implement traditional save serialization/restoration, exact VM
-snapshot restoration, hot reload orchestration, primitive mouse input, the reference
-system process beyond title/new-game entry, the debugger protocol, or the complete set
-of presentation/storage/media Host calls. These capabilities are not advertised during
-handshake and requests for reserved lifecycle features are rejected explicitly. The
+The runtime now includes current-format traditional saves, frontend-normalized primitive input,
+core system flows, stable-wait exact snapshots, and normalized incremental hot reload. It does not
+yet implement candidate `SAVEINFO` transactions, the complete save/delete controller,
+Map/XML/DataTable execution, runtime-owned menu snapshots, the debugger protocol, or the complete
+set of presentation/storage/media Host calls. Only implemented capabilities are advertised during
+handshake. The
 interfaces and current boundary are documented in
 [`docs/runtime-protocol.md`](docs/runtime-protocol.md),
 [`docs/debug-protocol.md`](docs/debug-protocol.md), and the

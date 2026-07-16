@@ -11,11 +11,12 @@ use crate::{
     PresentationDelta, PresentationSnapshot, ProjectLoadReport, ProjectManifest, ReloadProject,
     ResynchronizeRequest, RuntimeFault, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement,
     ServerHello, ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
-    StateExportReady, StateExportRequest, StorageRequest, StorageResponse, VersionRejected,
-    WaitChange,
+    StateExportChunk, StateExportChunkRequest, StateExportReady, StateExportRequest,
+    StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady,
+    StateTransferCancel, StorageRequest, StorageResponse, VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(7, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(8, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -89,6 +90,22 @@ pub enum RuntimeMessage {
     StateExportRequest(#[n(0)] StateExportRequest),
     #[n(61)]
     StateExportReady(#[n(0)] StateExportReady),
+    #[n(62)]
+    StateImportBegin(#[n(0)] StateImportBegin),
+    #[n(63)]
+    StateImportAccepted(#[n(0)] StateImportAccepted),
+    #[n(64)]
+    StateImportChunk(#[n(0)] StateImportChunk),
+    #[n(65)]
+    StateImportCommit(#[n(0)] StateImportCommit),
+    #[n(66)]
+    StateImportReady(#[n(0)] StateImportReady),
+    #[n(67)]
+    StateExportChunkRequest(#[n(0)] StateExportChunkRequest),
+    #[n(68)]
+    StateExportChunk(#[n(0)] StateExportChunk),
+    #[n(69)]
+    StateTransferCancel(#[n(0)] StateTransferCancel),
     #[n(90)]
     ShutdownRequest(#[n(0)] ShutdownRequest),
     #[n(91)]
@@ -134,6 +151,14 @@ impl RuntimeMessage {
             Self::CancelExternalRequest(_) => 54,
             Self::StateExportRequest(_) => 60,
             Self::StateExportReady(_) => 61,
+            Self::StateImportBegin(_) => 62,
+            Self::StateImportAccepted(_) => 63,
+            Self::StateImportChunk(_) => 64,
+            Self::StateImportCommit(_) => 65,
+            Self::StateImportReady(_) => 66,
+            Self::StateExportChunkRequest(_) => 67,
+            Self::StateExportChunk(_) => 68,
+            Self::StateTransferCancel(_) => 69,
             Self::ShutdownRequest(_) => 90,
             Self::ShutdownReady(_) => 91,
             Self::Fault(_) => 92,

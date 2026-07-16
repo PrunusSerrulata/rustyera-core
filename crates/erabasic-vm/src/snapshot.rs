@@ -10,7 +10,7 @@ use crate::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SnapshotBlocker {
@@ -43,7 +43,9 @@ pub struct VmSnapshot {
     next_frame: u64,
     next_request: u64,
     next_generation: u64,
-    native_states: BTreeMap<erabasic_bytecode::SymbolKey, Vec<u8>>,
+    // JSON object keys cannot losslessly represent a 128-bit SymbolKey. A sorted
+    // pair list keeps the snapshot deterministic and format-independent.
+    native_states: Vec<(erabasic_bytecode::SymbolKey, Vec<u8>)>,
 }
 
 impl VmSnapshot {
@@ -201,7 +203,11 @@ impl Vm {
             next_frame: self.next_frame,
             next_request: self.next_request,
             next_generation: self.next_generation,
-            native_states: natives.snapshots().map_err(VmError::Snapshot)?,
+            native_states: natives
+                .snapshots()
+                .map_err(VmError::Snapshot)?
+                .into_iter()
+                .collect(),
         })
     }
 
@@ -243,8 +249,9 @@ impl Vm {
             })
             .collect::<Vec<_>>();
         let previous_native = natives.snapshots().map_err(VmError::Snapshot)?;
+        let native_states = snapshot.native_states.iter().cloned().collect();
         natives
-            .restore_snapshots(&snapshot.native_states)
+            .restore_snapshots(&native_states)
             .map_err(VmError::Snapshot)?;
         if let Err(error) = host.rebind_snapshot(&rebinds) {
             let _ = natives.restore_snapshots(&previous_native);

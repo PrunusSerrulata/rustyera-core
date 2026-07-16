@@ -360,7 +360,7 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `7.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `8.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
@@ -396,8 +396,9 @@ CSV、ERH 和 ERB 必须提交 UTF-8 文本。源码位置统一为 UTF-8 byte o
 Runtime 返回 `ProjectLoadReport`（tag `11`）：原 revision、`success` 和按确定性顺序排列
 的诊断。诊断包含稳定 `code`、严重度、文本以及可选的相对路径和 byte span。
 
-`ReloadProject`（tag `12`）和增量文件变更已在协议中预留；没有协商
-`ProjectReload` 时不得发送。
+`ReloadProject`（tag `12`）提交基于当前 revision 的规范化增量。Runtime 在隔离候选
+状态中完成加载、分析、增量编译和验证，再通过 VM 多代热替换原子提交；失败保持当前
+artifact 和运行状态。没有协商 `ProjectReload` 时不得发送。
 
 ### 启动
 
@@ -406,6 +407,17 @@ Runtime 返回 `ProjectLoadReport`（tag `11`）：原 revision、`success` 和�
 - `NewGame { seed: Some(u64) }`：使用前端提供的确定性 seed；
 - `NewGame { seed: None }`：runtime 会发出 `Entropy/random_seed` 服务请求；
 - `TraditionalSave` 和 `VmSnapshot`：仅在相应功能已协商时发送。
+
+传统存档与 VM Snapshot 不再内联到 `Start`。前端先发送 `StateImportBegin`（tag `62`），
+按 Runtime 返回的 transfer ID 连续发送 `StateImportChunk`（tag `64`），再发送
+`StateImportCommit`（tag `65`）。收到 `StateImportReady`（tag `66`）后，`Start` 只携带
+该 transfer ID，且成功启动会一次性消费它。声明包含总字节数和原始 32-byte BLAKE3
+摘要；乱序、缺块、超限或摘要不符都会被拒绝。
+
+导出由 `StateExportRequest`（tag `60`）开始。`StateExportReady`（tag `61`）返回长度、
+摘要和 transfer ID，前端随后使用 `StateExportChunkRequest`（tag `67`）顺序读取
+`StateExportChunk`（tag `68`）。任一方向都可用 `StateTransferCancel`（tag `69`）释放；
+同一会话每个方向最多一个活动 transfer。
 
 Runtime 使用 `StateChanged`（tag `21`）报告 `Negotiating`、`LoadingProject`、`Ready`、
 `Starting`、`Running`、`WaitingInput`、`Paused`、`Reloading`、`Stopping`、`Stopped` 或
@@ -511,7 +523,7 @@ runtime；应先取出消息，再异步或同步完成平台工作，最后通�
 `recursive`；`Stat` 只返回长度和 revision，不传输文件内容。
 读取/写入/列表/元数据结果可以携带前端生成的 revision。
 
-协议 7.0 通过 `RuntimeFeature::Storage` 协商该能力。只有握手协商且实际收到
+协议 8.0 通过 `RuntimeFeature::Storage` 协商该能力。只有握手协商且实际收到
 `StorageRequest` 时前端才应执行 I/O；前端不得主动发送无对应 request ID 的
 `StorageResponse`。
 

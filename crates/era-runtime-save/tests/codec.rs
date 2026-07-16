@@ -1,6 +1,7 @@
 use era_runtime_save::{
-    SaveCodecLimits, SaveDocument, SaveEntry, SaveFileKind, SaveFormat, SaveMetadata, SaveValue,
-    Text1808Layout, Text1808ValueType, Text1808Variable, decode, decode_text_with_layout, encode,
+    SaveCodecLimits, SaveDocument, SaveEntry, SaveExtension, SaveFileKind, SaveFormat,
+    SaveMetadata, SaveValue, Text1808Layout, Text1808ValueType, Text1808Variable, decode,
+    decode_save_extension, decode_text_with_layout, encode, encode_save_extension,
     encode_text_with_layout,
 };
 
@@ -103,6 +104,43 @@ fn all_current_binary_file_kinds_round_trip() {
             document
         );
     }
+}
+
+#[test]
+fn typed_binary_extensions_preserve_map_order_and_xml_payloads() {
+    let extensions = vec![
+        SaveExtension::Map {
+            key: "inventory".into(),
+            entries: vec![("b".into(), "2".into()), ("a".into(), "1".into())],
+        },
+        SaveExtension::Xml {
+            key: "tree".into(),
+            document: "<root><value>🙂</value></root>".into(),
+        },
+        SaveExtension::DataTable {
+            key: "rows".into(),
+            schema: "<schema />".into(),
+            data: "<data />".into(),
+        },
+    ];
+    let mut document = binary_document(SaveFormat::Binary1808);
+    document.opaque_extensions = extensions
+        .iter()
+        .map(|extension| encode_save_extension(extension, SaveCodecLimits::default()).unwrap())
+        .collect();
+    let bytes = encode(
+        &document,
+        SaveFormat::Binary1808,
+        SaveCodecLimits::default(),
+    )
+    .unwrap();
+    let decoded = decode(&bytes, SaveCodecLimits::default()).unwrap();
+    let typed: Vec<_> = decoded
+        .opaque_extensions
+        .iter()
+        .map(|extension| decode_save_extension(extension, SaveCodecLimits::default()).unwrap())
+        .collect();
+    assert_eq!(typed, extensions);
 }
 
 #[test]

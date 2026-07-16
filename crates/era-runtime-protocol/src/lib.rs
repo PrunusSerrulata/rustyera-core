@@ -21,8 +21,11 @@ pub use lifecycle::{
     ClientCapabilities, ClientHello, ClientStateChanged, CommandErrorCode, CommandRejected,
     ExitReason, ExitRequested, FaultCode, InputModality, ResynchronizeRequest, RuntimeFault,
     RuntimeFeature, RuntimeLimits, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement,
-    ServerHello, ShutdownReady, ShutdownRequest, StartMode, StartRequest, StateExportKind,
-    StateExportReady, StateExportRequest, StateExportResult, VersionRejected,
+    ServerHello, ShutdownReady, ShutdownRequest, SnapshotIneligibleReason, StartMode, StartRequest,
+    StateExportChunk, StateExportChunkRequest, StateExportKind, StateExportReady,
+    StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk,
+    StateImportCommit, StateImportReady, StateTransferCancel, StateTransferDescriptor,
+    VersionRejected,
 };
 pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage, RuntimeResynchronized};
 pub use presentation::{

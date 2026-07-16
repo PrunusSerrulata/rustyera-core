@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 7.0 over common wire 2.0 is a development contract: by explicit project policy it
+dynamic library. Runtime protocol 8.0 over common wire 2.0 is a development contract: by explicit project policy it
 does not promise backward compatibility until a frontend exists.
 
 ## Authority and ownership
@@ -91,11 +91,18 @@ Runtime-initiated work is asynchronous:
 The runtime and all lower crates perform no concrete file I/O and sample no system clock.
 Current ordinary text, binary and gzip traditional saves are encoded and decoded in memory. Export is
 eligible only at a stable untimed input wait; restore validates a candidate VM state before an
-atomic commit. Slot and Host-command bytes cross only storage messages. Schema-aware UTF-8 text
+atomic commit. Large explicit imports and exports use one negotiated transfer in each direction:
+the sender declares kind, exact length and a raw BLAKE3 digest, chunks are contiguous and ordered,
+and a committed import is consumed once by `Start`. Traditional saves therefore never rely on the
+single-envelope payload limit. Slot and Host-command bytes cross only storage messages. Schema-aware UTF-8 text
 saves use the reference positional and named-group layout with BOM/CRLF output. Current global,
 character DAT, arbitrary UTF-8 text and canonical runtime-log operations are connected; the pinned
 reference's unimplemented `SAVEVAR`/`LOADVAR` remain a stable unsupported operation. Exact VM
-snapshots remain a later feature and must accept only the exact artifact identity.
+snapshots are available at stable, untimed VM input waits. Their checksummed runtime wrapper binds
+the VM image to the exact artifact and normalized project/resource identity, restores canonical
+presentation and pending input state atomically, and regenerates epoch-bound wait/interaction
+identities. Runtime-owned system-menu waits remain ineligible until their controller snapshots are
+fully rebound.
 
 Storage is negotiated as `RuntimeFeature::Storage`. `Stat` returns metadata without transferring
 contents. `List { pattern, recursive }` returns frontend-relative entries; runtime sorts any list
@@ -176,11 +183,11 @@ resynchronization, full in-memory project load/analyze/compile/validate, determi
 startup, bounded VM driving, logical-line text/column/separator presentation, reference-shaped
 waits and timeouts, fresh GETKEY-family queries, frontend-owned local time, seed acquisition,
 SFMT-backed RAND/RANDOMIZE, transactional array/find/regex Native operations, current ordinary
-binary/gzip traditional-save export and atomic restore, correlated slot listing/loading, faults
-and cancellation-aware shutdown.
+text/binary/gzip traditional-save export and atomic restore, chunked exact snapshots at stable VM
+input waits, normalized incremental reload with generation-pinned VM commit, correlated slot
+listing/loading, faults and cancellation-aware shutdown.
 The compiler uses an explicit execution catalog rather than Host-name heuristics. Configuration
-and resource inputs receive stable diagnostics; semantic configuration needed by save/shop flow is
-retained while GUI/device options remain frontend state. The schema-aware positional text writer,
-global/DAT/log save operations, save-slot writes/overwrite/autosave, complete shop/training flow,
-remaining CSV/character Native services, reload, exact snapshots, media/audio execution and
-debugger execution remain unavailable.
+and resource inputs receive deterministic identities and diagnostics; semantic configuration needed
+by save/shop flow is retained while GUI/device options remain frontend state. Candidate SAVEINFO
+transactions, the complete slot/delete controller, executable Map/XML/DataTable Native services,
+runtime-owned menu snapshots, media/audio execution and debugger execution remain unavailable.

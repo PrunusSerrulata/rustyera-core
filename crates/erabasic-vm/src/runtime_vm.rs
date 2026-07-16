@@ -6,8 +6,8 @@ use crate::{
     HostCallResult, HostReady, HostRequestId, HostWaitStability, HotReloadReport,
     NativeServiceRegistry, PreparedRuntimeState, RunBudget, SnapshotEligibility, Vm, VmConfig,
     VmDriveMode, VmError, VmHost, VmHostCompletion, VmHostRequest, VmPortDriveReport, VmPortEvent,
-    VmPortStop, VmRuntimePort, VmRuntimeRead, VmRuntimeStatePort, VmRuntimeStateTransaction,
-    VmSnapshot, VmValue,
+    VmPortStop, VmRestorePort, VmRuntimePort, VmRuntimeRead, VmRuntimeStatePort,
+    VmRuntimeStateTransaction, VmSnapshot, VmValue, VmWaitRebind,
 };
 
 /// Runtime-facing VM owner. It keeps native services beside the interpreter so the
@@ -15,6 +15,7 @@ use crate::{
 pub struct RuntimeVm {
     vm: Vm,
     natives: NativeServiceRegistry,
+    pending_natives: Option<NativeServiceRegistry>,
 }
 
 impl RuntimeVm {
@@ -24,6 +25,7 @@ impl RuntimeVm {
         Self {
             vm: Vm::new(artifact, config),
             natives,
+            pending_natives: None,
         }
     }
 
@@ -33,6 +35,7 @@ impl RuntimeVm {
         Self {
             vm: Vm::new(artifact, config),
             natives,
+            pending_natives: None,
         }
     }
 
@@ -277,13 +280,81 @@ impl VmRuntimePort for RuntimeVm {
     }
 
     fn prepare_hot_reload(&mut self, target: ValidatedArtifact) -> Result<(), VmError> {
-        self.vm.prepare_hot_reload_artifact(target).map(|_| ())
+        let migrated = self
+            .natives
+            .migrated_for_artifact(target.artifact())
+            .map_err(VmError::Snapshot)?;
+        self.vm.prepare_hot_reload_artifact(target)?;
+        self.pending_natives = Some(migrated);
+        Ok(())
     }
 
     fn commit_hot_reload(&mut self) -> Result<HotReloadReport, VmError> {
         let report = self.vm.commit_hot_reload()?;
-        self.natives = NativeServiceRegistry::for_artifact(self.vm.artifact());
+        self.natives = self
+            .pending_natives
+            .take()
+            .ok_or_else(|| VmError::InvalidState("prepared native migration is missing".into()))?;
         Ok(report)
+    }
+}
+
+pub struct PreparedVmRestore {
+    runtime: RuntimeVm,
+    waits: Vec<VmWaitRebind>,
+}
+
+#[derive(Default)]
+struct RestoreCaptureHost {
+    waits: Vec<VmWaitRebind>,
+}
+
+impl VmHost for RestoreCaptureHost {
+    fn call(&mut self, _request: HostCallRequest) -> HostCallResult {
+        HostCallResult::Error("restore capture host cannot execute calls".into())
+    }
+
+    fn rebind_snapshot(&mut self, requests: &[crate::HostRebindRequest]) -> Result<(), String> {
+        self.waits = requests
+            .iter()
+            .map(|request| VmWaitRebind {
+                request: request.id,
+                fiber: request.fiber,
+                import: request.import.clone(),
+                payload: request.payload.clone(),
+            })
+            .collect();
+        Ok(())
+    }
+}
+
+impl VmRestorePort for RuntimeVm {
+    type PreparedRestore = PreparedVmRestore;
+
+    fn prepare_restore(
+        artifact: ValidatedArtifact,
+        config: VmConfig,
+        snapshot: VmSnapshot,
+    ) -> Result<Self::PreparedRestore, VmError> {
+        let mut natives = NativeServiceRegistry::for_artifact(artifact.artifact());
+        let mut host = RestoreCaptureHost::default();
+        let vm = Vm::restore_snapshot(artifact, config, snapshot, &mut host, &mut natives)?;
+        Ok(PreparedVmRestore {
+            runtime: Self {
+                vm,
+                natives,
+                pending_natives: None,
+            },
+            waits: host.waits,
+        })
+    }
+
+    fn restore_waits(plan: &Self::PreparedRestore) -> &[VmWaitRebind] {
+        &plan.waits
+    }
+
+    fn commit_restore(plan: Self::PreparedRestore) -> Result<Self, VmError> {
+        Ok(plan.runtime)
     }
 }
 

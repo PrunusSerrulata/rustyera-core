@@ -1,17 +1,18 @@
 use era_runtime_protocol::{InputWait, InteractionToken, ProtocolValue, WaitKind, WaitStability};
 use erabasic_bytecode::BytecodeType;
 use erabasic_vm::{HostRequestId, VmHostRequest, VmValue};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct PendingInput {
     pub(crate) host_request: Option<HostRequestId>,
     pub(crate) wait: InputWait,
-    pub(crate) result_name: Option<&'static str>,
+    pub(crate) result_name: Option<String>,
     pub(crate) choices: std::collections::BTreeMap<InteractionToken, VmValue>,
     pub(crate) timeout_duration_ns: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum ExternalCompletion {
     GetKey {
         request: HostRequestId,
@@ -25,7 +26,7 @@ pub(crate) enum ExternalCompletion {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum ClockOperation {
     Time,
     Times,
@@ -128,7 +129,7 @@ pub(crate) fn input_wait(
                 .filter(|_| display_time)
                 .map(|_| timelimit_ms.cast_unsigned()),
         },
-        result_name,
+        result_name: result_name.map(str::to_owned),
         choices: std::collections::BTreeMap::new(),
         timeout_duration_ns: (timelimit_ms > 0)
             .then(|| timelimit_ms.cast_unsigned().saturating_mul(1_000_000)),
@@ -211,7 +212,7 @@ mod tests {
             Some(ProtocolValue::String("DEFAULT".into()))
         );
         assert_eq!(pending.wait.timeout_message.as_deref(), Some("timeout"));
-        assert_eq!(pending.result_name, Some("RESULTS"));
+        assert_eq!(pending.result_name.as_deref(), Some("RESULTS"));
     }
 
     #[test]

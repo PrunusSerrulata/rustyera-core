@@ -9,6 +9,7 @@ mod host;
 mod operation;
 mod presentation;
 mod project;
+mod runtime_snapshot;
 mod save_adapter;
 mod session;
 

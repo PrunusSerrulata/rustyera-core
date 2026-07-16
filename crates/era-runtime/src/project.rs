@@ -1,6 +1,6 @@
 use era_runtime_protocol::{
-    DiagnosticSeverity, FileCategory, FilePayload, ProjectLoadReport, ProjectManifest,
-    ProtocolDiagnostic, SourceLocation, validate_relative_path,
+    DiagnosticSeverity, FileCategory, FileChange, FilePayload, ProjectLoadReport, ProjectManifest,
+    ProtocolDiagnostic, ReloadProject, SourceLocation, validate_relative_path,
 };
 use erabasic_analyzer::{
     AnalysisInput, AnalyzerDiagnosticSeverity, AnalyzerOptions, ExtensionRegistry, ProjectSource,
@@ -27,6 +27,8 @@ pub(crate) struct ProjectBuild {
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) manifest: ProjectManifest,
+    pub(crate) project_identity: [u8; 32],
+    pub(crate) resources: Vec<NormalizedResourceIdentity>,
     pub(crate) sort_with_filename: bool,
     pub(crate) use_new_random_ignored: bool,
     pub(crate) auto_save: bool,
@@ -36,6 +38,13 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) money_label: String,
     pub(crate) money_first: bool,
     pub(crate) maximum_shop_items: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NormalizedResourceIdentity {
+    pub(crate) relative_path: String,
+    pub(crate) category: FileCategory,
+    pub(crate) payload_digest: [u8; 32],
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +101,7 @@ pub(crate) fn build_project(
     }
     let mut csv_files = ProjectFiles::default();
     let mut sources = Vec::new();
+    let mut resources = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for mut file in files {
         let path = match validate_relative_path(&file.relative_path) {
@@ -155,22 +165,13 @@ pub(crate) fn build_project(
                 sources.push(analyzer_source(path, file.payload));
             }
             FileCategory::Configuration => {}
-            FileCategory::ResourceManifest => inspect_deferred_file(
-                &mut diagnostics,
-                &path,
-                &file.payload,
-                true,
-                "runtime.resource_manifest_deferred",
-                "resource manifest input is validated but is not applied by this runtime stage",
-            ),
-            FileCategory::Resource => inspect_deferred_file(
-                &mut diagnostics,
-                &path,
-                &file.payload,
-                false,
-                "runtime.resource_deferred",
-                "resource bytes are retained by the frontend until resource services are enabled",
-            ),
+            FileCategory::ResourceManifest | FileCategory::Resource => {
+                if let Some(identity) =
+                    normalize_resource(&mut diagnostics, path, file.category, &file.payload)
+                {
+                    resources.push(identity);
+                }
+            }
         }
     }
 
@@ -274,13 +275,23 @@ pub(crate) fn build_project(
             None,
         )
     }));
-    let artifact = validation.value;
-    let success = artifact.is_some()
-        && !diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
+    let Some(artifact) = validation.value else {
+        return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
+    };
+    let success = !diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
+    if !success {
+        return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
+    }
+    resources.sort_by(|left, right| {
+        left.relative_path
+            .cmp(&right.relative_path)
+            .then_with(|| (left.category as u8).cmp(&(right.category as u8)))
+    });
+    let project_identity = project_identity(&artifact, &config, &resources);
     ProjectBuild {
-        artifact: success.then_some(artifact).flatten(),
+        artifact: Some(artifact),
         incremental,
         report: ProjectLoadReport {
             project_revision: manifest.project_revision,
@@ -289,6 +300,8 @@ pub(crate) fn build_project(
         },
         snapshot: Some(NormalizedProjectSnapshot {
             manifest: manifest.clone(),
+            project_identity,
+            resources,
             sort_with_filename: config.csv.sort_with_filename,
             use_new_random_ignored: config.use_new_random,
             auto_save: config.auto_save,
@@ -300,6 +313,123 @@ pub(crate) fn build_project(
             maximum_shop_items: config.maximum_shop_items,
         }),
     }
+}
+
+pub(crate) fn apply_project_delta(
+    current: &ProjectManifest,
+    reload: &ReloadProject,
+) -> Result<ProjectManifest, String> {
+    if reload.base_revision != current.project_revision {
+        return Err("reload base revision differs from the loaded project".into());
+    }
+    if reload.target_revision <= reload.base_revision {
+        return Err("reload target revision must increase monotonically".into());
+    }
+    let mut files = std::collections::BTreeMap::new();
+    for file in &current.files {
+        let path = validate_relative_path(&file.relative_path).map_err(|error| error.message)?;
+        files.insert(
+            (file.category as u8, path.to_ascii_lowercase()),
+            file.clone(),
+        );
+    }
+    let mut changed = std::collections::BTreeSet::new();
+    for change in &reload.changes {
+        let (category, path) = match change {
+            FileChange::Upsert { file } => (file.category, file.relative_path.as_str()),
+            FileChange::Remove {
+                category,
+                relative_path,
+            } => (*category, relative_path.as_str()),
+        };
+        let path = validate_relative_path(path).map_err(|error| error.message)?;
+        let identity = (category as u8, path.to_ascii_lowercase());
+        if !changed.insert(identity.clone()) {
+            return Err("reload contains duplicate changes for one normalized path".into());
+        }
+        match change {
+            FileChange::Upsert { file } => {
+                let mut file = file.clone();
+                file.relative_path = path;
+                files.insert(identity, file);
+            }
+            FileChange::Remove { .. } => {
+                files.remove(&identity);
+            }
+        }
+    }
+    Ok(ProjectManifest {
+        project_revision: reload.target_revision,
+        files: files.into_values().collect(),
+    })
+}
+
+fn normalize_resource(
+    diagnostics: &mut Vec<ProtocolDiagnostic>,
+    relative_path: String,
+    category: FileCategory,
+    payload: &FilePayload,
+) -> Option<NormalizedResourceIdentity> {
+    let location = Some(SourceLocation {
+        relative_path: relative_path.clone(),
+        byte_start: 0,
+        byte_end: 0,
+        line: None,
+        byte_column: None,
+    });
+    let bytes = match payload {
+        FilePayload::Utf8(value) => value.as_bytes(),
+        FilePayload::Bytes(_) if category == FileCategory::ResourceManifest => {
+            diagnostics.push(project_diagnostic(
+                "runtime.expected_utf8",
+                DiagnosticSeverity::Error,
+                "resource manifests must be submitted as UTF-8",
+                location,
+            ));
+            return None;
+        }
+        FilePayload::Bytes(value) => value.as_slice(),
+        FilePayload::IoError(error) => {
+            diagnostics.push(project_diagnostic(
+                "runtime.frontend_io_error",
+                DiagnosticSeverity::Error,
+                format!("frontend resource read failed: {:?}", error.kind),
+                location,
+            ));
+            return None;
+        }
+    };
+    Some(NormalizedResourceIdentity {
+        relative_path,
+        category,
+        payload_digest: *blake3::hash(bytes).as_bytes(),
+    })
+}
+
+fn project_identity(
+    artifact: &ValidatedArtifact,
+    config: &SemanticConfig,
+    resources: &[NormalizedResourceIdentity],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("rustyera.runtime.project.v1");
+    hasher.update(&artifact.artifact().manifest.artifact_id.bytes());
+    hasher.update(&[
+        u8::from(config.auto_save),
+        u8::from(config.save_in_binary),
+        u8::from(config.compress_save),
+        u8::from(config.money_first),
+    ]);
+    hasher.update(&config.save_slot_count.to_le_bytes());
+    hasher.update(&config.maximum_shop_items.to_le_bytes());
+    hasher.update(&(config.money_label.len() as u64).to_le_bytes());
+    hasher.update(config.money_label.as_bytes());
+    for resource in resources {
+        hasher.update(&(resource.relative_path.len() as u64).to_le_bytes());
+        hasher.update(resource.relative_path.as_bytes());
+        hasher.update(&[resource.category as u8]);
+        hasher.update(&resource.payload_digest);
+    }
+    *hasher.finalize().as_bytes()
 }
 
 fn inspect_deferred_file(
@@ -648,7 +778,9 @@ fn project_diagnostic(
 
 #[cfg(test)]
 mod tests {
-    use era_runtime_protocol::{FileCategory, FilePayload, SubmittedFile};
+    use era_runtime_protocol::{
+        FileCategory, FileChange, FilePayload, ReloadProject, SubmittedFile,
+    };
 
     use super::*;
 
@@ -713,5 +845,54 @@ mod tests {
         assert!(path_has_priority_directory("ERB/a#early/first.erb"));
         assert!(!path_has_priority_directory("ERB/ordinary/#function.erb"));
         assert!(!path_has_priority_directory("root.erb"));
+    }
+
+    #[test]
+    fn project_delta_is_monotonic_normalized_and_unique() {
+        let current = ProjectManifest {
+            project_revision: 4,
+            files: vec![SubmittedFile {
+                relative_path: "ERB\\main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("old".into()),
+                content_hash: None,
+            }],
+        };
+        let updated = apply_project_delta(
+            &current,
+            &ReloadProject {
+                base_revision: 4,
+                target_revision: 5,
+                changes: vec![FileChange::Upsert {
+                    file: SubmittedFile {
+                        relative_path: "ERB/./main.erb".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8("new".into()),
+                        content_hash: None,
+                    },
+                }],
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.project_revision, 5);
+        assert_eq!(updated.files.len(), 1);
+        assert_eq!(updated.files[0].relative_path, "ERB/main.erb");
+        assert!(matches!(updated.files[0].payload, FilePayload::Utf8(ref value) if value == "new"));
+
+        let duplicate = ReloadProject {
+            base_revision: 4,
+            target_revision: 5,
+            changes: vec![
+                FileChange::Remove {
+                    category: FileCategory::Erb,
+                    relative_path: "ERB/main.erb".into(),
+                },
+                FileChange::Remove {
+                    category: FileCategory::Erb,
+                    relative_path: "erb\\MAIN.erb".into(),
+                },
+            ],
+        };
+        assert!(apply_project_delta(&current, &duplicate).is_err());
     }
 }

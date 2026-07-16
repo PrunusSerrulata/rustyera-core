@@ -2,9 +2,10 @@ use std::collections::VecDeque;
 
 use erabasic_bytecode::{BytecodeArtifact, BytecodeEventEntry, SymbolKey};
 use erabasic_vm::{FiberId, VmValue};
+use serde::{Deserialize, Serialize};
 
 /// Reference system phases are runtime state, never inferred from frontend screens.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum SystemFlow {
     Title,
     First,
@@ -16,7 +17,7 @@ pub(crate) enum SystemFlow {
     Normal,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum SystemStep {
     #[default]
     None,
@@ -54,7 +55,7 @@ impl SystemFlow {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct DispatchEntry {
     function: SymbolKey,
     single: bool,
@@ -63,7 +64,7 @@ struct DispatchEntry {
 
 /// Runs Emuera event groups one root fiber at a time. Keeping the sequence outside
 /// the VM lets the runtime atomically commit authoritative state between handlers.
-#[derive(Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SystemController {
     pub(crate) flow: Option<SystemFlow>,
     pub(crate) step: SystemStep,
