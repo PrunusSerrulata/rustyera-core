@@ -8,33 +8,38 @@ use era_protocol::{
 };
 use era_runtime_protocol::{
     AdvanceTime, CancelExternalRequest, CellAlignment, ClientCapabilities, ClientHello,
-    CommandErrorCode, CommandRejected, ExitReason, ExitRequested, ExternalRequestKind, FaultCode,
-    FrontendInput, FrontendIoErrorKind, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
-    GetKeyStateRequest, GetKeyStateResponse, InputIntent, InputWait, InteractionToken,
-    LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION, LocalDateTimeRequest,
-    LocalDateTimeResponse, ProjectManifest, RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION,
-    RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse, RuntimeFault, RuntimeFeature,
+    CommandErrorCode, CommandRejected, DiagnosticSeverity, ExitReason, ExitRequested,
+    ExternalRequestKind, FaultCode, FrontendInput, FrontendIoErrorKind, GET_KEY_STATE_OPERATION,
+    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
+    InputWait, InteractionToken, LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION,
+    LocalDateTimeRequest, LocalDateTimeResponse, ProjectManifest, ProtocolDiagnostic,
+    RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION,
+    RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault, RuntimeFeature,
     RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized, RuntimeStateChanged,
     ServerHello, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady,
-    StartMode, StartRequest, StateExportKind, StateExportReady, StateExportRequest,
-    StateExportResult, StorageNamespace, StorageOperation, StoragePrecondition, StorageRequest,
-    StorageResponse, StorageResult, SystemTextArgument, SystemTextKey, VersionRejected, WaitChange,
-    WaitKind, WaitStability,
+    SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk, StateExportChunkRequest,
+    StateExportKind, StateExportReady, StateExportRequest, StateExportResult, StateImportAccepted,
+    StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
+    StateTransferDescriptor, StorageNamespace, StorageOperation, StoragePrecondition,
+    StorageRequest, StorageResponse, StorageResult, SystemTextArgument, SystemTextKey,
+    VersionRejected, WaitChange, WaitKind, WaitStability,
 };
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
 use erabasic_vm::{
     EraSaveScope, EraState, HostReady, HostWaitStability, HostWrite, PlaceDescriptor, RunBudget,
     RuntimeVm, VmConfig, VmDriveMode, VmHostCompletion, VmHostRequest, VmPortEvent, VmPortStop,
-    VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite,
-    VmValue,
+    VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction,
+    VmRuntimeWrite, VmSnapshot, VmValue,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::controller::{SystemController, SystemFlow, SystemStep};
 use crate::host::{ClockOperation, ExternalCompletion, PendingInput, input_wait};
 use crate::operation::{PendingOperations, PendingService, PendingStorage};
 use crate::presentation::{PresentationModel, display_value, logical_line_string};
-use crate::project::{NormalizedProjectSnapshot, build_project};
+use crate::project::{NormalizedProjectSnapshot, apply_project_delta, build_project};
+use crate::runtime_snapshot::{self, RUNTIME_SNAPSHOT_FORMAT_VERSION, RuntimeSnapshotPayload};
 use crate::save_adapter::{
     decode_era_save, decode_scoped_save, encode_era_save, encode_scoped_save,
 };
@@ -57,6 +62,7 @@ impl Default for RuntimeOptions {
                 maximum_pending_requests: 1024,
                 maximum_journal_entries: 4096,
                 maximum_drive_instructions: 100_000,
+                maximum_transfer_bytes: 1024 * 1024 * 1024,
             },
             wire_limits: WireLimits::default(),
             vm_config: VmConfig::default(),
@@ -133,11 +139,25 @@ enum SessionState {
     Active,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 enum SystemMenuState {
     #[default]
     Title,
     LoadSlots,
+}
+
+#[derive(Debug)]
+struct InboundStateTransfer {
+    descriptor: StateTransferDescriptor,
+    bytes: Vec<u8>,
+    committed: bool,
+}
+
+#[derive(Debug)]
+struct OutboundStateTransfer {
+    descriptor: StateTransferDescriptor,
+    bytes: Vec<u8>,
+    next_offset: u64,
 }
 
 /// Single-owner runtime actor. Methods only enqueue, drive, and dequeue messages;
@@ -154,7 +174,9 @@ pub struct RuntimeSession {
     next_request_id: u64,
     next_wait_id: u64,
     next_interaction_id: u64,
+    next_transfer_id: u64,
     logical_time_ns: u64,
+    frontend_time_origin: Option<(u64, u64)>,
     random_seed: Option<u64>,
     inbound: VecDeque<(u64, RuntimeMessage)>,
     outbound: VecDeque<Vec<u8>>,
@@ -176,6 +198,8 @@ pub struct RuntimeSession {
     save_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
     system_menu: SystemMenuState,
     load_slot_paths: Vec<String>,
+    inbound_transfer: Option<InboundStateTransfer>,
+    outbound_transfer: Option<OutboundStateTransfer>,
 }
 
 impl RuntimeSession {
@@ -193,7 +217,9 @@ impl RuntimeSession {
             next_request_id: 1,
             next_wait_id: 1,
             next_interaction_id: 1,
+            next_transfer_id: 1,
             logical_time_ns: 0,
+            frontend_time_origin: None,
             random_seed: None,
             inbound: VecDeque::new(),
             outbound: VecDeque::new(),
@@ -215,6 +241,8 @@ impl RuntimeSession {
             save_extensions: Vec::new(),
             system_menu: SystemMenuState::Title,
             load_slot_paths: Vec::new(),
+            inbound_transfer: None,
+            outbound_transfer: None,
         }
     }
 
@@ -438,7 +466,7 @@ impl RuntimeSession {
             RuntimeMessage::Input(input) => self.complete_input(message_id, input),
             RuntimeMessage::AdvanceTime(time) => self.advance_time(message_id, time),
             RuntimeMessage::DeviceStateChanged(state) => {
-                self.logical_time_ns = self.logical_time_ns.max(state.monotonic_time_ns);
+                self.observe_frontend_time(state.monotonic_time_ns);
                 Ok(())
             }
             RuntimeMessage::ClientStateChanged(_) | RuntimeMessage::EffectAcknowledgement(_) => {
@@ -448,11 +476,20 @@ impl RuntimeSession {
                 self.complete_service(message_id, response)
             }
             RuntimeMessage::StateExportRequest(request) => self.export_state(message_id, request),
-            RuntimeMessage::ReloadProject(_) => self.reject(
-                message_id,
-                CommandErrorCode::FeatureUnavailable,
-                "hot reload is not enabled by this runtime stage",
-            ),
+            RuntimeMessage::StateImportBegin(request) => {
+                self.begin_state_import(message_id, request)
+            }
+            RuntimeMessage::StateImportChunk(chunk) => self.append_state_import(message_id, &chunk),
+            RuntimeMessage::StateImportCommit(commit) => {
+                self.commit_state_import(message_id, commit)
+            }
+            RuntimeMessage::StateExportChunkRequest(request) => {
+                self.read_state_export(message_id, request)
+            }
+            RuntimeMessage::StateTransferCancel(cancel) => {
+                self.cancel_state_transfer(message_id, cancel)
+            }
+            RuntimeMessage::ReloadProject(reload) => self.reload_project(message_id, &reload),
             RuntimeMessage::ShutdownRequest(_) => self.shutdown(message_id),
             RuntimeMessage::Acknowledge(ack) => {
                 self.outbound_journal
@@ -487,6 +524,9 @@ impl RuntimeSession {
             | RuntimeMessage::ServiceRequest(_)
             | RuntimeMessage::CancelExternalRequest(_)
             | RuntimeMessage::StateExportReady(_)
+            | RuntimeMessage::StateImportAccepted(_)
+            | RuntimeMessage::StateImportReady(_)
+            | RuntimeMessage::StateExportChunk(_)
             | RuntimeMessage::ShutdownReady(_)
             | RuntimeMessage::Fault(_)
             | RuntimeMessage::CommandRejected(_)
@@ -504,7 +544,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 7.0 is required".into(),
+                    message: "runtime protocol 8.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -519,6 +559,8 @@ impl RuntimeSession {
             usize::try_from(limits.maximum_payload_bytes).unwrap_or(usize::MAX);
         let implemented = [
             RuntimeFeature::TraditionalSave,
+            RuntimeFeature::VmSnapshot,
+            RuntimeFeature::ProjectReload,
             RuntimeFeature::Storage,
             RuntimeFeature::TimedInput,
             RuntimeFeature::ExternalServices,
@@ -580,6 +622,101 @@ impl RuntimeSession {
         })
     }
 
+    fn reload_project(
+        &mut self,
+        message_id: u64,
+        reload: &ReloadProject,
+    ) -> Result<(), RuntimeError> {
+        let previous_phase = self.phase;
+        if !matches!(
+            previous_phase,
+            RuntimePhase::Ready | RuntimePhase::Running | RuntimePhase::WaitingInput
+        ) {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "project reload requires a ready or running runtime",
+            );
+        }
+        if self.operations.total_count() != 0 && !self.operations.is_snapshot_stable() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "project reload cannot cross transient runtime operations",
+            );
+        }
+        let current = self
+            .project_snapshot
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Internal("project reload has no base manifest".into()))?;
+        let manifest = match apply_project_delta(&current.manifest, reload) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                return self.reject(message_id, CommandErrorCode::InvalidValue, &error);
+            }
+        };
+        self.set_phase(RuntimePhase::Reloading)?;
+        let mut build = build_project(&manifest, Some(&self.incremental));
+        if !build.report.success {
+            self.emit(
+                RuntimeMessage::ProjectLoadReport(build.report),
+                Some(message_id),
+            )?;
+            return self.set_phase(previous_phase);
+        }
+        let target = build
+            .artifact
+            .take()
+            .ok_or_else(|| RuntimeError::Internal("successful reload has no artifact".into()))?;
+        if let Some(vm) = &mut self.vm
+            && let Err(error) = vm.prepare_hot_reload(target.clone())
+        {
+            build.report.success = false;
+            build.report.diagnostics.push(ProtocolDiagnostic {
+                code: "runtime.hot_reload_incompatible".into(),
+                severity: DiagnosticSeverity::Error,
+                message: error.to_string(),
+                source: None,
+            });
+            self.emit(
+                RuntimeMessage::ProjectLoadReport(build.report),
+                Some(message_id),
+            )?;
+            return self.set_phase(previous_phase);
+        }
+        if let Some(vm) = &mut self.vm {
+            vm.commit_hot_reload()
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        }
+
+        self.artifact = Some(target);
+        self.incremental = build.incremental;
+        self.project_snapshot = build.snapshot;
+        let new_epoch = self.epoch.0.saturating_add(1);
+        let (tokens, waits) = self.operations.rebind_stable_inputs(
+            new_epoch,
+            &mut self.next_wait_id,
+            &mut self.next_interaction_id,
+        );
+        self.presentation.rebind_interactions(&tokens, &waits);
+        self.command_intents = std::mem::take(&mut self.command_intents)
+            .into_iter()
+            .filter_map(|(old, value)| tokens.get(&old).copied().map(|new| (new, value)))
+            .collect();
+        self.reusable_system_intents = std::mem::take(&mut self.reusable_system_intents)
+            .into_iter()
+            .filter_map(|(old, value)| tokens.get(&old).copied().map(|new| (new, value)))
+            .collect();
+        self.epoch = SessionEpoch(new_epoch);
+        self.accepted_message_ids.clear();
+        self.emit(
+            RuntimeMessage::ProjectLoadReport(build.report),
+            Some(message_id),
+        )?;
+        self.set_phase(previous_phase)?;
+        self.emit_presentation()
+    }
+
     fn start(&mut self, message_id: u64, request: &StartRequest) -> Result<(), RuntimeError> {
         if self.phase != RuntimePhase::Ready {
             return self.reject(
@@ -610,14 +747,28 @@ impl RuntimeSession {
                     Some(message_id),
                 )
             }
-            StartMode::TraditionalSave { ref data } => {
-                self.start_traditional_save(message_id, data.as_slice())
+            StartMode::TraditionalSave { transfer_id } => {
+                let Some(bytes) = self.consume_state_import(
+                    message_id,
+                    transfer_id,
+                    StateExportKind::TraditionalSave,
+                )?
+                else {
+                    return Ok(());
+                };
+                self.start_traditional_save(message_id, &bytes)
             }
-            StartMode::VmSnapshot { .. } => self.reject(
-                message_id,
-                CommandErrorCode::FeatureUnavailable,
-                "save restoration is reserved by the protocol but not implemented yet",
-            ),
+            StartMode::VmSnapshot { transfer_id } => {
+                let Some(bytes) = self.consume_state_import(
+                    message_id,
+                    transfer_id,
+                    StateExportKind::VmSnapshot,
+                )?
+                else {
+                    return Ok(());
+                };
+                self.start_vm_snapshot(message_id, &bytes)
+            }
         }
     }
 
@@ -681,8 +832,129 @@ impl RuntimeSession {
         self.set_phase(RuntimePhase::Running)
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn start_vm_snapshot(&mut self, message_id: u64, bytes: &[u8]) -> Result<(), RuntimeError> {
+        let maximum =
+            usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
+        let payload = match runtime_snapshot::decode(bytes, maximum) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    &format!("runtime snapshot is invalid: {error}"),
+                );
+            }
+        };
+        let artifact = self
+            .artifact
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Internal("loaded artifact is missing".into()))?;
+        let project = self
+            .project_snapshot
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Internal("loaded project identity is missing".into()))?;
+        if payload.artifact_id != artifact.artifact().manifest.artifact_id
+            || payload.project_identity != project.project_identity
+            || payload.resource_count != u64::try_from(project.resources.len()).unwrap_or(u64::MAX)
+            || !payload.operations.is_snapshot_stable()
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::VersionMismatch,
+                "runtime snapshot does not match the exact project or stable-wait contract",
+            );
+        }
+        let system_menu = match payload.system_menu {
+            0 => SystemMenuState::Title,
+            1 => SystemMenuState::LoadSlots,
+            _ => {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "runtime snapshot contains an unknown system menu",
+                );
+            }
+        };
+        let vm_snapshot = match VmSnapshot::decode(&payload.vm_snapshot, maximum) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    &format!("VM snapshot is invalid: {error}"),
+                );
+            }
+        };
+        let prepared =
+            match RuntimeVm::prepare_restore(artifact.clone(), self.options.vm_config, vm_snapshot)
+            {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    return self.reject(
+                        message_id,
+                        CommandErrorCode::InvalidValue,
+                        &format!("VM snapshot cannot be restored: {error}"),
+                    );
+                }
+            };
+        let mut expected_requests = payload.operations.input_host_requests();
+        expected_requests.sort();
+        let mut rebound_requests = RuntimeVm::restore_waits(&prepared)
+            .iter()
+            .map(|wait| wait.request)
+            .collect::<Vec<_>>();
+        rebound_requests.sort();
+        if expected_requests != rebound_requests {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "runtime and VM snapshot waits do not correspond",
+            );
+        }
+        let vm = RuntimeVm::commit_restore(prepared)
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+
+        let new_epoch = self.epoch.0.max(payload.epoch).saturating_add(1);
+        let mut operations = payload.operations;
+        self.next_wait_id = 1;
+        self.next_interaction_id = 1;
+        let (tokens, waits) = operations.rebind_stable_inputs(
+            new_epoch,
+            &mut self.next_wait_id,
+            &mut self.next_interaction_id,
+        );
+        let mut presentation = payload.presentation;
+        presentation.rebind_interactions(&tokens, &waits);
+        let remap_intents = |values: std::collections::BTreeMap<InteractionToken, VmValue>| {
+            values
+                .into_iter()
+                .filter_map(|(token, value)| tokens.get(&token).copied().map(|new| (new, value)))
+                .collect()
+        };
+
+        self.epoch = SessionEpoch(new_epoch);
+        self.accepted_message_ids.clear();
+        self.vm = Some(vm);
+        self.presentation = presentation;
+        self.operations = operations;
+        self.controller = payload.controller;
+        self.logical_time_ns = payload.logical_time_ns;
+        self.frontend_time_origin = None;
+        self.random_seed = payload.random_seed;
+        self.message_skip = payload.message_skip;
+        self.command_intents = remap_intents(payload.command_intents);
+        self.reusable_system_intents = remap_intents(payload.reusable_system_intents);
+        self.save_extensions = payload.save_extensions;
+        self.system_menu = system_menu;
+        self.load_slot_paths = payload.load_slot_paths;
+        self.set_phase(RuntimePhase::WaitingInput)?;
+        self.emit_presentation()
+    }
+
     fn start_new_game(&mut self, seed: u64) -> Result<(), RuntimeError> {
         self.random_seed = Some(seed);
+        self.frontend_time_origin = None;
         self.set_phase(RuntimePhase::Starting)?;
         let artifact = self
             .artifact
@@ -1367,7 +1639,7 @@ impl RuntimeSession {
                 && request.arguments.len() >= 6
             {
                 let mouse = matches!(request.arguments.get(4), Some(VmValue::Integer(1)));
-                let target = pending.result_name.and_then(|result| {
+                let target = pending.result_name.as_deref().and_then(|result| {
                     if mouse {
                         global_place_at(vm, result, 1)
                     } else {
@@ -2311,24 +2583,30 @@ impl RuntimeSession {
         message_id: u64,
         input: FrontendInput,
     ) -> Result<(), RuntimeError> {
-        let Some(pending) = self.operations.active_input() else {
+        let Some(wait_id) = self
+            .operations
+            .active_input()
+            .map(|pending| pending.wait.wait_id)
+        else {
             return self.reject(
                 message_id,
                 CommandErrorCode::StaleRequest,
                 "no input is pending",
             );
         };
-        if pending.wait.wait_id != input.wait_id {
+        if wait_id != input.wait_id {
             return self.reject(
                 message_id,
                 CommandErrorCode::StaleRequest,
                 "input wait identity is stale",
             );
         }
+        let observed_time = self.observe_frontend_time(input.monotonic_time_ns);
+        let pending = self.operations.active_input().expect("checked above");
         if pending
             .wait
             .deadline_ns
-            .is_some_and(|deadline| input.monotonic_time_ns > deadline)
+            .is_some_and(|deadline| observed_time > deadline)
         {
             return self.advance_time(
                 message_id,
@@ -2345,12 +2623,11 @@ impl RuntimeSession {
                 "input value does not match the active wait",
             );
         };
-        self.logical_time_ns = self.logical_time_ns.max(input.monotonic_time_ns);
         self.finish_input(submission, false)
     }
 
     fn advance_time(&mut self, _message_id: u64, time: AdvanceTime) -> Result<(), RuntimeError> {
-        self.logical_time_ns = self.logical_time_ns.max(time.monotonic_time_ns);
+        self.observe_frontend_time(time.monotonic_time_ns);
         let ready_delays = self.operations.take_ready_delays(self.logical_time_ns);
         for request in ready_delays {
             let vm = self
@@ -2437,7 +2714,7 @@ impl RuntimeSession {
                         _ => "RESULT",
                     })
                 } else {
-                    pending.result_name
+                    pending.result_name.as_deref()
                 };
                 if let Some(target) = result_name.and_then(|name| global_place(vm, name)) {
                     writes.push(HostWrite { target, value });
@@ -3072,49 +3349,120 @@ impl RuntimeSession {
         self.emit_presentation()
     }
 
+    #[allow(clippy::too_many_lines)]
     fn export_state(
         &mut self,
         message_id: u64,
         request: StateExportRequest,
     ) -> Result<(), RuntimeError> {
-        if request.kind == StateExportKind::VmSnapshot {
-            return self.emit(
-                RuntimeMessage::StateExportReady(StateExportReady {
-                    kind: request.kind,
-                    result: StateExportResult::Ineligible {
-                        reasons: vec!["exact VM snapshot export is scheduled for batch 7".into()],
-                    },
-                }),
-                Some(message_id),
-            );
-        }
         let stable_wait = self.operations.active_input().is_some_and(|pending| {
             pending.wait.stability == WaitStability::StableInput
                 && pending.wait.deadline_ns.is_none()
         });
         let mut reasons = Vec::new();
         if self.phase != RuntimePhase::WaitingInput || !stable_wait {
-            reasons.push("traditional saves require a stable untimed input wait".into());
+            reasons.push(SnapshotIneligibleReason::StableWaitRequired);
         }
         if self.operations.has_transient_external() {
-            reasons.push("external operations are still pending".into());
+            reasons.push(SnapshotIneligibleReason::ExternalOperationPending);
+        }
+        if request.kind == StateExportKind::VmSnapshot && !self.operations.is_snapshot_stable() {
+            reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
         }
         let result = if reasons.is_empty() {
+            if self.outbound_transfer.is_some() {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "another state export is already active",
+                );
+            }
             let vm = self
                 .vm
                 .as_ref()
                 .ok_or_else(|| RuntimeError::Internal("save export has no VM".into()))?;
-            let bytes = encode_era_save(
-                &vm.export_era_state(),
-                vm.vm().artifact(),
-                String::new(),
-                self.save_extensions.clone(),
-                self.traditional_save_format(),
-            )
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            let bytes = match request.kind {
+                StateExportKind::TraditionalSave => encode_era_save(
+                    &vm.export_era_state(),
+                    vm.vm().artifact(),
+                    String::new(),
+                    self.save_extensions.clone(),
+                    self.traditional_save_format(),
+                )
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                StateExportKind::VmSnapshot => {
+                    let vm_snapshot = match vm.snapshot() {
+                        Ok(snapshot) => snapshot.encode().map_err(|error| {
+                            RuntimeError::Internal(format!("VM snapshot encode failed: {error}"))
+                        })?,
+                        Err(_) => {
+                            return self.emit(
+                                RuntimeMessage::StateExportReady(StateExportReady {
+                                    kind: request.kind,
+                                    result: StateExportResult::Ineligible {
+                                        reasons: vec![
+                                            SnapshotIneligibleReason::SnapshotStateUnavailable,
+                                        ],
+                                    },
+                                }),
+                                Some(message_id),
+                            );
+                        }
+                    };
+                    let project = self.project_snapshot.as_ref().ok_or_else(|| {
+                        RuntimeError::Internal("snapshot export has no project identity".into())
+                    })?;
+                    runtime_snapshot::encode(&RuntimeSnapshotPayload {
+                        format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
+                        artifact_id: vm.artifact_id(),
+                        project_identity: project.project_identity,
+                        resource_count: u64::try_from(project.resources.len()).unwrap_or(u64::MAX),
+                        epoch: self.epoch.0,
+                        vm_snapshot,
+                        presentation: self.presentation.clone(),
+                        operations: self.operations.clone(),
+                        controller: self.controller.clone(),
+                        logical_time_ns: self.logical_time_ns,
+                        random_seed: self.random_seed,
+                        message_skip: self.message_skip,
+                        command_intents: self.command_intents.clone(),
+                        reusable_system_intents: self.reusable_system_intents.clone(),
+                        save_extensions: self.save_extensions.clone(),
+                        system_menu: match self.system_menu {
+                            SystemMenuState::Title => 0,
+                            SystemMenuState::LoadSlots => 1,
+                        },
+                        load_slot_paths: self.load_slot_paths.clone(),
+                    })
+                    .map_err(RuntimeError::Internal)?
+                }
+            };
+            if u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+                > self.options.limits.maximum_transfer_bytes
+            {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::ResourceLimit,
+                    "state export exceeds the negotiated transfer limit",
+                );
+            }
+            let export_artifact_id = (request.kind == StateExportKind::VmSnapshot)
+                .then(|| ProtocolBytes::new(vm.artifact_id().bytes()));
+            let transfer_id = self.allocate_transfer();
+            let descriptor = StateTransferDescriptor {
+                transfer_id,
+                kind: request.kind,
+                total_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                digest: ProtocolBytes::new(blake3::hash(&bytes).as_bytes().to_vec()),
+                artifact_id: export_artifact_id,
+            };
+            self.outbound_transfer = Some(OutboundStateTransfer {
+                descriptor: descriptor.clone(),
+                bytes,
+                next_offset: 0,
+            });
             StateExportResult::Ready {
-                data: ProtocolBytes::new(bytes),
-                artifact_id: None,
+                transfer: descriptor,
             }
         } else {
             StateExportResult::Ineligible { reasons }
@@ -3126,6 +3474,274 @@ impl RuntimeSession {
             }),
             Some(message_id),
         )
+    }
+
+    fn begin_state_import(
+        &mut self,
+        message_id: u64,
+        request: StateImportBegin,
+    ) -> Result<(), RuntimeError> {
+        if self.inbound_transfer.is_some() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "another state import is already active",
+            );
+        }
+        if request.total_bytes > self.options.limits.maximum_transfer_bytes {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "state import exceeds the negotiated transfer limit",
+            );
+        }
+        if request.digest.as_slice().len() != blake3::OUT_LEN {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "state import digest must contain 32 bytes",
+            );
+        }
+        match usize::try_from(request.total_bytes) {
+            Ok(_) => {}
+            Err(_) => {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "state import length is not addressable on this platform",
+                );
+            }
+        }
+        let transfer_id = self.allocate_transfer();
+        self.inbound_transfer = Some(InboundStateTransfer {
+            descriptor: StateTransferDescriptor {
+                transfer_id,
+                kind: request.kind,
+                total_bytes: request.total_bytes,
+                digest: request.digest,
+                artifact_id: request.artifact_id,
+            },
+            // Grow with accepted chunks instead of trusting a potentially huge declaration.
+            bytes: Vec::new(),
+            committed: false,
+        });
+        self.emit(
+            RuntimeMessage::StateImportAccepted(StateImportAccepted { transfer_id }),
+            Some(message_id),
+        )
+    }
+
+    fn append_state_import(
+        &mut self,
+        message_id: u64,
+        chunk: &StateImportChunk,
+    ) -> Result<(), RuntimeError> {
+        let Some(transfer) = self.inbound_transfer.as_mut() else {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "no state import is active",
+            );
+        };
+        if transfer.descriptor.transfer_id != chunk.transfer_id || transfer.committed {
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "state import transfer is stale",
+            );
+        }
+        if chunk.offset != u64::try_from(transfer.bytes.len()).unwrap_or(u64::MAX) {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "state import chunks must be contiguous and ordered",
+            );
+        }
+        if chunk.data.as_slice().is_empty()
+            || chunk
+                .offset
+                .saturating_add(u64::try_from(chunk.data.as_slice().len()).unwrap_or(u64::MAX))
+                > transfer.descriptor.total_bytes
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "state import chunk has an invalid length",
+            );
+        }
+        transfer
+            .bytes
+            .try_reserve(chunk.data.as_slice().len())
+            .map_err(|_| RuntimeError::ResourceLimit("state import allocation failed"))?;
+        transfer.bytes.extend_from_slice(chunk.data.as_slice());
+        Ok(())
+    }
+
+    fn commit_state_import(
+        &mut self,
+        message_id: u64,
+        commit: StateImportCommit,
+    ) -> Result<(), RuntimeError> {
+        let Some(transfer) = self.inbound_transfer.as_mut() else {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "no state import is active",
+            );
+        };
+        if transfer.descriptor.transfer_id != commit.transfer_id || transfer.committed {
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "state import transfer is stale",
+            );
+        }
+        if u64::try_from(transfer.bytes.len()).unwrap_or(u64::MAX)
+            != transfer.descriptor.total_bytes
+            || transfer.descriptor.digest.as_slice() != blake3::hash(&transfer.bytes).as_bytes()
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "state import length or digest does not match its descriptor",
+            );
+        }
+        transfer.committed = true;
+        let kind = transfer.descriptor.kind;
+        self.emit(
+            RuntimeMessage::StateImportReady(StateImportReady {
+                transfer_id: commit.transfer_id,
+                kind,
+            }),
+            Some(message_id),
+        )
+    }
+
+    fn read_state_export(
+        &mut self,
+        message_id: u64,
+        request: StateExportChunkRequest,
+    ) -> Result<(), RuntimeError> {
+        let Some(transfer) = self.outbound_transfer.as_ref() else {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "no state export is active",
+            );
+        };
+        if transfer.descriptor.transfer_id != request.transfer_id {
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "state export transfer is stale",
+            );
+        }
+        if request.offset != transfer.next_offset {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "state export chunks must be read contiguously and in order",
+            );
+        }
+        let offset = match usize::try_from(request.offset) {
+            Ok(offset) if offset <= transfer.bytes.len() => offset,
+            _ => {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "state export offset is outside the payload",
+                );
+            }
+        };
+        if request.maximum_bytes == 0 {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "state export chunk size must be non-zero",
+            );
+        }
+        let protocol_overhead = 1024_u64;
+        let negotiated = self
+            .options
+            .limits
+            .maximum_payload_bytes
+            .saturating_sub(protocol_overhead);
+        let requested = u64::from(request.maximum_bytes).min(negotiated);
+        if requested == 0 {
+            return self.reject(
+                message_id,
+                CommandErrorCode::ResourceLimit,
+                "negotiated payload limit cannot carry a state chunk",
+            );
+        }
+        let end = offset
+            .saturating_add(usize::try_from(requested).unwrap_or(usize::MAX))
+            .min(transfer.bytes.len());
+        let complete = end == transfer.bytes.len();
+        let response = StateExportChunk {
+            transfer_id: request.transfer_id,
+            offset: request.offset,
+            data: ProtocolBytes::new(transfer.bytes[offset..end].to_vec()),
+            complete,
+        };
+        self.emit(RuntimeMessage::StateExportChunk(response), Some(message_id))?;
+        if complete {
+            self.outbound_transfer = None;
+        } else if let Some(transfer) = self.outbound_transfer.as_mut() {
+            transfer.next_offset = u64::try_from(end).unwrap_or(u64::MAX);
+        }
+        Ok(())
+    }
+
+    fn cancel_state_transfer(
+        &mut self,
+        message_id: u64,
+        cancel: StateTransferCancel,
+    ) -> Result<(), RuntimeError> {
+        let inbound = self
+            .inbound_transfer
+            .as_ref()
+            .is_some_and(|transfer| transfer.descriptor.transfer_id == cancel.transfer_id);
+        let outbound = self
+            .outbound_transfer
+            .as_ref()
+            .is_some_and(|transfer| transfer.descriptor.transfer_id == cancel.transfer_id);
+        if !inbound && !outbound {
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "state transfer is stale",
+            );
+        }
+        if inbound {
+            self.inbound_transfer = None;
+        }
+        if outbound {
+            self.outbound_transfer = None;
+        }
+        Ok(())
+    }
+
+    fn consume_state_import(
+        &mut self,
+        message_id: u64,
+        transfer_id: u64,
+        kind: StateExportKind,
+    ) -> Result<Option<Vec<u8>>, RuntimeError> {
+        let valid = self.inbound_transfer.as_ref().is_some_and(|transfer| {
+            transfer.descriptor.transfer_id == transfer_id
+                && transfer.descriptor.kind == kind
+                && transfer.committed
+        });
+        if !valid {
+            self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "start requires a committed state import of the requested kind",
+            )?;
+            return Ok(None);
+        }
+        Ok(self.inbound_transfer.take().map(|transfer| transfer.bytes))
     }
 
     fn traditional_save_format(&self) -> era_runtime_save::SaveFormat {
@@ -3161,6 +3777,8 @@ impl RuntimeSession {
             )?;
         }
         self.operations.clear();
+        self.inbound_transfer = None;
+        self.outbound_transfer = None;
         self.vm = None;
         self.set_phase(RuntimePhase::Stopped)?;
         self.emit(
@@ -3267,6 +3885,21 @@ impl RuntimeSession {
         let id = self.next_wait_id;
         self.next_wait_id = self.next_wait_id.saturating_add(1);
         id
+    }
+
+    fn allocate_transfer(&mut self) -> u64 {
+        let id = self.next_transfer_id;
+        self.next_transfer_id = self.next_transfer_id.saturating_add(1);
+        id
+    }
+
+    fn observe_frontend_time(&mut self, sample: u64) -> u64 {
+        let (frontend_origin, logical_origin) = *self
+            .frontend_time_origin
+            .get_or_insert((sample, self.logical_time_ns));
+        let mapped = logical_origin.saturating_add(sample.saturating_sub(frontend_origin));
+        self.logical_time_ns = self.logical_time_ns.max(mapped);
+        self.logical_time_ns
     }
 
     fn allocate_interaction(&mut self) -> InteractionToken {
@@ -3962,13 +4595,18 @@ fn intersect_limits(left: RuntimeLimits, right: RuntimeLimits) -> RuntimeLimits 
         maximum_drive_instructions: left
             .maximum_drive_instructions
             .min(right.maximum_drive_instructions),
+        maximum_transfer_bytes: left
+            .maximum_transfer_bytes
+            .min(right.maximum_transfer_bytes),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use era_protocol::{Channel, Envelope, ProtocolBytes, decode_envelope, encode_envelope};
-    use era_runtime_protocol::{FileCategory, FilePayload, ProjectManifest, SubmittedFile};
+    use era_runtime_protocol::{
+        FileCategory, FileChange, FilePayload, ProjectManifest, SubmittedFile,
+    };
 
     use super::*;
 
@@ -4036,6 +4674,157 @@ mod tests {
         assert_eq!(hello.selected_version, RUNTIME_PROTOCOL_VERSION);
         assert!(hello.features.contains(&RuntimeFeature::TimedInput));
         assert!(!hello.features.contains(&RuntimeFeature::Audio));
+    }
+
+    #[test]
+    fn ready_project_reload_stages_and_commits_a_normalized_delta() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        submit(
+            &mut session,
+            0,
+            RuntimeMessage::ClientHello(ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "reload-test".into(),
+                features: vec![RuntimeFeature::ProjectReload],
+                requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
+                preferred_locales: vec!["en".into()],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        submit(
+            &mut session,
+            1,
+            RuntimeMessage::ProjectManifest(ProjectManifest {
+                project_revision: 1,
+                files: vec![SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                    content_hash: None,
+                }],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        submit(
+            &mut session,
+            2,
+            RuntimeMessage::ReloadProject(ReloadProject {
+                base_revision: 1,
+                target_revision: 2,
+                changes: vec![FileChange::Upsert {
+                    file: SubmittedFile {
+                        relative_path: "./main.erb".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8(
+                            "@SYSTEM_TITLE\nPRINTL reloaded\nRETURN\n".into(),
+                        ),
+                        content_hash: None,
+                    },
+                }],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let messages = drain(&mut session);
+        assert_eq!(session.phase(), RuntimePhase::Ready);
+        assert_eq!(
+            session
+                .project_snapshot
+                .as_ref()
+                .unwrap()
+                .manifest
+                .project_revision,
+            2
+        );
+        assert!(messages.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::ProjectLoadReport(era_runtime_protocol::ProjectLoadReport {
+                project_revision: 2,
+                success: true,
+                ..
+            })
+        )));
+    }
+
+    #[test]
+    fn state_import_rejects_out_of_order_chunks_and_bad_digests() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        submit(
+            &mut session,
+            0,
+            RuntimeMessage::ClientHello(ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "test".into(),
+                features: vec![RuntimeFeature::TraditionalSave],
+                requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
+                preferred_locales: vec!["ja".into()],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+
+        submit(
+            &mut session,
+            1,
+            RuntimeMessage::StateImportBegin(StateImportBegin {
+                kind: StateExportKind::TraditionalSave,
+                total_bytes: 3,
+                digest: ProtocolBytes::new([0; 32]),
+                artifact_id: None,
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let transfer_id = drain(&mut session)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::StateImportAccepted(accepted) => Some(accepted.transfer_id),
+                _ => None,
+            })
+            .unwrap();
+
+        submit(
+            &mut session,
+            2,
+            RuntimeMessage::StateImportChunk(StateImportChunk {
+                transfer_id,
+                offset: 1,
+                data: ProtocolBytes::new([b'a']),
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        assert!(drain(&mut session).iter().any(|message| matches!(
+            message,
+            RuntimeMessage::CommandRejected(CommandRejected {
+                code: CommandErrorCode::InvalidValue,
+                ..
+            })
+        )));
+
+        submit(
+            &mut session,
+            3,
+            RuntimeMessage::StateImportChunk(StateImportChunk {
+                transfer_id,
+                offset: 0,
+                data: ProtocolBytes::new(*b"abc"),
+            }),
+        );
+        submit(
+            &mut session,
+            4,
+            RuntimeMessage::StateImportCommit(StateImportCommit { transfer_id }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        assert!(drain(&mut session).iter().any(|message| matches!(
+            message,
+            RuntimeMessage::CommandRejected(CommandRejected {
+                code: CommandErrorCode::InvalidValue,
+                ..
+            })
+        )));
     }
 
     #[test]
@@ -4427,7 +5216,7 @@ mod tests {
                 RuntimeMessage::ClientHello(ClientHello {
                     runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
                     client_name: "save-test".into(),
-                    features: vec![RuntimeFeature::TraditionalSave],
+                    features: vec![RuntimeFeature::TraditionalSave, RuntimeFeature::VmSnapshot],
                     requested_limits: RuntimeOptions::default().limits,
                     capabilities: capabilities(),
                     preferred_locales: vec!["en-US".into()],
@@ -4507,13 +5296,30 @@ mod tests {
             }),
         );
         source.drive(RuntimeDriveBudget::default()).unwrap();
-        let bytes = drain(&mut source)
+        let descriptor = drain(&mut source)
             .into_iter()
             .find_map(|message| match message {
                 RuntimeMessage::StateExportReady(StateExportReady {
-                    result: StateExportResult::Ready { data, .. },
+                    result: StateExportResult::Ready { transfer },
                     ..
-                }) => Some(data.as_slice().to_vec()),
+                }) => Some(transfer),
+                _ => None,
+            })
+            .expect("traditional save descriptor");
+        submit(
+            &mut source,
+            5,
+            RuntimeMessage::StateExportChunkRequest(StateExportChunkRequest {
+                transfer_id: descriptor.transfer_id,
+                offset: 0,
+                maximum_bytes: u32::MAX,
+            }),
+        );
+        source.drive(RuntimeDriveBudget::default()).unwrap();
+        let bytes = drain(&mut source)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::StateExportChunk(chunk) => Some(chunk.data.as_slice().to_vec()),
                 _ => None,
             })
             .expect("traditional save bytes");
@@ -4522,10 +5328,42 @@ mod tests {
         submit(
             &mut restored,
             2,
+            RuntimeMessage::StateImportBegin(StateImportBegin {
+                kind: StateExportKind::TraditionalSave,
+                total_bytes: u64::try_from(bytes.len()).unwrap(),
+                digest: descriptor.digest,
+                artifact_id: None,
+            }),
+        );
+        restored.drive(RuntimeDriveBudget::default()).unwrap();
+        let transfer_id = drain(&mut restored)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::StateImportAccepted(accepted) => Some(accepted.transfer_id),
+                _ => None,
+            })
+            .expect("accepted import");
+        submit(
+            &mut restored,
+            3,
+            RuntimeMessage::StateImportChunk(StateImportChunk {
+                transfer_id,
+                offset: 0,
+                data: ProtocolBytes::new(bytes),
+            }),
+        );
+        submit(
+            &mut restored,
+            4,
+            RuntimeMessage::StateImportCommit(StateImportCommit { transfer_id }),
+        );
+        restored.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut restored);
+        submit(
+            &mut restored,
+            5,
             RuntimeMessage::Start(StartRequest {
-                mode: StartMode::TraditionalSave {
-                    data: ProtocolBytes::new(bytes),
-                },
+                mode: StartMode::TraditionalSave { transfer_id },
             }),
         );
         for _ in 0..5 {
@@ -4544,6 +5382,114 @@ mod tests {
             }),
             _ => false,
         }));
+
+        let old_wait = source
+            .operations
+            .active_input()
+            .expect("snapshot wait")
+            .wait
+            .clone();
+        submit(
+            &mut source,
+            6,
+            RuntimeMessage::StateExportRequest(StateExportRequest {
+                kind: StateExportKind::VmSnapshot,
+            }),
+        );
+        source.drive(RuntimeDriveBudget::default()).unwrap();
+        let snapshot_descriptor = drain(&mut source)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::StateExportReady(StateExportReady {
+                    result: StateExportResult::Ready { transfer },
+                    ..
+                }) => Some(transfer),
+                _ => None,
+            })
+            .expect("runtime snapshot descriptor");
+        let mut snapshot_bytes = Vec::new();
+        let mut source_sequence = 7;
+        loop {
+            submit(
+                &mut source,
+                source_sequence,
+                RuntimeMessage::StateExportChunkRequest(StateExportChunkRequest {
+                    transfer_id: snapshot_descriptor.transfer_id,
+                    offset: u64::try_from(snapshot_bytes.len()).unwrap(),
+                    maximum_bytes: 1024 * 1024,
+                }),
+            );
+            source_sequence += 1;
+            source.drive(RuntimeDriveBudget::default()).unwrap();
+            let chunk = drain(&mut source)
+                .into_iter()
+                .find_map(|message| match message {
+                    RuntimeMessage::StateExportChunk(chunk) => Some(chunk),
+                    _ => None,
+                })
+                .expect("runtime snapshot chunk");
+            snapshot_bytes.extend_from_slice(chunk.data.as_slice());
+            if chunk.complete {
+                break;
+            }
+        }
+
+        let mut exact = prepare();
+        submit(
+            &mut exact,
+            2,
+            RuntimeMessage::StateImportBegin(StateImportBegin {
+                kind: StateExportKind::VmSnapshot,
+                total_bytes: u64::try_from(snapshot_bytes.len()).unwrap(),
+                digest: snapshot_descriptor.digest,
+                artifact_id: snapshot_descriptor.artifact_id,
+            }),
+        );
+        exact.drive(RuntimeDriveBudget::default()).unwrap();
+        let transfer_id = drain(&mut exact)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::StateImportAccepted(accepted) => Some(accepted.transfer_id),
+                _ => None,
+            })
+            .unwrap();
+        let mut exact_sequence = 3;
+        for (index, chunk) in snapshot_bytes.chunks(1024 * 1024).enumerate() {
+            submit(
+                &mut exact,
+                exact_sequence,
+                RuntimeMessage::StateImportChunk(StateImportChunk {
+                    transfer_id,
+                    offset: u64::try_from(index * 1024 * 1024).unwrap(),
+                    data: ProtocolBytes::new(chunk.to_vec()),
+                }),
+            );
+            exact_sequence += 1;
+        }
+        submit(
+            &mut exact,
+            exact_sequence,
+            RuntimeMessage::StateImportCommit(StateImportCommit { transfer_id }),
+        );
+        exact_sequence += 1;
+        exact.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut exact);
+        submit(
+            &mut exact,
+            exact_sequence,
+            RuntimeMessage::Start(StartRequest {
+                mode: StartMode::VmSnapshot { transfer_id },
+            }),
+        );
+        exact.drive(RuntimeDriveBudget::default()).unwrap();
+        let restored_wait = exact.operations.active_input().expect("restored wait");
+        assert_eq!(exact.phase(), RuntimePhase::WaitingInput);
+        assert_ne!(restored_wait.wait.wait_id, old_wait.wait_id);
+        assert_ne!(
+            restored_wait.wait.submission_token,
+            old_wait.submission_token
+        );
+        assert_eq!(restored_wait.wait.submission_token.epoch, exact.epoch.0);
     }
 
     #[test]
@@ -4781,7 +5727,7 @@ mod tests {
     }
 
     #[test]
-    fn configuration_is_parsed_while_resource_manifests_remain_deferred() {
+    fn configuration_is_parsed_and_resources_receive_stable_identities() {
         let build = build_project(
             &ProjectManifest {
                 project_revision: 1,
@@ -4816,7 +5762,15 @@ mod tests {
             .map(|diagnostic| diagnostic.code.as_str())
             .collect();
         assert!(codes.contains(&"runtime.invalid_configuration"));
-        assert!(codes.contains(&"runtime.resource_manifest_deferred"));
+        assert!(!codes.contains(&"runtime.resource_manifest_deferred"));
+        let snapshot = build.snapshot.expect("normalized project snapshot");
+        assert_eq!(snapshot.resources.len(), 1);
+        assert_eq!(snapshot.resources[0].relative_path, "resources.csv");
+        assert_eq!(
+            snapshot.resources[0].payload_digest,
+            *blake3::hash(b"name,path").as_bytes()
+        );
+        assert_ne!(snapshot.project_identity, [0; 32]);
     }
 
     #[test]
@@ -4850,6 +5804,15 @@ mod tests {
     }
 
     #[test]
+    fn frontend_monotonic_time_rebases_onto_restored_logical_time() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        session.logical_time_ns = 100;
+        assert_eq!(session.observe_frontend_time(5), 100);
+        assert_eq!(session.observe_frontend_time(15), 110);
+        assert_eq!(session.observe_frontend_time(9), 110);
+    }
+
+    #[test]
     fn primitive_input_uses_runtime_selection_tokens_and_rejects_timeout_spoofing() {
         let submission = InteractionToken { epoch: 7, id: 1 };
         let selection = InteractionToken { epoch: 7, id: 2 };
@@ -4870,7 +5833,7 @@ mod tests {
                 submission_token: submission,
                 countdown_remaining_ms: None,
             },
-            result_name: Some("RESULT"),
+            result_name: Some("RESULT".into()),
             choices: BTreeMap::from([(selection, VmValue::Integer(42))]),
             timeout_duration_ns: Some(10),
         };

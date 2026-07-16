@@ -78,6 +78,26 @@ pub struct OpaqueSaveExtension {
     pub payload: Vec<u8>,
 }
 
+/// Structured representation of the three extension records written by Emuera 1808.
+/// Map entries remain ordered because `MAP_GETKEYS` and `MAP_TOXML` make that order observable.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SaveExtension {
+    Map {
+        key: String,
+        entries: Vec<(String, String)>,
+    },
+    Xml {
+        key: String,
+        document: String,
+    },
+    DataTable {
+        key: String,
+        schema: String,
+        data: String,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SaveDocument {
     pub format: SaveFormat,

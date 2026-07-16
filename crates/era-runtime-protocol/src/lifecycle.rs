@@ -110,6 +110,9 @@ pub struct RuntimeLimits {
     pub maximum_journal_entries: u32,
     #[n(4)]
     pub maximum_drive_instructions: u64,
+    /// Maximum size of one logical import or export assembled from chunks.
+    #[n(5)]
+    pub maximum_transfer_bytes: u64,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -247,14 +250,12 @@ pub enum StartMode {
     #[n(1)]
     TraditionalSave {
         #[n(0)]
-        data: ProtocolBytes,
+        transfer_id: u64,
     },
     #[n(2)]
     VmSnapshot {
         #[n(0)]
-        artifact_id: ProtocolBytes,
-        #[n(1)]
-        data: ProtocolBytes,
+        transfer_id: u64,
     },
 }
 
@@ -275,6 +276,39 @@ pub enum StateExportKind {
     VmSnapshot,
 }
 
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct StateTransferDescriptor {
+    #[n(0)]
+    pub transfer_id: u64,
+    #[n(1)]
+    pub kind: StateExportKind,
+    #[n(2)]
+    pub total_bytes: u64,
+    /// Raw 32-byte BLAKE3 digest of the complete payload.
+    #[n(3)]
+    pub digest: ProtocolBytes,
+    /// Exact bytecode artifact identity when the transfer requires one.
+    #[n(4)]
+    pub artifact_id: Option<ProtocolBytes>,
+}
+
+#[derive(
+    Clone, Copy, Debug, Decode, Encode, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotIneligibleReason {
+    #[n(0)]
+    StableWaitRequired,
+    #[n(1)]
+    ExternalOperationPending,
+    #[n(2)]
+    VmSnapshotUnavailable,
+    #[n(3)]
+    SnapshotStateUnavailable,
+}
+
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct StateExportRequest {
@@ -288,15 +322,91 @@ pub enum StateExportResult {
     #[n(0)]
     Ready {
         #[n(0)]
-        data: ProtocolBytes,
-        #[n(1)]
-        artifact_id: Option<ProtocolBytes>,
+        transfer: StateTransferDescriptor,
     },
     #[n(1)]
     Ineligible {
         #[n(0)]
-        reasons: Vec<String>,
+        reasons: Vec<SnapshotIneligibleReason>,
     },
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct StateImportBegin {
+    #[n(0)]
+    pub kind: StateExportKind,
+    #[n(1)]
+    pub total_bytes: u64,
+    #[n(2)]
+    pub digest: ProtocolBytes,
+    #[n(3)]
+    pub artifact_id: Option<ProtocolBytes>,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct StateImportAccepted {
+    #[n(0)]
+    pub transfer_id: u64,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct StateImportChunk {
+    #[n(0)]
+    pub transfer_id: u64,
+    #[n(1)]
+    pub offset: u64,
+    #[n(2)]
+    pub data: ProtocolBytes,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct StateImportCommit {
+    #[n(0)]
+    pub transfer_id: u64,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct StateImportReady {
+    #[n(0)]
+    pub transfer_id: u64,
+    #[n(1)]
+    pub kind: StateExportKind,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct StateExportChunkRequest {
+    #[n(0)]
+    pub transfer_id: u64,
+    #[n(1)]
+    pub offset: u64,
+    #[n(2)]
+    pub maximum_bytes: u32,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct StateExportChunk {
+    #[n(0)]
+    pub transfer_id: u64,
+    #[n(1)]
+    pub offset: u64,
+    #[n(2)]
+    pub data: ProtocolBytes,
+    #[n(3)]
+    pub complete: bool,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct StateTransferCancel {
+    #[n(0)]
+    pub transfer_id: u64,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

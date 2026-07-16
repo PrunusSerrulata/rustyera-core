@@ -7,10 +7,11 @@ mod binary;
 mod model;
 mod text;
 
-pub use binary::{decode_binary, encode_binary};
+pub use binary::{decode_binary, decode_save_extension, encode_binary, encode_save_extension};
 pub use model::{
-    OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveFileKind,
-    SaveFormat, SaveMetadata, SaveValue, Text1808Layout, Text1808ValueType, Text1808Variable,
+    OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveExtension,
+    SaveFileKind, SaveFormat, SaveMetadata, SaveValue, Text1808Layout, Text1808ValueType,
+    Text1808Variable,
 };
 pub use text::{decode_text, decode_text_with_layout, encode_text, encode_text_with_layout};
 

@@ -38,8 +38,7 @@ impl fmt::Display for Digest {
     }
 }
 
-#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SymbolKey(pub [u8; 16]);
 
 impl SymbolKey {
@@ -59,5 +58,39 @@ impl fmt::Debug for SymbolKey {
             write!(formatter, "{byte:02x}")?;
         }
         write!(formatter, ")")
+    }
+}
+
+impl Serialize for SymbolKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut encoded = String::with_capacity(32);
+        for byte in self.0 {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        serializer.serialize_str(&encoded)
+    }
+}
+
+impl<'de> Deserialize<'de> for SymbolKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        if encoded.len() != 32 {
+            return Err(serde::de::Error::custom(
+                "symbol key must contain 32 hexadecimal digits",
+            ));
+        }
+        let mut bytes = [0; 16];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16)
+                .map_err(serde::de::Error::custom)?;
+        }
+        Ok(Self(bytes))
     }
 }

@@ -23,6 +23,14 @@ runtime-message =
   [53, service-response] /
   [60, state-export-request] /
   [61, state-export-ready] /
+  [62, state-import-begin] /
+  [63, state-import-accepted] /
+  [64, state-import-chunk] /
+  [65, state-import-commit] /
+  [66, state-import-ready] /
+  [67, state-export-chunk-request] /
+  [68, state-export-chunk] /
+  [69, state-transfer-cancel] /
   [90, shutdown-request] /
   [91, shutdown-ready] /
   [92, runtime-fault] /
@@ -31,8 +39,9 @@ runtime-message =
   [95, command-rejected] /
   [96, any]
 
-client-hello = { 0: any, 1: tstr, 2: [* uint], 3: any, 4: any }
-server-hello = { 0: any, 1: any, 2: [* uint], 3: any, 4: uint, 5: any }
+client-hello = { 0: any, 1: tstr, 2: [* uint], 3: runtime-limits, 4: any, 5: [* tstr] }
+server-hello = { 0: any, 1: any, 2: [* uint], 3: runtime-limits, 4: uint, 5: any, 6: tstr }
+runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint }
 version-rejected = { 0: any, 1: tstr }
 project-manifest = { 0: uint, 1: [* any] }
 project-load-report = { 0: uint, 1: bool, 2: [* any] }
@@ -57,6 +66,14 @@ service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr }
 service-response = { 0: uint, 1: any }
 state-export-request = { 0: uint }
 state-export-ready = { 0: uint, 1: any }
+state-import-begin = { 0: uint, 1: uint, 2: bstr, 3: bstr / null }
+state-import-accepted = { 0: uint }
+state-import-chunk = { 0: uint, 1: uint, 2: bstr }
+state-import-commit = { 0: uint }
+state-import-ready = { 0: uint, 1: uint }
+state-export-chunk-request = { 0: uint, 1: uint, 2: uint }
+state-export-chunk = { 0: uint, 1: uint, 2: bstr, 3: bool }
+state-transfer-cancel = { 0: uint }
 shutdown-request = { 0: bool }
 shutdown-ready = { 0: uint, 1: uint }
 runtime-fault = { 0: uint, 1: tstr, 2: any / null }

@@ -224,6 +224,21 @@ stable runtime/game header instead of UI/device/patch-directory details.
 
 ## Batch 7: exact snapshot restore and hot replacement
 
+Implementation checkpoint:
+
+- Runtime protocol 8.0 now uses checksummed, ordered chunk transfers for traditional saves and VM
+  snapshots instead of embedding potentially large payloads in `Start`.
+- Submitted resource manifests and payloads have deterministic normalized identities. Current
+  binary save extension records have typed, order-preserving Map/XML/DataTable codecs.
+- Exact Runtime Snapshot v1 and VM Snapshot v2 round-trip stable untimed VM input waits, including
+  VM/native state, canonical presentation, controller state, logical time and token rebinding.
+- Project deltas are normalized, compiled incrementally and committed through the VM's
+  generation-pinned hot-reload path. Native state shared by stable imports is migrated instead of
+  being silently reset.
+- The remaining items below are still required before Batch 7 is complete: executable
+  Map/XML/DataTable Native builtins, candidate SAVEINFO transactions, full slot/delete controller,
+  runtime-owned menu snapshots, and exact wait/controller rebind validation during running reloads.
+
 Implement in this dependency order:
 
 1. Add a candidate save transaction that runs frontend Clock and speculative `SAVEINFO` against

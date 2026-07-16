@@ -6,8 +6,8 @@ use era_runtime_protocol::{
     AdvanceTime, EffectBatch, EffectEvent, EffectKind, ExitReason, ExitRequested, FrontendInput,
     GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
     GetKeyStateResponse, InputIntent, InteractionToken, PrimitiveInput, RUNTIME_PROTOCOL_VERSION,
-    RuntimeMessage, ServiceKind, ServiceRequest, StorageNamespace, StorageOperation,
-    StorageRequest, validate_relative_path,
+    RuntimeMessage, ServiceKind, ServiceRequest, StateExportChunkRequest, StateExportKind,
+    StateImportBegin, StorageNamespace, StorageOperation, StorageRequest, validate_relative_path,
 };
 
 #[test]
@@ -101,8 +101,8 @@ fn storage_write_is_correlated_and_idempotent() {
 }
 
 #[test]
-fn storage_v7_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(7, 0));
+fn storage_v8_expresses_create_only_stat_and_recursive_listing() {
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(8, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -141,7 +141,27 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(7, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(8, 0));
+}
+
+#[test]
+fn state_transfers_are_versioned_and_chunked() {
+    let begin = RuntimeMessage::StateImportBegin(StateImportBegin {
+        kind: StateExportKind::TraditionalSave,
+        total_bytes: 4096,
+        digest: ProtocolBytes::new([7; 32]),
+        artifact_id: None,
+    });
+    let encoded = begin.encode_payload().expect("encode state import");
+    assert_eq!(RuntimeMessage::decode_payload(62, &encoded), Ok(begin));
+
+    let read = RuntimeMessage::StateExportChunkRequest(StateExportChunkRequest {
+        transfer_id: 9,
+        offset: 1024,
+        maximum_bytes: 1024,
+    });
+    let encoded = read.encode_payload().expect("encode export chunk request");
+    assert_eq!(RuntimeMessage::decode_payload(67, &encoded), Ok(read));
 }
 
 #[test]

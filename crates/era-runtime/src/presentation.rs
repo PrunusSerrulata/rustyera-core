@@ -4,9 +4,12 @@ use era_runtime_protocol::{
     SystemTextKey, SystemTextRef, TextStyle,
 };
 use erabasic_vm::VmValue;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct PresentationModel {
     revision: u64,
     title: String,
@@ -53,6 +56,25 @@ impl Default for PresentationModel {
 }
 
 impl PresentationModel {
+    pub(crate) fn rebind_interactions(
+        &mut self,
+        tokens: &BTreeMap<InteractionToken, InteractionToken>,
+        waits: &BTreeMap<u64, u64>,
+    ) {
+        if let Some(wait) = &mut self.input_wait {
+            if let Some(rebound) = waits.get(&wait.wait_id) {
+                wait.wait_id = *rebound;
+            }
+            if let Some(rebound) = tokens.get(&wait.submission_token) {
+                wait.submission_token = *rebound;
+            }
+        }
+        for line in &mut self.lines {
+            rebind_runs(&mut line.runs, tokens);
+        }
+        rebind_runs(&mut self.pending_runs, tokens);
+        self.bump();
+    }
     pub(crate) fn set_title(&mut self, title: String) {
         self.title = title;
         self.bump();
@@ -291,6 +313,21 @@ impl PresentationModel {
 
     fn bump(&mut self) {
         self.revision = self.revision.saturating_add(1);
+    }
+}
+
+fn rebind_runs(runs: &mut [DisplayRun], tokens: &BTreeMap<InteractionToken, InteractionToken>) {
+    for run in runs {
+        match run {
+            DisplayRun::Button { runs, token, .. } => {
+                if let Some(rebound) = tokens.get(token) {
+                    *token = *rebound;
+                }
+                rebind_runs(runs, tokens);
+            }
+            DisplayRun::ColumnCell { content, .. } => rebind_runs(content, tokens),
+            _ => {}
+        }
     }
 }
 

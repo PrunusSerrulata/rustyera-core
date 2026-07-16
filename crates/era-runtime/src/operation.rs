@@ -2,16 +2,17 @@ use std::collections::{BTreeMap, VecDeque};
 
 use era_runtime_save::SaveFileKind;
 use erabasic_vm::HostRequestId;
+use serde::{Deserialize, Serialize};
 
 use crate::host::{ExternalCompletion, PendingInput};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum PendingService {
     StartEntropy,
     Host(ExternalCompletion),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum PendingStorage {
     ListLoadSlots,
     ReadLoadSlot,
@@ -51,7 +52,7 @@ pub(crate) enum PendingStorage {
     BuiltinAutosave,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 enum PendingOperation {
     Input(PendingInput),
     Service {
@@ -73,7 +74,7 @@ enum PendingOperation {
 /// Protocol-visible IDs live in each typed entry and are never reused as table keys.
 /// This prevents service, storage, VM host and wait ID domains from colliding while
 /// preserving deterministic completion in the actor's inbound-message order.
-#[derive(Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct PendingOperations {
     next_id: u64,
     epoch: u64,
@@ -88,6 +89,51 @@ impl PendingOperations {
             self.clear();
             self.epoch = epoch;
         }
+    }
+
+    pub(crate) fn rebind_stable_inputs(
+        &mut self,
+        epoch: u64,
+        next_wait: &mut u64,
+        next_interaction: &mut u64,
+    ) -> (
+        BTreeMap<era_runtime_protocol::InteractionToken, era_runtime_protocol::InteractionToken>,
+        BTreeMap<u64, u64>,
+    ) {
+        let mut tokens = BTreeMap::new();
+        let mut waits = BTreeMap::new();
+        for operation in self.entries.values_mut() {
+            let PendingOperation::Input(input) = operation else {
+                continue;
+            };
+            let new_wait = *next_wait;
+            *next_wait = next_wait.saturating_add(1);
+            waits.insert(input.wait.wait_id, new_wait);
+            input.wait.wait_id = new_wait;
+
+            let old_submission = input.wait.submission_token;
+            let new_submission = era_runtime_protocol::InteractionToken {
+                epoch,
+                id: *next_interaction,
+            };
+            *next_interaction = next_interaction.saturating_add(1);
+            tokens.insert(old_submission, new_submission);
+            input.wait.submission_token = new_submission;
+            input.choices = std::mem::take(&mut input.choices)
+                .into_iter()
+                .map(|(old, value)| {
+                    let new = era_runtime_protocol::InteractionToken {
+                        epoch,
+                        id: *next_interaction,
+                    };
+                    *next_interaction = next_interaction.saturating_add(1);
+                    tokens.insert(old, new);
+                    (new, value)
+                })
+                .collect();
+        }
+        self.epoch = epoch;
+        (tokens, waits)
     }
 
     fn insert(&mut self, operation: PendingOperation) -> u64 {
@@ -108,6 +154,20 @@ impl PendingOperations {
                 PendingOperation::Service { .. } | PendingOperation::Delay { .. }
             )
         })
+    }
+
+    pub(crate) fn is_snapshot_stable(&self) -> bool {
+        !self.entries.is_empty()
+            && self.entries.values().all(|operation| match operation {
+                PendingOperation::Input(input) => {
+                    input.wait.stability == era_runtime_protocol::WaitStability::StableInput
+                        && input.wait.deadline_ns.is_none()
+                        && input.timeout_duration_ns.is_none()
+                }
+                PendingOperation::Service { .. }
+                | PendingOperation::Storage { .. }
+                | PendingOperation::Delay { .. } => false,
+            })
     }
 
     pub(crate) fn insert_service(&mut self, request_id: u64, value: PendingService) {
@@ -182,6 +242,16 @@ impl PendingOperations {
             Some(PendingOperation::Input(input)) => Some(input),
             _ => None,
         }
+    }
+
+    pub(crate) fn input_host_requests(&self) -> Vec<HostRequestId> {
+        self.entries
+            .values()
+            .filter_map(|operation| match operation {
+                PendingOperation::Input(input) => input.host_request,
+                _ => None,
+            })
+            .collect()
     }
 
     pub(crate) fn active_input_mut(&mut self) -> Option<&mut PendingInput> {

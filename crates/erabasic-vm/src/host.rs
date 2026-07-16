@@ -244,6 +244,24 @@ impl NativeServiceRegistry {
         }
         Ok(())
     }
+
+    /// Build the registry required by a replacement artifact while retaining every
+    /// service state whose stable import identity still exists. New services start
+    /// from their deterministic default; removed services are dropped only after the
+    /// VM has accepted the replacement generation.
+    pub(crate) fn migrated_for_artifact(
+        &self,
+        artifact: &BytecodeArtifact,
+    ) -> Result<Self, String> {
+        let previous = self.snapshots()?;
+        let mut target = Self::for_artifact(artifact);
+        let retained = previous
+            .into_iter()
+            .filter(|(key, _)| target.services.contains_key(key))
+            .collect();
+        target.restore_snapshots(&retained)?;
+        Ok(target)
+    }
 }
 
 struct CoreNative {
