@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use erabasic_data::ProjectData;
 use erabasic_hir::{
-    CallTarget, HIR_FORMAT_VERSION, HirExpr, HirExprKind, HirStatementKind, InstructionTarget,
-    Program, SemanticType,
+    CallTarget, HIR_FORMAT_VERSION, HirCallArgument, HirExpr, HirExprKind, HirStatementKind,
+    InstructionTarget, Program, SemanticType,
 };
 
 use crate::{ValidationCode, ValidationDiagnostic, ValidationReport};
@@ -237,15 +237,38 @@ fn validate_expression(
                 }
                 _ => {}
             }
-            for argument in arguments.iter().flatten() {
-                validate_expression(
-                    argument,
-                    functions,
-                    variables,
-                    function_name,
-                    instruction,
-                    diagnostics,
-                );
+            for argument in arguments {
+                match argument {
+                    HirCallArgument::Value(argument) => validate_expression(
+                        argument,
+                        functions,
+                        variables,
+                        function_name,
+                        instruction,
+                        diagnostics,
+                    ),
+                    HirCallArgument::Place(place) => {
+                        if !variables.contains(&place.variable) {
+                            diagnostics.push(ValidationDiagnostic::instruction(
+                                ValidationCode::MissingReference,
+                                function_name,
+                                instruction,
+                                "call place refers to an unknown variable",
+                            ));
+                        }
+                        for index in &place.indices {
+                            validate_expression(
+                                index,
+                                functions,
+                                variables,
+                                function_name,
+                                instruction,
+                                diagnostics,
+                            );
+                        }
+                    }
+                    HirCallArgument::Omitted => {}
+                }
             }
         }
         HirExprKind::Unary { operand, .. } | HirExprKind::Postfix { operand, .. } => {

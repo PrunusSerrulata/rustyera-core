@@ -7,16 +7,19 @@ use era_protocol::{
     negotiate_version,
 };
 use era_runtime_protocol::{
-    AdvanceTime, CellAlignment, ClientCapabilities, ClientHello, CommandErrorCode, CommandRejected,
-    ExitReason, ExitRequested, FaultCode, FrontendInput, GET_KEY_STATE_OPERATION,
-    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
-    InputWait, InteractionToken, LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION,
-    LocalDateTimeRequest, LocalDateTimeResponse, ProjectManifest, RANDOM_SEED_OPERATION,
-    RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse,
-    RuntimeFault, RuntimeFeature, RuntimeLimits, RuntimeMessage, RuntimePhase,
-    RuntimeResynchronized, RuntimeStateChanged, ServerHello, ServiceKind, ServiceRequest,
-    ServiceResponse, ServiceResult, ShutdownReady, StartMode, StartRequest, StateExportReady,
-    StateExportRequest, StateExportResult, VersionRejected, WaitChange, WaitKind, WaitStability,
+    AdvanceTime, CancelExternalRequest, CellAlignment, ClientCapabilities, ClientHello,
+    CommandErrorCode, CommandRejected, ExitReason, ExitRequested, ExternalRequestKind, FaultCode,
+    FrontendInput, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
+    GetKeyStateResponse, InputIntent, InputWait, InteractionToken, LOCAL_DATE_TIME_OPERATION,
+    LOCAL_DATE_TIME_OPERATION_VERSION, LocalDateTimeRequest, LocalDateTimeResponse,
+    ProjectManifest, RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION,
+    RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse, RuntimeFault, RuntimeFeature,
+    RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized, RuntimeStateChanged,
+    ServerHello, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady,
+    StartMode, StartRequest, StateExportKind, StateExportReady, StateExportRequest,
+    StateExportResult, StorageNamespace, StorageOperation, StorageRequest, StorageResponse,
+    StorageResult, SystemTextArgument, SystemTextKey, VersionRejected, WaitChange, WaitKind,
+    WaitStability,
 };
 use erabasic_bytecode::SymbolKey;
 use erabasic_compiler::IncrementalState;
@@ -31,6 +34,7 @@ use crate::controller::{SystemController, SystemFlow};
 use crate::host::{ClockOperation, ExternalCompletion, PendingInput, input_wait};
 use crate::presentation::{PresentationModel, display_value, logical_line_string};
 use crate::project::{NormalizedProjectSnapshot, build_project};
+use crate::save_adapter::{decode_era_save, encode_era_save};
 
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeOptions {
@@ -132,6 +136,19 @@ enum PendingService {
     Host(ExternalCompletion),
 }
 
+#[derive(Clone, Debug)]
+enum PendingStorage {
+    ListLoadSlots,
+    ReadLoadSlot,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum SystemMenuState {
+    #[default]
+    Title,
+    LoadSlots,
+}
+
 /// Single-owner runtime actor. Methods only enqueue, drive, and dequeue messages;
 /// no frontend code can run inside a VM instruction dispatch.
 pub struct RuntimeSession {
@@ -159,12 +176,17 @@ pub struct RuntimeSession {
     pending_input: Option<PendingInput>,
     queued_inputs: VecDeque<PendingInput>,
     pending_services: BTreeMap<u64, PendingService>,
+    pending_storage: BTreeMap<u64, PendingStorage>,
     pending_delays: BTreeMap<erabasic_vm::HostRequestId, u64>,
     key_toggle_state: [u8; 256],
     message_skip: bool,
     exit_requested: Option<ExitRequested>,
     controller: SystemController,
     project_snapshot: Option<NormalizedProjectSnapshot>,
+    selected_locale: String,
+    save_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
+    system_menu: SystemMenuState,
+    load_slot_paths: Vec<String>,
 }
 
 impl RuntimeSession {
@@ -195,12 +217,17 @@ impl RuntimeSession {
             pending_input: None,
             queued_inputs: VecDeque::new(),
             pending_services: BTreeMap::new(),
+            pending_storage: BTreeMap::new(),
             pending_delays: BTreeMap::new(),
             key_toggle_state: [0; 256],
             message_skip: false,
             exit_requested: None,
             controller: SystemController::default(),
             project_snapshot: None,
+            selected_locale: "ja".into(),
+            save_extensions: Vec::new(),
+            system_menu: SystemMenuState::Title,
+            load_slot_paths: Vec::new(),
         }
     }
 
@@ -368,6 +395,41 @@ impl RuntimeSession {
             .map(|snapshot| snapshot.use_new_random_ignored)
     }
 
+    #[must_use]
+    pub fn project_auto_save(&self) -> Option<bool> {
+        self.project_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.auto_save)
+    }
+
+    #[must_use]
+    pub fn project_save_slots_per_page(&self) -> Option<u32> {
+        self.project_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.save_slots_per_page)
+    }
+
+    #[must_use]
+    pub fn project_money_label(&self) -> Option<&str> {
+        self.project_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.money_label.as_str())
+    }
+
+    #[must_use]
+    pub fn project_money_first(&self) -> Option<bool> {
+        self.project_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.money_first)
+    }
+
+    #[must_use]
+    pub fn project_maximum_shop_items(&self) -> Option<u32> {
+        self.project_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.maximum_shop_items)
+    }
+
     fn handle_message(
         &mut self,
         message_id: u64,
@@ -417,14 +479,13 @@ impl RuntimeSession {
                     runtime_revision: self.revision,
                     presentation: self.presentation.snapshot(),
                     exit_requested: self.exit_requested,
+                    selected_locale: self.selected_locale.clone(),
                 }),
                 Some(message_id),
             ),
-            RuntimeMessage::StorageResponse(_) => self.reject(
-                message_id,
-                CommandErrorCode::StaleRequest,
-                "no storage request is pending",
-            ),
+            RuntimeMessage::StorageResponse(response) => {
+                self.complete_storage(message_id, response)
+            }
             RuntimeMessage::ClientHello(_)
             | RuntimeMessage::ServerHello(_)
             | RuntimeMessage::VersionRejected(_)
@@ -437,6 +498,7 @@ impl RuntimeSession {
             | RuntimeMessage::EffectBatch(_)
             | RuntimeMessage::StorageRequest(_)
             | RuntimeMessage::ServiceRequest(_)
+            | RuntimeMessage::CancelExternalRequest(_)
             | RuntimeMessage::StateExportReady(_)
             | RuntimeMessage::ShutdownReady(_)
             | RuntimeMessage::Fault(_)
@@ -455,7 +517,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 5.0 is required".into(),
+                    message: "runtime protocol 6.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -469,6 +531,7 @@ impl RuntimeSession {
         self.options.wire_limits.maximum_payload_bytes =
             usize::try_from(limits.maximum_payload_bytes).unwrap_or(usize::MAX);
         let implemented = [
+            RuntimeFeature::TraditionalSave,
             RuntimeFeature::TimedInput,
             RuntimeFeature::ExternalServices,
             RuntimeFeature::StateResynchronization,
@@ -478,6 +541,7 @@ impl RuntimeSession {
             .filter(|feature| hello.features.contains(feature))
             .collect();
         let selected_capabilities = selected_capabilities(&hello.capabilities);
+        self.selected_locale = select_locale(&hello.preferred_locales).into();
         self.presentation.set_projection(
             selected_capabilities.column_cells,
             selected_capabilities.separators,
@@ -490,6 +554,7 @@ impl RuntimeSession {
                 limits,
                 epoch: self.epoch.0,
                 selected_capabilities,
+                selected_locale: self.selected_locale.clone(),
             }),
             Some(message_id),
         )
@@ -552,16 +617,69 @@ impl RuntimeSession {
                         operation: RANDOM_SEED_OPERATION.into(),
                         operation_version: RANDOM_SEED_OPERATION_VERSION,
                         payload: ProtocolBytes::new(encode_canonical(&RandomSeedRequest {})?),
+                        deadline_ns: None,
                     }),
                     Some(message_id),
                 )
             }
-            StartMode::TraditionalSave { .. } | StartMode::VmSnapshot { .. } => self.reject(
+            StartMode::TraditionalSave { ref data } => {
+                self.start_traditional_save(message_id, data.as_slice())
+            }
+            StartMode::VmSnapshot { .. } => self.reject(
                 message_id,
                 CommandErrorCode::FeatureUnavailable,
                 "save restoration is reserved by the protocol but not implemented yet",
             ),
         }
+    }
+
+    fn start_traditional_save(
+        &mut self,
+        message_id: u64,
+        bytes: &[u8],
+    ) -> Result<(), RuntimeError> {
+        let artifact = self
+            .artifact
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Internal("loaded artifact is missing".into()))?;
+        let decoded = match decode_era_save(bytes, artifact.artifact()) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    &format!("traditional save is invalid: {error}"),
+                );
+            }
+        };
+        let mut vm = RuntimeVm::new(
+            self.artifact
+                .clone()
+                .ok_or_else(|| RuntimeError::Internal("loaded artifact is missing".into()))?,
+            self.options.vm_config,
+        );
+        let prepared = match vm.prepare_runtime_state(VmRuntimeStateTransaction::RestoreEraState(
+            Box::new(decoded.state),
+        )) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    &format!("traditional save is incompatible: {error}"),
+                );
+            }
+        };
+        vm.commit_runtime_state(prepared)
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        self.save_extensions = decoded.opaque_extensions;
+        self.advance_epoch();
+        self.set_phase(RuntimePhase::Starting)?;
+        if self.controller.prepare_load_sequence(vm.vm().artifact()) {
+            self.spawn_next_event(&mut vm)?;
+        }
+        self.vm = Some(vm);
+        self.set_phase(RuntimePhase::Running)
     }
 
     fn start_new_game(&mut self, seed: u64) -> Result<(), RuntimeError> {
@@ -593,44 +711,59 @@ impl RuntimeSession {
             self.set_phase(RuntimePhase::Running)
         } else {
             self.vm = Some(vm);
-            self.presentation
-                .append_text("[0] Start a new game".into(), false);
-            let start_token = self.allocate_interaction();
-            let load_token = self.allocate_interaction();
-            let submission_token = self.allocate_interaction();
-            self.presentation
-                .append_button("Start a new game".into(), start_token);
-            self.presentation
-                .append_button("Load game".into(), load_token);
-            let wait = InputWait {
-                wait_id: self.allocate_wait(),
-                kind: WaitKind::IntegerButton,
-                stability: WaitStability::StableInput,
-                one_input: false,
-                stop_message_skip: false,
-                system_input: true,
-                mouse_input: false,
-                default_value: None,
-                deadline_ns: None,
-                display_time: false,
-                timeout_message: None,
-                submission_token,
-                countdown_remaining_ms: None,
-            };
-            let choices = BTreeMap::from([
-                (start_token, VmValue::Integer(0)),
-                (load_token, VmValue::Integer(1)),
-            ]);
-            self.open_wait(
-                PendingInput {
-                    host_request: None,
-                    wait,
-                    result_name: None,
-                    choices,
-                    timeout_duration_ns: None,
-                },
-                true,
-            )
+            self.open_title_menu()
+        }
+    }
+
+    fn open_title_menu(&mut self) -> Result<(), RuntimeError> {
+        self.system_menu = SystemMenuState::Title;
+        self.load_slot_paths.clear();
+        let start_token = self.allocate_interaction();
+        let load_token = self.allocate_interaction();
+        let submission_token = self.allocate_interaction();
+        self.presentation.append_system_button(
+            localized_system_text(&self.selected_locale, SystemTextKey::NewGame),
+            SystemTextKey::NewGame,
+            Vec::new(),
+            start_token,
+        );
+        self.presentation.append_system_button(
+            localized_system_text(&self.selected_locale, SystemTextKey::LoadGame),
+            SystemTextKey::LoadGame,
+            Vec::new(),
+            load_token,
+        );
+        let wait = self.system_wait(submission_token);
+        self.open_wait(
+            PendingInput {
+                host_request: None,
+                wait,
+                result_name: None,
+                choices: BTreeMap::from([
+                    (start_token, VmValue::Integer(0)),
+                    (load_token, VmValue::Integer(1)),
+                ]),
+                timeout_duration_ns: None,
+            },
+            true,
+        )
+    }
+
+    fn system_wait(&mut self, submission_token: InteractionToken) -> InputWait {
+        InputWait {
+            wait_id: self.allocate_wait(),
+            kind: WaitKind::IntegerButton,
+            stability: WaitStability::StableInput,
+            one_input: false,
+            stop_message_skip: false,
+            system_input: true,
+            mouse_input: false,
+            default_value: None,
+            deadline_ns: None,
+            display_time: false,
+            timeout_message: None,
+            submission_token,
+            countdown_remaining_ms: None,
         }
     }
 
@@ -987,9 +1120,140 @@ impl RuntimeSession {
                 operation: operation.into(),
                 operation_version,
                 payload: ProtocolBytes::new(encode_canonical(payload)?),
+                deadline_ns: None,
             }),
             None,
         )
+    }
+
+    fn issue_storage(
+        &mut self,
+        pending: PendingStorage,
+        operation: StorageOperation,
+        relative_path: String,
+    ) -> Result<(), RuntimeError> {
+        let request_id = self.allocate_request()?;
+        self.pending_storage.insert(request_id, pending);
+        self.set_phase(RuntimePhase::Paused)?;
+        self.emit(
+            RuntimeMessage::StorageRequest(StorageRequest {
+                request_id,
+                namespace: StorageNamespace::Save,
+                relative_path,
+                operation,
+                idempotency_key: format!(
+                    "{}-{}-{}",
+                    self.options.session_id.low, self.epoch.0, request_id
+                ),
+                deadline_ns: None,
+            }),
+            None,
+        )
+    }
+
+    fn complete_storage(
+        &mut self,
+        message_id: u64,
+        response: StorageResponse,
+    ) -> Result<(), RuntimeError> {
+        let Some(pending) = self.pending_storage.remove(&response.request_id) else {
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "storage response has no pending request",
+            );
+        };
+        match (pending, response.result) {
+            (PendingStorage::ListLoadSlots, StorageResult::Listed { mut entries }) => {
+                entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+                if entries.iter().any(|entry| {
+                    era_runtime_protocol::validate_relative_path(&entry.relative_path).is_err()
+                }) {
+                    return self.reject(
+                        message_id,
+                        CommandErrorCode::InvalidValue,
+                        "storage list contains an invalid relative path",
+                    );
+                }
+                self.system_menu = SystemMenuState::LoadSlots;
+                let maximum = self.project_snapshot.as_ref().map_or(20, |snapshot| {
+                    usize::try_from(snapshot.save_slots_per_page).unwrap_or(usize::MAX)
+                });
+                self.load_slot_paths = entries
+                    .into_iter()
+                    .take(maximum)
+                    .map(|entry| entry.relative_path)
+                    .collect();
+                self.presentation.append_system_text(
+                    localized_system_text(&self.selected_locale, SystemTextKey::LoadQuestion),
+                    SystemTextKey::LoadQuestion,
+                    Vec::new(),
+                    false,
+                );
+                let mut choices = BTreeMap::new();
+                for index in 0..self.load_slot_paths.len() {
+                    let path = self.load_slot_paths[index].clone();
+                    let token = self.allocate_interaction();
+                    let arguments = vec![SystemTextArgument::String(path.clone())];
+                    self.presentation.append_system_button(
+                        format!(
+                            "{}: {path}",
+                            localized_system_text(&self.selected_locale, SystemTextKey::SaveSlot)
+                        ),
+                        SystemTextKey::SaveSlot,
+                        arguments,
+                        token,
+                    );
+                    choices.insert(
+                        token,
+                        VmValue::Integer(
+                            i64::try_from(index).unwrap_or(i64::MAX).saturating_add(2),
+                        ),
+                    );
+                }
+                let back = self.allocate_interaction();
+                self.presentation.append_system_button(
+                    localized_system_text(&self.selected_locale, SystemTextKey::Back),
+                    SystemTextKey::Back,
+                    Vec::new(),
+                    back,
+                );
+                choices.insert(back, VmValue::Integer(-1));
+                let submission = self.allocate_interaction();
+                let wait = self.system_wait(submission);
+                self.open_wait(
+                    PendingInput {
+                        host_request: None,
+                        wait,
+                        result_name: None,
+                        choices,
+                        timeout_duration_ns: None,
+                    },
+                    true,
+                )
+            }
+            (PendingStorage::ReadLoadSlot, StorageResult::Read { data, .. }) => {
+                self.set_phase(RuntimePhase::Ready)?;
+                self.start_traditional_save(message_id, data.as_slice())
+            }
+            (_, StorageResult::Error { error }) => {
+                self.presentation.append_system_text(
+                    format!(
+                        "{}: {error:?}",
+                        localized_system_text(&self.selected_locale, SystemTextKey::InvalidValue)
+                    ),
+                    SystemTextKey::InvalidValue,
+                    Vec::new(),
+                    true,
+                );
+                self.open_title_menu()
+            }
+            _ => self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "storage response kind differs from its request",
+            ),
+        }
     }
 
     fn complete_service(
@@ -1301,8 +1565,8 @@ impl RuntimeSession {
         pending: PendingInput,
         value: &VmValue,
     ) -> Result<(), RuntimeError> {
-        match value {
-            VmValue::Integer(0) => {
+        match (self.system_menu, value) {
+            (SystemMenuState::Title, VmValue::Integer(0)) => {
                 self.close_wait(pending.wait.wait_id)?;
                 let vm = self
                     .vm
@@ -1322,13 +1586,28 @@ impl RuntimeSession {
                 self.controller.started(fiber);
                 self.set_phase(RuntimePhase::Running)
             }
-            VmValue::Integer(1) => {
-                self.pending_input = Some(pending);
-                self.reject(
-                    0,
-                    CommandErrorCode::FeatureUnavailable,
-                    "traditional save selection is not implemented yet",
+            (SystemMenuState::Title, VmValue::Integer(1)) => {
+                self.close_wait(pending.wait.wait_id)?;
+                self.issue_storage(
+                    PendingStorage::ListLoadSlots,
+                    StorageOperation::List {
+                        pattern: Some("save*.sav".into()),
+                    },
+                    String::new(),
                 )
+            }
+            (SystemMenuState::LoadSlots, VmValue::Integer(-1)) => {
+                self.close_wait(pending.wait.wait_id)?;
+                self.open_title_menu()
+            }
+            (SystemMenuState::LoadSlots, VmValue::Integer(selection)) if *selection >= 2 => {
+                let index = usize::try_from(*selection - 2).unwrap_or(usize::MAX);
+                let Some(path) = self.load_slot_paths.get(index).cloned() else {
+                    self.pending_input = Some(pending);
+                    return self.reject(0, CommandErrorCode::InvalidValue, "unknown save slot");
+                };
+                self.close_wait(pending.wait.wait_id)?;
+                self.issue_storage(PendingStorage::ReadLoadSlot, StorageOperation::Read, path)
             }
             _ => {
                 self.pending_input = Some(pending);
@@ -1440,27 +1719,97 @@ impl RuntimeSession {
         message_id: u64,
         request: StateExportRequest,
     ) -> Result<(), RuntimeError> {
+        if request.kind == StateExportKind::VmSnapshot {
+            return self.emit(
+                RuntimeMessage::StateExportReady(StateExportReady {
+                    kind: request.kind,
+                    result: StateExportResult::Ineligible {
+                        reasons: vec!["VM snapshot export is scheduled for batch 5".into()],
+                    },
+                }),
+                Some(message_id),
+            );
+        }
+        let stable_wait = self.pending_input.as_ref().is_some_and(|pending| {
+            pending.wait.stability == WaitStability::StableInput
+                && pending.wait.deadline_ns.is_none()
+        });
+        let mut reasons = Vec::new();
+        if self.phase != RuntimePhase::WaitingInput || !stable_wait {
+            reasons.push("traditional saves require a stable untimed input wait".into());
+        }
+        if !self.pending_services.is_empty() || !self.pending_delays.is_empty() {
+            reasons.push("external operations are still pending".into());
+        }
+        let result = if reasons.is_empty() {
+            let vm = self
+                .vm
+                .as_ref()
+                .ok_or_else(|| RuntimeError::Internal("save export has no VM".into()))?;
+            let bytes = encode_era_save(
+                &vm.export_era_state(),
+                String::new(),
+                self.save_extensions.clone(),
+                self.traditional_save_format(),
+            )
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            StateExportResult::Ready {
+                data: ProtocolBytes::new(bytes),
+                artifact_id: None,
+            }
+        } else {
+            StateExportResult::Ineligible { reasons }
+        };
         self.emit(
             RuntimeMessage::StateExportReady(StateExportReady {
                 kind: request.kind,
-                result: StateExportResult::Ineligible {
-                    reasons: vec![
-                        "the traditional save codec and runtime snapshot container are not implemented"
-                            .into(),
-                    ],
-                },
+                result,
             }),
             Some(message_id),
         )
     }
 
+    fn traditional_save_format(&self) -> era_runtime_save::SaveFormat {
+        match self.project_snapshot.as_ref() {
+            Some(snapshot) if snapshot.save_in_binary && snapshot.compress_save => {
+                era_runtime_save::SaveFormat::Binary1808Gzip
+            }
+            // The schema-aware positional text writer is tracked separately. Until it is
+            // available, the runtime emits the lossless named binary representation instead
+            // of producing a text save with a corrupt variable order.
+            _ => era_runtime_save::SaveFormat::Binary1808,
+        }
+    }
+
     fn shutdown(&mut self, message_id: u64) -> Result<(), RuntimeError> {
         self.set_phase(RuntimePhase::Stopping)?;
         let cancelled = self.pending_services.len()
+            + self.pending_storage.len()
             + self.pending_delays.len()
             + self.queued_inputs.len()
             + usize::from(self.pending_input.is_some());
+        let service_requests: Vec<_> = self.pending_services.keys().copied().collect();
+        let storage_requests: Vec<_> = self.pending_storage.keys().copied().collect();
+        for request_id in service_requests {
+            self.emit(
+                RuntimeMessage::CancelExternalRequest(CancelExternalRequest {
+                    request_id,
+                    kind: ExternalRequestKind::Service,
+                }),
+                None,
+            )?;
+        }
+        for request_id in storage_requests {
+            self.emit(
+                RuntimeMessage::CancelExternalRequest(CancelExternalRequest {
+                    request_id,
+                    kind: ExternalRequestKind::Storage,
+                }),
+                None,
+            )?;
+        }
         self.pending_services.clear();
+        self.pending_storage.clear();
         self.pending_delays.clear();
         self.pending_input = None;
         self.queued_inputs.clear();
@@ -1556,7 +1905,9 @@ impl RuntimeSession {
     }
 
     fn allocate_request(&mut self) -> Result<u64, RuntimeError> {
-        if self.pending_services.len() >= self.options.limits.maximum_pending_requests as usize {
+        if self.pending_services.len() + self.pending_storage.len()
+            >= self.options.limits.maximum_pending_requests as usize
+        {
             return Err(RuntimeError::ResourceLimit(
                 "too many pending service requests",
             ));
@@ -1738,6 +2089,67 @@ fn selected_capabilities(client: &ClientCapabilities) -> ClientCapabilities {
     }
 }
 
+fn select_locale(preferred: &[String]) -> &'static str {
+    for locale in preferred {
+        let locale = locale.to_ascii_lowercase();
+        if locale == "zh-hans" || locale.starts_with("zh-cn") || locale.starts_with("zh-sg") {
+            return "zh-Hans";
+        }
+        if locale == "en" || locale.starts_with("en-") {
+            return "en";
+        }
+        if locale == "ja" || locale.starts_with("ja-") {
+            return "ja";
+        }
+    }
+    "ja"
+}
+
+fn localized_system_text(locale: &str, key: SystemTextKey) -> String {
+    let value = match (locale, key) {
+        ("zh-Hans", SystemTextKey::InvalidValue) => "输入无效",
+        ("zh-Hans", SystemTextKey::SaveQuestion) => "请选择保存位置",
+        ("zh-Hans", SystemTextKey::LoadQuestion) => "请选择要读取的存档",
+        ("zh-Hans", SystemTextKey::OverwriteQuestion) => "要覆盖这个存档吗？",
+        ("zh-Hans", SystemTextKey::NotEnoughMoney) => "金钱不足",
+        ("zh-Hans", SystemTextKey::OutOfStock) => "无法购买",
+        ("zh-Hans", SystemTextKey::AutoSaveFailed) => "自动保存失败",
+        ("zh-Hans", SystemTextKey::AutoSaveSkipped) => "已跳过自动保存",
+        ("zh-Hans", SystemTextKey::PressAnyKey) => "请按任意键",
+        ("zh-Hans", SystemTextKey::SaveSlot) => "存档",
+        ("zh-Hans", SystemTextKey::Back) => "返回",
+        ("zh-Hans", SystemTextKey::NewGame) => "开始新游戏",
+        ("zh-Hans", SystemTextKey::LoadGame) => "读取存档",
+        ("en", SystemTextKey::InvalidValue) => "Invalid value",
+        ("en", SystemTextKey::SaveQuestion) => "Select a save slot",
+        ("en", SystemTextKey::LoadQuestion) => "Select a save to load",
+        ("en", SystemTextKey::OverwriteQuestion) => "Overwrite this save?",
+        ("en", SystemTextKey::NotEnoughMoney) => "Not enough money",
+        ("en", SystemTextKey::OutOfStock) => "This item cannot be purchased",
+        ("en", SystemTextKey::AutoSaveFailed) => "Autosave failed",
+        ("en", SystemTextKey::AutoSaveSkipped) => "Autosave skipped",
+        ("en", SystemTextKey::PressAnyKey) => "Press any key",
+        ("en", SystemTextKey::SaveSlot) => "Save",
+        ("en", SystemTextKey::Back) => "Back",
+        ("en", SystemTextKey::NewGame) => "Start a new game",
+        ("en", SystemTextKey::LoadGame) => "Load game",
+        (_, SystemTextKey::InvalidValue) => "入力が正しくありません",
+        (_, SystemTextKey::SaveQuestion) => "セーブするデータを選択してください",
+        (_, SystemTextKey::LoadQuestion) => "ロードするデータを選択してください",
+        (_, SystemTextKey::OverwriteQuestion) => "上書きしてよろしいですか？",
+        (_, SystemTextKey::NotEnoughMoney) => "所持金が足りません",
+        (_, SystemTextKey::OutOfStock) => "購入できません",
+        (_, SystemTextKey::AutoSaveFailed) => "オートセーブに失敗しました",
+        (_, SystemTextKey::AutoSaveSkipped) => "オートセーブをスキップしました",
+        (_, SystemTextKey::PressAnyKey) => "何かキーを押してください",
+        (_, SystemTextKey::SaveSlot) => "セーブデータ",
+        (_, SystemTextKey::Back) => "戻る",
+        (_, SystemTextKey::NewGame) => "最初からはじめる",
+        (_, SystemTextKey::LoadGame) => "ロードする",
+    };
+    value.into()
+}
+
 fn protocol_to_vm(value: &era_runtime_protocol::ProtocolValue) -> VmValue {
     match value {
         era_runtime_protocol::ProtocolValue::Integer(value) => VmValue::Integer(*value),
@@ -1864,6 +2276,7 @@ mod tests {
                 features: vec![RuntimeFeature::Audio, RuntimeFeature::TimedInput],
                 requested_limits: RuntimeOptions::default().limits,
                 capabilities: capabilities(),
+                preferred_locales: vec!["ja".into()],
             }),
         );
         session.drive(RuntimeDriveBudget::default()).expect("drive");
@@ -1888,6 +2301,7 @@ mod tests {
                 features: Vec::new(),
                 requested_limits: RuntimeOptions::default().limits,
                 capabilities: capabilities(),
+                preferred_locales: vec!["ja".into()],
             }),
         );
         session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -1949,6 +2363,7 @@ mod tests {
                 features: vec![RuntimeFeature::TimedInput],
                 requested_limits: RuntimeOptions::default().limits,
                 capabilities: capabilities(),
+                preferred_locales: vec!["ja".into()],
             }),
         );
         session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -2024,6 +2439,193 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
+        fn prepare() -> RuntimeSession {
+            let mut session = RuntimeSession::new(RuntimeOptions::default());
+            submit(
+                &mut session,
+                0,
+                RuntimeMessage::ClientHello(ClientHello {
+                    runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                    client_name: "save-test".into(),
+                    features: vec![RuntimeFeature::TraditionalSave],
+                    requested_limits: RuntimeOptions::default().limits,
+                    capabilities: capabilities(),
+                    preferred_locales: vec!["en-US".into()],
+                }),
+            );
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            drain(&mut session);
+            submit(
+                &mut session,
+                1,
+                RuntimeMessage::ProjectManifest(ProjectManifest {
+                    project_revision: 1,
+                    files: vec![
+                        SubmittedFile {
+                            relative_path: "variables.erh".into(),
+                            category: FileCategory::Erh,
+                            payload: FilePayload::Utf8("#DIM SAVEDATA ZZZSAVE\n".into()),
+                            content_hash: None,
+                        },
+                        SubmittedFile {
+                            relative_path: "save.erb".into(),
+                            category: FileCategory::Erb,
+                            payload: FilePayload::Utf8(
+                                "@SYSTEM_TITLE\nINPUT\nZZZSAVE = RESULT\nINPUT\nRETURN\n@SYSTEM_LOADEND\nPRINTFORML restored={ZZZSAVE}\nRETURN\n"
+                                    .into(),
+                            ),
+                            content_hash: None,
+                        },
+                    ],
+                }),
+            );
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            let load_messages = drain(&mut session);
+            assert_eq!(session.phase(), RuntimePhase::Ready, "{load_messages:#?}");
+            session
+        }
+
+        let mut source = prepare();
+        submit(
+            &mut source,
+            2,
+            RuntimeMessage::Start(StartRequest {
+                mode: StartMode::NewGame { seed: Some(1) },
+            }),
+        );
+        for _ in 0..4 {
+            source.drive(RuntimeDriveBudget::default()).unwrap();
+        }
+        let wait = drain(&mut source)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::WaitChanged(WaitChange::Opened(wait)) => Some(wait),
+                _ => None,
+            })
+            .expect("first INPUT wait");
+        submit(
+            &mut source,
+            3,
+            RuntimeMessage::Input(FrontendInput {
+                wait_id: wait.wait_id,
+                token: wait.submission_token,
+                monotonic_time_ns: 1,
+                intent: InputIntent::CommitText("37".into()),
+                message_skip: false,
+            }),
+        );
+        for _ in 0..4 {
+            source.drive(RuntimeDriveBudget::default()).unwrap();
+        }
+        drain(&mut source);
+        assert_eq!(source.phase(), RuntimePhase::WaitingInput);
+        submit(
+            &mut source,
+            4,
+            RuntimeMessage::StateExportRequest(StateExportRequest {
+                kind: StateExportKind::TraditionalSave,
+            }),
+        );
+        source.drive(RuntimeDriveBudget::default()).unwrap();
+        let bytes = drain(&mut source)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::StateExportReady(StateExportReady {
+                    result: StateExportResult::Ready { data, .. },
+                    ..
+                }) => Some(data.as_slice().to_vec()),
+                _ => None,
+            })
+            .expect("traditional save bytes");
+
+        let mut restored = prepare();
+        submit(
+            &mut restored,
+            2,
+            RuntimeMessage::Start(StartRequest {
+                mode: StartMode::TraditionalSave {
+                    data: ProtocolBytes::new(bytes),
+                },
+            }),
+        );
+        for _ in 0..5 {
+            restored.drive(RuntimeDriveBudget::default()).unwrap();
+        }
+        let output = drain(&mut restored);
+        assert!(output.iter().any(|message| match message {
+            RuntimeMessage::PresentationSnapshot(snapshot) => snapshot.lines.iter().any(|line| {
+                line.runs.iter().any(|run| {
+                    matches!(
+                        run,
+                        era_runtime_protocol::DisplayRun::Text { text, .. }
+                            if text.contains("restored=37")
+                    )
+                })
+            }),
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn storage_slot_listing_is_sorted_and_runtime_tokenized() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        session.state = SessionState::Active;
+        session.phase = RuntimePhase::Paused;
+        session.epoch = SessionEpoch(1);
+        session.selected_locale = "en".into();
+        session
+            .pending_storage
+            .insert(7, PendingStorage::ListLoadSlots);
+        session
+            .complete_storage(
+                10,
+                StorageResponse {
+                    request_id: 7,
+                    result: StorageResult::Listed {
+                        entries: vec![
+                            era_runtime_protocol::StorageEntry {
+                                relative_path: "save02.sav".into(),
+                                byte_length: 20,
+                                revision: None,
+                            },
+                            era_runtime_protocol::StorageEntry {
+                                relative_path: "save01.sav".into(),
+                                byte_length: 10,
+                                revision: None,
+                            },
+                        ],
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            session.load_slot_paths,
+            ["save01.sav".to_owned(), "save02.sav".to_owned()]
+        );
+        assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+        let wait = session.pending_input.as_ref().expect("system slot wait");
+        assert!(wait.wait.system_input);
+        assert!(
+            wait.choices
+                .keys()
+                .all(|token| token.epoch == session.epoch.0)
+        );
+        assert!(session.presentation.snapshot().lines.iter().any(|line| {
+            line.runs.iter().any(|run| {
+                matches!(
+                    run,
+                    era_runtime_protocol::DisplayRun::Text {
+                        system_text: Some(reference),
+                        ..
+                    } if reference.key == SystemTextKey::LoadQuestion
+                )
+            })
+        }));
+    }
+
+    #[test]
     fn sequence_gaps_are_rejected_before_execution() {
         let mut session = RuntimeSession::new(RuntimeOptions::default());
         let message = RuntimeMessage::ClientHello(ClientHello {
@@ -2032,6 +2634,7 @@ mod tests {
             features: Vec::new(),
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
+            preferred_locales: vec!["ja".into()],
         });
         let envelope = message
             .envelope(None, None, 2, 1, None)
@@ -2058,6 +2661,7 @@ mod tests {
                 features: vec![RuntimeFeature::StateResynchronization],
                 requested_limits: RuntimeOptions::default().limits,
                 capabilities: capabilities(),
+                preferred_locales: vec!["ja".into()],
             }),
         );
         session.drive(RuntimeDriveBudget::default()).expect("hello");

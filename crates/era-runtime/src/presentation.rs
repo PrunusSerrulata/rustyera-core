@@ -1,6 +1,7 @@
 use era_runtime_protocol::{
     CellAlignment, Color, DisplayLine, DisplayRun, InputWait, InteractionToken, LineAlignment,
-    PresentationSettings, PresentationSnapshot, RunLayout, SeparatorRole, TextStyle,
+    PresentationSettings, PresentationSnapshot, RunLayout, SeparatorRole, SystemTextArgument,
+    SystemTextKey, SystemTextRef, TextStyle,
 };
 use erabasic_vm::VmValue;
 use unicode_segmentation::UnicodeSegmentation;
@@ -59,6 +60,23 @@ impl PresentationModel {
 
     pub(crate) fn append_text(&mut self, text: String, temporary: bool) {
         self.append_print_text(text, temporary, true);
+    }
+
+    pub(crate) fn append_system_text(
+        &mut self,
+        text: String,
+        key: SystemTextKey,
+        arguments: Vec<SystemTextArgument>,
+        temporary: bool,
+    ) {
+        self.pending_temporary |= temporary;
+        let mut run = self.text_run(text);
+        if let DisplayRun::Text { system_text, .. } = &mut run {
+            *system_text = Some(SystemTextRef { key, arguments });
+        }
+        self.pending_runs.push(run);
+        self.bump();
+        self.commit_line();
     }
 
     /// Append PRINT-family text to the canonical logical line buffer.
@@ -126,10 +144,26 @@ impl PresentationModel {
                 height_millipixels: self.settings.line_height_millipixels,
                 depth: 0,
             },
+            system_text: None,
         }
     }
 
-    pub(crate) fn append_button(&mut self, text: String, token: InteractionToken) {
+    pub(crate) fn append_system_button(
+        &mut self,
+        text: String,
+        key: SystemTextKey,
+        arguments: Vec<SystemTextArgument>,
+        token: InteractionToken,
+    ) {
+        self.append_button_with_system_text(text, token, Some(SystemTextRef { key, arguments }));
+    }
+
+    fn append_button_with_system_text(
+        &mut self,
+        text: String,
+        token: InteractionToken,
+        system_text: Option<SystemTextRef>,
+    ) {
         let layout = RunLayout {
             x_millipixels: 0,
             y_millipixels: 0,
@@ -149,6 +183,7 @@ impl PresentationModel {
                     text,
                     style: default_style(),
                     layout,
+                    system_text,
                 }],
                 token,
                 title: None,
@@ -238,6 +273,7 @@ fn plain_text(text: String, line_height: i64) -> DisplayRun {
             height_millipixels: line_height,
             depth: 0,
         },
+        system_text: None,
     }
 }
 

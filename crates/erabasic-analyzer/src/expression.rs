@@ -1,8 +1,8 @@
 use erabasic_ast::{BinaryOp, Expr, ExprKind, FormPart, FormattedString, PostfixOp, UnaryOp};
 use erabasic_data::{NameTableKind, ProjectData};
 use erabasic_hir::{
-    CallTarget, ConstantValue, FunctionId, HirExpr, HirExprKind, HirFormPart, HirFormattedString,
-    HirPlace, SemanticType, SourceId, SourceLocation,
+    CallTarget, ConstantValue, FunctionId, HirCallArgument, HirExpr, HirExprKind, HirFormPart,
+    HirFormattedString, HirPlace, SemanticType, SourceId, SourceLocation,
 };
 use std::collections::BTreeMap;
 
@@ -273,11 +273,12 @@ impl ExpressionAnalyzer<'_> {
         location: SourceLocation,
     ) -> HirExpr {
         let key = self.key(name);
-        let arguments: Vec<_> = args
+        let values: Vec<_> = args
             .iter()
             .map(|argument| argument.as_ref().map(|argument| self.analyze(argument)))
             .collect();
         if let Some(function) = self.symbols.function(name) {
+            let arguments = values.into_iter().map(value_call_argument).collect();
             return HirExpr {
                 kind: HirExprKind::Call {
                     target: CallTarget::User {
@@ -301,7 +302,7 @@ impl ExpressionAnalyzer<'_> {
                     target: CallTarget::Unresolved {
                         name: name.to_owned(),
                     },
-                    arguments,
+                    arguments: values.into_iter().map(value_call_argument).collect(),
                 },
                 value_type: SemanticType::Error,
                 constant: None,
@@ -309,13 +310,38 @@ impl ExpressionAnalyzer<'_> {
             };
         };
         self.check_arguments(
-            &arguments,
+            &values,
             &signature.arguments,
             signature.minimum_arguments,
             signature.variadic,
             signature.allow_omitted,
             location,
         );
+        let argument_count = values.len();
+        let arguments = values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| match value {
+                None => HirCallArgument::Omitted,
+                Some(expression)
+                    if signature.arguments.get(index).is_some_and(|constraint| {
+                        matches!(
+                            constraint,
+                            ArgumentConstraint::MutableInteger
+                                | ArgumentConstraint::MutableString
+                                | ArgumentConstraint::MutableAny
+                                | ArgumentConstraint::ReferenceAny
+                        ) || key == "REGEXPMATCH" && argument_count == 4 && index == 2
+                    }) =>
+                {
+                    match expression.kind {
+                        HirExprKind::Variable { place } => HirCallArgument::Place(place),
+                        _ => HirCallArgument::Value(expression),
+                    }
+                }
+                Some(expression) => HirCallArgument::Value(expression),
+            })
+            .collect();
         let target = if self.catalog.extension_functions.contains(&key) {
             CallTarget::Extension { name: key }
         } else {
@@ -531,14 +557,15 @@ impl ExpressionAnalyzer<'_> {
         index: usize,
     ) {
         let expected = match constraint {
-            ArgumentConstraint::Integer | ArgumentConstraint::MutableInteger => {
-                Some(SemanticType::Integer)
-            }
+            ArgumentConstraint::Integer
+            | ArgumentConstraint::MutableInteger
+            | ArgumentConstraint::IntegerOrReference => Some(SemanticType::Integer),
             ArgumentConstraint::String | ArgumentConstraint::MutableString => {
                 Some(SemanticType::String)
             }
             ArgumentConstraint::Any
             | ArgumentConstraint::MutableAny
+            | ArgumentConstraint::ReferenceAny
             | ArgumentConstraint::Formatted
             | ArgumentConstraint::Raw => None,
         };
@@ -550,8 +577,19 @@ impl ExpressionAnalyzer<'_> {
             ArgumentConstraint::MutableInteger
                 | ArgumentConstraint::MutableString
                 | ArgumentConstraint::MutableAny
+                | ArgumentConstraint::ReferenceAny
         ) {
-            self.expect_mutable_place(expression, &format!("argument {index}"));
+            if constraint == ArgumentConstraint::ReferenceAny {
+                if !matches!(expression.kind, HirExprKind::Variable { .. }) {
+                    self.diagnostic(
+                        AnalyzerDiagnosticCode::InvalidArgument,
+                        expression.location,
+                        format!("argument {index} must be a variable reference"),
+                    );
+                }
+            } else {
+                self.expect_mutable_place(expression, &format!("argument {index}"));
+            }
         }
     }
 
@@ -614,6 +652,10 @@ impl ExpressionAnalyzer<'_> {
             name.to_owned()
         }
     }
+}
+
+fn value_call_argument(value: Option<HirExpr>) -> HirCallArgument {
+    value.map_or(HirCallArgument::Omitted, HirCallArgument::Value)
 }
 
 fn data_variable_for_kind(kind: NameTableKind) -> &'static str {

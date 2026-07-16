@@ -6,16 +6,16 @@ use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AdvanceTime, ClientHello, ClientStateChanged, CommandRejected, DeviceStateChanged,
-    EffectAcknowledgement, EffectBatch, ExitRequested, FrontendInput, PresentationDelta,
-    PresentationSnapshot, ProjectLoadReport, ProjectManifest, ReloadProject, ResynchronizeRequest,
-    RuntimeFault, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello,
-    ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
+    AdvanceTime, CancelExternalRequest, ClientHello, ClientStateChanged, CommandRejected,
+    DeviceStateChanged, EffectAcknowledgement, EffectBatch, ExitRequested, FrontendInput,
+    PresentationDelta, PresentationSnapshot, ProjectLoadReport, ProjectManifest, ReloadProject,
+    ResynchronizeRequest, RuntimeFault, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement,
+    ServerHello, ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
     StateExportReady, StateExportRequest, StorageRequest, StorageResponse, VersionRejected,
     WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(5, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(6, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -30,6 +30,8 @@ pub struct RuntimeResynchronized {
     pub presentation: PresentationSnapshot,
     #[n(4)]
     pub exit_requested: Option<ExitRequested>,
+    #[n(5)]
+    pub selected_locale: String,
 }
 
 /// Stable runtime message variants. Numeric discriminants are wire IDs and must
@@ -81,6 +83,8 @@ pub enum RuntimeMessage {
     ServiceRequest(#[n(0)] ServiceRequest),
     #[n(53)]
     ServiceResponse(#[n(0)] ServiceResponse),
+    #[n(54)]
+    CancelExternalRequest(#[n(0)] CancelExternalRequest),
     #[n(60)]
     StateExportRequest(#[n(0)] StateExportRequest),
     #[n(61)]
@@ -127,6 +131,7 @@ impl RuntimeMessage {
             Self::StorageResponse(_) => 51,
             Self::ServiceRequest(_) => 52,
             Self::ServiceResponse(_) => 53,
+            Self::CancelExternalRequest(_) => 54,
             Self::StateExportRequest(_) => 60,
             Self::StateExportReady(_) => 61,
             Self::ShutdownRequest(_) => 90,

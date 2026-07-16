@@ -137,7 +137,7 @@ pub(crate) fn input_wait(
 
 fn integer(value: Option<&VmValue>) -> Option<i64> {
     match value {
-        Some(VmValue::Integer(value)) => Some(*value),
+        Some(VmValue::Integer(value)) if *value != i64::MIN => Some(*value),
         _ => None,
     }
 }

@@ -27,6 +27,7 @@ pub struct VmRuntimeWrite {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VmRuntimeStateTransaction {
     ResetNewGame,
+    RestoreEraState(Box<EraState>),
     Mutate {
         writes: Vec<VmRuntimeWrite>,
         clear_characters: bool,

@@ -77,26 +77,87 @@ debugger source inspection is assigned to the corresponding later batch below.
   exists for TITLE/FIRST/TRAIN/AFTERTRAIN/ABLUP/TURNEND/SHOP; QUIT/restart variants emit the
   persistent exit intent.
 
-## Batch 4: game rules, current traditional saves and storage
+## Completed: batch 4, traditional-save and storage foundation
 
-- Extend VM place transactions to ARRAYSHIFT/ARRAYREMOVE/ARRAYSORT/ARRAYCOPY and the mutable
-  array/find family. Complete pinned math, regex, CSV and character Native behavior required by
-  reference system functions; unsupported names must keep faulting rather than return defaults.
-- Parse the remaining semantic configuration keys before system-flow decisions. GUI, device and
-  accessibility configuration remains frontend/capability state.
-- Complete TITLE, FIRST, TRAIN, AFTERTRAIN, ABLUP, TURNEND, SHOP and NORMAL substates. Runtime
-  drives every entry through VM ports and atomically commits RESULT, SOURCE, BOUGHT and
-  training/shop fields. SHOP performs SYSTEM_AUTOSAVE when defined, otherwise the selected
-  reference-compatible failure prompt/any-key continuation.
-- Generalize input waits, frontend services and storage work into a typed pending-operation
-  registry with deadlines, operation-specific errors, cancellation policies and atomic shutdown.
-- Add an I/O-free `era-runtime-save` crate for the pinned current ordinary/global save formats,
-  variable/character DAT, text and log formats.
-- Implement slots, SAVEINFO, overwrite, autosave, TITLE_LOADGAME, SYSTEM_LOAD and EVENTLOAD.
-- Make save and restore prepare/validate/commit transactions. Storage bytes only cross versioned
-  frontend messages, and failed restore leaves the live timeline unchanged.
+Completed in the first Batch 4 implementation slice:
 
-## Batch 5: exact snapshot restore and hot replacement
+- Runtime protocol 6.0 negotiates and persists a supported locale, carries semantic system-text
+  identities beside canonical runtime-selected text, and gives storage/service requests optional
+  logical deadlines plus explicit cancellation messages. Development protocol compatibility is
+  still intentionally not retained.
+- HIR 5, compiler ABI 5 and Native ABI 4 preserve read-only as well as mutable array places.
+  ARRAYSHIFT, ARRAYREMOVE, ARRAYSORT, direct-place ARRAYCOPY, FINDELEMENT/FINDLASTELEMENT and
+  REGEXPMATCH execute as prevalidated VM transactions. String search uses a documented common
+  .NET/Rust regex subset; lookaround, backreferences, conditionals and atomic groups fail closed.
+- The I/O-free `era-runtime-save` crate reads and writes current 1808 ordinary binary and gzip
+  containers, enforces resource limits, round-trips named scalar/1D/2D/3D values, and preserves
+  Map/XML/DataTable extension payloads opaquely. It validates and losslessly retains UTF-8 current
+  text payloads, but does not guess their project-specific positional layout.
+- Traditional binary save export is restricted to stable untimed input waits. Restore decodes and
+  validates a complete candidate memory image before commit, advances `SessionEpoch`, discards
+  execution state, preserves opaque extensions, then dispatches SYSTEM_LOADEND followed by
+  EVENTLOAD. A failed restore leaves the active VM timeline unchanged.
+- The title fallback can list and read save slots through correlated frontend storage messages.
+  Runtime sorts and bounds entries, owns interaction tokens and semantic slot selection, and
+  cancels outstanding storage/service requests during shutdown. Frontend code never parses save
+  bytes.
+- Runtime configuration now retains autosave, binary/compression selection, slots per page,
+  currency placement and maximum shop-item settings. The canonical system menu has Japanese,
+  English and Simplified Chinese projections; locale is part of resynchronization.
+
+The unfinished portions of the original Batch 4 plan are reassigned below instead of keeping this
+batch indefinitely open. Batch 5 establishes the remaining execution/state prerequisites. Batch 6
+then closes current-format persistence and the system flows that depend on it. Exact snapshots and
+hot replacement move to Batch 7 because they must not freeze incomplete Native, pending-operation
+or authoritative runtime-state schemas.
+
+## Batch 5: Native, authoritative game state and operation foundations
+
+Implement in this dependency order:
+
+1. Finish the remaining mutable array family and dynamically evaluated variable-name form of
+   ARRAYCOPY. Preserve the existing prevalidate-then-commit transaction rule for every mutation.
+2. Implement the pinned CSV and character Native services on those place transactions. Unsupported
+   extensions continue to fault explicitly; they must not silently manufacture defaults.
+3. Define authoritative runtime fields and VM ports for SOURCE, BOUGHT, training state, shop state
+   and other controller-owned values. VM requests mutations through ports; it never gains direct
+   ownership of runtime state.
+4. Complete the storage-independent TITLE, FIRST, TRAIN, AFTERTRAIN, ABLUP, TURNEND, SHOP and
+   NORMAL transitions, including purchase validation and retained currency/shop configuration.
+   Persistence-dependent title/load and shop/autosave continuations close in Batch 6.
+5. Replace the separate input, service and storage pending maps with one typed pending-operation
+   registry. It owns deadlines, epoch binding, interaction tokens, cancellation policy, shutdown
+   behavior and operation-specific recoverable errors. This registry is the only asynchronous
+   operation substrate used by later storage, media, snapshot and debugger work.
+
+Batch 5 acceptance requires transaction rollback tests for every mutable Native family, controller
+state-transition tests, and pending-operation tests for completion, timeout, cancellation, stale
+epoch, duplicate response and shutdown.
+
+## Batch 6: current saves, storage and system-flow closure
+
+Implement in this dependency order:
+
+1. Add the project-schema positional adapter for generating and restoring current text saves.
+   Binary remains the safe runtime export when text layout cannot be proven. UTF-8-only text is an
+   intentional encoding difference and must remain explicit in diagnostics and tests.
+2. Complete current global saves, variable/character DAT, text and log codecs, then expose
+   SAVEDATA/LOADDATA, SAVEGLOBAL/LOADGLOBAL, SAVEVAR/LOADVAR, SAVECHARA/LOADCHARA and related Host
+   paths without performing filesystem I/O.
+3. Build slot writes, SAVEINFO/CHKDATA, overwrite confirmation, deletion and autosave as atomic
+   transactions over the Batch 5 pending-operation registry. Decode and validate before commit;
+   failed or cancelled operations leave both VM and runtime timelines unchanged.
+4. Finish TITLE_LOADGAME, SHOP/SYSTEM_AUTOSAVE and their failure/any-key continuations. Complete
+   the authoritative TITLE through NORMAL system-flow integration and apply the retained save,
+   autosave, currency and shop settings.
+5. Add same-input reference comparisons for every current format and Host path the reference CLI
+   can expose. Where the CLI lacks an endpoint, add a documented oracle gap rather than treating a
+   Rust round trip as compatibility proof.
+
+Batch 6 closes all current-format traditional persistence and all system-flow work inherited from
+the original Batch 4 plan. Historical formats remain assigned to Batch 10.
+
+## Batch 7: exact snapshot restore and hot replacement
 
 - Implement Map, XML and DataTable Native state after the ordinary game-rule Native layer is
   stable. Give every stateful Native service a deterministic schema and migration policy before
@@ -110,13 +171,13 @@ debugger source inspection is assigned to the corresponding later batch below.
 - Stage project deltas with incremental analyze/compile/validate, then migrate compatible Native
   state and rebind waits/breakpoints atomically. A successful commit advances `SessionEpoch`.
 
-## Batch 6: media and platform services
+## Batch 8: media and platform services
 
 - Complete canonical text presentation semantics: style and alignment state, buttons, line
   mutation, skip/log behavior and HTML_PRINT logical text. Build BINPUT choices from canonical
   runtime buttons and finish message-skip suppression/retention rules. Keep GETDISPLAYLINE and
   the deferred HTML query family unavailable until a deterministic non-GDI contract is approved.
-- Consume the normalized resource identities from Batch 5 and apply media-specific validation,
+- Consume the normalized resource identities from Batch 7 and apply media-specific validation,
   capability projection and deterministic fallback here.
 - Implement images, shapes, backgrounds, sprite/canvas, font/image metrics, tooltips, logical
   audio/BGM, video, URL, network update and focus/device services.
@@ -124,7 +185,7 @@ debugger source inspection is assigned to the corresponding later batch below.
   cache, render and play; deterministic fallback is used unless missing capability changes an
   observable script result, in which case startup is rejected.
 
-## Batch 7: debugger implementation
+## Batch 9: debugger implementation
 
 - Resolve runtime-generated UnsupportedRuntimeFeature, input and Native faults through bytecode
   source maps so every available fault carries its command and UTF-8 source location.
@@ -134,7 +195,7 @@ debugger source inspection is assigned to the corresponding later batch below.
 - Freeze QTE time during debug stops and bind every grant/stop token to epoch, generation and
   runtime revision. Console execution is limited to the reference-safe subset.
 
-## Batch 8: legacy saves and compatibility closure
+## Batch 10: legacy saves and compatibility closure
 
 - Add reference-supported historical save readers after current formats are stable.
 - Require every pinned built-in to have tests and a working implementation or a documented,

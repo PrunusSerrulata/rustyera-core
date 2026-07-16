@@ -559,9 +559,15 @@ impl VmRuntimeStatePort for Vm {
         transaction: VmRuntimeStateTransaction,
     ) -> Result<PreparedRuntimeState, VmError> {
         let artifact = self.artifact();
-        let reset_execution = matches!(transaction, VmRuntimeStateTransaction::ResetNewGame);
+        let reset_execution = matches!(
+            &transaction,
+            VmRuntimeStateTransaction::ResetNewGame | VmRuntimeStateTransaction::RestoreEraState(_)
+        );
         let mut memory = match &transaction {
             VmRuntimeStateTransaction::ResetNewGame => Memory::new_game(artifact),
+            VmRuntimeStateTransaction::RestoreEraState(state) => {
+                crate::save::prepare_era_memory(artifact, state)?.0
+            }
             VmRuntimeStateTransaction::Mutate { .. } => self.memory.clone(),
         };
         if let VmRuntimeStateTransaction::Mutate {

@@ -89,6 +89,7 @@ fn pinned_reference_wait_and_output_are_losslessly_representable() {
         layout_width_millipixels: None,
         runs: vec![DisplayRun::Text {
             text: observed.load.last_output,
+            system_text: None,
             style: TextStyle {
                 foreground: Color {
                     red: 255,

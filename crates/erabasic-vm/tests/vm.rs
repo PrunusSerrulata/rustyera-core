@@ -191,6 +191,175 @@ fn swap_native_commits_both_places() {
 }
 
 #[test]
+fn array_shift_and_remove_commit_after_validating_the_whole_array() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nFLAG:0 = 1\nFLAG:1 = 2\nFLAG:2 = 3\nFLAG:3 = 4\nARRAYSHIFT FLAG, 1, 9, 0, 4\nARRAYREMOVE FLAG, 1, 2\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    let values = (0..4)
+        .map(|index| vm.read_variable(flag, &[index], None).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        vec![
+            VmValue::Integer(9),
+            VmValue::Integer(3),
+            VmValue::Integer(0),
+            VmValue::Integer(0),
+        ]
+    );
+}
+
+#[test]
+fn findelement_uses_the_verified_regex_subset() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULTS:0 = \"ab\"\nRESULTS:1 = \"abc\"\nRESULTS:2 = \"zz\"\nRESULT = FINDELEMENT(RESULTS, \"^ab$\", 0, 3, 1)\nRETURN\n",
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(0));
+
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULTS:0 = \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"a(?=b)\", 0, 1, 0)\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        VmEvent::FiberFaulted { fault, .. }
+            if fault.message.contains("lookaround")
+    )));
+}
+
+#[test]
+fn arraysort_accepts_reference_forward_back_keywords() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nFLAG:0 = 2\nFLAG:1 = 4\nFLAG:2 = 1\nFLAG:3 = 3\nARRAYSORT FLAG, BACK, 0, 4\nARRAYCOPY FLAG, FLAG\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..4)
+            .map(|index| vm.read_variable(flag, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::Integer(4),
+            VmValue::Integer(3),
+            VmValue::Integer(2),
+            VmValue::Integer(1),
+        ]
+    );
+}
+
+#[test]
+fn regexpmatch_writes_reference_capture_outputs_atomically() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULT:0 = REGEXPMATCH(\"ab ac\", \"a(.)\", 1)\nRESULT:2 = REGEXPMATCH(\"az\", \"a(.)\", RESULT:5, RESULTS)\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(2))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[1], None),
+        Ok(VmValue::Integer(2))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[2], None),
+        Ok(VmValue::Integer(1))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[5], None),
+        Ok(VmValue::Integer(2))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[0], None),
+        Ok(VmValue::String("az".into()))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[1], None),
+        Ok(VmValue::String("z".into()))
+    );
+}
+
+#[test]
 fn initrand_and_dumprand_exchange_all_randdata_state_atomically() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nDUMPRAND\nRESULT:0 = RAND:1000000\nINITRAND\nRESULT:1 = RAND:1000000\nRETURN\n",

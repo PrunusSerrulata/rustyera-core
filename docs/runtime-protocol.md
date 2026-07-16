@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 5.0 over common wire 2.0 is a development contract: by explicit project policy it
+dynamic library. Runtime protocol 6.0 over common wire 2.0 is a development contract: by explicit project policy it
 does not promise backward compatibility until a frontend exists.
 
 ## Authority and ownership
@@ -82,14 +82,18 @@ Runtime-initiated work is asynchronous:
   project, save, global-save, DAT, log and resource namespaces;
 - platform services cover font metrics, image/canvas operations, audio, networking,
   opening URLs and negotiated extensions;
-- every request has a stable request ID; writes additionally have an idempotency key and
-  may carry an expected revision.
+- every request has a stable request ID and optional runtime-logical deadline; writes additionally
+  have an idempotency key and may carry an expected revision;
+- shutdown and other cancellation policies use a typed cancellation message. Late responses are
+  rejected by request ID and cannot modify the new runtime timeline.
 
 The runtime and all lower crates perform no concrete file I/O and sample no system clock.
-Traditional save bytes remain a reserved, unimplemented runtime feature and would be
-persisted by storage requests. `StateExportRequest` currently returns structured
-ineligibility reasons for both formats. A later exact VM snapshot implementation must
-accept snapshots only for the exact artifact identity.
+Current ordinary binary and gzip traditional saves are encoded and decoded in memory. Export is
+eligible only at a stable untimed input wait; restore validates a candidate VM state before an
+atomic commit. Slot list/read bytes cross only storage messages. Current UTF-8 text saves are
+validated and retained losslessly, but schema-aware positional text generation/restoration and
+the remaining global/DAT/log operations are not yet connected. Exact VM snapshots remain a later
+feature and must accept only the exact artifact identity.
 
 ## Input, QTE and presentation
 
@@ -123,6 +127,11 @@ while deadline-free Enter/value input can be stable.
 resynchronization state until the frontend completes the normal shutdown lifecycle; restart
 creates a new session rather than reusing VM or runtime state.
 
+The hello exchange includes ordered BCP-47 locale preferences. Runtime selects and persists one
+supported locale. Canonical system text carries both the runtime-selected text and a semantic key
+with arguments, allowing accessible clients to understand its role without becoming authoritative
+for wording or game state.
+
 The runtime stores a revisioned semantic presentation snapshot and emits deltas based on
 that revision. It includes text/styles/buttons, HTML, image/shape placement, backgrounds,
 logical audio state, title and the current wait. Numeric media measurements use fixed
@@ -154,13 +163,17 @@ presentation waits and source breakpoints are rebound only after successful comm
 
 ## Implemented stage
 
-The current runtime implements handshake, epoch-scoped sessions, normalized text input,
+The current runtime implements handshake, locale/semantic-system-text negotiation, epoch-scoped sessions, normalized text input,
 capability intersection, bounded journals with idempotent retransmission, full-state
 resynchronization, full in-memory project load/analyze/compile/validate, deterministic new-game
 startup, bounded VM driving, logical-line text/column/separator presentation, reference-shaped
 waits and timeouts, fresh GETKEY-family queries, frontend-owned local time, seed acquisition,
-SFMT-backed RAND/RANDOMIZE, an initial deterministic core Native set, faults and shutdown.
+SFMT-backed RAND/RANDOMIZE, transactional array/find/regex Native operations, current ordinary
+binary/gzip traditional-save export and atomic restore, correlated slot listing/loading, faults
+and cancellation-aware shutdown.
 The compiler uses an explicit execution catalog rather than Host-name heuristics. Configuration
-and resource inputs receive stable deferred diagnostics but are not applied yet. Complex mutable
-Native families, RANDDATA INIT/DUMP transactions, saves/reload, media/audio execution, complete
-primitive-input semantics and debugger execution remain unavailable and are not advertised.
+and resource inputs receive stable diagnostics; semantic configuration needed by save/shop flow is
+retained while GUI/device options remain frontend state. The schema-aware positional text writer,
+global/DAT/log save operations, save-slot writes/overwrite/autosave, complete shop/training flow,
+remaining CSV/character Native services, reload, exact snapshots, media/audio execution and
+debugger execution remain unavailable.

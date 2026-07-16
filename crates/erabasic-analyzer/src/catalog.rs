@@ -13,6 +13,8 @@ pub enum ArgumentConstraint {
     MutableInteger,
     MutableString,
     MutableAny,
+    ReferenceAny,
+    IntegerOrReference,
     Formatted,
     Raw,
 }
@@ -140,7 +142,9 @@ fn instruction(
 
 #[allow(clippy::items_after_statements, clippy::too_many_lines)]
 fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
-    use ArgumentConstraint::{Any, Formatted, Integer, MutableAny, MutableInteger, String};
+    use ArgumentConstraint::{
+        Any, Formatted, Integer, MutableAny, MutableInteger, ReferenceAny, String,
+    };
     use ArgumentStyle::{Expressions, Formatted as FormStyle, None as NoArgs, Raw};
 
     let mut result = BTreeMap::new();
@@ -241,6 +245,38 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
             false,
         );
     }
+    add(
+        "ARRAYREMOVE",
+        Expressions,
+        &[MutableAny, Integer, Integer],
+        3,
+        false,
+        false,
+    );
+    add(
+        "ARRAYSHIFT",
+        Expressions,
+        &[MutableAny, Integer, Any, Integer, Integer],
+        3,
+        false,
+        true,
+    );
+    add(
+        "ARRAYSORT",
+        Expressions,
+        &[MutableAny, String, Integer, Integer],
+        1,
+        false,
+        true,
+    );
+    add(
+        "ARRAYCOPY",
+        Expressions,
+        &[ReferenceAny, MutableAny],
+        2,
+        false,
+        false,
+    );
     for name in [
         "CALL",
         "CALLF",
@@ -561,7 +597,9 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
 
 #[allow(clippy::items_after_statements, clippy::too_many_lines)]
 fn builtin_functions() -> BTreeMap<String, CallableSignature> {
-    use ArgumentConstraint::{Any, Integer, String};
+    use ArgumentConstraint::{
+        Any, Integer, IntegerOrReference, MutableString, ReferenceAny, String,
+    };
     use SemanticType::{Integer as IntType, String as StrType};
 
     let mut result = BTreeMap::new();
@@ -618,6 +656,22 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         add(name, StrType, &[Any], 1, true);
     }
     add("STRFIND", IntType, &[String, String, Integer], 2, true);
+    for name in ["FINDELEMENT", "FINDLASTELEMENT"] {
+        add(
+            name,
+            IntType,
+            &[ReferenceAny, Any, Integer, Integer, Integer],
+            2,
+            false,
+        );
+    }
+    add(
+        "REGEXPMATCH",
+        IntType,
+        &[String, String, IntegerOrReference, MutableString],
+        2,
+        false,
+    );
     // GETKEY is deliberately non-constant in Emuera and accepts exactly one
     // integer virtual-key code. HIR calls are never folded, so the signature is
     // sufficient to retain that behavior in the current analyzer.
@@ -750,7 +804,6 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "OUTPUTLOG",
         "PRINTCLENGTH",
         "PRINTCPERLINE",
-        "REGEXPMATCH",
         "SAVENOS",
         "SAVETEXT",
         "SETANIMETIMER",

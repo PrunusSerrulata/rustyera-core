@@ -5,6 +5,7 @@ members = [
     "crates/era-runtime-ffi",
     "crates/era-runtime-capi",
     "crates/era-runtime-protocol",
+    "crates/era-runtime-save",
     "crates/era-runtime",
     "crates/erabasic-ast",
     "crates/erabasic-bytecode",
@@ -40,3 +41,5 @@ serde = { version = "1.0.210", features = ["derive"] }
 minicbor = { version = "2.2.2", features = ["derive", "std"] }
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.0"
+flate2 = "1.0.35"
+regex = "1.11.1"

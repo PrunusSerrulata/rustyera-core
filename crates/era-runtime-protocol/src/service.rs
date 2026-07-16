@@ -61,6 +61,8 @@ pub struct StorageRequest {
     pub operation: StorageOperation,
     #[n(4)]
     pub idempotency_key: String,
+    #[n(5)]
+    pub deadline_ns: Option<u64>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -223,6 +225,27 @@ pub struct ServiceRequest {
     pub operation_version: ProtocolVersion,
     #[n(4)]
     pub payload: ProtocolBytes,
+    #[n(5)]
+    pub deadline_ns: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalRequestKind {
+    #[n(0)]
+    Storage,
+    #[n(1)]
+    Service,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct CancelExternalRequest {
+    #[n(0)]
+    pub request_id: u64,
+    #[n(1)]
+    pub kind: ExternalRequestKind,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
