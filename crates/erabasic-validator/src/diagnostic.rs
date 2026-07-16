@@ -16,6 +16,7 @@ pub enum ValidationCode {
     StackMismatch,
     TypeMismatch,
     HostAbiMismatch,
+    InvalidOperationContract,
     MissingCapability,
 }
 

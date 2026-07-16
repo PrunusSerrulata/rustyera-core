@@ -16,6 +16,8 @@ use erabasic_csv::{
 };
 use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode};
 
+use crate::resource::ResourceGraph;
+
 pub(crate) struct ProjectBuild {
     pub(crate) artifact: Option<ValidatedArtifact>,
     pub(crate) incremental: IncrementalState,
@@ -29,6 +31,7 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) manifest: ProjectManifest,
     pub(crate) project_identity: [u8; 32],
     pub(crate) resources: Vec<NormalizedResourceIdentity>,
+    pub(crate) resource_graph: ResourceGraph,
     pub(crate) sort_with_filename: bool,
     pub(crate) use_new_random_ignored: bool,
     pub(crate) auto_save: bool,
@@ -301,6 +304,31 @@ pub(crate) fn build_project(
             .cmp(&right.relative_path)
             .then_with(|| (left.category as u8).cmp(&(right.category as u8)))
     });
+    let (resource_graph, resource_diagnostics) = ResourceGraph::from_manifest(manifest);
+    diagnostics.extend(resource_diagnostics.into_iter().map(|diagnostic| {
+        project_diagnostic(
+            diagnostic.code,
+            if diagnostic.error {
+                DiagnosticSeverity::Error
+            } else {
+                DiagnosticSeverity::Warning
+            },
+            diagnostic.message,
+            Some(SourceLocation {
+                relative_path: diagnostic.path,
+                byte_start: 0,
+                byte_end: 0,
+                line: diagnostic.line,
+                byte_column: None,
+            }),
+        )
+    }));
+    let success = !diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
+    if !success {
+        return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
+    }
     let project_identity = project_identity(&artifact, &config, &resources);
     ProjectBuild {
         artifact: Some(artifact),
@@ -314,6 +342,7 @@ pub(crate) fn build_project(
             manifest: manifest.clone(),
             project_identity,
             resources,
+            resource_graph,
             sort_with_filename: config.csv.sort_with_filename,
             use_new_random_ignored: config.use_new_random,
             auto_save: config.auto_save,

@@ -93,7 +93,9 @@ fn input_wait_and_getkey_bindings_preserve_dynamic_stability() {
     assert_eq!(getkey.namespace, "rustyera.input");
     assert_eq!(getkey.capability, HostCapability::Input);
     assert!(getkey.effect.may_suspend);
-    assert!(getkey.effect.mutates_runtime);
+    // GETKEY waits for a frontend-owned primitive-input sample, but the value
+    // is returned to the VM and does not mutate canonical runtime state.
+    assert!(!getkey.effect.mutates_runtime);
     assert_eq!(getkey.snapshot_capability, HostSnapshotCapability::Never);
 
     let artifact = compile_project(
@@ -128,6 +130,36 @@ fn input_wait_and_getkey_bindings_preserve_dynamic_stability() {
     assert!(import("forcewait").import.parameters.is_empty());
     assert_eq!(import("getkey").import.parameters, [BytecodeType::Integer]);
     assert_eq!(import("getkey").import.result, Some(BytecodeType::Integer));
+}
+
+#[test]
+fn skip_scope_commands_cross_the_host_boundary() {
+    let project = analyze("@SYSTEM_TITLE\nNOSKIP\nENDNOSKIP\nRETURN\n");
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
+    let artifact = report.artifact.expect("skip scope should compile");
+    let names = artifact
+        .host_imports
+        .iter()
+        .map(|import| import.import.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"noskip"));
+    assert!(names.contains(&"endnoskip"));
+    assert!(
+        artifact
+            .functions
+            .iter()
+            .flat_map(|function| &function.code)
+            .all(|instruction| {
+                instruction.opcode != Opcode::CallNative as u16
+                    || !matches!(instruction.payload.as_slice(), b"NOSKIP" | b"ENDNOSKIP")
+            })
+    );
 }
 
 #[test]
@@ -202,10 +234,34 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
         .into_iter()
         .chain(builtin_function_names())
     {
-        assert!(
-            registry.classification(&name).is_some(),
-            "missing execution catalog entry for {name}"
-        );
+        let classification = registry
+            .classification(&name)
+            .unwrap_or_else(|| panic!("missing execution catalog entry for {name}"));
+        match classification {
+            ExecutionBinding::Host(binding) => {
+                assert!(
+                    binding.contract.is_coherent(),
+                    "incoherent Host contract for {name}"
+                );
+                assert_eq!(
+                    binding.effect,
+                    binding.contract.effect(),
+                    "stale Host effect for {name}"
+                );
+                assert_eq!(
+                    binding.snapshot_capability,
+                    binding.contract.snapshot_capability(),
+                    "stale Host snapshot classification for {name}"
+                );
+            }
+            ExecutionBinding::Native(contract) => {
+                assert!(
+                    contract.is_coherent(),
+                    "incoherent Native contract for {name}"
+                );
+            }
+            ExecutionBinding::Unsupported { .. } => {}
+        }
     }
     assert!(matches!(
         registry.classification("GETTEXTBOX"),
@@ -225,7 +281,7 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
     }
     assert!(matches!(
         registry.classification("RAND"),
-        Some(ExecutionBinding::Native)
+        Some(ExecutionBinding::Native(_))
     ));
     assert!(matches!(
         registry.classification("CALLSHARP"),
@@ -403,6 +459,16 @@ fn image_style_host_binding_still_uses_the_single_call_host_opcode() {
             },
             capability: HostCapability::Graphics,
             snapshot_capability: HostSnapshotCapability::StableWait,
+            contract: erabasic_bytecode::OperationContract {
+                state: erabasic_bytecode::OperationState::Presentation,
+                transaction: erabasic_bytecode::TransactionPolicy::CloneCommit,
+                persistence: erabasic_bytecode::OperationPersistence::RuntimeOnly,
+                snapshot: erabasic_bytecode::OperationSnapshotPolicy::Included,
+                hot_reload: erabasic_bytecode::OperationHotReloadPolicy::Preserve,
+                wait: erabasic_bytecode::OperationWaitPolicy::Immediate,
+                capability_fallback: erabasic_bytecode::CapabilityFallback::CanonicalProjection,
+                debug: erabasic_bytecode::OperationDebugPolicy::Forbidden,
+            },
         },
     ));
     let artifact = compile_project(

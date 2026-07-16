@@ -8,17 +8,20 @@ use serde::{Deserialize, Serialize};
 use crate::controller::SystemController;
 use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
+use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 2;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 3;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 52;
 
 #[derive(Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) format_version: u32,
     pub(crate) artifact_id: Digest,
     pub(crate) project_identity: [u8; 32],
     pub(crate) resource_count: u64,
+    pub(crate) resource_graph: ResourceGraph,
     pub(crate) epoch: u64,
     pub(crate) vm_snapshot: Vec<u8>,
     pub(crate) presentation: PresentationModel,
@@ -27,6 +30,9 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) logical_time_ns: u64,
     pub(crate) random_seed: Option<u64>,
     pub(crate) message_skip: bool,
+    pub(crate) skip_print: bool,
+    pub(crate) user_defined_skip: bool,
+    pub(crate) saved_skip: bool,
     pub(crate) command_intents: BTreeMap<InteractionToken, VmValue>,
     pub(crate) reusable_system_intents: BTreeMap<InteractionToken, VmValue>,
     pub(crate) save_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
@@ -88,11 +94,14 @@ mod tests {
 
     #[test]
     fn checksum_rejects_mutated_payload() {
+        let mut resource_graph = ResourceGraph::default();
+        assert_eq!(resource_graph.create_canvas(7, 20, 10), Ok(true));
         let payload = RuntimeSnapshotPayload {
             format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
             artifact_id: Digest([1; 32]),
             project_identity: [2; 32],
             resource_count: 0,
+            resource_graph,
             epoch: 3,
             vm_snapshot: vec![3],
             presentation: PresentationModel::default(),
@@ -101,6 +110,9 @@ mod tests {
             logical_time_ns: 4,
             random_seed: Some(5),
             message_skip: false,
+            skip_print: false,
+            user_defined_skip: false,
+            saved_skip: false,
             command_intents: BTreeMap::new(),
             reusable_system_intents: BTreeMap::new(),
             save_extensions: Vec::new(),
@@ -111,5 +123,37 @@ mod tests {
         let last = encoded.last_mut().unwrap();
         *last ^= 1;
         assert!(decode(&encoded, encoded.len()).is_err());
+    }
+
+    #[test]
+    fn canvas_replay_state_round_trips_in_exact_runtime_snapshots() {
+        let mut resource_graph = ResourceGraph::default();
+        resource_graph.create_canvas(7, 20, 10).unwrap();
+        let payload = RuntimeSnapshotPayload {
+            format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
+            artifact_id: Digest([1; 32]),
+            project_identity: [2; 32],
+            resource_count: 0,
+            resource_graph,
+            epoch: 3,
+            vm_snapshot: vec![3],
+            presentation: PresentationModel::default(),
+            operations: PendingOperations::default(),
+            controller: SystemController::default(),
+            logical_time_ns: 4,
+            random_seed: Some(5),
+            message_skip: false,
+            skip_print: false,
+            user_defined_skip: false,
+            saved_skip: false,
+            command_intents: BTreeMap::new(),
+            reusable_system_intents: BTreeMap::new(),
+            save_extensions: Vec::new(),
+            system_menu: 0,
+            load_slot_paths: Vec::new(),
+        };
+        let encoded = encode(&payload).unwrap();
+        let decoded = decode(&encoded, encoded.len()).unwrap();
+        assert_eq!(decoded.resource_graph.canvas_state(7), Some((20, 10)));
     }
 }

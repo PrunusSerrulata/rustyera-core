@@ -4,9 +4,11 @@ use erabasic_analyzer::{
 };
 use erabasic_bytecode::{
     ArtifactManifest, BytecodeArtifact, BytecodeFunction, BytecodeGlobal, BytecodePersistence,
-    BytecodeStorage, BytecodeType, Digest, FunctionImport, HostCapability, HostEffect, HostImport,
-    HostSnapshotCapability, ImportKind, Opcode, RuntimeImport, SourceMap, SourceMapEntry,
-    SourceRecord, SymbolKey, create_patch, opcode,
+    BytecodeStorage, BytecodeType, CapabilityFallback, Digest, FunctionImport, HostCapability,
+    HostImport, HostSnapshotCapability, ImportKind, Opcode, OperationContract,
+    OperationDebugPolicy, OperationHotReloadPolicy, OperationPersistence, OperationSnapshotPolicy,
+    OperationState, OperationWaitPolicy, RuntimeImport, SourceMap, SourceMapEntry, SourceRecord,
+    SymbolKey, TransactionPolicy, create_patch, opcode,
 };
 use erabasic_compiler::{CompilerOptions, compile_project, default_host_registry};
 use erabasic_csv::{
@@ -101,6 +103,7 @@ fn compile_source_with_data(
         &ExtensionRegistry::default(),
     );
     assert!(analysis.project.is_some(), "{:#?}", analysis.diagnostics);
+    let analysis_diagnostics = analysis.diagnostics.clone();
     let compilation = compile_project(
         &analysis.project.unwrap(),
         &CompilerOptions::default(),
@@ -109,8 +112,8 @@ fn compile_source_with_data(
     );
     assert!(
         compilation.artifact.is_some(),
-        "{:#?}",
-        compilation.diagnostics
+        "analysis: {analysis_diagnostics:#?}\ncompilation: {:#?}",
+        compilation.diagnostics,
     );
     compilation.artifact.unwrap()
 }
@@ -235,6 +238,57 @@ fn structured_data_table_uses_deterministic_ids_and_updates_rows() {
     assert_eq!(
         vm.read_variable(result, &[4], None),
         Ok(VmValue::Integer(9))
+    );
+}
+
+#[test]
+fn structured_xml_mutations_match_the_reference_fixture_subset() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULT:0 = XML_DOCUMENT(1, \"<root><item id='a'>one</item><item id='b'>two</item></root>\")\nRESULTS:0 = %XML_TOSTR(1)%\nRESULT:1 = XML_SET(RESULTS:0, \"//item[@id='b']\", \"changed\", 0, 1)\nRESULT:2 = XML_ADDATTRIBUTE(RESULTS:0, \"//item[@id='a']\", \"kind\", \"first\")\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .expect("RESULTS")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[1], None),
+        Ok(VmValue::Integer(1))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[2], None),
+        Ok(VmValue::Integer(1))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[0], None),
+        Ok(VmValue::String(
+            "<root><item id=\"a\" kind=\"first\">one</item><item id=\"b\">changed</item></root>"
+                .into()
+        ))
     );
 }
 
@@ -982,16 +1036,34 @@ fn host_artifact(stability: HostSnapshotCapability) -> (BytecodeArtifact, Symbol
         key: import_key,
     });
     let mut artifact = artifact(vec![function], Vec::new());
+    let contract = OperationContract {
+        state: OperationState::Controller,
+        transaction: TransactionPolicy::Forbidden,
+        persistence: OperationPersistence::RuntimeOnly,
+        snapshot: if stability == HostSnapshotCapability::StableWait {
+            OperationSnapshotPolicy::Included
+        } else {
+            OperationSnapshotPolicy::PendingBlocks
+        },
+        hot_reload: if stability == HostSnapshotCapability::StableWait {
+            OperationHotReloadPolicy::Preserve
+        } else {
+            OperationHotReloadPolicy::ActiveBlocks
+        },
+        wait: if stability == HostSnapshotCapability::StableWait {
+            OperationWaitPolicy::StableInput
+        } else {
+            OperationWaitPolicy::TransientExternal
+        },
+        capability_fallback: CapabilityFallback::ScriptResult,
+        debug: OperationDebugPolicy::Forbidden,
+    };
     artifact.host_imports.push(HostImport {
         import: runtime_import,
-        effect: HostEffect {
-            pure: false,
-            may_suspend: true,
-            may_error: true,
-            mutates_runtime: true,
-        },
+        effect: contract.effect(),
         capability: HostCapability::Input,
         snapshot_capability: stability,
+        contract,
     });
     artifact.refresh_ids().unwrap();
     (artifact, entry)

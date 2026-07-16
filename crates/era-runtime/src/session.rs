@@ -8,22 +8,28 @@ use era_protocol::{
     negotiate_version,
 };
 use era_runtime_protocol::{
-    AdvanceTime, CancelExternalRequest, CellAlignment, ClientCapabilities, ClientHello,
-    CommandErrorCode, CommandRejected, DiagnosticSeverity, ExitReason, ExitRequested,
-    ExternalRequestKind, FaultCode, FrontendInput, FrontendIoErrorKind, GET_KEY_STATE_OPERATION,
-    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
-    InputWait, InteractionToken, LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION,
-    LineAlignment, LocalDateTimeRequest, LocalDateTimeResponse, ProjectManifest,
-    ProtocolDiagnostic, RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION,
-    RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault,
-    RuntimeFeature, RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized,
-    RuntimeStateChanged, ServerHello, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult,
+    AdvanceTime, AudioEffect, AudioEffectAction, CancelExternalRequest, CellAlignment,
+    ClientCapabilities, ClientHello, CommandErrorCode, CommandRejected, DiagnosticSeverity,
+    EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcomeStatus, ExitReason,
+    ExitRequested, ExternalRequestKind, FaultCode, FrontendInput, FrontendIoErrorKind,
+    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
+    GetKeyStateResponse, IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION,
+    IMAGE_PIXEL_OPERATION, IMAGE_PIXEL_OPERATION_VERSION, ImageMetadataRequest,
+    ImageMetadataResponse, ImagePixelRequest, ImagePixelResponse, InputIntent, InputWait,
+    InteractionToken, LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment,
+    LocalDateTimeRequest, LocalDateTimeResponse, OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION,
+    OpenUrlRequest, OpenUrlResponse, ProjectLoadReport, ProjectManifest, ProtocolDiagnostic,
+    RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION,
+    RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault, RuntimeFeature,
+    RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized, RuntimeStateChanged,
+    ServerHello, ServiceCapability, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult,
     ShutdownReady, SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk,
     StateExportChunkRequest, StateExportKind, StateExportReady, StateExportRequest,
     StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit,
     StateImportReady, StateTransferCancel, StateTransferDescriptor, StorageNamespace,
     StorageOperation, StoragePrecondition, StorageRequest, StorageResponse, StorageResult,
-    SystemTextArgument, SystemTextKey, VersionRejected, WaitChange, WaitKind, WaitStability,
+    SystemTextArgument, SystemTextKey, UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION,
+    UpdateCheckRequest, UpdateCheckResponse, VersionRejected, WaitChange, WaitKind, WaitStability,
 };
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
@@ -36,7 +42,7 @@ use erabasic_vm::{
 use serde::{Deserialize, Serialize};
 
 use crate::controller::{SystemController, SystemFlow, SystemStep};
-use crate::host::{ClockOperation, ExternalCompletion, PendingInput, input_wait};
+use crate::host::{ClockOperation, ExternalCompletion, PendingInput, PostInputAction, input_wait};
 use crate::operation::{PendingOperations, PendingService, PendingStorage};
 use crate::presentation::{PresentationModel, display_value, logical_line_string};
 use crate::project::{NormalizedProjectSnapshot, apply_project_delta, build_project};
@@ -181,6 +187,7 @@ struct ActiveDebugGrant {
 
 /// Single-owner runtime actor. Methods only enqueue, drive, and dequeue messages;
 /// no frontend code can run inside a VM instruction dispatch.
+#[allow(clippy::struct_excessive_bools)]
 pub struct RuntimeSession {
     options: RuntimeOptions,
     state: SessionState,
@@ -196,12 +203,14 @@ pub struct RuntimeSession {
     next_wait_id: u64,
     next_interaction_id: u64,
     next_transfer_id: u64,
+    next_effect_id: u64,
     logical_time_ns: u64,
     frontend_time_origin: Option<(u64, u64)>,
     random_seed: Option<u64>,
     inbound: VecDeque<(u64, InboundMessage)>,
     outbound: VecDeque<Vec<u8>>,
     outbound_journal: BTreeMap<u64, Vec<u8>>,
+    effect_journal: BTreeMap<u64, EffectEvent>,
     accepted_message_ids: BTreeMap<u64, (u64, blake3::Hash)>,
     accepted_debug_message_ids: BTreeMap<u64, (u64, blake3::Hash)>,
     active_debug_grant: Option<ActiveDebugGrant>,
@@ -215,6 +224,11 @@ pub struct RuntimeSession {
     operations: PendingOperations,
     key_toggle_state: [u8; 256],
     message_skip: bool,
+    skip_print: bool,
+    user_defined_skip: bool,
+    saved_skip: bool,
+    client_focused: bool,
+    client_audio_available: bool,
     command_intents: BTreeMap<InteractionToken, VmValue>,
     reusable_system_intents: BTreeMap<InteractionToken, VmValue>,
     exit_requested: Option<ExitRequested>,
@@ -222,11 +236,19 @@ pub struct RuntimeSession {
     project_snapshot: Option<NormalizedProjectSnapshot>,
     selected_locale: String,
     available_fonts: BTreeSet<String>,
+    service_capabilities: BTreeMap<(ServiceKind, String), ProtocolVersion>,
     save_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
     system_menu: SystemMenuState,
     load_slot_paths: Vec<String>,
     inbound_transfer: Option<InboundStateTransfer>,
     outbound_transfer: Option<OutboundStateTransfer>,
+    pending_project_load: Option<PendingProjectLoad>,
+}
+
+struct PendingProjectLoad {
+    message_id: u64,
+    report: ProjectLoadReport,
+    remaining_metadata: BTreeSet<String>,
 }
 
 impl RuntimeSession {
@@ -247,12 +269,14 @@ impl RuntimeSession {
             next_wait_id: 1,
             next_interaction_id: 1,
             next_transfer_id: 1,
+            next_effect_id: 1,
             logical_time_ns: 0,
             frontend_time_origin: None,
             random_seed: None,
             inbound: VecDeque::new(),
             outbound: VecDeque::new(),
             outbound_journal: BTreeMap::new(),
+            effect_journal: BTreeMap::new(),
             accepted_message_ids: BTreeMap::new(),
             accepted_debug_message_ids: BTreeMap::new(),
             active_debug_grant: None,
@@ -266,6 +290,11 @@ impl RuntimeSession {
             operations: PendingOperations::default(),
             key_toggle_state: [0; 256],
             message_skip: false,
+            skip_print: false,
+            user_defined_skip: false,
+            saved_skip: false,
+            client_focused: true,
+            client_audio_available: true,
             command_intents: BTreeMap::new(),
             reusable_system_intents: BTreeMap::new(),
             exit_requested: None,
@@ -273,11 +302,13 @@ impl RuntimeSession {
             project_snapshot: None,
             selected_locale: "ja".into(),
             available_fonts: BTreeSet::new(),
+            service_capabilities: BTreeMap::new(),
             save_extensions: Vec::new(),
             system_menu: SystemMenuState::Title,
             load_slot_paths: Vec::new(),
             inbound_transfer: None,
             outbound_transfer: None,
+            pending_project_load: None,
         }
     }
 
@@ -537,8 +568,13 @@ impl RuntimeSession {
                 }
                 Ok(())
             }
-            RuntimeMessage::ClientStateChanged(_) | RuntimeMessage::EffectAcknowledgement(_) => {
+            RuntimeMessage::ClientStateChanged(state) => {
+                self.client_focused = state.focused;
+                self.client_audio_available = state.audio_available;
                 Ok(())
+            }
+            RuntimeMessage::EffectAcknowledgement(acknowledgement) => {
+                self.acknowledge_effects(message_id, acknowledgement)
             }
             RuntimeMessage::ServiceResponse(response) => {
                 self.complete_service(message_id, response)
@@ -564,17 +600,7 @@ impl RuntimeSession {
                     .retain(|sequence, _| *sequence > ack.through_sequence);
                 Ok(())
             }
-            RuntimeMessage::Resynchronize(_) => self.emit(
-                RuntimeMessage::RuntimeResynchronized(RuntimeResynchronized {
-                    epoch: self.epoch.0,
-                    phase: self.phase,
-                    runtime_revision: self.revision,
-                    presentation: self.presentation.snapshot(),
-                    exit_requested: self.exit_requested,
-                    selected_locale: self.selected_locale.clone(),
-                }),
-                Some(message_id),
-            ),
+            RuntimeMessage::Resynchronize(_) => self.resynchronize(message_id),
             RuntimeMessage::StorageResponse(response) => {
                 self.complete_storage(message_id, response)
             }
@@ -598,7 +624,8 @@ impl RuntimeSession {
             | RuntimeMessage::ShutdownReady(_)
             | RuntimeMessage::Fault(_)
             | RuntimeMessage::CommandRejected(_)
-            | RuntimeMessage::RuntimeResynchronized(_) => self.reject(
+            | RuntimeMessage::RuntimeResynchronized(_)
+            | RuntimeMessage::Diagnostic(_) => self.reject(
                 message_id,
                 CommandErrorCode::InvalidValue,
                 "message direction is frontend-incompatible",
@@ -612,7 +639,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 10.0 is required".into(),
+                    message: "runtime protocol 11.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -639,6 +666,16 @@ impl RuntimeSession {
             .filter(|feature| hello.features.contains(feature))
             .collect();
         let selected_capabilities = selected_capabilities(&hello.capabilities);
+        self.service_capabilities = selected_capabilities
+            .services
+            .iter()
+            .map(|capability| {
+                (
+                    (capability.kind, capability.operation.clone()),
+                    capability.versions.maximum,
+                )
+            })
+            .collect();
         self.available_fonts = selected_capabilities
             .available_fonts
             .iter()
@@ -682,22 +719,87 @@ impl RuntimeSession {
             );
         }
         self.set_phase(RuntimePhase::LoadingProject)?;
-        let build = build_project(manifest, Some(&self.incremental));
-        let success = build.report.success;
+        let mut build = build_project(manifest, Some(&self.incremental));
         self.incremental = build.incremental;
         self.artifact = build.artifact;
         self.project_snapshot = build.snapshot;
-        if let Some(snapshot) = &self.project_snapshot {
-            self.presentation.configure_layout(
-                snapshot.viewport_width,
-                snapshot.print_c_per_line,
-                snapshot.print_c_length,
-            );
+        let metadata = self
+            .project_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.resource_graph.metadata_requests())
+            .unwrap_or_default();
+        if !build.report.success || metadata.is_empty() {
+            return self.finish_project_load(message_id, build.report);
         }
-        self.emit(
-            RuntimeMessage::ProjectLoadReport(build.report),
-            Some(message_id),
-        )?;
+        if self
+            .service_capabilities
+            .get(&(ServiceKind::Image, IMAGE_METADATA_OPERATION.into()))
+            != Some(&IMAGE_METADATA_OPERATION_VERSION)
+        {
+            build.report.success = false;
+            build.report.diagnostics.push(ProtocolDiagnostic {
+                code: "runtime.missing_image_metadata_service".into(),
+                severity: DiagnosticSeverity::Error,
+                message: "resource sprites require the negotiated image_metadata service".into(),
+                source: None,
+            });
+            return self.finish_project_load(message_id, build.report);
+        }
+        let remaining_metadata = metadata
+            .iter()
+            .map(|(path, _)| path.to_ascii_lowercase())
+            .collect();
+        self.pending_project_load = Some(PendingProjectLoad {
+            message_id,
+            report: build.report,
+            remaining_metadata,
+        });
+        for (relative_path, digest) in metadata {
+            let request_id = self.allocate_request()?;
+            self.operations.insert_service(
+                request_id,
+                PendingService::ProjectImageMetadata {
+                    relative_path: relative_path.clone(),
+                },
+            );
+            self.emit(
+                RuntimeMessage::ServiceRequest(ServiceRequest {
+                    request_id,
+                    kind: ServiceKind::Image,
+                    operation: IMAGE_METADATA_OPERATION.into(),
+                    operation_version: IMAGE_METADATA_OPERATION_VERSION,
+                    payload: ProtocolBytes::new(encode_canonical(&ImageMetadataRequest {
+                        resource_id: relative_path,
+                        content_digest: ProtocolBytes::new(digest),
+                    })?),
+                    deadline_ns: None,
+                }),
+                None,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn finish_project_load(
+        &mut self,
+        message_id: u64,
+        report: ProjectLoadReport,
+    ) -> Result<(), RuntimeError> {
+        if report.success {
+            if let Some(snapshot) = &self.project_snapshot {
+                self.presentation.configure_layout(
+                    snapshot.viewport_width,
+                    snapshot.print_c_per_line,
+                    snapshot.print_c_length,
+                );
+            }
+            self.sync_resource_replay();
+        } else {
+            self.artifact = None;
+            self.project_snapshot = None;
+        }
+        let success = report.success;
+        self.emit(RuntimeMessage::ProjectLoadReport(report), Some(message_id))?;
         self.set_phase(if success {
             RuntimePhase::Ready
         } else {
@@ -705,6 +807,7 @@ impl RuntimeSession {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn reload_project(
         &mut self,
         message_id: u64,
@@ -747,6 +850,31 @@ impl RuntimeSession {
             )?;
             return self.set_phase(previous_phase);
         }
+        if let (Some(next), Some(previous)) =
+            (build.snapshot.as_mut(), self.project_snapshot.as_ref())
+        {
+            next.resource_graph
+                .inherit_runtime_graph(&previous.resource_graph);
+        }
+        if build
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| !snapshot.resource_graph.metadata_requests().is_empty())
+        {
+            build.report.success = false;
+            build.report.diagnostics.push(ProtocolDiagnostic {
+                code: "runtime.reload_image_metadata_requires_full_load".into(),
+                severity: DiagnosticSeverity::Error,
+                message: "hot reload of new or changed image bytes requires a full project load"
+                    .into(),
+                source: None,
+            });
+            self.emit(
+                RuntimeMessage::ProjectLoadReport(build.report),
+                Some(message_id),
+            )?;
+            return self.set_phase(previous_phase);
+        }
         let target = build
             .artifact
             .take()
@@ -782,6 +910,7 @@ impl RuntimeSession {
                 snapshot.print_c_length,
             );
         }
+        self.sync_resource_replay();
         let new_epoch = self.epoch.0.saturating_add(1);
         let (tokens, waits) = self.operations.rebind_stable_inputs(
             new_epoch,
@@ -917,6 +1046,10 @@ impl RuntimeSession {
         vm.commit_runtime_state(last_load)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         self.save_extensions = decoded.opaque_extensions;
+        if let Some(project) = &mut self.project_snapshot {
+            project.resource_graph.reset_runtime_graph();
+        }
+        self.sync_resource_replay();
         self.advance_epoch();
         self.set_phase(RuntimePhase::Starting)?;
         if self.controller.prepare_load_sequence(vm.vm().artifact()) {
@@ -1033,11 +1166,18 @@ impl RuntimeSession {
         self.vm = Some(vm);
         self.presentation = presentation;
         self.operations = operations;
+        self.project_snapshot
+            .as_mut()
+            .expect("project identity was checked above")
+            .resource_graph = payload.resource_graph;
         self.controller = payload.controller;
         self.logical_time_ns = payload.logical_time_ns;
         self.frontend_time_origin = None;
         self.random_seed = payload.random_seed;
         self.message_skip = payload.message_skip;
+        self.skip_print = payload.skip_print;
+        self.user_defined_skip = payload.user_defined_skip;
+        self.saved_skip = payload.saved_skip;
         self.command_intents = remap_intents(payload.command_intents);
         self.reusable_system_intents = remap_intents(payload.reusable_system_intents);
         self.save_extensions = payload.save_extensions;
@@ -1051,6 +1191,10 @@ impl RuntimeSession {
     fn start_new_game(&mut self, seed: u64) -> Result<(), RuntimeError> {
         self.random_seed = Some(seed);
         self.frontend_time_origin = None;
+        if let Some(project) = &mut self.project_snapshot {
+            project.resource_graph.reset_runtime_graph();
+        }
+        self.sync_resource_replay();
         self.set_phase(RuntimePhase::Starting)?;
         let artifact = self
             .artifact
@@ -1115,6 +1259,7 @@ impl RuntimeSession {
                     (load_token, VmValue::Integer(1)),
                 ]),
                 timeout_duration_ns: None,
+                post_input: None,
             },
             true,
         )
@@ -1197,6 +1342,64 @@ impl RuntimeSession {
         request: &VmHostRequest,
     ) -> Result<(), RuntimeError> {
         let name = request.import.import.name.to_ascii_uppercase();
+        if name == "SKIPDISP" {
+            self.skip_print = integer_argument_value(&request.arguments, 0)? != 0;
+            self.user_defined_skip = self.skip_print;
+            let writes = self.result_write(i64::from(self.skip_print))?;
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: None,
+                    writes,
+                }),
+            );
+        }
+        if name == "SKIPLOG" {
+            self.message_skip = integer_argument_value(&request.arguments, 0)? != 0;
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "NOSKIP" {
+            self.saved_skip = self.skip_print;
+            self.skip_print = false;
+            return commit_integer_result(vm, request.id, 1);
+        }
+        if name == "ENDNOSKIP" {
+            if self.saved_skip {
+                self.skip_print = true;
+            }
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if matches!(
+            name.as_str(),
+            "ISSKIP" | "MESSKIP" | "MOUSESKIP" | "LINEISEMPTY" | "ISACTIVE"
+        ) {
+            let value = match name.as_str() {
+                "ISSKIP" => self.skip_print,
+                "MESSKIP" | "MOUSESKIP" => self.message_skip,
+                "LINEISEMPTY" => self.presentation.last_line_is_empty(),
+                "ISACTIVE" => self.client_focused,
+                _ => unreachable!(),
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(i64::from(value))),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if self.skip_print && is_runtime_print_command(&name) {
+            if self.user_defined_skip && is_input_command(&name) {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "an input command cannot execute while user SKIPDISP is active; wrap it in NOSKIP/ENDNOSKIP",
+                    Some(request.origin.clone()),
+                );
+            }
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
         if name == "AWAIT" {
             let milliseconds = match request.arguments.first() {
                 None | Some(VmValue::Integer(0)) => 0,
@@ -1936,12 +2139,106 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
+        if name == "SETBGIMAGE" {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let depth = request.arguments.get(1).map_or(0, integer_value_or_zero);
+            let opacity = request.arguments.get(2).map_or(255, integer_value_or_zero);
+            let exists = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.sprite(&resource))
+                .is_some();
+            if exists {
+                self.presentation.add_background(resource, depth, opacity);
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "REMOVEBGIMAGE" {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            self.presentation.remove_background(&resource);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "CLEARBGIMAGE" {
+            self.presentation.clear_backgrounds();
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name.starts_with("TOOLTIP_") {
+            let result = match name.as_str() {
+                "TOOLTIP_SETCOLOR" => {
+                    let foreground = integer_argument_value(&request.arguments, 0)?;
+                    let background = integer_argument_value(&request.arguments, 1)?;
+                    if !(0..=0xff_ffff).contains(&foreground)
+                        || !(0..=0xff_ffff).contains(&background)
+                    {
+                        Err("tooltip color is out of range")
+                    } else {
+                        self.presentation.set_tooltip_colors(foreground, background);
+                        Ok(())
+                    }
+                }
+                "TOOLTIP_SETDELAY" => self
+                    .presentation
+                    .set_tooltip_delay(integer_argument_value(&request.arguments, 0)?),
+                "TOOLTIP_SETDURATION" => self
+                    .presentation
+                    .set_tooltip_duration(integer_argument_value(&request.arguments, 0)?),
+                "TOOLTIP_SETFONT" => {
+                    self.presentation.set_tooltip_font(
+                        request
+                            .arguments
+                            .first()
+                            .map_or_else(String::new, display_value),
+                    );
+                    Ok(())
+                }
+                "TOOLTIP_SETFONTSIZE" => self
+                    .presentation
+                    .set_tooltip_font_size(integer_argument_value(&request.arguments, 0)?),
+                "TOOLTIP_CUSTOM" => {
+                    self.presentation
+                        .set_tooltip_custom(integer_argument_value(&request.arguments, 0)? != 0);
+                    Ok(())
+                }
+                "TOOLTIP_FORMAT" => {
+                    self.presentation
+                        .set_tooltip_format(integer_argument_value(&request.arguments, 0)?);
+                    Ok(())
+                }
+                "TOOLTIP_IMG" => {
+                    self.presentation
+                        .set_tooltip_images(integer_argument_value(&request.arguments, 0)? != 0);
+                    Ok(())
+                }
+                _ => Err("unsupported tooltip operation"),
+            };
+            if let Err(message) = result {
+                return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
         if name == "PRINT_IMG" {
             let resource = request
                 .arguments
                 .first()
                 .map_or_else(String::new, display_value);
-            self.presentation.append_image(resource, None);
+            let exists = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.sprite(&resource))
+                .is_some();
+            if exists {
+                self.presentation.append_image(resource, None);
+            }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
@@ -1958,21 +2255,313 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
+        if name == "EXISTSOUND" {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let exists = self
+                .project_snapshot
+                .as_ref()
+                .is_some_and(|project| project.resource_graph.contains_audio(&resource));
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(i64::from(exists))),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "SPRITECREATED" | "SPRITEWIDTH" | "SPRITEHEIGHT" | "SPRITEPOSX" | "SPRITEPOSY"
+        ) {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let value = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.sprite(&resource))
+                .map_or(0, |sprite| match name.as_str() {
+                    "SPRITECREATED" => 1,
+                    "SPRITEWIDTH" => i64::from(sprite.width),
+                    "SPRITEHEIGHT" => i64::from(sprite.height),
+                    "SPRITEPOSX" => i64::from(sprite.position_x),
+                    _ => i64::from(sprite.position_y),
+                });
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "SPRITEGETCOLOR" {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let x = integer_argument_value(&request.arguments, 1)?;
+            let y = integer_argument_value(&request.arguments, 2)?;
+            let Some((resource_id, digest, x, y)) = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.sprite_pixel_request(&resource, x, y))
+            else {
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady {
+                        value: Some(VmValue::Integer(-1)),
+                        writes: Vec::new(),
+                    }),
+                );
+            };
+            return self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::SpritePixel {
+                    request: request.id,
+                },
+                ServiceKind::Image,
+                IMAGE_PIXEL_OPERATION,
+                IMAGE_PIXEL_OPERATION_VERSION,
+                &ImagePixelRequest {
+                    resource_id,
+                    content_digest: ProtocolBytes::new(digest),
+                    x,
+                    y,
+                },
+            );
+        }
+        if matches!(name.as_str(), "SPRITEMOVE" | "SPRITESETPOS") {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let x = i32::try_from(integer_argument_value(&request.arguments, 1)?).unwrap_or(0);
+            let y = i32::try_from(integer_argument_value(&request.arguments, 2)?).unwrap_or(0);
+            let changed = self.project_snapshot.as_mut().is_some_and(|project| {
+                project
+                    .resource_graph
+                    .move_sprite(&resource, x, y, name == "SPRITEMOVE")
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(changed));
+        }
+        if name == "GCREATE" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let width = integer_argument_value(&request.arguments, 1)?;
+            let height = integer_argument_value(&request.arguments, 2)?;
+            let result = self
+                .project_snapshot
+                .as_mut()
+                .ok_or_else(|| RuntimeError::Internal("GCREATE has no loaded project".into()))?
+                .resource_graph
+                .create_canvas(id, width, height);
+            let created = match result {
+                Ok(value) => value,
+                Err(message) => {
+                    return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                }
+            };
+            return self.complete_graphics_result(vm, request.id, i64::from(created));
+        }
+        if name == "GDISPOSE" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let disposed = self
+                .project_snapshot
+                .as_mut()
+                .is_some_and(|project| project.resource_graph.dispose_canvas(id));
+            return self.complete_graphics_result(vm, request.id, i64::from(disposed));
+        }
+        if matches!(name.as_str(), "GCREATED" | "GWIDTH" | "GHEIGHT") {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let state = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.canvas_state(id));
+            let value = match (name.as_str(), state) {
+                ("GCREATED", Some(_)) => 1,
+                ("GWIDTH", Some((width, _))) => i64::from(width),
+                ("GHEIGHT", Some((_, height))) => i64::from(height),
+                _ => 0,
+            };
+            return commit_integer_result(vm, request.id, value);
+        }
+        if name == "GCLEAR" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let color = integer_argument_value(&request.arguments, 1)?;
+            let rectangle = if request.arguments.len() == 6 {
+                Some([
+                    i32_argument_value(&request.arguments, 2)?,
+                    i32_argument_value(&request.arguments, 3)?,
+                    i32_argument_value(&request.arguments, 4)?,
+                    i32_argument_value(&request.arguments, 5)?,
+                ])
+            } else {
+                None
+            };
+            let changed = self
+                .project_snapshot
+                .as_mut()
+                .is_some_and(|project| project.resource_graph.clear_canvas(id, color, rectangle));
+            return self.complete_graphics_result(vm, request.id, i64::from(changed));
+        }
+        if name == "GDRAWSPRITE" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let sprite = request
+                .arguments
+                .get(1)
+                .map_or_else(String::new, display_value);
+            let destination = match request.arguments.len() {
+                2 => None,
+                4 => Some([
+                    i32_argument_value(&request.arguments, 2)?,
+                    i32_argument_value(&request.arguments, 3)?,
+                    self.project_snapshot
+                        .as_ref()
+                        .and_then(|project| project.resource_graph.sprite(&sprite))
+                        .map_or(0, |value| i32::try_from(value.width).unwrap_or(i32::MAX)),
+                    self.project_snapshot
+                        .as_ref()
+                        .and_then(|project| project.resource_graph.sprite(&sprite))
+                        .map_or(0, |value| i32::try_from(value.height).unwrap_or(i32::MAX)),
+                ]),
+                _ => Some([
+                    i32_argument_value(&request.arguments, 2)?,
+                    i32_argument_value(&request.arguments, 3)?,
+                    i32_argument_value(&request.arguments, 4)?,
+                    i32_argument_value(&request.arguments, 5)?,
+                ]),
+            };
+            let changed = self.project_snapshot.as_mut().is_some_and(|project| {
+                project.resource_graph.draw_sprite(id, &sprite, destination)
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(changed));
+        }
+        if name == "SPRITECREATE" {
+            let sprite = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let id = integer_argument_value(&request.arguments, 1)?;
+            let rectangle = if request.arguments.len() == 6 {
+                Some([
+                    i32_argument_value(&request.arguments, 2)?,
+                    i32_argument_value(&request.arguments, 3)?,
+                    i32_argument_value(&request.arguments, 4)?,
+                    i32_argument_value(&request.arguments, 5)?,
+                ])
+            } else {
+                None
+            };
+            let created = self.project_snapshot.as_mut().is_some_and(|project| {
+                project
+                    .resource_graph
+                    .create_canvas_sprite(&sprite, id, rectangle)
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(created));
+        }
+        if name == "SPRITEDISPOSE" {
+            let sprite = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let disposed = self
+                .project_snapshot
+                .as_mut()
+                .is_some_and(|project| project.resource_graph.dispose_sprite(&sprite));
+            return self.complete_graphics_result(vm, request.id, i64::from(disposed));
+        }
+        if name == "SPRITEDISPOSEALL" {
+            let include_static = integer_argument_value(&request.arguments, 0)? != 0;
+            let count = self.project_snapshot.as_mut().map_or(0, |project| {
+                project.resource_graph.dispose_sprites(include_static)
+            });
+            return self.complete_graphics_result(
+                vm,
+                request.id,
+                i64::try_from(count).unwrap_or(i64::MAX),
+            );
+        }
         if matches!(name.as_str(), "PLAYBGM" | "PLAYSOUND") {
             let resource = request
                 .arguments
                 .first()
                 .map_or_else(String::new, display_value);
-            self.presentation
-                .set_audio(resource, name == "PLAYBGM", true);
+            let bgm = name == "PLAYBGM";
+            let exists = self
+                .project_snapshot
+                .as_ref()
+                .is_some_and(|project| project.resource_graph.contains_audio(&resource));
+            if !exists {
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady::empty()),
+                );
+            }
+            self.presentation.set_audio(resource.clone(), bgm, true);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
-            return self.emit_presentation();
+            self.emit_presentation()?;
+            if self.presentation.projects_audio() && self.client_audio_available {
+                return self.emit_effect(EffectKind::Audio(AudioEffect {
+                    channel_id: u64::from(bgm),
+                    action: AudioEffectAction::Play,
+                    resource_id: Some(resource),
+                    repeat_count: if bgm { -1 } else { 1 },
+                    volume_millionths: 1_000_000,
+                }));
+            }
+            if self.presentation.projects_audio() {
+                return self.emit_audio_unavailable();
+            }
+            return Ok(());
         }
         if matches!(name.as_str(), "STOPBGM" | "STOPSOUND") {
-            self.presentation
-                .set_audio(String::new(), name == "STOPBGM", false);
+            let bgm = name == "STOPBGM";
+            self.presentation.set_audio(String::new(), bgm, false);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
-            return self.emit_presentation();
+            self.emit_presentation()?;
+            if self.presentation.projects_audio() && self.client_audio_available {
+                return self.emit_effect(EffectKind::Audio(AudioEffect {
+                    channel_id: u64::from(bgm),
+                    action: AudioEffectAction::Stop,
+                    resource_id: None,
+                    repeat_count: 0,
+                    volume_millionths: 0,
+                }));
+            }
+            if self.presentation.projects_audio() {
+                return self.emit_audio_unavailable();
+            }
+            return Ok(());
+        }
+        if matches!(name.as_str(), "SETBGMVOLUME" | "SETSOUNDVOLUME") {
+            let bgm = name == "SETBGMVOLUME";
+            let volume = integer_argument_value(&request.arguments, 0)?;
+            self.presentation.set_audio_volume(bgm, volume);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            self.emit_presentation()?;
+            if self.presentation.projects_audio() && self.client_audio_available {
+                return self.emit_effect(EffectKind::Audio(AudioEffect {
+                    channel_id: u64::from(bgm),
+                    action: AudioEffectAction::SetVolume,
+                    resource_id: None,
+                    repeat_count: 0,
+                    volume_millionths: u32::try_from(volume.clamp(0, 100)).unwrap_or_default()
+                        * 10_000,
+                }));
+            }
+            if self.presentation.projects_audio() {
+                return self.emit_audio_unavailable();
+            }
+            return Ok(());
         }
         if matches!(
             name.as_str(),
@@ -1981,14 +2570,20 @@ impl RuntimeSession {
             let text = request
                 .arguments
                 .first()
-                .map_or_else(String::new, display_value);
+                .map_or_else(String::new, display_value)
+                .replace('\n', "");
             let value = request
                 .arguments
                 .get(1)
                 .cloned()
                 .ok_or_else(|| RuntimeError::Internal("PRINTBUTTON value is missing".into()))?;
             let token = self.allocate_interaction();
-            self.presentation.append_button(text, token);
+            let alignment = match name.as_str() {
+                "PRINTBUTTONC" => Some(CellAlignment::Right),
+                "PRINTBUTTONLC" => Some(CellAlignment::Left),
+                _ => None,
+            };
+            self.presentation.append_button(text, token, alignment);
             self.command_intents.insert(token, value);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
@@ -1999,7 +2594,9 @@ impl RuntimeSession {
                 .iter()
                 .map(display_value)
                 .collect::<String>();
-            if is_column_print(&name) {
+            if name == "REUSELASTLINE" {
+                self.presentation.print_temporary_line(text);
+            } else if is_column_print(&name) {
                 let alignment = if name.ends_with("LC") {
                     CellAlignment::Left
                 } else {
@@ -2032,6 +2629,7 @@ impl RuntimeSession {
                     result_name: None,
                     choices: BTreeMap::new(),
                     timeout_duration_ns: None,
+                    post_input: None,
                 };
                 commit_completion(
                     vm,
@@ -2045,6 +2643,25 @@ impl RuntimeSession {
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
+        }
+        if name == "UPDATECHECK" {
+            let game_base = &vm.vm().artifact().project_data.static_data.game_base;
+            if game_base.update_url.is_empty() {
+                return commit_host_result_write(vm, request.id, 3);
+            }
+            return self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::UpdateCheck {
+                    request: request.id,
+                },
+                ServiceKind::Network,
+                UPDATE_CHECK_OPERATION,
+                UPDATE_CHECK_OPERATION_VERSION,
+                &UpdateCheckRequest {
+                    url: game_base.update_url.clone(),
+                },
+            );
         }
         if matches!(name.as_str(), "GETKEY" | "GETKEYTRIGGERED") {
             let key = match request.arguments.first() {
@@ -2110,7 +2727,7 @@ impl RuntimeSession {
             )
         } else {
             self.fault(
-                FaultCode::VmFault,
+                FaultCode::UnsupportedRuntimeFeature,
                 &format!("unsupported host import: {}", request.import.import.name),
                 Some(request.origin.clone()),
             )
@@ -2129,6 +2746,16 @@ impl RuntimeSession {
         operation_version: ProtocolVersion,
         payload: &T,
     ) -> Result<(), RuntimeError> {
+        if self.service_capabilities.get(&(kind, operation.to_owned())) != Some(&operation_version)
+        {
+            return self.fault(
+                FaultCode::UnsupportedRuntimeFeature,
+                &format!(
+                    "frontend did not negotiate service {kind:?}/{operation} {operation_version:?}"
+                ),
+                Some(request.origin.clone()),
+            );
+        }
         commit_completion(
             vm,
             request.id,
@@ -2140,6 +2767,45 @@ impl RuntimeSession {
         let request_id = self.allocate_request()?;
         self.operations
             .insert_service(request_id, PendingService::Host(completion));
+        self.emit(
+            RuntimeMessage::ServiceRequest(ServiceRequest {
+                request_id,
+                kind,
+                operation: operation.into(),
+                operation_version,
+                payload: ProtocolBytes::new(encode_canonical(payload)?),
+                deadline_ns: None,
+            }),
+            None,
+        )
+    }
+
+    fn issue_platform_effect<T: minicbor::Encode<()>>(
+        &mut self,
+        kind: ServiceKind,
+        operation: &str,
+        operation_version: ProtocolVersion,
+        payload: &T,
+    ) -> Result<(), RuntimeError> {
+        if self.service_capabilities.get(&(kind, operation.to_owned())) != Some(&operation_version)
+        {
+            return self.emit(
+                RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    code: "runtime.platform_capability_unavailable".into(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: format!("frontend did not negotiate service {kind:?}/{operation}"),
+                    source: None,
+                }),
+                None,
+            );
+        }
+        let request_id = self.allocate_request()?;
+        self.operations.insert_service(
+            request_id,
+            PendingService::PlatformEffect {
+                operation: operation.into(),
+            },
+        );
         self.emit(
             RuntimeMessage::ServiceRequest(ServiceRequest {
                 request_id,
@@ -2400,6 +3066,7 @@ impl RuntimeSession {
                         result_name: None,
                         choices,
                         timeout_duration_ns: None,
+                        post_input: None,
                     },
                     true,
                 )
@@ -2738,6 +3405,7 @@ impl RuntimeSession {
         self.set_phase(RuntimePhase::Running)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn complete_service(
         &mut self,
         message_id: u64,
@@ -2750,6 +3418,88 @@ impl RuntimeSession {
                 "service response has no pending request",
             );
         };
+        if let PendingService::ProjectImageMetadata { relative_path } = pending {
+            let result = match response.result {
+                ServiceResult::Ready { payload } => {
+                    let metadata: ImageMetadataResponse = decode_canonical(payload.as_slice())?;
+                    self.project_snapshot
+                        .as_mut()
+                        .ok_or_else(|| {
+                            RuntimeError::Internal(
+                                "image metadata completion has no pending project".into(),
+                            )
+                        })?
+                        .resource_graph
+                        .apply_metadata(&relative_path, metadata)
+                }
+                ServiceResult::Error { error } => Err(format!("{}: {}", error.code, error.message)),
+            };
+            let pending = self.pending_project_load.as_mut().ok_or_else(|| {
+                RuntimeError::Internal("image metadata completion has no load report".into())
+            })?;
+            pending
+                .remaining_metadata
+                .remove(&relative_path.to_ascii_lowercase());
+            if let Err(message) = result {
+                pending.report.success = false;
+                pending.report.diagnostics.push(ProtocolDiagnostic {
+                    code: "runtime.invalid_image_metadata".into(),
+                    severity: DiagnosticSeverity::Error,
+                    message,
+                    source: Some(era_runtime_protocol::SourceLocation {
+                        relative_path,
+                        byte_start: 0,
+                        byte_end: 0,
+                        line: None,
+                        byte_column: None,
+                    }),
+                });
+            }
+            if pending.remaining_metadata.is_empty() {
+                let pending = self.pending_project_load.take().expect("checked above");
+                return self.finish_project_load(pending.message_id, pending.report);
+            }
+            return Ok(());
+        }
+        if let PendingService::PlatformEffect { operation } = &pending {
+            let failure = match response.result {
+                ServiceResult::Ready { payload } if operation == OPEN_URL_OPERATION => {
+                    let response: OpenUrlResponse = decode_canonical(payload.as_slice())?;
+                    (!response.opened).then_some("frontend declined the URL request".to_owned())
+                }
+                ServiceResult::Ready { .. } => None,
+                ServiceResult::Error { error } => {
+                    Some(format!("{}: {}", error.code, error.message))
+                }
+            };
+            if let Some(message) = failure {
+                self.emit(
+                    RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        code: "runtime.platform_effect_failed".into(),
+                        severity: DiagnosticSeverity::Warning,
+                        message,
+                        source: None,
+                    }),
+                    Some(message_id),
+                )?;
+            }
+            return Ok(());
+        }
+        if let PendingService::Host(ExternalCompletion::UpdateCheck { request, .. }) = &pending
+            && let ServiceResult::Error { error } = &response.result
+        {
+            let result = if error.code.eq_ignore_ascii_case("network_unavailable") {
+                5
+            } else {
+                3
+            };
+            let vm = self
+                .vm
+                .as_mut()
+                .ok_or_else(|| RuntimeError::Internal("pending update check has no VM".into()))?;
+            commit_host_result_write(vm, *request, result)?;
+            return self.set_phase(RuntimePhase::Running);
+        }
         let payload = match response.result {
             ServiceResult::Ready { payload } => payload,
             ServiceResult::Error { error } => {
@@ -2818,10 +3568,51 @@ impl RuntimeSession {
                             })
                         }
                     }
+                    ExternalCompletion::SpritePixel { .. } => {
+                        let pixel: ImagePixelResponse = decode_canonical(payload.as_slice())?;
+                        Some(VmValue::Integer(i64::from(pixel.argb)))
+                    }
+                    ExternalCompletion::UpdateCheck { request } => {
+                        let update: UpdateCheckResponse = decode_canonical(payload.as_slice())?;
+                        if update.remote_version.is_empty() || update.download_url.is_empty() {
+                            let vm = self.vm.as_mut().ok_or_else(|| {
+                                RuntimeError::Internal("pending update check has no VM".into())
+                            })?;
+                            commit_host_result_write(vm, request, 3)?;
+                            return self.set_phase(RuntimePhase::Running);
+                        }
+                        let current_version = self
+                            .vm
+                            .as_ref()
+                            .map(|vm| {
+                                &vm.vm()
+                                    .artifact()
+                                    .project_data
+                                    .static_data
+                                    .game_base
+                                    .version_name
+                            })
+                            .cloned()
+                            .unwrap_or_default();
+                        if update.remote_version == current_version {
+                            let vm = self.vm.as_mut().ok_or_else(|| {
+                                RuntimeError::Internal("pending update check has no VM".into())
+                            })?;
+                            commit_host_result_write(vm, request, 0)?;
+                            return self.set_phase(RuntimePhase::Running);
+                        }
+                        return self.open_update_prompt(
+                            request,
+                            &update.remote_version,
+                            update.download_url,
+                        );
+                    }
                 };
                 let host_request = match completion {
                     ExternalCompletion::GetKey { request: id, .. }
-                    | ExternalCompletion::LocalDateTime { request: id, .. } => id,
+                    | ExternalCompletion::LocalDateTime { request: id, .. }
+                    | ExternalCompletion::SpritePixel { request: id }
+                    | ExternalCompletion::UpdateCheck { request: id, .. } => id,
                 };
                 let vm = self
                     .vm
@@ -2834,7 +3625,53 @@ impl RuntimeSession {
                 )?;
                 self.set_phase(RuntimePhase::Running)
             }
+            PendingService::ProjectImageMetadata { .. } | PendingService::PlatformEffect { .. } => {
+                unreachable!("handled above")
+            }
         }
+    }
+
+    fn open_update_prompt(
+        &mut self,
+        request: erabasic_vm::HostRequestId,
+        remote_version: &str,
+        download_url: String,
+    ) -> Result<(), RuntimeError> {
+        self.presentation.append_text(
+            format!("New version {remote_version} is available: {download_url}"),
+            false,
+        );
+        let no = self.allocate_interaction();
+        let yes = self.allocate_interaction();
+        self.presentation.append_button("No".into(), no, None);
+        self.presentation.append_button("Yes".into(), yes, None);
+        let submission = self.allocate_interaction();
+        let pending = PendingInput {
+            host_request: Some(request),
+            wait: InputWait {
+                wait_id: self.allocate_wait(),
+                kind: WaitKind::IntegerButton,
+                stability: WaitStability::Transient,
+                one_input: false,
+                stop_message_skip: false,
+                system_input: false,
+                mouse_input: false,
+                default_value: None,
+                deadline_ns: None,
+                display_time: false,
+                timeout_message: None,
+                submission_token: submission,
+                countdown_remaining_ms: None,
+            },
+            result_name: Some("RESULT".into()),
+            choices: BTreeMap::from([(no, VmValue::Integer(1)), (yes, VmValue::Integer(2))]),
+            timeout_duration_ns: None,
+            post_input: Some(PostInputAction::OpenUrl {
+                url: download_url,
+                trigger_value: 2,
+            }),
+        };
+        self.open_wait(pending, false)
     }
 
     fn complete_input(
@@ -2940,6 +3777,7 @@ impl RuntimeSession {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn finish_input(
         &mut self,
         submission: InputSubmission,
@@ -2960,6 +3798,13 @@ impl RuntimeSession {
         let request = pending
             .host_request
             .ok_or_else(|| RuntimeError::Internal("VM wait has no host request".into()))?;
+        let post_url = match (&pending.post_input, &submission) {
+            (
+                Some(PostInputAction::OpenUrl { url, trigger_value }),
+                InputSubmission::Value(VmValue::Integer(value)),
+            ) if value == trigger_value => Some(url.clone()),
+            _ => None,
+        };
         let vm = self
             .vm
             .as_mut()
@@ -3034,10 +3879,19 @@ impl RuntimeSession {
         let pause_next_wait = !vm.has_runnable_fibers();
         self.close_wait(pending.wait.wait_id)?;
         if let Some(next) = self.operations.pop_queued_input() {
-            self.activate_wait(next, pause_next_wait)
+            self.activate_wait(next, pause_next_wait)?;
         } else {
-            self.set_phase(RuntimePhase::Running)
+            self.set_phase(RuntimePhase::Running)?;
         }
+        if let Some(url) = post_url {
+            self.issue_platform_effect(
+                ServiceKind::OpenUrl,
+                OPEN_URL_OPERATION,
+                OPEN_URL_OPERATION_VERSION,
+                &OpenUrlRequest { url },
+            )?;
+        }
+        Ok(())
     }
 
     fn finish_system_input(
@@ -3350,6 +4204,7 @@ impl RuntimeSession {
                 result_name: None,
                 choices,
                 timeout_duration_ns: None,
+                post_input: None,
             },
             true,
         )
@@ -3557,7 +4412,7 @@ impl RuntimeSession {
                 .unwrap_or("");
             let token = self.allocate_interaction();
             self.presentation
-                .append_button(format!("{name}[{display:>3}]"), token);
+                .append_button(format!("{name}[{display:>3}]"), token, None);
             self.command_intents.insert(
                 token,
                 VmValue::Integer(i64::try_from(display).unwrap_or(i64::MAX)),
@@ -3628,7 +4483,7 @@ impl RuntimeSession {
         if self.phase != RuntimePhase::WaitingInput || !stable_wait {
             reasons.push(SnapshotIneligibleReason::StableWaitRequired);
         }
-        if self.operations.has_transient_external() {
+        if self.operations.has_transient_external() || !self.effect_journal.is_empty() {
             reasons.push(SnapshotIneligibleReason::ExternalOperationPending);
         }
         if request.kind == StateExportKind::VmSnapshot && !self.operations.is_snapshot_stable() {
@@ -3687,6 +4542,7 @@ impl RuntimeSession {
                         artifact_id: vm.artifact_id(),
                         project_identity: project.project_identity,
                         resource_count: u64::try_from(project.resources.len()).unwrap_or(u64::MAX),
+                        resource_graph: project.resource_graph.clone(),
                         epoch: self.epoch.0,
                         vm_snapshot,
                         presentation: self.presentation.clone(),
@@ -3695,6 +4551,9 @@ impl RuntimeSession {
                         logical_time_ns: self.logical_time_ns,
                         random_seed: self.random_seed,
                         message_skip: self.message_skip,
+                        skip_print: self.skip_print,
+                        user_defined_skip: self.user_defined_skip,
+                        saved_skip: self.saved_skip,
                         command_intents: self.command_intents.clone(),
                         reusable_system_intents: self.reusable_system_intents.clone(),
                         save_extensions: self.save_extensions.clone(),
@@ -4026,7 +4885,10 @@ impl RuntimeSession {
 
     fn shutdown(&mut self, message_id: u64) -> Result<(), RuntimeError> {
         self.set_phase(RuntimePhase::Stopping)?;
-        let cancelled = self.operations.total_count();
+        let cancelled = self
+            .operations
+            .total_count()
+            .saturating_add(self.effect_journal.len());
         let (service_requests, storage_requests) = self.operations.external_requests();
         for request_id in service_requests {
             self.emit(
@@ -4047,6 +4909,7 @@ impl RuntimeSession {
             )?;
         }
         self.operations.clear();
+        self.effect_journal.clear();
         self.inbound_transfer = None;
         self.outbound_transfer = None;
         self.vm = None;
@@ -4060,11 +4923,54 @@ impl RuntimeSession {
         )
     }
 
+    fn resynchronize(&mut self, message_id: u64) -> Result<(), RuntimeError> {
+        self.emit(
+            RuntimeMessage::RuntimeResynchronized(RuntimeResynchronized {
+                epoch: self.epoch.0,
+                phase: self.phase,
+                runtime_revision: self.revision,
+                presentation: self.presentation.snapshot(),
+                exit_requested: self.exit_requested,
+                selected_locale: self.selected_locale.clone(),
+            }),
+            Some(message_id),
+        )?;
+        if !self.effect_journal.is_empty() {
+            self.emit(
+                RuntimeMessage::EffectBatch(EffectBatch {
+                    effects: self.effect_journal.values().cloned().collect(),
+                }),
+                Some(message_id),
+            )?;
+        }
+        Ok(())
+    }
+
     fn emit_presentation(&mut self) -> Result<(), RuntimeError> {
         self.emit(
             RuntimeMessage::PresentationSnapshot(self.presentation.snapshot()),
             None,
         )
+    }
+
+    fn sync_resource_replay(&mut self) {
+        let replay = self
+            .project_snapshot
+            .as_ref()
+            .map(|project| project.resource_graph.replay())
+            .unwrap_or_default();
+        self.presentation.set_resource_replay(replay);
+    }
+
+    fn complete_graphics_result(
+        &mut self,
+        vm: &mut RuntimeVm,
+        request: erabasic_vm::HostRequestId,
+        value: i64,
+    ) -> Result<(), RuntimeError> {
+        commit_integer_result(vm, request, value)?;
+        self.sync_resource_replay();
+        self.emit_presentation()
     }
 
     fn set_phase(&mut self, phase: RuntimePhase) -> Result<(), RuntimeError> {
@@ -4163,6 +5069,76 @@ impl RuntimeSession {
         id
     }
 
+    fn emit_effect(&mut self, kind: EffectKind) -> Result<(), RuntimeError> {
+        if self.effect_journal.len() >= self.options.limits.maximum_journal_entries as usize {
+            return Err(RuntimeError::ResourceLimit("effect journal is full"));
+        }
+        let event = EffectEvent {
+            effect_id: self.next_effect_id,
+            kind,
+        };
+        self.next_effect_id = self.next_effect_id.saturating_add(1);
+        self.effect_journal.insert(event.effect_id, event.clone());
+        self.emit(
+            RuntimeMessage::EffectBatch(EffectBatch {
+                effects: vec![event],
+            }),
+            None,
+        )
+    }
+
+    fn emit_audio_unavailable(&mut self) -> Result<(), RuntimeError> {
+        self.emit(
+            RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                code: "runtime.audio_device_unavailable".into(),
+                severity: DiagnosticSeverity::Warning,
+                message: "audio intent was retained but no frontend audio device is available"
+                    .into(),
+                source: None,
+            }),
+            None,
+        )
+    }
+
+    fn acknowledge_effects(
+        &mut self,
+        message_id: u64,
+        acknowledgement: EffectAcknowledgement,
+    ) -> Result<(), RuntimeError> {
+        let mut seen = BTreeSet::new();
+        for outcome in &acknowledgement.outcomes {
+            if !seen.insert(outcome.effect_id)
+                || !self.effect_journal.contains_key(&outcome.effect_id)
+            {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "effect acknowledgement refers to an unknown or duplicate effect",
+                );
+            }
+        }
+        for outcome in acknowledgement.outcomes {
+            self.effect_journal.remove(&outcome.effect_id);
+            if outcome.status != EffectOutcomeStatus::Completed {
+                self.emit(
+                    RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        code: "runtime.device_effect_failed".into(),
+                        severity: DiagnosticSeverity::Warning,
+                        message: outcome.message.unwrap_or_else(|| {
+                            format!(
+                                "frontend reported {:?} for effect {}",
+                                outcome.status, outcome.effect_id
+                            )
+                        }),
+                        source: None,
+                    }),
+                    Some(message_id),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn observe_frontend_time(&mut self, sample: u64) -> u64 {
         let (frontend_origin, logical_origin) = *self
             .frontend_time_origin
@@ -4212,6 +5188,22 @@ fn integer_argument_value(arguments: &[VmValue], index: usize) -> Result<i64, Ru
             "host argument {} must be integer",
             index + 1
         ))),
+    }
+}
+
+fn i32_argument_value(arguments: &[VmValue], index: usize) -> Result<i32, RuntimeError> {
+    i32::try_from(integer_argument_value(arguments, index)?).map_err(|_| {
+        RuntimeError::Internal(format!(
+            "host argument {} must fit a signed 32-bit drawing coordinate",
+            index + 1
+        ))
+    })
+}
+
+fn integer_value_or_zero(value: &VmValue) -> i64 {
+    match value {
+        VmValue::Integer(value) => *value,
+        _ => 0,
     }
 }
 
@@ -4640,6 +5632,44 @@ fn commit_completion(
         .map_err(|error| RuntimeError::Internal(error.to_string()))
 }
 
+fn commit_integer_result(
+    vm: &mut RuntimeVm,
+    request: erabasic_vm::HostRequestId,
+    value: i64,
+) -> Result<(), RuntimeError> {
+    commit_completion(
+        vm,
+        request,
+        VmHostCompletion::Ready(HostReady {
+            value: Some(VmValue::Integer(value)),
+            writes: Vec::new(),
+        }),
+    )
+}
+
+fn commit_host_result_write(
+    vm: &mut RuntimeVm,
+    request: erabasic_vm::HostRequestId,
+    value: i64,
+) -> Result<(), RuntimeError> {
+    let writes = global_place(vm, "RESULT")
+        .map(|target| {
+            vec![HostWrite {
+                target,
+                value: VmValue::Integer(value),
+            }]
+        })
+        .unwrap_or_default();
+    commit_completion(
+        vm,
+        request,
+        VmHostCompletion::Ready(HostReady {
+            value: None,
+            writes,
+        }),
+    )
+}
+
 fn global_place(vm: &RuntimeVm, name: &str) -> Option<PlaceDescriptor> {
     vm.vm()
         .artifact()
@@ -4664,6 +5694,46 @@ fn global_place_at(vm: &RuntimeVm, name: &str, index: usize) -> Option<PlaceDesc
 
 fn is_print(name: &str) -> bool {
     name.starts_with("PRINT") || name == "REUSELASTLINE"
+}
+
+fn is_input_command(name: &str) -> bool {
+    matches!(
+        name,
+        "WAIT"
+            | "WAITANYKEY"
+            | "FORCEWAIT"
+            | "TWAIT"
+            | "INPUT"
+            | "INPUTS"
+            | "ONEINPUT"
+            | "ONEINPUTS"
+            | "TINPUT"
+            | "TINPUTS"
+            | "TONEINPUT"
+            | "TONEINPUTS"
+            | "INPUTANY"
+            | "BINPUT"
+            | "BINPUTS"
+            | "ONEBINPUT"
+            | "ONEBINPUTS"
+            | "INPUTMOUSEKEY"
+    )
+}
+
+fn is_runtime_print_command(name: &str) -> bool {
+    is_print(name)
+        || is_input_command(name)
+        || matches!(
+            name,
+            "DRAWLINE"
+                | "CLEARLINE"
+                | "HTML_PRINT"
+                | "HTML_PRINT_ISLAND"
+                | "HTML_PRINT_ISLAND_CLEAR"
+                | "PRINT_IMG"
+                | "PRINT_RECT"
+                | "PRINT_SPACE"
+        )
 }
 
 fn is_column_print(name: &str) -> bool {
@@ -4764,7 +5834,42 @@ fn selected_capabilities(client: &ClientCapabilities) -> ClientCapabilities {
             fonts.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
             fonts
         },
+        services: selected_service_capabilities(&client.services),
     }
+}
+
+fn selected_service_capabilities(client: &[ServiceCapability]) -> Vec<ServiceCapability> {
+    let mut selected = client
+        .iter()
+        .filter_map(|capability| {
+            let supported = match (capability.kind, capability.operation.as_str()) {
+                (ServiceKind::Clock, LOCAL_DATE_TIME_OPERATION) => {
+                    LOCAL_DATE_TIME_OPERATION_VERSION
+                }
+                (ServiceKind::Entropy, RANDOM_SEED_OPERATION) => RANDOM_SEED_OPERATION_VERSION,
+                (ServiceKind::InputState, GET_KEY_STATE_OPERATION) => {
+                    GET_KEY_STATE_OPERATION_VERSION
+                }
+                (ServiceKind::Image, IMAGE_METADATA_OPERATION) => IMAGE_METADATA_OPERATION_VERSION,
+                (ServiceKind::Image, IMAGE_PIXEL_OPERATION) => IMAGE_PIXEL_OPERATION_VERSION,
+                (ServiceKind::Network, UPDATE_CHECK_OPERATION) => UPDATE_CHECK_OPERATION_VERSION,
+                (ServiceKind::OpenUrl, OPEN_URL_OPERATION) => OPEN_URL_OPERATION_VERSION,
+                _ => return None,
+            };
+            negotiate_version(capability.versions, VersionRange::exact(supported)).map(|version| {
+                ServiceCapability {
+                    kind: capability.kind,
+                    operation: capability.operation.clone(),
+                    versions: VersionRange::exact(version),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    selected.sort_by(|left, right| {
+        (left.kind, left.operation.as_str()).cmp(&(right.kind, right.operation.as_str()))
+    });
+    selected.dedup_by(|left, right| left.kind == right.kind && left.operation == right.operation);
+    selected
 }
 
 fn select_locale(preferred: &[String]) -> &'static str {
@@ -4937,6 +6042,23 @@ mod tests {
             column_cells: true,
             separators: true,
             available_fonts: vec!["sans-serif".into()],
+            services: vec![
+                ServiceCapability {
+                    kind: ServiceKind::Clock,
+                    operation: LOCAL_DATE_TIME_OPERATION.into(),
+                    versions: VersionRange::exact(LOCAL_DATE_TIME_OPERATION_VERSION),
+                },
+                ServiceCapability {
+                    kind: ServiceKind::Entropy,
+                    operation: RANDOM_SEED_OPERATION.into(),
+                    versions: VersionRange::exact(RANDOM_SEED_OPERATION_VERSION),
+                },
+                ServiceCapability {
+                    kind: ServiceKind::InputState,
+                    operation: GET_KEY_STATE_OPERATION.into(),
+                    versions: VersionRange::exact(GET_KEY_STATE_OPERATION_VERSION),
+                },
+            ],
         }
     }
 
@@ -5511,6 +6633,101 @@ mod tests {
                 ))
             }),
             _ => false,
+        }));
+    }
+
+    #[test]
+    fn reference_presentation_fixture_preserves_logical_intent() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        submit(
+            &mut session,
+            0,
+            RuntimeMessage::ClientHello(ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "test".into(),
+                features: Vec::new(),
+                requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
+                preferred_locales: vec!["ja".into()],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).expect("hello");
+        drain(&mut session);
+
+        // Keep this body identical to ORACLE_PRESENTATION in the C# fixture so
+        // the oracle and Rust tests exercise the same EraBasic commands.
+        let source = "@SYSTEM_TITLE\nPRINTBUTTON \"A\", 1\nPRINTBUTTONC \"B\", 2\nPRINTBUTTONLC \"C\", 3\nPRINTL\nDRAWLINE\nNOSKIP\nPRINTL VISIBLE\nENDNOSKIP\nRETURN\n";
+        submit(
+            &mut session,
+            1,
+            RuntimeMessage::ProjectManifest(ProjectManifest {
+                project_revision: 1,
+                files: vec![SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(source.into()),
+                    content_hash: None,
+                }],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).expect("load");
+        drain(&mut session);
+        submit(
+            &mut session,
+            2,
+            RuntimeMessage::Start(StartRequest {
+                mode: StartMode::NewGame { seed: Some(1) },
+            }),
+        );
+        for _ in 0..16 {
+            session.drive(RuntimeDriveBudget::default()).expect("run");
+            if session.phase() == RuntimePhase::Ready {
+                break;
+            }
+        }
+        let output = drain(&mut session);
+        let snapshot = output
+            .iter()
+            .filter_map(|message| match message {
+                RuntimeMessage::PresentationSnapshot(snapshot) => Some(snapshot),
+                _ => None,
+            })
+            .next_back()
+            .expect("presentation snapshot");
+
+        assert!(snapshot.lines.iter().any(|line| {
+            line.runs.iter().any(|run| {
+                matches!(
+                    run,
+                    era_runtime_protocol::DisplayRun::Button { runs, .. }
+                        if runs.iter().any(|run| matches!(
+                            run,
+                            era_runtime_protocol::DisplayRun::Text { text, .. } if text == "A"
+                        ))
+                )
+            })
+        }));
+        assert_eq!(
+            snapshot
+                .lines
+                .iter()
+                .flat_map(|line| &line.runs)
+                .filter(|run| matches!(run, era_runtime_protocol::DisplayRun::ColumnCell { .. }))
+                .count(),
+            2
+        );
+        assert!(snapshot.lines.iter().any(|line| {
+            line.runs
+                .iter()
+                .any(|run| matches!(run, era_runtime_protocol::DisplayRun::Separator { .. }))
+        }));
+        assert!(snapshot.lines.iter().any(|line| {
+            line.runs.iter().any(|run| {
+                matches!(
+                    run,
+                    era_runtime_protocol::DisplayRun::Text { text, .. } if text == "VISIBLE"
+                )
+            })
         }));
     }
 
@@ -6143,7 +7360,7 @@ mod tests {
                     SubmittedFile {
                         relative_path: "resources.csv".into(),
                         category: FileCategory::ResourceManifest,
-                        payload: FilePayload::Utf8("name,path".into()),
+                        payload: FilePayload::Utf8("; name,path".into()),
                         content_hash: None,
                     },
                 ],
@@ -6164,7 +7381,7 @@ mod tests {
         assert_eq!(snapshot.resources[0].relative_path, "resources.csv");
         assert_eq!(
             snapshot.resources[0].payload_digest,
-            *blake3::hash(b"name,path").as_bytes()
+            *blake3::hash(b"; name,path").as_bytes()
         );
         assert_ne!(snapshot.project_identity, [0; 32]);
     }
@@ -6232,6 +7449,7 @@ mod tests {
             result_name: Some("RESULT".into()),
             choices: BTreeMap::from([(selection, VmValue::Integer(42))]),
             timeout_duration_ns: Some(10),
+            post_input: None,
         };
         let input = era_runtime_protocol::PrimitiveInput {
             input_type: 1,
@@ -6278,10 +7496,140 @@ mod tests {
     }
 
     #[test]
+    fn project_resource_metadata_is_frontend_decoded_before_load_commit() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        let mut client = capabilities();
+        client.graphics = true;
+        client.services.push(ServiceCapability {
+            kind: ServiceKind::Image,
+            operation: IMAGE_METADATA_OPERATION.into(),
+            versions: VersionRange::exact(IMAGE_METADATA_OPERATION_VERSION),
+        });
+        submit(
+            &mut session,
+            0,
+            RuntimeMessage::ClientHello(ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "resource-test".into(),
+                features: Vec::new(),
+                requested_limits: RuntimeOptions::default().limits,
+                capabilities: client,
+                preferred_locales: vec!["en".into()],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let _ = drain(&mut session);
+        submit(
+            &mut session,
+            1,
+            RuntimeMessage::ProjectManifest(ProjectManifest {
+                project_revision: 1,
+                files: vec![
+                    SubmittedFile {
+                        relative_path: "main.erb".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                        content_hash: None,
+                    },
+                    SubmittedFile {
+                        relative_path: "resources/sprites.csv".into(),
+                        category: FileCategory::ResourceManifest,
+                        payload: FilePayload::Utf8("FACE,face.png".into()),
+                        content_hash: None,
+                    },
+                    SubmittedFile {
+                        relative_path: "resources/face.png".into(),
+                        category: FileCategory::Resource,
+                        payload: FilePayload::Bytes(ProtocolBytes::new(vec![1, 2, 3])),
+                        content_hash: None,
+                    },
+                ],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let messages = drain(&mut session);
+        assert!(
+            !messages
+                .iter()
+                .any(|message| matches!(message, RuntimeMessage::ProjectLoadReport(_)))
+        );
+        let request_id = messages
+            .iter()
+            .find_map(|message| match message {
+                RuntimeMessage::ServiceRequest(request)
+                    if request.operation == IMAGE_METADATA_OPERATION =>
+                {
+                    Some(request.request_id)
+                }
+                _ => None,
+            })
+            .expect("image metadata request");
+        submit(
+            &mut session,
+            2,
+            RuntimeMessage::ServiceResponse(ServiceResponse {
+                request_id,
+                result: ServiceResult::Ready {
+                    payload: ProtocolBytes::new(
+                        encode_canonical(&ImageMetadataResponse {
+                            width: 32,
+                            height: 16,
+                            format: "png".into(),
+                            animated: false,
+                        })
+                        .unwrap(),
+                    ),
+                },
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        assert!(drain(&mut session).iter().any(|message| {
+            matches!(message, RuntimeMessage::ProjectLoadReport(report) if report.success)
+        }));
+        assert_eq!(
+            session
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.sprite("face"))
+                .map(|sprite| (sprite.width, sprite.height)),
+            Some((32, 16))
+        );
+    }
+
+    #[test]
     fn font_profile_is_session_fixed_case_insensitive_and_deterministic() {
         let mut requested = capabilities();
         requested.available_fonts = vec!["Zeta".into(), "alpha".into(), "ALPHA".into()];
         let selected = selected_capabilities(&requested);
         assert_eq!(selected.available_fonts, vec!["alpha", "Zeta"]);
+    }
+
+    #[test]
+    fn effect_acknowledgements_are_exact_and_failures_become_diagnostics() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        session.state = SessionState::Active;
+        session.epoch = SessionEpoch(1);
+        session
+            .emit_effect(EffectKind::StartAnimation("flash".into()))
+            .expect("emit effect");
+        let _ = drain(&mut session);
+        session
+            .handle_message(
+                10,
+                RuntimeMessage::EffectAcknowledgement(EffectAcknowledgement {
+                    outcomes: vec![era_runtime_protocol::EffectOutcome {
+                        effect_id: 1,
+                        status: EffectOutcomeStatus::Failed,
+                        message: Some("device unavailable".into()),
+                    }],
+                }),
+            )
+            .expect("acknowledge effect");
+        assert!(session.effect_journal.is_empty());
+        assert!(matches!(
+            drain(&mut session).as_slice(),
+            [RuntimeMessage::Diagnostic(ProtocolDiagnostic { code, .. })]
+                if code == "runtime.device_effect_failed"
+        ));
     }
 }

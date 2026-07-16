@@ -9,6 +9,8 @@ use crate::host::{ExternalCompletion, PendingInput};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum PendingService {
     StartEntropy,
+    ProjectImageMetadata { relative_path: String },
+    PlatformEffect { operation: String },
     Host(ExternalCompletion),
 }
 

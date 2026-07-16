@@ -282,6 +282,104 @@ pub struct AudioState {
     pub revision: u64,
 }
 
+/// Canonical tooltip policy. A frontend may project the font and timing to its
+/// platform, but it must not invent different game-visible tooltip contents.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct TooltipSettings {
+    #[n(0)]
+    pub foreground: Color,
+    #[n(1)]
+    pub background: Color,
+    #[n(2)]
+    pub delay_ms: u32,
+    #[n(3)]
+    pub duration_ms: u32,
+    #[n(4)]
+    pub font_family: Option<String>,
+    #[n(5)]
+    pub font_millipoints: u32,
+    #[n(6)]
+    pub custom: bool,
+    #[n(7)]
+    pub format: i64,
+    #[n(8)]
+    pub images: bool,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct SpriteFrameReplay {
+    #[n(0)]
+    pub resource_id: String,
+    #[n(1)]
+    pub source_rectangle: [i32; 4],
+    #[n(2)]
+    pub offset: [i32; 2],
+    #[n(3)]
+    pub delay_ms: u32,
+    #[n(4)]
+    pub destination_size: Option<[u32; 2]>,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct SpriteReplay {
+    #[n(0)]
+    pub name: String,
+    #[n(1)]
+    pub size: [u32; 2],
+    #[n(2)]
+    pub position: [i32; 2],
+    #[n(3)]
+    pub frames: Vec<SpriteFrameReplay>,
+    #[n(4)]
+    pub canvas_id: Option<i64>,
+    #[n(5)]
+    pub canvas_rectangle: Option<[i32; 4]>,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CanvasReplayCommand {
+    #[n(0)]
+    Clear {
+        #[n(0)]
+        argb: u32,
+        #[n(1)]
+        rectangle: Option<[i32; 4]>,
+    },
+    #[n(1)]
+    DrawSprite {
+        #[n(0)]
+        name: String,
+        #[n(1)]
+        destination: [i32; 4],
+    },
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct CanvasReplay {
+    #[n(0)]
+    pub canvas_id: i64,
+    #[n(1)]
+    pub width: u32,
+    #[n(2)]
+    pub height: u32,
+    #[n(3)]
+    pub commands: Vec<CanvasReplayCommand>,
+}
+
+#[derive(Clone, Debug, Default, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ResourceReplay {
+    #[n(0)]
+    pub sprites: Vec<SpriteReplay>,
+    #[n(1)]
+    pub canvases: Vec<CanvasReplay>,
+}
+
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct PresentationSnapshot {
@@ -299,6 +397,10 @@ pub struct PresentationSnapshot {
     pub input_wait: Option<InputWait>,
     #[n(6)]
     pub settings: PresentationSettings,
+    #[n(7)]
+    pub tooltip: TooltipSettings,
+    #[n(8)]
+    pub resources: ResourceReplay,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

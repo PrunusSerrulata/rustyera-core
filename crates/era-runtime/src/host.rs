@@ -10,6 +10,12 @@ pub(crate) struct PendingInput {
     pub(crate) result_name: Option<String>,
     pub(crate) choices: std::collections::BTreeMap<InteractionToken, VmValue>,
     pub(crate) timeout_duration_ns: Option<u64>,
+    pub(crate) post_input: Option<PostInputAction>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) enum PostInputAction {
+    OpenUrl { url: String, trigger_value: i64 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -23,6 +29,12 @@ pub(crate) enum ExternalCompletion {
         request: HostRequestId,
         operation: ClockOperation,
         result: Option<BytecodeType>,
+    },
+    SpritePixel {
+        request: HostRequestId,
+    },
+    UpdateCheck {
+        request: HostRequestId,
     },
 }
 
@@ -133,6 +145,7 @@ pub(crate) fn input_wait(
         choices: std::collections::BTreeMap::new(),
         timeout_duration_ns: (timelimit_ms > 0)
             .then(|| timelimit_ms.cast_unsigned().saturating_mul(1_000_000)),
+        post_input: None,
     })
 }
 
@@ -153,13 +166,26 @@ fn string(value: Option<&VmValue>) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use erabasic_bytecode::{
-        HostCapability, HostEffect, HostImport, HostSnapshotCapability, RuntimeImport, SymbolKey,
+        CapabilityFallback, HostCapability, HostImport, HostSnapshotCapability, OperationContract,
+        OperationDebugPolicy, OperationHotReloadPolicy, OperationPersistence,
+        OperationSnapshotPolicy, OperationState, OperationWaitPolicy, RuntimeImport, SymbolKey,
+        TransactionPolicy,
     };
     use erabasic_vm::{FiberId, GenerationId, HostRequestId, VmExecutionOrigin};
 
     use super::*;
 
     fn request(name: &str, arguments: Vec<VmValue>) -> VmHostRequest {
+        let contract = OperationContract {
+            state: OperationState::Controller,
+            transaction: TransactionPolicy::Forbidden,
+            persistence: OperationPersistence::RuntimeOnly,
+            snapshot: OperationSnapshotPolicy::Included,
+            hot_reload: OperationHotReloadPolicy::Preserve,
+            wait: OperationWaitPolicy::StableInput,
+            capability_fallback: CapabilityFallback::ScriptResult,
+            debug: OperationDebugPolicy::Forbidden,
+        };
         VmHostRequest {
             id: HostRequestId(1),
             fiber: FiberId(1),
@@ -172,12 +198,10 @@ mod tests {
                     parameters: Vec::new(),
                     result: None,
                 },
-                effect: HostEffect {
-                    may_suspend: true,
-                    ..HostEffect::default()
-                },
+                effect: contract.effect(),
                 capability: HostCapability::Input,
                 snapshot_capability: HostSnapshotCapability::StableWait,
+                contract,
             },
             arguments,
             origin: VmExecutionOrigin {

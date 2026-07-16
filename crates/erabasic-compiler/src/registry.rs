@@ -1,7 +1,11 @@
 use std::collections::BTreeMap;
 
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
-use erabasic_bytecode::{HostCapability, HostEffect, HostSnapshotCapability};
+use erabasic_bytecode::{
+    CapabilityFallback, HostCapability, HostEffect, HostSnapshotCapability, OperationContract,
+    OperationDebugPolicy, OperationHotReloadPolicy, OperationPersistence, OperationSnapshotPolicy,
+    OperationState, OperationWaitPolicy, TransactionPolicy,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -12,11 +16,12 @@ pub struct HostBinding {
     pub effect: HostEffect,
     pub capability: HostCapability,
     pub snapshot_capability: HostSnapshotCapability,
+    pub contract: OperationContract,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExecutionBinding {
-    Native,
+    Native(OperationContract),
     Host(HostBinding),
     Unsupported { reason: String },
 }
@@ -54,7 +59,7 @@ impl HostRegistry {
     pub fn resolve(&self, era_name: &str) -> Option<HostBinding> {
         match self.classification(era_name) {
             Some(ExecutionBinding::Host(binding)) => Some(binding.clone()),
-            Some(ExecutionBinding::Native | ExecutionBinding::Unsupported { .. }) | None => None,
+            Some(ExecutionBinding::Native(_) | ExecutionBinding::Unsupported { .. }) | None => None,
         }
     }
 }
@@ -66,10 +71,11 @@ pub fn default_host_registry() -> HostRegistry {
         .into_iter()
         .chain(builtin_function_names())
     {
+        let contract = native_contract(&name);
         registry
             .bindings
             .entry(name)
-            .or_insert(ExecutionBinding::Native);
+            .or_insert(ExecutionBinding::Native(contract));
     }
 
     register_hosts(
@@ -144,31 +150,20 @@ fn register_hosts(
     names: &[&str],
     namespace: &str,
     capability: HostCapability,
-    may_suspend: bool,
+    _may_suspend: bool,
 ) {
     for name in names {
+        let contract = host_contract(namespace, name);
         registry.register(
             *name,
             HostBinding {
                 namespace: namespace.into(),
                 name: name.to_ascii_lowercase(),
                 abi_version: 1,
-                effect: HostEffect {
-                    pure: false,
-                    may_suspend,
-                    may_error: true,
-                    mutates_runtime: true,
-                },
+                effect: contract.effect(),
                 capability,
-                snapshot_capability: if namespace == "rustyera.input"
-                    && !matches!(*name, "AWAIT" | "GETKEY" | "GETKEYTRIGGERED")
-                {
-                    HostSnapshotCapability::StableWait
-                } else if may_suspend {
-                    HostSnapshotCapability::Never
-                } else {
-                    HostSnapshotCapability::StableWait
-                },
+                snapshot_capability: contract.snapshot_capability(),
+                contract,
             },
         );
     }
@@ -478,17 +473,199 @@ const SYSTEM: &[&str] = &[
 const NETWORK: &[&str] = &["UPDATECHECK"];
 
 pub(crate) fn extension_binding(name: &str) -> HostBinding {
+    let contract = OperationContract {
+        state: OperationState::External,
+        transaction: TransactionPolicy::Forbidden,
+        persistence: OperationPersistence::RuntimeOnly,
+        snapshot: OperationSnapshotPolicy::PendingBlocks,
+        hot_reload: OperationHotReloadPolicy::ActiveBlocks,
+        wait: OperationWaitPolicy::TransientExternal,
+        capability_fallback: CapabilityFallback::Unsupported,
+        debug: OperationDebugPolicy::Forbidden,
+    };
     HostBinding {
         namespace: "rustyera.extension".into(),
         name: name.to_ascii_lowercase(),
         abi_version: 1,
-        effect: HostEffect {
-            pure: false,
-            may_suspend: true,
-            may_error: true,
-            mutates_runtime: true,
-        },
+        effect: contract.effect(),
         capability: HostCapability::Extension,
         snapshot_capability: HostSnapshotCapability::Never,
+        contract,
+    }
+}
+
+fn native_contract(name: &str) -> OperationContract {
+    let name = name.to_ascii_lowercase();
+    let structured =
+        name.starts_with("map_") || name.starts_with("xml_") || name.starts_with("dt_");
+    let random = matches!(
+        name.as_str(),
+        "rand" | "randomize" | "initrand" | "dumprand"
+    );
+    let variable_mutation = matches!(
+        name.as_str(),
+        "swap"
+            | "swapvar"
+            | "arrayremove"
+            | "arrayshift"
+            | "arraysort"
+            | "arraycopy"
+            | "varset"
+            | "cvarset"
+            | "arraymsort"
+            | "arraymsortex"
+            | "addchara"
+            | "addspchara"
+            | "adddefchara"
+            | "addvoidchara"
+            | "delchara"
+            | "delallchara"
+            | "swapchara"
+            | "copychara"
+            | "addcopychara"
+            | "pickupchara"
+            | "sortchara"
+            | "reset_stain"
+    );
+    let mutable = structured || random || variable_mutation;
+    OperationContract {
+        state: if structured || random {
+            OperationState::Native
+        } else if variable_mutation {
+            OperationState::Vm
+        } else {
+            OperationState::Pure
+        },
+        transaction: if mutable {
+            TransactionPolicy::CloneCommit
+        } else {
+            TransactionPolicy::ReadOnly
+        },
+        persistence: if structured {
+            OperationPersistence::ExtensionScoped
+        } else if variable_mutation {
+            OperationPersistence::VariableScoped
+        } else if random {
+            OperationPersistence::RuntimeOnly
+        } else {
+            OperationPersistence::None
+        },
+        snapshot: OperationSnapshotPolicy::Included,
+        hot_reload: OperationHotReloadPolicy::Preserve,
+        wait: OperationWaitPolicy::Immediate,
+        capability_fallback: CapabilityFallback::NotApplicable,
+        debug: if mutable {
+            OperationDebugPolicy::Transactional
+        } else {
+            OperationDebugPolicy::Pure
+        },
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn host_contract(namespace: &str, name: &str) -> OperationContract {
+    let (state, transaction, persistence, snapshot, hot_reload, wait, fallback) = match namespace {
+        "rustyera.text" => (
+            OperationState::Presentation,
+            TransactionPolicy::CloneCommit,
+            OperationPersistence::RuntimeOnly,
+            OperationSnapshotPolicy::Included,
+            OperationHotReloadPolicy::Preserve,
+            OperationWaitPolicy::Immediate,
+            CapabilityFallback::CanonicalProjection,
+        ),
+        "rustyera.audio" => (
+            OperationState::Presentation,
+            TransactionPolicy::BufferedEffect,
+            OperationPersistence::RuntimeOnly,
+            OperationSnapshotPolicy::Included,
+            OperationHotReloadPolicy::Rebuild,
+            OperationWaitPolicy::Immediate,
+            CapabilityFallback::IntentNoOp,
+        ),
+        "rustyera.graphics" if matches!(name, "GLOAD" | "GSAVE" | "GCREATEFROMFILE") => (
+            OperationState::External,
+            TransactionPolicy::Forbidden,
+            OperationPersistence::ProjectDerived,
+            OperationSnapshotPolicy::PendingBlocks,
+            OperationHotReloadPolicy::ActiveBlocks,
+            OperationWaitPolicy::TransientExternal,
+            CapabilityFallback::Unsupported,
+        ),
+        "rustyera.graphics" => (
+            OperationState::Presentation,
+            TransactionPolicy::CloneCommit,
+            OperationPersistence::RuntimeOnly,
+            OperationSnapshotPolicy::Included,
+            OperationHotReloadPolicy::Rebuild,
+            OperationWaitPolicy::Immediate,
+            CapabilityFallback::ScriptResult,
+        ),
+        "rustyera.input" if matches!(name, "GETKEY" | "GETKEYTRIGGERED" | "AWAIT") => (
+            OperationState::Controller,
+            TransactionPolicy::Forbidden,
+            OperationPersistence::RuntimeOnly,
+            OperationSnapshotPolicy::PendingBlocks,
+            OperationHotReloadPolicy::ActiveBlocks,
+            OperationWaitPolicy::TransientExternal,
+            CapabilityFallback::ScriptResult,
+        ),
+        "rustyera.input" => (
+            OperationState::Controller,
+            TransactionPolicy::Forbidden,
+            OperationPersistence::RuntimeOnly,
+            OperationSnapshotPolicy::Included,
+            OperationHotReloadPolicy::Preserve,
+            OperationWaitPolicy::StableInput,
+            CapabilityFallback::ScriptResult,
+        ),
+        "rustyera.clock" | "rustyera.network" => (
+            OperationState::External,
+            TransactionPolicy::Forbidden,
+            OperationPersistence::None,
+            OperationSnapshotPolicy::PendingBlocks,
+            OperationHotReloadPolicy::ActiveBlocks,
+            OperationWaitPolicy::TransientExternal,
+            CapabilityFallback::ScriptResult,
+        ),
+        "rustyera.storage" => (
+            OperationState::External,
+            TransactionPolicy::Forbidden,
+            OperationPersistence::Ordinary,
+            OperationSnapshotPolicy::PendingBlocks,
+            OperationHotReloadPolicy::ActiveBlocks,
+            OperationWaitPolicy::TransientExternal,
+            CapabilityFallback::Unsupported,
+        ),
+        "rustyera.system" => (
+            OperationState::Controller,
+            TransactionPolicy::CloneCommit,
+            OperationPersistence::RuntimeOnly,
+            OperationSnapshotPolicy::Included,
+            OperationHotReloadPolicy::Preserve,
+            OperationWaitPolicy::Immediate,
+            CapabilityFallback::NotApplicable,
+        ),
+        _ => (
+            OperationState::External,
+            TransactionPolicy::Forbidden,
+            OperationPersistence::RuntimeOnly,
+            OperationSnapshotPolicy::PendingBlocks,
+            OperationHotReloadPolicy::ActiveBlocks,
+            OperationWaitPolicy::TransientExternal,
+            CapabilityFallback::Unsupported,
+        ),
+    };
+    OperationContract {
+        state,
+        transaction,
+        persistence,
+        snapshot,
+        hot_reload,
+        wait,
+        capability_fallback: fallback,
+        // The debugger deliberately rejects every Host import, including reference
+        // METHOD_SAFE printing and media commands.
+        debug: OperationDebugPolicy::Forbidden,
     }
 }

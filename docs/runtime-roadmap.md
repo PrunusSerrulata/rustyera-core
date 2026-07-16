@@ -312,6 +312,11 @@ No additional reference conflict or user choice is introduced by this split.
 
 ## Batch 10: runtime-surface compatibility and transaction substrate
 
+Status: completed on 2026-07-16. The frozen classification gate is published in
+[`runtime-operation-contracts.md`](runtime-operation-contracts.md). Completion includes stable,
+tested intentional-difference diagnostics for the physical presentation queries and unimplemented
+GDI-dependent Host tail; it does not claim those operations produce reference WinForms pixels.
+
 Implement in this dependency order:
 
 Items 1 and 2 are independent foundations and may proceed in parallel. Item 3 depends on the
@@ -350,6 +355,14 @@ convergence path and begin only after items 1--4 have fixed their public behavio
 Batch 10 must not implement candidate `SAVEINFO` writes against a partially classified runtime.
 It is complete only when Batch 11 can clone or reject every operation reachable during candidate
 execution without consulting frontend/device state synchronously.
+
+Delivered details: mutable XML and the fixed XPath subset; reference-shaped DataTable XSD/XML;
+logical-line/button/skip behavior; resource manifests, image metadata and pixel services;
+canvas/dynamic-sprite replay state; backgrounds and tooltip policy; logical audio plus exact
+one-shot effect outcomes; typed update/open-URL services and focus state; bytecode-persisted
+operation contracts; and parser-backed atomic safe-console expressions. New or changed image bytes
+during hot reload deliberately require a full project load, while unchanged resource metadata and
+runtime-created replay state are preserved. Candidate save writes remain deferred to Batch 11.
 
 ## Batch 11: persistence, controller and final compatibility closure
 

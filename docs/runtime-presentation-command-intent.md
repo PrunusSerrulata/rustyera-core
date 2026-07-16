@@ -1,7 +1,8 @@
 # Runtime presentation command intent notes
 
-本文暂存对 `GETDISPLAYLINE`、Emuera HTML 辅助函数、`PRINTC`、`GETLINESTR` 和
-`DRAWLINE` 的参考实现调研，以及面向 Runtime—前端分离架构的后续实现方案。
+本文记录对 `GETDISPLAYLINE`、Emuera HTML 辅助函数、`PRINTC`、`GETLINESTR` 和
+`DRAWLINE` 的参考实现调研，以及 Runtime—前端分离架构采用的实现方案。该方案已在
+runtime protocol 11.0 落地；本文保留调研依据。
 
 ## 调研结论
 
@@ -26,10 +27,9 @@
 - `reference/eraTW-minimal/ERB/NEWGAME/NEWGAME_UTILS.ERB` 和事件脚本使用
   `DRAWLINE` 分隔交互区域与消息。
 
-当前编译器目录已经认识这些名称，但首阶段 Runtime 仅把所有 `PRINT*` 和
-`DRAWLINE` 当作普通文本追加，并为每次追加创建独立逻辑行。因此当前实现不能表达
-连续 `PRINTC` 单元构成的一行菜单，无参数的 `DRAWLINE` 也只会产生空文本行；上述
-查询和 HTML 函数则会成为不支持的 Host import。
+当前 Runtime 已用逻辑行缓冲、`ColumnCell` 和 `Separator` 表达这些命令，并提供确定性
+纯文本投影。六个依赖 WinForms 物理行/字体度量的查询仍按下文决定返回稳定的
+`UnsupportedRuntimeFeature`。
 
 ## 已选择的设计方向
 
@@ -84,7 +84,7 @@ DisplayRun::ColumnCell {
 函数时应产生带命令名和源码位置的稳定 `UnsupportedRuntimeFeature` 故障，不得静默
 返回空串并改变脚本分支。语言前端和编译器仍可保留其名称与签名。
 
-## 建议实施顺序
+## 已完成的实施顺序
 
 1. 扩展展示协议，加入 `ColumnCell` 和 `Separator`，并同步更新协议版本和 C ABI。
 2. 将 Runtime 展示模型改为真正的逻辑行缓冲区。

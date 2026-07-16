@@ -3,11 +3,13 @@ use era_protocol::{
     decode_canonical, encode_canonical,
 };
 use era_runtime_protocol::{
-    AdvanceTime, EffectBatch, EffectEvent, EffectKind, ExitReason, ExitRequested, FrontendInput,
-    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
-    GetKeyStateResponse, InputIntent, InteractionToken, PrimitiveInput, RUNTIME_PROTOCOL_VERSION,
-    RuntimeMessage, ServiceKind, ServiceRequest, StateExportChunkRequest, StateExportKind,
-    StateImportBegin, StorageNamespace, StorageOperation, StorageRequest, validate_relative_path,
+    AdvanceTime, AudioEffect, AudioEffectAction, CanvasReplay, CanvasReplayCommand,
+    EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcome,
+    EffectOutcomeStatus, ExitReason, ExitRequested, FrontendInput, GET_KEY_STATE_OPERATION,
+    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
+    InteractionToken, PrimitiveInput, RUNTIME_PROTOCOL_VERSION, ResourceReplay, RuntimeMessage,
+    ServiceKind, ServiceRequest, StateExportChunkRequest, StateExportKind, StateImportBegin,
+    StorageNamespace, StorageOperation, StorageRequest, validate_relative_path,
 };
 
 #[test]
@@ -102,7 +104,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(10, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(11, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -141,7 +143,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(10, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(11, 0));
 }
 
 #[test]
@@ -216,9 +218,43 @@ fn transient_effects_have_an_independent_idempotent_stream() {
     let message = RuntimeMessage::EffectBatch(EffectBatch {
         effects: vec![EffectEvent {
             effect_id: 4,
-            kind: EffectKind::PlaySound("click".into()),
+            kind: EffectKind::Audio(AudioEffect {
+                channel_id: 0,
+                action: AudioEffectAction::Play,
+                resource_id: Some("click".into()),
+                repeat_count: 1,
+                volume_millionths: 1_000_000,
+            }),
         }],
     });
     let encoded = message.encode_payload().expect("encode effect batch");
     assert_eq!(RuntimeMessage::decode_payload(42, &encoded), Ok(message));
+
+    let acknowledgement = EffectAcknowledgement {
+        outcomes: vec![EffectOutcome {
+            effect_id: 4,
+            status: EffectOutcomeStatus::Failed,
+            message: Some("device unavailable".into()),
+        }],
+    };
+    let encoded = encode_canonical(&acknowledgement).expect("encode effect outcome");
+    assert_eq!(decode_canonical(&encoded), Ok(acknowledgement));
+}
+
+#[test]
+fn resource_replay_is_a_renderer_independent_protocol_value() {
+    let replay = ResourceReplay {
+        sprites: Vec::new(),
+        canvases: vec![CanvasReplay {
+            canvas_id: 3,
+            width: 64,
+            height: 32,
+            commands: vec![CanvasReplayCommand::Clear {
+                argb: 0xff00_ff00,
+                rectangle: None,
+            }],
+        }],
+    };
+    let encoded = encode_canonical(&replay).expect("encode resource replay");
+    assert_eq!(decode_canonical(&encoded), Ok(replay));
 }

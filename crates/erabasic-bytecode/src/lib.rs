@@ -20,8 +20,10 @@ pub use artifact::{
 };
 pub use codec::{DecodeError, EncodeError, decode_artifact, encode_artifact};
 pub use host::{
-    HostCapability, HostEffect, HostImport, HostSnapshotCapability, NativeImport, RuntimeImport,
-    RuntimeImportKind,
+    CapabilityFallback, HostCapability, HostEffect, HostImport, HostSnapshotCapability,
+    NativeImport, OperationContract, OperationDebugPolicy, OperationHotReloadPolicy,
+    OperationPersistence, OperationSnapshotPolicy, OperationState, OperationWaitPolicy,
+    RuntimeImport, RuntimeImportKind, TransactionPolicy,
 };
 pub use ids::{Digest, SymbolKey};
 pub use isa::{BytecodeType, EncodedInstruction, Opcode, opcode};

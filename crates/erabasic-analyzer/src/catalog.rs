@@ -831,44 +831,81 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
             false,
         );
     }
-    for name in ["XML_SET", "XML_SET_BYNAME"] {
+    add(
+        "XML_SET",
+        IntType,
+        &[IntegerOrMutableString, String, String, Integer, Integer],
+        3,
+        false,
+    );
+    add(
+        "XML_SET_BYNAME",
+        IntType,
+        &[String, String, String, Integer, Integer],
+        3,
+        false,
+    );
+    add(
+        "XML_ADDNODE",
+        IntType,
+        &[IntegerOrMutableString, String, String, Integer, Integer],
+        3,
+        false,
+    );
+    add(
+        "XML_ADDNODE_BYNAME",
+        IntType,
+        &[String, String, String, Integer, Integer],
+        3,
+        false,
+    );
+    add(
+        "XML_ADDATTRIBUTE",
+        IntType,
+        &[
+            IntegerOrMutableString,
+            String,
+            String,
+            String,
+            Integer,
+            Integer,
+        ],
+        3,
+        false,
+    );
+    add(
+        "XML_ADDATTRIBUTE_BYNAME",
+        IntType,
+        &[String, String, String, String, Integer, Integer],
+        3,
+        false,
+    );
+    for name in ["XML_REMOVENODE", "XML_REMOVEATTRIBUTE"] {
         add(
             name,
             IntType,
-            &[Any, String, String, Integer, Integer],
-            3,
+            &[IntegerOrMutableString, String, Integer],
+            2,
             false,
         );
     }
-    for name in ["XML_ADDNODE", "XML_ADDNODE_BYNAME"] {
-        add(
-            name,
-            IntType,
-            &[Any, String, String, Integer, Integer],
-            3,
-            false,
-        );
+    for name in ["XML_REMOVENODE_BYNAME", "XML_REMOVEATTRIBUTE_BYNAME"] {
+        add(name, IntType, &[String, String, Integer], 2, false);
     }
-    for name in ["XML_ADDATTRIBUTE", "XML_ADDATTRIBUTE_BYNAME"] {
-        add(
-            name,
-            IntType,
-            &[Any, String, String, String, Integer, Integer],
-            3,
-            false,
-        );
-    }
-    for name in [
-        "XML_REMOVENODE",
-        "XML_REMOVENODE_BYNAME",
-        "XML_REMOVEATTRIBUTE",
-        "XML_REMOVEATTRIBUTE_BYNAME",
-    ] {
-        add(name, IntType, &[Any, String, Integer], 2, false);
-    }
-    for name in ["XML_REPLACE", "XML_REPLACE_BYNAME"] {
-        add(name, IntType, &[Any, String, String, Integer], 2, false);
-    }
+    add(
+        "XML_REPLACE",
+        IntType,
+        &[IntegerOrMutableString, String, String, Integer],
+        2,
+        false,
+    );
+    add(
+        "XML_REPLACE_BYNAME",
+        IntType,
+        &[String, String, String, Integer],
+        2,
+        false,
+    );
 
     for name in [
         "DT_CREATE",

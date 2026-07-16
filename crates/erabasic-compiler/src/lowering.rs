@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use erabasic_ast::{AssignOp, BinaryOp, PostfixOp, UnaryOp};
 use erabasic_bytecode::{
     BytecodeFunction, BytecodeParameter, BytecodeType, Digest, EncodedInstruction, FunctionImport,
-    HostEffect, HostImport, ImportKind, NATIVE_ABI_VERSION, NativeImport, Opcode, RuntimeImport,
+    HostImport, ImportKind, NATIVE_ABI_VERSION, NativeImport, Opcode, RuntimeImport,
     SourceMapEntry, SymbolKey, opcode,
 };
 use erabasic_hir::{
@@ -390,6 +390,18 @@ impl<'a> Builder<'a> {
         location: SourceLocation,
     ) {
         let name = target.name();
+        if matches!(name, "NOSKIP" | "ENDNOSKIP") {
+            // The analyzer's block edge uses the ordinary conditional-branch shape.
+            // NOSKIP therefore produces an internal true value while ENDNOSKIP is void.
+            self.emit_runtime_call(
+                name,
+                &[],
+                (name == "NOSKIP").then_some(BytecodeType::Integer),
+                false,
+                location,
+            );
+            return;
+        }
         if matches!(
             name,
             "IF" | "ELSE"
@@ -415,8 +427,6 @@ impl<'a> Builder<'a> {
                 | "STRDATA"
                 | "TRYLIST"
                 | "ENDLIST"
-                | "NOSKIP"
-                | "ENDNOSKIP"
         ) {
             let parameter_types: Vec<_> = arguments
                 .iter()
@@ -433,6 +443,7 @@ impl<'a> Builder<'a> {
                     &format!("control_{}", name.to_ascii_lowercase()),
                     &parameter_types,
                     has_branch.then_some(BytecodeType::Integer),
+                    compiler_native_contract(false),
                     location,
                 );
             }
@@ -732,6 +743,7 @@ impl<'a> Builder<'a> {
                         },
                         &parameters,
                         Some(BytecodeType::String),
+                        compiler_native_contract(true),
                         *location,
                     );
                 }
@@ -808,6 +820,7 @@ impl<'a> Builder<'a> {
                 effect: binding.effect,
                 capability: binding.capability,
                 snapshot_capability: binding.snapshot_capability,
+                contract: binding.contract,
             });
             let index = self.add_import(ImportKind::Host, key);
             self.emit(
@@ -819,8 +832,8 @@ impl<'a> Builder<'a> {
                 ),
                 location,
             );
-        } else if matches!(classification, ExecutionBinding::Native) {
-            self.emit_native_call(name, parameters, result, location);
+        } else if let ExecutionBinding::Native(contract) = classification {
+            self.emit_native_call(name, parameters, result, contract, location);
         } else if let ExecutionBinding::Unsupported { reason } = classification {
             self.diagnostics.push(CompilerDiagnostic::at(
                 CompilerDiagnosticCode::UnsupportedConstruct,
@@ -839,6 +852,7 @@ impl<'a> Builder<'a> {
         name: &str,
         parameters: &[BytecodeType],
         result: Option<BytecodeType>,
+        contract: erabasic_bytecode::OperationContract,
         location: SourceLocation,
     ) {
         let import = runtime_import(
@@ -851,12 +865,8 @@ impl<'a> Builder<'a> {
         let key = import.key;
         self.native_imports.entry(key).or_insert(NativeImport {
             import,
-            effect: HostEffect {
-                pure: false,
-                may_suspend: false,
-                may_error: true,
-                mutates_runtime: true,
-            },
+            effect: contract.effect(),
+            contract,
         });
         let index = self.add_import(ImportKind::Native, key);
         self.emit(
@@ -881,6 +891,28 @@ impl<'a> Builder<'a> {
         let index = self.imports.len();
         self.imports.push(FunctionImport { kind, key });
         u32::try_from(index).unwrap_or(u32::MAX)
+    }
+}
+
+fn compiler_native_contract(pure: bool) -> erabasic_bytecode::OperationContract {
+    use erabasic_bytecode::{
+        CapabilityFallback, OperationContract, OperationDebugPolicy, OperationHotReloadPolicy,
+        OperationPersistence, OperationSnapshotPolicy, OperationState, OperationWaitPolicy,
+        TransactionPolicy,
+    };
+    OperationContract {
+        state: if pure {
+            OperationState::Pure
+        } else {
+            OperationState::Vm
+        },
+        transaction: TransactionPolicy::ReadOnly,
+        persistence: OperationPersistence::None,
+        snapshot: OperationSnapshotPolicy::Included,
+        hot_reload: OperationHotReloadPolicy::Preserve,
+        wait: OperationWaitPolicy::Immediate,
+        capability_fallback: CapabilityFallback::NotApplicable,
+        debug: OperationDebugPolicy::Pure,
     }
 }
 

@@ -11,10 +11,12 @@ era-protocol = { path = "../era-protocol" }
 era-runtime-protocol = { path = "../era-runtime-protocol" }
 era-runtime-save = { path = "../era-runtime-save" }
 erabasic-analyzer = { path = "../erabasic-analyzer" }
+erabasic-ast = { path = "../erabasic-ast" }
 erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-compiler = { path = "../erabasic-compiler" }
 erabasic-csv = { path = "../erabasic-csv" }
 erabasic-data = { path = "../erabasic-data" }
+erabasic-parser = { path = "../erabasic-parser" }
 erabasic-validator = { path = "../erabasic-validator" }
 erabasic-vm = { path = "../erabasic-vm" }
 minicbor.workspace = true

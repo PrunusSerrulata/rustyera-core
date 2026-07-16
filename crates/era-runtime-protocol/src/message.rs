@@ -8,15 +8,16 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AdvanceTime, CancelExternalRequest, ClientHello, ClientStateChanged, CommandRejected,
     DeviceStateChanged, EffectAcknowledgement, EffectBatch, ExitRequested, FrontendInput,
-    PresentationDelta, PresentationSnapshot, ProjectLoadReport, ProjectManifest, ReloadProject,
-    ResynchronizeRequest, RuntimeFault, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement,
-    ServerHello, ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
-    StateExportChunk, StateExportChunkRequest, StateExportReady, StateExportRequest,
-    StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady,
-    StateTransferCancel, StorageRequest, StorageResponse, VersionRejected, WaitChange,
+    PresentationDelta, PresentationSnapshot, ProjectLoadReport, ProjectManifest,
+    ProtocolDiagnostic, ReloadProject, ResynchronizeRequest, RuntimeFault, RuntimePhase,
+    RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceRequest, ServiceResponse,
+    ShutdownReady, ShutdownRequest, StartRequest, StateExportChunk, StateExportChunkRequest,
+    StateExportReady, StateExportRequest, StateImportAccepted, StateImportBegin, StateImportChunk,
+    StateImportCommit, StateImportReady, StateTransferCancel, StorageRequest, StorageResponse,
+    VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(10, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(11, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -120,6 +121,8 @@ pub enum RuntimeMessage {
     CommandRejected(#[n(0)] CommandRejected),
     #[n(96)]
     RuntimeResynchronized(#[n(0)] RuntimeResynchronized),
+    #[n(97)]
+    Diagnostic(#[n(0)] ProtocolDiagnostic),
 }
 
 impl RuntimeMessage {
@@ -166,6 +169,7 @@ impl RuntimeMessage {
             Self::Resynchronize(_) => 94,
             Self::CommandRejected(_) => 95,
             Self::RuntimeResynchronized(_) => 96,
+            Self::Diagnostic(_) => 97,
         }
     }
 

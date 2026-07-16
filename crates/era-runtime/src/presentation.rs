@@ -1,7 +1,8 @@
 use era_runtime_protocol::{
     AudioState, CellAlignment, Color, DisplayLine, DisplayRun, InputWait, InteractionToken,
-    LineAlignment, MediaPlacement, PresentationSettings, PresentationSnapshot, RunLayout,
-    SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
+    LineAlignment, MediaPlacement, PresentationSettings, PresentationSnapshot, ResourceReplay,
+    RunLayout, SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
+    TooltipSettings,
 };
 use erabasic_vm::VmValue;
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,8 @@ pub(crate) struct PresentationModel {
     current_alignment: LineAlignment,
     backgrounds: Vec<MediaPlacement>,
     audio: Vec<AudioState>,
+    tooltip: TooltipSettings,
+    resources: ResourceReplay,
     print_c_per_line: u32,
     print_c_length: u32,
     pending_column_cells: u32,
@@ -69,6 +72,18 @@ impl Default for PresentationModel {
             current_alignment: LineAlignment::Left,
             backgrounds: Vec::new(),
             audio: Vec::new(),
+            tooltip: TooltipSettings {
+                foreground: rgb_color(0),
+                background: rgb_color(0x00ff_ffe1),
+                delay_ms: 500,
+                duration_ms: 5_000,
+                font_family: None,
+                font_millipoints: 9_000,
+                custom: false,
+                format: 0,
+                images: false,
+            },
+            resources: ResourceReplay::default(),
             print_c_per_line: 3,
             print_c_length: 25,
             pending_column_cells: 0,
@@ -158,6 +173,16 @@ impl PresentationModel {
     pub(crate) fn replace_last_temporary(&mut self, text: String) {
         self.delete_last_lines(1);
         self.append_text(text, true);
+    }
+
+    pub(crate) fn print_temporary_line(&mut self, text: String) {
+        if !self.pending_runs.is_empty() && self.pending_temporary {
+            self.pending_runs.clear();
+            self.pending_column_cells = 0;
+        } else if self.lines.last().is_some_and(|line| line.temporary) {
+            self.lines.pop();
+        }
+        self.append_print_text(text, true, true);
     }
 
     pub(crate) fn append_system_text(
@@ -298,6 +323,106 @@ impl PresentationModel {
         self.bump();
     }
 
+    pub(crate) fn set_audio_volume(&mut self, bgm: bool, volume: i64) {
+        let channel_id = u64::from(bgm);
+        let volume = volume.clamp(0, 100);
+        for state in &mut self.audio {
+            if state.channel_id == channel_id || (!bgm && state.channel_id != 1) {
+                state.volume_millionths = u32::try_from(volume).unwrap_or_default() * 10_000;
+                state.revision = self.revision.saturating_add(1);
+            }
+        }
+        self.bump();
+    }
+
+    pub(crate) fn projects_audio(&self) -> bool {
+        self.project_audio
+    }
+
+    pub(crate) fn set_resource_replay(&mut self, resources: ResourceReplay) {
+        self.resources = resources;
+        self.bump();
+    }
+
+    pub(crate) fn add_background(&mut self, resource_id: String, depth: i64, opacity: i64) {
+        self.backgrounds
+            .retain(|item| item.resource_id != resource_id);
+        self.backgrounds.push(MediaPlacement {
+            resource_id,
+            x_millipixels: 0,
+            y_millipixels: 0,
+            width_millipixels: self.settings.drawable_width_millipixels,
+            height_millipixels: 0,
+            depth,
+            opacity_millionths: u32::try_from(opacity.clamp(0, 255)).unwrap_or_default()
+                * 1_000_000
+                / 255,
+            revision: self.revision.saturating_add(1),
+        });
+        self.backgrounds.sort_by(|left, right| {
+            (left.depth, &left.resource_id).cmp(&(right.depth, &right.resource_id))
+        });
+        self.bump();
+    }
+
+    pub(crate) fn remove_background(&mut self, resource_id: &str) {
+        self.backgrounds
+            .retain(|item| item.resource_id != resource_id);
+        self.bump();
+    }
+
+    pub(crate) fn clear_backgrounds(&mut self) {
+        self.backgrounds.clear();
+        self.bump();
+    }
+
+    pub(crate) fn set_tooltip_colors(&mut self, foreground: i64, background: i64) {
+        self.tooltip.foreground = rgb_color(foreground);
+        self.tooltip.background = rgb_color(background);
+        self.bump();
+    }
+
+    pub(crate) fn set_tooltip_delay(&mut self, delay: i64) -> Result<(), &'static str> {
+        self.tooltip.delay_ms =
+            u32::try_from(delay).map_err(|_| "tooltip delay is out of range")?;
+        self.bump();
+        Ok(())
+    }
+
+    pub(crate) fn set_tooltip_duration(&mut self, duration: i64) -> Result<(), &'static str> {
+        let duration = u32::try_from(duration).map_err(|_| "tooltip duration is out of range")?;
+        self.tooltip.duration_ms = duration.min(i16::MAX.cast_unsigned().into());
+        self.bump();
+        Ok(())
+    }
+
+    pub(crate) fn set_tooltip_font(&mut self, family: String) {
+        self.tooltip.font_family = (!family.is_empty()).then_some(family);
+        self.bump();
+    }
+
+    pub(crate) fn set_tooltip_font_size(&mut self, points: i64) -> Result<(), &'static str> {
+        let points = u32::try_from(points).map_err(|_| "tooltip font size is out of range")?;
+        self.tooltip.font_millipoints = points.saturating_mul(1_000);
+        self.bump();
+        Ok(())
+    }
+
+    pub(crate) fn set_tooltip_custom(&mut self, enabled: bool) {
+        self.tooltip.custom = enabled;
+        self.bump();
+    }
+
+    pub(crate) fn set_tooltip_format(&mut self, format: i64) {
+        self.tooltip.format = format;
+        self.bump();
+    }
+
+    pub(crate) fn set_tooltip_images(&mut self, enabled: bool) {
+        self.tooltip.images = enabled;
+        self.bump();
+    }
+
     #[allow(clippy::fn_params_excessive_bools)]
     pub(crate) fn set_projection(
         &mut self,
@@ -368,8 +493,27 @@ impl PresentationModel {
         self.append_button_with_system_text(text, token, Some(SystemTextRef { key, arguments }));
     }
 
-    pub(crate) fn append_button(&mut self, text: String, token: InteractionToken) {
-        self.append_button_with_system_text(text, token, None);
+    pub(crate) fn append_button(
+        &mut self,
+        text: String,
+        token: InteractionToken,
+        column_alignment: Option<CellAlignment>,
+    ) {
+        let button = self.button_run(text, token, None);
+        if let Some(alignment) = column_alignment {
+            self.pending_runs.push(DisplayRun::ColumnCell {
+                content: vec![button],
+                alignment,
+                preferred_columns: self.print_c_length,
+            });
+            self.pending_column_cells = self.pending_column_cells.saturating_add(1);
+        } else {
+            self.pending_runs.push(button);
+        }
+        self.bump();
+        if column_alignment.is_some() && self.pending_column_cells >= self.print_c_per_line {
+            self.commit_line();
+        }
     }
 
     fn append_button_with_system_text(
@@ -378,13 +522,6 @@ impl PresentationModel {
         token: InteractionToken,
         system_text: Option<SystemTextRef>,
     ) {
-        let layout = RunLayout {
-            x_millipixels: 0,
-            y_millipixels: 0,
-            width_millipixels: 0,
-            height_millipixels: self.settings.line_height_millipixels,
-            depth: 0,
-        };
         let line = DisplayLine {
             line_id: self.next_line,
             temporary: false,
@@ -392,22 +529,38 @@ impl PresentationModel {
             line_end: true,
             alignment: self.current_alignment,
             layout_width_millipixels: None,
-            runs: vec![DisplayRun::Button {
-                runs: vec![DisplayRun::Text {
-                    text,
-                    style: self.current_style.clone(),
-                    layout,
-                    system_text,
-                }],
-                token,
-                title: None,
-                layout,
-                hover_style: None,
-            }],
+            runs: vec![self.button_run(text, token, system_text)],
         };
         self.next_line = self.next_line.saturating_add(1);
         self.lines.push(line);
         self.bump();
+    }
+
+    fn button_run(
+        &self,
+        text: String,
+        token: InteractionToken,
+        system_text: Option<SystemTextRef>,
+    ) -> DisplayRun {
+        let layout = RunLayout {
+            x_millipixels: 0,
+            y_millipixels: 0,
+            width_millipixels: 0,
+            height_millipixels: self.settings.line_height_millipixels,
+            depth: 0,
+        };
+        DisplayRun::Button {
+            runs: vec![DisplayRun::Text {
+                text,
+                style: self.current_style.clone(),
+                layout,
+                system_text,
+            }],
+            token,
+            title: None,
+            layout,
+            hover_style: None,
+        }
     }
 
     pub(crate) fn set_wait(&mut self, wait: Option<InputWait>) {
@@ -452,6 +605,12 @@ impl PresentationModel {
             },
             input_wait: self.input_wait.clone(),
             settings: self.settings.clone(),
+            tooltip: self.tooltip.clone(),
+            resources: if self.project_graphics {
+                self.resources.clone()
+            } else {
+                ResourceReplay::default()
+            },
         }
     }
 
@@ -754,5 +913,31 @@ mod tests {
         assert_eq!(rich.audio.len(), 1);
         assert!(matches!(rich.lines[1].runs[0], DisplayRun::Html { .. }));
         assert!(matches!(rich.lines[2].runs[0], DisplayRun::Image { .. }));
+    }
+
+    #[test]
+    fn plain_buttons_remain_on_the_current_logical_line() {
+        let mut model = PresentationModel::default();
+        model.append_button("one".into(), InteractionToken { epoch: 1, id: 1 }, None);
+        model.append_button("two".into(), InteractionToken { epoch: 1, id: 2 }, None);
+        let pending = model.snapshot();
+        assert_eq!(pending.lines.len(), 1);
+        assert!(!pending.lines[0].line_end);
+        assert_eq!(pending.lines[0].runs.len(), 2);
+    }
+
+    #[test]
+    fn backgrounds_and_tooltips_are_recoverable_canonical_state() {
+        let mut model = PresentationModel::default();
+        model.set_projection(true, true, true, true, true);
+        model.add_background("BACK".into(), 2, 128);
+        model.set_tooltip_colors(0x0011_2233, 0x0044_5566);
+        model.set_tooltip_delay(250).unwrap();
+        model.set_tooltip_duration(100_000).unwrap();
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.backgrounds.len(), 1);
+        assert_eq!(snapshot.backgrounds[0].depth, 2);
+        assert_eq!(snapshot.tooltip.delay_ms, 250);
+        assert_eq!(snapshot.tooltip.duration_ms, i16::MAX as u32);
     }
 }
