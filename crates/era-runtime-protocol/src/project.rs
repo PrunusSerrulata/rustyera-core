@@ -20,6 +20,9 @@ pub enum FrontendIoErrorKind {
     AlreadyExists,
     #[n(6)]
     Other,
+    /// A `Missing` or `Revision` storage precondition did not hold.
+    #[n(7)]
+    Conflict,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

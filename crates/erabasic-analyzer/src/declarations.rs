@@ -303,6 +303,11 @@ fn parse_dim(
             "the declared array contains too many elements".into(),
         ));
     }
+    if character && !options.system_save_in_binary {
+        return Err(DimError::Invalid(
+            "user-defined CHARADATA variables require binary saves".into(),
+        ));
+    }
     if saved && is_string && dimensions.len() > 1 && !options.system_save_in_binary {
         return Err(DimError::Invalid(
             "multi-dimensional saved string variables require binary saves".into(),

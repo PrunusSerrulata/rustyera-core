@@ -70,6 +70,8 @@ printf '%s\n' \
     '{"id":"wine-csv-gamebase","op":"eval","source":"GAMEBASE_GAMECODE"}' \
     '{"id":"wine-analyze","op":"analyzeLine","source":"RESULT = 9"}' \
     '{"id":"wine-execute","op":"execute","statement":"RESULT = 9","watch":["RESULT"]}' \
+    '{"id":"wine-putform","op":"execute","statement":"PUTFORM suffix","watch":["SAVEDATA_TEXT"]}' \
+    '{"id":"wine-savenos","op":"eval","source":"SAVENOS()"}' \
     '{"id":"wine-run","op":"run","entry":"ORACLE_TEST","watch":["RESULT"]}' \
     '{"id":"wine-input","op":"run","entry":"ORACLE_INPUT","inputs":["42"],"watch":["RESULT"]}' \
     '{"id":"wine-reset","op":"reset"}' \
@@ -84,12 +86,13 @@ perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 19 and
+    length == 21 and
     map(.id) == [
         "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-toneinput",
         "wine-getmillisecond", "wine-getsecond", "wine-project",
         "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
         "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
+        "wine-putform", "wine-savenos",
         "wine-run", "wine-input", "wine-reset"
     ] and
     all(.[]; .ok == true) and
@@ -104,6 +107,8 @@ jq -e -s '
     (map(select(.id == "wine-csv-gamebase"))[0].result.value == 42) and
     (map(select(.id == "wine-analyze"))[0].result.argument != null) and
     (map(select(.id == "wine-execute"))[0].result.watches.RESULT == 9) and
+    (map(select(.id == "wine-putform"))[0].result.watches.SAVEDATA_TEXT == "suffix") and
+    (map(select(.id == "wine-savenos"))[0].result.value == 20) and
     (map(select(.id == "wine-run"))[0].result.termination == "completed") and
     (map(select(.id == "wine-run"))[0].result.output | join("\n") | contains("ORACLE_OK")) and
     (map(select(.id == "wine-input"))[0].result.termination == "completed") and

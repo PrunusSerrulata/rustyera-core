@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 6.0 over common wire 2.0 is a development contract: by explicit project policy it
+dynamic library. Runtime protocol 7.0 over common wire 2.0 is a development contract: by explicit project policy it
 does not promise backward compatibility until a frontend exists.
 
 ## Authority and ownership
@@ -78,22 +78,29 @@ offsets. Absolute, drive-qualified and parent-traversing paths are invalid.
 
 Runtime-initiated work is asynchronous:
 
-- storage operations cover reads, atomic/idempotent writes, listing and deletion in
+- storage operations cover reads, metadata queries, atomic/idempotent writes, recursive or
+  top-level listing and deletion in
   project, save, global-save, DAT, log and resource namespaces;
 - platform services cover font metrics, image/canvas operations, audio, networking,
   opening URLs and negotiated extensions;
-- every request has a stable request ID and optional runtime-logical deadline; writes additionally
-  have an idempotency key and may carry an expected revision;
+- every request has a stable request ID, idempotency key and optional runtime-logical deadline;
+  writes and deletes carry an explicit `Any`, `Missing`, or `Revision(value)` commit precondition;
 - shutdown and other cancellation policies use a typed cancellation message. Late responses are
   rejected by request ID and cannot modify the new runtime timeline.
 
 The runtime and all lower crates perform no concrete file I/O and sample no system clock.
-Current ordinary binary and gzip traditional saves are encoded and decoded in memory. Export is
+Current ordinary text, binary and gzip traditional saves are encoded and decoded in memory. Export is
 eligible only at a stable untimed input wait; restore validates a candidate VM state before an
-atomic commit. Slot list/read bytes cross only storage messages. Current UTF-8 text saves are
-validated and retained losslessly, but schema-aware positional text generation/restoration and
-the remaining global/DAT/log operations are not yet connected. Exact VM snapshots remain a later
-feature and must accept only the exact artifact identity.
+atomic commit. Slot and Host-command bytes cross only storage messages. Schema-aware UTF-8 text
+saves use the reference positional and named-group layout with BOM/CRLF output. Current global,
+character DAT, arbitrary UTF-8 text and canonical runtime-log operations are connected; the pinned
+reference's unimplemented `SAVEVAR`/`LOADVAR` remain a stable unsupported operation. Exact VM
+snapshots remain a later feature and must accept only the exact artifact identity.
+
+Storage is negotiated as `RuntimeFeature::Storage`. `Stat` returns metadata without transferring
+contents. `List { pattern, recursive }` returns frontend-relative entries; runtime sorts any list
+that is observable by EraBasic. `Missing` is create-only, `Revision` is compare-and-replace/delete,
+and a precondition mismatch is reported as a storage error rather than silently overwriting data.
 
 ## Input, QTE and presentation
 

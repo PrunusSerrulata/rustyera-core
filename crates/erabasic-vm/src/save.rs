@@ -23,6 +23,17 @@ pub struct EraState {
     pub characters: Vec<BTreeMap<SymbolKey, EraVariableState>>,
 }
 
+/// Selects the independent persistence domains used by current Emuera saves.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EraSaveScope {
+    /// Ordinary slot data. Global variables are deliberately excluded.
+    Ordinary,
+    /// The process-wide `global.sav` variables only.
+    Global,
+    /// Character variables only, for character DAT files.
+    Characters,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EraStateReport {
     pub restored_variables: usize,
@@ -36,20 +47,31 @@ impl Vm {
     /// reference-compatible binary or text representation.
     #[must_use]
     pub fn export_era_state(&self) -> EraState {
+        self.export_era_state_for(EraSaveScope::Ordinary)
+    }
+
+    /// Export one persistence domain without leaking data from another domain.
+    #[must_use]
+    pub fn export_era_state_for(&self, scope: EraSaveScope) -> EraState {
         let artifact = self.artifact();
         let variables = artifact
             .globals
             .iter()
             .filter(|definition| {
-                definition.persistence != BytecodePersistence::None
-                    && !matches!(
-                        definition.storage,
-                        BytecodeStorage::FunctionLocal
-                            | BytecodeStorage::FunctionPersistent
-                            | BytecodeStorage::Character
-                            | BytecodeStorage::Constant
-                            | BytecodeStorage::Calculated
-                    )
+                matches!(
+                    (scope, definition.persistence),
+                    (
+                        EraSaveScope::Ordinary,
+                        BytecodePersistence::GameSave | BytecodePersistence::ExtendedSave
+                    ) | (EraSaveScope::Global, BytecodePersistence::GlobalSave)
+                ) && !matches!(
+                    definition.storage,
+                    BytecodeStorage::FunctionLocal
+                        | BytecodeStorage::FunctionPersistent
+                        | BytecodeStorage::Character
+                        | BytecodeStorage::Constant
+                        | BytecodeStorage::Calculated
+                )
             })
             .filter_map(|definition| {
                 let cell = match definition.storage {
@@ -59,26 +81,29 @@ impl Vm {
                 cell.map(|cell| (definition.key, saved_variable(definition, cell)))
             })
             .collect();
-        let characters = self
-            .memory
-            .characters
-            .iter()
-            .map(|character| {
-                artifact
-                    .globals
-                    .iter()
-                    .filter(|definition| {
-                        definition.storage == BytecodeStorage::Character
-                            && definition.persistence != BytecodePersistence::None
-                    })
-                    .filter_map(|definition| {
-                        character
-                            .get(&definition.key)
-                            .map(|cell| (definition.key, saved_variable(definition, cell)))
-                    })
-                    .collect()
-            })
-            .collect();
+        let characters = if matches!(scope, EraSaveScope::Ordinary | EraSaveScope::Characters) {
+            self.memory
+                .characters
+                .iter()
+                .map(|character| {
+                    artifact
+                        .globals
+                        .iter()
+                        .filter(|definition| {
+                            definition.storage == BytecodeStorage::Character
+                                && definition.persistence != BytecodePersistence::None
+                        })
+                        .filter_map(|definition| {
+                            character
+                                .get(&definition.key)
+                                .map(|cell| (definition.key, saved_variable(definition, cell)))
+                        })
+                        .collect()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         EraState {
             unique_code: artifact.project_data.static_data.game_base.unique_code,
             version: artifact.project_data.static_data.game_base.version,
@@ -99,7 +124,13 @@ impl Vm {
         let artifact = self.artifact().clone();
         self.memory = Memory::new_game(&artifact);
         let mut report = EraStateReport::default();
-        overlay_shared(&artifact, &mut self.memory, &preserved, &mut report);
+        overlay_shared(
+            &artifact,
+            &mut self.memory,
+            &preserved,
+            EraSaveScope::Global,
+            &mut report,
+        );
         self.clear_execution();
         report
     }
@@ -112,32 +143,7 @@ impl Vm {
     /// Returns an error when the save's game code or version is incompatible.
     pub fn reset_with_era_state(&mut self, state: &EraState) -> Result<EraStateReport, VmError> {
         let artifact = self.artifact().clone();
-        let context = artifact.project_data.save_load_context();
-        if !context
-            .compatibility
-            .accepts(state.unique_code, state.version)
-        {
-            return Err(VmError::Save(
-                "save unique code or version is incompatible with this project".into(),
-            ));
-        }
-        let mut memory = Memory::new_game(&artifact);
-        let mut report = EraStateReport::default();
-        overlay_shared(&artifact, &mut memory, &state.variables, &mut report);
-        if context.clear_characters_before_overlay {
-            memory.characters.clear();
-        }
-        for saved_character in &state.characters {
-            memory.push_character(&artifact, None);
-            let index = memory.characters.len() - 1;
-            overlay_character(
-                &artifact,
-                &mut memory.characters[index],
-                saved_character,
-                &mut report,
-            );
-        }
-        report.restored_characters = state.characters.len();
+        let (memory, report) = prepare_ordinary_memory(&artifact, &self.memory, state)?;
         self.memory = memory;
         self.clear_execution();
         Ok(report)
@@ -156,6 +162,15 @@ impl Vm {
 
 pub(crate) fn prepare_era_memory(
     artifact: &erabasic_bytecode::BytecodeArtifact,
+    current: &Memory,
+    state: &EraState,
+) -> Result<(Memory, EraStateReport), VmError> {
+    prepare_ordinary_memory(artifact, current, state)
+}
+
+pub(crate) fn prepare_ordinary_memory(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    current: &Memory,
     state: &EraState,
 ) -> Result<(Memory, EraStateReport), VmError> {
     let context = artifact.project_data.save_load_context();
@@ -169,7 +184,21 @@ pub(crate) fn prepare_era_memory(
     }
     let mut memory = Memory::new_game(artifact);
     let mut report = EraStateReport::default();
-    overlay_shared(artifact, &mut memory, &state.variables, &mut report);
+    let globals = exported_shared(artifact, current, EraSaveScope::Global);
+    overlay_shared(
+        artifact,
+        &mut memory,
+        &globals,
+        EraSaveScope::Global,
+        &mut report,
+    );
+    overlay_shared(
+        artifact,
+        &mut memory,
+        &state.variables,
+        EraSaveScope::Ordinary,
+        &mut report,
+    );
     if context.clear_characters_before_overlay {
         memory.characters.clear();
     }
@@ -185,6 +214,125 @@ pub(crate) fn prepare_era_memory(
     }
     report.restored_characters = state.characters.len();
     Ok((memory, report))
+}
+
+pub(crate) fn prepare_global_memory(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    current: &Memory,
+    state: &EraState,
+) -> Result<(Memory, EraStateReport), VmError> {
+    validate_compatibility(artifact, state)?;
+    let mut memory = current.clone();
+    let mut report = EraStateReport::default();
+    overlay_shared(
+        artifact,
+        &mut memory,
+        &state.variables,
+        EraSaveScope::Global,
+        &mut report,
+    );
+    Ok((memory, report))
+}
+
+pub(crate) fn prepare_appended_characters(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    current: &Memory,
+    state: &EraState,
+) -> Result<(Memory, EraStateReport), VmError> {
+    validate_compatibility(artifact, state)?;
+    let mut memory = current.clone();
+    let mut report = EraStateReport::default();
+    for saved_character in &state.characters {
+        memory.push_character(artifact, None);
+        let index = memory.characters.len() - 1;
+        overlay_character(
+            artifact,
+            &mut memory.characters[index],
+            saved_character,
+            &mut report,
+        );
+    }
+    report.restored_characters = state.characters.len();
+    Ok((memory, report))
+}
+
+pub(crate) fn prepare_reset_game_memory(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    current: &Memory,
+) -> Memory {
+    let mut memory = Memory::new_game(artifact);
+    let globals = exported_shared(artifact, current, EraSaveScope::Global);
+    overlay_shared(
+        artifact,
+        &mut memory,
+        &globals,
+        EraSaveScope::Global,
+        &mut EraStateReport::default(),
+    );
+    memory
+}
+
+pub(crate) fn prepare_reset_global_memory(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    current: &Memory,
+) -> Memory {
+    let defaults = Memory::new_game(artifact);
+    let globals = exported_shared(artifact, &defaults, EraSaveScope::Global);
+    let mut memory = current.clone();
+    overlay_shared(
+        artifact,
+        &mut memory,
+        &globals,
+        EraSaveScope::Global,
+        &mut EraStateReport::default(),
+    );
+    memory
+}
+
+fn validate_compatibility(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    state: &EraState,
+) -> Result<(), VmError> {
+    if artifact
+        .project_data
+        .save_load_context()
+        .compatibility
+        .accepts(state.unique_code, state.version)
+    {
+        Ok(())
+    } else {
+        Err(VmError::Save(
+            "save unique code or version is incompatible with this project".into(),
+        ))
+    }
+}
+
+fn exported_shared(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    memory: &Memory,
+    scope: EraSaveScope,
+) -> BTreeMap<SymbolKey, EraVariableState> {
+    artifact
+        .globals
+        .iter()
+        .filter(|definition| {
+            matches!(
+                (scope, definition.persistence),
+                (
+                    EraSaveScope::Ordinary,
+                    BytecodePersistence::GameSave | BytecodePersistence::ExtendedSave
+                ) | (EraSaveScope::Global, BytecodePersistence::GlobalSave)
+            )
+        })
+        .filter_map(|definition| {
+            let cell = match definition.storage {
+                BytecodeStorage::FunctionStatic => memory.statics.get(&definition.key),
+                BytecodeStorage::Project => memory.shared.get(&definition.key),
+                _ => None,
+            }?;
+            Some((definition.key, saved_variable(definition, cell)))
+        })
+        .collect()
 }
 
 fn saved_variable(
@@ -205,6 +353,7 @@ fn overlay_shared(
     artifact: &erabasic_bytecode::BytecodeArtifact,
     memory: &mut Memory,
     saved: &BTreeMap<SymbolKey, EraVariableState>,
+    scope: EraSaveScope,
     report: &mut EraStateReport,
 ) {
     for (key, variable) in saved {
@@ -217,7 +366,7 @@ fn overlay_shared(
                         definition.storage,
                         BytecodeStorage::Project | BytecodeStorage::FunctionStatic
                     )
-                    && definition.persistence != BytecodePersistence::None
+                    && persistence_in_scope(definition.persistence, scope)
             })
             .or_else(|| {
                 artifact.globals.iter().find(|definition| {
@@ -226,7 +375,7 @@ fn overlay_shared(
                             definition.storage,
                             BytecodeStorage::Project | BytecodeStorage::FunctionStatic
                         )
-                        && definition.persistence != BytecodePersistence::None
+                        && persistence_in_scope(definition.persistence, scope)
                 })
             })
         else {
@@ -251,6 +400,16 @@ fn overlay_shared(
             report.restored_variables += 1;
         }
     }
+}
+
+fn persistence_in_scope(persistence: BytecodePersistence, scope: EraSaveScope) -> bool {
+    matches!(
+        (scope, persistence),
+        (
+            EraSaveScope::Ordinary,
+            BytecodePersistence::GameSave | BytecodePersistence::ExtendedSave
+        ) | (EraSaveScope::Global, BytecodePersistence::GlobalSave)
+    )
 }
 
 fn overlay_character(

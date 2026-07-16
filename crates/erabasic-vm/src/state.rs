@@ -561,15 +561,9 @@ impl VmRuntimeStatePort for Vm {
         let artifact = self.artifact();
         let reset_execution = matches!(
             &transaction,
-            VmRuntimeStateTransaction::ResetNewGame | VmRuntimeStateTransaction::RestoreEraState(_)
+            VmRuntimeStateTransaction::ResetNewGame | VmRuntimeStateTransaction::RestoreOrdinary(_)
         );
-        let mut memory = match &transaction {
-            VmRuntimeStateTransaction::ResetNewGame => Memory::new_game(artifact),
-            VmRuntimeStateTransaction::RestoreEraState(state) => {
-                crate::save::prepare_era_memory(artifact, state)?.0
-            }
-            VmRuntimeStateTransaction::Mutate { .. } => self.memory.clone(),
-        };
+        let mut memory = prepare_transaction_memory(artifact, &self.memory, &transaction)?;
         if let VmRuntimeStateTransaction::Mutate {
             writes,
             fills,
@@ -660,6 +654,41 @@ impl VmRuntimeStatePort for Vm {
         }
         Ok(())
     }
+}
+
+fn prepare_transaction_memory(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    current: &Memory,
+    transaction: &VmRuntimeStateTransaction,
+) -> Result<Memory, VmError> {
+    Ok(match transaction {
+        VmRuntimeStateTransaction::ResetNewGame => Memory::new_game(artifact),
+        VmRuntimeStateTransaction::ResetGameData => {
+            crate::save::prepare_reset_game_memory(artifact, current)
+        }
+        VmRuntimeStateTransaction::ResetGlobalData => {
+            crate::save::prepare_reset_global_memory(artifact, current)
+        }
+        VmRuntimeStateTransaction::RestoreOrdinary(state) => {
+            crate::save::prepare_era_memory(artifact, current, state)?.0
+        }
+        VmRuntimeStateTransaction::OverlayGlobal(state) => {
+            crate::save::prepare_global_memory(artifact, current, state)?.0
+        }
+        VmRuntimeStateTransaction::AppendCharacters(state) => {
+            crate::save::prepare_appended_characters(artifact, current, state)?.0
+        }
+        VmRuntimeStateTransaction::SetLastLoad {
+            version,
+            slot,
+            text,
+        } => {
+            let mut memory = current.clone();
+            memory.set_last_load(artifact, *version, *slot, text);
+            memory
+        }
+        VmRuntimeStateTransaction::Mutate { .. } => current.clone(),
+    })
 }
 
 pub(crate) fn make_frame(

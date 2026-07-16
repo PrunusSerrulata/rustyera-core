@@ -58,6 +58,28 @@ impl PresentationModel {
         self.bump();
     }
 
+    /// Deterministic log projection used by OUTPUTLOG. Device, window and patch
+    /// directory details from the UI-coupled reference implementation are omitted.
+    pub(crate) fn log_text(&self, hide_info: bool) -> String {
+        let mut output = String::new();
+        if !hide_info {
+            output.push_str("RustyEra Runtime\r\n");
+            output.push_str("Game: ");
+            output.push_str(&self.title);
+            output.push_str("\r\nLog:\r\n");
+        }
+        for line in &self.lines {
+            for run in &line.runs {
+                append_log_run(&mut output, run);
+            }
+            output.push_str("\r\n");
+        }
+        for run in &self.pending_runs {
+            append_log_run(&mut output, run);
+        }
+        output
+    }
+
     pub(crate) fn append_text(&mut self, text: String, temporary: bool) {
         self.append_print_text(text, temporary, true);
     }
@@ -269,6 +291,31 @@ impl PresentationModel {
 
     fn bump(&mut self) {
         self.revision = self.revision.saturating_add(1);
+    }
+}
+
+fn append_log_run(output: &mut String, run: &DisplayRun) {
+    match run {
+        DisplayRun::Text { text, .. } => output.push_str(text),
+        DisplayRun::Button { runs, .. } => {
+            for run in runs {
+                append_log_run(output, run);
+            }
+        }
+        DisplayRun::Html { markup } => output.push_str(markup),
+        DisplayRun::Image { alt_text, .. } => {
+            if let Some(text) = alt_text {
+                output.push_str(text);
+            }
+        }
+        DisplayRun::Shape { .. } => {}
+        DisplayRun::ColumnCell { content, .. } => {
+            for run in content {
+                append_log_run(output, run);
+            }
+            output.push(' ');
+        }
+        DisplayRun::Separator { pattern, .. } => output.push_str(pattern),
     }
 }
 

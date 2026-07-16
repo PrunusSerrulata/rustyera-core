@@ -233,6 +233,18 @@ impl Memory {
         self.set_named_string(artifact, "LASTLOAD_TEXT", &defaults.last_load_text);
     }
 
+    pub(crate) fn set_last_load(
+        &mut self,
+        artifact: &BytecodeArtifact,
+        version: i64,
+        slot: i64,
+        text: &str,
+    ) {
+        self.set_named_integer(artifact, "LASTLOAD_VERSION", version);
+        self.set_named_integer(artifact, "LASTLOAD_NO", slot);
+        self.set_named_string(artifact, "LASTLOAD_TEXT", text);
+    }
+
     fn set_named_integer(&mut self, artifact: &BytecodeArtifact, name: &str, value: i64) {
         if let Some(definition) = find_definition(artifact, name)
             && let Some(cell) = self.shared.get_mut(&definition.key)

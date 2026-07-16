@@ -1,8 +1,11 @@
 use crate::{
-    SaveCodecError, SaveCodecLimits, SaveDocument, SaveFileKind, SaveFormat, SaveMetadata,
+    SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveFileKind, SaveFormat,
+    SaveMetadata, SaveValue, Text1808Layout, Text1808ValueType, Text1808Variable,
 };
 
 const CURRENT_MARKER: &str = "__EMUERA_1808_STRAT__";
+const FINISHER: &str = "__FINISHED";
+const SEPARATOR: &str = "__EMU_SEPARATOR__";
 
 /// Decode a current text save without interpreting its project-specific positional fields.
 ///
@@ -86,4 +89,592 @@ fn parse_integer(line: Option<&str>, field: &str) -> Result<i64, SaveCodecError>
         .trim_end_matches('\r')
         .parse()
         .map_err(|_| SaveCodecError::InvalidFormat(format!("text save has invalid {field}")))
+}
+
+/// Decode a current UTF-8 text save using the active project's positional schema.
+///
+/// # Errors
+///
+/// Returns an error before producing a document when any required position,
+/// separator, value, or array shape is malformed.
+pub fn decode_text_with_layout(
+    data: &[u8],
+    layout: &Text1808Layout,
+    limits: SaveCodecLimits,
+) -> Result<SaveDocument, SaveCodecError> {
+    if data.len() > limits.maximum_bytes {
+        return Err(SaveCodecError::LimitExceeded("maximum bytes"));
+    }
+    let data = data.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(data);
+    let source = std::str::from_utf8(data)
+        .map_err(|_| SaveCodecError::InvalidFormat("text save is not UTF-8".into()))?;
+    let mut reader = TextReader::new(source);
+    let unique_code = reader.integer("unique code")?;
+    let version = reader.integer("script version")?;
+    let description = if layout.kind == SaveFileKind::Normal {
+        reader.line("description")?.to_owned()
+    } else {
+        String::new()
+    };
+    let mut characters = Vec::new();
+    if layout.kind == SaveFileKind::Normal {
+        let count = usize::try_from(reader.integer("character count")?).map_err(|_| {
+            SaveCodecError::InvalidFormat("text save has a negative character count".into())
+        })?;
+        if count > limits.maximum_characters {
+            return Err(SaveCodecError::LimitExceeded("maximum characters"));
+        }
+        for _ in 0..count {
+            characters.push(read_base_entries(
+                &mut reader,
+                &layout.base_character_variables,
+                limits,
+            )?);
+        }
+    }
+    let mut variables = read_base_entries(&mut reader, &layout.base_variables, limits)?;
+    reader.expect(CURRENT_MARKER)?;
+    for character in &mut characters {
+        read_extended_groups(
+            &mut reader,
+            &layout.extended_character_groups,
+            character,
+            limits,
+        )?;
+    }
+    read_extended_groups(&mut reader, &layout.extended_groups, &mut variables, limits)?;
+    if variables.len() + characters.iter().map(Vec::len).sum::<usize>() > limits.maximum_entries {
+        return Err(SaveCodecError::LimitExceeded("maximum entries"));
+    }
+    Ok(SaveDocument {
+        format: SaveFormat::Text1808,
+        kind: layout.kind,
+        metadata: SaveMetadata {
+            unique_code,
+            version,
+            description,
+        },
+        characters,
+        variables,
+        opaque_extensions: Vec::new(),
+        text_payload: Some(data.to_vec()),
+    })
+}
+
+/// Encode a schema-aware current text save as UTF-8 BOM plus CRLF lines.
+///
+/// # Errors
+///
+/// Returns an error for unsupported string arrays above one dimension, invalid
+/// shapes, embedded newlines, or configured size limits.
+pub fn encode_text_with_layout(
+    document: &SaveDocument,
+    layout: &Text1808Layout,
+    limits: SaveCodecLimits,
+) -> Result<Vec<u8>, SaveCodecError> {
+    if document.kind != layout.kind {
+        return Err(SaveCodecError::InvalidFormat(
+            "text layout kind differs from save document".into(),
+        ));
+    }
+    let mut writer = TextWriter::default();
+    writer.line(&document.metadata.unique_code.to_string())?;
+    writer.line(&document.metadata.version.to_string())?;
+    if layout.kind == SaveFileKind::Normal {
+        writer.line(&document.metadata.description)?;
+        writer.line(&document.characters.len().to_string())?;
+        for character in &document.characters {
+            write_base_entries(&mut writer, &layout.base_character_variables, character)?;
+        }
+    }
+    write_base_entries(&mut writer, &layout.base_variables, &document.variables)?;
+    writer.line(CURRENT_MARKER)?;
+    for character in &document.characters {
+        write_extended_groups(&mut writer, &layout.extended_character_groups, character)?;
+    }
+    write_extended_groups(&mut writer, &layout.extended_groups, &document.variables)?;
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice(writer.output.as_bytes());
+    if bytes.len() > limits.maximum_bytes {
+        return Err(SaveCodecError::LimitExceeded("maximum bytes"));
+    }
+    // Decode our own output to enforce element and entry limits at the API edge.
+    let _ = decode_text_with_layout(&bytes, layout, limits)?;
+    Ok(bytes)
+}
+
+struct TextReader<'a> {
+    lines: std::str::Lines<'a>,
+}
+
+impl<'a> TextReader<'a> {
+    fn new(source: &'a str) -> Self {
+        Self {
+            lines: source.lines(),
+        }
+    }
+
+    fn line(&mut self, field: &str) -> Result<&'a str, SaveCodecError> {
+        self.lines
+            .next()
+            .map(|line| line.trim_end_matches('\r'))
+            .ok_or_else(|| SaveCodecError::InvalidFormat(format!("text save lacks {field}")))
+    }
+
+    fn integer(&mut self, field: &str) -> Result<i64, SaveCodecError> {
+        self.line(field)?
+            .parse()
+            .map_err(|_| SaveCodecError::InvalidFormat(format!("text save has invalid {field}")))
+    }
+
+    fn expect(&mut self, expected: &str) -> Result<(), SaveCodecError> {
+        let actual = self.line(expected)?;
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(SaveCodecError::InvalidFormat(format!(
+                "text save expected {expected}"
+            )))
+        }
+    }
+}
+
+#[derive(Default)]
+struct TextWriter {
+    output: String,
+}
+
+impl TextWriter {
+    fn line(&mut self, value: &str) -> Result<(), SaveCodecError> {
+        if value.contains(['\r', '\n']) {
+            return Err(SaveCodecError::InvalidFormat(
+                "text save values cannot contain newlines".into(),
+            ));
+        }
+        self.output.push_str(value);
+        self.output.push_str("\r\n");
+        Ok(())
+    }
+}
+
+fn read_base_entries(
+    reader: &mut TextReader<'_>,
+    variables: &[Text1808Variable],
+    limits: SaveCodecLimits,
+) -> Result<Vec<SaveEntry>, SaveCodecError> {
+    variables
+        .iter()
+        .map(|variable| {
+            let value = if variable.dimensions.is_empty() {
+                read_scalar(reader, variable.value_type, &variable.name)?
+            } else {
+                read_base_array(reader, variable, limits)?
+            };
+            Ok(SaveEntry {
+                name: variable.name.clone(),
+                value,
+            })
+        })
+        .collect()
+}
+
+fn read_scalar(
+    reader: &mut TextReader<'_>,
+    value_type: Text1808ValueType,
+    field: &str,
+) -> Result<SaveValue, SaveCodecError> {
+    match value_type {
+        Text1808ValueType::Integer => Ok(SaveValue::Integer(reader.integer(field)?)),
+        Text1808ValueType::String => Ok(SaveValue::String(reader.line(field)?.to_owned())),
+    }
+}
+
+fn read_base_array(
+    reader: &mut TextReader<'_>,
+    variable: &Text1808Variable,
+    limits: SaveCodecLimits,
+) -> Result<SaveValue, SaveCodecError> {
+    if variable.dimensions.len() != 1 {
+        return Err(SaveCodecError::InvalidFormat(
+            "positional text arrays must be one-dimensional".into(),
+        ));
+    }
+    let length = usize::try_from(variable.dimensions[0]).unwrap_or(usize::MAX);
+    let mut strings = Vec::new();
+    while strings.len() <= limits.maximum_elements {
+        let line = reader.line(&variable.name)?;
+        if line == FINISHER {
+            break;
+        }
+        strings.push(line.to_owned());
+    }
+    if strings.len() > limits.maximum_elements {
+        return Err(SaveCodecError::LimitExceeded("maximum elements"));
+    }
+    strings.truncate(length);
+    strings.resize(
+        length,
+        match variable.value_type {
+            Text1808ValueType::Integer => "0".into(),
+            Text1808ValueType::String => String::new(),
+        },
+    );
+    strings_to_value(variable, strings)
+}
+
+fn strings_to_value(
+    variable: &Text1808Variable,
+    strings: Vec<String>,
+) -> Result<SaveValue, SaveCodecError> {
+    match variable.value_type {
+        Text1808ValueType::Integer => Ok(SaveValue::Integers {
+            dimensions: variable.dimensions.clone(),
+            values: strings
+                .into_iter()
+                .map(|value| {
+                    value.parse().map_err(|_| {
+                        SaveCodecError::InvalidFormat(format!(
+                            "text save has invalid {} element",
+                            variable.name
+                        ))
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+        }),
+        Text1808ValueType::String => Ok(SaveValue::Strings {
+            dimensions: variable.dimensions.clone(),
+            values: strings,
+        }),
+    }
+}
+
+fn read_extended_groups(
+    reader: &mut TextReader<'_>,
+    groups: &[Vec<Text1808Variable>],
+    entries: &mut Vec<SaveEntry>,
+    limits: SaveCodecLimits,
+) -> Result<(), SaveCodecError> {
+    for group in groups {
+        let mut parsed = std::collections::BTreeMap::new();
+        loop {
+            let line = reader.line("extended group")?;
+            if line == SEPARATOR {
+                break;
+            }
+            let variable = if let Some((name, value)) = line.split_once(':') {
+                let Some(descriptor) = find_layout(group, name) else {
+                    // Extended dictionaries are forward compatible: variables
+                    // removed from the active project are ignored by Emuera.
+                    continue;
+                };
+                if !descriptor.dimensions.is_empty() {
+                    return Err(SaveCodecError::InvalidFormat(
+                        "array text entry used scalar syntax".into(),
+                    ));
+                }
+                parsed.insert(
+                    descriptor.name.to_ascii_uppercase(),
+                    SaveEntry {
+                        name: descriptor.name.clone(),
+                        value: match descriptor.value_type {
+                            Text1808ValueType::Integer => {
+                                SaveValue::Integer(value.parse().map_err(|_| {
+                                    SaveCodecError::InvalidFormat("invalid extended integer".into())
+                                })?)
+                            }
+                            Text1808ValueType::String => SaveValue::String(value.to_owned()),
+                        },
+                    },
+                );
+                continue;
+            } else {
+                let Some(descriptor) = find_layout(group, line) else {
+                    let mut ignored = 0usize;
+                    loop {
+                        if reader.line("unknown extended array")? == FINISHER {
+                            break;
+                        }
+                        ignored += 1;
+                        if ignored > limits.maximum_elements {
+                            return Err(SaveCodecError::LimitExceeded("maximum elements"));
+                        }
+                    }
+                    continue;
+                };
+                descriptor
+            };
+            let values = read_extended_array(reader, variable, limits)?;
+            parsed.insert(
+                variable.name.to_ascii_uppercase(),
+                SaveEntry {
+                    name: variable.name.clone(),
+                    value: values,
+                },
+            );
+        }
+        for descriptor in group {
+            if let Some(entry) = parsed.remove(&descriptor.name.to_ascii_uppercase()) {
+                entries.push(entry);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn find_layout<'a>(group: &'a [Text1808Variable], name: &str) -> Option<&'a Text1808Variable> {
+    group
+        .iter()
+        .find(|variable| variable.name.eq_ignore_ascii_case(name))
+}
+
+fn read_extended_array(
+    reader: &mut TextReader<'_>,
+    variable: &Text1808Variable,
+    limits: SaveCodecLimits,
+) -> Result<SaveValue, SaveCodecError> {
+    if variable.value_type == Text1808ValueType::String && variable.dimensions.len() > 1 {
+        return Err(SaveCodecError::InvalidFormat(
+            "current text saves do not support multidimensional string arrays".into(),
+        ));
+    }
+    let mut flattened = Vec::new();
+    let dimensions = variable
+        .dimensions
+        .iter()
+        .map(|value| usize::try_from(*value).unwrap_or(usize::MAX))
+        .collect::<Vec<_>>();
+    match dimensions.as_slice() {
+        [_] => loop {
+            let line = reader.line(&variable.name)?;
+            if line == FINISHER {
+                break;
+            }
+            flattened.push(line.to_owned());
+        },
+        [_, width] => loop {
+            let line = reader.line(&variable.name)?;
+            if line == FINISHER {
+                break;
+            }
+            let mut row = if line.is_empty() {
+                Vec::new()
+            } else {
+                line.split(',').map(str::to_owned).collect()
+            };
+            row.truncate(*width);
+            row.resize(*width, "0".into());
+            flattened.extend(row);
+        },
+        [_, rows, width] => loop {
+            let line = reader.line(&variable.name)?;
+            if line == FINISHER {
+                break;
+            }
+            if !line.ends_with('{') {
+                return Err(SaveCodecError::InvalidFormat(
+                    "invalid extended three-dimensional array".into(),
+                ));
+            }
+            let mut row_count = 0;
+            loop {
+                let row = reader.line(&variable.name)?;
+                if row == "}" {
+                    break;
+                }
+                if row_count < *rows {
+                    let mut values = if row.is_empty() {
+                        Vec::new()
+                    } else {
+                        row.split(',').map(str::to_owned).collect()
+                    };
+                    values.truncate(*width);
+                    values.resize(*width, "0".into());
+                    flattened.extend(values);
+                }
+                row_count += 1;
+            }
+            while row_count < *rows {
+                flattened.extend(std::iter::repeat_n("0".into(), *width));
+                row_count += 1;
+            }
+        },
+        _ => {
+            return Err(SaveCodecError::InvalidFormat(
+                "unsupported text array rank".into(),
+            ));
+        }
+    }
+    let total = dimensions
+        .iter()
+        .try_fold(1usize, |total, value| total.checked_mul(*value))
+        .ok_or(SaveCodecError::LimitExceeded("maximum elements"))?;
+    if total > limits.maximum_elements {
+        return Err(SaveCodecError::LimitExceeded("maximum elements"));
+    }
+    flattened.truncate(total);
+    flattened.resize(total, "0".into());
+    strings_to_value(variable, flattened)
+}
+
+fn write_base_entries(
+    writer: &mut TextWriter,
+    layout: &[Text1808Variable],
+    entries: &[SaveEntry],
+) -> Result<(), SaveCodecError> {
+    for descriptor in layout {
+        let Some(value) = find_entry(entries, &descriptor.name).map(|entry| &entry.value) else {
+            if descriptor.dimensions.is_empty() {
+                writer.line(match descriptor.value_type {
+                    Text1808ValueType::Integer => "0",
+                    Text1808ValueType::String => "",
+                })?;
+            } else {
+                writer.line(FINISHER)?;
+            }
+            continue;
+        };
+        if descriptor.dimensions.is_empty() {
+            write_scalar(writer, value, descriptor.value_type)?;
+        } else {
+            write_trimmed_1d(writer, value, descriptor)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_extended_groups(
+    writer: &mut TextWriter,
+    groups: &[Vec<Text1808Variable>],
+    entries: &[SaveEntry],
+) -> Result<(), SaveCodecError> {
+    for group in groups {
+        for descriptor in group {
+            let Some(entry) = find_entry(entries, &descriptor.name) else {
+                continue;
+            };
+            write_extended(writer, descriptor, &entry.value)?;
+        }
+        writer.line(SEPARATOR)?;
+    }
+    Ok(())
+}
+
+fn find_entry<'a>(entries: &'a [SaveEntry], name: &str) -> Option<&'a SaveEntry> {
+    entries
+        .iter()
+        .find(|entry| entry.name.eq_ignore_ascii_case(name))
+}
+
+fn write_scalar(
+    writer: &mut TextWriter,
+    value: &SaveValue,
+    value_type: Text1808ValueType,
+) -> Result<(), SaveCodecError> {
+    match (value_type, value) {
+        (Text1808ValueType::Integer, SaveValue::Integer(value)) => writer.line(&value.to_string()),
+        (Text1808ValueType::String, SaveValue::String(value)) => writer.line(value),
+        _ => Err(SaveCodecError::InvalidFormat(
+            "text value type differs from its layout".into(),
+        )),
+    }
+}
+
+fn write_trimmed_1d(
+    writer: &mut TextWriter,
+    value: &SaveValue,
+    descriptor: &Text1808Variable,
+) -> Result<(), SaveCodecError> {
+    if descriptor.dimensions.len() != 1 {
+        return Err(SaveCodecError::InvalidFormat(
+            "positional text arrays must be one-dimensional".into(),
+        ));
+    }
+    for value in trimmed_values(value)? {
+        writer.line(&value)?;
+    }
+    writer.line(FINISHER)
+}
+
+fn write_extended(
+    writer: &mut TextWriter,
+    descriptor: &Text1808Variable,
+    value: &SaveValue,
+) -> Result<(), SaveCodecError> {
+    if descriptor.dimensions.is_empty() {
+        let rendered = scalar_string(value)?;
+        if rendered.is_empty() || rendered == "0" {
+            return Ok(());
+        }
+        return writer.line(&format!("{}:{rendered}", descriptor.name));
+    }
+    if descriptor.value_type == Text1808ValueType::String && descriptor.dimensions.len() > 1 {
+        return Err(SaveCodecError::InvalidFormat(
+            "current text saves do not support multidimensional string arrays".into(),
+        ));
+    }
+    let values = trimmed_values(value)?;
+    if values.is_empty() {
+        return Ok(());
+    }
+    writer.line(&descriptor.name)?;
+    match descriptor.dimensions.as_slice() {
+        [_] => {
+            for value in values {
+                writer.line(&value)?;
+            }
+        }
+        [_, width] => {
+            let width = usize::try_from(*width).unwrap_or(usize::MAX);
+            for row in values.chunks(width) {
+                writer.line(&row.join(","))?;
+            }
+        }
+        [_, rows, width] => {
+            let rows = usize::try_from(*rows).unwrap_or(usize::MAX);
+            let width = usize::try_from(*width).unwrap_or(usize::MAX);
+            let plane = rows.saturating_mul(width);
+            for (x, values) in values.chunks(plane).enumerate() {
+                writer.line(&format!("{x}{{"))?;
+                for row in values.chunks(width) {
+                    writer.line(&row.join(","))?;
+                }
+                writer.line("}")?;
+            }
+        }
+        _ => {
+            return Err(SaveCodecError::InvalidFormat(
+                "unsupported text array rank".into(),
+            ));
+        }
+    }
+    writer.line(FINISHER)
+}
+
+fn scalar_string(value: &SaveValue) -> Result<String, SaveCodecError> {
+    match value {
+        SaveValue::Integer(value) => Ok(value.to_string()),
+        SaveValue::String(value) => Ok(value.clone()),
+        _ => Err(SaveCodecError::InvalidFormat(
+            "text scalar has an array value".into(),
+        )),
+    }
+}
+
+fn trimmed_values(value: &SaveValue) -> Result<Vec<String>, SaveCodecError> {
+    let mut values = match value {
+        SaveValue::Integers { values, .. } => values.iter().map(ToString::to_string).collect(),
+        SaveValue::Strings { values, .. } => values.clone(),
+        _ => {
+            return Err(SaveCodecError::InvalidFormat(
+                "text array has a scalar value".into(),
+            ));
+        }
+    };
+    while values
+        .last()
+        .is_some_and(|value| value.is_empty() || value == "0")
+    {
+        values.pop();
+    }
+    Ok(values)
 }

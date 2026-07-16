@@ -100,6 +100,11 @@ try {
     Assert-True $executed.ok "single-instruction execution failed"
     Assert-True ($executed.result.watches.RESULT -eq 9) "execute did not update RESULT"
 
+    $putform = Invoke-Oracle @{ id = "putform"; op = "execute"; statement = 'PUTFORM suffix'; watch = @("SAVEDATA_TEXT") }
+    Assert-True ($putform.ok -and $putform.result.watches.SAVEDATA_TEXT -eq "suffix") "PUTFORM differs"
+    $saveNos = Invoke-Oracle @{ id = "savenos"; op = "eval"; source = "SAVENOS()" }
+    Assert-True ($saveNos.ok -and $saveNos.result.value -eq 20) "SAVENOS differs"
+
     $run = Invoke-Oracle @{ id = 9; op = "run"; entry = "ORACLE_TEST"; watch = @("RESULT") }
     Assert-True $run.ok "isolated function run failed"
     Assert-True ($run.result.termination -eq "completed") "function did not complete"

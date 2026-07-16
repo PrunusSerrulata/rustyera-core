@@ -360,7 +360,7 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `3.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `7.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
@@ -372,7 +372,7 @@ Runtime 返回：
 - `VersionRejected`（tag `2`）：版本区间不重叠。
 
 当前前端只能依赖 `ServerHello.features` 中实际出现的功能。类型系统中定义但未协商的
-`ProjectReload`、`TraditionalSave`、`VmSnapshot`、`Html`、`Graphics`、`Audio`、
+`ProjectReload`、`TraditionalSave`、`VmSnapshot`、`Storage`、`Html`、`Graphics`、`Audio`、
 `MouseInput` 等功能必须视为不可用。
 
 ### 项目加载
@@ -502,13 +502,16 @@ runtime；应先取出消息，再异步或同步完成平台工作，最后通�
 
 协议预留 `StorageRequest`（tag `50`）和 `StorageResponse`（tag `51`），用于
 `Project`、`Save`、`GlobalSave`、`Data`、`Log`、`Resource` 命名空间中的读取、写入、
-列举和删除。路径仍是相对路径。
+列举、元数据查询和删除。路径仍是相对路径。
 
-写入参数包括 `atomic_replace`、可选 `expected_revision` 和 `idempotency_key`；前端应在
-重试时保持相同 idempotency key，避免重复写入。读取/写入/列表结果可以携带前端生成
-的 revision。
+写入参数包括 `atomic_replace`、`StoragePrecondition` 和 `idempotency_key`。前置条件为
+`Any`（不检查）、`Missing`（仅当目标不存在）或 `Revision(value)`（仅当 revision
+一致）。删除同样携带前置条件。前端应在重试时保持相同 idempotency key，避免重复
+写入。前置条件不成立时返回 `FrontendIoErrorKind::Conflict`。`List` 还携带
+`recursive`；`Stat` 只返回长度和 revision，不传输文件内容。
+读取/写入/列表/元数据结果可以携带前端生成的 revision。
 
-该消息存在不代表当前 runtime 已启用存档或 Storage 功能。只有握手协商且实际收到
+协议 7.0 通过 `RuntimeFeature::Storage` 协商该能力。只有握手协商且实际收到
 `StorageRequest` 时前端才应执行 I/O；前端不得主动发送无对应 request ID 的
 `StorageResponse`。
 

@@ -10,9 +10,9 @@ mod text;
 pub use binary::{decode_binary, encode_binary};
 pub use model::{
     OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveFileKind,
-    SaveFormat, SaveMetadata, SaveValue,
+    SaveFormat, SaveMetadata, SaveValue, Text1808Layout, Text1808ValueType, Text1808Variable,
 };
-pub use text::{decode_text, encode_text};
+pub use text::{decode_text, decode_text_with_layout, encode_text, encode_text_with_layout};
 
 /// Detect and decode one current-format save without performing I/O.
 ///

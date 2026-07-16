@@ -44,8 +44,15 @@ advance-time = { 0: uint }
 wait-change = any
 presentation-snapshot = any
 presentation-delta = { 0: uint, 1: uint, 2: [* any] }
-storage-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: tstr }
+storage-request = { 0: uint, 1: uint, 2: tstr, 3: storage-operation, 4: tstr, 5: uint / null }
 storage-response = { 0: uint, 1: any }
+storage-operation =
+  [0] /
+  [1, bstr, bool, storage-precondition] /
+  [2, tstr / null, bool] /
+  [3, storage-precondition] /
+  [4]
+storage-precondition = [0] / [1] / [2, tstr]
 service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr }
 service-response = { 0: uint, 1: any }
 state-export-request = { 0: uint }

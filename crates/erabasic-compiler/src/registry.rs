@@ -450,10 +450,14 @@ const STORAGE: &[&str] = &[
     "LOADTEXT",
     "EXISTFILE",
     "ENUMFILES",
+    "FIND_CHARADATA",
     "OUTPUTLOG",
     "CHKDATA",
     "CHKCHARADATA",
     "SAVENOS",
+    "PUTFORM",
+    "RESETDATA",
+    "RESETGLOBAL",
 ];
 
 const SYSTEM: &[&str] = &[
