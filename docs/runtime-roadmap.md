@@ -211,3 +211,8 @@ Add focused Rust unit/integration tests, then run `cargo fmt --all -- --check`,
 Windows smoke script), followed by a same-input Rust/C# comparison for changed behavior.
 Reference source remains read-only unless the user separately authorizes an isolated headless
 change.
+
+## Post-Completion Review
+
+After completing a batch of tasks, redistribute any tasks from that batch that remain unimplemented
+into the remaining batches according to their dependencies. No new batches may be added.
