@@ -10,10 +10,12 @@ use crate::DebugValue;
 #[cbor(map)]
 pub struct StopToken {
     #[n(0)]
-    pub pause_epoch: u64,
+    pub session_epoch: u64,
     #[n(1)]
-    pub program_generation: u64,
+    pub pause_epoch: u64,
     #[n(2)]
+    pub program_generation: u64,
+    #[n(3)]
     pub runtime_revision: u64,
 }
 

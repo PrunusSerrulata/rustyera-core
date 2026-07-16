@@ -109,6 +109,7 @@ pub struct VmHostRequest {
     pub fiber: FiberId,
     pub import: HostImport,
     pub arguments: Vec<VmValue>,
+    pub origin: crate::VmExecutionOrigin,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -127,6 +128,7 @@ pub enum VmPortEvent {
     FiberYielded(FiberId),
     FiberCompleted(FiberId, Option<VmValue>),
     FiberFaulted(FiberId, crate::VmFault),
+    DebugStopped(crate::VmDebugStop),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

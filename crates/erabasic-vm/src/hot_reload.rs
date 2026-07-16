@@ -142,6 +142,7 @@ impl Vm {
             removed_variables: plan.removed_variables,
             resized_variables: plan.resized_variables,
         };
+        self.debug_rebind_breakpoints();
         self.pending_reload = None;
         self.reclaim_generations();
         Ok(HotReloadReport {

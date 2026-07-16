@@ -323,6 +323,19 @@ fn source_only_changes_keep_the_execution_identity() {
         second.manifest.program_version.execution_id
     );
     assert_ne!(first.manifest.artifact_id, second.manifest.artifact_id);
+    let first_fingerprints = first
+        .source_map
+        .entries
+        .iter()
+        .map(|entry| entry.statement_fingerprint)
+        .collect::<std::collections::BTreeSet<_>>();
+    let second_fingerprints = second
+        .source_map
+        .entries
+        .iter()
+        .map(|entry| entry.statement_fingerprint)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(first_fingerprints, second_fingerprints);
 }
 
 #[test]

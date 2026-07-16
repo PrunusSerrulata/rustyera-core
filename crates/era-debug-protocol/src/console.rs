@@ -1,7 +1,18 @@
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::{DebugValue, GameFieldValue, VariableValue};
+use crate::{DebugSourceLocation, DebugValue, GameFieldValue, StopToken, VariableValue};
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct DebugDiagnostic {
+    #[n(0)]
+    pub code: String,
+    #[n(1)]
+    pub message: String,
+    #[n(2)]
+    pub source: Option<DebugSourceLocation>,
+}
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -23,13 +34,15 @@ pub enum ConsoleCommand {
 #[cbor(map)]
 pub struct ConsoleOutcome {
     #[n(0)]
-    pub value: Option<DebugValue>,
+    pub stop: StopToken,
     #[n(1)]
-    pub output: Vec<String>,
+    pub value: Option<DebugValue>,
     #[n(2)]
-    pub changed_variables: Vec<VariableValue>,
+    pub output: Vec<String>,
     #[n(3)]
-    pub changed_game_fields: Vec<GameFieldValue>,
+    pub changed_variables: Vec<VariableValue>,
     #[n(4)]
-    pub diagnostics: Vec<String>,
+    pub changed_game_fields: Vec<GameFieldValue>,
+    #[n(5)]
+    pub diagnostics: Vec<DebugDiagnostic>,
 }

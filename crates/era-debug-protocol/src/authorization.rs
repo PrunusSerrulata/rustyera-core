@@ -45,9 +45,22 @@ pub struct DebugGrant {
     #[n(0)]
     pub version: ProtocolVersion,
     #[n(1)]
-    pub grant_id: SessionId,
+    pub token: GrantToken,
     #[n(2)]
     pub scopes: Vec<DebugScope>,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct GrantToken {
+    #[n(0)]
+    pub grant_id: SessionId,
+    #[n(1)]
+    pub session_epoch: u64,
+    #[n(2)]
+    pub program_generation: u64,
+    #[n(3)]
+    pub issued_runtime_revision: u64,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

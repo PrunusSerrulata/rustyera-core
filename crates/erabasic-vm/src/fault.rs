@@ -28,7 +28,9 @@ pub struct VmFault {
     pub fiber: FiberId,
     pub generation: GenerationId,
     pub function: SymbolKey,
+    pub function_name: String,
     pub instruction: u32,
+    pub command: String,
     pub source: Option<ResolvedSourceLocation>,
 }
 

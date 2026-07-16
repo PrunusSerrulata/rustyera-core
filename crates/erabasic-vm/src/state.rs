@@ -6,9 +6,10 @@ use erabasic_bytecode::{
 use erabasic_validator::ValidatedArtifact;
 use serde::{Deserialize, Serialize};
 
+use crate::debug::DebugState;
 use crate::{
     FiberId, FiberStatus, FrameId, GenerationId, HostReady, HostRequestId, HostWaitStability,
-    Memory, PlaceDescriptor, VariableCell, VmConfig, VmError, VmFault, VmValue,
+    Memory, PlaceDescriptor, VariableCell, VmConfig, VmError, VmExecutionOrigin, VmFault, VmValue,
     hot_reload::HotReloadPlan,
 };
 use crate::{PreparedRuntimeState, VmRuntimeRead, VmRuntimeStatePort, VmRuntimeStateTransaction};
@@ -35,6 +36,7 @@ pub(crate) struct WaitingHost {
     pub result: Option<BytecodeType>,
     pub stability: HostWaitStability,
     pub rebind_payload: Vec<u8>,
+    pub origin: VmExecutionOrigin,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -87,6 +89,7 @@ pub struct Vm {
     pub(crate) next_request: u64,
     pub(crate) next_generation: u64,
     pub(crate) pending_reload: Option<HotReloadPlan>,
+    pub(crate) debug: DebugState,
 }
 
 impl Vm {
@@ -108,6 +111,7 @@ impl Vm {
             next_request: 1,
             next_generation: 2,
             pending_reload: None,
+            debug: DebugState::default(),
         }
     }
 

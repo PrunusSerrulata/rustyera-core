@@ -166,6 +166,19 @@ pub(crate) fn lower_function(
                 source_index: *source_index,
                 byte_start: location.span.start as u64,
                 byte_end: location.span.end as u64,
+                statement_fingerprint: function
+                    .lines
+                    .iter()
+                    .find(|line| line.location == *location)
+                    .map_or_else(
+                        || {
+                            Digest::hash(
+                                "rustyera.bytecode.source-statement.v1",
+                                &[function.name.as_bytes()],
+                            )
+                        },
+                        |line| statement_fingerprint(&line.kind),
+                    ),
                 origin_chain: Vec::new(),
             });
         }
@@ -204,6 +217,32 @@ pub(crate) fn lower_function(
         native_imports: builder.native_imports.into_values().collect(),
         host_imports: builder.host_imports.into_values().collect(),
         diagnostics: builder.diagnostics,
+    }
+}
+
+fn statement_fingerprint(kind: &HirStatementKind) -> Digest {
+    let mut value = serde_json::to_value(kind).expect("typed statements are serializable");
+    // Source locations are deliberately excluded: inserting unrelated lines must
+    // not break a breakpoint anchor for an otherwise identical typed statement.
+    strip_source_locations(&mut value);
+    let bytes = serde_json::to_vec(&value).expect("normalized statements are serializable");
+    Digest::hash("rustyera.bytecode.source-statement.v1", &[&bytes])
+}
+
+fn strip_source_locations(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            fields.remove("location");
+            for value in fields.values_mut() {
+                strip_source_locations(value);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                strip_source_locations(value);
+            }
+        }
+        _ => {}
     }
 }
 

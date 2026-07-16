@@ -184,14 +184,16 @@ pub enum RuntimePhase {
     #[n(5)]
     WaitingInput,
     #[n(6)]
-    Paused,
+    WaitingExternal,
     #[n(7)]
-    Reloading,
+    DebugPaused,
     #[n(8)]
-    Stopping,
+    Reloading,
     #[n(9)]
-    Stopped,
+    Stopping,
     #[n(10)]
+    Stopped,
+    #[n(11)]
     Faulted,
 }
 
@@ -486,6 +488,21 @@ pub struct RuntimeFault {
     #[n(1)]
     pub message: String,
     #[n(2)]
+    pub origin: Option<ExecutionOrigin>,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ExecutionOrigin {
+    #[n(0)]
+    pub command: String,
+    #[n(1)]
+    pub function: String,
+    #[n(2)]
+    pub generation: u64,
+    #[n(3)]
+    pub instruction: u32,
+    #[n(4)]
     pub source: Option<SourceLocation>,
 }
 

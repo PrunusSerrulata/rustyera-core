@@ -5,6 +5,7 @@
 //! files, clocks, rendering and input delivery.
 
 mod config;
+mod debug;
 mod debug_port;
 mod fault;
 mod host;
@@ -23,7 +24,7 @@ mod value;
 
 pub use config::{
     FiberId, FiberStatus, FrameId, GenerationId, HostRequestId, RunBudget, VmBacktraceFrame,
-    VmConfig, VmEvent, VmRunReport, VmRunStop,
+    VmConfig, VmEvent, VmExecutionOrigin, VmRunReport, VmRunStop,
 };
 pub use debug_port::{
     VmBreakpoint, VmBreakpointBinding, VmBreakpointLocation, VmDebugControl, VmDebugFiber,

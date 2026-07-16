@@ -87,6 +87,15 @@ pub struct VariableWrite {
     pub expected_revision: u64,
 }
 
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct VariableWriteOutcome {
+    #[n(0)]
+    pub stop: StopToken,
+    #[n(1)]
+    pub values: Vec<VariableValue>,
+}
+
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]
@@ -141,4 +150,13 @@ pub struct GameFieldWrite {
     pub value: DebugValue,
     #[n(2)]
     pub expected_revision: u64,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct GameFieldWriteOutcome {
+    #[n(0)]
+    pub stop: StopToken,
+    #[n(1)]
+    pub values: Vec<GameFieldValue>,
 }

@@ -262,7 +262,7 @@ Implementation checkpoint:
   URL/update/focus services and their capability-failure matrix. These items must not be described
   as implemented before Batch 10 lands. They do not block the debugger work in Batch 9.
 
-## Batch 9: debugger implementation
+## Completed: batch 9, debugger implementation
 
 - Before debugger dispatch, complete running-reload rebinding for stable VM and runtime waits,
   pending system-controller entries, presentation tokens and source-map identities. Stage every
@@ -275,6 +275,24 @@ Implementation checkpoint:
   breakpoints and hot-reload rebinding.
 - Freeze QTE time during debug stops and bind every grant/stop token to epoch, generation and
   runtime revision. Console execution is limited to the reference-safe subset.
+
+Batch 9 delivered runtime protocol 10.0, debug protocol 3.0 and C ABI 2.1. Runtime and debug
+channels have independent ordered streams. Creator policy bounds renewable epoch/generation grants;
+every stopped-state operation validates the session epoch, VM pause epoch, program generation and
+runtime revision. The VM exposes global pause, instruction/source/call-aware stepping, fibers,
+frames, read-only operand stacks, atomic variable mutations and source-map breakpoints. Statement
+fingerprints relocate a source breakpoint only when its function-local target is unique; otherwise
+the breakpoint remains unbound without rejecting reload. Existing frames remain pinned to their old
+generation while new calls use the new artifact.
+
+Runtime faults now preserve the originating Host/Native command and UTF-8 source position whenever
+the VM supplied one. `WaitingExternal` and `DebugPaused` are distinct phases, and frontend time
+samples observed during a debugger stop rebase rather than advance the authoritative QTE clock.
+Runtime game fields are separately described, with only `input.message_skip` writable. Console
+evaluation currently supports scalar literals and visible scalar variables; safe execution supports
+one scalar assignment and rejects flow, waits, Host effects and unsupported expressions before any
+mutation. This is deliberately narrower than the reference debug console's full method-safe
+instruction set and can be extended additively inside a later debugger-compatibility slice.
 
 ## Batch 10: legacy saves and compatibility closure
 

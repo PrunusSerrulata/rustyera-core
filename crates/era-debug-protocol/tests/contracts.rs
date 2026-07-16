@@ -1,6 +1,6 @@
 use era_debug_protocol::{
     AuthorizedDebugRequest, DEBUG_PROTOCOL_VERSION, DebugCommand, DebugMessage, DebugPlace,
-    DebugScope, DebugValue, StepKind, StopToken, ValueKind, grant_scopes,
+    DebugScope, DebugValue, GrantToken, StepKind, StopToken, ValueKind, grant_scopes,
 };
 use era_protocol::{ProtocolBytes, SessionId};
 
@@ -20,12 +20,18 @@ fn requested_scopes_cannot_widen_creation_policy() {
 #[test]
 fn stateful_debug_commands_carry_a_stop_token() {
     let stop = StopToken {
+        session_epoch: 3,
         pause_epoch: 7,
         program_generation: 2,
         runtime_revision: 19,
     };
     let message = DebugMessage::Request(AuthorizedDebugRequest {
-        grant_id: SessionId { high: 1, low: 2 },
+        grant: GrantToken {
+            grant_id: SessionId { high: 1, low: 2 },
+            session_epoch: 3,
+            program_generation: 2,
+            issued_runtime_revision: 18,
+        },
         command: DebugCommand::Step {
             stop,
             fiber_id: 4,
@@ -41,7 +47,7 @@ fn stateful_debug_commands_carry_a_stop_token() {
 
 #[test]
 fn debug_protocol_has_an_independent_version() {
-    assert_eq!(DEBUG_PROTOCOL_VERSION.major, 2);
+    assert_eq!(DEBUG_PROTOCOL_VERSION.major, 3);
 }
 
 #[test]

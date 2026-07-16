@@ -120,6 +120,7 @@ pub struct VmResolvedBreakpoint {
     pub binding: VmBreakpointBinding,
     pub source: Option<ResolvedSourceLocation>,
     pub message: Option<String>,
+    pub hit_count: u64,
 }
 
 /// Read-only inspection interface. The absence of operand/frame mutation methods is
@@ -175,7 +176,7 @@ pub trait VmDebugControl {
     /// # Errors
     ///
     /// Returns an error if a pause is already pending or execution cannot reach a safe point.
-    fn request_pause(&mut self) -> Result<(), VmError>;
+    fn request_pause(&mut self) -> Result<VmDebugStop, VmError>;
     /// # Errors
     ///
     /// Returns an error for a stale stop token or invalid execution state.

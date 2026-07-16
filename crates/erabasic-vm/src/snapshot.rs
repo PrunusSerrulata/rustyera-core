@@ -273,6 +273,7 @@ impl Vm {
             next_request: snapshot.next_request,
             next_generation: snapshot.next_generation,
             pending_reload: None,
+            debug: crate::debug::DebugState::default(),
         })
     }
 }

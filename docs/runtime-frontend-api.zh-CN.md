@@ -53,7 +53,7 @@ Runtime 不回调前端，也不执行文件 I/O、窗口绘制、操作系统�
 
 ## 2. 动态库与 ABI 协商
 
-ABI 当前版本为 `2.0`：
+ABI 当前版本为 `2.1`：
 
 ```c
 #define ERA_RUNTIME_ABI_MAJOR 2u
@@ -181,14 +181,14 @@ EraStatus session_create(
 | --- | --- |
 | `header` | 使用 `options->header`。 |
 | `options` | 创建选项，不能为空。 |
-| `options->debug_scope_mask` | 创建者允许的调试权限上限。当前阶段必须为 `0`。 |
+| `options->debug_scope_mask` | 创建者允许的调试权限上限。使用头文件中的 `ERA_DEBUG_SCOPE_*` 位；未知位会被拒绝。调试客户端只能申请其子集。 |
 | `options->reserved` | 必须全部为 `0`。 |
 | `out_handle` | 成功时写入非零句柄，不能为空。 |
 
 返回值：
 
 - `OK`：创建成功。
-- `INVALID_ARGUMENT`：指针、结构大小或当前不支持的调试权限无效。
+- `INVALID_ARGUMENT`：指针、结构大小、保留字段或调试权限掩码包含未知位。
 - `ABI_MISMATCH`：`options->header` 的 ABI 不兼容。
 - `INTERNAL_ERROR`：内部异常。
 
@@ -335,11 +335,11 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 | 字段 | 含义 |
 | --- | --- |
 | `wire_version` | 公共信封版本，当前为 `2.0`。 |
-| `channel_version` | Runtime protocol 版本，当前为 `5.0`。 |
+| `channel_version` | `Runtime` channel 当前为 `10.0`；`Debug` channel 当前为 `3.0`。 |
 | `channel` | 正常运行必须为 `Runtime`；调试使用独立 `Debug` channel。 |
 | `session` | 首次 `ClientHello` 可为空；握手成功后必须等于 `ServerHello.session`。 |
 | `session_epoch` | 首次握手可为空；之后必须等于当前时间线 epoch。新游戏、恢复或热替换提交后旧 epoch 消息失效。 |
-| `sequence` | 每个方向独立、从 `0` 开始、严格连续递增。 |
+| `sequence` | 每个 channel、每个方向独立，从 `0` 开始并严格连续递增。 |
 | `message_id` | 非零消息标识，在该方向保持唯一。 |
 | `correlation_id` | 响应关联的请求 `message_id`，无关联事件为空。 |
 | `payload_tag` | `RuntimeMessage` 的稳定数字标签。 |
@@ -420,7 +420,7 @@ artifact 和运行状态。没有协商 `ProjectReload` 时不得发送。
 同一会话每个方向最多一个活动 transfer。
 
 Runtime 使用 `StateChanged`（tag `21`）报告 `Negotiating`、`LoadingProject`、`Ready`、
-`Starting`、`Running`、`WaitingInput`、`Paused`、`Reloading`、`Stopping`、`Stopped` 或
+`Starting`、`Running`、`WaitingInput`、`WaitingExternal`、`DebugPaused`、`Reloading`、`Stopping`、`Stopped` 或
 `Faulted`；`revision` 在每次 phase 变化时递增，消息同时报告当前 epoch。
 
 ### 关闭
