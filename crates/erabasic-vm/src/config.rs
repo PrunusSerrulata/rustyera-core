@@ -93,6 +93,7 @@ pub enum VmEvent {
         fiber: FiberId,
         fault: VmFault,
     },
+    DebugStopped(crate::VmDebugStop),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -116,5 +117,17 @@ pub enum FiberStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VmBacktraceFrame {
     pub function: String,
+    pub source: Option<ResolvedSourceLocation>,
+}
+
+/// Immutable source identity captured before an instruction crosses the
+/// caller-pumped Host boundary.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VmExecutionOrigin {
+    pub generation: GenerationId,
+    pub function: erabasic_bytecode::SymbolKey,
+    pub function_name: String,
+    pub instruction: u32,
+    pub command: String,
     pub source: Option<ResolvedSourceLocation>,
 }

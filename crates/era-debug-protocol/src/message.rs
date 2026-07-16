@@ -8,11 +8,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BreakpointUpdate, CallStack, ConsoleCommand, ConsoleOutcome, DebugGrant, DebugHello,
     DebugRevoke, DebugStop, FiberPage, GameFieldPage, GameFieldValue, GameFieldWrite,
-    OperandStackPage, ResolvedBreakpoint, StepKind, StopToken, VariablePage, VariableValue,
-    VariableWrite,
+    GameFieldWriteOutcome, GrantToken, OperandStackPage, ResolvedBreakpoint, StepKind, StopToken,
+    VariablePage, VariableValue, VariableWrite, VariableWriteOutcome,
 };
 
-pub const DEBUG_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(2, 0);
+pub const DEBUG_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(3, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -126,7 +126,7 @@ pub enum DebugCommand {
 #[cbor(map)]
 pub struct AuthorizedDebugRequest {
     #[n(0)]
-    pub grant_id: SessionId,
+    pub grant: GrantToken,
     #[n(1)]
     pub command: DebugCommand,
 }
@@ -154,6 +154,10 @@ pub enum DebugResponse {
     Console(#[n(0)] ConsoleOutcome),
     #[n(9)]
     Breakpoints(#[n(0)] Vec<ResolvedBreakpoint>),
+    #[n(10)]
+    VariablesWritten(#[n(0)] VariableWriteOutcome),
+    #[n(11)]
+    GameFieldsWritten(#[n(0)] GameFieldWriteOutcome),
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

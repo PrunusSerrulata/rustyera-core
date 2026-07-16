@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::sfmt::Sfmt19937;
 use crate::structured::{StructuredExtension, StructuredScope};
 use crate::structured::{StructuredNative, StructuredState, bundle_key, is_structured_name};
-use crate::{FiberId, HostRequestId, HostWrite, PlaceDescriptor, VmValue};
+use crate::{FiberId, HostRequestId, HostWrite, PlaceDescriptor, VmExecutionOrigin, VmValue};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -22,6 +22,7 @@ pub struct HostCallRequest {
     pub fiber: FiberId,
     pub import: RuntimeImport,
     pub arguments: Vec<VmValue>,
+    pub origin: VmExecutionOrigin,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

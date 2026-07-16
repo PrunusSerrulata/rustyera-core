@@ -155,7 +155,7 @@ mod tests {
     use erabasic_bytecode::{
         HostCapability, HostEffect, HostImport, HostSnapshotCapability, RuntimeImport, SymbolKey,
     };
-    use erabasic_vm::{FiberId, HostRequestId};
+    use erabasic_vm::{FiberId, GenerationId, HostRequestId, VmExecutionOrigin};
 
     use super::*;
 
@@ -180,6 +180,14 @@ mod tests {
                 snapshot_capability: HostSnapshotCapability::StableWait,
             },
             arguments,
+            origin: VmExecutionOrigin {
+                generation: GenerationId(1),
+                function: SymbolKey::derive("test.function", b"TEST"),
+                function_name: "TEST".into(),
+                instruction: 0,
+                command: name.into(),
+                source: None,
+            },
         }
     }
 

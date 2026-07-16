@@ -16,8 +16,9 @@ use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode
 use erabasic_vm::{
     EraSaveScope, FiberStatus, HostCallRequest, HostCallResult, HostReady, HostRebindRequest,
     HostWaitStability, NativeServiceRegistry, RunBudget, RuntimeVm, SnapshotBlocker,
-    SnapshotEligibility, Vm, VmConfig, VmEvent, VmFaultCode, VmHost, VmRuntimeStatePort,
-    VmRuntimeStateTransaction, VmSnapshot, VmValue,
+    SnapshotEligibility, Vm, VmBreakpoint, VmBreakpointLocation, VmConfig, VmDebugControl,
+    VmDebugInspect, VmDebugVariableWrite, VmEvent, VmFaultCode, VmHost, VmRuntimeStatePort,
+    VmRuntimeStateTransaction, VmSnapshot, VmStepKind, VmValue,
 };
 
 fn project_data() -> erabasic_data::ProjectData {
@@ -1307,6 +1308,55 @@ fn hot_reload_pins_old_stacks_and_migrates_compatible_state() {
 }
 
 #[test]
+fn debugger_pause_step_and_variable_batch_are_coherent_and_atomic() {
+    let (artifact, entry, _) = call_artifact(7, vec![1]);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let stop = vm.request_pause().unwrap();
+    let page = vm.variables(stop.token, None, 32).unwrap();
+    let variable = page.values.first().expect("project variable").clone();
+    let mut invalid_target = variable.target.clone();
+    invalid_target.target.indices[0] = 99;
+    assert!(
+        vm.write_variables(
+            stop.token,
+            &[
+                VmDebugVariableWrite {
+                    target: variable.target.clone(),
+                    value: VmValue::Integer(41),
+                    expected_revision: variable.revision,
+                },
+                VmDebugVariableWrite {
+                    target: invalid_target,
+                    value: VmValue::Integer(42),
+                    expected_revision: variable.revision,
+                },
+            ],
+        )
+        .is_err()
+    );
+    assert_eq!(
+        VmDebugInspect::read_variable(&vm, stop.token, &variable.target)
+            .unwrap()
+            .value,
+        VmValue::Integer(0)
+    );
+
+    vm.step(stop.token, fiber, VmStepKind::Instruction).unwrap();
+    let mut host = ReadyHost::default();
+    let mut natives = NativeServiceRegistry::default();
+    let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::DebugStopped(_))),
+        "{:#?}",
+        report.events
+    );
+}
+
+#[test]
 fn incompatible_hot_reload_is_rejected_atomically() {
     let (base, _, variable) = call_artifact(1, vec![2]);
     let mut target = base.clone();
@@ -1327,6 +1377,36 @@ fn incompatible_hot_reload_is_rejected_atomically() {
         vm.read_variable(variable, &[0], None).unwrap(),
         VmValue::Integer(11)
     );
+}
+
+#[test]
+fn function_breakpoints_rebind_to_the_new_hot_reload_generation() {
+    let (base, entry, _) = call_artifact(1, vec![1]);
+    let (target, _, _) = call_artifact(2, vec![1]);
+    let patch = create_patch(&base, &target);
+    let mut vm = Vm::new(validated(&base), VmConfig::default());
+    vm.update_breakpoints(
+        &[VmBreakpoint {
+            id: 9,
+            enabled: true,
+            hit_count: 0,
+            location: VmBreakpointLocation::Function(entry),
+        }],
+        &[],
+    )
+    .unwrap();
+    vm.prepare_hot_reload(&patch, &ValidationContext::for_artifact(&target))
+        .unwrap();
+    vm.commit_hot_reload().unwrap();
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = ReadyHost::default();
+    let mut natives = NativeServiceRegistry::default();
+    let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        VmEvent::DebugStopped(stop)
+            if matches!(stop.reason, erabasic_vm::VmDebugStopReason::Breakpoint(9))
+    )));
 }
 
 #[test]
@@ -1456,6 +1536,7 @@ fn runtime_fault_resolves_to_utf8_source_location() {
             source_index: 0,
             byte_start: "@FAULT\n".len() as u64,
             byte_end: text.len() as u64,
+            statement_fingerprint: Digest::hash("test.statement", &[b"fault"]),
             origin_chain: Vec::new(),
         }],
     };

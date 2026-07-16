@@ -52,9 +52,25 @@ impl Vm {
             host_calls: 0,
             events: Vec::new(),
         };
+        if self.debug_is_paused() {
+            return report;
+        }
+        if let Some(selected) = self.debug_step_fiber()
+            && let Some(index) = self.runnable.iter().position(|fiber| *fiber == selected)
+            && let Some(selected) = self.runnable.remove(index)
+        {
+            self.runnable.push_front(selected);
+        }
         let quantum = budget.fiber_quantum.max(1);
         let mut budget_exhausted = false;
         while let Some(fiber_id) = self.runnable.pop_front() {
+            if self
+                .debug_step_fiber()
+                .is_some_and(|selected| selected != fiber_id)
+            {
+                self.runnable.push_front(fiber_id);
+                break;
+            }
             if report.instructions >= budget.maximum_instructions {
                 self.runnable.push_front(fiber_id);
                 budget_exhausted = true;
@@ -72,6 +88,10 @@ impl Vm {
             while used < quantum && matches!(fiber.state, FiberState::Runnable) {
                 if report.instructions >= budget.maximum_instructions {
                     budget_exhausted = true;
+                    break;
+                }
+                if let Some(stop) = self.debug_stop_before(&fiber) {
+                    report.events.push(VmEvent::DebugStopped(stop));
                     break;
                 }
                 let position = match self.instruction_position(&fiber) {
@@ -131,13 +151,21 @@ impl Vm {
                     fiber.mark_progress();
                 }
                 match outcome {
-                    Ok(StepOutcome::Continue) => {}
+                    Ok(StepOutcome::Continue) => {
+                        if let Some(stop) = self.debug_stop_after(&fiber, false, false) {
+                            report.events.push(VmEvent::DebugStopped(stop));
+                            break;
+                        }
+                    }
                     Ok(StepOutcome::Yielded) => {
                         fiber.mark_progress();
                         yielded = true;
                         report
                             .events
                             .push(VmEvent::FiberYielded { fiber: fiber.id });
+                        if let Some(stop) = self.debug_stop_after(&fiber, false, false) {
+                            report.events.push(VmEvent::DebugStopped(stop));
+                        }
                         break;
                     }
                     Ok(StepOutcome::Blocked) => {
@@ -148,6 +176,9 @@ impl Vm {
                                 request: wait.request,
                             });
                         }
+                        if let Some(stop) = self.debug_stop_after(&fiber, true, false) {
+                            report.events.push(VmEvent::DebugStopped(stop));
+                        }
                         break;
                     }
                     Ok(StepOutcome::Completed(value)) => {
@@ -155,6 +186,9 @@ impl Vm {
                             fiber: fiber.id,
                             value,
                         });
+                        if let Some(stop) = self.debug_stop_after(&fiber, false, true) {
+                            report.events.push(VmEvent::DebugStopped(stop));
+                        }
                         break;
                     }
                     Err(error) => {
@@ -221,7 +255,7 @@ impl Vm {
                 }
             }
             self.fibers.insert(fiber_id, fiber);
-            if budget_exhausted {
+            if budget_exhausted || self.debug_is_paused() {
                 break;
             }
         }
@@ -693,11 +727,13 @@ impl Vm {
                             })?;
                         let request = self.allocate_request_id();
                         *host_calls = host_calls.saturating_add(1);
+                        let origin = self.execution_origin(position, &target.import.name);
                         match host.call(HostCallRequest {
                             id: request,
                             fiber: fiber.id,
                             import: target.import.clone(),
                             arguments,
+                            origin: origin.clone(),
                         }) {
                             HostCallResult::Ready(ready) => self
                                 .apply_host_ready(fiber, target.import.result, ready)
@@ -728,6 +764,7 @@ impl Vm {
                                     result,
                                     stability,
                                     rebind_payload,
+                                    origin: origin.clone(),
                                 });
                                 return Ok(StepOutcome::Blocked);
                             }
@@ -742,6 +779,7 @@ impl Vm {
                                     result,
                                     stability: HostWaitStability::Transient,
                                     rebind_payload: Vec::new(),
+                                    origin,
                                 });
                                 return Ok(StepOutcome::Blocked);
                             }
@@ -803,35 +841,87 @@ impl Vm {
         code: VmFaultCode,
         message: impl Into<String>,
     ) -> VmFault {
-        let source = self
-            .generations
-            .get(&position.generation)
-            .and_then(|generation| {
-                let function = generation
-                    .artifact
-                    .functions
-                    .iter()
-                    .find(|function| function.key == position.function)?;
-                let offset = function
-                    .code
-                    .iter()
-                    .take(position.instruction)
-                    .map(EncodedInstruction::encoded_len)
-                    .sum();
-                generation
-                    .artifact
-                    .source_map
-                    .resolve(position.function, offset)
-            });
+        let command = self.command_for_position(position);
+        let origin = self.execution_origin(position, &command);
         VmFault {
             code,
             message: message.into(),
             fiber,
             generation: position.generation,
             function: position.function,
+            function_name: origin.function_name,
             instruction: u32::try_from(position.instruction).unwrap_or(u32::MAX),
+            command,
+            source: origin.source,
+        }
+    }
+
+    fn execution_origin(
+        &self,
+        position: &InstructionPosition,
+        command: &str,
+    ) -> crate::VmExecutionOrigin {
+        let generation = self.generations.get(&position.generation);
+        let function = generation.and_then(|generation| {
+            generation
+                .artifact
+                .functions
+                .iter()
+                .find(|function| function.key == position.function)
+        });
+        let source = generation.zip(function).and_then(|(generation, function)| {
+            let offset = function
+                .code
+                .iter()
+                .take(position.instruction)
+                .map(EncodedInstruction::encoded_len)
+                .sum();
+            generation
+                .artifact
+                .source_map
+                .resolve(position.function, offset)
+        });
+        crate::VmExecutionOrigin {
+            generation: position.generation,
+            function: position.function,
+            function_name: function.map_or_else(String::new, |value| value.name.clone()),
+            instruction: u32::try_from(position.instruction).unwrap_or(u32::MAX),
+            command: command.to_owned(),
             source,
         }
+    }
+
+    fn command_for_position(&self, position: &InstructionPosition) -> String {
+        let Ok(opcode) = Opcode::try_from(position.encoded.opcode) else {
+            return format!("opcode:{}", position.encoded.opcode);
+        };
+        if matches!(opcode, Opcode::CallHost | Opcode::CallNative)
+            && position.encoded.payload.len() >= 16
+        {
+            let mut bytes = [0; 16];
+            bytes.copy_from_slice(&position.encoded.payload[..16]);
+            let key = SymbolKey(bytes);
+            if let Some(generation) = self.generations.get(&position.generation) {
+                let name = generation
+                    .artifact
+                    .host_imports
+                    .iter()
+                    .map(|value| &value.import)
+                    .chain(
+                        generation
+                            .artifact
+                            .native_imports
+                            .iter()
+                            .map(|value| &value.import),
+                    )
+                    .find(|import| import.key == key)
+                    .map(|import| import.name.clone());
+                if let Some(name) = name {
+                    return name;
+                }
+            }
+        }
+        format!("{opcode:?}")
     }
 }
 

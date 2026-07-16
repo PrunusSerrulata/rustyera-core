@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
+use era_debug_protocol::{DebugMessage, DebugScope, GrantToken};
 use era_protocol::{
-    ProtocolBytes, ProtocolError, ProtocolVersion, SessionEpoch, SessionId, VersionRange,
+    Channel, ProtocolBytes, ProtocolError, ProtocolVersion, SessionEpoch, SessionId, VersionRange,
     WireLimits, decode_canonical, decode_envelope, encode_canonical, encode_envelope,
     negotiate_version,
 };
@@ -45,12 +46,16 @@ use crate::save_adapter::{
     merge_opaque_extensions, merge_structured_extensions,
 };
 
+mod debug_session;
+
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeOptions {
     pub session_id: SessionId,
     pub limits: RuntimeLimits,
     pub wire_limits: WireLimits,
     pub vm_config: VmConfig,
+    /// Creator-owned upper bound for [`DebugScope`] discriminants.
+    pub debug_scope_mask: u64,
 }
 
 impl Default for RuntimeOptions {
@@ -67,6 +72,7 @@ impl Default for RuntimeOptions {
             },
             wire_limits: WireLimits::default(),
             vm_config: VmConfig::default(),
+            debug_scope_mask: 0,
         }
     }
 }
@@ -161,6 +167,18 @@ struct OutboundStateTransfer {
     next_offset: u64,
 }
 
+#[derive(Debug)]
+enum InboundMessage {
+    Runtime(RuntimeMessage),
+    Debug(DebugMessage),
+}
+
+#[derive(Clone, Debug)]
+struct ActiveDebugGrant {
+    token: GrantToken,
+    scopes: BTreeSet<DebugScope>,
+}
+
 /// Single-owner runtime actor. Methods only enqueue, drive, and dequeue messages;
 /// no frontend code can run inside a VM instruction dispatch.
 pub struct RuntimeSession {
@@ -170,7 +188,9 @@ pub struct RuntimeSession {
     revision: u64,
     epoch: SessionEpoch,
     expected_inbound_sequence: u64,
+    expected_debug_sequence: u64,
     outbound_sequence: u64,
+    debug_outbound_sequence: u64,
     next_message_id: u64,
     next_request_id: u64,
     next_wait_id: u64,
@@ -179,10 +199,15 @@ pub struct RuntimeSession {
     logical_time_ns: u64,
     frontend_time_origin: Option<(u64, u64)>,
     random_seed: Option<u64>,
-    inbound: VecDeque<(u64, RuntimeMessage)>,
+    inbound: VecDeque<(u64, InboundMessage)>,
     outbound: VecDeque<Vec<u8>>,
     outbound_journal: BTreeMap<u64, Vec<u8>>,
     accepted_message_ids: BTreeMap<u64, (u64, blake3::Hash)>,
+    accepted_debug_message_ids: BTreeMap<u64, (u64, blake3::Hash)>,
+    active_debug_grant: Option<ActiveDebugGrant>,
+    next_debug_grant_id: u64,
+    debug_resume_phase: Option<RuntimePhase>,
+    debug_frontend_time_sample: Option<u64>,
     artifact: Option<ValidatedArtifact>,
     incremental: IncrementalState,
     vm: Option<RuntimeVm>,
@@ -214,7 +239,9 @@ impl RuntimeSession {
             revision: 0,
             epoch: SessionEpoch(0),
             expected_inbound_sequence: 0,
+            expected_debug_sequence: 0,
             outbound_sequence: 0,
+            debug_outbound_sequence: 0,
             next_message_id: 1,
             next_request_id: 1,
             next_wait_id: 1,
@@ -227,6 +254,11 @@ impl RuntimeSession {
             outbound: VecDeque::new(),
             outbound_journal: BTreeMap::new(),
             accepted_message_ids: BTreeMap::new(),
+            accepted_debug_message_ids: BTreeMap::new(),
+            active_debug_grant: None,
+            next_debug_grant_id: 1,
+            debug_resume_phase: None,
+            debug_frontend_time_sample: None,
             artifact: None,
             incremental: IncrementalState::default(),
             vm: None,
@@ -256,6 +288,9 @@ impl RuntimeSession {
     /// Rejects malformed, oversized, out-of-sequence, or wrong-session envelopes.
     pub fn submit_envelope(&mut self, bytes: &[u8]) -> Result<(), RuntimeError> {
         let envelope = decode_envelope(bytes, self.options.wire_limits)?;
+        if envelope.channel == Channel::Debug && self.state != SessionState::Active {
+            return Err(RuntimeError::SessionMismatch);
+        }
         if self.state == SessionState::Active
             && (envelope.session != Some(self.options.session_id)
                 || envelope.session_epoch != Some(self.epoch))
@@ -263,20 +298,28 @@ impl RuntimeSession {
             return Err(RuntimeError::SessionMismatch);
         }
         let envelope_hash = blake3::hash(bytes);
-        if envelope.sequence < self.expected_inbound_sequence {
-            if self.accepted_message_ids.get(&envelope.message_id)
-                == Some(&(envelope.sequence, envelope_hash))
-            {
+        let (expected_sequence, accepted_ids) = match envelope.channel {
+            Channel::Runtime => (
+                &mut self.expected_inbound_sequence,
+                &mut self.accepted_message_ids,
+            ),
+            Channel::Debug => (
+                &mut self.expected_debug_sequence,
+                &mut self.accepted_debug_message_ids,
+            ),
+        };
+        if envelope.sequence < *expected_sequence {
+            if accepted_ids.get(&envelope.message_id) == Some(&(envelope.sequence, envelope_hash)) {
                 return Ok(());
             }
             return Err(RuntimeError::InvalidSequence {
-                expected: self.expected_inbound_sequence,
+                expected: *expected_sequence,
                 actual: envelope.sequence,
             });
         }
-        if envelope.sequence != self.expected_inbound_sequence {
+        if envelope.sequence != *expected_sequence {
             return Err(RuntimeError::InvalidSequence {
-                expected: self.expected_inbound_sequence,
+                expected: *expected_sequence,
                 actual: envelope.sequence,
             });
         }
@@ -284,13 +327,14 @@ impl RuntimeSession {
             return Err(RuntimeError::ResourceLimit("inbound journal is full"));
         }
         let message_id = envelope.message_id;
-        let message = RuntimeMessage::from_envelope(&envelope)?;
-        self.expected_inbound_sequence = self.expected_inbound_sequence.saturating_add(1);
-        self.accepted_message_ids
-            .insert(message_id, (envelope.sequence, envelope_hash));
-        while self.accepted_message_ids.len() > self.options.limits.maximum_journal_entries as usize
-        {
-            self.accepted_message_ids.pop_first();
+        let message = match envelope.channel {
+            Channel::Runtime => InboundMessage::Runtime(RuntimeMessage::from_envelope(&envelope)?),
+            Channel::Debug => InboundMessage::Debug(DebugMessage::from_envelope(&envelope)?),
+        };
+        *expected_sequence = expected_sequence.saturating_add(1);
+        accepted_ids.insert(message_id, (envelope.sequence, envelope_hash));
+        while accepted_ids.len() > self.options.limits.maximum_journal_entries as usize {
+            accepted_ids.pop_first();
         }
         self.inbound.push_back((message_id, message));
         Ok(())
@@ -310,7 +354,12 @@ impl RuntimeSession {
         let mut instructions = 0;
         while transitions < transition_limit {
             if let Some((message_id, message)) = self.inbound.pop_front() {
-                self.handle_message(message_id, message)?;
+                match message {
+                    InboundMessage::Runtime(message) => self.handle_message(message_id, message)?,
+                    InboundMessage::Debug(message) => {
+                        self.handle_debug_message(message_id, message)?;
+                    }
+                }
                 transitions += 1;
                 continue;
             }
@@ -448,6 +497,7 @@ impl RuntimeSession {
             .map(|snapshot| snapshot.maximum_shop_items)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_message(
         &mut self,
         message_id: u64,
@@ -463,13 +513,28 @@ impl RuntimeSession {
                 ),
             };
         }
+        if self.phase == RuntimePhase::DebugPaused && debugger_suspends_message(&message) {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "state-changing runtime messages are suspended by a debugger stop",
+            );
+        }
         match message {
             RuntimeMessage::ProjectManifest(manifest) => self.load_project(message_id, &manifest),
             RuntimeMessage::Start(start) => self.start(message_id, &start),
             RuntimeMessage::Input(input) => self.complete_input(message_id, input),
+            RuntimeMessage::AdvanceTime(time) if self.phase == RuntimePhase::DebugPaused => {
+                self.debug_frontend_time_sample = Some(time.monotonic_time_ns);
+                Ok(())
+            }
             RuntimeMessage::AdvanceTime(time) => self.advance_time(message_id, time),
             RuntimeMessage::DeviceStateChanged(state) => {
-                self.observe_frontend_time(state.monotonic_time_ns);
+                if self.phase == RuntimePhase::DebugPaused {
+                    self.debug_frontend_time_sample = Some(state.monotonic_time_ns);
+                } else {
+                    self.observe_frontend_time(state.monotonic_time_ns);
+                }
                 Ok(())
             }
             RuntimeMessage::ClientStateChanged(_) | RuntimeMessage::EffectAcknowledgement(_) => {
@@ -547,7 +612,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 9.0 is required".into(),
+                    message: "runtime protocol 10.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -734,11 +799,13 @@ impl RuntimeSession {
             .collect();
         self.epoch = SessionEpoch(new_epoch);
         self.accepted_message_ids.clear();
+        self.accepted_debug_message_ids.clear();
         self.emit(
             RuntimeMessage::ProjectLoadReport(build.report),
             Some(message_id),
         )?;
         self.set_phase(previous_phase)?;
+        self.renew_debug_grant()?;
         self.emit_presentation()
     }
 
@@ -856,7 +923,8 @@ impl RuntimeSession {
             self.spawn_next_event(&mut vm)?;
         }
         self.vm = Some(vm);
-        self.set_phase(RuntimePhase::Running)
+        self.set_phase(RuntimePhase::Running)?;
+        self.renew_debug_grant()
     }
 
     #[allow(clippy::too_many_lines)]
@@ -976,6 +1044,7 @@ impl RuntimeSession {
         self.system_menu = system_menu;
         self.load_slot_paths = payload.load_slot_paths;
         self.set_phase(RuntimePhase::WaitingInput)?;
+        self.renew_debug_grant()?;
         self.emit_presentation()
     }
 
@@ -1002,7 +1071,7 @@ impl RuntimeSession {
         vm.commit_runtime_state(prepared)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         self.controller.flow = Some(SystemFlow::Title);
-        if self
+        let result = if self
             .controller
             .prepare_function(vm.vm().artifact(), "SYSTEM_TITLE")
         {
@@ -1012,7 +1081,9 @@ impl RuntimeSession {
         } else {
             self.vm = Some(vm);
             self.open_title_menu()
-        }
+        };
+        result?;
+        self.renew_debug_grant()
     }
 
     fn open_title_menu(&mut self) -> Result<(), RuntimeError> {
@@ -1074,9 +1145,18 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         match event {
             VmPortEvent::HostCall(request) => self.handle_host_call(vm, &request),
-            VmPortEvent::FiberFaulted(_, fault) => {
-                self.fault(FaultCode::VmFault, &fault.message, None)
-            }
+            VmPortEvent::FiberFaulted(_, fault) => self.fault(
+                FaultCode::VmFault,
+                &fault.message,
+                Some(erabasic_vm::VmExecutionOrigin {
+                    generation: fault.generation,
+                    function: fault.function,
+                    function_name: fault.function_name,
+                    instruction: fault.instruction,
+                    command: fault.command,
+                    source: fault.source,
+                }),
+            ),
             VmPortEvent::FiberCompleted(fiber, value) => {
                 if self.controller.completed(fiber, value.as_ref()) {
                     self.spawn_next_event(vm)?;
@@ -1106,6 +1186,7 @@ impl RuntimeSession {
                 Ok(())
             }
             VmPortEvent::FiberYielded(_) => Ok(()),
+            VmPortEvent::DebugStopped(stop) => self.enter_debug_stop(stop, None),
         }
     }
 
@@ -1124,7 +1205,7 @@ impl RuntimeSession {
                     return self.fault(
                         FaultCode::VmFault,
                         "AWAIT duration must be between 0 and 10000 milliseconds",
-                        None,
+                        Some(request.origin.clone()),
                     );
                 }
             };
@@ -1211,7 +1292,7 @@ impl RuntimeSession {
                 return self.fault(
                     FaultCode::VmFault,
                     "DOTRAIN is only valid with a non-negative command during TRAIN",
-                    None,
+                    Some(request.origin.clone()),
                 );
             }
             vm.cancel_fiber(request.fiber)
@@ -1230,13 +1311,17 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "BEGIN" | "FORCE_BEGIN") {
             let Some(VmValue::String(keyword)) = request.arguments.first() else {
-                return self.fault(FaultCode::VmFault, "BEGIN expects a system keyword", None);
+                return self.fault(
+                    FaultCode::VmFault,
+                    "BEGIN expects a system keyword",
+                    Some(request.origin.clone()),
+                );
             };
             let Some(flow) = SystemFlow::parse(keyword) else {
                 return self.fault(
                     FaultCode::VmFault,
                     &format!("unknown BEGIN system keyword: {keyword}"),
-                    None,
+                    Some(request.origin.clone()),
                 );
             };
             // The pinned fork treats BEGIN and FORCE_BEGIN as the same forced
@@ -1251,7 +1336,7 @@ impl RuntimeSession {
             return self.fault(
                 FaultCode::UnsupportedRuntimeFeature,
                 &format!("{name} is not implemented by the pinned reference runtime"),
-                None,
+                Some(request.origin.clone()),
             );
         }
         if name == "PUTFORM" {
@@ -1326,7 +1411,7 @@ impl RuntimeSession {
                 return self.fault(
                     FaultCode::VmFault,
                     "SAVEDATA description cannot contain a newline",
-                    None,
+                    Some(request.origin.clone()),
                 );
             }
             let bytes = encode_scoped_save(
@@ -1734,12 +1819,14 @@ impl RuntimeSession {
                 return self.fault(
                     FaultCode::VmFault,
                     "GETLINESTR expects a string pattern",
-                    None,
+                    Some(request.origin.clone()),
                 );
             };
             let value = match logical_line_string(pattern, 75) {
                 Ok(value) => value,
-                Err(message) => return self.fault(FaultCode::VmFault, message, None),
+                Err(message) => {
+                    return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                }
             };
             return commit_completion(
                 vm,
@@ -1784,7 +1871,7 @@ impl RuntimeSession {
             return self.fault(
                 FaultCode::UnsupportedRuntimeFeature,
                 &format!("unsupported runtime presentation query: {name}"),
-                None,
+                Some(request.origin.clone()),
             );
         }
         if name == "DRAWLINE" {
@@ -2025,7 +2112,7 @@ impl RuntimeSession {
             self.fault(
                 FaultCode::VmFault,
                 &format!("unsupported host import: {}", request.import.import.name),
-                None,
+                Some(request.origin.clone()),
             )
         }
     }
@@ -2095,7 +2182,7 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         let request_id = self.allocate_request()?;
         self.operations.insert_storage(request_id, pending);
-        self.set_phase(RuntimePhase::Paused)?;
+        self.set_phase(RuntimePhase::WaitingExternal)?;
         self.emit(
             RuntimeMessage::StorageRequest(StorageRequest {
                 request_id,
@@ -2397,7 +2484,8 @@ impl RuntimeSession {
         self.controller.step = SystemStep::ShopShow;
         self.dispatch_system_function(&mut vm, "SHOW_SHOP", true)?;
         self.vm = Some(vm);
-        self.set_phase(RuntimePhase::Running)
+        self.set_phase(RuntimePhase::Running)?;
+        self.renew_debug_grant()
     }
 
     fn resume_storage_host_value(
@@ -4013,13 +4101,13 @@ impl RuntimeSession {
         &mut self,
         code: FaultCode,
         message: &str,
-        source: Option<era_runtime_protocol::SourceLocation>,
+        origin: Option<erabasic_vm::VmExecutionOrigin>,
     ) -> Result<(), RuntimeError> {
         self.emit(
             RuntimeMessage::Fault(RuntimeFault {
                 code,
                 message: message.into(),
-                source,
+                origin: origin.map(protocol_execution_origin),
             }),
             None,
         )?;
@@ -4100,6 +4188,7 @@ impl RuntimeSession {
         self.reusable_system_intents.clear();
         self.next_interaction_id = 1;
         self.accepted_message_ids.clear();
+        self.accepted_debug_message_ids.clear();
     }
 }
 
@@ -4174,6 +4263,26 @@ fn dat_filename(value: &str) -> Result<&str, RuntimeError> {
         ));
     }
     Ok(value)
+}
+
+fn protocol_execution_origin(
+    origin: erabasic_vm::VmExecutionOrigin,
+) -> era_runtime_protocol::ExecutionOrigin {
+    era_runtime_protocol::ExecutionOrigin {
+        command: origin.command,
+        function: origin.function_name,
+        generation: origin.generation.0,
+        instruction: origin.instruction,
+        source: origin
+            .source
+            .map(|source| era_runtime_protocol::SourceLocation {
+                relative_path: source.relative_path,
+                byte_start: source.byte_start,
+                byte_end: source.byte_end,
+                line: Some(source.line),
+                byte_column: Some(source.byte_column),
+            }),
+    }
 }
 
 fn safe_relative_path(value: &str) -> Result<String, RuntimeError> {
@@ -4788,8 +4897,27 @@ fn intersect_limits(left: RuntimeLimits, right: RuntimeLimits) -> RuntimeLimits 
     }
 }
 
+fn debugger_suspends_message(message: &RuntimeMessage) -> bool {
+    matches!(
+        message,
+        RuntimeMessage::ProjectManifest(_)
+            | RuntimeMessage::Start(_)
+            | RuntimeMessage::Input(_)
+            | RuntimeMessage::ServiceResponse(_)
+            | RuntimeMessage::StorageResponse(_)
+            | RuntimeMessage::StateExportRequest(_)
+            | RuntimeMessage::StateImportBegin(_)
+            | RuntimeMessage::StateImportChunk(_)
+            | RuntimeMessage::StateImportCommit(_)
+            | RuntimeMessage::StateExportChunkRequest(_)
+            | RuntimeMessage::StateTransferCancel(_)
+            | RuntimeMessage::ReloadProject(_)
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use era_debug_protocol::{DEBUG_PROTOCOL_VERSION, DebugHello, DebugMessage, DebugScope};
     use era_protocol::{Channel, Envelope, ProtocolBytes, decode_envelope, encode_envelope};
     use era_runtime_protocol::{
         FileCategory, FileChange, FilePayload, ProjectManifest, SubmittedFile,
@@ -4839,6 +4967,20 @@ mod tests {
         messages
     }
 
+    fn submit_debug(session: &mut RuntimeSession, sequence: u64, message: &DebugMessage) {
+        let envelope = message
+            .envelope(
+                Some(session.options.session_id),
+                Some(session.epoch),
+                sequence,
+                10_000 + sequence,
+                None,
+            )
+            .expect("debug envelope");
+        let bytes = encode_envelope(&envelope, WireLimits::default()).expect("encode debug");
+        session.submit_envelope(&bytes).expect("submit debug");
+    }
+
     #[test]
     fn handshake_selects_only_implemented_features() {
         let mut session = RuntimeSession::new(RuntimeOptions::default());
@@ -4862,6 +5004,72 @@ mod tests {
         assert_eq!(hello.selected_version, RUNTIME_PROTOCOL_VERSION);
         assert!(hello.features.contains(&RuntimeFeature::TimedInput));
         assert!(!hello.features.contains(&RuntimeFeature::Audio));
+    }
+
+    #[test]
+    fn debug_channel_has_independent_sequence_and_cannot_widen_creator_policy() {
+        let mut session = RuntimeSession::new(RuntimeOptions {
+            debug_scope_mask: (1 << 2) | (1 << 5),
+            ..RuntimeOptions::default()
+        });
+        submit(
+            &mut session,
+            0,
+            RuntimeMessage::ClientHello(ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "debug-test".into(),
+                features: Vec::new(),
+                capabilities: capabilities(),
+                requested_limits: RuntimeOptions::default().limits,
+                preferred_locales: vec!["en".into()],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let _ = drain(&mut session);
+
+        submit_debug(
+            &mut session,
+            0,
+            &DebugMessage::Hello(DebugHello {
+                versions: VersionRange::exact(DEBUG_PROTOCOL_VERSION),
+                requested_scopes: vec![
+                    DebugScope::ExecutionControl,
+                    DebugScope::VariablesWrite,
+                    DebugScope::GameFieldsRead,
+                ],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let bytes = session.poll_envelope().expect("debug grant");
+        let envelope = decode_envelope(&bytes, WireLimits::default()).unwrap();
+        let DebugMessage::Grant(grant) = DebugMessage::from_envelope(&envelope).unwrap() else {
+            panic!("expected debug grant");
+        };
+        assert_eq!(
+            grant.scopes,
+            vec![DebugScope::GameFieldsRead, DebugScope::ExecutionControl]
+        );
+        assert_eq!(grant.token.session_epoch, session.epoch.0);
+    }
+
+    #[test]
+    fn debugger_pause_freezes_frontend_time_until_resume() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        session.state = SessionState::Active;
+        session.phase = RuntimePhase::DebugPaused;
+        session.logical_time_ns = 500;
+        session.frontend_time_origin = Some((10, 500));
+        session
+            .handle_message(
+                1,
+                RuntimeMessage::AdvanceTime(AdvanceTime {
+                    monotonic_time_ns: 1_000,
+                }),
+            )
+            .unwrap();
+        assert_eq!(session.logical_time_ns, 500);
+        session.resume_debug_time();
+        assert_eq!(session.frontend_time_origin, Some((1_000, 500)));
     }
 
     #[test]
@@ -5684,7 +5892,7 @@ mod tests {
     fn storage_slot_listing_is_sorted_and_runtime_tokenized() {
         let mut session = RuntimeSession::new(RuntimeOptions::default());
         session.state = SessionState::Active;
-        session.phase = RuntimePhase::Paused;
+        session.phase = RuntimePhase::WaitingExternal;
         session.epoch = SessionEpoch(1);
         session.selected_locale = "en".into();
         session
@@ -5811,7 +6019,7 @@ mod tests {
         )
         .expect("current save bytes");
         assert_eq!(decoded.metadata.description, "slot");
-        assert_eq!(session.phase(), RuntimePhase::Paused);
+        assert_eq!(session.phase(), RuntimePhase::WaitingExternal);
 
         submit(
             &mut session,

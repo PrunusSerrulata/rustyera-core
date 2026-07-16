@@ -13,9 +13,9 @@ use std::sync::{Mutex, OnceLock};
 use era_protocol::SessionId;
 use era_runtime::{RuntimeDriveBudget, RuntimeDriveState, RuntimeOptions, RuntimeSession};
 use era_runtime_ffi::{
-    ERA_RUNTIME_ABI_VERSION, EraAbiVersion, EraByteSlice, EraCallHeader, EraCreateOptions,
-    EraDriveOptions, EraDriveResult, EraDriveState, EraOwnedBuffer, EraRuntimeApi,
-    EraSessionHandle, EraStatus,
+    ERA_DEBUG_SCOPE_ALL, ERA_RUNTIME_ABI_VERSION, EraAbiVersion, EraByteSlice, EraCallHeader,
+    EraCreateOptions, EraDriveOptions, EraDriveResult, EraDriveState, EraOwnedBuffer,
+    EraRuntimeApi, EraSessionHandle, EraStatus,
 };
 
 static IMPLEMENTATION_NAME: &[u8] = b"RustyEra runtime\0";
@@ -97,7 +97,7 @@ extern "C" fn session_create(
         if !valid_header::<EraCreateOptions>(options.header) {
             return EraStatus::AbiMismatch;
         }
-        if options.debug_scope_mask != 0 {
+        if options.debug_scope_mask & !ERA_DEBUG_SCOPE_ALL != 0 {
             return EraStatus::InvalidArgument;
         }
         let mut registry = lock_registry();
@@ -108,6 +108,7 @@ extern "C" fn session_create(
                 high: 0x5255_5354_5945_5241,
                 low: handle,
             },
+            debug_scope_mask: options.debug_scope_mask,
             ..RuntimeOptions::default()
         });
         registry.sessions.insert(
@@ -331,7 +332,10 @@ mod tests {
 
     #[test]
     fn c_boundary_creates_drives_and_destroys_an_isolated_session() {
-        let options = EraCreateOptions::default();
+        let options = EraCreateOptions {
+            debug_scope_mask: era_runtime_ffi::ERA_DEBUG_SCOPE_EXECUTION_READ,
+            ..EraCreateOptions::default()
+        };
         let mut handle = EraSessionHandle::default();
         assert_eq!(
             session_create(options.header, &raw const options, &raw mut handle),
@@ -354,6 +358,19 @@ mod tests {
         assert_eq!(
             session_destroy(EraCallHeader::for_type::<EraCallHeader>(), handle),
             EraStatus::Ok
+        );
+    }
+
+    #[test]
+    fn c_boundary_rejects_unknown_debug_scope_bits() {
+        let options = EraCreateOptions {
+            debug_scope_mask: 1 << 63,
+            ..EraCreateOptions::default()
+        };
+        let mut handle = EraSessionHandle::default();
+        assert_eq!(
+            session_create(options.header, &raw const options, &raw mut handle),
+            EraStatus::InvalidArgument
         );
     }
 }

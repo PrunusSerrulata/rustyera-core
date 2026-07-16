@@ -4,7 +4,8 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 9.0 over common wire 2.0 is a development contract: by explicit project policy it
+dynamic library. Runtime protocol 10.0 and debug protocol 3.0 over common wire 2.0 are
+development contracts: by explicit project policy they
 does not promise backward compatibility until a frontend exists.
 
 ## Authority and ownership
@@ -53,7 +54,7 @@ ABI session allocation
   -> Ready
   -> Start(new game | traditional save | exact VM snapshot)
   -> Running <-> WaitingInput
-  -> optional Paused / Reloading
+  -> optional WaitingExternal / DebugPaused / Reloading
   -> ShutdownRequest -> Stopping -> ShutdownReady -> destroy
 ```
 
@@ -192,7 +193,13 @@ by save/shop and logical layout is retained while GUI/device options remain fron
 the documented XML/DataTable subsets execute through transactional Native place writes. Canonical
 presentation includes projected HTML/image/shape and logical audio state. Candidate SAVEINFO
 transactions, the complete slot/delete controller, mutable XML, reference DataTable XML,
-sprite/canvas/media services, platform services and debugger execution remain unavailable.
-Protocol 9.0 adds a session-fixed `available_fonts` list to `ClientCapabilities`. It is used only
+sprite/canvas/media services and platform services remain unavailable. Protocol 10.0 separates
+external waits from debugger pauses. The independent debug channel supports creator-bounded scope
+grants, coherent stop tokens, global pause/continue/stepping, source breakpoints, fiber/frame/stack
+inspection, atomic variable writes and runtime game-field inspection. Only
+`input.message_skip` is debug-writable. Debug console execution accepts the currently implemented
+side-effect-safe scalar assignment subset; unsupported expressions and instructions are rejected
+without mutation. Protocol 9.0 added a session-fixed `available_fonts` list to
+`ClientCapabilities`. It is used only
 for the script-observable `CHKFONT` result. Font metrics and canonical layout remain runtime-owned;
 the frontend cannot change this list after the handshake.

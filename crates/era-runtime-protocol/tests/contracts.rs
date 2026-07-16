@@ -101,8 +101,8 @@ fn storage_write_is_correlated_and_idempotent() {
 }
 
 #[test]
-fn storage_v9_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(9, 0));
+fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(10, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -141,7 +141,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(9, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(10, 0));
 }
 
 #[test]

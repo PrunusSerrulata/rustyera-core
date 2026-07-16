@@ -10,7 +10,18 @@ extern "C" {
 #endif
 
 #define ERA_RUNTIME_ABI_MAJOR 2u
-#define ERA_RUNTIME_ABI_MINOR 0u
+#define ERA_RUNTIME_ABI_MINOR 1u
+
+#define ERA_DEBUG_SCOPE_VARIABLES_READ (UINT64_C(1) << 0)
+#define ERA_DEBUG_SCOPE_VARIABLES_WRITE (UINT64_C(1) << 1)
+#define ERA_DEBUG_SCOPE_GAME_FIELDS_READ (UINT64_C(1) << 2)
+#define ERA_DEBUG_SCOPE_GAME_FIELDS_WRITE (UINT64_C(1) << 3)
+#define ERA_DEBUG_SCOPE_EXECUTION_READ (UINT64_C(1) << 4)
+#define ERA_DEBUG_SCOPE_EXECUTION_CONTROL (UINT64_C(1) << 5)
+#define ERA_DEBUG_SCOPE_CONSOLE_EVALUATE (UINT64_C(1) << 6)
+#define ERA_DEBUG_SCOPE_CONSOLE_EXECUTE (UINT64_C(1) << 7)
+#define ERA_DEBUG_SCOPE_BREAKPOINTS_MANAGE (UINT64_C(1) << 8)
+#define ERA_DEBUG_SCOPE_ALL ((UINT64_C(1) << 9) - 1)
 
 typedef struct EraAbiVersion { uint16_t major; uint16_t minor; } EraAbiVersion;
 typedef struct EraCallHeader { uint32_t struct_size; EraAbiVersion abi_version; } EraCallHeader;

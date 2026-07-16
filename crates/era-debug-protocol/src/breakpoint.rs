@@ -31,8 +31,6 @@ pub struct Breakpoint {
     #[n(1)]
     pub enabled: bool,
     #[n(2)]
-    pub hit_count: u64,
-    #[n(3)]
     pub location: BreakpointLocation,
 }
 
@@ -61,6 +59,8 @@ pub struct ResolvedBreakpoint {
     pub source: Option<DebugSourceLocation>,
     #[n(4)]
     pub message: Option<String>,
+    #[n(5)]
+    pub hit_count: u64,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

@@ -18,6 +18,9 @@ pub struct SourceMapEntry {
     pub source_index: u32,
     pub byte_start: u64,
     pub byte_end: u64,
+    /// Stable typed-statement identity used to relocate debugger breakpoints
+    /// when edits only move an otherwise unchanged statement.
+    pub statement_fingerprint: Digest,
     /// Parent origins are stored outermost first for future macro expansion/inlining.
     pub origin_chain: Vec<(u32, u64, u64)>,
 }
