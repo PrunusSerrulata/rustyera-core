@@ -335,7 +335,7 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 | 字段 | 含义 |
 | --- | --- |
 | `wire_version` | 公共信封版本，当前为 `2.0`。 |
-| `channel_version` | `Runtime` channel 当前为 `10.0`；`Debug` channel 当前为 `3.0`。 |
+| `channel_version` | `Runtime` channel 当前为 `11.0`；`Debug` channel 当前为 `3.0`。 |
 | `channel` | 正常运行必须为 `Runtime`；调试使用独立 `Debug` channel。 |
 | `session` | 首次 `ClientHello` 可为空；握手成功后必须等于 `ServerHello.session`。 |
 | `session_epoch` | 首次握手可为空；之后必须等于当前时间线 epoch。新游戏、恢复或热替换提交后旧 epoch 消息失效。 |
@@ -360,7 +360,7 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `9.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `11.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
@@ -437,7 +437,9 @@ Runtime 是展示语义状态的权威持有者；前端只负责渲染投影。
   应用 operations 并更新为 `new_revision`；
 - revision 不匹配时不要猜测或部分应用，应请求 `Resynchronize`（tag `94`）。
 
-Snapshot 包含标题、行、背景、逻辑音频状态、当前输入等待和全局展示设置。
+Snapshot 包含标题、行、背景、tooltip 策略、逻辑音频状态、当前输入等待、全局展示设置
+以及 `ResourceReplay`。后者提供 Runtime 已解析的 sprite 定义、动态 sprite 与 canvas
+command graph；前端按此重放，但仍自行解码像素并持有 renderer 对象。
 
 `DisplayRun` 支持文本、嵌套按钮、HTML、图片和形状。按钮只携带 opaque
 `InteractionToken`，前端不得读取或推导游戏值。尺寸使用整数固定单位：
@@ -448,6 +450,11 @@ Snapshot 包含标题、行、背景、逻辑音频状态、当前输入等待�
 
 前端不得根据本地字体重新推导脚本可观察的语义值；需要字体或资源信息时，应通过
 对应 `ServiceRequest` 返回版本化结果。
+
+一次性音频、视频和动画设备动作通过 `EffectBatch`（tag `42`）发送，与可恢复展示
+状态分离。前端必须为每个 `effect_id` 单独返回 `EffectAcknowledgement`（tag `43`）中的
+`Completed`、`Failed` 或 `Cancelled` 结果；不能用累计前缀掩盖中间失败。失败只产生
+`Diagnostic`（tag `97`），不会由前端反向修改 Runtime 已判定的游戏结果。
 
 ## 8. 输入与逻辑时间
 
@@ -505,6 +512,10 @@ Runtime 需要操作系统能力时发送 `ServiceRequest`（tag `52`）：
 | `Entropy / random_seed` v1.0 | 空 `RandomSeedRequest` | `RandomSeedResponse { seed: u64 }` |
 | `Clock / local_date_time` v1.0 | 空 `LocalDateTimeRequest` | 年、月、日、时、分、秒、毫秒、UTC offset 分钟 |
 | `InputState / get_key_state` v1.0 | `key_code: u8` | `frontend_active`、`pressed`、`toggle_state` |
+| `Image / image_metadata` v1.0 | 资源 ID 与内容摘要 | 宽、高、格式与动画标志 |
+| `Image / image_pixel` v1.0 | 资源 ID、内容摘要与坐标 | ARGB 像素值 |
+| `Network / update_check` v1.0 | 更新地址 | 远端版本和下载地址 |
+| `OpenUrl / open_url` v1.0 | URL | 是否已交给平台打开 |
 
 服务响应也必须作为正常入站消息取得连续 `sequence`。未知或已完成的 `request_id`
 会被视为 stale request。前端不能在处理 `ServiceRequest` 的同一 C 调用栈中回调

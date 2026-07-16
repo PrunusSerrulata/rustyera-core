@@ -219,6 +219,14 @@ fn validate_symbols(
     );
     validate_runtime_layout(artifact, diagnostics);
     for import in &artifact.native_imports {
+        validate_operation_contract(
+            &import.import.namespace,
+            &import.import.name,
+            import.effect,
+            None,
+            import.contract,
+            diagnostics,
+        );
         if context.native_imports.get(&import.import.key) != Some(import) {
             diagnostics.push(ValidationDiagnostic::project(
                 ValidationCode::HostAbiMismatch,
@@ -230,6 +238,14 @@ fn validate_symbols(
         }
     }
     for import in &artifact.host_imports {
+        validate_operation_contract(
+            &import.import.namespace,
+            &import.import.name,
+            import.effect,
+            Some(import.snapshot_capability),
+            import.contract,
+            diagnostics,
+        );
         if context.host_imports.get(&import.import.key) != Some(import) {
             diagnostics.push(ValidationDiagnostic::project(
                 ValidationCode::HostAbiMismatch,
@@ -245,6 +261,25 @@ fn validate_symbols(
                 format!("host capability {:?} is not available", import.capability),
             ));
         }
+    }
+}
+
+fn validate_operation_contract(
+    namespace: &str,
+    name: &str,
+    effect: erabasic_bytecode::HostEffect,
+    snapshot_capability: Option<erabasic_bytecode::HostSnapshotCapability>,
+    contract: erabasic_bytecode::OperationContract,
+    diagnostics: &mut Vec<ValidationDiagnostic>,
+) {
+    if !contract.is_coherent()
+        || effect != contract.effect()
+        || snapshot_capability.is_some_and(|value| value != contract.snapshot_capability())
+    {
+        diagnostics.push(ValidationDiagnostic::project(
+            ValidationCode::InvalidOperationContract,
+            format!("operation {namespace}.{name} has a contradictory execution contract"),
+        ));
     }
 }
 

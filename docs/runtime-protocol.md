@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 10.0 and debug protocol 3.0 over common wire 2.0 are
+dynamic library. Runtime protocol 11.0 and debug protocol 3.0 over common wire 2.0 are
 development contracts: by explicit project policy they
 does not promise backward compatibility until a frontend exists.
 
@@ -149,9 +149,13 @@ for wording or game state.
 
 The runtime stores a revisioned semantic presentation snapshot and emits deltas based on
 that revision. It includes text/styles/buttons, HTML, image/shape placement, backgrounds,
-logical audio state, title and the current wait. Numeric media measurements use fixed
+tooltip policy, parsed sprite definitions, canvas replay commands, logical audio state, title and
+the current wait. Numeric media measurements use fixed
 integer units rather than floating point. Recoverable state is separate from acknowledged
-one-shot `EffectBatch` events. `ColumnCell` and `Separator` preserve PRINTC/DRAWLINE intent
+one-shot `EffectBatch` events. Every effect has an independent ID; the frontend returns an
+exact completed/failed/cancelled outcome rather than acknowledging an ambiguous prefix. Device
+failures produce diagnostics and never rewrite already-decided game state. `ColumnCell` and
+`Separator` preserve PRINTC/DRAWLINE intent
 without font-dependent padding, with deterministic plain projection for clients that do not
 negotiate those nodes. Pixel buffers, font objects and audio devices
 remain frontend caches; script-observable service results return through ordered service
@@ -172,9 +176,12 @@ is a `CallHost` request. Existing `VmHost` remains available for lower-level emb
 the runtime itself uses the adapter and never invokes runtime code from instruction
 dispatch.
 
-The VM implements generation-pinned hot reload, but runtime project-delta orchestration is
-not enabled in this stage. When enabled it must compile and validate between VM slices;
-presentation waits and source breakpoints are rebound only after successful commit.
+The VM and runtime implement generation-pinned project-delta hot reload between VM slices.
+Stable waits and source breakpoints are rebound only after a successful commit. Canvas and
+dynamic-sprite replay state is preserved. A changed image payload currently returns the stable
+`runtime.reload_image_metadata_requires_full_load` diagnostic because decoder metadata cannot be
+requested after preparing a partially committed generation; the frontend must perform a full
+project load for that case.
 
 ## Implemented stage
 
@@ -187,19 +194,25 @@ SFMT-backed RAND/RANDOMIZE, transactional array/find/regex Native operations, cu
 text/binary/gzip traditional-save export and atomic restore, chunked exact snapshots at stable VM
 input waits, normalized incremental reload with generation-pinned VM commit, correlated slot
 listing/loading, faults and cancellation-aware shutdown.
-The compiler uses an explicit execution catalog rather than Host-name heuristics. Configuration
+The compiler uses a persisted, validator-checked operation contract rather than Host-name
+heuristics. Configuration
 and resource inputs receive deterministic identities and diagnostics; semantic configuration needed
-by save/shop and logical layout is retained while GUI/device options remain frontend state. Map and
-the documented XML/DataTable subsets execute through transactional Native place writes. Canonical
-presentation includes projected HTML/image/shape and logical audio state. Candidate SAVEINFO
-transactions, the complete slot/delete controller, mutable XML, reference DataTable XML,
-sprite/canvas/media services and platform services remain unavailable. Protocol 10.0 separates
+by save/shop and logical layout is retained while GUI/device options remain frontend state. Map,
+mutable XML, the fixed XPath subset and reference-shaped DataTable XSD/XML execute through
+transactional Native place writes. Canonical presentation includes logical lines/buttons,
+message-skip state, backgrounds, tooltips, resource sprites, canvas replay and logical audio state.
+Image metadata and pixels are typed frontend services; audio actions use an exact-outcome effect
+journal. `UPDATECHECK` uses typed network and open-URL services, while focus remains a reported
+client state queried by `ISACTIVE`. Candidate SAVEINFO transactions and the complete slot/delete
+controller remain Batch 11 work. Protocol 11.0 separates
 external waits from debugger pauses. The independent debug channel supports creator-bounded scope
 grants, coherent stop tokens, global pause/continue/stepping, source breakpoints, fiber/frame/stack
 inspection, atomic variable writes and runtime game-field inspection. Only
 `input.message_skip` is debug-writable. Debug console execution accepts the currently implemented
-side-effect-safe scalar assignment subset; unsupported expressions and instructions are rejected
-without mutation. Protocol 9.0 added a session-fixed `available_fonts` list to
-`ClientCapabilities`. It is used only
+EraBasic expression subset (operator precedence, ternary expressions and a pure-method whitelist)
+and atomic scalar assignment; Host calls, flow, waits, increment/decrement and unsupported methods
+are rejected without mutation. Protocol 11.0 adds operation-versioned service capabilities,
+resource decoder services, exact effect outcomes, tooltip state and runtime diagnostics. The
+session-fixed `available_fonts` list is used only
 for the script-observable `CHKFONT` result. Font metrics and canonical layout remain runtime-owned;
 the frontend cannot change this list after the handshake.

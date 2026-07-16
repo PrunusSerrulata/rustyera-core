@@ -21,6 +21,7 @@ runtime-message =
   [51, storage-response] /
   [52, service-request] /
   [53, service-response] /
+  [54, any] /
   [60, state-export-request] /
   [61, state-export-ready] /
   [62, state-import-begin] /
@@ -37,7 +38,8 @@ runtime-message =
   [93, any] /
   [94, any] /
   [95, command-rejected] /
-  [96, any]
+  [96, any] /
+  [97, protocol-diagnostic]
 
 client-hello = { 0: any, 1: tstr, 2: [* uint], 3: runtime-limits, 4: any, 5: [* tstr] }
 server-hello = { 0: any, 1: any, 2: [* uint], 3: runtime-limits, 4: uint, 5: any, 6: tstr }
@@ -78,3 +80,4 @@ shutdown-request = { 0: bool }
 shutdown-ready = { 0: uint, 1: uint }
 runtime-fault = { 0: uint, 1: tstr, 2: any / null }
 command-rejected = { 0: uint, 1: tstr, 2: bool, 3: any / null }
+protocol-diagnostic = { 0: tstr, 1: uint, 2: tstr, 3: any / null }

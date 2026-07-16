@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::FrontendIoError;
 
-#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Decode, Encode, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]
 pub enum StorageNamespace {
@@ -146,7 +148,9 @@ pub struct StorageResponse {
     pub result: StorageResult,
 }
 
-#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Decode, Encode, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceKind {
@@ -179,6 +183,14 @@ pub const LOCAL_DATE_TIME_OPERATION: &str = "local_date_time";
 pub const LOCAL_DATE_TIME_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const RANDOM_SEED_OPERATION: &str = "random_seed";
 pub const RANDOM_SEED_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const IMAGE_METADATA_OPERATION: &str = "image_metadata";
+pub const IMAGE_METADATA_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const IMAGE_PIXEL_OPERATION: &str = "image_pixel";
+pub const IMAGE_PIXEL_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const UPDATE_CHECK_OPERATION: &str = "update_check";
+pub const UPDATE_CHECK_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const OPEN_URL_OPERATION: &str = "open_url";
+pub const OPEN_URL_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -214,6 +226,79 @@ pub struct RandomSeedRequest {}
 pub struct RandomSeedResponse {
     #[n(0)]
     pub seed: u64,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ImageMetadataRequest {
+    #[n(0)]
+    pub resource_id: String,
+    #[n(1)]
+    pub content_digest: ProtocolBytes,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ImageMetadataResponse {
+    #[n(0)]
+    pub width: u32,
+    #[n(1)]
+    pub height: u32,
+    #[n(2)]
+    pub format: String,
+    #[n(3)]
+    pub animated: bool,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ImagePixelRequest {
+    #[n(0)]
+    pub resource_id: String,
+    #[n(1)]
+    pub content_digest: ProtocolBytes,
+    #[n(2)]
+    pub x: u32,
+    #[n(3)]
+    pub y: u32,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ImagePixelResponse {
+    /// ARGB in the same unsigned 32-bit layout exposed by Emuera.
+    #[n(0)]
+    pub argb: u32,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct UpdateCheckRequest {
+    #[n(0)]
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct UpdateCheckResponse {
+    #[n(0)]
+    pub remote_version: String,
+    #[n(1)]
+    pub download_url: String,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct OpenUrlRequest {
+    #[n(0)]
+    pub url: String,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct OpenUrlResponse {
+    #[n(0)]
+    pub opened: bool,
 }
 
 pub const GET_KEY_STATE_OPERATION: &str = "get_key_state";

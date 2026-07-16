@@ -78,7 +78,9 @@ try {
     Assert-True (($project.result.functions.name -contains "SYSTEM_TITLE") -and
         ($project.result.functions.name -contains "ORACLE_TEST") -and
         ($project.result.functions.name -contains "ORACLE_INPUT") -and
-        ($project.result.functions.name -contains "ORACLE_MAP")) "project function projection differs"
+        ($project.result.functions.name -contains "ORACLE_MAP") -and
+        ($project.result.functions.name -contains "ORACLE_PRESENTATION") -and
+        ($project.result.functions.name -contains "ORACLE_STRUCTURED")) "project function projection differs"
 
     $varSize = Invoke-Oracle @{ id = "csv-varsize"; op = "eval"; source = 'VARSIZE("ABL")' }
     Assert-True ($varSize.ok -and $varSize.result.value -eq 120) "VariableSize.CSV did not resize ABL"
@@ -115,6 +117,24 @@ try {
     Assert-True $mapRun.ok "map function run failed"
     Assert-True ($mapRun.result.termination -eq "completed") "map function did not complete"
     Assert-True (($mapRun.result.output -join "`n") -match [regex]::Escape("MAP=2,1,1,1|3|b,a")) "map output differs"
+
+    $presentationRun = Invoke-Oracle @{ id = "presentation"; op = "run"; entry = "ORACLE_PRESENTATION" }
+    Assert-True $presentationRun.ok "presentation function run failed"
+    Assert-True ($presentationRun.result.termination -eq "completed") "presentation function did not complete"
+    Assert-True (($presentationRun.result.output -join "`n").Contains("VISIBLE")) "NOSKIP presentation output differs"
+
+    $structuredRun = Invoke-Oracle @{
+        id = "structured"
+        op = "run"
+        entry = "ORACLE_STRUCTURED"
+        watch = @("RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULTS:0", "RESULTS:1", "RESULTS:2")
+    }
+    Assert-True $structuredRun.ok "structured function run failed"
+    Assert-True ($structuredRun.result.termination -eq "completed") "structured function did not complete"
+    Assert-True ($structuredRun.result.watches.'RESULTS:0'.Contains('<xs:schema id="NewDataSet"')) "DataTable schema differs"
+    Assert-True ($structuredRun.result.watches.'RESULTS:1'.Contains('A&amp;B')) "DataTable data XML differs"
+    Assert-True ($structuredRun.result.watches.'RESULTS:2' -eq '<root><item id="a" kind="first">one</item><item id="b">changed</item></root>') "XML mutation differs"
+    Assert-True (($structuredRun.result.watches.'RESULT:4' -eq 1) -and ($structuredRun.result.watches.'RESULT:5' -eq 1)) "XML mutation counts differ"
 
     $inputRun = Invoke-Oracle @{ id = 10; op = "run"; entry = "ORACLE_INPUT"; inputs = @("42"); watch = @("RESULT") }
     Assert-True $inputRun.ok "input function run failed"

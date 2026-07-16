@@ -4,15 +4,16 @@ use std::sync::{Arc, Mutex};
 use erabasic_bytecode::SymbolKey;
 use erabasic_data::ExtensionData;
 use quick_xml::Reader;
+use quick_xml::escape::resolve_predefined_entity;
 use quick_xml::events::Event;
 use serde::{Deserialize, Serialize};
 
 use crate::{HostWrite, NativeCallRequest, NativePlaceView, NativeReady, PlaceDescriptor, VmValue};
 
-pub(crate) const STRUCTURED_BUNDLE_VERSION: u32 = 1;
+pub(crate) const STRUCTURED_BUNDLE_VERSION: u32 = 2;
 
 pub(crate) fn bundle_key() -> SymbolKey {
-    SymbolKey::derive("rustyera.native.bundle", b"structured-data-v1")
+    SymbolKey::derive("rustyera.native.bundle", b"structured-data-v2")
 }
 
 pub(crate) fn is_structured_name(name: &str) -> bool {
@@ -74,6 +75,27 @@ impl OrderedMap {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct XmlDocument {
     root: XmlElement,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct XmlSelection {
+    element_path: Vec<usize>,
+    attribute: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum XmlMutation {
+    Set,
+    AddNode,
+    AddAttribute,
+    RemoveNode,
+    RemoveAttribute,
+    Replace,
+}
+
+enum XmlTarget {
+    Stored(String),
+    Inline(PlaceDescriptor),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -539,9 +561,9 @@ impl StructuredState {
     }
 
     fn call_xml(&mut self, name: &str, request: &NativeCallRequest) -> Result<NativeReady, String> {
-        let id = argument_key(request, 0)?;
         match name {
             "xml_document" => {
+                let id = argument_key(request, 0)?;
                 if self.xml_documents.contains_key(&id) {
                     return ready_integer(0);
                 }
@@ -549,8 +571,12 @@ impl StructuredState {
                 self.xml_documents.insert(id, document);
                 ready_integer(1)
             }
-            "xml_exist" => ready_integer(i64::from(self.xml_documents.contains_key(&id))),
+            "xml_exist" => {
+                let id = argument_key(request, 0)?;
+                ready_integer(i64::from(self.xml_documents.contains_key(&id)))
+            }
             "xml_release" => {
+                let id = argument_key(request, 0)?;
                 if self.xml_documents.remove(&id).is_some() {
                     ready_integer(1)
                 } else {
@@ -559,24 +585,28 @@ impl StructuredState {
             }
             "xml_tostr" => Ok(NativeReady::value(VmValue::String(
                 self.xml_documents
-                    .get(&id)
+                    .get(&argument_key(request, 0)?)
                     .map_or_else(String::new, XmlDocument::outer_xml),
             ))),
             "xml_get" | "xml_get_byname" => {
-                let Some(document) = self.xml_documents.get(&id) else {
-                    return ready_integer(-1);
+                let inline;
+                let document = if name == "xml_get_byname"
+                    || matches!(request.arguments.first(), Some(VmValue::Integer(_)))
+                {
+                    let id = argument_key(request, 0)?;
+                    let Some(document) = self.xml_documents.get(&id) else {
+                        return ready_integer(-1);
+                    };
+                    document
+                } else {
+                    inline = parse_xml(xml_target_string(request, 0)?)?;
+                    &inline
                 };
                 let selected = document.select(string_argument(request, 1)?)?;
                 let style = optional_integer(request, 3).unwrap_or(0);
                 let values = selected
                     .iter()
-                    .map(|element| match style {
-                        1 => element.inner_text(),
-                        2 => element.inner_xml(),
-                        3 => element.outer_xml(),
-                        4 => element.name.clone(),
-                        _ => String::new(),
-                    })
+                    .map(|selection| document.selection_value(selection, style))
                     .collect::<Vec<_>>();
                 let mut writes = Vec::new();
                 if request.arguments.len() >= 3 {
@@ -604,10 +634,100 @@ impl StructuredState {
                     writes,
                 })
             }
+            "xml_set" | "xml_set_byname" => {
+                self.mutate_xml(name.ends_with("_byname"), request, XmlMutation::Set)
+            }
+            "xml_addnode" | "xml_addnode_byname" => {
+                self.mutate_xml(name.ends_with("_byname"), request, XmlMutation::AddNode)
+            }
+            "xml_addattribute" | "xml_addattribute_byname" => self.mutate_xml(
+                name.ends_with("_byname"),
+                request,
+                XmlMutation::AddAttribute,
+            ),
+            "xml_removenode" | "xml_removenode_byname" => {
+                self.mutate_xml(name.ends_with("_byname"), request, XmlMutation::RemoveNode)
+            }
+            "xml_removeattribute" | "xml_removeattribute_byname" => self.mutate_xml(
+                name.ends_with("_byname"),
+                request,
+                XmlMutation::RemoveAttribute,
+            ),
+            "xml_replace" | "xml_replace_byname" => {
+                self.mutate_xml(name.ends_with("_byname"), request, XmlMutation::Replace)
+            }
             _ => Err(format!(
                 "XML operation {name} is outside the pinned XPath mutation subset"
             )),
         }
+    }
+
+    fn mutate_xml(
+        &mut self,
+        by_name: bool,
+        request: &NativeCallRequest,
+        mutation: XmlMutation,
+    ) -> Result<NativeReady, String> {
+        let target = if by_name
+            || matches!(request.arguments.first(), Some(VmValue::Integer(_)))
+            || mutation == XmlMutation::Replace && request.arguments.len() == 2
+        {
+            XmlTarget::Stored(xml_target_key(request, 0)?)
+        } else {
+            XmlTarget::Inline(explicit_place(request, 0)?.target.clone())
+        };
+        let mut candidate = match &target {
+            XmlTarget::Stored(id) => {
+                let Some(document) = self.xml_documents.get(id) else {
+                    return ready_integer(-1);
+                };
+                document.clone()
+            }
+            XmlTarget::Inline(_) => parse_xml(xml_target_string(request, 0)?)?,
+        };
+        if mutation == XmlMutation::Replace && request.arguments.len() == 2 {
+            let replacement = parse_xml(string_argument(request, 1)?)?;
+            let XmlTarget::Stored(id) = target else {
+                unreachable!("two-argument XML_REPLACE always resolves a stored document")
+            };
+            self.xml_documents.insert(id, replacement);
+            return ready_integer(1);
+        }
+        let selected = candidate.select(string_argument(request, 1)?)?;
+        let selected_count = selected.len();
+        let set_all_index = match mutation {
+            XmlMutation::Set | XmlMutation::Replace => 3,
+            XmlMutation::AddNode => 4,
+            XmlMutation::AddAttribute => 5,
+            XmlMutation::RemoveNode | XmlMutation::RemoveAttribute => 2,
+        };
+        let set_all = optional_integer(request, set_all_index).is_some_and(|value| value != 0);
+        let apply = if selected_count <= 1 || set_all {
+            selected.clone()
+        } else {
+            Vec::new()
+        };
+        let applied = candidate.apply_mutation(mutation, request, &apply)?;
+        if selected_count == 1 && !applied {
+            return ready_integer(0);
+        }
+        let xml = candidate.outer_xml();
+        let writes = match target {
+            XmlTarget::Stored(id) => {
+                self.xml_documents.insert(id, candidate);
+                Vec::new()
+            }
+            XmlTarget::Inline(target) => vec![HostWrite {
+                target,
+                value: VmValue::String(xml),
+            }],
+        };
+        Ok(NativeReady {
+            value: Some(VmValue::Integer(
+                i64::try_from(selected_count).unwrap_or(i64::MAX),
+            )),
+            writes,
+        })
     }
 
     #[allow(clippy::too_many_lines)]
@@ -974,8 +1094,8 @@ impl StructuredState {
         let Some(table) = self.data_tables.get(key) else {
             return Ok(NativeReady::value(VmValue::String(String::new())));
         };
-        let schema = serde_json::to_string(&table.columns).map_err(|error| error.to_string())?;
-        let data = serde_json::to_string(&table).map_err(|error| error.to_string())?;
+        let schema = data_table_schema_xml(key, table);
+        let data = data_table_data_xml(key, table);
         let target = request
             .places
             .iter()
@@ -993,22 +1113,12 @@ impl StructuredState {
         key: &str,
         request: &NativeCallRequest,
     ) -> Result<NativeReady, String> {
-        let schema: Vec<Column> = match serde_json::from_str(string_argument(request, 1)?) {
-            Ok(schema) => schema,
-            Err(_) => return ready_integer(0),
-        };
-        let mut table: DataTable = match serde_json::from_str(string_argument(request, 2)?) {
-            Ok(table) => table,
-            Err(_) => return ready_integer(0),
-        };
-        if table.columns != schema
-            || table
-                .columns
-                .first()
-                .is_none_or(|column| column.name != "id")
-        {
+        let Ok(schema) = parse_data_table_schema(key, string_argument(request, 1)?) else {
             return ready_integer(0);
-        }
+        };
+        let Ok(mut table) = parse_data_table_xml(key, &schema, string_argument(request, 2)?) else {
+            return ready_integer(0);
+        };
         table.next_id = table
             .rows
             .iter()
@@ -1020,6 +1130,279 @@ impl StructuredState {
         self.data_tables.insert(key.to_owned(), table);
         ready_integer(1)
     }
+}
+
+fn data_table_schema_xml(key: &str, table: &DataTable) -> String {
+    let table_name = encode_xml_name(key);
+    let mut output = String::from(
+        "<?xml version=\"1.0\" encoding=\"utf-16\"?>\r\n\
+<xs:schema id=\"NewDataSet\" xmlns=\"\" xmlns:xs=\"http://www.w3.org/2001/XMLSchema\" xmlns:msdata=\"urn:schemas-microsoft-com:xml-msdata\">\r\n",
+    );
+    output.push_str(
+        "  <xs:element name=\"NewDataSet\" msdata:IsDataSet=\"true\" msdata:MainDataTable=\"",
+    );
+    output.push_str(&xml_attribute_escape(&table_name));
+    output.push_str("\" msdata:CaseSensitive=\"");
+    output.push_str(if table.case_sensitive {
+        "true"
+    } else {
+        "false"
+    });
+    output.push_str("\" msdata:UseCurrentLocale=\"true\">\r\n");
+    output.push_str("    <xs:complexType>\r\n      <xs:choice minOccurs=\"0\" maxOccurs=\"unbounded\">\r\n        <xs:element name=\"");
+    output.push_str(&xml_attribute_escape(&table_name));
+    output.push_str("\" msdata:CaseSensitive=\"");
+    output.push_str(if table.case_sensitive {
+        "True"
+    } else {
+        "False"
+    });
+    output.push_str("\">\r\n          <xs:complexType>\r\n            <xs:sequence>\r\n");
+    for column in &table.columns {
+        output.push_str("              <xs:element name=\"");
+        output.push_str(&xml_attribute_escape(&encode_xml_name(&column.name)));
+        output.push_str("\" type=\"");
+        output.push_str(match column.value_type {
+            DataType::Int8 => "xs:byte",
+            DataType::Int16 => "xs:short",
+            DataType::Int32 => "xs:int",
+            DataType::Int64 => "xs:long",
+            DataType::String => "xs:string",
+        });
+        if column.nullable {
+            output.push_str("\" minOccurs=\"0");
+        }
+        output.push_str("\" />\r\n");
+    }
+    output.push_str(
+        "            </xs:sequence>\r\n          </xs:complexType>\r\n        </xs:element>\r\n      </xs:choice>\r\n    </xs:complexType>\r\n    <xs:unique name=\"Constraint1\" msdata:PrimaryKey=\"true\">\r\n      <xs:selector xpath=\".//",
+    );
+    output.push_str(&xml_attribute_escape(&table_name));
+    output.push_str("\" />\r\n      <xs:field xpath=\"");
+    output.push_str(&xml_attribute_escape(&encode_xml_name("id")));
+    output.push_str("\" />\r\n    </xs:unique>\r\n  </xs:element>\r\n</xs:schema>");
+    output
+}
+
+fn data_table_data_xml(key: &str, table: &DataTable) -> String {
+    if table.rows.is_empty() {
+        return "<DocumentElement />".into();
+    }
+    let table_name = encode_xml_name(key);
+    let mut output = String::from("<DocumentElement>\r\n");
+    for row in &table.rows {
+        output.push_str("  <");
+        output.push_str(&table_name);
+        output.push_str(">\r\n");
+        for (index, column) in table.columns.iter().enumerate() {
+            let cell = if index == 0 {
+                Cell::Integer(row.id)
+            } else {
+                row.cells.get(index).cloned().unwrap_or(Cell::Null)
+            };
+            if matches!(cell, Cell::Null) {
+                continue;
+            }
+            let name = encode_xml_name(&column.name);
+            output.push_str("    <");
+            output.push_str(&name);
+            output.push('>');
+            match cell {
+                Cell::Integer(value) => output.push_str(&value.to_string()),
+                Cell::String(value) => output.push_str(&xml_text_escape(&value)),
+                Cell::Null => unreachable!(),
+            }
+            output.push_str("</");
+            output.push_str(&name);
+            output.push_str(">\r\n");
+        }
+        output.push_str("  </");
+        output.push_str(&table_name);
+        output.push_str(">\r\n");
+    }
+    output.push_str("</DocumentElement>");
+    output
+}
+
+fn parse_data_table_schema(key: &str, xml: &str) -> Result<DataTable, String> {
+    let document = parse_xml(xml)?;
+    if document.root.name != "xs:schema" {
+        return Err("DataTable schema root must be xs:schema".into());
+    }
+    let expected_table = encode_xml_name(key);
+    let mut table_elements = Vec::new();
+    collect_elements(&document.root, "xs:element", &mut table_elements);
+    let table_element = table_elements
+        .into_iter()
+        .find(|element| {
+            element.attribute("name") == Some(expected_table.as_str())
+                && element.attribute("msdata:CaseSensitive").is_some()
+        })
+        .ok_or_else(|| "DataTable schema does not describe the requested table".to_owned())?;
+    let case_sensitive = table_element.attribute("msdata:CaseSensitive") != Some("False");
+    let mut sequences = Vec::new();
+    collect_elements(table_element, "xs:sequence", &mut sequences);
+    let sequence = sequences
+        .first()
+        .ok_or("DataTable schema has no column sequence")?;
+    let mut columns = Vec::new();
+    for child in &sequence.children {
+        let XmlChild::Element(element) = child else {
+            continue;
+        };
+        if element.name != "xs:element" {
+            continue;
+        }
+        let name = decode_xml_name(
+            element
+                .attribute("name")
+                .ok_or("DataTable column has no name")?,
+        )?;
+        let value_type = match element.attribute("type") {
+            Some("xs:byte") => DataType::Int8,
+            Some("xs:short") => DataType::Int16,
+            Some("xs:int") => DataType::Int32,
+            Some("xs:long") => DataType::Int64,
+            Some("xs:string") => DataType::String,
+            _ => return Err("DataTable schema contains an unsupported column type".into()),
+        };
+        columns.push(Column {
+            name,
+            value_type,
+            nullable: element.attribute("minOccurs") == Some("0"),
+        });
+    }
+    if columns.first()
+        != Some(&Column {
+            name: "id".into(),
+            value_type: DataType::Int64,
+            nullable: false,
+        })
+    {
+        return Err("DataTable schema must start with a non-null Int64 id column".into());
+    }
+    Ok(DataTable {
+        case_sensitive,
+        next_id: 1,
+        columns,
+        rows: Vec::new(),
+    })
+}
+
+fn parse_data_table_xml(key: &str, schema: &DataTable, xml: &str) -> Result<DataTable, String> {
+    let document = parse_xml(xml)?;
+    if document.root.name != "DocumentElement" {
+        return Err("DataTable data root must be DocumentElement".into());
+    }
+    let table_name = encode_xml_name(key);
+    let mut table = schema.clone();
+    for child in &document.root.children {
+        let XmlChild::Element(row_element) = child else {
+            continue;
+        };
+        if row_element.name != table_name {
+            return Err("DataTable data contains a row for another table".into());
+        }
+        let mut cells = table.columns.iter().map(|_| Cell::Null).collect::<Vec<_>>();
+        for cell_element in &row_element.children {
+            let XmlChild::Element(cell_element) = cell_element else {
+                continue;
+            };
+            let name = decode_xml_name(&cell_element.name)?;
+            let index = table
+                .column(&name)
+                .ok_or_else(|| format!("DataTable data contains unknown column {name}"))?;
+            if !matches!(cells[index], Cell::Null) {
+                return Err(format!("DataTable row repeats column {name}"));
+            }
+            let text = cell_element.inner_text();
+            cells[index] = match table.columns[index].value_type {
+                DataType::String => Cell::String(text),
+                value_type => {
+                    let value = text
+                        .parse::<i64>()
+                        .map_err(|_| format!("DataTable column {name} is not an integer"))?;
+                    cell_for_column(
+                        &Column {
+                            name: name.clone(),
+                            value_type,
+                            nullable: table.columns[index].nullable,
+                        },
+                        &VmValue::Integer(value),
+                    )?
+                }
+            };
+        }
+        let id = match cells.first() {
+            Some(Cell::Integer(value)) => *value,
+            _ => return Err("DataTable row has no integer id".into()),
+        };
+        for (column, cell) in table.columns.iter().zip(&cells) {
+            if !column.nullable && matches!(cell, Cell::Null) {
+                return Err(format!(
+                    "DataTable row omits non-null column {}",
+                    column.name
+                ));
+            }
+        }
+        if table.rows.iter().any(|row| row.id == id) {
+            return Err("DataTable data repeats a primary key".into());
+        }
+        cells[0] = Cell::Null;
+        table.rows.push(DataRow { id, cells });
+    }
+    Ok(table)
+}
+
+fn collect_elements<'a>(element: &'a XmlElement, name: &str, output: &mut Vec<&'a XmlElement>) {
+    if element.name == name {
+        output.push(element);
+    }
+    for child in &element.children {
+        if let XmlChild::Element(child) = child {
+            collect_elements(child, name, output);
+        }
+    }
+}
+
+fn encode_xml_name(value: &str) -> String {
+    let mut output = String::new();
+    for (index, character) in value.chars().enumerate() {
+        let valid = character == '_'
+            || character.is_alphabetic()
+            || index > 0 && (character.is_alphanumeric() || matches!(character, '-' | '.'));
+        if valid {
+            output.push(character);
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(output, "_x{:04X}_", u32::from(character));
+        }
+    }
+    output
+}
+
+fn decode_xml_name(value: &str) -> Result<String, String> {
+    let mut output = String::new();
+    let mut rest = value;
+    while let Some(position) = rest.find("_x") {
+        output.push_str(&rest[..position]);
+        let escape = rest
+            .get(position + 2..position + 6)
+            .filter(|_| rest.get(position + 6..position + 7) == Some("_"));
+        let Some(escape) = escape else {
+            output.push_str("_x");
+            rest = &rest[position + 2..];
+            continue;
+        };
+        let scalar = u32::from_str_radix(escape, 16)
+            .ok()
+            .and_then(char::from_u32)
+            .ok_or("DataTable XML name contains an invalid escape")?;
+        output.push(scalar);
+        rest = &rest[position + 7..];
+    }
+    output.push_str(rest);
+    Ok(output)
 }
 
 fn string_argument(request: &NativeCallRequest, index: usize) -> Result<&str, String> {
@@ -1055,6 +1438,32 @@ fn argument_key(request: &NativeCallRequest, index: usize) -> Result<String, Str
         Some(VmValue::Integer(value)) => Ok(value.to_string()),
         Some(VmValue::String(value)) => Ok(value.clone()),
         _ => Err(format!("argument {} must be integer or string", index + 1)),
+    }
+}
+
+fn xml_target_key(request: &NativeCallRequest, index: usize) -> Result<String, String> {
+    match request.arguments.get(index) {
+        Some(VmValue::Integer(value)) => Ok(value.to_string()),
+        Some(VmValue::String(value)) => Ok(value.clone()),
+        Some(VmValue::StringPlace(_)) => xml_target_string(request, index).map(ToOwned::to_owned),
+        _ => Err(format!(
+            "argument {} must identify an XML document",
+            index + 1
+        )),
+    }
+}
+
+fn xml_target_string(request: &NativeCallRequest, index: usize) -> Result<&str, String> {
+    match request.arguments.get(index) {
+        Some(VmValue::String(value)) => Ok(value),
+        Some(VmValue::StringPlace(_)) => {
+            let place = explicit_place(request, index)?;
+            match place.values.first() {
+                Some(VmValue::String(value)) => Ok(value),
+                _ => Err(format!("argument {} string place is unreadable", index + 1)),
+            }
+        }
+        _ => Err(format!("argument {} must be a string", index + 1)),
     }
 }
 
@@ -1288,6 +1697,7 @@ fn sort_rows(table: &DataTable, rows: &mut [&DataRow], sort: &str) -> Result<(),
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_xml(input: &str) -> Result<XmlDocument, String> {
     let mut reader = Reader::from_str(input);
     reader.config_mut().trim_text(false);
@@ -1346,10 +1756,11 @@ fn parse_xml(input: &str) -> Result<XmlDocument, String> {
                 let value = quick_xml::escape::unescape(&value)
                     .map_err(|error| error.to_string())?
                     .into_owned();
-                let parent = stack
-                    .last_mut()
-                    .ok_or("XML text appears outside the root element")?;
-                parent.children.push(XmlChild::Text(value));
+                if let Some(parent) = stack.last_mut() {
+                    parent.children.push(XmlChild::Text(value));
+                } else if !value.trim().is_empty() {
+                    return Err("XML text appears outside the root element".into());
+                }
             }
             Event::CData(text) => {
                 let value = text
@@ -1361,6 +1772,28 @@ fn parse_xml(input: &str) -> Result<XmlDocument, String> {
                     .ok_or("XML CDATA appears outside the root element")?;
                 parent.children.push(XmlChild::Text(value));
             }
+            Event::GeneralRef(reference) => {
+                let reference = reference.decode().map_err(|error| error.to_string())?;
+                let value = if let Some(number) = reference.strip_prefix("#x") {
+                    u32::from_str_radix(number, 16)
+                        .ok()
+                        .and_then(char::from_u32)
+                        .map(|value| value.to_string())
+                } else if let Some(number) = reference.strip_prefix('#') {
+                    number
+                        .parse::<u32>()
+                        .ok()
+                        .and_then(char::from_u32)
+                        .map(|value| value.to_string())
+                } else {
+                    resolve_predefined_entity(&reference).map(ToOwned::to_owned)
+                }
+                .ok_or_else(|| format!("XML contains unknown entity &{reference};"))?;
+                let parent = stack
+                    .last_mut()
+                    .ok_or("XML entity appears outside the root element")?;
+                parent.children.push(XmlChild::Text(value));
+            }
             Event::End(_) => {
                 let element = stack.pop().ok_or("XML contains an unmatched close tag")?;
                 if let Some(parent) = stack.last_mut() {
@@ -1369,11 +1802,7 @@ fn parse_xml(input: &str) -> Result<XmlDocument, String> {
                     return Err("XML contains more than one root element".into());
                 }
             }
-            Event::Decl(_)
-            | Event::Comment(_)
-            | Event::PI(_)
-            | Event::DocType(_)
-            | Event::GeneralRef(_) => {}
+            Event::Decl(_) | Event::Comment(_) | Event::PI(_) | Event::DocType(_) => {}
             Event::Eof => break,
         }
     }
@@ -1390,42 +1819,494 @@ impl XmlDocument {
         self.root.outer_xml()
     }
 
-    fn select(&self, path: &str) -> Result<Vec<&XmlElement>, String> {
+    fn select(&self, path: &str) -> Result<Vec<XmlSelection>, String> {
         let path = path.trim();
-        if let Some(name) = path.strip_prefix("//") {
-            if name.is_empty() || name.contains(['/', '[', '@']) {
-                return Err("unsupported XPath descendant expression".into());
-            }
-            let mut output = Vec::new();
-            self.root.descendants_named(name, &mut output);
-            return Ok(output);
+        if path.is_empty() || path == "." {
+            return Ok(vec![XmlSelection {
+                element_path: Vec::new(),
+                attribute: None,
+            }]);
         }
-        let absolute = path.starts_with('/');
-        let parts = path
+        if path.contains(['|', ':']) {
+            return Err(
+                "native.xpath.unsupported: namespace and union expressions are unsupported".into(),
+            );
+        }
+        let absolute = path.starts_with('/') && !path.starts_with("//");
+        let marked = path.replace("//", "/__DESCENDANT__/");
+        let mut descendant = path.starts_with("//");
+        let mut steps = Vec::new();
+        for part in marked
             .trim_start_matches("./")
             .split('/')
             .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>();
-        if parts.iter().any(|part| part.contains(['[', '@', ':'])) {
-            return Err("unsupported XPath predicate, attribute, or namespace expression".into());
+        {
+            if part == "__DESCENDANT__" {
+                descendant = true;
+                continue;
+            }
+            steps.push((descendant, parse_xpath_step(part)?));
+            descendant = false;
         }
-        let mut current = vec![&self.root];
+        if steps.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut current = vec![Vec::<usize>::new()];
         let mut offset = 0;
-        if absolute && parts.first().is_some_and(|part| *part == self.root.name) {
+        if absolute
+            && matches!(&steps[0].1.test, XPathTest::Element(name) if name == "*" || name == &self.root.name)
+            && !steps[0].0
+        {
+            if !predicate_matches(&self.root, steps[0].1.predicate.as_ref()) {
+                return Ok(Vec::new());
+            }
             offset = 1;
         }
-        for part in &parts[offset..] {
+        for (descendant, step) in &steps[offset..] {
+            if let XPathTest::Attribute(name) = &step.test {
+                if *descendant || step.predicate.is_some() {
+                    return Err(
+                        "native.xpath.unsupported: attribute axes cannot have predicates".into(),
+                    );
+                }
+                let mut output = Vec::new();
+                for path in current {
+                    let element = self.element(&path)?;
+                    for (index, (candidate, _)) in element.attributes.iter().enumerate() {
+                        if name == "*" || candidate == name {
+                            output.push(XmlSelection {
+                                element_path: path.clone(),
+                                attribute: Some(index),
+                            });
+                        }
+                    }
+                }
+                return Ok(output);
+            }
+            let XPathTest::Element(name) = &step.test else {
+                unreachable!()
+            };
             let mut next = Vec::new();
-            for element in current {
-                next.extend(element.elements_named(part));
+            for path in current {
+                let mut candidates = Vec::new();
+                if *descendant {
+                    self.descendant_paths(&path, name, &mut candidates)?;
+                } else {
+                    let element = self.element(&path)?;
+                    for (index, child) in element.children.iter().enumerate() {
+                        if let XmlChild::Element(child) = child
+                            && (name == "*" || child.name == *name)
+                        {
+                            let mut child_path = path.clone();
+                            child_path.push(index);
+                            candidates.push(child_path);
+                        }
+                    }
+                }
+                apply_xpath_predicate(self, &mut candidates, step.predicate.as_ref());
+                next.extend(candidates);
             }
             current = next;
         }
-        Ok(current)
+        Ok(current
+            .into_iter()
+            .map(|element_path| XmlSelection {
+                element_path,
+                attribute: None,
+            })
+            .collect())
+    }
+
+    fn selection_value(&self, selection: &XmlSelection, style: i64) -> String {
+        let Ok(element) = self.element(&selection.element_path) else {
+            return String::new();
+        };
+        if let Some(attribute) = selection.attribute {
+            let Some((name, value)) = element.attributes.get(attribute) else {
+                return String::new();
+            };
+            return match style {
+                3 => format!("{name}=\"{}\"", xml_attribute_escape(value)),
+                4 => name.clone(),
+                _ => value.clone(),
+            };
+        }
+        match style {
+            1 => element.inner_text(),
+            2 => element.inner_xml(),
+            3 => element.outer_xml(),
+            4 => element.name.clone(),
+            _ => String::new(),
+        }
+    }
+
+    fn element(&self, path: &[usize]) -> Result<&XmlElement, String> {
+        let mut element = &self.root;
+        for index in path {
+            element = match element.children.get(*index) {
+                Some(XmlChild::Element(child)) => child,
+                _ => return Err("XML selection path became invalid".into()),
+            };
+        }
+        Ok(element)
+    }
+
+    fn element_mut(&mut self, path: &[usize]) -> Result<&mut XmlElement, String> {
+        let mut element = &mut self.root;
+        for index in path {
+            element = match element.children.get_mut(*index) {
+                Some(XmlChild::Element(child)) => child,
+                _ => return Err("XML selection path became invalid".into()),
+            };
+        }
+        Ok(element)
+    }
+
+    fn descendant_paths(
+        &self,
+        start: &[usize],
+        name: &str,
+        output: &mut Vec<Vec<usize>>,
+    ) -> Result<(), String> {
+        let element = self.element(start)?;
+        if (name == "*" || element.name == name) && !start.is_empty() {
+            output.push(start.to_vec());
+        }
+        for (index, child) in element.children.iter().enumerate() {
+            if matches!(child, XmlChild::Element(_)) {
+                let mut path = start.to_vec();
+                path.push(index);
+                self.descendant_paths(&path, name, output)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn apply_mutation(
+        &mut self,
+        mutation: XmlMutation,
+        request: &NativeCallRequest,
+        selections: &[XmlSelection],
+    ) -> Result<bool, String> {
+        let mut applied = true;
+        match mutation {
+            XmlMutation::Set => {
+                let value = string_argument(request, 2)?.to_owned();
+                let style = optional_integer(request, 4)
+                    .filter(|value| (0..=2).contains(value))
+                    .unwrap_or(0);
+                for selection in selections {
+                    let element = self.element_mut(&selection.element_path)?;
+                    if let Some(attribute) = selection.attribute {
+                        if let Some((_, target)) = element.attributes.get_mut(attribute) {
+                            target.clone_from(&value);
+                        }
+                    } else if style == 1 {
+                        element.children = vec![XmlChild::Text(value.clone())];
+                    } else if style == 2 {
+                        element.children = parse_xml_fragment(&value)?;
+                    } else {
+                        // XmlElement.Value cannot be assigned in System.Xml.
+                        return Err("XML_SET style 0 requires an attribute or text node".into());
+                    }
+                }
+            }
+            XmlMutation::AddNode => {
+                let child = parse_xml(string_argument(request, 2)?)?.root;
+                let method = optional_integer(request, 3)
+                    .filter(|value| (0..=2).contains(value))
+                    .unwrap_or(0);
+                for selection in sorted_selections(selections, method != 0) {
+                    if selection.attribute.is_some() {
+                        applied = false;
+                    } else if method == 0 {
+                        self.element_mut(&selection.element_path)?
+                            .children
+                            .push(XmlChild::Element(child.clone()));
+                    } else {
+                        applied &= insert_sibling(
+                            self,
+                            &selection.element_path,
+                            child.clone(),
+                            method == 2,
+                        )?;
+                    }
+                }
+            }
+            XmlMutation::AddAttribute => {
+                let name = string_argument(request, 2)?.to_owned();
+                if name.is_empty() || name.contains(['<', '>', '=', '/', ':']) {
+                    return Err("XML attribute name is invalid".into());
+                }
+                let value = optional_string(request, 3).unwrap_or_default().to_owned();
+                let method = optional_integer(request, 4)
+                    .filter(|value| (0..=2).contains(value))
+                    .unwrap_or(0);
+                for selection in selections {
+                    let element = self.element_mut(&selection.element_path)?;
+                    if method == 0 {
+                        if selection.attribute.is_none() {
+                            element.attributes.push((name.clone(), value.clone()));
+                        } else {
+                            applied = false;
+                        }
+                    } else {
+                        let Some(index) = selection.attribute else {
+                            applied = false;
+                            continue;
+                        };
+                        let insert = index + usize::from(method == 2);
+                        element
+                            .attributes
+                            .insert(insert, (name.clone(), value.clone()));
+                    }
+                }
+            }
+            XmlMutation::RemoveNode => {
+                for selection in sorted_selections(selections, true) {
+                    if selection.attribute.is_some() {
+                        applied = false;
+                    } else {
+                        applied &= remove_element(self, &selection.element_path)?;
+                    }
+                }
+            }
+            XmlMutation::RemoveAttribute => {
+                let mut selections = selections.to_vec();
+                selections.sort_by(|left, right| {
+                    right
+                        .element_path
+                        .cmp(&left.element_path)
+                        .then_with(|| right.attribute.cmp(&left.attribute))
+                });
+                for selection in selections {
+                    if let Some(index) = selection.attribute {
+                        let element = self.element_mut(&selection.element_path)?;
+                        if index < element.attributes.len() {
+                            element.attributes.remove(index);
+                        }
+                    } else {
+                        applied = false;
+                    }
+                }
+            }
+            XmlMutation::Replace => {
+                let replacement = parse_xml(string_argument(request, 2)?)?.root;
+                for selection in sorted_selections(selections, true) {
+                    if selection.attribute.is_some() {
+                        applied = false;
+                    } else {
+                        applied &=
+                            replace_element(self, &selection.element_path, replacement.clone())?;
+                    }
+                }
+            }
+        }
+        Ok(applied)
     }
 }
 
+#[derive(Clone, Debug)]
+struct XPathStep {
+    test: XPathTest,
+    predicate: Option<XPathPredicate>,
+}
+
+#[derive(Clone, Debug)]
+enum XPathTest {
+    Element(String),
+    Attribute(String),
+}
+
+#[derive(Clone, Debug)]
+enum XPathPredicate {
+    Position(usize),
+    Last,
+    AttributeExists(String),
+    AttributeEquals(String, String),
+    TextEquals(String),
+    ChildEquals(String, String),
+}
+
+fn parse_xpath_step(value: &str) -> Result<XPathStep, String> {
+    let (test, predicate) = if let Some(open) = value.find('[') {
+        if !value.ends_with(']') {
+            return Err("native.xpath.unsupported: malformed predicate".into());
+        }
+        (&value[..open], Some(&value[open + 1..value.len() - 1]))
+    } else {
+        (value, None)
+    };
+    if test.is_empty() || test.contains(['(', ')']) {
+        return Err("native.xpath.unsupported: unsupported node test".into());
+    }
+    let test = test.strip_prefix('@').map_or_else(
+        || XPathTest::Element(test.to_owned()),
+        |name| XPathTest::Attribute(name.to_owned()),
+    );
+    let predicate = predicate.map(parse_xpath_predicate).transpose()?;
+    Ok(XPathStep { test, predicate })
+}
+
+fn parse_xpath_predicate(value: &str) -> Result<XPathPredicate, String> {
+    let value = value.trim();
+    if value == "last()" {
+        return Ok(XPathPredicate::Last);
+    }
+    if let Ok(position) = value.parse::<usize>() {
+        return Ok(XPathPredicate::Position(position));
+    }
+    if let Some(attribute) = value.strip_prefix('@') {
+        if let Some((name, literal)) = attribute.split_once('=') {
+            return Ok(XPathPredicate::AttributeEquals(
+                name.trim().to_owned(),
+                xpath_literal(literal)?,
+            ));
+        }
+        return Ok(XPathPredicate::AttributeExists(attribute.trim().to_owned()));
+    }
+    if let Some(literal) = value.strip_prefix("text()=") {
+        return Ok(XPathPredicate::TextEquals(xpath_literal(literal)?));
+    }
+    if let Some((child, literal)) = value.split_once('=')
+        && !child.trim().is_empty()
+    {
+        return Ok(XPathPredicate::ChildEquals(
+            child.trim().to_owned(),
+            xpath_literal(literal)?,
+        ));
+    }
+    Err("native.xpath.unsupported: predicate is outside the fixed XPath subset".into())
+}
+
+fn xpath_literal(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.len() >= 2
+        && ((value.starts_with('\'') && value.ends_with('\''))
+            || (value.starts_with('"') && value.ends_with('"')))
+    {
+        Ok(value[1..value.len() - 1].to_owned())
+    } else {
+        Err("native.xpath.unsupported: predicate literal must be quoted".into())
+    }
+}
+
+fn apply_xpath_predicate(
+    document: &XmlDocument,
+    candidates: &mut Vec<Vec<usize>>,
+    predicate: Option<&XPathPredicate>,
+) {
+    match predicate {
+        None => {}
+        Some(XPathPredicate::Position(position)) => {
+            let selected = position
+                .checked_sub(1)
+                .and_then(|index| candidates.get(index))
+                .cloned();
+            candidates.clear();
+            candidates.extend(selected);
+        }
+        Some(XPathPredicate::Last) => {
+            let selected = candidates.last().cloned();
+            candidates.clear();
+            candidates.extend(selected);
+        }
+        Some(predicate) => candidates.retain(|path| {
+            document
+                .element(path)
+                .is_ok_and(|element| predicate_matches(element, Some(predicate)))
+        }),
+    }
+}
+
+fn predicate_matches(element: &XmlElement, predicate: Option<&XPathPredicate>) -> bool {
+    match predicate {
+        None | Some(XPathPredicate::Position(1) | XPathPredicate::Last) => true,
+        Some(XPathPredicate::Position(_)) => false,
+        Some(XPathPredicate::AttributeExists(name)) => element
+            .attributes
+            .iter()
+            .any(|(candidate, _)| candidate == name),
+        Some(XPathPredicate::AttributeEquals(name, value)) => element
+            .attributes
+            .iter()
+            .any(|(candidate, candidate_value)| candidate == name && candidate_value == value),
+        Some(XPathPredicate::TextEquals(value)) => element.inner_text() == *value,
+        Some(XPathPredicate::ChildEquals(name, value)) => element
+            .elements_named(name)
+            .iter()
+            .any(|child| child.inner_text() == *value),
+    }
+}
+
+fn sorted_selections(selections: &[XmlSelection], reverse: bool) -> Vec<XmlSelection> {
+    let mut result = selections.to_vec();
+    if reverse {
+        result.sort_by(|left, right| right.element_path.cmp(&left.element_path));
+    }
+    result
+}
+
+fn insert_sibling(
+    document: &mut XmlDocument,
+    path: &[usize],
+    child: XmlElement,
+    after: bool,
+) -> Result<bool, String> {
+    let Some((index, parent)) = path.split_last() else {
+        return Ok(false);
+    };
+    let parent = document.element_mut(parent)?;
+    parent
+        .children
+        .insert(*index + usize::from(after), XmlChild::Element(child));
+    Ok(true)
+}
+
+fn remove_element(document: &mut XmlDocument, path: &[usize]) -> Result<bool, String> {
+    let Some((index, parent)) = path.split_last() else {
+        return Ok(false);
+    };
+    let parent = document.element_mut(parent)?;
+    if *index < parent.children.len() {
+        parent.children.remove(*index);
+    }
+    Ok(true)
+}
+
+fn replace_element(
+    document: &mut XmlDocument,
+    path: &[usize],
+    replacement: XmlElement,
+) -> Result<bool, String> {
+    let Some((index, parent)) = path.split_last() else {
+        return Ok(false);
+    };
+    let parent = document.element_mut(parent)?;
+    let Some(slot) = parent.children.get_mut(*index) else {
+        return Err("XML replacement path became invalid".into());
+    };
+    *slot = XmlChild::Element(replacement);
+    Ok(true)
+}
+
+fn parse_xml_fragment(value: &str) -> Result<Vec<XmlChild>, String> {
+    Ok(parse_xml(&format!(
+        "<__rustyera_fragment>{value}</__rustyera_fragment>"
+    ))?
+    .root
+    .children)
+}
+
 impl XmlElement {
+    fn attribute(&self, name: &str) -> Option<&str> {
+        self.attributes
+            .iter()
+            .find_map(|(candidate, value)| (candidate == name).then_some(value.as_str()))
+    }
+
     fn elements_named(&self, name: &str) -> Vec<&Self> {
         self.children
             .iter()
@@ -1434,17 +2315,6 @@ impl XmlElement {
                 XmlChild::Element(_) | XmlChild::Text(_) => None,
             })
             .collect()
-    }
-
-    fn descendants_named<'a>(&'a self, name: &str, output: &mut Vec<&'a Self>) {
-        if self.name == name || name == "*" {
-            output.push(self);
-        }
-        for child in &self.children {
-            if let XmlChild::Element(element) = child {
-                element.descendants_named(name, output);
-            }
-        }
     }
 
     fn inner_text(&self) -> String {
@@ -1462,7 +2332,7 @@ impl XmlElement {
         let mut output = String::new();
         for child in &self.children {
             match child {
-                XmlChild::Text(value) => output.push_str(&xml_escape(value)),
+                XmlChild::Text(value) => output.push_str(&xml_text_escape(value)),
                 XmlChild::Element(element) => output.push_str(&element.outer_xml()),
             }
         }
@@ -1477,7 +2347,7 @@ impl XmlElement {
             output.push(' ');
             output.push_str(name);
             output.push_str("=\"");
-            output.push_str(&xml_escape(value));
+            output.push_str(&xml_attribute_escape(value));
             output.push('"');
         }
         if self.children.is_empty() {
@@ -1493,13 +2363,15 @@ impl XmlElement {
     }
 }
 
-fn xml_escape(value: &str) -> String {
+fn xml_text_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+}
+
+fn xml_attribute_escape(value: &str) -> String {
+    xml_text_escape(value).replace('"', "&quot;")
 }
 
 #[cfg(test)]
@@ -1522,8 +2394,29 @@ mod tests {
     fn xml_subset_preserves_mixed_content_and_selects_paths() {
         let document = parse_xml("<root a='x'>A<p><k>one</k></p>B</root>").unwrap();
         assert_eq!(document.root.inner_text(), "AoneB");
-        assert_eq!(document.select("/root/p/k").unwrap()[0].inner_text(), "one");
+        let selection = &document.select("/root/p/k").unwrap()[0];
+        assert_eq!(document.selection_value(selection, 1), "one");
         assert_eq!(parse_xml(&document.outer_xml()).unwrap(), document);
+    }
+
+    #[test]
+    fn xpath_subset_handles_descendants_attributes_and_predicates() {
+        let document = parse_xml(
+            "<root><p id='a'><k>one</k></p><group><p id='b'><k>two</k></p></group></root>",
+        )
+        .unwrap();
+        let selected = document.select("//p[@id='b']/k").unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(document.selection_value(&selected[0], 1), "two");
+        let attributes = document.select("//p/@id").unwrap();
+        assert_eq!(
+            attributes
+                .iter()
+                .map(|selection| document.selection_value(selection, 0))
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert!(document.select("//p[contains(k, 'o')]").is_err());
     }
 
     #[test]
@@ -1531,6 +2424,80 @@ mod tests {
         let table = DataTable::new();
         assert_eq!(table.next_id, 1);
         assert_eq!(table.columns[0].name, "id");
+    }
+
+    #[test]
+    fn data_table_xml_matches_reference_dataset_shape_and_round_trips() {
+        let mut table = DataTable::new();
+        table.columns.extend([
+            Column {
+                name: "name".into(),
+                value_type: DataType::String,
+                nullable: true,
+            },
+            Column {
+                name: "score".into(),
+                value_type: DataType::Int32,
+                nullable: false,
+            },
+        ]);
+        table.rows.push(DataRow {
+            id: 1,
+            cells: vec![Cell::Null, Cell::String("A&B".into()), Cell::Integer(7)],
+        });
+        let schema = data_table_schema_xml("table", &table);
+        assert_eq!(
+            schema,
+            concat!(
+                "<?xml version=\"1.0\" encoding=\"utf-16\"?>\r\n",
+                "<xs:schema id=\"NewDataSet\" xmlns=\"\" xmlns:xs=\"http://www.w3.org/2001/XMLSchema\" xmlns:msdata=\"urn:schemas-microsoft-com:xml-msdata\">\r\n",
+                "  <xs:element name=\"NewDataSet\" msdata:IsDataSet=\"true\" msdata:MainDataTable=\"table\" msdata:CaseSensitive=\"true\" msdata:UseCurrentLocale=\"true\">\r\n",
+                "    <xs:complexType>\r\n",
+                "      <xs:choice minOccurs=\"0\" maxOccurs=\"unbounded\">\r\n",
+                "        <xs:element name=\"table\" msdata:CaseSensitive=\"True\">\r\n",
+                "          <xs:complexType>\r\n",
+                "            <xs:sequence>\r\n",
+                "              <xs:element name=\"id\" type=\"xs:long\" />\r\n",
+                "              <xs:element name=\"name\" type=\"xs:string\" minOccurs=\"0\" />\r\n",
+                "              <xs:element name=\"score\" type=\"xs:int\" />\r\n",
+                "            </xs:sequence>\r\n",
+                "          </xs:complexType>\r\n",
+                "        </xs:element>\r\n",
+                "      </xs:choice>\r\n",
+                "    </xs:complexType>\r\n",
+                "    <xs:unique name=\"Constraint1\" msdata:PrimaryKey=\"true\">\r\n",
+                "      <xs:selector xpath=\".//table\" />\r\n",
+                "      <xs:field xpath=\"id\" />\r\n",
+                "    </xs:unique>\r\n",
+                "  </xs:element>\r\n",
+                "</xs:schema>"
+            )
+        );
+        let data = data_table_data_xml("table", &table);
+        assert_eq!(
+            data,
+            "<DocumentElement>\r\n  <table>\r\n    <id>1</id>\r\n    <name>A&amp;B</name>\r\n    <score>7</score>\r\n  </table>\r\n</DocumentElement>"
+        );
+        let parsed_schema = parse_data_table_schema("table", &schema).unwrap();
+        let parsed = parse_data_table_xml("table", &parsed_schema, &data).unwrap();
+        assert_eq!(parsed.columns, table.columns);
+        assert_eq!(parsed.rows, table.rows);
+    }
+
+    #[test]
+    fn data_table_xml_rejects_partial_or_mismatched_input_before_commit() {
+        let table = DataTable::new();
+        let schema = data_table_schema_xml("table", &table);
+        let parsed_schema = parse_data_table_schema("table", &schema).unwrap();
+        assert!(parse_data_table_schema("other", &schema).is_err());
+        assert!(
+            parse_data_table_xml(
+                "table",
+                &parsed_schema,
+                "<DocumentElement><table><id>bad</id></table></DocumentElement>"
+            )
+            .is_err()
+        );
     }
 
     #[test]

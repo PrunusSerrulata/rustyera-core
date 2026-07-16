@@ -9,7 +9,9 @@ use era_debug_protocol::{
     VariableReference, VariableStorage, VariableValue, VariableWriteOutcome, grant_scopes,
 };
 use era_protocol::{ProtocolBytes, SessionId, VersionRange, encode_envelope, negotiate_version};
+use erabasic_ast::{BinaryOp, Expr, ExprKind, UnaryOp};
 use erabasic_bytecode::{BytecodeStorage, Digest, SymbolKey};
+use erabasic_parser::{DefaultParserContext, ParserContext, parse_expression};
 use erabasic_vm::{
     FiberId, FiberStatus, FrameId, GenerationId, PlaceDescriptor, VmBreakpoint,
     VmBreakpointBinding, VmBreakpointLocation, VmDebugControl, VmDebugInspect, VmDebugStop,
@@ -801,15 +803,18 @@ impl RuntimeSession {
                     diagnostics,
                 );
             };
-            let Some(parsed) = parse_console_atom(expression.trim(), &variables) else {
-                diagnostics.push(console_diagnostic("debug.console.unsupported_expression", "assignment value must be an integer, quoted string, or visible scalar variable"));
-                return self.emit_console_outcome(
-                    message_id,
-                    stop,
-                    value,
-                    changed_variables,
-                    diagnostics,
-                );
+            let parsed = match parse_console_expression(expression.trim(), &variables) {
+                Ok(value) => value,
+                Err((code, message)) => {
+                    diagnostics.push(console_diagnostic(code, &message));
+                    return self.emit_console_outcome(
+                        message_id,
+                        stop,
+                        value,
+                        changed_variables,
+                        diagnostics,
+                    );
+                }
             };
             let writes = [VmDebugVariableWrite {
                 target: target.target.clone(),
@@ -826,13 +831,11 @@ impl RuntimeSession {
                 }
                 Err(error) => return self.emit_vm_debug_error(error, Some(message_id)),
             }
-        } else if let Some(parsed) = parse_console_atom(trimmed, &variables) {
-            value = Some(protocol_value(parsed));
         } else {
-            diagnostics.push(console_diagnostic(
-                "debug.console.unsupported_expression",
-                "evaluation accepts an integer, quoted string, or visible scalar variable",
-            ));
+            match parse_console_expression(trimmed, &variables) {
+                Ok(parsed) => value = Some(protocol_value(parsed)),
+                Err((code, message)) => diagnostics.push(console_diagnostic(code, &message)),
+            }
         }
         self.emit_console_outcome(message_id, stop, value, changed_variables, diagnostics)
     }
@@ -868,21 +871,255 @@ fn console_diagnostic(code: &str, message: &str) -> DebugDiagnostic {
     }
 }
 
-fn parse_console_atom(source: &str, variables: &[VmDebugVariable]) -> Option<VmValue> {
-    source
-        .parse::<i64>()
-        .ok()
-        .map(VmValue::Integer)
-        .or_else(|| {
-            (source.len() >= 2 && source.starts_with('"') && source.ends_with('"'))
-                .then(|| VmValue::String(source[1..source.len() - 1].to_owned()))
-        })
-        .or_else(|| {
-            variables
+fn parse_console_expression(
+    source: &str,
+    variables: &[VmDebugVariable],
+) -> Result<VmValue, (&'static str, String)> {
+    let mut context = DefaultParserContext::default();
+    for variable in variables {
+        context.register_variable(&variable.name);
+    }
+    for function in [
+        "ABS", "MAX", "MIN", "LIMIT", "STRLEN", "STRLENS", "STRLENSU", "TOINT", "TOSTR", "POWER",
+    ] {
+        context.register_function(function);
+    }
+    let parsed = parse_expression(source, &context);
+    if parsed.has_errors() {
+        let message = parsed
+            .diagnostics
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(("debug.console.parse_error", message));
+    }
+    let expression = parsed.value.ok_or_else(|| {
+        (
+            "debug.console.parse_error",
+            "expression parser produced no value".into(),
+        )
+    })?;
+    evaluate_console_expression(&expression, variables)
+}
+
+fn evaluate_console_expression(
+    expression: &Expr,
+    variables: &[VmDebugVariable],
+) -> Result<VmValue, (&'static str, String)> {
+    match &expression.kind {
+        ExprKind::Integer(value) => Ok(VmValue::Integer(*value)),
+        ExprKind::String(value) => Ok(VmValue::String(value.clone())),
+        ExprKind::Identifier(name) => variables
+            .iter()
+            .find(|item| item.name.eq_ignore_ascii_case(name))
+            .map(|item| item.value.clone())
+            .ok_or_else(|| {
+                (
+                    "debug.console.unknown_variable",
+                    format!("{name} is not a visible scalar variable"),
+                )
+            }),
+        ExprKind::Variable { name, indices } if indices.is_empty() => variables
+            .iter()
+            .find(|item| item.name.eq_ignore_ascii_case(name))
+            .map(|item| item.value.clone())
+            .ok_or_else(|| {
+                (
+                    "debug.console.unknown_variable",
+                    format!("{name} is not a visible scalar variable"),
+                )
+            }),
+        ExprKind::Variable { .. } => Err((
+            "debug.console.unsupported_expression",
+            "indexed variable reads are not in the safe console subset".into(),
+        )),
+        ExprKind::Group(inner) => evaluate_console_expression(inner, variables),
+        ExprKind::Unary { op, operand } => {
+            let evaluated = evaluate_console_expression(operand, variables)?;
+            let value = console_integer(&evaluated)?;
+            match op {
+                UnaryOp::Plus => Ok(VmValue::Integer(value)),
+                UnaryOp::Minus => Ok(VmValue::Integer(value.wrapping_neg())),
+                UnaryOp::LogicalNot => Ok(VmValue::Integer(i64::from(value == 0))),
+                UnaryOp::BitNot => Ok(VmValue::Integer(!value)),
+                UnaryOp::PreIncrement | UnaryOp::PreDecrement => Err((
+                    "debug.console.unsafe_expression",
+                    "increment and decrement are not allowed in the transactional console".into(),
+                )),
+            }
+        }
+        ExprKind::Postfix { .. } => Err((
+            "debug.console.unsafe_expression",
+            "increment and decrement are not allowed in the transactional console".into(),
+        )),
+        ExprKind::Binary { op, left, right } => {
+            let left = evaluate_console_expression(left, variables)?;
+            let right = evaluate_console_expression(right, variables)?;
+            evaluate_console_binary(*op, &left, &right)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            let evaluated = evaluate_console_expression(condition, variables)?;
+            let condition = console_integer(&evaluated)?;
+            evaluate_console_expression(
+                if condition != 0 { then_expr } else { else_expr },
+                variables,
+            )
+        }
+        ExprKind::Call { name, args } => {
+            let values = args
                 .iter()
-                .find(|item| item.name.eq_ignore_ascii_case(source))
-                .map(|item| item.value.clone())
-        })
+                .map(|argument| {
+                    argument
+                        .as_ref()
+                        .ok_or_else(|| {
+                            (
+                                "debug.console.unsupported_expression",
+                                "omitted method arguments are not supported".into(),
+                            )
+                        })
+                        .and_then(|argument| evaluate_console_expression(argument, variables))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            evaluate_console_method(name, &values)
+        }
+        ExprKind::Formatted(_) => Err((
+            "debug.console.unsupported_expression",
+            "formatted strings are not part of the safe console subset".into(),
+        )),
+        ExprKind::Error => Err(("debug.console.parse_error", "invalid expression".into())),
+    }
+}
+
+fn evaluate_console_binary(
+    op: BinaryOp,
+    left: &VmValue,
+    right: &VmValue,
+) -> Result<VmValue, (&'static str, String)> {
+    if matches!(op, BinaryOp::Equal | BinaryOp::NotEqual) {
+        let equal = left == right;
+        return Ok(VmValue::Integer(i64::from(if op == BinaryOp::Equal {
+            equal
+        } else {
+            !equal
+        })));
+    }
+    let left = console_integer(left)?;
+    let right = console_integer(right)?;
+    // EraBasic follows the CLR's masked 64-bit shift-count behavior.
+    let shift = u32::try_from(right & 63).expect("masked shift count fits u32");
+    let value = match op {
+        BinaryOp::Multiply => left.wrapping_mul(right),
+        BinaryOp::Divide if right != 0 => left.wrapping_div(right),
+        BinaryOp::Modulo if right != 0 => left.wrapping_rem(right),
+        BinaryOp::Divide | BinaryOp::Modulo => {
+            return Err(("debug.console.execution_error", "division by zero".into()));
+        }
+        BinaryOp::Add => left.wrapping_add(right),
+        BinaryOp::Subtract => left.wrapping_sub(right),
+        BinaryOp::ShiftLeft => left.wrapping_shl(shift),
+        BinaryOp::ShiftRight => left.wrapping_shr(shift),
+        BinaryOp::Less => i64::from(left < right),
+        BinaryOp::LessEqual => i64::from(left <= right),
+        BinaryOp::Greater => i64::from(left > right),
+        BinaryOp::GreaterEqual => i64::from(left >= right),
+        BinaryOp::BitAnd => left & right,
+        BinaryOp::BitXor => left ^ right,
+        BinaryOp::BitOr => left | right,
+        BinaryOp::LogicalAnd => i64::from(left != 0 && right != 0),
+        BinaryOp::LogicalXor => i64::from((left != 0) ^ (right != 0)),
+        BinaryOp::LogicalOr => i64::from(left != 0 || right != 0),
+        BinaryOp::Nand => i64::from(!(left != 0 && right != 0)),
+        BinaryOp::Nor => i64::from(!(left != 0 || right != 0)),
+        BinaryOp::Equal | BinaryOp::NotEqual => unreachable!("handled above"),
+    };
+    Ok(VmValue::Integer(value))
+}
+
+fn evaluate_console_method(
+    name: &str,
+    values: &[VmValue],
+) -> Result<VmValue, (&'static str, String)> {
+    let upper = name.to_ascii_uppercase();
+    match upper.as_str() {
+        "ABS" if values.len() == 1 => Ok(VmValue::Integer(
+            console_integer(&values[0])?.wrapping_abs(),
+        )),
+        "MAX" if values.len() == 2 => Ok(VmValue::Integer(
+            console_integer(&values[0])?.max(console_integer(&values[1])?),
+        )),
+        "MIN" if values.len() == 2 => Ok(VmValue::Integer(
+            console_integer(&values[0])?.min(console_integer(&values[1])?),
+        )),
+        "LIMIT" if values.len() == 3 => {
+            let value = console_integer(&values[0])?;
+            let minimum = console_integer(&values[1])?;
+            let maximum = console_integer(&values[2])?;
+            if minimum > maximum {
+                return Err((
+                    "debug.console.execution_error",
+                    "LIMIT minimum exceeds maximum".into(),
+                ));
+            }
+            Ok(VmValue::Integer(value.clamp(minimum, maximum)))
+        }
+        "STRLEN" | "STRLENS" if values.len() == 1 => match &values[0] {
+            // RustyEra's documented encoding difference makes this byte count UTF-8.
+            VmValue::String(value) => Ok(VmValue::Integer(
+                i64::try_from(value.len()).unwrap_or(i64::MAX),
+            )),
+            _ => console_type_error("string"),
+        },
+        "STRLENSU" if values.len() == 1 => match &values[0] {
+            // .NET String.Length counts UTF-16 code units for the U variant.
+            VmValue::String(value) => Ok(VmValue::Integer(
+                i64::try_from(value.encode_utf16().count()).unwrap_or(i64::MAX),
+            )),
+            _ => console_type_error("string"),
+        },
+        "TOINT" if values.len() == 1 => match &values[0] {
+            VmValue::String(value) => Ok(VmValue::Integer(value.parse().unwrap_or_default())),
+            VmValue::Integer(value) => Ok(VmValue::Integer(*value)),
+            _ => console_type_error("scalar"),
+        },
+        "TOSTR" if values.len() == 1 => Ok(VmValue::String(match &values[0] {
+            VmValue::String(value) => value.clone(),
+            VmValue::Integer(value) => value.to_string(),
+            _ => return console_type_error("scalar"),
+        })),
+        "POWER" if values.len() == 2 => {
+            let base = console_integer(&values[0])?;
+            let exponent = u32::try_from(console_integer(&values[1])?).map_err(|_| {
+                (
+                    "debug.console.execution_error",
+                    "POWER exponent is out of range".into(),
+                )
+            })?;
+            Ok(VmValue::Integer(base.wrapping_pow(exponent)))
+        }
+        _ => Err((
+            "debug.console.unsafe_method",
+            format!("{name} is not in the debugger's pure method whitelist"),
+        )),
+    }
+}
+
+fn console_integer(value: &VmValue) -> Result<i64, (&'static str, String)> {
+    match value {
+        VmValue::Integer(value) => Ok(*value),
+        _ => console_type_error("integer"),
+    }
+}
+
+fn console_type_error<T>(expected: &str) -> Result<T, (&'static str, String)> {
+    Err((
+        "debug.console.type_mismatch",
+        format!("safe expression expected an {expected} value"),
+    ))
 }
 
 fn all_debug_scopes() -> [DebugScope; 9] {
@@ -939,6 +1176,41 @@ fn command_scope(command: &DebugCommand) -> DebugScope {
             ..
         } => DebugScope::ConsoleExecute,
         DebugCommand::UpdateBreakpoints { .. } => DebugScope::BreakpointsManage,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod console_tests {
+    use super::*;
+
+    #[test]
+    fn safe_console_uses_erabasic_precedence_and_pure_methods() {
+        assert_eq!(
+            parse_console_expression("1 + 2 * 3", &[]),
+            Ok(VmValue::Integer(7))
+        );
+        assert_eq!(
+            parse_console_expression("ABS(-4) + MAX(2, 5)", &[]),
+            Ok(VmValue::Integer(9))
+        );
+        assert_eq!(
+            parse_console_expression("STRLENS(\"界\")", &[]),
+            Ok(VmValue::Integer(3))
+        );
+        assert_eq!(
+            parse_console_expression("STRLENSU(\"😀\")", &[]),
+            Ok(VmValue::Integer(2))
+        );
+    }
+
+    #[test]
+    fn safe_console_rejects_failed_or_non_whitelisted_work_before_commit() {
+        assert!(matches!(
+            parse_console_expression("1 / 0", &[]),
+            Err(("debug.console.execution_error", _))
+        ));
+        assert!(parse_console_expression("GETKEY(1)", &[]).is_err());
     }
 }
 

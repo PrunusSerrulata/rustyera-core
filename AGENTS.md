@@ -46,9 +46,11 @@ caller-pumped runtime 和 C ABI 动态库。这里的 AST 是语法 AST；`Parse
 
 当前 runtime 已实现握手、内存项目加载与编译、新游戏启动、受限 VM 驱动、文本与
 输入等待、时钟/按键/熵服务、当前格式传统存档、稳定等待 VM snapshot、增量热替换、
-部分系统流程、独立调试通道与 VM 调试端口，以及 Map 和受限 XML/DataTable Native、
-VAREXT 与规范化展示状态。候选 `SAVEINFO` 事务、完整存档菜单、可变 XML、参考
-DataTable XML 以及完整的资源、媒体和平台 Host 调用仍未实现。在这些能力实际落地前，
+部分系统流程、独立调试通道与 VM 调试端口，以及 Map、可变 XML、固定 XPath 子集、
+参考形状 DataTable XSD/XML Native、VAREXT、资源图、canvas replay、规范化展示状态、
+typed image/audio/update/open-URL 边界和持久化 operation contract。候选 `SAVEINFO`
+事务、完整存档菜单、GDI 相关绘图尾部以及文档列出的稳定不支持 Host 调用仍未实现。
+在这些能力实际落地前，
 不得在 README、crate 文档、测试结果
 或交付说明中将其描述为已实现。CSV 加载期间的格式检查不是字节码验证器；C#
 reference CLI 能够调用参考实现的 evaluator、VM 和 runtime，也不代表 Rust 侧已实现

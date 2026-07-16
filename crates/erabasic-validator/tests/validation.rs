@@ -1,5 +1,8 @@
 use erabasic_bytecode::{
-    ArtifactManifest, BytecodeArtifact, BytecodeFunction, Digest, Opcode, SourceMap, SymbolKey,
+    ArtifactManifest, BytecodeArtifact, BytecodeFunction, CapabilityFallback, Digest,
+    HostCapability, HostEffect, HostImport, HostSnapshotCapability, Opcode, OperationContract,
+    OperationDebugPolicy, OperationHotReloadPolicy, OperationPersistence, OperationSnapshotPolicy,
+    OperationState, OperationWaitPolicy, RuntimeImport, SourceMap, SymbolKey, TransactionPolicy,
     opcode,
 };
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
@@ -125,5 +128,57 @@ fn rejects_snapshot_vm_abi_mismatch() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == ValidationCode::UnsupportedVersion)
+    );
+}
+
+#[test]
+fn rejects_contradictory_persisted_operation_contracts() {
+    let contract = OperationContract {
+        state: OperationState::Pure,
+        transaction: TransactionPolicy::ReadOnly,
+        persistence: OperationPersistence::None,
+        snapshot: OperationSnapshotPolicy::Included,
+        hot_reload: OperationHotReloadPolicy::Preserve,
+        wait: OperationWaitPolicy::Immediate,
+        capability_fallback: CapabilityFallback::NotApplicable,
+        debug: OperationDebugPolicy::Pure,
+    };
+    let mut artifact = BytecodeArtifact {
+        manifest: ArtifactManifest::new(Digest::default()),
+        project_data: project_data(),
+        globals: Vec::new(),
+        native_imports: Vec::new(),
+        host_imports: vec![HostImport {
+            import: RuntimeImport {
+                key: SymbolKey::derive("test.host", b"pure"),
+                namespace: "test.host".into(),
+                name: "pure".into(),
+                abi_version: 1,
+                parameters: Vec::new(),
+                result: None,
+            },
+            effect: HostEffect {
+                pure: false,
+                ..contract.effect()
+            },
+            capability: HostCapability::System,
+            snapshot_capability: HostSnapshotCapability::StableWait,
+            contract,
+        }],
+        functions: Vec::new(),
+        event_groups: Vec::new(),
+        source_map: SourceMap::default(),
+    };
+    artifact.refresh_ids().unwrap();
+    let report = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &ValidationContext::for_artifact(&artifact),
+    );
+    assert!(report.value.is_none());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == ValidationCode::InvalidOperationContract)
     );
 }
