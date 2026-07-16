@@ -896,9 +896,9 @@ impl<'a> Builder<'a> {
 
 fn compiler_native_contract(pure: bool) -> erabasic_bytecode::OperationContract {
     use erabasic_bytecode::{
-        CapabilityFallback, OperationContract, OperationDebugPolicy, OperationHotReloadPolicy,
-        OperationPersistence, OperationSnapshotPolicy, OperationState, OperationWaitPolicy,
-        TransactionPolicy,
+        CandidatePolicy, CapabilityFallback, OperationContract, OperationDebugPolicy,
+        OperationHotReloadPolicy, OperationPersistence, OperationSnapshotPolicy, OperationState,
+        OperationWaitPolicy, TransactionPolicy,
     };
     OperationContract {
         state: if pure {
@@ -907,6 +907,7 @@ fn compiler_native_contract(pure: bool) -> erabasic_bytecode::OperationContract 
             OperationState::Vm
         },
         transaction: TransactionPolicy::ReadOnly,
+        candidate: CandidatePolicy::ReadOnly,
         persistence: OperationPersistence::None,
         snapshot: OperationSnapshotPolicy::Included,
         hot_reload: OperationHotReloadPolicy::Preserve,

@@ -136,6 +136,7 @@ fn rejects_contradictory_persisted_operation_contracts() {
     let contract = OperationContract {
         state: OperationState::Pure,
         transaction: TransactionPolicy::ReadOnly,
+        candidate: erabasic_bytecode::CandidatePolicy::ReadOnly,
         persistence: OperationPersistence::None,
         snapshot: OperationSnapshotPolicy::Included,
         hot_reload: OperationHotReloadPolicy::Preserve,
@@ -143,6 +144,13 @@ fn rejects_contradictory_persisted_operation_contracts() {
         capability_fallback: CapabilityFallback::NotApplicable,
         debug: OperationDebugPolicy::Pure,
     };
+    assert!(
+        !OperationContract {
+            candidate: erabasic_bytecode::CandidatePolicy::CloneCommit,
+            ..contract
+        }
+        .is_coherent()
+    );
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         project_data: project_data(),

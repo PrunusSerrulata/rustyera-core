@@ -79,6 +79,7 @@ try {
         ($project.result.functions.name -contains "ORACLE_TEST") -and
         ($project.result.functions.name -contains "ORACLE_INPUT") -and
         ($project.result.functions.name -contains "ORACLE_MAP") -and
+        ($project.result.functions.name -contains "ORACLE_NATIVE") -and
         ($project.result.functions.name -contains "ORACLE_PRESENTATION") -and
         ($project.result.functions.name -contains "ORACLE_STRUCTURED")) "project function projection differs"
 
@@ -112,6 +113,19 @@ try {
     Assert-True $run.ok "isolated function run failed"
     Assert-True ($run.result.termination -eq "completed") "function did not complete"
     Assert-True (($run.result.output -join "`n") -match "ORACLE_OK") "function output missing"
+
+    $nativeTail = Invoke-Oracle @{
+        id = "native-tail"
+        op = "run"
+        entry = "ORACLE_NATIVE"
+        watch = @("RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULTS:0")
+    }
+    Assert-True ($nativeTail.ok -and $nativeTail.result.termination -eq "completed") "native tail failed"
+    Assert-True (($nativeTail.result.watches.'RESULT:0' -eq 0) -and
+        ($nativeTail.result.watches.'RESULT:1' -eq 4) -and
+        ($nativeTail.result.watches.'RESULT:2' -eq 1) -and
+        ($nativeTail.result.watches.'RESULT:3' -eq 1) -and
+        ($nativeTail.result.watches.'RESULTS:0' -eq 'a\+b')) "native tail differs"
 
     $mapRun = Invoke-Oracle @{ id = "map"; op = "run"; entry = "ORACLE_MAP"; watch = @("RESULT", "RESULTS") }
     Assert-True $mapRun.ok "map function run failed"

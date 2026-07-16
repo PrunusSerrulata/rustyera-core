@@ -43,6 +43,8 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) maximum_shop_items: u32,
     pub(crate) viewport_width: u32,
     pub(crate) viewport_height: u32,
+    pub(crate) font_size: u32,
+    pub(crate) line_height: u32,
     pub(crate) print_c_per_line: u32,
     pub(crate) print_c_length: u32,
 }
@@ -69,6 +71,8 @@ struct SemanticConfig {
     maximum_shop_items: u32,
     viewport_width: u32,
     viewport_height: u32,
+    font_size: u32,
+    line_height: u32,
     print_c_per_line: u32,
     print_c_length: u32,
 }
@@ -88,6 +92,8 @@ impl Default for SemanticConfig {
             maximum_shop_items: 100,
             viewport_width: 760,
             viewport_height: 480,
+            font_size: 18,
+            line_height: 19,
             print_c_per_line: 3,
             print_c_length: 25,
         }
@@ -354,6 +360,8 @@ pub(crate) fn build_project(
             maximum_shop_items: config.maximum_shop_items,
             viewport_width: config.viewport_width,
             viewport_height: config.viewport_height,
+            font_size: config.font_size,
+            line_height: config.line_height,
             print_c_per_line: config.print_c_per_line,
             print_c_length: config.print_c_length,
         }),
@@ -468,6 +476,8 @@ fn project_identity(
     hasher.update(&config.maximum_shop_items.to_le_bytes());
     hasher.update(&config.viewport_width.to_le_bytes());
     hasher.update(&config.viewport_height.to_le_bytes());
+    hasher.update(&config.font_size.to_le_bytes());
+    hasher.update(&config.line_height.to_le_bytes());
     hasher.update(&config.print_c_per_line.to_le_bytes());
     hasher.update(&config.print_c_length.to_le_bytes());
     hasher.update(&(config.money_label.len() as u64).to_le_bytes());
@@ -626,6 +636,18 @@ fn parse_configuration(
                     }
                     continue;
                 }
+                "フォントサイズ" | "Font size" => {
+                    if let Ok(value) = value.parse::<u32>() {
+                        config.font_size = value.max(8);
+                    }
+                    continue;
+                }
+                "一行の高さ" | "Line height" => {
+                    if let Ok(value) = value.parse::<u32>() {
+                        config.line_height = value.max(config.font_size);
+                    }
+                    continue;
+                }
                 "PRINTCを並べる数" | "Items per line for PRINTC" => {
                     if let Ok(value) = value.parse::<u32>() {
                         config.print_c_per_line = value.max(1);
@@ -743,6 +765,8 @@ fn parse_json_configuration(
                 ("WindowY", &mut config.viewport_height, 128),
                 ("PrintCPerLine", &mut config.print_c_per_line, 1),
                 ("PrintCLength", &mut config.print_c_length, 1),
+                ("FontSize", &mut config.font_size, 8),
+                ("LineHeight", &mut config.line_height, 8),
             ] {
                 if let Some(number) = value
                     .get(key)
@@ -752,6 +776,7 @@ fn parse_json_configuration(
                     *target = number.max(minimum);
                 }
             }
+            config.line_height = config.line_height.max(config.font_size);
         }
         Err(error) => diagnostics.push(project_diagnostic(
             "runtime.invalid_json_configuration",
@@ -885,7 +910,7 @@ mod tests {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
-                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nCurrency symbol:円\nCurrency symbol position:NO\nMax shop item storage:77\nフォント名:Test\n",
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nCurrency symbol:円\nCurrency symbol position:NO\nMax shop item storage:77\nFont size:20\nLine height:22\nフォント名:Test\n",
             )],
             &mut diagnostics,
         );
@@ -900,6 +925,8 @@ mod tests {
         assert_eq!(config.money_label, "円");
         assert!(!config.money_first);
         assert_eq!(config.maximum_shop_items, 77);
+        assert_eq!(config.font_size, 20);
+        assert_eq!(config.line_height, 22);
         assert_eq!(
             diagnostics
                 .iter()
@@ -914,11 +941,13 @@ mod tests {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
-                r#"{"UseNewRandom":true,"UseMouse":false,"WindowWidth":1200}"#,
+                r#"{"UseNewRandom":true,"UseMouse":false,"WindowWidth":1200,"FontSize":21,"LineHeight":19}"#,
             )],
             &mut diagnostics,
         );
         assert!(config.use_new_random);
+        assert_eq!(config.font_size, 21);
+        assert_eq!(config.line_height, 21);
         assert!(
             diagnostics
                 .iter()

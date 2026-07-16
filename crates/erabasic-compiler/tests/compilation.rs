@@ -290,6 +290,27 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
 }
 
 #[test]
+fn candidate_contract_distinguishes_frozen_clock_from_storage_and_putform() {
+    let registry = default_host_registry();
+    assert_eq!(
+        registry.resolve("GETTIME").unwrap().contract.candidate,
+        erabasic_bytecode::CandidatePolicy::FrozenClock
+    );
+    assert_eq!(
+        registry.resolve("PUTFORM").unwrap().contract.candidate,
+        erabasic_bytecode::CandidatePolicy::CloneCommit
+    );
+    assert_eq!(
+        registry.resolve("SAVEDATA").unwrap().contract.candidate,
+        erabasic_bytecode::CandidatePolicy::Forbidden
+    );
+    assert_eq!(
+        registry.resolve("WAIT").unwrap().contract.candidate,
+        erabasic_bytecode::CandidatePolicy::Forbidden
+    );
+}
+
+#[test]
 fn parallelism_does_not_change_artifact_bytes() {
     let project = analyze("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRESULT = 1 + 2\nRETURN\n");
     let registry = default_host_registry();
@@ -462,6 +483,7 @@ fn image_style_host_binding_still_uses_the_single_call_host_opcode() {
             contract: erabasic_bytecode::OperationContract {
                 state: erabasic_bytecode::OperationState::Presentation,
                 transaction: erabasic_bytecode::TransactionPolicy::CloneCommit,
+                candidate: erabasic_bytecode::CandidatePolicy::CloneCommit,
                 persistence: erabasic_bytecode::OperationPersistence::RuntimeOnly,
                 snapshot: erabasic_bytecode::OperationSnapshotPolicy::Included,
                 hot_reload: erabasic_bytecode::OperationHotReloadPolicy::Preserve,

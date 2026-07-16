@@ -575,6 +575,21 @@ impl Vm {
                             NativeReady::default()
                         } else if matches!(
                             native_name.as_str(),
+                            "setbit" | "clearbit" | "invertbit"
+                        ) {
+                            execute_bit_mutation(self, fiber, &native_name, &arguments)
+                                .map_err(map_vm_error)?;
+                            NativeReady::default()
+                        } else if native_name == "split" {
+                            execute_split_transaction(self, fiber, &arguments)
+                                .map_err(map_vm_error)?;
+                            NativeReady::default()
+                        } else if native_name == "getnum" {
+                            NativeReady::value(
+                                execute_getnum(self, fiber, &arguments).map_err(map_vm_error)?,
+                            )
+                        } else if matches!(
+                            native_name.as_str(),
                             "arrayremove" | "arrayshift" | "arraysort"
                         ) {
                             execute_array_mutation(self, fiber, &native_name, &arguments)
@@ -973,7 +988,7 @@ fn native_implicit_place_views(
     vm: &Vm,
     fiber: &Fiber,
 ) -> Result<std::collections::BTreeMap<String, NativePlaceView>, VmError> {
-    ["RESULT", "RESULTS"]
+    ["RESULT", "RESULTS", "PALAMLV", "EXPLV"]
         .into_iter()
         .filter_map(|name| {
             global_unindexed_place(vm, fiber, name)
@@ -1057,6 +1072,168 @@ fn integer_argument(arguments: &[VmValue], index: usize) -> Result<i64, VmError>
             index + 1
         ))),
     }
+}
+
+fn execute_bit_mutation(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    operation: &str,
+    arguments: &[VmValue],
+) -> Result<(), VmError> {
+    let place = array_place(arguments)?.clone();
+    let VmValue::Integer(mut value) = vm.read_place(fiber, &place)? else {
+        return Err(VmError::InvalidArguments(
+            "bit mutation requires an integer place".into(),
+        ));
+    };
+    // Validate the complete argument list before the first observable write.
+    let bits = arguments[1..]
+        .iter()
+        .enumerate()
+        .map(|(index, argument)| match argument {
+            VmValue::Integer(bit @ 0..=63) => Ok(u32::try_from(*bit).unwrap_or(63)),
+            VmValue::Integer(bit) => Err(VmError::InvalidArguments(format!(
+                "{} bit argument {} ({bit}) is outside 0..63",
+                operation.to_ascii_uppercase(),
+                index + 2
+            ))),
+            _ => Err(VmError::InvalidArguments(format!(
+                "{} bit argument {} is not an integer",
+                operation.to_ascii_uppercase(),
+                index + 2
+            ))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for bit in bits {
+        let mask = 1_i64.wrapping_shl(bit);
+        match operation {
+            "setbit" => value |= mask,
+            "clearbit" => value &= !mask,
+            "invertbit" => value ^= mask,
+            _ => unreachable!("bit operation is classified before dispatch"),
+        }
+    }
+    vm.write_place(fiber, &place, VmValue::Integer(value))
+}
+
+fn execute_split_transaction(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    arguments: &[VmValue],
+) -> Result<(), VmError> {
+    let Some(VmValue::String(target)) = arguments.first() else {
+        return Err(VmError::InvalidArguments(
+            "SPLIT target is not a string".into(),
+        ));
+    };
+    let Some(VmValue::String(separator)) = arguments.get(1) else {
+        return Err(VmError::InvalidArguments(
+            "SPLIT separator is not a string".into(),
+        ));
+    };
+    let output = match arguments.get(2) {
+        Some(VmValue::StringPlace(place)) => place.clone(),
+        _ => {
+            return Err(VmError::InvalidArguments(
+                "SPLIT output is not a string-array place".into(),
+            ));
+        }
+    };
+    let count = match arguments.get(3) {
+        Some(VmValue::IntegerPlace(place)) => place.clone(),
+        None => global_unindexed_place(vm, fiber, "RESULT")?,
+        _ => {
+            return Err(VmError::InvalidArguments(
+                "SPLIT count is not an integer place".into(),
+            ));
+        }
+    };
+    let current = array_snapshot(vm, fiber, &output)?;
+    let _ = vm.read_place(fiber, &count)?;
+    let parts = if separator.is_empty() {
+        vec![target.as_str()]
+    } else {
+        target.split(separator).collect::<Vec<_>>()
+    };
+    let values = parts
+        .iter()
+        .take(current.len())
+        .map(|value| VmValue::String((*value).into()))
+        .collect::<Vec<_>>();
+    // All destinations and types have been read above, so neither write can
+    // discover a new user-visible error after the first mutation.
+    for (index, value) in values.into_iter().enumerate() {
+        let mut element = output.clone();
+        element.indices = vec![u64::try_from(index).unwrap_or(u64::MAX)];
+        vm.write_place(fiber, &element, value)?;
+    }
+    vm.write_place(
+        fiber,
+        &count,
+        VmValue::Integer(i64::try_from(parts.len()).unwrap_or(i64::MAX)),
+    )
+}
+
+fn execute_getnum(vm: &Vm, fiber: &Fiber, arguments: &[VmValue]) -> Result<VmValue, VmError> {
+    let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = arguments.first() else {
+        return Err(VmError::InvalidArguments(
+            "GETNUM argument 1 is not a variable reference".into(),
+        ));
+    };
+    let Some(VmValue::String(key)) = arguments.get(1) else {
+        return Err(VmError::InvalidArguments(
+            "GETNUM key is not a string".into(),
+        ));
+    };
+    let generation = fiber.frames.last().expect("frame exists").generation;
+    let artifact = &vm
+        .generations
+        .get(&generation)
+        .ok_or_else(|| VmError::InvalidState("GETNUM generation is missing".into()))?
+        .artifact;
+    let name = artifact
+        .globals
+        .iter()
+        .find(|definition| definition.key == place.variable)
+        .map(|definition| definition.name.to_ascii_uppercase())
+        .ok_or_else(|| {
+            VmError::InvalidArguments("GETNUM variable is not project-visible".into())
+        })?;
+    let kind = match name.as_str() {
+        "ABL" => Some(erabasic_data::NameTableKind::Abl),
+        "EXP" => Some(erabasic_data::NameTableKind::Exp),
+        "TALENT" => Some(erabasic_data::NameTableKind::Talent),
+        "PALAM" => Some(erabasic_data::NameTableKind::Palam),
+        "TRAIN" => Some(erabasic_data::NameTableKind::Train),
+        "MARK" => Some(erabasic_data::NameTableKind::Mark),
+        "ITEM" => Some(erabasic_data::NameTableKind::Item),
+        "BASE" => Some(erabasic_data::NameTableKind::Base),
+        "SOURCE" => Some(erabasic_data::NameTableKind::Source),
+        "EX" => Some(erabasic_data::NameTableKind::Ex),
+        "STR" => Some(erabasic_data::NameTableKind::Str),
+        "EQUIP" => Some(erabasic_data::NameTableKind::Equip),
+        "TEQUIP" => Some(erabasic_data::NameTableKind::Tequip),
+        "FLAG" => Some(erabasic_data::NameTableKind::Flag),
+        "TFLAG" => Some(erabasic_data::NameTableKind::Tflag),
+        "CFLAG" => Some(erabasic_data::NameTableKind::Cflag),
+        "TCVAR" => Some(erabasic_data::NameTableKind::Tcvar),
+        "CSTR" => Some(erabasic_data::NameTableKind::Cstr),
+        "STAIN" => Some(erabasic_data::NameTableKind::Stain),
+        "STRNAME" => Some(erabasic_data::NameTableKind::Strname),
+        "TSTR" => Some(erabasic_data::NameTableKind::Tstr),
+        "SAVESTR" => Some(erabasic_data::NameTableKind::Savestr),
+        "GLOBAL" => Some(erabasic_data::NameTableKind::Global),
+        "GLOBALS" => Some(erabasic_data::NameTableKind::Globals),
+        "DAY" => Some(erabasic_data::NameTableKind::Day),
+        "TIME" => Some(erabasic_data::NameTableKind::Time),
+        "MONEY" => Some(erabasic_data::NameTableKind::Money),
+        _ => None,
+    };
+    let value = kind
+        .and_then(|kind| artifact.project_data.static_data.name_tables.get(&kind))
+        .and_then(|table| table.lookup.get(key))
+        .map_or(-1, |index| i64::from(*index));
+    Ok(VmValue::Integer(value))
 }
 
 fn array_snapshot(

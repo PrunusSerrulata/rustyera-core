@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_bytecode::{
-    CapabilityFallback, HostCapability, HostEffect, HostSnapshotCapability, OperationContract,
-    OperationDebugPolicy, OperationHotReloadPolicy, OperationPersistence, OperationSnapshotPolicy,
-    OperationState, OperationWaitPolicy, TransactionPolicy,
+    CandidatePolicy, CapabilityFallback, HostCapability, HostEffect, HostSnapshotCapability,
+    OperationContract, OperationDebugPolicy, OperationHotReloadPolicy, OperationPersistence,
+    OperationSnapshotPolicy, OperationState, OperationWaitPolicy, TransactionPolicy,
 };
 use serde::{Deserialize, Serialize};
 
@@ -468,6 +468,8 @@ const SYSTEM: &[&str] = &[
     "CALLTRAIN",
     "STOPCALLTRAIN",
     "GETMEMORYUSAGE",
+    "GETCONFIG",
+    "GETCONFIGS",
 ];
 
 const NETWORK: &[&str] = &["UPDATECHECK"];
@@ -476,6 +478,7 @@ pub(crate) fn extension_binding(name: &str) -> HostBinding {
     let contract = OperationContract {
         state: OperationState::External,
         transaction: TransactionPolicy::Forbidden,
+        candidate: CandidatePolicy::Forbidden,
         persistence: OperationPersistence::RuntimeOnly,
         snapshot: OperationSnapshotPolicy::PendingBlocks,
         hot_reload: OperationHotReloadPolicy::ActiveBlocks,
@@ -526,6 +529,10 @@ fn native_contract(name: &str) -> OperationContract {
             | "pickupchara"
             | "sortchara"
             | "reset_stain"
+            | "setbit"
+            | "clearbit"
+            | "invertbit"
+            | "split"
     );
     let mutable = structured || random || variable_mutation;
     OperationContract {
@@ -540,6 +547,11 @@ fn native_contract(name: &str) -> OperationContract {
             TransactionPolicy::CloneCommit
         } else {
             TransactionPolicy::ReadOnly
+        },
+        candidate: if mutable {
+            CandidatePolicy::CloneCommit
+        } else {
+            CandidatePolicy::ReadOnly
         },
         persistence: if structured {
             OperationPersistence::ExtensionScoped
@@ -628,6 +640,24 @@ fn host_contract(namespace: &str, name: &str) -> OperationContract {
             OperationWaitPolicy::TransientExternal,
             CapabilityFallback::ScriptResult,
         ),
+        "rustyera.storage" if name == "PUTFORM" => (
+            OperationState::Vm,
+            TransactionPolicy::CloneCommit,
+            OperationPersistence::Ordinary,
+            OperationSnapshotPolicy::Included,
+            OperationHotReloadPolicy::Preserve,
+            OperationWaitPolicy::Immediate,
+            CapabilityFallback::NotApplicable,
+        ),
+        "rustyera.storage" if name == "SAVENOS" => (
+            OperationState::Vm,
+            TransactionPolicy::ReadOnly,
+            OperationPersistence::None,
+            OperationSnapshotPolicy::Included,
+            OperationHotReloadPolicy::Preserve,
+            OperationWaitPolicy::Immediate,
+            CapabilityFallback::NotApplicable,
+        ),
         "rustyera.storage" => (
             OperationState::External,
             TransactionPolicy::Forbidden,
@@ -636,6 +666,15 @@ fn host_contract(namespace: &str, name: &str) -> OperationContract {
             OperationHotReloadPolicy::ActiveBlocks,
             OperationWaitPolicy::TransientExternal,
             CapabilityFallback::Unsupported,
+        ),
+        "rustyera.system" if matches!(name, "GETCONFIG" | "GETCONFIGS") => (
+            OperationState::Controller,
+            TransactionPolicy::ReadOnly,
+            OperationPersistence::ProjectDerived,
+            OperationSnapshotPolicy::Included,
+            OperationHotReloadPolicy::Rebuild,
+            OperationWaitPolicy::Immediate,
+            CapabilityFallback::CanonicalProjection,
         ),
         "rustyera.system" => (
             OperationState::Controller,
@@ -659,6 +698,16 @@ fn host_contract(namespace: &str, name: &str) -> OperationContract {
     OperationContract {
         state,
         transaction,
+        candidate: match (namespace, wait, transaction) {
+            ("rustyera.clock", _, TransactionPolicy::Forbidden) => CandidatePolicy::FrozenClock,
+            (_, OperationWaitPolicy::StableInput | OperationWaitPolicy::TransientExternal, _) => {
+                CandidatePolicy::Forbidden
+            }
+            (_, _, TransactionPolicy::ReadOnly) => CandidatePolicy::ReadOnly,
+            (_, _, TransactionPolicy::CloneCommit) => CandidatePolicy::CloneCommit,
+            (_, _, TransactionPolicy::BufferedEffect) => CandidatePolicy::BufferedEffect,
+            (_, _, TransactionPolicy::Forbidden) => CandidatePolicy::Forbidden,
+        },
         persistence,
         snapshot,
         hot_reload,

@@ -2,7 +2,7 @@ use era_protocol::{ProtocolBytes, ProtocolVersion, SessionId, VersionRange};
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::{ServiceKind, SourceLocation};
+use crate::{ServiceKind, SourceLocation, StorageCapabilities};
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -62,6 +62,9 @@ pub struct ClientCapabilities {
     /// Exact service operations and wire versions supported by the frontend.
     #[n(10)]
     pub services: Vec<ServiceCapability>,
+    /// Storage guarantees the frontend can enforce at commit time.
+    #[n(11)]
+    pub storage: StorageCapabilities,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

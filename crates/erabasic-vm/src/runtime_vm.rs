@@ -12,6 +12,8 @@ use crate::{
 };
 use std::collections::BTreeSet;
 
+use crate::debug::DebugState;
+
 /// Runtime-facing VM owner. It keeps native services beside the interpreter so the
 /// caller-pumped runtime port never needs a callback parameter.
 pub struct RuntimeVm {
@@ -20,7 +22,69 @@ pub struct RuntimeVm {
     pending_natives: Option<NativeServiceRegistry>,
 }
 
+/// Opaque candidate state prepared against one exact artifact generation.
+/// It intentionally excludes fibers, frames and scheduler counters.
+pub struct PreparedCandidateState {
+    artifact_id: Digest,
+    memory: crate::Memory,
+    natives: NativeServiceRegistry,
+}
+
 impl RuntimeVm {
+    /// Fork authoritative memory and Native state while discarding every live
+    /// fiber. Candidate SAVEINFO execution uses this isolated timeline so a
+    /// failure cannot leak stack, scheduler, random or structured state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a registered Native service cannot be snapshotted.
+    pub fn fork_isolated(&self) -> Result<Self, VmError> {
+        let mut vm = self.vm.clone();
+        vm.fibers.clear();
+        vm.runnable.clear();
+        vm.primary_fiber = None;
+        vm.pending_reload = None;
+        vm.debug = DebugState::default();
+        let natives = self
+            .natives
+            .fork_for_artifact(vm.artifact())
+            .map_err(VmError::Snapshot)?;
+        Ok(Self {
+            vm,
+            natives,
+            pending_natives: None,
+        })
+    }
+
+    #[must_use]
+    pub fn into_candidate_state(self) -> PreparedCandidateState {
+        PreparedCandidateState {
+            artifact_id: self.vm.artifact_id(),
+            memory: self.vm.memory,
+            natives: self.natives,
+        }
+    }
+
+    /// Atomically install candidate memory and Native services without replacing
+    /// the caller's fibers or call stacks.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a candidate prepared for another artifact generation.
+    pub fn commit_candidate_state(
+        &mut self,
+        candidate: PreparedCandidateState,
+    ) -> Result<(), VmError> {
+        if candidate.artifact_id != self.vm.artifact_id() {
+            return Err(VmError::InvalidState(
+                "candidate state belongs to another artifact".into(),
+            ));
+        }
+        self.vm.memory = candidate.memory;
+        self.natives = candidate.natives;
+        Ok(())
+    }
+
     #[must_use]
     pub fn new(artifact: ValidatedArtifact, config: VmConfig) -> Self {
         let natives = NativeServiceRegistry::for_artifact(artifact.artifact());

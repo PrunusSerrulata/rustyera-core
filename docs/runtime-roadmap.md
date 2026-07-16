@@ -312,10 +312,11 @@ No additional reference conflict or user choice is introduced by this split.
 
 ## Batch 10: runtime-surface compatibility and transaction substrate
 
-Status: completed on 2026-07-16. The frozen classification gate is published in
-[`runtime-operation-contracts.md`](runtime-operation-contracts.md). Completion includes stable,
-tested intentional-difference diagnostics for the physical presentation queries and unimplemented
-GDI-dependent Host tail; it does not claim those operations produce reference WinForms pixels.
+Status: reopened after the 2026-07-17 final-surface audit. The first implementation checkpoint is
+published in [`runtime-operation-contracts.md`](runtime-operation-contracts.md), but the catalog
+cannot be called closed while deterministic analyzer-visible operations still reach an
+unregistered Native or generic Host fault. The six approved physical-history queries, raster/file
+GDI operations and `GETMEMORYUSAGE` remain intentional stable unsupported differences.
 
 Implement in this dependency order:
 
@@ -356,49 +357,69 @@ Batch 10 must not implement candidate `SAVEINFO` writes against a partially clas
 It is complete only when Batch 11 can clone or reject every operation reachable during candidate
 execution without consulting frontend/device state synchronously.
 
-Delivered details: mutable XML and the fixed XPath subset; reference-shaped DataTable XSD/XML;
+First-checkpoint details: mutable XML and the fixed XPath subset; reference-shaped DataTable XSD/XML;
 logical-line/button/skip behavior; resource manifests, image metadata and pixel services;
 canvas/dynamic-sprite replay state; backgrounds and tooltip policy; logical audio plus exact
 one-shot effect outcomes; typed update/open-URL services and focus state; bytecode-persisted
 operation contracts; and parser-backed atomic safe-console expressions. New or changed image bytes
 during hot reload deliberately require a full project load, while unchanged resource metadata and
-runtime-created replay state are preserved. Candidate save writes remain deferred to Batch 11.
+runtime-created replay state are preserved. The reopened closure slice adds an independent
+persisted candidate policy (`ReadOnly`/`CloneCommit`/`BufferedEffect`/`FrozenClock`/`Forbidden`),
+container 7, ISA 3, compiler ABI 11, Native ABI 10, Host ABI 6 and VM ABI 4. It also closes the
+high-use `SETBIT`/`CLEARBIT`/`INVERTBIT`, `SPLIT`, `GETNUM`, `GETPALAMLV`/`GETEXPLV`, `STRCOUNT`
+and `ESCAPE` paths, including the missing mutable/reference analyzer signatures. Remaining
+deterministic Built-ins, the wider semantic graphics replay tail, changed-image staged metadata
+reload and the final machine-checked execution matrix still block Batch 10 completion.
 
 ## Batch 11: persistence, controller and final compatibility closure
 
-Implement in this dependency order:
+### Implementation checkpoint (2026-07-17)
 
-This batch is intentionally sequential: item 1 consumes the Batch 10 classification gate; items 2
-and 3 build on its candidate transaction; item 4 snapshots the resulting stable controller states;
-and items 5--8 validate and close the finalized persistence behavior.
+- Runtime protocol 12 negotiates revision, atomic-replace, missing-precondition and delete storage
+  guarantees explicitly. Direct script storage commands retain reference-compatible unconditional
+  overwrite behavior; candidate writes require the stronger negotiated guarantees.
+- The VM can fork an isolated memory/Native timeline without live fibers and can later commit only
+  its authoritative state while retaining the caller's stacks. Runtime Snapshot v4 and VM Snapshot
+  v4 reject older layouts after the ABI change.
+- Built-in shop autosave now performs `Stat`, chooses `Missing` or the observed `Revision`, obtains
+  one Clock sample, executes a fresh bounded `SAVEINFO` fiber against cloned VM/Native/runtime and
+  buffered presentation/effect state, and writes atomically. Candidate faults, forbidden waits,
+  capability failures, conflicts and storage errors discard the candidate; a successful write is
+  the commit point. Once the atomic write request is emitted, shutdown cannot cancel that commit
+  window. Custom `SYSTEM_AUTOSAVE` and direct `SAVEDATA` retain their reference roles.
 
-1. Implement the candidate save transaction over Batch 10's frozen classifications. Obtain one
-   frontend Clock sample, run `SAVEINFO` against cloned mutable VM/Native/runtime state and buffered
-   presentation/effects, and commit only after a revision-checked storage write succeeds. Parse,
-   execution, cancellation, conflict and storage failure discard the complete candidate. This is
-   the approved transactional difference from the reference implementation's leaked side effects.
-2. Complete the title/save/load controller over `CHKDATA`: fixed pages of twenty, empty/corrupt
+This checkpoint does not complete Batch 11. The runtime-owned save/load/overwrite/delete pages,
+nested `SAVEGAME`/`LOADGAME` continuations, title override, final post-load/autosave chain, stable
+menu snapshot rebinding and UTF-8 historical readers remain in the dependency order below.
+
+The candidate save transaction is now the completed prerequisite for the remaining work. The rest
+of this batch is intentionally sequential: items 1 and 2 finalize controller continuations; item 3
+snapshots those stable controller states; and items 4--7 validate and close persistence behavior.
+
+Implement the remaining work in this dependency order:
+
+1. Complete the title/save/load controller over `CHKDATA`: fixed pages of twenty, empty/corrupt
    slot states, overwrite confirmation, revision-bound tokens, any-key recovery and delete actions
    in save and load menus. Deletion remains an explicitly documented extension.
-3. Complete nested `SAVEGAME`/`LOADGAME` continuation behavior in `__CAN_SAVE__` states,
+2. Complete nested `SAVEGAME`/`LOADGAME` continuation behavior in `__CAN_SAVE__` states,
    `TITLE_LOADGAME` precedence, and the `SYSTEM_LOADEND` -> `EVENTLOAD` -> SHOP chain with immediate
    shop-autosave suppression. Route built-in and shop autosave through the same candidate
    transaction using `Missing` or the observed `Revision`, never `Any`.
-4. Extend exact Runtime Snapshot eligibility to stable runtime-owned title/save/load/shop waits.
+3. Extend exact Runtime Snapshot eligibility to stable runtime-owned title/save/load/shop waits.
    Serialize controller and slot metadata without transport IDs, then atomically restore and
    rebind fresh epoch-scoped waits, buttons and revisions. Candidate saves, QTEs, storage/service
    work and old bytecode generations remain blockers.
-5. Add reference-supported historical save readers after current-format candidate writes,
+4. Add reference-supported historical save readers after current-format candidate writes,
    continuation rules and schema checks are stable. Historical input is read-only migration into
    the current authoritative state; new writes continue to use the current versioned formats.
-6. Extend the reference CLI with current-format ordinary/global/character/text/log and save Host
+5. Extend the reference CLI with current-format ordinary/global/character/text/log and save Host
    fixtures, then run same-input semantic comparisons for metadata, corruption, conflict,
    cancellation, continuation and autosave behavior wherever the headless reference exposes them.
    Record endpoint gaps explicitly; Rust codec round trips remain necessary but insufficient.
-7. Run focused real-game project slices for startup, title/save/load, shop/autosave, reload,
+6. Run focused real-game project slices for startup, title/save/load, shop/autosave, reload,
    snapshot recovery and long sessions. Keep unit fixtures small, and use selected real-game slices
    rather than loading the complete 80+ MiB corpus by default.
-8. Perform the final pinned built-in audit. Every built-in must have tests and a working
+7. Perform the final pinned built-in audit. Every built-in must have tests and a working
    implementation or a documented stable intentional-difference diagnostic; every public protocol,
    persisted format and roadmap status must agree before declaring runtime compatibility closure.
 

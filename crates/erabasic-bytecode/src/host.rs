@@ -34,6 +34,12 @@ pub struct HostEffect {
 pub struct OperationContract {
     pub state: OperationState,
     pub transaction: TransactionPolicy,
+    /// Behavior when the operation is reached by an isolated SAVEINFO run.
+    ///
+    /// This is deliberately independent from `transaction`: a system-flow
+    /// command can be transactional during normal execution while still being
+    /// forbidden in a save-description candidate.
+    pub candidate: CandidatePolicy,
     pub persistence: OperationPersistence,
     pub snapshot: OperationSnapshotPolicy,
     pub hot_reload: OperationHotReloadPolicy,
@@ -74,6 +80,19 @@ impl OperationContract {
     /// fields, so untrusted containers cannot smuggle a contradictory policy.
     #[must_use]
     pub const fn is_coherent(self) -> bool {
+        if (matches!(self.candidate, CandidatePolicy::ReadOnly)
+            && !matches!(self.transaction, TransactionPolicy::ReadOnly))
+            || (matches!(self.candidate, CandidatePolicy::CloneCommit)
+                && !matches!(self.transaction, TransactionPolicy::CloneCommit))
+            || (matches!(self.candidate, CandidatePolicy::BufferedEffect)
+                && !matches!(self.transaction, TransactionPolicy::BufferedEffect))
+            || (matches!(self.candidate, CandidatePolicy::FrozenClock)
+                && (!matches!(self.state, OperationState::External)
+                    || !matches!(self.transaction, TransactionPolicy::Forbidden)
+                    || !matches!(self.wait, OperationWaitPolicy::TransientExternal)))
+        {
+            return false;
+        }
         if matches!(self.state, OperationState::Pure)
             && (!matches!(self.transaction, TransactionPolicy::ReadOnly)
                 || !matches!(self.persistence, OperationPersistence::None)
@@ -108,6 +127,17 @@ impl OperationContract {
         }
         true
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidatePolicy {
+    ReadOnly,
+    CloneCommit,
+    BufferedEffect,
+    /// Read the one clock value sampled before candidate execution starts.
+    FrozenClock,
+    Forbidden,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

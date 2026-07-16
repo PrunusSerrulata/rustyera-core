@@ -51,9 +51,9 @@ pub use service::{
     LocalDateTimeRequest, LocalDateTimeResponse, OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION,
     OpenUrlRequest, OpenUrlResponse, RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION,
     RandomSeedRequest, RandomSeedResponse, ServiceError, ServiceKind, ServiceRequest,
-    ServiceResponse, ServiceResult, StorageEntry, StorageMetadata, StorageNamespace,
-    StorageOperation, StoragePrecondition, StorageRequest, StorageResponse, StorageResult,
-    UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest,
+    ServiceResponse, ServiceResult, StorageCapabilities, StorageEntry, StorageMetadata,
+    StorageNamespace, StorageOperation, StoragePrecondition, StorageRequest, StorageResponse,
+    StorageResult, UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest,
     UpdateCheckResponse,
 };
 pub use value::ProtocolValue;

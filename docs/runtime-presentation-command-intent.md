@@ -2,7 +2,7 @@
 
 本文记录对 `GETDISPLAYLINE`、Emuera HTML 辅助函数、`PRINTC`、`GETLINESTR` 和
 `DRAWLINE` 的参考实现调研，以及 Runtime—前端分离架构采用的实现方案。该方案已在
-runtime protocol 11.0 落地；本文保留调研依据。
+runtime protocol 11.0 首次落地，并在 protocol 12.0 的存储能力协商中继续沿用；本文保留调研依据。
 
 ## 调研结论
 

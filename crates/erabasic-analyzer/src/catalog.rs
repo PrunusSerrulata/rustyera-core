@@ -150,7 +150,7 @@ fn instruction(
 fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     use ArgumentConstraint::{
         Any, Formatted, Integer, MutableAny, MutableInteger, MutableReferenceOrString,
-        ReferenceOrString, String,
+        MutableString, ReferenceOrString, String,
     };
     use ArgumentStyle::{Expressions, Formatted as FormStyle, None as NoArgs, Raw};
 
@@ -374,13 +374,30 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         );
     }
     add("TWAIT", Expressions, &[Integer, Integer], 2, false, false);
+    add(
+        "SPLIT",
+        Expressions,
+        &[String, String, MutableString, MutableInteger],
+        3,
+        false,
+        true,
+    );
+    for name in ["SETBIT", "CLEARBIT", "INVERTBIT"] {
+        add(
+            name,
+            Expressions,
+            &[MutableInteger, Integer],
+            2,
+            true,
+            false,
+        );
+    }
 
     // Known instructions without a specialized signature still remain known. Their
     // arguments are preserved and type checked as general expressions.
     for name in [
         "BAR",
         "BARL",
-        "SPLIT",
         "VARSIZE",
         "SAVEDATA",
         "LOADDATA",
@@ -432,7 +449,6 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "CALLEVENT",
         "CALLFORMF",
         "CALLTRAIN",
-        "CLEARBIT",
         "CLEARLINE",
         "CLEARBGIMAGE",
         "CLEARTEXTBOX",
@@ -461,7 +477,6 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "HTML_TAGSPLIT",
         "INPUTANY",
         "INPUTMOUSEKEY",
-        "INVERTBIT",
         "JUMPFORM",
         "LOADCHARA",
         "LOADGAME",
@@ -494,7 +509,6 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "SETBGCOLORBYNAME",
         "SETBGIMAGE",
         "SETBGMVOLUME",
-        "SETBIT",
         "SETCOLORBYNAME",
         "SETFONT",
         "SETSOUNDVOLUME",
@@ -696,11 +710,19 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "STRFORM",
         "REPLACE",
         "UNICODETOSTR",
-        "GETCONFIG",
     ] {
         add(name, StrType, &[Any], 1, true);
     }
     add("STRFIND", IntType, &[String, String, Integer], 2, true);
+    add("GETCONFIG", IntType, &[String], 1, false);
+    add("GETCONFIGS", StrType, &[String], 1, false);
+    add(
+        "GETNUM",
+        IntType,
+        &[ReferenceAny, String, Integer],
+        2,
+        false,
+    );
     for name in ["GETCHARA", "EXISTCSV"] {
         add(name, IntType, &[Integer, Integer], 1, false);
     }
@@ -1054,7 +1076,6 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "GETKEYTRIGGERED",
         "GETMEMORYUSAGE",
         "GETMETH",
-        "GETNUM",
         "GETNUMB",
         "GETPALAMLV",
         "GETSECOND",
@@ -1185,7 +1206,6 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "ERDNAME",
         "ESCAPE",
         "FLOWINPUTS",
-        "GETCONFIGS",
         "GETDISPLAYLINE",
         "GETDOINGFUNCTION",
         "GETFONT",

@@ -4,6 +4,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::FrontendIoError;
 
+/// Filesystem semantics negotiated independently from rendering capabilities.
+/// Candidate saves require every field; ordinary script Host operations can
+/// continue to use their reference-compatible unconditional behavior.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct StorageCapabilities {
+    #[n(0)]
+    pub revisions: bool,
+    #[n(1)]
+    pub atomic_replace: bool,
+    #[n(2)]
+    pub missing_precondition: bool,
+    #[n(3)]
+    pub delete: bool,
+}
+
 #[derive(
     Clone, Copy, Debug, Decode, Encode, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
 )]

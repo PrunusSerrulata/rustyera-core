@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 11.0 and debug protocol 3.0 over common wire 2.0 are
+dynamic library. Runtime protocol 12.0 and debug protocol 3.0 over common wire 2.0 are
 development contracts: by explicit project policy they
 does not promise backward compatibility until a frontend exists.
 
@@ -109,6 +109,9 @@ Storage is negotiated as `RuntimeFeature::Storage`. `Stat` returns metadata with
 contents. `List { pattern, recursive }` returns frontend-relative entries; runtime sorts any list
 that is observable by EraBasic. `Missing` is create-only, `Revision` is compare-and-replace/delete,
 and a precondition mismatch is reported as a storage error rather than silently overwriting data.
+Protocol 12 additionally negotiates whether the frontend can return revisions, perform atomic
+replacement, enforce `Missing`, and delete. Candidate saves require the first three guarantees;
+menu deletion will additionally require the fourth.
 
 ## Input, QTE and presentation
 
@@ -203,15 +206,16 @@ transactional Native place writes. Canonical presentation includes logical lines
 message-skip state, backgrounds, tooltips, resource sprites, canvas replay and logical audio state.
 Image metadata and pixels are typed frontend services; audio actions use an exact-outcome effect
 journal. `UPDATECHECK` uses typed network and open-URL services, while focus remains a reported
-client state queried by `ISACTIVE`. Candidate SAVEINFO transactions and the complete slot/delete
-controller remain Batch 11 work. Protocol 11.0 separates
+client state queried by `ISACTIVE`. Built-in shop autosave now uses the isolated candidate
+`SAVEINFO` transaction and revision-checked storage commit; the complete slot/delete controller and
+nested SAVEGAME/LOADGAME continuations remain Batch 11 work. Protocol 12.0 separates
 external waits from debugger pauses. The independent debug channel supports creator-bounded scope
 grants, coherent stop tokens, global pause/continue/stepping, source breakpoints, fiber/frame/stack
 inspection, atomic variable writes and runtime game-field inspection. Only
 `input.message_skip` is debug-writable. Debug console execution accepts the currently implemented
 EraBasic expression subset (operator precedence, ternary expressions and a pure-method whitelist)
 and atomic scalar assignment; Host calls, flow, waits, increment/decrement and unsupported methods
-are rejected without mutation. Protocol 11.0 adds operation-versioned service capabilities,
+are rejected without mutation. Protocol 12.0 adds operation-versioned service capabilities,
 resource decoder services, exact effect outcomes, tooltip state and runtime diagnostics. The
 session-fixed `available_fonts` list is used only
 for the script-observable `CHKFONT` result. Font metrics and canonical layout remain runtime-owned;

@@ -179,6 +179,7 @@ mod tests {
         let contract = OperationContract {
             state: OperationState::Controller,
             transaction: TransactionPolicy::Forbidden,
+            candidate: erabasic_bytecode::CandidatePolicy::Forbidden,
             persistence: OperationPersistence::RuntimeOnly,
             snapshot: OperationSnapshotPolicy::Included,
             hot_reload: OperationHotReloadPolicy::Preserve,

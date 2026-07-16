@@ -76,6 +76,7 @@ impl Fiber {
     }
 }
 
+#[derive(Clone)]
 pub struct Vm {
     pub(crate) config: VmConfig,
     pub(crate) generations: BTreeMap<GenerationId, ProgramGeneration>,
