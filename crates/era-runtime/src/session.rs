@@ -21,17 +21,17 @@ use era_runtime_protocol::{
     StorageResult, SystemTextArgument, SystemTextKey, VersionRejected, WaitChange, WaitKind,
     WaitStability,
 };
-use erabasic_bytecode::SymbolKey;
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
 use erabasic_vm::{
     HostReady, HostWaitStability, HostWrite, PlaceDescriptor, RunBudget, RuntimeVm, VmConfig,
-    VmDriveMode, VmHostCompletion, VmHostRequest, VmPortEvent, VmPortStop, VmRuntimePort,
-    VmRuntimeStatePort, VmRuntimeStateTransaction, VmValue,
+    VmDriveMode, VmHostCompletion, VmHostRequest, VmPortEvent, VmPortStop, VmRuntimeFill,
+    VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite, VmValue,
 };
 
-use crate::controller::{SystemController, SystemFlow};
+use crate::controller::{SystemController, SystemFlow, SystemStep};
 use crate::host::{ClockOperation, ExternalCompletion, PendingInput, input_wait};
+use crate::operation::{PendingOperations, PendingService, PendingStorage};
 use crate::presentation::{PresentationModel, display_value, logical_line_string};
 use crate::project::{NormalizedProjectSnapshot, build_project};
 use crate::save_adapter::{decode_era_save, encode_era_save};
@@ -130,18 +130,6 @@ enum SessionState {
     Active,
 }
 
-#[derive(Clone, Debug)]
-enum PendingService {
-    StartEntropy,
-    Host(ExternalCompletion),
-}
-
-#[derive(Clone, Debug)]
-enum PendingStorage {
-    ListLoadSlots,
-    ReadLoadSlot,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum SystemMenuState {
     #[default]
@@ -173,13 +161,11 @@ pub struct RuntimeSession {
     incremental: IncrementalState,
     vm: Option<RuntimeVm>,
     presentation: PresentationModel,
-    pending_input: Option<PendingInput>,
-    queued_inputs: VecDeque<PendingInput>,
-    pending_services: BTreeMap<u64, PendingService>,
-    pending_storage: BTreeMap<u64, PendingStorage>,
-    pending_delays: BTreeMap<erabasic_vm::HostRequestId, u64>,
+    operations: PendingOperations,
     key_toggle_state: [u8; 256],
     message_skip: bool,
+    command_intents: BTreeMap<InteractionToken, VmValue>,
+    reusable_system_intents: BTreeMap<InteractionToken, VmValue>,
     exit_requested: Option<ExitRequested>,
     controller: SystemController,
     project_snapshot: Option<NormalizedProjectSnapshot>,
@@ -214,13 +200,11 @@ impl RuntimeSession {
             incremental: IncrementalState::default(),
             vm: None,
             presentation: PresentationModel::default(),
-            pending_input: None,
-            queued_inputs: VecDeque::new(),
-            pending_services: BTreeMap::new(),
-            pending_storage: BTreeMap::new(),
-            pending_delays: BTreeMap::new(),
+            operations: PendingOperations::default(),
             key_toggle_state: [0; 256],
             message_skip: false,
+            command_intents: BTreeMap::new(),
+            reusable_system_intents: BTreeMap::new(),
             exit_requested: None,
             controller: SystemController::default(),
             project_snapshot: None,
@@ -318,7 +302,7 @@ impl RuntimeSession {
                 for event in report.events {
                     self.handle_vm_event(&mut vm, event)?;
                 }
-                if self.pending_input.is_some()
+                if self.operations.active_input().is_some()
                     && !vm.has_runnable_fibers()
                     && self.phase == RuntimePhase::Running
                 {
@@ -608,8 +592,8 @@ impl RuntimeSession {
             StartMode::NewGame { seed: None } => {
                 self.set_phase(RuntimePhase::Starting)?;
                 let request_id = self.allocate_request()?;
-                self.pending_services
-                    .insert(request_id, PendingService::StartEntropy);
+                self.operations
+                    .insert_service(request_id, PendingService::StartEntropy);
                 self.emit(
                     RuntimeMessage::ServiceRequest(ServiceRequest {
                         request_id,
@@ -696,7 +680,6 @@ impl RuntimeSession {
             .game_base
             .title
             .clone();
-        let entry = function_key(&artifact, "SYSTEM_TITLE");
         self.presentation.set_title(title);
         let mut vm = RuntimeVm::new_with_seed(artifact, self.options.vm_config, seed);
         let prepared = vm
@@ -704,9 +687,12 @@ impl RuntimeSession {
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         vm.commit_runtime_state(prepared)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        if let Some(entry) = entry {
-            vm.spawn_entry(entry, Vec::new())
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        self.controller.flow = Some(SystemFlow::Title);
+        if self
+            .controller
+            .prepare_function(vm.vm().artifact(), "SYSTEM_TITLE")
+        {
+            self.spawn_next_event(&mut vm)?;
             self.vm = Some(vm);
             self.set_phase(RuntimePhase::Running)
         } else {
@@ -780,6 +766,28 @@ impl RuntimeSession {
             VmPortEvent::FiberCompleted(fiber, value) => {
                 if self.controller.completed(fiber, value.as_ref()) {
                     self.spawn_next_event(vm)?;
+                    if self.controller.is_complete()
+                        && matches!(
+                            self.controller.flow,
+                            Some(
+                                SystemFlow::Title
+                                    | SystemFlow::First
+                                    | SystemFlow::AfterTrain
+                                    | SystemFlow::TurnEnd
+                                    | SystemFlow::Normal
+                            )
+                        )
+                    {
+                        self.controller.flow = Some(SystemFlow::Normal);
+                        return self.fault(
+                            FaultCode::VmFault,
+                            "script execution ended while the reference system was in NORMAL",
+                            None,
+                        );
+                    }
+                    if self.controller.is_complete() && self.controller.step != SystemStep::None {
+                        return self.continue_system_flow(vm);
+                    }
                 }
                 Ok(())
             }
@@ -821,7 +829,7 @@ impl RuntimeSession {
                     rebind_payload: Vec::new(),
                 },
             )?;
-            self.pending_delays.insert(
+            self.operations.insert_delay(
                 request.id,
                 self.logical_time_ns
                     .saturating_add(milliseconds.cast_unsigned().saturating_mul(1_000_000)),
@@ -847,6 +855,53 @@ impl RuntimeSession {
             self.emit(RuntimeMessage::ExitRequested(exit), None)?;
             return self.set_phase(RuntimePhase::Stopping);
         }
+        if name == "CALLTRAIN" {
+            let count =
+                usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
+                    RuntimeError::Internal("CALLTRAIN count must be non-negative".into())
+                })?;
+            self.controller.continuous_commands.clear();
+            for index in 0..count {
+                self.controller
+                    .continuous_commands
+                    .push_back(read_runtime_integer(
+                        vm,
+                        "SELECTCOM",
+                        &[u64::try_from(index + 1).unwrap_or(u64::MAX)],
+                        None,
+                    )?);
+            }
+            self.controller.continuous_train = true;
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "STOPCALLTRAIN" {
+            self.controller.continuous_commands.clear();
+            self.controller.continuous_train = false;
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "DOTRAIN" {
+            let command = integer_argument_value(&request.arguments, 0)?;
+            if command < 0 || self.controller.flow != Some(SystemFlow::Train) {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "DOTRAIN is only valid with a non-negative command during TRAIN",
+                    None,
+                );
+            }
+            vm.cancel_fiber(request.fiber)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            self.controller.clear();
+            self.controller.continuous_commands.clear();
+            self.controller.continuous_train = false;
+            self.controller.selected_command = Some(command);
+            write_runtime_integer(vm, "SELECTCOM", &[], None, command)?;
+            fill_runtime_variable(vm, "NOWEX", VmValue::Integer(0), true)?;
+            self.controller.step = SystemStep::TrainEventCom;
+            if !self.dispatch_system_event(vm, "EVENTCOM")? {
+                return self.continue_system_flow(vm);
+            }
+            return Ok(());
+        }
         if matches!(name.as_str(), "BEGIN" | "FORCE_BEGIN") {
             let Some(VmValue::String(keyword)) = request.arguments.first() else {
                 return self.fault(FaultCode::VmFault, "BEGIN expects a system keyword", None);
@@ -866,12 +921,18 @@ impl RuntimeSession {
             self.controller.flow = Some(flow);
             return self.begin_flow(vm, flow);
         }
-        if let Some(pending) = input_wait(
+        if let Some(mut pending) = input_wait(
             request,
             self.allocate_wait(),
             self.allocate_interaction(),
             self.logical_time_ns,
         ) {
+            if matches!(
+                pending.wait.kind,
+                WaitKind::IntegerValue | WaitKind::IntegerButton
+            ) {
+                pending.choices = std::mem::take(&mut self.command_intents);
+            }
             if pending.wait.stop_message_skip {
                 self.message_skip = false;
             }
@@ -963,6 +1024,25 @@ impl RuntimeSession {
                 .first()
                 .map_or_else(|| "-".into(), display_value);
             self.presentation.append_separator(pattern);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if matches!(
+            name.as_str(),
+            "PRINTBUTTON" | "PRINTBUTTONC" | "PRINTBUTTONLC"
+        ) {
+            let text = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let value = request
+                .arguments
+                .get(1)
+                .cloned()
+                .ok_or_else(|| RuntimeError::Internal("PRINTBUTTON value is missing".into()))?;
+            let token = self.allocate_interaction();
+            self.presentation.append_button(text, token);
+            self.command_intents.insert(token, value);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
@@ -1111,8 +1191,8 @@ impl RuntimeSession {
             },
         )?;
         let request_id = self.allocate_request()?;
-        self.pending_services
-            .insert(request_id, PendingService::Host(completion));
+        self.operations
+            .insert_service(request_id, PendingService::Host(completion));
         self.emit(
             RuntimeMessage::ServiceRequest(ServiceRequest {
                 request_id,
@@ -1133,7 +1213,7 @@ impl RuntimeSession {
         relative_path: String,
     ) -> Result<(), RuntimeError> {
         let request_id = self.allocate_request()?;
-        self.pending_storage.insert(request_id, pending);
+        self.operations.insert_storage(request_id, pending);
         self.set_phase(RuntimePhase::Paused)?;
         self.emit(
             RuntimeMessage::StorageRequest(StorageRequest {
@@ -1156,7 +1236,7 @@ impl RuntimeSession {
         message_id: u64,
         response: StorageResponse,
     ) -> Result<(), RuntimeError> {
-        let Some(pending) = self.pending_storage.remove(&response.request_id) else {
+        let Some(pending) = self.operations.take_storage(response.request_id) else {
             return self.reject(
                 message_id,
                 CommandErrorCode::StaleRequest,
@@ -1261,7 +1341,7 @@ impl RuntimeSession {
         message_id: u64,
         response: ServiceResponse,
     ) -> Result<(), RuntimeError> {
-        let Some(pending) = self.pending_services.remove(&response.request_id) else {
+        let Some(pending) = self.operations.take_service(response.request_id) else {
             return self.reject(
                 message_id,
                 CommandErrorCode::StaleRequest,
@@ -1360,7 +1440,7 @@ impl RuntimeSession {
         message_id: u64,
         input: FrontendInput,
     ) -> Result<(), RuntimeError> {
-        let Some(pending) = self.pending_input.as_ref() else {
+        let Some(pending) = self.operations.active_input() else {
             return self.reject(
                 message_id,
                 CommandErrorCode::StaleRequest,
@@ -1400,15 +1480,8 @@ impl RuntimeSession {
 
     fn advance_time(&mut self, _message_id: u64, time: AdvanceTime) -> Result<(), RuntimeError> {
         self.logical_time_ns = self.logical_time_ns.max(time.monotonic_time_ns);
-        let ready_delays: Vec<_> = self
-            .pending_delays
-            .iter()
-            .filter_map(|(request, deadline)| {
-                (*deadline <= self.logical_time_ns).then_some(*request)
-            })
-            .collect();
+        let ready_delays = self.operations.take_ready_delays(self.logical_time_ns);
         for request in ready_delays {
-            self.pending_delays.remove(&request);
             let vm = self
                 .vm
                 .as_mut()
@@ -1417,12 +1490,12 @@ impl RuntimeSession {
             self.set_phase(RuntimePhase::Running)?;
         }
         let timed_out = self
-            .pending_input
-            .as_ref()
+            .operations
+            .active_input()
             .and_then(|pending| pending.wait.deadline_ns)
             .is_some_and(|deadline| self.logical_time_ns >= deadline);
         if !timed_out
-            && let Some(pending) = self.pending_input.as_mut()
+            && let Some(pending) = self.operations.active_input_mut()
             && pending.wait.display_time
             && let Some(deadline) = pending.wait.deadline_ns
         {
@@ -1437,7 +1510,7 @@ impl RuntimeSession {
             self.emit_presentation()?;
         }
         if timed_out {
-            let pending = self.pending_input.as_ref().expect("checked above");
+            let pending = self.operations.active_input().expect("checked above");
             if let Some(message) = &pending.wait.timeout_message {
                 self.presentation.append_text(message.clone(), false);
             }
@@ -1466,8 +1539,8 @@ impl RuntimeSession {
         timed_out: bool,
     ) -> Result<(), RuntimeError> {
         let pending = self
-            .pending_input
-            .take()
+            .operations
+            .take_active_input()
             .ok_or_else(|| RuntimeError::Internal("input wait disappeared".into()))?;
         if pending.wait.system_input {
             let InputSubmission::Value(value) = submission else {
@@ -1553,7 +1626,7 @@ impl RuntimeSession {
         )?;
         let pause_next_wait = !vm.has_runnable_fibers();
         self.close_wait(pending.wait.wait_id)?;
-        if let Some(next) = self.queued_inputs.pop_front() {
+        if let Some(next) = self.operations.pop_queued_input() {
             self.activate_wait(next, pause_next_wait)
         } else {
             self.set_phase(RuntimePhase::Running)
@@ -1565,6 +1638,9 @@ impl RuntimeSession {
         pending: PendingInput,
         value: &VmValue,
     ) -> Result<(), RuntimeError> {
+        if self.controller.step != SystemStep::None {
+            return self.finish_flow_input(pending, value);
+        }
         match (self.system_menu, value) {
             (SystemMenuState::Title, VmValue::Integer(0)) => {
                 self.close_wait(pending.wait.wait_id)?;
@@ -1603,14 +1679,30 @@ impl RuntimeSession {
             (SystemMenuState::LoadSlots, VmValue::Integer(selection)) if *selection >= 2 => {
                 let index = usize::try_from(*selection - 2).unwrap_or(usize::MAX);
                 let Some(path) = self.load_slot_paths.get(index).cloned() else {
-                    self.pending_input = Some(pending);
+                    self.operations.restore_active_input(pending);
                     return self.reject(0, CommandErrorCode::InvalidValue, "unknown save slot");
                 };
                 self.close_wait(pending.wait.wait_id)?;
                 self.issue_storage(PendingStorage::ReadLoadSlot, StorageOperation::Read, path)
             }
             _ => {
-                self.pending_input = Some(pending);
+                if self.presentation.last_line_is_temporary()
+                    && self.presentation.last_line_is_empty()
+                {
+                    self.presentation.delete_last_lines(2);
+                    self.presentation.append_text(
+                        localized_system_text(&self.selected_locale, SystemTextKey::InvalidValue),
+                        true,
+                    );
+                } else {
+                    self.presentation
+                        .replace_last_temporary(localized_system_text(
+                            &self.selected_locale,
+                            SystemTextKey::InvalidValue,
+                        ));
+                }
+                self.operations.restore_active_input(pending);
+                self.emit_presentation()?;
                 self.reject(
                     0,
                     CommandErrorCode::InvalidValue,
@@ -1618,6 +1710,123 @@ impl RuntimeSession {
                 )
             }
         }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn finish_flow_input(
+        &mut self,
+        pending: PendingInput,
+        value: &VmValue,
+    ) -> Result<(), RuntimeError> {
+        let VmValue::Integer(selection) = value else {
+            self.operations.restore_active_input(pending);
+            return self.reject(
+                0,
+                CommandErrorCode::InvalidValue,
+                "system input must be integer",
+            );
+        };
+        let previous_choices = pending.choices.clone();
+        self.close_wait(pending.wait.wait_id)?;
+        self.set_phase(RuntimePhase::Running)?;
+        let mut vm = self
+            .vm
+            .take()
+            .ok_or_else(|| RuntimeError::Internal("system flow input has no VM".into()))?;
+        let result = match self.controller.step {
+            SystemStep::TrainShowUser => {
+                if let Some(command) = usize::try_from(*selection)
+                    .ok()
+                    .and_then(|index| self.controller.train_commands.get(index))
+                    .copied()
+                {
+                    self.controller.selected_command = Some(command);
+                    write_runtime_integer(&mut vm, "SELECTCOM", &[], None, command)?;
+                    fill_runtime_variable(&mut vm, "NOWEX", VmValue::Integer(0), true)?;
+                    self.controller.step = SystemStep::TrainEventCom;
+                    if self.dispatch_system_event(&mut vm, "EVENTCOM")? {
+                        Ok(())
+                    } else {
+                        self.continue_system_flow(&mut vm)
+                    }
+                } else {
+                    write_runtime_integer(&mut vm, "RESULT", &[], None, *selection)?;
+                    self.controller.step = SystemStep::TrainUserCom;
+                    self.dispatch_system_function(&mut vm, "USERCOM", true)?;
+                    Ok(())
+                }
+            }
+            SystemStep::AblupShowSelect => {
+                self.controller.step = SystemStep::AblupAction;
+                if (0..100).contains(selection) {
+                    if self.dispatch_system_function(
+                        &mut vm,
+                        &format!("ABLUP{selection}"),
+                        false,
+                    )? {
+                        Ok(())
+                    } else {
+                        self.presentation
+                            .replace_last_temporary(localized_system_text(
+                                &self.selected_locale,
+                                SystemTextKey::InvalidValue,
+                            ));
+                        self.command_intents = previous_choices.clone();
+                        self.open_system_command_wait()
+                    }
+                } else {
+                    write_runtime_integer(&mut vm, "RESULT", &[], None, *selection)?;
+                    self.dispatch_system_function(&mut vm, "USERABLUP", true)?;
+                    Ok(())
+                }
+            }
+            SystemStep::ShopShow => {
+                let maximum = self
+                    .project_snapshot
+                    .as_ref()
+                    .map_or(100, |snapshot| snapshot.maximum_shop_items);
+                if *selection >= 0 && *selection < i64::from(maximum) {
+                    let purchase = purchase_item(
+                        &mut vm,
+                        usize::try_from(*selection).unwrap_or(usize::MAX),
+                        maximum,
+                    )?;
+                    match purchase {
+                        PurchaseResult::Purchased => {
+                            self.controller.step = SystemStep::ShopAction;
+                            if !self.dispatch_system_event(&mut vm, "EVENTBUY")? {
+                                self.continue_system_flow(&mut vm)?;
+                            }
+                            Ok(())
+                        }
+                        PurchaseResult::OutOfStock | PurchaseResult::NotEnoughMoney => {
+                            let key = if purchase == PurchaseResult::NotEnoughMoney {
+                                SystemTextKey::NotEnoughMoney
+                            } else {
+                                SystemTextKey::OutOfStock
+                            };
+                            self.presentation
+                                .replace_last_temporary(localized_system_text(
+                                    &self.selected_locale,
+                                    key,
+                                ));
+                            self.command_intents = previous_choices.clone();
+                            self.open_system_command_wait()
+                        }
+                    }
+                } else {
+                    write_runtime_integer(&mut vm, "RESULT", &[], None, *selection)?;
+                    self.controller.step = SystemStep::ShopAction;
+                    self.dispatch_system_function(&mut vm, "USERSHOP", true)?;
+                    Ok(())
+                }
+            }
+            _ => Err(RuntimeError::Internal(
+                "system flow received input outside an input step".into(),
+            )),
+        };
+        self.vm = Some(vm);
+        result
     }
 
     fn spawn_next_event(&mut self, vm: &mut RuntimeVm) -> Result<(), RuntimeError> {
@@ -1632,6 +1841,19 @@ impl RuntimeSession {
 
     fn begin_flow(&mut self, vm: &mut RuntimeVm, flow: SystemFlow) -> Result<(), RuntimeError> {
         self.message_skip = false;
+        if flow == SystemFlow::Train {
+            reset_training_state(vm)?;
+            self.controller.train_scan = 0;
+            self.controller.train_commands.clear();
+            self.controller.continuous_commands.clear();
+            self.controller.continuous_train = false;
+        }
+        self.controller.step = match flow {
+            SystemFlow::Train => SystemStep::TrainEvent,
+            SystemFlow::Ablup => SystemStep::AblupShowJuel,
+            SystemFlow::Shop => SystemStep::ShopEvent,
+            _ => SystemStep::None,
+        };
         let (entry, event, required) = match flow {
             SystemFlow::Title => ("SYSTEM_TITLE", false, false),
             SystemFlow::First => ("EVENTFIRST", true, true),
@@ -1652,10 +1874,8 @@ impl RuntimeSession {
             if self.controller.prepare_event(vm.vm().artifact(), entry) {
                 return self.spawn_next_event(vm);
             }
-        } else if let Some(function) = function_key_from_artifact(vm.vm().artifact(), entry) {
-            vm.spawn_entry(function, Vec::new())
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-            return Ok(());
+        } else if self.controller.prepare_function(vm.vm().artifact(), entry) {
+            return self.spawn_next_event(vm);
         }
         if required {
             self.fault(
@@ -1663,9 +1883,255 @@ impl RuntimeSession {
                 &format!("required system function {entry} is not defined"),
                 None,
             )
+        } else if self.controller.step != SystemStep::None {
+            self.continue_system_flow(vm)
         } else {
             Ok(())
         }
+    }
+
+    fn dispatch_system_function(
+        &mut self,
+        vm: &mut RuntimeVm,
+        name: &str,
+        required: bool,
+    ) -> Result<bool, RuntimeError> {
+        if self.controller.prepare_function(vm.vm().artifact(), name) {
+            self.spawn_next_event(vm)?;
+            return Ok(true);
+        }
+        if required {
+            self.fault(
+                FaultCode::VmFault,
+                &format!("required system function {name} is not defined"),
+                None,
+            )?;
+        }
+        Ok(false)
+    }
+
+    fn dispatch_system_event(
+        &mut self,
+        vm: &mut RuntimeVm,
+        name: &str,
+    ) -> Result<bool, RuntimeError> {
+        if self.controller.prepare_event(vm.vm().artifact(), name) {
+            self.spawn_next_event(vm)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn open_system_command_wait(&mut self) -> Result<(), RuntimeError> {
+        let submission = self.allocate_interaction();
+        let mut wait = self.system_wait(submission);
+        wait.kind = WaitKind::IntegerValue;
+        let choices = std::mem::take(&mut self.command_intents);
+        self.reusable_system_intents.clone_from(&choices);
+        self.open_wait(
+            PendingInput {
+                host_request: None,
+                wait,
+                result_name: None,
+                choices,
+                timeout_duration_ns: None,
+            },
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn continue_system_flow(&mut self, vm: &mut RuntimeVm) -> Result<(), RuntimeError> {
+        match self.controller.step {
+            SystemStep::TrainEvent => {
+                let next = read_runtime_integer(vm, "NEXTCOM", &[], None)?;
+                if next >= 0 {
+                    write_runtime_integer(vm, "SELECTCOM", &[], None, next)?;
+                    write_runtime_integer(vm, "NEXTCOM", &[], None, 0)?;
+                    self.controller.selected_command = Some(next);
+                    fill_runtime_variable(vm, "NOWEX", VmValue::Integer(0), true)?;
+                    self.controller.step = SystemStep::TrainEventCom;
+                    if !self.dispatch_system_event(vm, "EVENTCOM")? {
+                        return self.continue_system_flow(vm);
+                    }
+                } else {
+                    self.controller.step = SystemStep::TrainShowStatus;
+                    self.dispatch_system_function(vm, "SHOW_STATUS", true)?;
+                }
+            }
+            SystemStep::TrainShowStatus => {
+                self.controller.step = SystemStep::TrainComAble;
+                self.controller.train_scan = 0;
+                self.controller.train_commands.clear();
+                return self.prepare_next_comable(vm);
+            }
+            SystemStep::TrainComAble => {
+                let command = self.controller.train_scan.saturating_sub(1);
+                if read_runtime_integer(vm, "RESULT", &[], None)? != 0 {
+                    self.controller
+                        .train_commands
+                        .push(i64::try_from(command).unwrap_or(i64::MAX));
+                }
+                return self.prepare_next_comable(vm);
+            }
+            SystemStep::TrainShowUser if self.controller.continuous_train => {
+                reset_after_show_user(vm)?;
+                if let Some(command) = self.controller.continuous_commands.pop_front() {
+                    if self.controller.train_commands.contains(&command) {
+                        self.controller.selected_command = Some(command);
+                        write_runtime_integer(vm, "SELECTCOM", &[], None, command)?;
+                        fill_runtime_variable(vm, "NOWEX", VmValue::Integer(0), true)?;
+                        self.controller.step = SystemStep::TrainEventCom;
+                        if !self.dispatch_system_event(vm, "EVENTCOM")? {
+                            return self.continue_system_flow(vm);
+                        }
+                    } else {
+                        self.controller.step = SystemStep::TrainShowStatus;
+                        self.dispatch_system_function(vm, "SHOW_STATUS", true)?;
+                    }
+                } else {
+                    self.controller.continuous_train = false;
+                    self.controller.step = SystemStep::TrainShowStatus;
+                    if !self.dispatch_system_function(vm, "CALLTRAINEND", false)? {
+                        self.dispatch_system_function(vm, "SHOW_STATUS", true)?;
+                    }
+                }
+            }
+            SystemStep::TrainShowUser => {
+                reset_after_show_user(vm)?;
+                return self.open_system_command_wait();
+            }
+            SystemStep::AblupShowSelect | SystemStep::ShopShow => {
+                return self.open_system_command_wait();
+            }
+            SystemStep::TrainUserCom | SystemStep::TrainEventComEnd => {
+                self.controller.step = SystemStep::TrainShowStatus;
+                self.dispatch_system_function(vm, "SHOW_STATUS", true)?;
+            }
+            SystemStep::TrainEventCom => {
+                let command = self.controller.selected_command.ok_or_else(|| {
+                    RuntimeError::Internal("training command selection disappeared".into())
+                })?;
+                self.controller.step = SystemStep::TrainCommand;
+                self.dispatch_system_function(vm, &format!("COM{command}"), true)?;
+            }
+            SystemStep::TrainCommand => {
+                let result = read_runtime_integer(vm, "RESULT", &[], None)?;
+                if result == 0 {
+                    self.controller.step = SystemStep::TrainEventComEnd;
+                    if !self.dispatch_system_event(vm, "EVENTCOMEND")? {
+                        return self.continue_system_flow(vm);
+                    }
+                } else {
+                    self.controller.step = SystemStep::TrainSourceCheck;
+                    self.dispatch_system_function(vm, "SOURCE_CHECK", true)?;
+                }
+            }
+            SystemStep::TrainSourceCheck => {
+                fill_runtime_variable(vm, "SOURCE", VmValue::Integer(0), true)?;
+                self.controller.step = SystemStep::TrainEventComEnd;
+                if !self.dispatch_system_event(vm, "EVENTCOMEND")? {
+                    return self.continue_system_flow(vm);
+                }
+            }
+            SystemStep::AblupShowJuel => {
+                self.controller.step = SystemStep::AblupShowSelect;
+                self.dispatch_system_function(vm, "SHOW_ABLUP_SELECT", true)?;
+            }
+            SystemStep::AblupAction => {
+                if self.presentation.last_line_is_temporary() {
+                    self.command_intents
+                        .clone_from(&self.reusable_system_intents);
+                    return self.open_system_command_wait();
+                }
+                self.controller.step = SystemStep::AblupShowJuel;
+                self.dispatch_system_function(vm, "SHOW_JUEL", true)?;
+            }
+            SystemStep::ShopEvent => {
+                if self
+                    .project_snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.auto_save)
+                {
+                    self.controller.step = SystemStep::ShopAutosave;
+                    if !self.dispatch_system_function(vm, "SYSTEM_AUTOSAVE", false)? {
+                        return self.fault(
+                            FaultCode::UnsupportedRuntimeFeature,
+                            "built-in shop autosave is deferred to runtime batch 6; define SYSTEM_AUTOSAVE or disable autosave",
+                            None,
+                        );
+                    }
+                } else {
+                    self.controller.step = SystemStep::ShopShow;
+                    self.dispatch_system_function(vm, "SHOW_SHOP", true)?;
+                }
+            }
+            SystemStep::ShopAutosave | SystemStep::ShopAction => {
+                self.controller.step = SystemStep::ShopShow;
+                self.dispatch_system_function(vm, "SHOW_SHOP", true)?;
+            }
+            SystemStep::None => {}
+        }
+        Ok(())
+    }
+
+    fn prepare_next_comable(&mut self, vm: &mut RuntimeVm) -> Result<(), RuntimeError> {
+        let names = vm
+            .vm()
+            .artifact()
+            .project_data
+            .static_data
+            .name_tables
+            .get(&erabasic_data::NameTableKind::Train)
+            .map(|table| table.names.clone())
+            .unwrap_or_default();
+        let default_enabled = vm
+            .vm()
+            .artifact()
+            .project_data
+            .static_data
+            .replace
+            .com_able_default
+            != 0;
+        while self.controller.train_scan < names.len() {
+            let command = self.controller.train_scan;
+            self.controller.train_scan += 1;
+            if names[command].is_none() {
+                continue;
+            }
+            if self.dispatch_system_function(vm, &format!("COM_ABLE{command}"), false)? {
+                return Ok(());
+            }
+            if default_enabled {
+                self.controller
+                    .train_commands
+                    .push(i64::try_from(command).unwrap_or(i64::MAX));
+            }
+        }
+        for (display, command) in self
+            .controller
+            .train_commands
+            .clone()
+            .into_iter()
+            .enumerate()
+        {
+            let name = usize::try_from(command)
+                .ok()
+                .and_then(|index| names.get(index))
+                .and_then(Option::as_deref)
+                .unwrap_or("");
+            let token = self.allocate_interaction();
+            self.presentation
+                .append_button(format!("{name}[{display:>3}]"), token);
+            self.command_intents.insert(
+                token,
+                VmValue::Integer(i64::try_from(display).unwrap_or(i64::MAX)),
+            );
+        }
+        self.controller.step = SystemStep::TrainShowUser;
+        self.dispatch_system_function(vm, "SHOW_USERCOM", true)?;
+        Ok(())
     }
 
     fn open_wait(
@@ -1673,8 +2139,8 @@ impl RuntimeSession {
         pending: PendingInput,
         pause_runtime: bool,
     ) -> Result<(), RuntimeError> {
-        if self.pending_input.is_some() {
-            self.queued_inputs.push_back(pending);
+        if self.operations.active_input().is_some() {
+            self.operations.queue_input(pending);
             return Ok(());
         }
         self.activate_wait(pending, pause_runtime)
@@ -1696,7 +2162,7 @@ impl RuntimeSession {
             RuntimeMessage::WaitChanged(WaitChange::Opened(pending.wait.clone())),
             None,
         )?;
-        self.pending_input = Some(pending);
+        self.operations.activate_input(pending);
         self.emit_presentation()?;
         if pause_runtime {
             self.set_phase(RuntimePhase::WaitingInput)
@@ -1724,13 +2190,13 @@ impl RuntimeSession {
                 RuntimeMessage::StateExportReady(StateExportReady {
                     kind: request.kind,
                     result: StateExportResult::Ineligible {
-                        reasons: vec!["VM snapshot export is scheduled for batch 5".into()],
+                        reasons: vec!["exact VM snapshot export is scheduled for batch 7".into()],
                     },
                 }),
                 Some(message_id),
             );
         }
-        let stable_wait = self.pending_input.as_ref().is_some_and(|pending| {
+        let stable_wait = self.operations.active_input().is_some_and(|pending| {
             pending.wait.stability == WaitStability::StableInput
                 && pending.wait.deadline_ns.is_none()
         });
@@ -1738,7 +2204,7 @@ impl RuntimeSession {
         if self.phase != RuntimePhase::WaitingInput || !stable_wait {
             reasons.push("traditional saves require a stable untimed input wait".into());
         }
-        if !self.pending_services.is_empty() || !self.pending_delays.is_empty() {
+        if self.operations.has_transient_external() {
             reasons.push("external operations are still pending".into());
         }
         let result = if reasons.is_empty() {
@@ -1783,13 +2249,8 @@ impl RuntimeSession {
 
     fn shutdown(&mut self, message_id: u64) -> Result<(), RuntimeError> {
         self.set_phase(RuntimePhase::Stopping)?;
-        let cancelled = self.pending_services.len()
-            + self.pending_storage.len()
-            + self.pending_delays.len()
-            + self.queued_inputs.len()
-            + usize::from(self.pending_input.is_some());
-        let service_requests: Vec<_> = self.pending_services.keys().copied().collect();
-        let storage_requests: Vec<_> = self.pending_storage.keys().copied().collect();
+        let cancelled = self.operations.total_count();
+        let (service_requests, storage_requests) = self.operations.external_requests();
         for request_id in service_requests {
             self.emit(
                 RuntimeMessage::CancelExternalRequest(CancelExternalRequest {
@@ -1808,11 +2269,7 @@ impl RuntimeSession {
                 None,
             )?;
         }
-        self.pending_services.clear();
-        self.pending_storage.clear();
-        self.pending_delays.clear();
-        self.pending_input = None;
-        self.queued_inputs.clear();
+        self.operations.clear();
         self.vm = None;
         self.set_phase(RuntimePhase::Stopped)?;
         self.emit(
@@ -1905,9 +2362,7 @@ impl RuntimeSession {
     }
 
     fn allocate_request(&mut self) -> Result<u64, RuntimeError> {
-        if self.pending_services.len() + self.pending_storage.len()
-            >= self.options.limits.maximum_pending_requests as usize
-        {
+        if self.operations.total_count() >= self.options.limits.maximum_pending_requests as usize {
             return Err(RuntimeError::ResourceLimit(
                 "too many pending service requests",
             ));
@@ -1934,9 +2389,318 @@ impl RuntimeSession {
 
     fn advance_epoch(&mut self) {
         self.epoch.0 = self.epoch.0.saturating_add(1);
+        self.operations.bind_epoch(self.epoch.0);
+        self.command_intents.clear();
+        self.reusable_system_intents.clear();
         self.next_interaction_id = 1;
         self.accepted_message_ids.clear();
     }
+}
+
+fn runtime_variable_key(
+    vm: &RuntimeVm,
+    name: &str,
+) -> Result<erabasic_bytecode::SymbolKey, RuntimeError> {
+    vm.vm()
+        .artifact()
+        .globals
+        .iter()
+        .find(|global| global.name.eq_ignore_ascii_case(name))
+        .map(|global| global.key)
+        .ok_or_else(|| RuntimeError::Internal(format!("system variable {name} is missing")))
+}
+
+fn integer_argument_value(arguments: &[VmValue], index: usize) -> Result<i64, RuntimeError> {
+    match arguments.get(index) {
+        Some(VmValue::Integer(value)) => Ok(*value),
+        _ => Err(RuntimeError::Internal(format!(
+            "host argument {} must be integer",
+            index + 1
+        ))),
+    }
+}
+
+fn read_runtime_integer(
+    vm: &RuntimeVm,
+    name: &str,
+    indices: &[u64],
+    character: Option<u64>,
+) -> Result<i64, RuntimeError> {
+    let values = vm
+        .read_runtime_state(&[erabasic_vm::VmRuntimeRead {
+            variable: runtime_variable_key(vm, name)?,
+            indices: indices.to_vec(),
+            character,
+        }])
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    match values.as_slice() {
+        [VmValue::Integer(value)] => Ok(*value),
+        _ => Err(RuntimeError::Internal(format!(
+            "system variable {name} is not integer"
+        ))),
+    }
+}
+
+fn write_runtime_integer(
+    vm: &mut RuntimeVm,
+    name: &str,
+    indices: &[u64],
+    character: Option<u64>,
+    value: i64,
+) -> Result<(), RuntimeError> {
+    let prepared = vm
+        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+            writes: vec![VmRuntimeWrite {
+                variable: runtime_variable_key(vm, name)?,
+                indices: indices.to_vec(),
+                character,
+                value: VmValue::Integer(value),
+            }],
+            fills: Vec::new(),
+            clear_characters: false,
+            add_characters_from_csv: Vec::new(),
+        })
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    vm.commit_runtime_state(prepared)
+        .map_err(|error| RuntimeError::Internal(error.to_string()))
+}
+
+fn fill_runtime_variable(
+    vm: &mut RuntimeVm,
+    name: &str,
+    value: VmValue,
+    all_characters: bool,
+) -> Result<(), RuntimeError> {
+    let prepared = vm
+        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+            writes: Vec::new(),
+            fills: vec![VmRuntimeFill {
+                variable: runtime_variable_key(vm, name)?,
+                value,
+                all_characters,
+            }],
+            clear_characters: false,
+            add_characters_from_csv: Vec::new(),
+        })
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    vm.commit_runtime_state(prepared)
+        .map_err(|error| RuntimeError::Internal(error.to_string()))
+}
+
+fn reset_training_state(vm: &mut RuntimeVm) -> Result<(), RuntimeError> {
+    let artifact = vm.vm().artifact();
+    let key = |name: &str| {
+        artifact
+            .globals
+            .iter()
+            .find(|global| global.name.eq_ignore_ascii_case(name))
+            .map(|global| global.key)
+            .ok_or_else(|| RuntimeError::Internal(format!("system variable {name} is missing")))
+    };
+    let mut writes = vec![
+        VmRuntimeWrite {
+            variable: key("ASSIPLAY")?,
+            indices: Vec::new(),
+            character: None,
+            value: VmValue::Integer(0),
+        },
+        VmRuntimeWrite {
+            variable: key("PREVCOM")?,
+            indices: Vec::new(),
+            character: None,
+            value: VmValue::Integer(-1),
+        },
+        VmRuntimeWrite {
+            variable: key("NEXTCOM")?,
+            indices: Vec::new(),
+            character: None,
+            value: VmValue::Integer(-1),
+        },
+    ];
+    let fills = [
+        "TFLAG", "TSTR", "GOTJUEL", "TEQUIP", "EX", "PALAM", "SOURCE", "TCVAR",
+    ]
+    .into_iter()
+    .map(|name| {
+        Ok(VmRuntimeFill {
+            variable: key(name)?,
+            value: if name == "TSTR" {
+                VmValue::String(String::new())
+            } else {
+                VmValue::Integer(0)
+            },
+            all_characters: matches!(
+                name,
+                "GOTJUEL" | "TEQUIP" | "EX" | "PALAM" | "SOURCE" | "TCVAR"
+            ),
+        })
+    })
+    .collect::<Result<Vec<_>, RuntimeError>>()?;
+    let character_count = vm.vm().export_era_state().characters.len();
+    let stain = key("STAIN")?;
+    let stain_defaults = artifact
+        .project_data
+        .static_data
+        .replace
+        .stain_default
+        .clone();
+    for character in 0..character_count {
+        for (index, value) in stain_defaults.iter().copied().enumerate() {
+            writes.push(VmRuntimeWrite {
+                variable: stain,
+                indices: vec![u64::try_from(index).unwrap_or(u64::MAX)],
+                character: Some(u64::try_from(character).unwrap_or(u64::MAX)),
+                value: VmValue::Integer(value),
+            });
+        }
+    }
+    let prepared = vm
+        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+            writes,
+            fills,
+            clear_characters: false,
+            add_characters_from_csv: Vec::new(),
+        })
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    vm.commit_runtime_state(prepared)
+        .map_err(|error| RuntimeError::Internal(error.to_string()))
+}
+
+fn reset_after_show_user(vm: &mut RuntimeVm) -> Result<(), RuntimeError> {
+    let mut fills = Vec::new();
+    for name in ["UP", "DOWN", "LOSEBASE", "DOWNBASE", "CUP", "CDOWN"] {
+        fills.push(VmRuntimeFill {
+            variable: runtime_variable_key(vm, name)?,
+            value: VmValue::Integer(0),
+            all_characters: matches!(name, "DOWNBASE" | "CUP" | "CDOWN"),
+        });
+    }
+    let prepared = vm
+        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+            writes: Vec::new(),
+            fills,
+            clear_characters: false,
+            add_characters_from_csv: Vec::new(),
+        })
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    vm.commit_runtime_state(prepared)
+        .map_err(|error| RuntimeError::Internal(error.to_string()))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PurchaseResult {
+    Purchased,
+    OutOfStock,
+    NotEnoughMoney,
+}
+
+#[allow(clippy::too_many_lines)]
+fn purchase_item(
+    vm: &mut RuntimeVm,
+    item: usize,
+    maximum_shop_items: u32,
+) -> Result<PurchaseResult, RuntimeError> {
+    if item >= usize::try_from(maximum_shop_items).unwrap_or(usize::MAX) {
+        return Ok(PurchaseResult::OutOfStock);
+    }
+    let artifact = vm.vm().artifact();
+    let item_names = artifact
+        .project_data
+        .static_data
+        .name_tables
+        .get(&erabasic_data::NameTableKind::Item);
+    let price = artifact
+        .project_data
+        .static_data
+        .item_prices
+        .get(item)
+        .copied();
+    if price.is_none()
+        || item_names
+            .and_then(|table| table.names.get(item))
+            .and_then(Option::as_ref)
+            .is_none()
+    {
+        return Ok(PurchaseResult::OutOfStock);
+    }
+    let find = |name: &str| {
+        artifact
+            .globals
+            .iter()
+            .find(|global| global.name.eq_ignore_ascii_case(name))
+            .map(|global| global.key)
+            .ok_or_else(|| RuntimeError::Internal(format!("system variable {name} is missing")))
+    };
+    let sales = find("ITEMSALES")?;
+    let money = find("MONEY")?;
+    let items = find("ITEM")?;
+    let bought = find("BOUGHT")?;
+    let values = vm
+        .read_runtime_state(&[
+            erabasic_vm::VmRuntimeRead {
+                variable: sales,
+                indices: vec![u64::try_from(item).unwrap_or(u64::MAX)],
+                character: None,
+            },
+            erabasic_vm::VmRuntimeRead {
+                variable: money,
+                indices: Vec::new(),
+                character: None,
+            },
+            erabasic_vm::VmRuntimeRead {
+                variable: items,
+                indices: vec![u64::try_from(item).unwrap_or(u64::MAX)],
+                character: None,
+            },
+        ])
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    let [
+        VmValue::Integer(for_sale),
+        VmValue::Integer(current_money),
+        VmValue::Integer(owned),
+    ] = values.as_slice()
+    else {
+        return Err(RuntimeError::Internal(
+            "shop variables have incompatible types".into(),
+        ));
+    };
+    if *for_sale == 0 {
+        return Ok(PurchaseResult::OutOfStock);
+    }
+    let price = price.expect("checked above");
+    if *current_money < price {
+        return Ok(PurchaseResult::NotEnoughMoney);
+    }
+    let prepared = vm
+        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+            writes: vec![
+                VmRuntimeWrite {
+                    variable: money,
+                    indices: Vec::new(),
+                    character: None,
+                    value: VmValue::Integer(current_money - price),
+                },
+                VmRuntimeWrite {
+                    variable: items,
+                    indices: vec![u64::try_from(item).unwrap_or(u64::MAX)],
+                    character: None,
+                    value: VmValue::Integer(owned.saturating_add(1)),
+                },
+                VmRuntimeWrite {
+                    variable: bought,
+                    indices: Vec::new(),
+                    character: None,
+                    value: VmValue::Integer(i64::try_from(item).unwrap_or(i64::MAX)),
+                },
+            ],
+            fills: Vec::new(),
+            clear_characters: false,
+            add_characters_from_csv: Vec::new(),
+        })
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    vm.commit_runtime_state(prepared)
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    Ok(PurchaseResult::Purchased)
 }
 
 fn commit_completion(
@@ -1950,21 +2714,6 @@ fn commit_completion(
     vm.commit_host_completion(prepared)
         .map(|_| ())
         .map_err(|error| RuntimeError::Internal(error.to_string()))
-}
-
-fn function_key(artifact: &ValidatedArtifact, name: &str) -> Option<SymbolKey> {
-    function_key_from_artifact(artifact.artifact(), name)
-}
-
-fn function_key_from_artifact(
-    artifact: &erabasic_bytecode::BytecodeArtifact,
-    name: &str,
-) -> Option<SymbolKey> {
-    artifact
-        .functions
-        .iter()
-        .find(|function| function.name.eq_ignore_ascii_case(name))
-        .map(|function| function.key)
 }
 
 fn global_place(vm: &RuntimeVm, name: &str) -> Option<PlaceDescriptor> {
@@ -2290,6 +3039,235 @@ mod tests {
     }
 
     #[test]
+    fn training_reset_updates_shared_and_all_character_state_atomically() {
+        let build = build_project(
+            &ProjectManifest {
+                project_revision: 1,
+                files: vec![SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8("@EVENTTRAIN\nRETURN\n".into()),
+                    content_hash: None,
+                }],
+            },
+            None,
+        );
+        let artifact = build.artifact.expect("valid project");
+        let source = artifact
+            .artifact()
+            .globals
+            .iter()
+            .find(|global| global.name == "SOURCE")
+            .expect("SOURCE")
+            .key;
+        let tflag = artifact
+            .artifact()
+            .globals
+            .iter()
+            .find(|global| global.name == "TFLAG")
+            .expect("TFLAG")
+            .key;
+        let mut vm = RuntimeVm::new(artifact, VmConfig::default());
+        let dirty = vm
+            .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+                writes: vec![
+                    VmRuntimeWrite {
+                        variable: source,
+                        indices: vec![0],
+                        character: Some(0),
+                        value: VmValue::Integer(9),
+                    },
+                    VmRuntimeWrite {
+                        variable: tflag,
+                        indices: vec![0],
+                        character: None,
+                        value: VmValue::Integer(7),
+                    },
+                ],
+                fills: Vec::new(),
+                clear_characters: false,
+                add_characters_from_csv: Vec::new(),
+            })
+            .expect("prepare dirty state");
+        vm.commit_runtime_state(dirty).expect("commit dirty state");
+        reset_training_state(&mut vm).expect("reset training state");
+        assert_eq!(
+            vm.read_runtime_state(&[
+                erabasic_vm::VmRuntimeRead {
+                    variable: source,
+                    indices: vec![0],
+                    character: Some(0),
+                },
+                erabasic_vm::VmRuntimeRead {
+                    variable: tflag,
+                    indices: vec![0],
+                    character: None,
+                },
+            ]),
+            Ok(vec![VmValue::Integer(0), VmValue::Integer(0)])
+        );
+    }
+
+    #[test]
+    fn shop_purchase_validates_stock_and_commits_money_item_and_bought_together() {
+        let build = build_project(
+            &ProjectManifest {
+                project_revision: 1,
+                files: vec![
+                    SubmittedFile {
+                        relative_path: "main.erb".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                        content_hash: None,
+                    },
+                    SubmittedFile {
+                        relative_path: "ITEM.CSV".into(),
+                        category: FileCategory::Csv,
+                        payload: FilePayload::Utf8("5,potion,120\n".into()),
+                        content_hash: None,
+                    },
+                ],
+            },
+            None,
+        );
+        let artifact = build.artifact.expect("valid project");
+        let mut vm = RuntimeVm::new(artifact, VmConfig::default());
+        let sales = runtime_variable_key(&vm, "ITEMSALES").unwrap();
+        let money = runtime_variable_key(&vm, "MONEY").unwrap();
+        let dirty = vm
+            .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+                writes: vec![
+                    VmRuntimeWrite {
+                        variable: sales,
+                        indices: vec![5],
+                        character: None,
+                        value: VmValue::Integer(1),
+                    },
+                    VmRuntimeWrite {
+                        variable: money,
+                        indices: Vec::new(),
+                        character: None,
+                        value: VmValue::Integer(200),
+                    },
+                ],
+                fills: Vec::new(),
+                clear_characters: false,
+                add_characters_from_csv: Vec::new(),
+            })
+            .unwrap();
+        vm.commit_runtime_state(dirty).unwrap();
+        assert_eq!(
+            purchase_item(&mut vm, 5, 100).unwrap(),
+            PurchaseResult::Purchased
+        );
+        assert_eq!(read_runtime_integer(&vm, "MONEY", &[], None).unwrap(), 80);
+        assert_eq!(read_runtime_integer(&vm, "ITEM", &[5], None).unwrap(), 1);
+        assert_eq!(read_runtime_integer(&vm, "BOUGHT", &[], None).unwrap(), 5);
+        assert_eq!(
+            purchase_item(&mut vm, 5, 100).unwrap(),
+            PurchaseResult::NotEnoughMoney
+        );
+        assert_eq!(read_runtime_integer(&vm, "MONEY", &[], None).unwrap(), 80);
+        assert_eq!(read_runtime_integer(&vm, "ITEM", &[5], None).unwrap(), 1);
+    }
+
+    #[test]
+    fn train_controller_consumes_runtime_button_intent_and_loops_after_eventcomend() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        submit(
+            &mut session,
+            0,
+            RuntimeMessage::ClientHello(ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "test".into(),
+                features: Vec::new(),
+                requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
+                preferred_locales: vec!["en".into()],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        let source = "@SYSTEM_TITLE\nBEGIN TRAIN\n@EVENTTRAIN\nRETURN\n@SHOW_STATUS\nRETURN\n@COM_ABLE0\nRESULT = 1\nRETURN\n@SHOW_USERCOM\nRETURN\n@EVENTCOM\nRETURN\n@COM0\nFLAG:0 += 1\nRESULT = 1\nRETURN\n@SOURCE_CHECK\nRETURN\n@EVENTCOMEND\nRETURN\n";
+        submit(
+            &mut session,
+            1,
+            RuntimeMessage::ProjectManifest(ProjectManifest {
+                project_revision: 1,
+                files: vec![
+                    SubmittedFile {
+                        relative_path: "main.erb".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8(source.into()),
+                        content_hash: None,
+                    },
+                    SubmittedFile {
+                        relative_path: "TRAIN.CSV".into(),
+                        category: FileCategory::Csv,
+                        payload: FilePayload::Utf8("0,go\n".into()),
+                        content_hash: None,
+                    },
+                ],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        submit(
+            &mut session,
+            2,
+            RuntimeMessage::Start(StartRequest {
+                mode: StartMode::NewGame { seed: Some(3) },
+            }),
+        );
+        for _ in 0..12 {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            if session.operations.active_input().is_some() {
+                break;
+            }
+        }
+        let pending = session
+            .operations
+            .active_input()
+            .expect("training command wait");
+        let token = *pending.choices.keys().next().expect("PRINTBUTTON token");
+        let wait_id = pending.wait.wait_id;
+        let submission_token = pending.wait.submission_token;
+        submit(
+            &mut session,
+            3,
+            RuntimeMessage::Input(FrontendInput {
+                wait_id,
+                token: submission_token,
+                intent: InputIntent::Activate(token),
+                monotonic_time_ns: 0,
+                message_skip: false,
+            }),
+        );
+        for _ in 0..64 {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            if session.operations.active_input().is_some()
+                && session.controller.step == SystemStep::TrainShowUser
+            {
+                break;
+            }
+        }
+        let output = drain(&mut session);
+        assert_ne!(session.phase, RuntimePhase::Faulted, "{output:#?}");
+        let vm = session.vm.as_ref().expect("running VM");
+        assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 1);
+        assert_eq!(
+            read_runtime_integer(vm, "SOURCE", &[0], Some(0)).unwrap(),
+            0
+        );
+        assert_eq!(
+            session.controller.step,
+            SystemStep::TrainShowUser,
+            "phase={:?}",
+            session.phase
+        );
+    }
+
+    #[test]
     fn project_load_start_and_print_cross_the_message_boundary() {
         let mut session = RuntimeSession::new(RuntimeOptions::default());
         submit(
@@ -2576,8 +3554,8 @@ mod tests {
         session.epoch = SessionEpoch(1);
         session.selected_locale = "en".into();
         session
-            .pending_storage
-            .insert(7, PendingStorage::ListLoadSlots);
+            .operations
+            .insert_storage(7, PendingStorage::ListLoadSlots);
         session
             .complete_storage(
                 10,
@@ -2605,7 +3583,7 @@ mod tests {
             ["save01.sav".to_owned(), "save02.sav".to_owned()]
         );
         assert_eq!(session.phase(), RuntimePhase::WaitingInput);
-        let wait = session.pending_input.as_ref().expect("system slot wait");
+        let wait = session.operations.active_input().expect("system slot wait");
         assert!(wait.wait.system_input);
         assert!(
             wait.choices

@@ -111,9 +111,9 @@ then closes current-format persistence and the system flows that depend on it. E
 hot replacement move to Batch 7 because they must not freeze incomplete Native, pending-operation
 or authoritative runtime-state schemas.
 
-## Batch 5: Native, authoritative game state and operation foundations
+## Batch 5: Native, authoritative game state and operation foundations (implemented)
 
-Implement in this dependency order:
+Implemented in dependency order:
 
 1. Finish the remaining mutable array family and dynamically evaluated variable-name form of
    ARRAYCOPY. Preserve the existing prevalidate-then-commit transaction rule for every mutation.
@@ -133,6 +133,34 @@ Implement in this dependency order:
 Batch 5 acceptance requires transaction rollback tests for every mutable Native family, controller
 state-transition tests, and pending-operation tests for completion, timeout, cancellation, stale
 epoch, duplicate response and shutdown.
+
+Batch 5 landed the dynamic ARRAYCOPY form, VARSET/CVARSET, ARRAYMSORT/ARRAYMSORTEX, array queries,
+the pinned character/CSV query and mutation layer, SORTCHARA and RESET_STAIN. Mutable operations
+validate a cloned candidate or every destination before their first write. The runtime state port
+now supports whole-array fills across shared or all-character storage, so the controller resets
+SOURCE, training scratch arrays and character fields without mirroring EraBasic variables in
+runtime-owned structs.
+
+The controller now drives TITLE/FIRST, TRAIN (including COM_ABLE discovery, NEXTCOM, DOTRAIN and
+continuous CALLTRAIN queues), AFTERTRAIN, ABLUP, TURNEND, SHOP and NORMAL termination. Presentation
+buttons become runtime-owned command intents identified by epoch-bound tokens. Purchases validate
+the retained maximum item count, item name, sale flag, price and money before atomically updating
+MONEY, ITEM and BOUGHT. A project-defined SYSTEM_AUTOSAVE runs; when autosave is enabled but that
+function is absent, runtime reports the documented unsupported feature instead of pretending the
+Batch 6 storage transaction succeeded.
+
+All input, service, storage and delay waits now live in one typed pending-operation registry. It
+separates overlapping external ID domains, consumes completions once, orders ready deadlines
+deterministically, binds operations to SessionEpoch, enforces the common pending limit and owns
+shutdown cancellation. Minimal last-line temporary/empty/delete/replace semantics required by
+system error recovery are canonical runtime presentation state, not frontend behavior.
+
+The Batch 5 reference differential covers VARSET ranges, CSVNAME/CSVBASE, ADDCHARA/ADDVOIDCHARA,
+GETCHARA and ARRAYMSORT with identical fixture data and watched values. The current reference CLI
+does not expose the internal system-state pump independently from its coupled console, so aggregate
+runtime controller sequencing, pending-operation ownership and token validation remain a documented
+oracle endpoint gap; they are verified by Rust actor/port tests derived from the audited reference
+transition order.
 
 ## Batch 6: current saves, storage and system-flow closure
 

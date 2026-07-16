@@ -572,6 +572,7 @@ impl VmRuntimeStatePort for Vm {
         };
         if let VmRuntimeStateTransaction::Mutate {
             writes,
+            fills,
             clear_characters,
             add_characters_from_csv,
         } = transaction
@@ -592,6 +593,35 @@ impl VmRuntimeStatePort for Vm {
                         ))
                     })?;
                 memory.push_character(artifact, Some(template));
+            }
+            for fill in fills {
+                let definition = find_global(artifact, fill.variable)?;
+                if !definition.mutable || definition.storage == BytecodeStorage::FunctionLocal {
+                    return Err(VmError::InvalidState(
+                        "runtime state transaction cannot fill this variable".into(),
+                    ));
+                }
+                if definition.value_type != fill.value.value_type() {
+                    return Err(VmError::InvalidArguments(
+                        "runtime fill value type differs from its variable".into(),
+                    ));
+                }
+                let characters: Box<dyn Iterator<Item = usize>> =
+                    if definition.storage == BytecodeStorage::Character && fill.all_characters {
+                        Box::new(0..memory.characters.len())
+                    } else {
+                        Box::new(std::iter::once(
+                            memory.target_character(artifact, self.current_generation),
+                        ))
+                    };
+                for character in characters {
+                    let cell = memory
+                        .cell_mut(self.current_generation, definition, character)
+                        .ok_or_else(|| {
+                            VmError::InvalidState("variable storage is unavailable".into())
+                        })?;
+                    cell.values.fill(fill.value.clone());
+                }
             }
             for write in writes {
                 let definition = find_global(artifact, write.variable)?;

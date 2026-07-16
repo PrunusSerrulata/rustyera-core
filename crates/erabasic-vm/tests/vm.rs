@@ -9,7 +9,9 @@ use erabasic_bytecode::{
     SourceRecord, SymbolKey, create_patch, opcode,
 };
 use erabasic_compiler::{CompilerOptions, compile_project, default_host_registry};
-use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
+use erabasic_csv::{
+    CsvLoadOptions, FilePayload as CsvFilePayload, FrontendFile, ProjectFiles, load_project,
+};
 use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode};
 use erabasic_vm::{
     FiberStatus, HostCallRequest, HostCallResult, HostReady, HostRebindRequest, HostWaitStability,
@@ -78,9 +80,16 @@ fn global(key: SymbolKey, dimensions: Vec<u64>) -> BytecodeGlobal {
 }
 
 fn compile_source(source: &str) -> BytecodeArtifact {
+    compile_source_with_data(source, project_data())
+}
+
+fn compile_source_with_data(
+    source: &str,
+    project_data: erabasic_data::ProjectData,
+) -> BytecodeArtifact {
     let analysis = analyze_project(
         AnalysisInput {
-            project_data: project_data(),
+            project_data,
             sources: vec![ProjectSource {
                 relative_path: "main.erb".into(),
                 payload: SourcePayload::Utf8(source.into()),
@@ -294,6 +303,449 @@ fn arraysort_accepts_reference_forward_back_keywords() {
             VmValue::Integer(4),
             VmValue::Integer(3),
             VmValue::Integer(2),
+            VmValue::Integer(1),
+        ]
+    );
+}
+
+#[test]
+fn arraycopy_resolves_runtime_variable_names_and_array_queries_keep_places() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 3\nARRAYCOPY \"FLAG\", \"FLAG\"\nRESULT:0 = SUMARRAY(FLAG, 0, 3)\nRESULT:1 = MATCH(FLAG, 3, 0, 3)\nRESULT:2 = INRANGEARRAY(FLAG, 2, 3, 0, 3)\nRESULT:3 = GROUPMATCH(3, FLAG:0, FLAG:1, FLAG:2)\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..4)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::Integer(7),
+            VmValue::Integer(2),
+            VmValue::Integer(2),
+            VmValue::Integer(2),
+        ]
+    );
+}
+
+#[test]
+fn arraymsort_reorders_complete_rows_before_committing() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nRESULT:0 = 30\nRESULT:1 = 10\nRESULT:2 = 20\nRESULT:9 = ARRAYMSORT(FLAG, RESULT)\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..3)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::Integer(10),
+            VmValue::Integer(20),
+            VmValue::Integer(30),
+        ]
+    );
+    assert_eq!(
+        vm.read_variable(result, &[9], None),
+        Ok(VmValue::Integer(1))
+    );
+}
+
+#[test]
+fn arraymsortex_resolves_target_names_at_runtime() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nTFLAG:0 = 30\nTFLAG:1 = 10\nTFLAG:2 = 20\nRESULTS:0 = \"TFLAG\"\nRESULTS:1 = \"\"\nRESULT:9 = ARRAYMSORTEX(FLAG, RESULTS, 1, -1)\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let tflag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "TFLAG")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..3)
+            .map(|index| vm.read_variable(tflag, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::Integer(10),
+            VmValue::Integer(20),
+            VmValue::Integer(30),
+        ]
+    );
+}
+
+#[test]
+fn arraymsortex_rolls_back_when_a_later_dynamic_target_is_invalid() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nTFLAG:0 = 30\nTFLAG:1 = 10\nTFLAG:2 = 20\nRESULTS:0 = \"TFLAG\"\nRESULTS:1 = \"MISSING\"\nRESULT:9 = ARRAYMSORTEX(FLAG, RESULTS, 1, -1)\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let tflag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "TFLAG")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        VmEvent::FiberFaulted { fault, .. } if fault.message.contains("MISSING")
+    )));
+    assert_eq!(
+        (0..3)
+            .map(|index| vm.read_variable(tflag, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::Integer(30),
+            VmValue::Integer(10),
+            VmValue::Integer(20),
+        ]
+    );
+}
+
+#[test]
+fn character_mutations_commit_as_one_memory_transaction() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nADDCOPYCHARA 0\nSWAPCHARA 0, 1\nDELCHARA 1\nRESULT = CHARANUM\nRETURN\n",
+    );
+    assert!(
+        artifact
+            .native_imports
+            .iter()
+            .any(|import| import.import.name.eq_ignore_ascii_case("ADDVOIDCHARA")),
+        "{:#?}",
+        artifact.native_imports
+    );
+    let entry = artifact.functions[0].key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(2))
+    );
+}
+
+#[test]
+fn varset_fills_only_the_validated_half_open_range() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nFLAG:0 = 1\nFLAG:1 = 2\nFLAG:2 = 3\nFLAG:3 = 4\nVARSET FLAG, 9, 1, 3\nRESULT = FLAG:1\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .unwrap()
+        .key;
+    assert_eq!(
+        (0..4)
+            .map(|index| vm.read_variable(flag, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::Integer(1),
+            VmValue::Integer(9),
+            VmValue::Integer(9),
+            VmValue::Integer(4),
+        ]
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(9))
+    );
+}
+
+#[test]
+fn cvarset_prevalidates_and_fills_the_character_range() {
+    let artifact =
+        compile_source("@SYSTEM_TITLE\nADDVOIDCHARA\nCVARSET CFLAG, 1, 7, 0, 2\nRETURN\n");
+    let entry = artifact.functions[0].key;
+    let cflag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "CFLAG")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..2)
+            .map(|character| vm.read_variable(cflag, &[1], Some(character)).unwrap())
+            .collect::<Vec<_>>(),
+        vec![VmValue::Integer(7), VmValue::Integer(7)]
+    );
+}
+
+#[test]
+fn cvarset_invalid_range_does_not_write_any_character() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nTARGET = 0\nCFLAG:1 = 3\nTARGET = 1\nCFLAG:1 = 4\nCVARSET CFLAG, 1, 7, 0, 3\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let cflag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "CFLAG")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        VmEvent::FiberFaulted { fault, .. } if fault.message.contains("range")
+    )));
+    assert_eq!(
+        (0..2)
+            .map(|character| vm.read_variable(cflag, &[1], Some(character)).unwrap())
+            .collect::<Vec<_>>(),
+        vec![VmValue::Integer(3), VmValue::Integer(4)]
+    );
+}
+
+#[test]
+fn sortchara_reorders_characters_and_remaps_target() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nADDVOIDCHARA\nTARGET = 0\nNO = 30\nTARGET = 1\nNO = 10\nTARGET = 2\nNO = 20\nMASTER = -1\nSORTCHARA NO, FORWARD\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let no = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "NO")
+        .unwrap()
+        .key;
+    let target = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "TARGET")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..3)
+            .map(|character| vm.read_variable(no, &[], Some(character)).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::Integer(10),
+            VmValue::Integer(20),
+            VmValue::Integer(30),
+        ]
+    );
+    assert_eq!(vm.read_variable(target, &[], None), Ok(VmValue::Integer(1)));
+}
+
+#[test]
+fn failed_character_mutation_rolls_back_the_complete_candidate() {
+    let artifact = compile_source("@SYSTEM_TITLE\nADDVOIDCHARA\nDELCHARA 0, 99\nRETURN\n");
+    let entry = artifact.functions[0].key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        VmEvent::FiberFaulted { fault, .. } if fault.message.contains("out of range")
+    )));
+    // New-game memory starts with one character. ADDVOIDCHARA committed first,
+    // while the later multi-delete failed before replacing its cloned memory.
+    assert_eq!(vm.export_era_state().characters.len(), 2);
+}
+
+#[test]
+fn character_csv_queries_use_loaded_templates_and_character_lookup() {
+    let loaded = load_project(
+        &ProjectFiles {
+            csv: vec![FrontendFile {
+                relative_path: "CHARA0.CSV".into(),
+                payload: CsvFilePayload::Utf8("NO,10\nNAME,Alice\nBASE,0,100\nCFLAG,1,7\n".into()),
+            }],
+            erb: Vec::new(),
+        },
+        &CsvLoadOptions::default(),
+    )
+    .data
+    .expect("character CSV should load");
+    let artifact = compile_source_with_data(
+        "@SYSTEM_TITLE\nRESULT:0 = GETCHARA(10)\nRESULT:1 = CSVBASE(10, 0)\nRESULT:2 = CSVCFLAG(10, 1)\nRESULT:3 = CSVNAME(10) == \"Alice\"\nRETURN\n",
+        loaded,
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..4)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::Integer(0),
+            VmValue::Integer(100),
+            VmValue::Integer(7),
             VmValue::Integer(1),
         ]
     );

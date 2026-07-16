@@ -22,6 +22,15 @@ pub struct VmRuntimeWrite {
     pub value: VmValue,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VmRuntimeFill {
+    pub variable: SymbolKey,
+    pub value: VmValue,
+    /// Character storage is filled for every character when set; otherwise the
+    /// current target is used. This flag is ignored for shared variables.
+    pub all_characters: bool,
+}
+
 /// Mutations needed by the reference system controller. Script instructions keep
 /// using regular bytecode operations; this transaction is only legal between slices.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,6 +39,7 @@ pub enum VmRuntimeStateTransaction {
     RestoreEraState(Box<EraState>),
     Mutate {
         writes: Vec<VmRuntimeWrite>,
+        fills: Vec<VmRuntimeFill>,
         clear_characters: bool,
         add_characters_from_csv: Vec<i64>,
     },
