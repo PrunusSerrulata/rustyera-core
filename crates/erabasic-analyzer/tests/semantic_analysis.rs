@@ -331,19 +331,20 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             "SYSTEM_TITLE",
             "ORACLE_PRESENTATION",
             "ORACLE_TEST",
+            "ORACLE_NATIVE",
             "ORACLE_INPUT",
             "ORACLE_MAP",
             "ORACLE_STRUCTURED"
         ]
     );
-    assert_eq!(program.functions[0].lines.len(), 10);
+    assert_eq!(program.functions[0].lines.len(), 11);
     assert_eq!(
         program.functions[0]
             .control_flow
             .iter()
             .filter(|edge| edge.kind == erabasic_hir::ControlFlowKind::Call)
             .count(),
-        5
+        6
     );
 }
 

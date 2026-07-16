@@ -43,7 +43,7 @@ pub use runtime_port::{
     VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeRead,
     VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite, VmWaitRebind,
 };
-pub use runtime_vm::{PreparedHostCompletion, RuntimeVm};
+pub use runtime_vm::{PreparedCandidateState, PreparedHostCompletion, RuntimeVm};
 pub use save::{EraSaveScope, EraState, EraStateReport, EraVariableState};
 pub use snapshot::{
     SNAPSHOT_FORMAT_VERSION, SNAPSHOT_MAGIC, SnapshotBlocker, SnapshotEligibility, VmSnapshot,

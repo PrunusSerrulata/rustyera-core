@@ -129,10 +129,18 @@ fn run_compiled_result(artifact: &BytecodeArtifact) -> VmValue {
     let mut natives = NativeServiceRegistry::for_artifact(artifact);
     let mut vm = Vm::new(validated(artifact), VmConfig::default());
     vm.spawn_entry(entry, Vec::new()).unwrap();
-    vm.run_slice(
+    let report = vm.run_slice(
         &mut ReadyHost::default(),
         &mut natives,
         RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
     );
     vm.read_variable(result, &[0], None).unwrap()
 }
@@ -1039,6 +1047,7 @@ fn host_artifact(stability: HostSnapshotCapability) -> (BytecodeArtifact, Symbol
     let contract = OperationContract {
         state: OperationState::Controller,
         transaction: TransactionPolicy::Forbidden,
+        candidate: erabasic_bytecode::CandidatePolicy::Forbidden,
         persistence: OperationPersistence::RuntimeOnly,
         snapshot: if stability == HostSnapshotCapability::StableWait {
             OperationSnapshotPolicy::Included
@@ -1570,6 +1579,32 @@ fn global_overlay_transaction_changes_only_global_save_storage() {
 }
 
 #[test]
+fn isolated_fork_copies_memory_without_copying_live_execution() {
+    let key = SymbolKey::derive("test.variable", b"candidate");
+    let artifact = artifact(Vec::new(), vec![global(key, vec![1])]);
+    let mut live = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    live.vm_mut()
+        .write_variable(key, &[0], None, VmValue::Integer(7))
+        .unwrap();
+
+    let mut candidate = live.fork_isolated().unwrap();
+    assert_eq!(
+        candidate.vm().read_variable(key, &[0], None),
+        Ok(VmValue::Integer(7))
+    );
+    candidate
+        .vm_mut()
+        .write_variable(key, &[0], None, VmValue::Integer(9))
+        .unwrap();
+
+    assert_eq!(
+        live.vm().read_variable(key, &[0], None),
+        Ok(VmValue::Integer(7))
+    );
+    assert!(!candidate.has_runnable_fibers());
+}
+
+#[test]
 fn compiled_arithmetic_executes_and_updates_project_storage() {
     let artifact = compile_source("@SYSTEM_TITLE\nRESULT = (2 + 3) * 4\nRETURN\n");
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(20));
@@ -1581,6 +1616,93 @@ fn compiled_assignment_matches_reference_smoke_input() {
     // statement and observes RESULT=9 through the C# VM watch projection.
     let artifact = compile_source("@SYSTEM_TITLE\nRESULT = 9\nRETURN\n");
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(9));
+}
+
+#[test]
+fn compiled_bit_mutations_prevalidate_and_update_the_target() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULT = 0\nSETBIT RESULT, 1, 3\nINVERTBIT RESULT, 1\nCLEARBIT RESULT, 3\nRETURN\n",
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(0));
+}
+
+#[test]
+fn compiled_split_preserves_empty_fields_and_reports_the_full_count() {
+    let artifact =
+        compile_source("@SYSTEM_TITLE\n#DIMS TEMP, 4\nSPLIT \"a//b/\", \"/\", TEMP\nRETURN\n");
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(4));
+}
+
+#[test]
+fn getnum_resolves_the_referenced_builtin_name_table_at_runtime() {
+    let mut data = project_data();
+    data.static_data
+        .name_tables
+        .get_mut(&erabasic_data::NameTableKind::Cflag)
+        .unwrap()
+        .lookup
+        .insert("dynamic-key".into(), 17);
+    let artifact = compile_source_with_data(
+        "@SYSTEM_TITLE\nRESULT = GETNUM(CFLAG, \"dynamic-key\")\nRETURN\n",
+        data,
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(17));
+}
+
+#[test]
+fn native_tail_matches_the_reference_oracle_fixture() {
+    let artifact = compile_source(
+        "@ORACLE_NATIVE\n#DIMS PARTS, 4\nRESULT:0 = 0\nSETBIT RESULT:0, 1, 3\nINVERTBIT RESULT:0, 1\nCLEARBIT RESULT:0, 3\nSPLIT \"a//b/\", \"/\", PARTS, RESULT:1\nRESULT:2 = STRCOUNT(\"ababa\", \"aba\")\nRESULT:3 = GETPALAMLV(499, 5)\nRESULTS:0 = %ESCAPE(\"a+b\")%\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(0))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[1], None),
+        Ok(VmValue::Integer(4))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[2], None),
+        Ok(VmValue::Integer(1))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[3], None),
+        Ok(VmValue::Integer(1))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[0], None),
+        Ok(VmValue::String("a\\+b".into()))
+    );
 }
 
 #[test]

@@ -154,6 +154,13 @@ pub struct NativeServiceRegistry {
 type PreparedStructuredImport = (Option<Vec<u8>>, BTreeSet<(u8, String)>);
 
 impl NativeServiceRegistry {
+    pub(crate) fn fork_for_artifact(&self, artifact: &BytecodeArtifact) -> Result<Self, String> {
+        let snapshots = self.snapshots()?;
+        let mut fork = Self::for_artifact(artifact);
+        fork.restore_snapshots(&snapshots)?;
+        Ok(fork)
+    }
+
     /// Register the small VM-native services emitted directly by the compiler.
     /// Project-specific builtins remain explicit services and fail closed when absent.
     #[must_use]
@@ -216,7 +223,11 @@ impl NativeServiceRegistry {
                     | "substring"
                     | "substringu"
                     | "strfind"
+                    | "strcount"
+                    | "getpalamlv"
+                    | "getexplv"
                     | "replace"
+                    | "escape"
                     | "unicodetostr"
             ) {
                 registry.register(native.import.key, CoreNative { name: name.into() });
@@ -574,7 +585,40 @@ impl NativeService for CoreNative {
                         .unwrap_or(-1),
                 )
             }
+            "strcount" => {
+                let regex = regex::Regex::new(string(1)?)
+                    .map_err(|error| format!("STRCOUNT argument 2 is not a regex: {error}"))?;
+                VmValue::Integer(
+                    i64::try_from(regex.find_iter(string(0)?).count()).unwrap_or(i64::MAX),
+                )
+            }
+            "getpalamlv" | "getexplv" => {
+                let maximum = usize::try_from(integer(1)?)
+                    .map_err(|_| format!("{} maximum level is negative", self.name))?;
+                let variable = if self.name == "getpalamlv" {
+                    "PALAMLV"
+                } else {
+                    "EXPLV"
+                };
+                let levels = request
+                    .implicit_places
+                    .get(variable)
+                    .ok_or_else(|| format!("{variable} is not available"))?;
+                let mut level = maximum;
+                for index in 0..maximum {
+                    let threshold = match levels.values.get(index + 1) {
+                        Some(VmValue::Integer(value)) => *value,
+                        _ => return Err(format!("{variable}[{}] is unavailable", index + 1)),
+                    };
+                    if integer(0)? < threshold {
+                        level = index;
+                        break;
+                    }
+                }
+                VmValue::Integer(i64::try_from(level).unwrap_or(i64::MAX))
+            }
             "replace" => VmValue::String(string(0)?.replace(string(1)?, string(2)?)),
+            "escape" => VmValue::String(regex::escape(string(0)?)),
             "unicodetostr" => {
                 let scalar = u32::try_from(integer(0)?)
                     .ok()
@@ -784,6 +828,49 @@ mod tests {
                     implicit_places: BTreeMap::new(),
                 })
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn regex_string_natives_match_non_overlapping_reference_semantics() {
+        let request = |name: &str, arguments: Vec<VmValue>| NativeCallRequest {
+            import: RuntimeImport {
+                key: SymbolKey([0; 16]),
+                namespace: "test".into(),
+                name: name.into(),
+                abi_version: 1,
+                parameters: vec![],
+                result: None,
+            },
+            arguments,
+            places: Vec::new(),
+            implicit_places: BTreeMap::new(),
+        };
+        let mut count = CoreNative {
+            name: "strcount".into(),
+        };
+        assert_eq!(
+            count
+                .call(request(
+                    "strcount",
+                    vec![
+                        VmValue::String("ababa".into()),
+                        VmValue::String("aba".into())
+                    ],
+                ))
+                .unwrap()
+                .value,
+            Some(VmValue::Integer(1))
+        );
+        let mut escape = CoreNative {
+            name: "escape".into(),
+        };
+        assert_eq!(
+            escape
+                .call(request("escape", vec![VmValue::String("a+b".into())]))
+                .unwrap()
+                .value,
+            Some(VmValue::String("a\\+b".into()))
         );
     }
 }

@@ -26,24 +26,28 @@ use era_runtime_protocol::{
     ShutdownReady, SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk,
     StateExportChunkRequest, StateExportKind, StateExportReady, StateExportRequest,
     StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit,
-    StateImportReady, StateTransferCancel, StateTransferDescriptor, StorageNamespace,
-    StorageOperation, StoragePrecondition, StorageRequest, StorageResponse, StorageResult,
-    SystemTextArgument, SystemTextKey, UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION,
-    UpdateCheckRequest, UpdateCheckResponse, VersionRejected, WaitChange, WaitKind, WaitStability,
+    StateImportReady, StateTransferCancel, StateTransferDescriptor, StorageCapabilities,
+    StorageNamespace, StorageOperation, StoragePrecondition, StorageRequest, StorageResponse,
+    StorageResult, SystemTextArgument, SystemTextKey, UPDATE_CHECK_OPERATION,
+    UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest, UpdateCheckResponse, VersionRejected,
+    WaitChange, WaitKind, WaitStability,
 };
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
 use erabasic_vm::{
-    EraSaveScope, EraState, HostReady, HostWaitStability, HostWrite, PlaceDescriptor, RunBudget,
-    RuntimeVm, StructuredScope, VmConfig, VmDriveMode, VmHostCompletion, VmHostRequest,
-    VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
-    VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot, VmValue,
+    EraSaveScope, EraState, HostReady, HostWaitStability, HostWrite, PlaceDescriptor,
+    PreparedCandidateState, RunBudget, RuntimeVm, StructuredScope, VmConfig, VmDriveMode,
+    VmHostCompletion, VmHostRequest, VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill,
+    VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot,
+    VmValue,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::controller::{SystemController, SystemFlow, SystemStep};
 use crate::host::{ClockOperation, ExternalCompletion, PendingInput, PostInputAction, input_wait};
-use crate::operation::{PendingOperations, PendingService, PendingStorage};
+use crate::operation::{
+    CandidateSaveContinuation, PendingOperations, PendingService, PendingStorage,
+};
 use crate::presentation::{PresentationModel, display_value, logical_line_string};
 use crate::project::{NormalizedProjectSnapshot, apply_project_delta, build_project};
 use crate::runtime_snapshot::{self, RUNTIME_SNAPSHOT_FORMAT_VERSION, RuntimeSnapshotPayload};
@@ -237,18 +241,33 @@ pub struct RuntimeSession {
     selected_locale: String,
     available_fonts: BTreeSet<String>,
     service_capabilities: BTreeMap<(ServiceKind, String), ProtocolVersion>,
+    storage_capabilities: StorageCapabilities,
     save_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
     system_menu: SystemMenuState,
     load_slot_paths: Vec<String>,
     inbound_transfer: Option<InboundStateTransfer>,
     outbound_transfer: Option<OutboundStateTransfer>,
     pending_project_load: Option<PendingProjectLoad>,
+    pending_candidate_commit: Option<PendingCandidateCommit>,
+    candidate_clock: Option<LocalDateTimeResponse>,
 }
 
 struct PendingProjectLoad {
     message_id: u64,
     report: ProjectLoadReport,
     remaining_metadata: BTreeSet<String>,
+}
+
+#[allow(clippy::struct_excessive_bools)]
+struct PendingCandidateCommit {
+    state: PreparedCandidateState,
+    presentation: PresentationModel,
+    project_snapshot: Option<NormalizedProjectSnapshot>,
+    message_skip: bool,
+    skip_print: bool,
+    user_defined_skip: bool,
+    saved_skip: bool,
+    effects: Vec<EffectKind>,
 }
 
 impl RuntimeSession {
@@ -303,12 +322,20 @@ impl RuntimeSession {
             selected_locale: "ja".into(),
             available_fonts: BTreeSet::new(),
             service_capabilities: BTreeMap::new(),
+            storage_capabilities: StorageCapabilities {
+                revisions: false,
+                atomic_replace: false,
+                missing_precondition: false,
+                delete: false,
+            },
             save_extensions: Vec::new(),
             system_menu: SystemMenuState::Title,
             load_slot_paths: Vec::new(),
             inbound_transfer: None,
             outbound_transfer: None,
             pending_project_load: None,
+            pending_candidate_commit: None,
+            candidate_clock: None,
         }
     }
 
@@ -639,7 +666,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 11.0 is required".into(),
+                    message: "runtime protocol 12.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -676,6 +703,7 @@ impl RuntimeSession {
                 )
             })
             .collect();
+        self.storage_capabilities = selected_capabilities.storage;
         self.available_fonts = selected_capabilities
             .available_fonts
             .iter()
@@ -1341,6 +1369,22 @@ impl RuntimeSession {
         vm: &mut RuntimeVm,
         request: &VmHostRequest,
     ) -> Result<(), RuntimeError> {
+        if let Some(time) = self.candidate_clock {
+            match request.import.contract.candidate {
+                erabasic_bytecode::CandidatePolicy::Forbidden => {
+                    return Err(RuntimeError::Internal(format!(
+                        "{} is forbidden during candidate SAVEINFO execution",
+                        request.import.import.name
+                    )));
+                }
+                erabasic_bytecode::CandidatePolicy::FrozenClock => {
+                    return complete_frozen_clock(vm, request, time);
+                }
+                erabasic_bytecode::CandidatePolicy::ReadOnly
+                | erabasic_bytecode::CandidatePolicy::CloneCommit
+                | erabasic_bytecode::CandidatePolicy::BufferedEffect => {}
+            }
+        }
         let name = request.import.import.name.to_ascii_uppercase();
         if name == "SKIPDISP" {
             self.skip_print = integer_argument_value(&request.arguments, 0)? != 0;
@@ -1461,6 +1505,83 @@ impl RuntimeSession {
                 request.id,
                 VmHostCompletion::Ready(HostReady {
                     value: Some(VmValue::Integer(i64::from(available))),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(name.as_str(), "GETCONFIG" | "GETCONFIGS") {
+            let key = string_argument_value(&request.arguments, 0, &name)?;
+            let project = self
+                .project_snapshot
+                .as_ref()
+                .ok_or_else(|| RuntimeError::Internal("GETCONFIG has no loaded project".into()))?;
+            let replace = &vm.vm().artifact().project_data.static_data.replace;
+            let value = if name == "GETCONFIG" {
+                let value = match key {
+                    "オートセーブを行なう" | "Make autosaves" => {
+                        i64::from(project.auto_save)
+                    }
+                    "単位の位置" | "Currency symbol position" => {
+                        i64::from(project.money_first)
+                    }
+                    "ウィンドウ幅" | "Window width" => i64::from(project.viewport_width),
+                    "PRINTCを並べる数" | "Items per line for PRINTC" => {
+                        i64::from(project.print_c_per_line)
+                    }
+                    "PRINTCの文字数" | "Number of Item characters for PRINTC" => {
+                        i64::from(project.print_c_length)
+                    }
+                    "フォントサイズ" | "Font size" => i64::from(project.font_size),
+                    "一行の高さ" | "Line height" => i64::from(project.line_height),
+                    "表示するセーブデータ数" | "Save data count per page" => {
+                        i64::from(project.save_slot_count)
+                    }
+                    "販売アイテム数" | "Max shop item storage" => {
+                        i64::from(project.maximum_shop_items)
+                    }
+                    "COM_ABLE初期値" | "COM_ABLE initial value" => {
+                        i64::from(replace.com_able_default)
+                    }
+                    "PBANDの初期値" | "PBAND initial value" => replace.pband_default,
+                    "RELATIONの初期値" | "RELATION initial value" => replace.relation_default,
+                    _ => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            &format!("GETCONFIG does not expose configuration key {key:?}"),
+                            Some(request.origin.clone()),
+                        );
+                    }
+                };
+                VmValue::Integer(value)
+            } else {
+                let value = match key {
+                    "お金の単位" | "Currency symbol" => project.money_label.clone(),
+                    "起動時簡略表示" | "Loading message" => replace.load_label.clone(),
+                    "DRAWLINE文字" | "DRAWLINE characters" => replace.draw_line_string.clone(),
+                    "システムメニュー0" | "System menu 0" => {
+                        replace.title_menu_string_0.clone()
+                    }
+                    "システムメニュー1" | "System menu 1" => {
+                        replace.title_menu_string_1.clone()
+                    }
+                    "時間切れ表示" | "Time-up message" => replace.timeup_label.clone(),
+                    "BAR文字1" | "BAR character 1" => replace.bar_char_1.to_string(),
+                    "BAR文字2" | "BAR character 2" => replace.bar_char_2.to_string(),
+                    _ => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            &format!("GETCONFIGS does not expose configuration key {key:?}"),
+                            Some(request.origin.clone()),
+                        );
+                    }
+                };
+                VmValue::String(value)
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(value),
                     writes: Vec::new(),
                 }),
             );
@@ -2839,6 +2960,293 @@ impl RuntimeSession {
         self.issue_storage(pending, namespace, operation, relative_path)
     }
 
+    fn begin_candidate_save(
+        &mut self,
+        vm: &mut RuntimeVm,
+        slot: u32,
+        continuation: CandidateSaveContinuation,
+    ) -> Result<(), RuntimeError> {
+        let capabilities = self.storage_capabilities;
+        if !(capabilities.revisions
+            && capabilities.atomic_replace
+            && capabilities.missing_precondition)
+        {
+            self.emit(
+                RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    code: "runtime.candidate_save_failed".into(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: "frontend storage cannot provide revision-checked atomic writes"
+                        .into(),
+                    source: None,
+                }),
+                None,
+            )?;
+            self.presentation.append_system_text(
+                localized_system_text(&self.selected_locale, SystemTextKey::AutoSaveFailed),
+                SystemTextKey::AutoSaveFailed,
+                Vec::new(),
+                false,
+            );
+            self.controller.step = SystemStep::ShopShow;
+            self.dispatch_system_function(vm, "SHOW_SHOP", true)?;
+            return Ok(());
+        }
+        self.issue_storage(
+            PendingStorage::CandidateSaveStat { slot, continuation },
+            StorageNamespace::Save,
+            StorageOperation::Stat,
+            save_slot_path(slot),
+        )
+    }
+
+    fn issue_candidate_clock(
+        &mut self,
+        slot: u32,
+        precondition: StoragePrecondition,
+        continuation: CandidateSaveContinuation,
+    ) -> Result<(), RuntimeError> {
+        if self
+            .service_capabilities
+            .get(&(ServiceKind::Clock, LOCAL_DATE_TIME_OPERATION.to_owned()))
+            != Some(&LOCAL_DATE_TIME_OPERATION_VERSION)
+        {
+            return self.finish_candidate_save_failure(
+                continuation,
+                "frontend did not negotiate the candidate-save clock service",
+            );
+        }
+        let request_id = self.allocate_request()?;
+        self.operations.insert_service(
+            request_id,
+            PendingService::CandidateSaveClock {
+                slot,
+                precondition,
+                continuation,
+            },
+        );
+        self.emit(
+            RuntimeMessage::ServiceRequest(ServiceRequest {
+                request_id,
+                kind: ServiceKind::Clock,
+                operation: LOCAL_DATE_TIME_OPERATION.into(),
+                operation_version: LOCAL_DATE_TIME_OPERATION_VERSION,
+                payload: ProtocolBytes::new(encode_canonical(&LocalDateTimeRequest {})?),
+                deadline_ns: None,
+            }),
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn prepare_candidate_save(
+        &mut self,
+        time: LocalDateTimeResponse,
+    ) -> Result<(PendingCandidateCommit, Vec<u8>), RuntimeError> {
+        let mut candidate = self
+            .vm
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Internal("candidate save has no VM".into()))?
+            .fork_isolated()
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        write_runtime_string(
+            &mut candidate,
+            "SAVEDATA_TEXT",
+            format!(
+                "{:04}/{:02}/{:02} {:02}:{:02}:{:02} ",
+                time.year, time.month, time.day, time.hour, time.minute, time.second
+            ),
+        )?;
+
+        let function = candidate
+            .vm()
+            .artifact()
+            .functions
+            .iter()
+            .find(|function| function.name.eq_ignore_ascii_case("SAVEINFO"))
+            .map(|function| function.key);
+
+        let original_presentation = self.presentation.clone();
+        let original_project = self.project_snapshot.clone();
+        let original_flags = (
+            self.message_skip,
+            self.skip_print,
+            self.user_defined_skip,
+            self.saved_skip,
+        );
+        let original_phase = self.phase;
+        let original_revision = self.revision;
+        let original_outbound = std::mem::take(&mut self.outbound);
+        let original_outbound_journal = std::mem::take(&mut self.outbound_journal);
+        let original_effect_journal = std::mem::take(&mut self.effect_journal);
+        let original_sequence = self.outbound_sequence;
+        let original_message = self.next_message_id;
+        let original_effect = self.next_effect_id;
+        self.candidate_clock = Some(time);
+
+        let execution = (|| -> Result<(), RuntimeError> {
+            let Some(function) = function else {
+                return Ok(());
+            };
+            let fiber = candidate
+                .spawn_entry(function, Vec::new())
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            let maximum = self.options.limits.maximum_drive_instructions.max(1);
+            let mut executed = 0_u64;
+            loop {
+                let report = candidate.drive(
+                    RunBudget {
+                        maximum_instructions: maximum.saturating_sub(executed).max(1),
+                        maximum_host_calls: self.options.limits.maximum_pending_requests,
+                        fiber_quantum: RunBudget::default().fiber_quantum,
+                    },
+                    VmDriveMode::Normal,
+                );
+                executed = executed.saturating_add(report.instructions);
+                let mut completed = false;
+                for event in report.events {
+                    match event {
+                        VmPortEvent::HostCall(request) => {
+                            self.handle_host_call(&mut candidate, &request)?;
+                        }
+                        VmPortEvent::FiberCompleted(id, _) if id == fiber => completed = true,
+                        VmPortEvent::FiberFaulted(id, fault) if id == fiber => {
+                            return Err(RuntimeError::Internal(format!(
+                                "candidate SAVEINFO faulted: {}",
+                                fault.message
+                            )));
+                        }
+                        VmPortEvent::FiberYielded(_)
+                        | VmPortEvent::DebugStopped(_)
+                        | VmPortEvent::FiberCompleted(_, _)
+                        | VmPortEvent::FiberFaulted(_, _) => {}
+                    }
+                }
+                if completed {
+                    return Ok(());
+                }
+                if executed >= maximum {
+                    return Err(RuntimeError::ResourceLimit(
+                        "candidate SAVEINFO exceeded its instruction budget",
+                    ));
+                }
+                if !candidate.has_runnable_fibers() {
+                    return Err(RuntimeError::Internal(
+                        "candidate SAVEINFO attempted to suspend".into(),
+                    ));
+                }
+            }
+        })();
+
+        self.candidate_clock = None;
+        let candidate_presentation = self.presentation.clone();
+        let candidate_project = self.project_snapshot.clone();
+        let candidate_flags = (
+            self.message_skip,
+            self.skip_print,
+            self.user_defined_skip,
+            self.saved_skip,
+        );
+        let effects = self
+            .effect_journal
+            .values()
+            .map(|event| event.kind.clone())
+            .collect();
+        self.presentation = original_presentation;
+        self.project_snapshot = original_project;
+        (
+            self.message_skip,
+            self.skip_print,
+            self.user_defined_skip,
+            self.saved_skip,
+        ) = original_flags;
+        self.phase = original_phase;
+        self.revision = original_revision;
+        self.outbound = original_outbound;
+        self.outbound_journal = original_outbound_journal;
+        self.effect_journal = original_effect_journal;
+        self.outbound_sequence = original_sequence;
+        self.next_message_id = original_message;
+        self.next_effect_id = original_effect;
+        execution?;
+
+        let description = read_runtime_string(&candidate, "SAVEDATA_TEXT")?;
+        let bytes = encode_scoped_save(
+            &candidate.export_era_state(),
+            candidate.vm().artifact(),
+            era_runtime_save::SaveFileKind::Normal,
+            description,
+            merge_structured_extensions(
+                &self.save_extensions,
+                candidate
+                    .structured_extensions(StructuredScope::Ordinary)
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+            )
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+            self.traditional_save_format(),
+        )
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        Ok((
+            PendingCandidateCommit {
+                state: candidate.into_candidate_state(),
+                presentation: candidate_presentation,
+                project_snapshot: candidate_project,
+                message_skip: candidate_flags.0,
+                skip_print: candidate_flags.1,
+                user_defined_skip: candidate_flags.2,
+                saved_skip: candidate_flags.3,
+                effects,
+            },
+            bytes,
+        ))
+    }
+
+    fn finish_candidate_save_failure(
+        &mut self,
+        continuation: CandidateSaveContinuation,
+        message: &str,
+    ) -> Result<(), RuntimeError> {
+        self.pending_candidate_commit = None;
+        self.emit(
+            RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                code: "runtime.candidate_save_failed".into(),
+                severity: DiagnosticSeverity::Warning,
+                message: message.into(),
+                source: None,
+            }),
+            None,
+        )?;
+        match continuation {
+            CandidateSaveContinuation::Autosave => self.finish_builtin_autosave(false),
+        }
+    }
+
+    fn commit_candidate_save(
+        &mut self,
+        continuation: CandidateSaveContinuation,
+    ) -> Result<(), RuntimeError> {
+        let candidate = self.pending_candidate_commit.take().ok_or_else(|| {
+            RuntimeError::Internal("candidate storage completion has no prepared state".into())
+        })?;
+        self.vm
+            .as_mut()
+            .ok_or_else(|| RuntimeError::Internal("candidate commit has no VM".into()))?
+            .commit_candidate_state(candidate.state)
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        self.presentation = candidate.presentation;
+        self.project_snapshot = candidate.project_snapshot;
+        self.message_skip = candidate.message_skip;
+        self.skip_print = candidate.skip_print;
+        self.user_defined_skip = candidate.user_defined_skip;
+        self.saved_skip = candidate.saved_skip;
+        self.emit_presentation()?;
+        for effect in candidate.effects {
+            self.emit_effect(effect)?;
+        }
+        match continuation {
+            CandidateSaveContinuation::Autosave => self.finish_builtin_autosave(true),
+        }
+    }
+
     fn issue_storage(
         &mut self,
         pending: PendingStorage,
@@ -2879,12 +3287,46 @@ impl RuntimeSession {
             );
         };
         match (pending, response.result) {
-            (PendingStorage::BuiltinAutosave, StorageResult::Written { .. }) => {
-                self.finish_builtin_autosave(true)
+            (
+                PendingStorage::CandidateSaveStat { slot, continuation },
+                StorageResult::Metadata(metadata),
+            ) => {
+                let Some(revision) = metadata.revision else {
+                    return self.finish_candidate_save_failure(
+                        continuation,
+                        "frontend stat omitted the revision required for an overwrite",
+                    );
+                };
+                self.issue_candidate_clock(
+                    slot,
+                    StoragePrecondition::Revision(revision),
+                    continuation,
+                )
             }
-            (PendingStorage::BuiltinAutosave, StorageResult::Error { .. }) => {
-                self.finish_builtin_autosave(false)
+            (
+                PendingStorage::CandidateSaveStat { slot, continuation },
+                StorageResult::Error { error },
+            ) if error.kind == FrontendIoErrorKind::NotFound => {
+                self.issue_candidate_clock(slot, StoragePrecondition::Missing, continuation)
             }
+            (
+                PendingStorage::CandidateSaveStat { continuation, .. },
+                StorageResult::Error { error },
+            ) => self.finish_candidate_save_failure(
+                continuation,
+                &format!("candidate stat failed: {error:?}"),
+            ),
+            (
+                PendingStorage::CandidateSaveWrite { continuation },
+                StorageResult::Written { .. },
+            ) => self.commit_candidate_save(continuation),
+            (
+                PendingStorage::CandidateSaveWrite { continuation },
+                StorageResult::Error { error },
+            ) => self.finish_candidate_save_failure(
+                continuation,
+                &format!("candidate write failed: {error:?}"),
+            ),
             (PendingStorage::HostFunctionWrite { request }, StorageResult::Written { .. })
             | (PendingStorage::HostStat { request }, StorageResult::Metadata(_)) => {
                 self.resume_storage_host_value(request, VmValue::Integer(1), Vec::new())
@@ -3088,7 +3530,6 @@ impl RuntimeSession {
                         | PendingStorage::HostReadText { .. }
                         | PendingStorage::HostStat { .. }
                         | PendingStorage::HostListFiles { .. }
-                        | PendingStorage::BuiltinAutosave
                 ) {
                     return self.fault(
                         FaultCode::ServiceFailure,
@@ -3485,6 +3926,43 @@ impl RuntimeSession {
             }
             return Ok(());
         }
+        if let PendingService::CandidateSaveClock {
+            slot,
+            precondition,
+            continuation,
+        } = pending
+        {
+            let payload = match response.result {
+                ServiceResult::Ready { payload } => payload,
+                ServiceResult::Error { error } => {
+                    return self.finish_candidate_save_failure(
+                        continuation,
+                        &format!("candidate clock failed: {}: {}", error.code, error.message),
+                    );
+                }
+            };
+            let time: LocalDateTimeResponse = decode_canonical(payload.as_slice())?;
+            let (candidate, bytes) = match self.prepare_candidate_save(time) {
+                Ok(value) => value,
+                Err(error) => {
+                    return self.finish_candidate_save_failure(
+                        continuation,
+                        &format!("candidate SAVEINFO failed: {error}"),
+                    );
+                }
+            };
+            self.pending_candidate_commit = Some(candidate);
+            return self.issue_storage(
+                PendingStorage::CandidateSaveWrite { continuation },
+                StorageNamespace::Save,
+                StorageOperation::Write {
+                    data: ProtocolBytes::new(bytes),
+                    atomic_replace: true,
+                    precondition,
+                },
+                save_slot_path(slot),
+            );
+        }
         if let PendingService::Host(ExternalCompletion::UpdateCheck { request, .. }) = &pending
             && let ServiceResult::Error { error } = &response.result
         {
@@ -3625,7 +4103,9 @@ impl RuntimeSession {
                 )?;
                 self.set_phase(RuntimePhase::Running)
             }
-            PendingService::ProjectImageMetadata { .. } | PendingService::PlatformEffect { .. } => {
+            PendingService::ProjectImageMetadata { .. }
+            | PendingService::PlatformEffect { .. }
+            | PendingService::CandidateSaveClock { .. } => {
                 unreachable!("handled above")
             }
         }
@@ -4325,30 +4805,10 @@ impl RuntimeSession {
                 {
                     self.controller.step = SystemStep::ShopAutosave;
                     if !self.dispatch_system_function(vm, "SYSTEM_AUTOSAVE", false)? {
-                        let description = read_runtime_string(vm, "SAVEDATA_TEXT")?;
-                        let bytes = encode_scoped_save(
-                            &vm.export_era_state(),
-                            vm.vm().artifact(),
-                            era_runtime_save::SaveFileKind::Normal,
-                            description,
-                            merge_structured_extensions(
-                                &self.save_extensions,
-                                vm.structured_extensions(StructuredScope::Ordinary)
-                                    .map_err(|error| RuntimeError::Internal(error.to_string()))?,
-                            )
-                            .map_err(|error| RuntimeError::Internal(error.to_string()))?,
-                            self.traditional_save_format(),
-                        )
-                        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-                        return self.issue_storage(
-                            PendingStorage::BuiltinAutosave,
-                            StorageNamespace::Save,
-                            StorageOperation::Write {
-                                data: ProtocolBytes::new(bytes),
-                                atomic_replace: true,
-                                precondition: StoragePrecondition::Any,
-                            },
-                            save_slot_path(99),
+                        return self.begin_candidate_save(
+                            vm,
+                            99,
+                            CandidateSaveContinuation::Autosave,
                         );
                     }
                 } else {
@@ -4884,6 +5344,13 @@ impl RuntimeSession {
     }
 
     fn shutdown(&mut self, message_id: u64) -> Result<(), RuntimeError> {
+        if self.operations.has_candidate_write() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "shutdown cannot cancel a candidate save after its atomic write was emitted",
+            );
+        }
         self.set_phase(RuntimePhase::Stopping)?;
         let cancelled = self
             .operations
@@ -5381,6 +5848,24 @@ fn write_runtime_integer(
         .map_err(|error| RuntimeError::Internal(error.to_string()))
 }
 
+fn write_runtime_string(vm: &mut RuntimeVm, name: &str, value: String) -> Result<(), RuntimeError> {
+    let prepared = vm
+        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+            writes: vec![VmRuntimeWrite {
+                variable: runtime_variable_key(vm, name)?,
+                indices: Vec::new(),
+                character: None,
+                value: VmValue::String(value),
+            }],
+            fills: Vec::new(),
+            clear_characters: false,
+            add_characters_from_csv: Vec::new(),
+        })
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    vm.commit_runtime_state(prepared)
+        .map_err(|error| RuntimeError::Internal(error.to_string()))
+}
+
 fn fill_runtime_variable(
     vm: &mut RuntimeVm,
     name: &str,
@@ -5835,6 +6320,7 @@ fn selected_capabilities(client: &ClientCapabilities) -> ClientCapabilities {
             fonts
         },
         services: selected_service_capabilities(&client.services),
+        storage: client.storage,
     }
 }
 
@@ -5952,6 +6438,53 @@ fn calendar_number(time: LocalDateTimeResponse) -> i64 {
     date * 1000 + i64::from(time.millisecond)
 }
 
+fn complete_frozen_clock(
+    vm: &mut RuntimeVm,
+    request: &VmHostRequest,
+    time: LocalDateTimeResponse,
+) -> Result<(), RuntimeError> {
+    let name = request.import.import.name.to_ascii_uppercase();
+    let operation = match name.as_str() {
+        "GETTIME" => ClockOperation::Time,
+        "GETTIMES" => ClockOperation::Times,
+        "GETMILLISECOND" => ClockOperation::Millisecond,
+        "GETSECOND" => ClockOperation::Second,
+        _ => {
+            return Err(RuntimeError::Internal(format!(
+                "clock operation {name} has no frozen candidate implementation"
+            )));
+        }
+    };
+    let mut writes = Vec::new();
+    let value = if request.import.import.result.is_none() {
+        if let Some(target) = global_place(vm, "RESULT") {
+            writes.push(HostWrite {
+                target,
+                value: VmValue::Integer(calendar_number(time)),
+            });
+        }
+        if let Some(target) = global_place(vm, "RESULTS") {
+            writes.push(HostWrite {
+                target,
+                value: VmValue::String(calendar_string(time)),
+            });
+        }
+        None
+    } else {
+        Some(match operation {
+            ClockOperation::Time => VmValue::Integer(calendar_number(time)),
+            ClockOperation::Times => VmValue::String(calendar_string(time)),
+            ClockOperation::Millisecond => VmValue::Integer(milliseconds_since_year_one(time)),
+            ClockOperation::Second => VmValue::Integer(milliseconds_since_year_one(time) / 1_000),
+        })
+    };
+    commit_completion(
+        vm,
+        request.id,
+        VmHostCompletion::Ready(HostReady { value, writes }),
+    )
+}
+
 fn calendar_string(time: LocalDateTimeResponse) -> String {
     format!(
         "{:04}/{:02}/{:02} {:02}:{:02}:{:02}",
@@ -6059,6 +6592,12 @@ mod tests {
                     versions: VersionRange::exact(GET_KEY_STATE_OPERATION_VERSION),
                 },
             ],
+            storage: StorageCapabilities {
+                revisions: true,
+                atomic_replace: true,
+                missing_precondition: true,
+                delete: true,
+            },
         }
     }
 
@@ -6126,6 +6665,7 @@ mod tests {
         assert_eq!(hello.selected_version, RUNTIME_PROTOCOL_VERSION);
         assert!(hello.features.contains(&RuntimeFeature::TimedInput));
         assert!(!hello.features.contains(&RuntimeFeature::Audio));
+        assert_eq!(hello.selected_capabilities.storage, capabilities().storage);
     }
 
     #[test]
@@ -7267,6 +7807,164 @@ mod tests {
         let vm = session.vm.as_ref().expect("runtime VM");
         assert_eq!(read_runtime_string(vm, "SAVEDATA_TEXT").unwrap(), "suffix");
         assert_eq!(read_runtime_integer(vm, "RESULT", &[], None).unwrap(), 20);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        submit(
+            &mut session,
+            0,
+            RuntimeMessage::ClientHello(ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "candidate-test".into(),
+                features: vec![RuntimeFeature::Storage],
+                requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
+                preferred_locales: vec!["en".into()],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        submit(
+            &mut session,
+            1,
+            RuntimeMessage::ProjectManifest(ProjectManifest {
+                project_revision: 1,
+                files: vec![SubmittedFile {
+                    relative_path: "candidate.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(
+                        "@SYSTEM_TITLE\nWAIT\nRETURN\n@SAVEINFO\nRESULT = 99\nRESULT:1 = GETCONFIG(\"Font size\")\nPUTFORM suffix\nRETURN\n"
+                            .into(),
+                    ),
+                    content_hash: None,
+                }],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        submit(
+            &mut session,
+            2,
+            RuntimeMessage::Start(StartRequest {
+                mode: StartMode::NewGame { seed: Some(1) },
+            }),
+        );
+        for _ in 0..4 {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+        }
+        drain(&mut session);
+        assert_eq!(
+            read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+            0
+        );
+
+        let time = LocalDateTimeResponse {
+            year: 2026,
+            month: 7,
+            day: 17,
+            hour: 12,
+            minute: 34,
+            second: 56,
+            millisecond: 0,
+            utc_offset_minutes: 480,
+        };
+        let mut live = session.vm.take().unwrap();
+        session
+            .begin_candidate_save(&mut live, 99, CandidateSaveContinuation::Autosave)
+            .unwrap();
+        session.vm = Some(live);
+        let stat_request = drain(&mut session)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::StorageRequest(request) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(stat_request.operation, StorageOperation::Stat);
+        session
+            .complete_storage(
+                0,
+                StorageResponse {
+                    request_id: stat_request.request_id,
+                    result: StorageResult::Metadata(era_runtime_protocol::StorageMetadata {
+                        byte_length: 12,
+                        revision: Some("slot-rev".into()),
+                    }),
+                },
+            )
+            .unwrap();
+        let clock_request = drain(&mut session)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::ServiceRequest(request) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        session
+            .complete_service(
+                0,
+                ServiceResponse {
+                    request_id: clock_request.request_id,
+                    result: ServiceResult::Ready {
+                        payload: ProtocolBytes::new(encode_canonical(&time).unwrap()),
+                    },
+                },
+            )
+            .unwrap();
+        let write_request = drain(&mut session)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::StorageRequest(request) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        let StorageOperation::Write {
+            data: bytes,
+            atomic_replace,
+            precondition,
+        } = write_request.operation
+        else {
+            panic!("candidate did not issue a write")
+        };
+        assert!(atomic_replace);
+        assert_eq!(
+            precondition,
+            StoragePrecondition::Revision("slot-rev".into())
+        );
+        let decoded = decode_scoped_save(
+            bytes.as_slice(),
+            session.vm.as_ref().unwrap().vm().artifact(),
+            era_runtime_save::SaveFileKind::Normal,
+        )
+        .unwrap();
+        assert_eq!(decoded.description, "2026/07/17 12:34:56 suffix");
+        assert_eq!(
+            read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+            0,
+            "candidate mutation leaked before commit"
+        );
+        session
+            .complete_storage(
+                0,
+                StorageResponse {
+                    request_id: write_request.request_id,
+                    result: StorageResult::Written {
+                        revision: Some("new-rev".into()),
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+            99
+        );
+        assert_eq!(
+            read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[1], None).unwrap(),
+            18
+        );
     }
 
     #[test]

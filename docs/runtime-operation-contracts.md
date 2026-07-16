@@ -2,7 +2,7 @@
 
 This table is the Batch 10 handoff gate for candidate-save work. Every analyzer-visible built-in
 has exactly one compiler catalog entry. Native and Host imports persist the resolved contract in
-bytecode container 6; the validator rejects incoherent combinations or legacy flags which do not
+bytecode container 7; the validator rejects incoherent combinations or legacy flags which do not
 match the contract. Unknown runtime dispatch never silently succeeds: it emits
 `UnsupportedRuntimeFeature` with the import name.
 
@@ -11,7 +11,8 @@ match the contract. Unknown runtime dispatch never silently succeeds: it emits
 | Dimension | Persisted values | Runtime meaning |
 | --- | --- | --- |
 | State owner | `Pure`, `Vm`, `Native`, `Presentation`, `Controller`, `External` | The only authority an operation may mutate. |
-| Transaction | `ReadOnly`, `CloneCommit`, `BufferedEffect`, `Forbidden` | Whether candidate execution may read, clone and commit, buffer, or must reject the operation. |
+| Transaction | `ReadOnly`, `CloneCommit`, `BufferedEffect`, `Forbidden` | Normal-execution mutation/rollback boundary. |
+| Candidate SAVEINFO | `ReadOnly`, `CloneCommit`, `BufferedEffect`, `FrozenClock`, `Forbidden` | Isolated-save behavior, independently of the normal execution transaction. |
 | Persistence | `None`, `Ordinary`, `Global`, `VariableScoped`, `ExtensionScoped`, `ProjectDerived`, `RuntimeOnly` | Which durable state receives a committed mutation. |
 | Snapshot | `Included`, `Rebuild`, `Excluded`, `PendingBlocks` | Whether exact snapshots contain, reconstruct, omit, or reject pending state. |
 | Hot reload | `Preserve`, `Rebuild`, `Invalidate`, `ActiveBlocks` | Treatment when a new artifact generation is committed. |
@@ -61,6 +62,8 @@ containers.
 - Primitive mouse/key events remain frontend-normalized into EraBasic-shaped fields by design.
   Runtime validates the wait, token, selection and timeout but does not interpret platform events.
 
-Candidate `SAVEINFO` execution in Batch 11 may accept only `ReadOnly`, `CloneCommit`, or
-`BufferedEffect` operations. It must reject `Forbidden`, every transient external wait and every
-operation whose persisted contract is missing or invalid before running candidate code.
+Candidate `SAVEINFO` execution accepts `ReadOnly`, `CloneCommit`, and `BufferedEffect` operations,
+and resolves `FrozenClock` from the single sample obtained before the candidate starts. It rejects
+`Forbidden`, every other wait, and every operation whose persisted contract is missing or invalid.
+Normal transaction safety remains a separate field: for example, system-flow commands can be
+transactional during ordinary execution while still being forbidden in a candidate.

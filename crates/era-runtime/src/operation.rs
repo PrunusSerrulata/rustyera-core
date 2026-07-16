@@ -6,11 +6,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::host::{ExternalCompletion, PendingInput};
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub(crate) enum CandidateSaveContinuation {
+    Autosave,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum PendingService {
     StartEntropy,
-    ProjectImageMetadata { relative_path: String },
-    PlatformEffect { operation: String },
+    ProjectImageMetadata {
+        relative_path: String,
+    },
+    PlatformEffect {
+        operation: String,
+    },
+    CandidateSaveClock {
+        slot: u32,
+        precondition: era_runtime_protocol::StoragePrecondition,
+        continuation: CandidateSaveContinuation,
+    },
     Host(ExternalCompletion),
 }
 
@@ -51,7 +65,13 @@ pub(crate) enum PendingStorage {
         target: Option<erabasic_vm::PlaceDescriptor>,
         strip_character_dat: bool,
     },
-    BuiltinAutosave,
+    CandidateSaveStat {
+        slot: u32,
+        continuation: CandidateSaveContinuation,
+    },
+    CandidateSaveWrite {
+        continuation: CandidateSaveContinuation,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -307,6 +327,18 @@ impl PendingOperations {
         (services, storage)
     }
 
+    pub(crate) fn has_candidate_write(&self) -> bool {
+        self.entries.values().any(|operation| {
+            matches!(
+                operation,
+                PendingOperation::Storage {
+                    value: PendingStorage::CandidateSaveWrite { .. },
+                    ..
+                }
+            )
+        })
+    }
+
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.active_input = None;
@@ -352,5 +384,17 @@ mod tests {
         operations.bind_epoch(2);
         assert_eq!(operations.total_count(), 0);
         assert!(operations.take_service(1).is_none());
+    }
+
+    #[test]
+    fn candidate_write_is_identified_as_a_noncancellable_commit_window() {
+        let mut operations = PendingOperations::default();
+        operations.insert_storage(
+            9,
+            PendingStorage::CandidateSaveWrite {
+                continuation: CandidateSaveContinuation::Autosave,
+            },
+        );
+        assert!(operations.has_candidate_write());
     }
 }
