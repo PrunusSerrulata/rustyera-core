@@ -38,8 +38,8 @@ pub use host::{
 pub use hot_reload::{HotReloadPlan, HotReloadReport};
 pub use runtime_port::{
     PreparedRuntimeState, VmDriveMode, VmHostCompletion, VmHostRequest, VmPortDriveReport,
-    VmPortEvent, VmPortStop, VmRestorePort, VmRuntimePort, VmRuntimeRead, VmRuntimeStatePort,
-    VmRuntimeStateTransaction, VmRuntimeWrite, VmWaitRebind,
+    VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeRead,
+    VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite, VmWaitRebind,
 };
 pub use runtime_vm::{PreparedHostCompletion, RuntimeVm};
 pub use save::{EraState, EraStateReport, EraVariableState};

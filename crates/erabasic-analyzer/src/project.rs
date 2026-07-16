@@ -663,8 +663,7 @@ fn analyze_instruction(
         }
         lowered.push(match argument {
             Argument::Expression(expression) => {
-                if key == "ARRAYSORT"
-                    && index == 1
+                if ((key == "ARRAYSORT" && index == 1) || (key == "SORTCHARA" && index <= 1))
                     && let erabasic_ast::ExprKind::Identifier(order) = &expression.kind
                     && matches!(order.to_ascii_uppercase().as_str(), "FORWARD" | "BACK")
                 {
@@ -673,7 +672,14 @@ fn analyze_instruction(
                 }
                 let expression = analyzer.analyze(expression);
                 let mutable = signature
-                    .and_then(|signature| signature.arguments.get(index))
+                    .and_then(|signature| {
+                        signature.arguments.get(index).or_else(|| {
+                            signature
+                                .variadic
+                                .then(|| signature.arguments.last())
+                                .flatten()
+                        })
+                    })
                     .is_some_and(|constraint| {
                         matches!(
                             constraint,
@@ -681,6 +687,8 @@ fn analyze_instruction(
                                 | crate::ArgumentConstraint::MutableString
                                 | crate::ArgumentConstraint::MutableAny
                                 | crate::ArgumentConstraint::ReferenceAny
+                                | crate::ArgumentConstraint::ReferenceOrString
+                                | crate::ArgumentConstraint::MutableReferenceOrString
                         )
                     });
                 if mutable {

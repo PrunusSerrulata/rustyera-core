@@ -324,15 +324,26 @@ impl ExpressionAnalyzer<'_> {
             .map(|(index, value)| match value {
                 None => HirCallArgument::Omitted,
                 Some(expression)
-                    if signature.arguments.get(index).is_some_and(|constraint| {
-                        matches!(
-                            constraint,
-                            ArgumentConstraint::MutableInteger
-                                | ArgumentConstraint::MutableString
-                                | ArgumentConstraint::MutableAny
-                                | ArgumentConstraint::ReferenceAny
-                        ) || key == "REGEXPMATCH" && argument_count == 4 && index == 2
-                    }) =>
+                    if signature
+                        .arguments
+                        .get(index)
+                        .or_else(|| {
+                            signature
+                                .variadic
+                                .then(|| signature.arguments.last())
+                                .flatten()
+                        })
+                        .is_some_and(|constraint| {
+                            matches!(
+                                constraint,
+                                ArgumentConstraint::MutableInteger
+                                    | ArgumentConstraint::MutableString
+                                    | ArgumentConstraint::MutableAny
+                                    | ArgumentConstraint::ReferenceAny
+                                    | ArgumentConstraint::ReferenceOrString
+                                    | ArgumentConstraint::MutableReferenceOrString
+                            ) || key == "REGEXPMATCH" && argument_count == 4 && index == 2
+                        }) =>
                 {
                     match expression.kind {
                         HirExprKind::Variable { place } => HirCallArgument::Place(place),
@@ -566,6 +577,8 @@ impl ExpressionAnalyzer<'_> {
             ArgumentConstraint::Any
             | ArgumentConstraint::MutableAny
             | ArgumentConstraint::ReferenceAny
+            | ArgumentConstraint::ReferenceOrString
+            | ArgumentConstraint::MutableReferenceOrString
             | ArgumentConstraint::Formatted
             | ArgumentConstraint::Raw => None,
         };
@@ -589,6 +602,21 @@ impl ExpressionAnalyzer<'_> {
                 }
             } else {
                 self.expect_mutable_place(expression, &format!("argument {index}"));
+            }
+        } else if matches!(
+            constraint,
+            ArgumentConstraint::ReferenceOrString | ArgumentConstraint::MutableReferenceOrString
+        ) {
+            if matches!(expression.kind, HirExprKind::Variable { .. }) {
+                if constraint == ArgumentConstraint::MutableReferenceOrString {
+                    self.expect_mutable_place(expression, &format!("argument {index}"));
+                }
+            } else {
+                self.expect_type(
+                    expression,
+                    SemanticType::String,
+                    &format!("argument {index}"),
+                );
             }
         }
     }

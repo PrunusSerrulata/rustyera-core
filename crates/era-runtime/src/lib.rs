@@ -6,6 +6,7 @@
 
 mod controller;
 mod host;
+mod operation;
 mod presentation;
 mod project;
 mod save_adapter;

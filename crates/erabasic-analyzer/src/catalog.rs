@@ -14,6 +14,8 @@ pub enum ArgumentConstraint {
     MutableString,
     MutableAny,
     ReferenceAny,
+    ReferenceOrString,
+    MutableReferenceOrString,
     IntegerOrReference,
     Formatted,
     Raw,
@@ -143,7 +145,8 @@ fn instruction(
 #[allow(clippy::items_after_statements, clippy::too_many_lines)]
 fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     use ArgumentConstraint::{
-        Any, Formatted, Integer, MutableAny, MutableInteger, ReferenceAny, String,
+        Any, Formatted, Integer, MutableAny, MutableInteger, MutableReferenceOrString,
+        ReferenceOrString, String,
     };
     use ArgumentStyle::{Expressions, Formatted as FormStyle, None as NoArgs, Raw};
 
@@ -272,10 +275,50 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     add(
         "ARRAYCOPY",
         Expressions,
-        &[ReferenceAny, MutableAny],
+        &[ReferenceOrString, MutableReferenceOrString],
         2,
         false,
         false,
+    );
+    for name in [
+        "ADDCHARA",
+        "ADDSPCHARA",
+        "DELCHARA",
+        "ADDCOPYCHARA",
+        "PICKUPCHARA",
+    ] {
+        add(name, Expressions, &[Integer], 1, true, false);
+    }
+    for name in ["SWAPCHARA", "COPYCHARA"] {
+        add(name, Expressions, &[Integer, Integer], 2, false, false);
+    }
+    for name in ["ADDDEFCHARA", "ADDVOIDCHARA", "DELALLCHARA"] {
+        add(name, NoArgs, &[], 0, false, false);
+    }
+    add(
+        "SORTCHARA",
+        Expressions,
+        &[ReferenceOrString, String],
+        0,
+        false,
+        true,
+    );
+    add("RESET_STAIN", Expressions, &[Integer], 1, false, false);
+    add(
+        "VARSET",
+        Expressions,
+        &[MutableAny, Any, Integer, Integer],
+        1,
+        false,
+        true,
+    );
+    add(
+        "CVARSET",
+        Expressions,
+        &[MutableAny, Any, Any, Integer, Integer],
+        1,
+        false,
+        true,
     );
     for name in [
         "CALL",
@@ -330,10 +373,6 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     // Known instructions without a specialized signature still remain known. Their
     // arguments are preserved and type checked as general expressions.
     for name in [
-        "ADDCHARA",
-        "DELCHARA",
-        "COPYCHARA",
-        "SORTCHARA",
         "BAR",
         "BARL",
         "SPLIT",
@@ -598,7 +637,7 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
 #[allow(clippy::items_after_statements, clippy::too_many_lines)]
 fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     use ArgumentConstraint::{
-        Any, Integer, IntegerOrReference, MutableString, ReferenceAny, String,
+        Any, Integer, IntegerOrReference, MutableString, ReferenceAny, ReferenceOrString, String,
     };
     use SemanticType::{Integer as IntType, String as StrType};
 
@@ -656,6 +695,36 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         add(name, StrType, &[Any], 1, true);
     }
     add("STRFIND", IntType, &[String, String, Integer], 2, true);
+    for name in ["GETCHARA", "EXISTCSV"] {
+        add(name, IntType, &[Integer, Integer], 1, false);
+    }
+    add("GETSPCHARA", IntType, &[Integer], 1, false);
+    for name in [
+        "CSVBASE",
+        "CSVABL",
+        "CSVMARK",
+        "CSVEXP",
+        "CSVRELATION",
+        "CSVTALENT",
+        "CSVCFLAG",
+        "CSVEQUIP",
+        "CSVJUEL",
+    ] {
+        add(name, IntType, &[Integer, Integer, Integer], 2, false);
+    }
+    for name in ["CSVNAME", "CSVCALLNAME", "CSVNICKNAME", "CSVMASTERNAME"] {
+        add(name, StrType, &[Integer, Integer], 1, false);
+    }
+    add("CSVCSTR", StrType, &[Integer, Integer, Integer], 2, false);
+    for name in ["FINDCHARA", "FINDLASTCHARA"] {
+        add(
+            name,
+            IntType,
+            &[ReferenceAny, Any, Integer, Integer],
+            2,
+            false,
+        );
+    }
     for name in ["FINDELEMENT", "FINDLASTELEMENT"] {
         add(
             name,
@@ -669,6 +738,45 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "REGEXPMATCH",
         IntType,
         &[String, String, IntegerOrReference, MutableString],
+        2,
+        false,
+    );
+    for name in [
+        "SUMARRAY",
+        "SUMCARRAY",
+        "MAXARRAY",
+        "MAXCARRAY",
+        "MINARRAY",
+        "MINCARRAY",
+    ] {
+        add(name, IntType, &[ReferenceAny, Integer, Integer], 1, false);
+    }
+    for name in ["MATCH", "CMATCH"] {
+        add(
+            name,
+            IntType,
+            &[ReferenceAny, Any, Integer, Integer],
+            2,
+            false,
+        );
+    }
+    for name in ["INRANGEARRAY", "INRANGECARRAY"] {
+        add(
+            name,
+            IntType,
+            &[ReferenceAny, Integer, Integer, Integer, Integer],
+            3,
+            false,
+        );
+    }
+    for name in ["GROUPMATCH", "NOSAMES", "ALLSAMES"] {
+        add(name, IntType, &[Any], 2, true);
+    }
+    add("ARRAYMSORT", IntType, &[ReferenceAny], 1, true);
+    add(
+        "ARRAYMSORTEX",
+        IntType,
+        &[ReferenceOrString, ReferenceAny, Integer, Integer],
         2,
         false,
     );

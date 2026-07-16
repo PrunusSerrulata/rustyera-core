@@ -62,6 +62,38 @@ impl PresentationModel {
         self.append_print_text(text, temporary, true);
     }
 
+    pub(crate) fn last_line_is_temporary(&self) -> bool {
+        self.lines.last().is_some_and(|line| line.temporary)
+            || (!self.pending_runs.is_empty() && self.pending_temporary)
+    }
+
+    pub(crate) fn last_line_is_empty(&self) -> bool {
+        if !self.pending_runs.is_empty() {
+            return self.pending_runs.iter().all(run_is_empty);
+        }
+        self.lines
+            .last()
+            .is_none_or(|line| line.runs.iter().all(run_is_empty))
+    }
+
+    /// Delete canonical logical lines, including an uncommitted current line first.
+    /// This models the small console-editing subset used by reference system flows.
+    pub(crate) fn delete_last_lines(&mut self, mut count: usize) {
+        if count != 0 && !self.pending_runs.is_empty() {
+            self.pending_runs.clear();
+            self.pending_temporary = false;
+            count -= 1;
+        }
+        let keep = self.lines.len().saturating_sub(count);
+        self.lines.truncate(keep);
+        self.bump();
+    }
+
+    pub(crate) fn replace_last_temporary(&mut self, text: String) {
+        self.delete_last_lines(1);
+        self.append_text(text, true);
+    }
+
     pub(crate) fn append_system_text(
         &mut self,
         text: String,
@@ -158,6 +190,10 @@ impl PresentationModel {
         self.append_button_with_system_text(text, token, Some(SystemTextRef { key, arguments }));
     }
 
+    pub(crate) fn append_button(&mut self, text: String, token: InteractionToken) {
+        self.append_button_with_system_text(text, token, None);
+    }
+
     fn append_button_with_system_text(
         &mut self,
         text: String,
@@ -233,6 +269,17 @@ impl PresentationModel {
 
     fn bump(&mut self) {
         self.revision = self.revision.saturating_add(1);
+    }
+}
+
+fn run_is_empty(run: &DisplayRun) -> bool {
+    match run {
+        DisplayRun::Text { text, .. } => text.is_empty(),
+        DisplayRun::Button { runs, .. } | DisplayRun::ColumnCell { content: runs, .. } => {
+            runs.iter().all(run_is_empty)
+        }
+        DisplayRun::Separator { pattern, .. } => pattern.is_empty(),
+        _ => false,
     }
 }
 
@@ -379,6 +426,23 @@ mod tests {
         assert!(matches!(
             &snapshot.lines[1].runs[0],
             DisplayRun::Separator { pattern, .. } if pattern == "="
+        ));
+    }
+
+    #[test]
+    fn temporary_empty_lines_can_be_replaced_without_frontend_state() {
+        let mut model = PresentationModel::default();
+        model.append_text("before".into(), false);
+        model.append_text(String::new(), true);
+        assert!(model.last_line_is_temporary());
+        assert!(model.last_line_is_empty());
+        model.replace_last_temporary("invalid".into());
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.lines.len(), 2);
+        assert!(snapshot.lines[1].temporary);
+        assert!(matches!(
+            &snapshot.lines[1].runs[0],
+            DisplayRun::Text { text, .. } if text == "invalid"
         ));
     }
 

@@ -16,6 +16,28 @@ pub(crate) enum SystemFlow {
     Normal,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum SystemStep {
+    #[default]
+    None,
+    TrainEvent,
+    TrainShowStatus,
+    TrainComAble,
+    TrainShowUser,
+    TrainUserCom,
+    TrainEventCom,
+    TrainCommand,
+    TrainSourceCheck,
+    TrainEventComEnd,
+    AblupShowJuel,
+    AblupShowSelect,
+    AblupAction,
+    ShopEvent,
+    ShopAutosave,
+    ShopShow,
+    ShopAction,
+}
+
 impl SystemFlow {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value.to_ascii_uppercase().as_str() {
@@ -44,6 +66,12 @@ struct DispatchEntry {
 #[derive(Default)]
 pub(crate) struct SystemController {
     pub(crate) flow: Option<SystemFlow>,
+    pub(crate) step: SystemStep,
+    pub(crate) selected_command: Option<i64>,
+    pub(crate) train_scan: usize,
+    pub(crate) train_commands: Vec<i64>,
+    pub(crate) continuous_commands: VecDeque<i64>,
+    pub(crate) continuous_train: bool,
     pending: VecDeque<DispatchEntry>,
     active: Option<(FiberId, DispatchEntry)>,
 }
@@ -65,6 +93,27 @@ impl SystemController {
         };
         self.prepare_group(event);
         !self.pending.is_empty()
+    }
+
+    pub(crate) fn prepare_function(&mut self, artifact: &BytecodeArtifact, name: &str) -> bool {
+        self.clear();
+        let Some(function) = artifact
+            .functions
+            .iter()
+            .find(|function| function.name.eq_ignore_ascii_case(name))
+        else {
+            return false;
+        };
+        self.pending.push_back(DispatchEntry {
+            function: function.key,
+            single: false,
+            group: u8::MAX,
+        });
+        true
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.active.is_none() && self.pending.is_empty()
     }
 
     /// Queue the post-load system hook followed by the EVENTLOAD group. This keeps the
