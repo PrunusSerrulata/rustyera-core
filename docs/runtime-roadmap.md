@@ -235,42 +235,20 @@ Implementation checkpoint:
 - Project deltas are normalized, compiled incrementally and committed through the VM's
   generation-pinned hot-reload path. Native state shared by stable imports is migrated instead of
   being silently reset.
-- The remaining items below are still required before Batch 7 is complete: executable
-  Map/XML/DataTable Native builtins, candidate SAVEINFO transactions, full slot/delete controller,
-  runtime-owned menu snapshots, and exact wait/controller rebind validation during running reloads.
-
-Implement in this dependency order:
-
-1. Add a candidate save transaction that runs frontend Clock and speculative `SAVEINFO` against
-   cloned VM/runtime/presentation state. Reject external waits from the candidate and publish its
-   buffered presentation only when the storage commit succeeds.
-2. Build the complete title/save controller over `CHKDATA` metadata: fixed-size pages, empty-slot
-   selection, overwrite confirmation, deletion, any-key recovery and revision-bound interaction
-   tokens. Storage writes must use `Missing` or the observed `Revision`, never an unqualified
-   overwrite.
-3. Suspend nested `SAVEGAME`/`LOADGAME` only in the reference `__CAN_SAVE__` states. Cancellation
-   and successful save resume the suspended continuation; a successful load discards it with the
-   replaced VM timeline.
-4. Complete `TITLE_LOADGAME` precedence and the exact post-load `SYSTEM_LOADEND` -> `EVENTLOAD` ->
-   SHOP sequence, including suppression of the immediately following shop autosave.
-5. Route built-in autosave through the same Clock/`SAVEINFO` transaction, add its failure any-key
-   continuation, and select `Missing` versus `Revision` from the observed slot metadata. This
-   replaces the temporary `SAVEDATA_TEXT` plus `Any` baseline retained by Batch 6.
-6. Implement Map, XML and DataTable Native state after the ordinary game-rule Native layer is
-   stable. Give every stateful Native service a deterministic schema and migration policy before
-   exact snapshots or hot replacement can include it.
-7. Normalize submitted resource manifests and payload identities as opaque project state before
-   reload is implemented. Media-specific validation and capability projection remain deferred.
-8. Wrap VM snapshot plus runtime system state, presentation, stable waits, logical clock, IDs and
-   Native state in a checksummed exact-artifact container. Only the stable waits established after
-   the persistence-controller phase are snapshot-eligible.
-9. Implement `VmRestorePort`, wait rebinding and atomic restore; reject every transient QTE,
-   service, storage or old-generation state.
-10. Stage project deltas with incremental analyze/compile/validate, then migrate compatible Native
-    state and rebind waits/breakpoints atomically. A successful commit advances `SessionEpoch`.
+- Batch 7 is closed at this checkpoint. Its unfinished higher-level features are reassigned by
+  dependency: structured Native execution to Batch 8, running-reload rebinding to Batch 9, and the
+  persistence controller plus runtime-owned menu snapshots to Batch 10. They must not be described
+  as Batch 7 implementations before their destination batch lands.
 
 ## Batch 8: media and platform services
 
+- First implement executable Map, XML and DataTable Native services, before media broadens the
+  Native/Host surface. Replace fallback signatures with exact Analyzer contracts; make multi-place
+  and array-output operations transactional; preserve Map insertion order; provide XPath behavior
+  and deterministic DataTable filtering/sorting; use deterministic opaque DataTable row handles.
+- Connect declared VAREXT scopes to the typed `0x20`--`0x22` binary-save codecs. New game and
+  `RESETDATA`/`RESETGLOBAL` clear the reference scopes, text saves omit structured extensions, and
+  snapshots/hot reload migrate the versioned Native bundle. Preserve unknown extension payloads.
 - Complete canonical text presentation semantics: style and alignment state, buttons, line
   mutation, skip/log behavior and HTML_PRINT logical text. Build BINPUT choices from canonical
   runtime buttons and finish message-skip suppression/retention rules. Keep GETDISPLAYLINE and
@@ -285,6 +263,10 @@ Implement in this dependency order:
 
 ## Batch 9: debugger implementation
 
+- Before debugger dispatch, complete running-reload rebinding for stable VM and runtime waits,
+  pending system-controller entries, presentation tokens and source-map identities. Stage every
+  rebind against the target artifact and roll back the complete reload if any reference is absent
+  or ambiguous; transient operations remain reload blockers.
 - Resolve runtime-generated UnsupportedRuntimeFeature, input and Native faults through bytecode
   source maps so every available fault carries its command and UTF-8 source location.
 - Dispatch the independent debug channel with explicit scope grants.
@@ -295,6 +277,23 @@ Implement in this dependency order:
 
 ## Batch 10: legacy saves and compatibility closure
 
+- Implement the candidate save transaction after all stateful Native and Host classifications are
+  fixed. Obtain one frontend Clock sample, run `SAVEINFO` against cloned mutable VM/Native and
+  buffered presentation state, allow only rollback-safe calls, and commit those effects only after
+  a revision-checked storage write succeeds. Failure and conflict discard the candidate. This is
+  the approved transactional difference from the reference implementation's leaked side effects.
+- Complete the title/save/load controller over `CHKDATA`: fixed pages of twenty, empty/corrupt
+  slot states, overwrite confirmation, revision-bound tokens, any-key recovery and delete actions
+  in both save and load menus. Deletion is an approved extension over the reference menu and must
+  remain explicitly documented.
+- Complete nested `SAVEGAME`/`LOADGAME` continuation behavior in `__CAN_SAVE__` states,
+  `TITLE_LOADGAME` precedence, and the `SYSTEM_LOADEND` -> `EVENTLOAD` -> SHOP chain with immediate
+  shop-autosave suppression. Route built-in autosave through the same candidate transaction using
+  `Missing` or the observed `Revision`, never `Any`.
+- Extend exact Runtime Snapshot eligibility to stable runtime-owned title/save/load/shop waits.
+  Serialize controller and slot metadata without transport IDs, then atomically restore and rebind
+  fresh epoch-scoped waits, buttons and revisions. Candidate saves, QTEs, storage/service work and
+  old bytecode generations remain blockers.
 - Add reference-supported historical save readers after current formats are stable.
 - Extend the reference CLI with current-format ordinary/global/character/text/log and Host-path
   fixtures, then run same-input semantic comparisons. Cover metadata, failure and continuation
