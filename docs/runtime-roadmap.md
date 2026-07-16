@@ -184,7 +184,7 @@ Implement in this dependency order:
 
 Batch 6 establishes current-format traditional persistence and the Host/storage foundation for the
 system-flow work inherited from the original Batch 4 plan. Its controller-dependent remainder is
-reassigned below; historical formats remain assigned to Batch 10.
+reassigned below; historical formats remain assigned to Batch 11.
 
 ### Batch 6 implementation checkpoint (2026-07-16)
 
@@ -214,7 +214,8 @@ The dependency and Host layers are implemented:
 The unfinished controller work from this batch has been reassigned by dependency instead of
 leaving Batch 6 open. Candidate save transactions, slot interaction and load continuations are
 prerequisites of an exact runtime snapshot, so they form the first phase of Batch 7. Broader
-current-save and Host oracle coverage belongs to the final compatibility closure in Batch 10.
+Host/Native oracle coverage belongs to Batch 10, while current-save and system-flow oracle coverage
+belongs to the final persistence closure in Batch 11.
 Until those destinations land, the corresponding behavior must not be described as implemented.
 
 Intentional architecture-first differences remain: failed/cancelled loads do not clear opaque
@@ -237,7 +238,7 @@ Implementation checkpoint:
   being silently reset.
 - Batch 7 is closed at this checkpoint. Its unfinished higher-level features are reassigned by
   dependency: structured Native execution to Batch 8, running-reload rebinding to Batch 9, and the
-  persistence controller plus runtime-owned menu snapshots to Batch 10. They must not be described
+  persistence controller plus runtime-owned menu snapshots to Batch 11. They must not be described
   as Batch 7 implementations before their destination batch lands.
 
 ## Batch 8: media and platform services
@@ -294,38 +295,99 @@ one scalar assignment and rejects flow, waits, Host effects and unsupported expr
 mutation. This is deliberately narrower than the reference debug console's full method-safe
 instruction set and can be extended additively inside a later debugger-compatibility slice.
 
-## Batch 10: legacy saves and compatibility closure
+## Remaining dependency split
 
-- First close Batch 8's compatibility-heavy tail: mutable XML and reference DataTable XML,
-  remaining canonical presentation behavior, resource/sprite/canvas command graphs and intrinsic
-  metrics, then media and platform services. This must precede candidate-save transactions so every
-  stateful Native and Host operation has a final rollback and persistence classification.
-- Implement the candidate save transaction after all stateful Native and Host classifications are
-  fixed. Obtain one frontend Clock sample, run `SAVEINFO` against cloned mutable VM/Native and
-  buffered presentation state, allow only rollback-safe calls, and commit those effects only after
-  a revision-checked storage write succeeds. Failure and conflict discard the candidate. This is
-  the approved transactional difference from the reference implementation's leaked side effects.
-- Complete the title/save/load controller over `CHKDATA`: fixed pages of twenty, empty/corrupt
-  slot states, overwrite confirmation, revision-bound tokens, any-key recovery and delete actions
-  in both save and load menus. Deletion is an approved extension over the reference menu and must
-  remain explicitly documented.
-- Complete nested `SAVEGAME`/`LOADGAME` continuation behavior in `__CAN_SAVE__` states,
-  `TITLE_LOADGAME` precedence, and the `SYSTEM_LOADEND` -> `EVENTLOAD` -> SHOP chain with immediate
-  shop-autosave suppression. Route built-in autosave through the same candidate transaction using
-  `Missing` or the observed `Revision`, never `Any`.
-- Extend exact Runtime Snapshot eligibility to stable runtime-owned title/save/load/shop waits.
-  Serialize controller and slot metadata without transport IDs, then atomically restore and rebind
-  fresh epoch-scoped waits, buttons and revisions. Candidate saves, QTEs, storage/service work and
-  old bytecode generations remain blockers.
-- Add reference-supported historical save readers after current formats are stable.
-- Extend the reference CLI with current-format ordinary/global/character/text/log and Host-path
-  fixtures, then run same-input semantic comparisons. Cover metadata, failure and continuation
-  behavior where the headless reference exposes it; record genuine endpoint gaps explicitly.
-  Rust-only codec round trips remain coverage and never count as compatibility proof.
-- Require every pinned built-in to have tests and a working implementation or a documented,
-  stable intentional-difference diagnostic.
-- Run focused real-game project slices for startup, system flow, saves, reload and long sessions;
-  keep ordinary unit fixtures small.
+The remaining work has two dependency layers. Runtime-surface operations must first receive final
+transaction, persistence, snapshot, asynchronous-wait and capability classifications. A candidate
+save cannot safely clone or reject execution until those classifications are closed. The save/menu
+controller then depends on that candidate transaction, and runtime-owned menu snapshots depend on
+the controller's final stable states. Historical readers and end-to-end compatibility tests come
+last because they must target the final current-format and continuation behavior.
+
+The split retains the already approved architectural decisions: presentation is canonical and
+cross-platform rather than Windows-GDI pixel-identical; candidate-save failure rolls back buffered
+effects instead of leaking them like the reference implementation; menu deletion remains an
+explicit extension; filesystem I/O remains frontend-owned; and all submitted text remains UTF-8.
+No additional reference conflict or user choice is introduced by this split.
+
+## Batch 10: runtime-surface compatibility and transaction substrate
+
+Implement in this dependency order:
+
+Items 1 and 2 are independent foundations and may proceed in parallel. Item 3 depends on the
+canonical presentation model from item 2; item 4 may proceed beside item 3. Items 5--8 are the
+convergence path and begin only after items 1--4 have fixed their public behavior.
+
+1. Complete the structured Native tail: mutable XML operations, the required wider XPath subset,
+   and reference XSD/XML DataTable interchange. Preserve prevalidate-then-commit behavior and give
+   every mutation explicit ordinary/global/save-extension, snapshot and hot-reload treatment.
+2. Complete canonical presentation semantics before media services consume them: exact logical
+   line/button/message-skip behavior, recoverable display history, and the remaining presentation
+   queries. For `GETDISPLAYLINE` and the Emuera HTML helpers, either implement deterministic
+   canonical semantics or retain a tested `UnsupportedRuntimeFeature` difference where real-game
+   usage and the approved cross-platform model do not justify pixel-dependent behavior.
+3. Build resource-manifest sprite/canvas replay graphs, intrinsic image metadata handling,
+   backgrounds and tooltips over canonical presentation state. The runtime owns semantic resource
+   identities and replay state; the frontend continues to own decoding, rendering and file I/O.
+4. Add typed audio/video effects and URL/update/focus platform services with complete capability,
+   cancellation, ordering and failure matrices. Device actions remain one-shot effects; only
+   recoverable semantic state may enter runtime snapshots.
+5. Audit every non-persistence Host and Native operation and freeze its rollback safety,
+   persistence scope, snapshot eligibility, hot-reload behavior, external-wait stability and
+   capability fallback. No unclassified stateful operation may pass the Batch 10 completion gate.
+6. Extend the debug console from its current scalar subset to the reference method-safe subset
+   that can execute under the classifications above. Continue to reject flow control, waits,
+   partial instructions and Host effects; parse/validation/execution failure must leave VM,
+   Native, runtime and presentation state unchanged.
+7. Extend the reference CLI and Rust differential fixtures for the changed Native, presentation,
+   resource, media and platform Host paths. Record genuine headless or platform oracle gaps rather
+   than treating Rust-only round trips as compatibility proof. Add focused real-game slices for
+   presentation-heavy menus and resource/media dispatch without loading the full script corpus.
+8. Require every pinned non-persistence built-in to have a working tested implementation or a
+   documented stable intentional-difference diagnostic. Publish the finalized operation
+   classification table as the explicit handoff gate to Batch 11.
+
+Batch 10 must not implement candidate `SAVEINFO` writes against a partially classified runtime.
+It is complete only when Batch 11 can clone or reject every operation reachable during candidate
+execution without consulting frontend/device state synchronously.
+
+## Batch 11: persistence, controller and final compatibility closure
+
+Implement in this dependency order:
+
+This batch is intentionally sequential: item 1 consumes the Batch 10 classification gate; items 2
+and 3 build on its candidate transaction; item 4 snapshots the resulting stable controller states;
+and items 5--8 validate and close the finalized persistence behavior.
+
+1. Implement the candidate save transaction over Batch 10's frozen classifications. Obtain one
+   frontend Clock sample, run `SAVEINFO` against cloned mutable VM/Native/runtime state and buffered
+   presentation/effects, and commit only after a revision-checked storage write succeeds. Parse,
+   execution, cancellation, conflict and storage failure discard the complete candidate. This is
+   the approved transactional difference from the reference implementation's leaked side effects.
+2. Complete the title/save/load controller over `CHKDATA`: fixed pages of twenty, empty/corrupt
+   slot states, overwrite confirmation, revision-bound tokens, any-key recovery and delete actions
+   in save and load menus. Deletion remains an explicitly documented extension.
+3. Complete nested `SAVEGAME`/`LOADGAME` continuation behavior in `__CAN_SAVE__` states,
+   `TITLE_LOADGAME` precedence, and the `SYSTEM_LOADEND` -> `EVENTLOAD` -> SHOP chain with immediate
+   shop-autosave suppression. Route built-in and shop autosave through the same candidate
+   transaction using `Missing` or the observed `Revision`, never `Any`.
+4. Extend exact Runtime Snapshot eligibility to stable runtime-owned title/save/load/shop waits.
+   Serialize controller and slot metadata without transport IDs, then atomically restore and
+   rebind fresh epoch-scoped waits, buttons and revisions. Candidate saves, QTEs, storage/service
+   work and old bytecode generations remain blockers.
+5. Add reference-supported historical save readers after current-format candidate writes,
+   continuation rules and schema checks are stable. Historical input is read-only migration into
+   the current authoritative state; new writes continue to use the current versioned formats.
+6. Extend the reference CLI with current-format ordinary/global/character/text/log and save Host
+   fixtures, then run same-input semantic comparisons for metadata, corruption, conflict,
+   cancellation, continuation and autosave behavior wherever the headless reference exposes them.
+   Record endpoint gaps explicitly; Rust codec round trips remain necessary but insufficient.
+7. Run focused real-game project slices for startup, title/save/load, shop/autosave, reload,
+   snapshot recovery and long sessions. Keep unit fixtures small, and use selected real-game slices
+   rather than loading the complete 80+ MiB corpus by default.
+8. Perform the final pinned built-in audit. Every built-in must have tests and a working
+   implementation or a documented stable intentional-difference diagnostic; every public protocol,
+   persisted format and roadmap status must agree before declaring runtime compatibility closure.
 
 ## Verification required for every batch
 
