@@ -37,6 +37,33 @@ pub enum SaveValue {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Text1808ValueType {
+    Integer,
+    String,
+}
+
+/// One project-defined position in the current text save layout.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Text1808Variable {
+    pub name: String,
+    pub value_type: Text1808ValueType,
+    pub dimensions: Vec<u32>,
+}
+
+/// Schema-neutral description of the order supplied by the active project.
+///
+/// Extended groups are explicit because the reference format uses separators,
+/// not tags, to distinguish scalar/1D/2D/3D and integer/string dictionaries.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Text1808Layout {
+    pub kind: SaveFileKind,
+    pub base_variables: Vec<Text1808Variable>,
+    pub base_character_variables: Vec<Text1808Variable>,
+    pub extended_groups: Vec<Vec<Text1808Variable>>,
+    pub extended_character_groups: Vec<Vec<Text1808Variable>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SaveEntry {
     pub name: String,

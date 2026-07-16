@@ -92,6 +92,9 @@ pub enum RuntimeFeature {
     ExternalServices,
     #[n(10)]
     StateResynchronization,
+    /// Versioned frontend storage messages are available.
+    #[n(11)]
+    Storage,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

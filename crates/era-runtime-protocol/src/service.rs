@@ -34,18 +34,39 @@ pub enum StorageOperation {
         #[n(1)]
         atomic_replace: bool,
         #[n(2)]
-        expected_revision: Option<String>,
+        precondition: StoragePrecondition,
     },
     #[n(2)]
     List {
         #[n(0)]
         pattern: Option<String>,
+        /// Whether entries below child directories are included.
+        #[n(1)]
+        recursive: bool,
     },
     #[n(3)]
     Delete {
         #[n(0)]
-        expected_revision: Option<String>,
+        precondition: StoragePrecondition,
     },
+    /// Read metadata without transferring the file contents.
+    #[n(4)]
+    Stat,
+}
+
+/// Optimistic concurrency condition applied by the frontend at commit time.
+///
+/// `Missing` is required for a new slot and prevents an unnoticed overwrite;
+/// `Revision` protects an overwrite/delete selected from an earlier listing.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "revision", rename_all = "snake_case")]
+pub enum StoragePrecondition {
+    #[n(0)]
+    Any,
+    #[n(1)]
+    Missing,
+    #[n(2)]
+    Revision(#[n(0)] String),
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -77,6 +98,15 @@ pub struct StorageEntry {
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct StorageMetadata {
+    #[n(0)]
+    pub byte_length: u64,
+    #[n(1)]
+    pub revision: Option<String>,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StorageResult {
     #[n(0)]
@@ -103,6 +133,8 @@ pub enum StorageResult {
         #[n(0)]
         error: FrontendIoError,
     },
+    #[n(5)]
+    Metadata(#[n(0)] StorageMetadata),
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

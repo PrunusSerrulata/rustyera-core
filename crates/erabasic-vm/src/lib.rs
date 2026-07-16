@@ -42,7 +42,7 @@ pub use runtime_port::{
     VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite, VmWaitRebind,
 };
 pub use runtime_vm::{PreparedHostCompletion, RuntimeVm};
-pub use save::{EraState, EraStateReport, EraVariableState};
+pub use save::{EraSaveScope, EraState, EraStateReport, EraVariableState};
 pub use snapshot::{
     SNAPSHOT_FORMAT_VERSION, SNAPSHOT_MAGIC, SnapshotBlocker, SnapshotEligibility, VmSnapshot,
 };

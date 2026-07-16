@@ -14,9 +14,10 @@ use erabasic_csv::{
 };
 use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode};
 use erabasic_vm::{
-    FiberStatus, HostCallRequest, HostCallResult, HostReady, HostRebindRequest, HostWaitStability,
-    NativeServiceRegistry, RunBudget, SnapshotBlocker, SnapshotEligibility, Vm, VmConfig, VmEvent,
-    VmFaultCode, VmHost, VmSnapshot, VmValue,
+    EraSaveScope, FiberStatus, HostCallRequest, HostCallResult, HostReady, HostRebindRequest,
+    HostWaitStability, NativeServiceRegistry, RunBudget, RuntimeVm, SnapshotBlocker,
+    SnapshotEligibility, Vm, VmConfig, VmEvent, VmFaultCode, VmHost, VmRuntimeStatePort,
+    VmRuntimeStateTransaction, VmSnapshot, VmValue,
 };
 
 fn project_data() -> erabasic_data::ProjectData {
@@ -1245,6 +1246,70 @@ fn traditional_state_overlay_restores_persistent_arrays_without_stacks() {
     assert_eq!(
         vm.read_variable(variable, &[1], None).unwrap(),
         VmValue::Integer(42)
+    );
+}
+
+#[test]
+fn ordinary_save_excludes_and_restore_preserves_global_save_variables() {
+    let ordinary = SymbolKey::derive("test.variable", b"ordinary");
+    let global_key = SymbolKey::derive("test.variable", b"global");
+    let mut ordinary_definition = global(ordinary, vec![1]);
+    ordinary_definition.name = "ORDINARY".into();
+    let mut global_definition = global(global_key, vec![1]);
+    global_definition.name = "GLOBAL_VALUE".into();
+    global_definition.persistence = BytecodePersistence::GlobalSave;
+    let artifact = artifact(Vec::new(), vec![ordinary_definition, global_definition]);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.write_variable(ordinary, &[0], None, VmValue::Integer(11))
+        .unwrap();
+    vm.write_variable(global_key, &[0], None, VmValue::Integer(21))
+        .unwrap();
+    let save = vm.export_era_state();
+    assert!(save.variables.contains_key(&ordinary));
+    assert!(!save.variables.contains_key(&global_key));
+
+    vm.write_variable(ordinary, &[0], None, VmValue::Integer(12))
+        .unwrap();
+    vm.write_variable(global_key, &[0], None, VmValue::Integer(22))
+        .unwrap();
+    vm.reset_with_era_state(&save).unwrap();
+    assert_eq!(
+        vm.read_variable(ordinary, &[0], None),
+        Ok(VmValue::Integer(11))
+    );
+    assert_eq!(
+        vm.read_variable(global_key, &[0], None),
+        Ok(VmValue::Integer(22))
+    );
+}
+
+#[test]
+fn global_overlay_transaction_changes_only_global_save_storage() {
+    let ordinary = SymbolKey::derive("test.variable", b"ordinary-overlay");
+    let global_key = SymbolKey::derive("test.variable", b"global-overlay");
+    let mut ordinary_definition = global(ordinary, vec![1]);
+    ordinary_definition.name = "ORDINARY_OVERLAY".into();
+    let mut global_definition = global(global_key, vec![1]);
+    global_definition.name = "GLOBAL_OVERLAY".into();
+    global_definition.persistence = BytecodePersistence::GlobalSave;
+    let artifact = artifact(Vec::new(), vec![ordinary_definition, global_definition]);
+    let mut vm = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    vm.vm_mut()
+        .write_variable(ordinary, &[0], None, VmValue::Integer(10))
+        .unwrap();
+    let mut state = vm.vm().export_era_state_for(EraSaveScope::Global);
+    state.variables.get_mut(&global_key).unwrap().values[0] = VmValue::Integer(20);
+    let prepared = vm
+        .prepare_runtime_state(VmRuntimeStateTransaction::OverlayGlobal(Box::new(state)))
+        .unwrap();
+    vm.commit_runtime_state(prepared).unwrap();
+    assert_eq!(
+        vm.vm().read_variable(ordinary, &[0], None),
+        Ok(VmValue::Integer(10))
+    );
+    assert_eq!(
+        vm.vm().read_variable(global_key, &[0], None),
+        Ok(VmValue::Integer(20))
     );
 }
 

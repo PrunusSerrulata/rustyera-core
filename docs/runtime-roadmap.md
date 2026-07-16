@@ -182,22 +182,77 @@ Implement in this dependency order:
    can expose. Where the CLI lacks an endpoint, add a documented oracle gap rather than treating a
    Rust round trip as compatibility proof.
 
-Batch 6 closes all current-format traditional persistence and all system-flow work inherited from
-the original Batch 4 plan. Historical formats remain assigned to Batch 10.
+Batch 6 establishes current-format traditional persistence and the Host/storage foundation for the
+system-flow work inherited from the original Batch 4 plan. Its controller-dependent remainder is
+reassigned below; historical formats remain assigned to Batch 10.
+
+### Batch 6 implementation checkpoint (2026-07-16)
+
+The dependency and Host layers are implemented:
+
+- Runtime protocol 7.0 negotiates `Storage`, adds `Stat`, recursive lists and explicit
+  `Any`/`Missing`/`Revision` preconditions. No protocol-6 compatibility adapter is retained during
+  the pre-frontend development period.
+- The current UTF-8 text codec now has a project-schema positional adapter, emits BOM plus CRLF,
+  and supports ordinary and global 1808 layouts. Binary and gzip codecs continue to cover normal,
+  global, variable and character file kinds. User `CHARADATA` and multidimensional saved strings
+  are rejected for text-save projects, matching the reference format's representability limits.
+- VM exports separate ordinary/global/character scopes. Ordinary restore preserves live globals;
+  global load overlays only global storage; character DAT load appends atomically. Runtime-only
+  reset and `LASTLOAD_*` transactions avoid exposing calculated fields to scripts.
+- `SAVEDATA`, `LOADDATA`, `DELDATA`, `SAVEGLOBAL`, `LOADGLOBAL`, `SAVECHARA`, `LOADCHARA`,
+  `CHKDATA`, `CHKCHARADATA`, `FIND_CHARADATA`, `SAVETEXT`, `LOADTEXT`, `EXISTFILE`, `ENUMFILES`,
+  `OUTPUTLOG`, `PUTFORM`, `SAVENOS`, `RESETDATA` and `RESETGLOBAL` use the pending-operation
+  registry and never perform filesystem I/O. The pinned reference deliberately throws for
+  `SAVEVAR`/`LOADVAR`; Rust reports the same stable unsupported feature instead of inventing data.
+- `SaveDataNos` now means the clamped total ordinary slot count (20--80); the built-in page size is
+  fixed at twenty and autosave uses slot 99. A missing project `SYSTEM_AUTOSAVE` now performs the
+  built-in storage write instead of faulting.
+- The macOS/Windows reference smoke fixture now executes the same `PUTFORM suffix` and `SAVENOS()`
+  inputs covered by the Rust runtime test; both produce `SAVEDATA_TEXT == "suffix"` and `20`.
+
+The unfinished controller work from this batch has been reassigned by dependency instead of
+leaving Batch 6 open. Candidate save transactions, slot interaction and load continuations are
+prerequisites of an exact runtime snapshot, so they form the first phase of Batch 7. Broader
+current-save and Host oracle coverage belongs to the final compatibility closure in Batch 10.
+Until those destinations land, the corresponding behavior must not be described as implemented.
+
+Intentional architecture-first differences remain: failed/cancelled loads do not clear opaque
+state, arbitrary paths reject traversal rather than sanitizing it, filesystem results are sorted
+before becoming script-visible, and `OUTPUTLOG` contains canonical runtime presentation plus a
+stable runtime/game header instead of UI/device/patch-directory details.
 
 ## Batch 7: exact snapshot restore and hot replacement
 
-- Implement Map, XML and DataTable Native state after the ordinary game-rule Native layer is
-  stable. Give every stateful Native service a deterministic schema and migration policy before
-  exact snapshots or hot replacement can include it.
-- Normalize submitted resource manifests and payload identities as opaque project state before
-  reload is implemented. Media-specific validation and capability projection remain deferred.
-- Wrap VM snapshot plus runtime system state, presentation, stable waits, logical clock, IDs and
-  Native state in a checksummed exact-artifact container.
-- Implement `VmRestorePort`, wait rebinding and atomic restore; reject every transient QTE,
-  service, storage or old-generation state.
-- Stage project deltas with incremental analyze/compile/validate, then migrate compatible Native
-  state and rebind waits/breakpoints atomically. A successful commit advances `SessionEpoch`.
+Implement in this dependency order:
+
+1. Add a candidate save transaction that runs frontend Clock and speculative `SAVEINFO` against
+   cloned VM/runtime/presentation state. Reject external waits from the candidate and publish its
+   buffered presentation only when the storage commit succeeds.
+2. Build the complete title/save controller over `CHKDATA` metadata: fixed-size pages, empty-slot
+   selection, overwrite confirmation, deletion, any-key recovery and revision-bound interaction
+   tokens. Storage writes must use `Missing` or the observed `Revision`, never an unqualified
+   overwrite.
+3. Suspend nested `SAVEGAME`/`LOADGAME` only in the reference `__CAN_SAVE__` states. Cancellation
+   and successful save resume the suspended continuation; a successful load discards it with the
+   replaced VM timeline.
+4. Complete `TITLE_LOADGAME` precedence and the exact post-load `SYSTEM_LOADEND` -> `EVENTLOAD` ->
+   SHOP sequence, including suppression of the immediately following shop autosave.
+5. Route built-in autosave through the same Clock/`SAVEINFO` transaction, add its failure any-key
+   continuation, and select `Missing` versus `Revision` from the observed slot metadata. This
+   replaces the temporary `SAVEDATA_TEXT` plus `Any` baseline retained by Batch 6.
+6. Implement Map, XML and DataTable Native state after the ordinary game-rule Native layer is
+   stable. Give every stateful Native service a deterministic schema and migration policy before
+   exact snapshots or hot replacement can include it.
+7. Normalize submitted resource manifests and payload identities as opaque project state before
+   reload is implemented. Media-specific validation and capability projection remain deferred.
+8. Wrap VM snapshot plus runtime system state, presentation, stable waits, logical clock, IDs and
+   Native state in a checksummed exact-artifact container. Only the stable waits established after
+   the persistence-controller phase are snapshot-eligible.
+9. Implement `VmRestorePort`, wait rebinding and atomic restore; reject every transient QTE,
+   service, storage or old-generation state.
+10. Stage project deltas with incremental analyze/compile/validate, then migrate compatible Native
+    state and rebind waits/breakpoints atomically. A successful commit advances `SessionEpoch`.
 
 ## Batch 8: media and platform services
 
@@ -226,6 +281,10 @@ the original Batch 4 plan. Historical formats remain assigned to Batch 10.
 ## Batch 10: legacy saves and compatibility closure
 
 - Add reference-supported historical save readers after current formats are stable.
+- Extend the reference CLI with current-format ordinary/global/character/text/log and Host-path
+  fixtures, then run same-input semantic comparisons. Cover metadata, failure and continuation
+  behavior where the headless reference exposes it; record genuine endpoint gaps explicitly.
+  Rust-only codec round trips remain coverage and never count as compatibility proof.
 - Require every pinned built-in to have tests and a working implementation or a documented,
   stable intentional-difference diagnostic.
 - Run focused real-game project slices for startup, system flow, saves, reload and long sessions;

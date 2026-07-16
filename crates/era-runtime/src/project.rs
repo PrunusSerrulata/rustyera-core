@@ -32,7 +32,7 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) auto_save: bool,
     pub(crate) save_in_binary: bool,
     pub(crate) compress_save: bool,
-    pub(crate) save_slots_per_page: u32,
+    pub(crate) save_slot_count: u32,
     pub(crate) money_label: String,
     pub(crate) money_first: bool,
     pub(crate) maximum_shop_items: u32,
@@ -47,7 +47,7 @@ struct SemanticConfig {
     auto_save: bool,
     save_in_binary: bool,
     compress_save: bool,
-    save_slots_per_page: u32,
+    save_slot_count: u32,
     money_label: String,
     money_first: bool,
     maximum_shop_items: u32,
@@ -62,7 +62,7 @@ impl Default for SemanticConfig {
             auto_save: true,
             save_in_binary: false,
             compress_save: false,
-            save_slots_per_page: 20,
+            save_slot_count: 20,
             money_label: "$".into(),
             money_first: true,
             maximum_shop_items: 100,
@@ -294,7 +294,7 @@ pub(crate) fn build_project(
             auto_save: config.auto_save,
             save_in_binary: config.save_in_binary,
             compress_save: config.compress_save,
-            save_slots_per_page: config.save_slots_per_page,
+            save_slot_count: config.save_slot_count,
             money_label: config.money_label,
             money_first: config.money_first,
             maximum_shop_items: config.maximum_shop_items,
@@ -421,7 +421,7 @@ fn parse_configuration(
             match name {
                 "表示するセーブデータ数" | "Save data count per page" => {
                     if let Ok(value) = value.parse::<u32>() {
-                        config.save_slots_per_page = value.max(1);
+                        config.save_slot_count = value.clamp(20, 80);
                     }
                     continue;
                 }
@@ -533,7 +533,7 @@ fn parse_json_configuration(
                 .and_then(serde_json::Value::as_u64)
                 .and_then(|value| u32::try_from(value).ok())
             {
-                config.save_slots_per_page = number.max(1);
+                config.save_slot_count = number.clamp(20, 80);
             }
         }
         Err(error) => diagnostics.push(project_diagnostic(
@@ -604,6 +604,7 @@ fn csv_error_kind(kind: era_runtime_protocol::FrontendIoErrorKind) -> CsvIoError
         era_runtime_protocol::FrontendIoErrorKind::Interrupted => CsvIoErrorKind::Interrupted,
         era_runtime_protocol::FrontendIoErrorKind::ReadOnly
         | era_runtime_protocol::FrontendIoErrorKind::AlreadyExists
+        | era_runtime_protocol::FrontendIoErrorKind::Conflict
         | era_runtime_protocol::FrontendIoErrorKind::Other => CsvIoErrorKind::Other,
     }
 }
@@ -618,6 +619,7 @@ fn analyzer_error_kind(kind: era_runtime_protocol::FrontendIoErrorKind) -> Sourc
         era_runtime_protocol::FrontendIoErrorKind::Interrupted => SourceIoErrorKind::Interrupted,
         era_runtime_protocol::FrontendIoErrorKind::ReadOnly
         | era_runtime_protocol::FrontendIoErrorKind::AlreadyExists
+        | era_runtime_protocol::FrontendIoErrorKind::Conflict
         | era_runtime_protocol::FrontendIoErrorKind::Other => SourceIoErrorKind::Other,
     }
 }
@@ -675,7 +677,7 @@ mod tests {
         assert!(!config.auto_save);
         assert!(config.save_in_binary);
         assert!(config.compress_save);
-        assert_eq!(config.save_slots_per_page, 30);
+        assert_eq!(config.save_slot_count, 30);
         assert_eq!(config.money_label, "円");
         assert!(!config.money_first);
         assert_eq!(config.maximum_shop_items, 77);

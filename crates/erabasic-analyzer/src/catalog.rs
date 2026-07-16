@@ -204,6 +204,7 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "RETURNFORM",
         "DATA",
         "DATALIST",
+        "PUTFORM",
     ] {
         add(name, FormStyle, &[Formatted], 0, false, true);
     }
@@ -835,6 +836,7 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "DT_ROW_REMOVE",
         "DT_ROW_SET",
         "EXISTFILE",
+        "FIND_CHARADATA",
         "EXISTFUNCTION",
         "EXISTMETH",
         "EXISTSOUND",

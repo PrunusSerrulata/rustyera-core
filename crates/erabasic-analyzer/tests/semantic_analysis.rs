@@ -473,3 +473,35 @@ fn csv_name_tables_resolve_identifier_indices() {
         Some(erabasic_hir::ConstantValue::Integer(2))
     );
 }
+
+#[test]
+fn user_character_data_requires_binary_save_configuration() {
+    let input = AnalysisInput {
+        project_data: empty_project(),
+        sources: vec![source(
+            "character.erh",
+            "#DIM CHARADATA CUSTOM_CHARACTER, 10\n",
+        )],
+    };
+    let text = analyze_project(
+        input.clone(),
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(text.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == AnalyzerDiagnosticCode::InvalidDeclaration
+            && diagnostic.message.contains("require binary saves")
+    }));
+
+    let mut binary_options = AnalyzerOptions::analysis_mode();
+    binary_options.system_save_in_binary = true;
+    let binary = analyze_project(input, &binary_options, &ExtensionRegistry::default());
+    assert!(
+        !binary
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        binary.diagnostics
+    );
+}

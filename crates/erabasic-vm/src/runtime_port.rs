@@ -36,7 +36,16 @@ pub struct VmRuntimeFill {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VmRuntimeStateTransaction {
     ResetNewGame,
-    RestoreEraState(Box<EraState>),
+    ResetGameData,
+    ResetGlobalData,
+    RestoreOrdinary(Box<EraState>),
+    OverlayGlobal(Box<EraState>),
+    AppendCharacters(Box<EraState>),
+    SetLastLoad {
+        version: i64,
+        slot: i64,
+        text: String,
+    },
     Mutate {
         writes: Vec<VmRuntimeWrite>,
         fills: Vec<VmRuntimeFill>,

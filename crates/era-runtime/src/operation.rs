@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 
+use era_runtime_save::SaveFileKind;
 use erabasic_vm::HostRequestId;
 
 use crate::host::{ExternalCompletion, PendingInput};
@@ -14,6 +15,40 @@ pub(crate) enum PendingService {
 pub(crate) enum PendingStorage {
     ListLoadSlots,
     ReadLoadSlot,
+    HostWrite {
+        request: HostRequestId,
+    },
+    HostDelete {
+        request: HostRequestId,
+    },
+    HostLoadOrdinary {
+        slot: u32,
+    },
+    HostLoadGlobal {
+        request: HostRequestId,
+    },
+    HostLoadCharacters {
+        request: HostRequestId,
+    },
+    HostCheck {
+        request: HostRequestId,
+        kind: SaveFileKind,
+    },
+    HostFunctionWrite {
+        request: HostRequestId,
+    },
+    HostReadText {
+        request: HostRequestId,
+    },
+    HostStat {
+        request: HostRequestId,
+    },
+    HostListFiles {
+        request: HostRequestId,
+        target: Option<erabasic_vm::PlaceDescriptor>,
+        strip_character_dat: bool,
+    },
+    BuiltinAutosave,
 }
 
 #[derive(Clone, Debug)]

@@ -87,7 +87,7 @@ fn storage_write_is_correlated_and_idempotent() {
         operation: StorageOperation::Write {
             data: ProtocolBytes::new([1, 2, 3]),
             atomic_replace: true,
-            expected_revision: Some("old".into()),
+            precondition: era_runtime_protocol::StoragePrecondition::Revision("old".into()),
         },
         idempotency_key: "session-1/save-10".into(),
         deadline_ns: None,
@@ -97,6 +97,34 @@ fn storage_write_is_correlated_and_idempotent() {
     assert_eq!(
         RuntimeMessage::decode_payload(message.tag(), &encoded),
         Ok(message)
+    );
+}
+
+#[test]
+fn storage_v7_expresses_create_only_stat_and_recursive_listing() {
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(7, 0));
+    assert_eq!(
+        StorageOperation::Write {
+            data: ProtocolBytes::new(vec![1]),
+            atomic_replace: true,
+            precondition: era_runtime_protocol::StoragePrecondition::Missing,
+        },
+        StorageOperation::Write {
+            data: ProtocolBytes::new(vec![1]),
+            atomic_replace: true,
+            precondition: era_runtime_protocol::StoragePrecondition::Missing,
+        }
+    );
+    assert_eq!(StorageOperation::Stat, StorageOperation::Stat);
+    assert_eq!(
+        StorageOperation::List {
+            pattern: Some("*.dat".into()),
+            recursive: true,
+        },
+        StorageOperation::List {
+            pattern: Some("*.dat".into()),
+            recursive: true,
+        }
     );
 }
 
@@ -113,7 +141,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(6, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(7, 0));
 }
 
 #[test]
