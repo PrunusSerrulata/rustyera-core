@@ -11,6 +11,7 @@ mod host;
 mod hot_reload;
 mod interpreter;
 mod memory;
+mod regex_compat;
 mod runtime_port;
 mod runtime_vm;
 mod save;

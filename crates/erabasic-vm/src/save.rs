@@ -154,6 +154,39 @@ impl Vm {
     }
 }
 
+pub(crate) fn prepare_era_memory(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    state: &EraState,
+) -> Result<(Memory, EraStateReport), VmError> {
+    let context = artifact.project_data.save_load_context();
+    if !context
+        .compatibility
+        .accepts(state.unique_code, state.version)
+    {
+        return Err(VmError::Save(
+            "save unique code or version is incompatible with this project".into(),
+        ));
+    }
+    let mut memory = Memory::new_game(artifact);
+    let mut report = EraStateReport::default();
+    overlay_shared(artifact, &mut memory, &state.variables, &mut report);
+    if context.clear_characters_before_overlay {
+        memory.characters.clear();
+    }
+    for saved_character in &state.characters {
+        memory.push_character(artifact, None);
+        let index = memory.characters.len() - 1;
+        overlay_character(
+            artifact,
+            &mut memory.characters[index],
+            saved_character,
+            &mut report,
+        );
+    }
+    report.restored_characters = state.characters.len();
+    Ok((memory, report))
+}
+
 fn saved_variable(
     definition: &erabasic_bytecode::BytecodeGlobal,
     cell: &crate::VariableCell,

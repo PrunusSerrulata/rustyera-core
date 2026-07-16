@@ -45,6 +45,17 @@ pub struct HirExpr {
     pub location: SourceLocation,
 }
 
+/// Calls retain omitted slots and variable identity. This is required by `EraBasic`
+/// functions such as FINDELEMENT whose first operand is an array reference rather
+/// than the value of element zero.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum HirCallArgument {
+    Value(HirExpr),
+    Place(HirPlace),
+    Omitted,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HirExprKind {
@@ -59,7 +70,7 @@ pub enum HirExprKind {
     },
     Call {
         target: CallTarget,
-        arguments: Vec<Option<HirExpr>>,
+        arguments: Vec<HirCallArgument>,
     },
     Unary {
         op: UnaryOp,

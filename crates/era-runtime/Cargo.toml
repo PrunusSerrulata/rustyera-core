@@ -9,6 +9,7 @@ blake3.workspace = true
 era-debug-protocol = { path = "../era-debug-protocol" }
 era-protocol = { path = "../era-protocol" }
 era-runtime-protocol = { path = "../era-runtime-protocol" }
+era-runtime-save = { path = "../era-runtime-save" }
 erabasic-analyzer = { path = "../erabasic-analyzer" }
 erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-compiler = { path = "../erabasic-compiler" }

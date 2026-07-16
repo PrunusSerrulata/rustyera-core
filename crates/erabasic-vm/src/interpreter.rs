@@ -538,6 +538,32 @@ impl Vm {
                             execute_swap_transaction(self, fiber, &arguments)
                                 .map_err(map_vm_error)?;
                             None
+                        } else if matches!(
+                            native_name.as_str(),
+                            "arrayremove" | "arrayshift" | "arraysort"
+                        ) {
+                            execute_array_mutation(self, fiber, &native_name, &arguments)
+                                .map_err(map_vm_error)?;
+                            None
+                        } else if native_name == "arraycopy" {
+                            execute_array_copy(self, fiber, &arguments).map_err(map_vm_error)?;
+                            None
+                        } else if matches!(native_name.as_str(), "findelement" | "findlastelement")
+                        {
+                            Some(
+                                execute_find_element(
+                                    self,
+                                    fiber,
+                                    native_name == "findlastelement",
+                                    &arguments,
+                                )
+                                .map_err(map_vm_error)?,
+                            )
+                        } else if native_name == "regexpmatch" {
+                            Some(
+                                execute_regex_match(self, fiber, &arguments)
+                                    .map_err(map_vm_error)?,
+                            )
                         } else {
                             natives
                                 .call(
@@ -733,6 +759,509 @@ fn execute_swap_transaction(
     // single-owner here, the validated writes form one observable transaction.
     vm.write_place(fiber, left, right_value)?;
     vm.write_place(fiber, right, left_value)
+}
+
+fn array_place(arguments: &[VmValue]) -> Result<&PlaceDescriptor, VmError> {
+    match arguments.first() {
+        Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) => Ok(place),
+        _ => Err(VmError::InvalidArguments(
+            "array operation requires a variable reference".into(),
+        )),
+    }
+}
+
+fn integer_argument(arguments: &[VmValue], index: usize) -> Result<i64, VmError> {
+    match arguments.get(index) {
+        Some(VmValue::Integer(value)) => Ok(*value),
+        _ => Err(VmError::InvalidArguments(format!(
+            "argument {} must be integer",
+            index + 1
+        ))),
+    }
+}
+
+fn array_snapshot(
+    vm: &Vm,
+    fiber: &Fiber,
+    place: &PlaceDescriptor,
+) -> Result<Vec<VmValue>, VmError> {
+    let generation = fiber.frames.last().expect("frame exists").generation;
+    let artifact = &vm
+        .generations
+        .get(&generation)
+        .ok_or_else(|| VmError::InvalidState("array generation is missing".into()))?
+        .artifact;
+    let definition = artifact
+        .globals
+        .iter()
+        .find(|definition| definition.key == place.variable)
+        .ok_or_else(|| VmError::InvalidState("array variable is missing".into()))?;
+    if definition.dimensions.len() != 1 || !place.indices.is_empty() {
+        return Err(VmError::InvalidArguments(
+            "array operation requires an unindexed one-dimensional variable".into(),
+        ));
+    }
+    let length = usize::try_from(definition.dimensions[0])
+        .map_err(|_| VmError::InvalidState("array length exceeds this platform".into()))?;
+    (0..length)
+        .map(|index| {
+            let mut element = place.clone();
+            element.indices = vec![index as u64];
+            vm.read_place(fiber, &element)
+        })
+        .collect()
+}
+
+fn commit_array(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    place: &PlaceDescriptor,
+    values: Vec<VmValue>,
+) -> Result<(), VmError> {
+    // Every element was read successfully before this commit, so all addresses
+    // and types have already been validated.
+    for (index, value) in values.into_iter().enumerate() {
+        let mut element = place.clone();
+        element.indices = vec![index as u64];
+        vm.write_place(fiber, &element, value)?;
+    }
+    Ok(())
+}
+
+fn execute_array_mutation(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    operation: &str,
+    arguments: &[VmValue],
+) -> Result<(), VmError> {
+    let place = array_place(arguments)?.clone();
+    let mut values = array_snapshot(vm, fiber, &place)?;
+    match operation {
+        "arrayremove" => {
+            let start = usize::try_from(integer_argument(arguments, 1)?)
+                .map_err(|_| VmError::InvalidArguments("ARRAYREMOVE start is negative".into()))?;
+            let count = integer_argument(arguments, 2)?;
+            if count <= 0 || start >= values.len() {
+                return Ok(());
+            }
+            let count = usize::try_from(count).unwrap_or(usize::MAX);
+            let end = start.saturating_add(count).min(values.len());
+            let removed = end - start;
+            for source in end..values.len() {
+                values[source - removed] = values[source].clone();
+            }
+            let default = VmValue::default_for(values[0].value_type());
+            let fill_start = values.len() - removed;
+            for value in &mut values[fill_start..] {
+                *value = default.clone();
+            }
+        }
+        "arrayshift" => {
+            let shift = integer_argument(arguments, 1)?;
+            if shift == 0 {
+                return Ok(());
+            }
+            let fill = arguments.get(2).cloned().ok_or_else(|| {
+                VmError::InvalidArguments("ARRAYSHIFT fill value is missing".into())
+            })?;
+            if values
+                .first()
+                .is_some_and(|value| value.value_type() != fill.value_type())
+            {
+                return Err(VmError::InvalidArguments(
+                    "ARRAYSHIFT fill type differs".into(),
+                ));
+            }
+            let start = match integer_argument(arguments, 3).unwrap_or(0) {
+                i64::MIN => 0,
+                value => usize::try_from(value).map_err(|_| {
+                    VmError::InvalidArguments("ARRAYSHIFT start is negative".into())
+                })?,
+            };
+            if start > values.len() {
+                return Err(VmError::InvalidArguments(
+                    "ARRAYSHIFT start exceeds array".into(),
+                ));
+            }
+            let count = match integer_argument(arguments, 4).unwrap_or(i64::MIN) {
+                i64::MIN => values.len() - start,
+                value => usize::try_from(value).map_err(|_| {
+                    VmError::InvalidArguments("ARRAYSHIFT count is negative".into())
+                })?,
+            };
+            let end = start.saturating_add(count).min(values.len());
+            let source = values[start..end].to_vec();
+            for (relative, value) in values[start..end].iter_mut().enumerate() {
+                let source_index = i64::try_from(relative).unwrap_or(i64::MAX) - shift;
+                *value = usize::try_from(source_index)
+                    .ok()
+                    .and_then(|source_index| source.get(source_index).cloned())
+                    .unwrap_or_else(|| fill.clone());
+            }
+        }
+        "arraysort" => {
+            let descending = arguments.get(1).is_some_and(|value| {
+                matches!(value, VmValue::String(value) if value.eq_ignore_ascii_case("BACK"))
+                    || matches!(value, VmValue::Integer(value) if *value < 0)
+            });
+            let start = match integer_argument(arguments, 2).unwrap_or(0) {
+                i64::MIN => 0,
+                value => usize::try_from(value)
+                    .map_err(|_| VmError::InvalidArguments("ARRAYSORT start is negative".into()))?,
+            };
+            let count = match integer_argument(arguments, 3).unwrap_or(i64::MIN) {
+                i64::MIN => values.len().saturating_sub(start),
+                value => usize::try_from(value)
+                    .map_err(|_| VmError::InvalidArguments("ARRAYSORT count is negative".into()))?,
+            };
+            let end = start.saturating_add(count).min(values.len());
+            if start > end {
+                return Err(VmError::InvalidArguments(
+                    "ARRAYSORT range is invalid".into(),
+                ));
+            }
+            values[start..end].sort_by(|left, right| match (left, right) {
+                (VmValue::Integer(left), VmValue::Integer(right)) => left.cmp(right),
+                (VmValue::String(left), VmValue::String(right)) => left.cmp(right),
+                _ => std::cmp::Ordering::Equal,
+            });
+            if descending {
+                values[start..end].reverse();
+            }
+        }
+        _ => return Err(VmError::InvalidArguments("unknown array mutation".into())),
+    }
+    commit_array(vm, fiber, &place, values)
+}
+
+fn execute_find_element(
+    vm: &Vm,
+    fiber: &Fiber,
+    last: bool,
+    arguments: &[VmValue],
+) -> Result<VmValue, VmError> {
+    let place = array_place(arguments)?;
+    let values = array_snapshot(vm, fiber, place)?;
+    let needle = arguments
+        .get(1)
+        .ok_or_else(|| VmError::InvalidArguments("FINDELEMENT target is missing".into()))?;
+    let start = match integer_argument(arguments, 2).unwrap_or(0) {
+        i64::MIN => 0,
+        value => usize::try_from(value)
+            .map_err(|_| VmError::InvalidArguments("FINDELEMENT start is negative".into()))?,
+    };
+    let end = match integer_argument(arguments, 3).unwrap_or(i64::MIN) {
+        i64::MIN => values.len(),
+        value => usize::try_from(value)
+            .map_err(|_| VmError::InvalidArguments("FINDELEMENT end is negative".into()))?,
+    };
+    if start > end || end > values.len() {
+        return Err(VmError::InvalidArguments(
+            "FINDELEMENT range is invalid".into(),
+        ));
+    }
+    let exact = !matches!(integer_argument(arguments, 4), Ok(0) | Err(_));
+    let matched = |value: &VmValue| -> Result<bool, VmError> {
+        match (value, needle) {
+            (VmValue::Integer(value), VmValue::Integer(needle)) => Ok(value == needle),
+            (VmValue::String(value), VmValue::String(needle)) => {
+                let regex =
+                    crate::regex_compat::compile(needle).map_err(VmError::InvalidArguments)?;
+                Ok(regex
+                    .find(value)
+                    .is_some_and(|matched| !exact || matched.as_str().len() == value.len()))
+            }
+            _ => Err(VmError::InvalidArguments("FINDELEMENT types differ".into())),
+        }
+    };
+    let range: Box<dyn Iterator<Item = usize>> = if last {
+        Box::new((start..end).rev())
+    } else {
+        Box::new(start..end)
+    };
+    for index in range {
+        if matched(&values[index])? {
+            return Ok(VmValue::Integer(i64::try_from(index).unwrap_or(i64::MAX)));
+        }
+    }
+    Ok(VmValue::Integer(-1))
+}
+
+fn execute_regex_match(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    arguments: &[VmValue],
+) -> Result<VmValue, VmError> {
+    let VmValue::String(input) = arguments
+        .first()
+        .ok_or_else(|| VmError::InvalidArguments("REGEXPMATCH input is missing".into()))?
+    else {
+        return Err(VmError::InvalidArguments(
+            "REGEXPMATCH input must be a string".into(),
+        ));
+    };
+    let VmValue::String(pattern) = arguments
+        .get(1)
+        .ok_or_else(|| VmError::InvalidArguments("REGEXPMATCH pattern is missing".into()))?
+    else {
+        return Err(VmError::InvalidArguments(
+            "REGEXPMATCH pattern must be a string".into(),
+        ));
+    };
+    let regex = crate::regex_compat::compile(pattern).map_err(VmError::InvalidArguments)?;
+    let captures = regex
+        .captures_iter(input)
+        .map(|captures| {
+            (0..regex.captures_len())
+                .map(|index| {
+                    VmValue::String(
+                        captures
+                            .get(index)
+                            .map_or_else(String::new, |value| value.as_str().to_owned()),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let count = i64::try_from(captures.len()).unwrap_or(i64::MAX);
+    match arguments.len() {
+        2 => {}
+        3 => {
+            let VmValue::Integer(output) = arguments[2] else {
+                return Err(VmError::InvalidArguments(
+                    "REGEXPMATCH output flag must be an integer".into(),
+                ));
+            };
+            if output != 0 {
+                let result = global_unindexed_place(vm, fiber, "RESULT")?;
+                let results = global_unindexed_place(vm, fiber, "RESULTS")?;
+                let mut writes = vec![(
+                    indexed_place(&result, 1),
+                    VmValue::Integer(i64::try_from(regex.captures_len()).unwrap_or(i64::MAX)),
+                )];
+                if count > 0 {
+                    writes.extend(
+                        captures
+                            .into_iter()
+                            .flatten()
+                            .enumerate()
+                            .map(|(index, value)| (indexed_place(&results, index), value)),
+                    );
+                }
+                commit_place_writes(vm, fiber, writes)?;
+            }
+        }
+        4 => {
+            let group_count = match &arguments[2] {
+                VmValue::IntegerPlace(place) => place.clone(),
+                _ => {
+                    return Err(VmError::InvalidArguments(
+                        "REGEXPMATCH group-count output must be an integer place".into(),
+                    ));
+                }
+            };
+            let values = match &arguments[3] {
+                VmValue::StringPlace(place) => place.clone(),
+                _ => {
+                    return Err(VmError::InvalidArguments(
+                        "REGEXPMATCH capture output must be a string-array place".into(),
+                    ));
+                }
+            };
+            let mut writes = vec![(
+                group_count,
+                VmValue::Integer(i64::try_from(regex.captures_len()).unwrap_or(i64::MAX)),
+            )];
+            if count > 0 {
+                writes.extend(
+                    captures
+                        .into_iter()
+                        .flatten()
+                        .enumerate()
+                        .map(|(index, value)| (indexed_place(&values, index), value)),
+                );
+            }
+            commit_place_writes(vm, fiber, writes)?;
+        }
+        _ => {
+            return Err(VmError::InvalidArguments(
+                "REGEXPMATCH expects two, three, or four arguments".into(),
+            ));
+        }
+    }
+    Ok(VmValue::Integer(count))
+}
+
+fn global_unindexed_place(vm: &Vm, fiber: &Fiber, name: &str) -> Result<PlaceDescriptor, VmError> {
+    let generation = fiber.frames.last().expect("frame exists").generation;
+    let variable = vm
+        .generations
+        .get(&generation)
+        .and_then(|generation| {
+            generation
+                .artifact
+                .globals
+                .iter()
+                .find(|definition| definition.name.eq_ignore_ascii_case(name))
+        })
+        .ok_or_else(|| VmError::InvalidState(format!("{name} is not defined")))?;
+    Ok(PlaceDescriptor {
+        variable: variable.key,
+        ..PlaceDescriptor::default()
+    })
+}
+
+fn indexed_place(place: &PlaceDescriptor, index: usize) -> PlaceDescriptor {
+    let mut result = place.clone();
+    result.indices = vec![u64::try_from(index).unwrap_or(u64::MAX)];
+    result
+}
+
+fn commit_place_writes(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    writes: Vec<(PlaceDescriptor, VmValue)>,
+) -> Result<(), VmError> {
+    // Read every destination before the first write so bounds and storage failures cannot
+    // leave partially updated regex outputs.
+    for (place, value) in &writes {
+        let previous = vm.read_place(fiber, place)?;
+        if previous.value_type() != value.value_type() {
+            return Err(VmError::InvalidArguments(
+                "REGEXPMATCH output type differs from its destination".into(),
+            ));
+        }
+    }
+    for (place, value) in writes {
+        vm.write_place(fiber, &place, value)?;
+    }
+    Ok(())
+}
+
+fn execute_array_copy(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    arguments: &[VmValue],
+) -> Result<(), VmError> {
+    let (source, source_type) = array_copy_place(arguments.first(), "source")?;
+    let (destination, destination_type) = array_copy_place(arguments.get(1), "destination")?;
+    if source_type != destination_type {
+        return Err(VmError::InvalidArguments(
+            "ARRAYCOPY array types differ".into(),
+        ));
+    }
+    let source_values = array_snapshot_any_rank(vm, fiber, &source)?;
+    let destination_values = array_snapshot_any_rank(vm, fiber, &destination)?;
+    if source_values.len() != destination_values.len() {
+        return Err(VmError::InvalidArguments(
+            "ARRAYCOPY dimensions differ".into(),
+        ));
+    }
+    commit_array_any_rank(vm, fiber, &destination, source_values)
+}
+
+fn array_copy_place(
+    value: Option<&VmValue>,
+    role: &str,
+) -> Result<(PlaceDescriptor, BytecodeType), VmError> {
+    match value {
+        Some(VmValue::IntegerPlace(place)) => Ok((place.clone(), BytecodeType::Integer)),
+        Some(VmValue::StringPlace(place)) => Ok((place.clone(), BytecodeType::String)),
+        _ => Err(VmError::InvalidArguments(format!(
+            "ARRAYCOPY {role} must be an array place"
+        ))),
+    }
+}
+
+fn array_snapshot_any_rank(
+    vm: &Vm,
+    fiber: &Fiber,
+    place: &PlaceDescriptor,
+) -> Result<Vec<VmValue>, VmError> {
+    if !place.indices.is_empty() {
+        return Err(VmError::InvalidArguments(
+            "array place must be unindexed".into(),
+        ));
+    }
+    let generation = fiber.frames.last().expect("frame exists").generation;
+    let definition = vm
+        .generations
+        .get(&generation)
+        .and_then(|generation| {
+            generation
+                .artifact
+                .globals
+                .iter()
+                .find(|definition| definition.key == place.variable)
+        })
+        .ok_or_else(|| VmError::InvalidState("array variable is missing".into()))?;
+    if !(1..=3).contains(&definition.dimensions.len()) {
+        return Err(VmError::InvalidArguments(
+            "ARRAYCOPY requires a one to three dimensional array".into(),
+        ));
+    }
+    let dimensions = definition
+        .dimensions
+        .iter()
+        .map(|dimension| {
+            usize::try_from(*dimension)
+                .map_err(|_| VmError::InvalidState("array dimension exceeds this platform".into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let count = dimensions
+        .iter()
+        .try_fold(1usize, |count, dimension| count.checked_mul(*dimension))
+        .ok_or_else(|| VmError::InvalidState("array element count overflows".into()))?;
+    (0..count)
+        .map(|flat| {
+            let mut element = place.clone();
+            element.indices = unflatten_indices(flat, &dimensions);
+            vm.read_place(fiber, &element)
+        })
+        .collect()
+}
+
+fn commit_array_any_rank(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    place: &PlaceDescriptor,
+    values: Vec<VmValue>,
+) -> Result<(), VmError> {
+    let generation = fiber.frames.last().expect("frame exists").generation;
+    let definition = vm
+        .generations
+        .get(&generation)
+        .and_then(|generation| {
+            generation
+                .artifact
+                .globals
+                .iter()
+                .find(|definition| definition.key == place.variable)
+        })
+        .ok_or_else(|| VmError::InvalidState("array variable is missing".into()))?;
+    let dimensions = definition
+        .dimensions
+        .iter()
+        .map(|dimension| {
+            usize::try_from(*dimension)
+                .map_err(|_| VmError::InvalidState("array dimension exceeds this platform".into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for (flat, value) in values.into_iter().enumerate() {
+        let mut element = place.clone();
+        element.indices = unflatten_indices(flat, &dimensions);
+        vm.write_place(fiber, &element, value)?;
+    }
+    Ok(())
+}
+
+fn unflatten_indices(mut flat: usize, dimensions: &[usize]) -> Vec<u64> {
+    let mut indices = vec![0; dimensions.len()];
+    for dimension in (0..dimensions.len()).rev() {
+        indices[dimension] = u64::try_from(flat % dimensions[dimension]).unwrap_or(u64::MAX);
+        flat /= dimensions[dimension];
+    }
+    indices
 }
 
 fn execute_random_place_transaction(

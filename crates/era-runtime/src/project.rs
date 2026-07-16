@@ -24,17 +24,50 @@ pub(crate) struct ProjectBuild {
 }
 
 #[derive(Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) manifest: ProjectManifest,
     pub(crate) sort_with_filename: bool,
     pub(crate) use_new_random_ignored: bool,
+    pub(crate) auto_save: bool,
+    pub(crate) save_in_binary: bool,
+    pub(crate) compress_save: bool,
+    pub(crate) save_slots_per_page: u32,
+    pub(crate) money_label: String,
+    pub(crate) money_first: bool,
+    pub(crate) maximum_shop_items: u32,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 struct SemanticConfig {
     csv: CsvLoadOptions,
     analyzer: AnalyzerOptions,
     use_new_random: bool,
+    auto_save: bool,
+    save_in_binary: bool,
+    compress_save: bool,
+    save_slots_per_page: u32,
+    money_label: String,
+    money_first: bool,
+    maximum_shop_items: u32,
+}
+
+impl Default for SemanticConfig {
+    fn default() -> Self {
+        Self {
+            csv: CsvLoadOptions::default(),
+            analyzer: AnalyzerOptions::default(),
+            use_new_random: false,
+            auto_save: true,
+            save_in_binary: false,
+            compress_save: false,
+            save_slots_per_page: 20,
+            money_label: "$".into(),
+            money_first: true,
+            maximum_shop_items: 100,
+        }
+    }
 }
 
 // Keeping the pipeline in one function makes the atomic artifact/report outcome visible;
@@ -258,6 +291,13 @@ pub(crate) fn build_project(
             manifest: manifest.clone(),
             sort_with_filename: config.csv.sort_with_filename,
             use_new_random_ignored: config.use_new_random,
+            auto_save: config.auto_save,
+            save_in_binary: config.save_in_binary,
+            compress_save: config.compress_save,
+            save_slots_per_page: config.save_slots_per_page,
+            money_label: config.money_label,
+            money_first: config.money_first,
+            maximum_shop_items: config.maximum_shop_items,
         }),
     }
 }
@@ -332,6 +372,7 @@ fn path_has_priority_directory(path: &str) -> bool {
         .any(|component| component.contains('#'))
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_configuration(
     files: &[era_runtime_protocol::SubmittedFile],
     diagnostics: &mut Vec<ProtocolDiagnostic>,
@@ -375,10 +416,31 @@ fn parse_configuration(
                 ));
                 continue;
             };
-            let Some(boolean) = parse_bool(value.trim()) else {
+            let name = name.trim();
+            let value = value.trim();
+            match name {
+                "表示するセーブデータ数" | "Save data count per page" => {
+                    if let Ok(value) = value.parse::<u32>() {
+                        config.save_slots_per_page = value.max(1);
+                    }
+                    continue;
+                }
+                "お金の単位" | "Currency symbol" => {
+                    value.clone_into(&mut config.money_label);
+                    continue;
+                }
+                "販売アイテム数" | "Max shop item storage" => {
+                    if let Ok(value) = value.parse::<u32>() {
+                        config.maximum_shop_items = value;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            let Some(boolean) = parse_bool(value) else {
                 continue;
             };
-            match name.trim() {
+            match name {
                 "大文字小文字の違いを無視する" | "Ignore case" => {
                     config.csv.ignore_case = boolean;
                     config.analyzer.ignore_case = boolean;
@@ -411,6 +473,13 @@ fn parse_configuration(
                 "UseNewRandom" | "新しい高速な乱数アルゴリズムを使う" => {
                     config.use_new_random = boolean;
                 }
+                "オートセーブを行なう" | "Make autosaves" => config.auto_save = boolean,
+                "セーブデータをバイナリ形式で保存する"
+                | "Use the binary format for saving data" => config.save_in_binary = boolean,
+                "セーブデータを圧縮して保存する" | "Compress save data" => {
+                    config.compress_save = boolean;
+                }
+                "単位の位置" | "Currency symbol position" => config.money_first = boolean,
                 _ => {}
             }
         }
@@ -443,6 +512,28 @@ fn parse_json_configuration(
                 .and_then(serde_json::Value::as_bool)
             {
                 config.use_new_random = boolean;
+            }
+            if let Some(boolean) = value.get("AutoSave").and_then(serde_json::Value::as_bool) {
+                config.auto_save = boolean;
+            }
+            if let Some(boolean) = value
+                .get("SystemSaveInBinary")
+                .and_then(serde_json::Value::as_bool)
+            {
+                config.save_in_binary = boolean;
+            }
+            if let Some(boolean) = value
+                .get("ZipSaveData")
+                .and_then(serde_json::Value::as_bool)
+            {
+                config.compress_save = boolean;
+            }
+            if let Some(number) = value
+                .get("SaveDataNos")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+            {
+                config.save_slots_per_page = number.max(1);
             }
         }
         Err(error) => diagnostics.push(project_diagnostic(
@@ -573,7 +664,7 @@ mod tests {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
-                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nフォント名:Test\n",
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nCurrency symbol:円\nCurrency symbol position:NO\nMax shop item storage:77\nフォント名:Test\n",
             )],
             &mut diagnostics,
         );
@@ -581,6 +672,13 @@ mod tests {
         assert!(!config.csv.ignore_case);
         assert!(!config.analyzer.ignore_case);
         assert!(config.use_new_random);
+        assert!(!config.auto_save);
+        assert!(config.save_in_binary);
+        assert!(config.compress_save);
+        assert_eq!(config.save_slots_per_page, 30);
+        assert_eq!(config.money_label, "円");
+        assert!(!config.money_first);
+        assert_eq!(config.maximum_shop_items, 77);
         assert_eq!(
             diagnostics
                 .iter()

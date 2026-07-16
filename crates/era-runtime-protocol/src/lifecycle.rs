@@ -122,6 +122,9 @@ pub struct ClientHello {
     pub requested_limits: RuntimeLimits,
     #[n(4)]
     pub capabilities: ClientCapabilities,
+    /// Ordered BCP-47 preferences sampled by the frontend.
+    #[n(5)]
+    pub preferred_locales: Vec<String>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -139,6 +142,8 @@ pub struct ServerHello {
     pub epoch: u64,
     #[n(5)]
     pub selected_capabilities: ClientCapabilities,
+    #[n(6)]
+    pub selected_locale: String,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

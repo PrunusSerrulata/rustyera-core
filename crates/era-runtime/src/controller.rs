@@ -67,6 +67,31 @@ impl SystemController {
         !self.pending.is_empty()
     }
 
+    /// Queue the post-load system hook followed by the EVENTLOAD group. This keeps the
+    /// reference ordering while still running one root fiber at a time.
+    pub(crate) fn prepare_load_sequence(&mut self, artifact: &BytecodeArtifact) -> bool {
+        self.clear();
+        if let Some(function) = artifact
+            .functions
+            .iter()
+            .find(|function| function.name.eq_ignore_ascii_case("SYSTEM_LOADEND"))
+        {
+            self.pending.push_back(DispatchEntry {
+                function: function.key,
+                single: false,
+                group: u8::MAX,
+            });
+        }
+        if let Some(event) = artifact
+            .event_groups
+            .iter()
+            .find(|event| event.name.eq_ignore_ascii_case("EVENTLOAD"))
+        {
+            self.prepare_group(event);
+        }
+        !self.pending.is_empty()
+    }
+
     fn prepare_group(&mut self, event: &erabasic_bytecode::BytecodeEventGroup) {
         if event.only.is_empty() {
             self.extend(&event.priority, 1);

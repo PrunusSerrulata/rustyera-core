@@ -10,8 +10,8 @@ mod program;
 mod source;
 
 pub use expression::{
-    CallTarget, ConstantValue, HirExpr, HirExprKind, HirFormPart, HirFormattedString, HirPlace,
-    SemanticType,
+    CallTarget, ConstantValue, HirCallArgument, HirExpr, HirExprKind, HirFormPart,
+    HirFormattedString, HirPlace, SemanticType,
 };
 pub use ids::{FunctionId, LabelId, LineId, SourceId, VariableId};
 pub use program::{
@@ -21,4 +21,4 @@ pub use program::{
 pub use source::{SourceFile, SourceLocation};
 
 /// Version of the serialized HIR contract.
-pub const HIR_FORMAT_VERSION: u32 = 4;
+pub const HIR_FORMAT_VERSION: u32 = 5;

@@ -7,9 +7,9 @@ use erabasic_bytecode::{
     SourceMapEntry, SymbolKey, opcode,
 };
 use erabasic_hir::{
-    CallTarget, ControlFlowKind, Function, FunctionId, HirArgument, HirExpr, HirExprKind,
-    HirFormPart, HirFormattedString, HirStatementKind, InstructionTarget, LineId, Program,
-    SemanticType, SourceLocation, VariableId,
+    CallTarget, ControlFlowKind, Function, FunctionId, HirArgument, HirCallArgument, HirExpr,
+    HirExprKind, HirFormPart, HirFormattedString, HirStatementKind, InstructionTarget, LineId,
+    Program, SemanticType, SourceLocation, VariableId,
 };
 
 use crate::{
@@ -511,7 +511,10 @@ impl<'a> Builder<'a> {
                 BytecodeType::String
             }
             HirArgument::Omitted => {
-                self.emit(opcode::push_integer(0), location);
+                // EraBasic can distinguish an omitted operand from an explicit zero. The
+                // internal call ABI reserves i64::MIN until bytecode gains a first-class
+                // omitted value.
+                self.emit(opcode::push_integer(i64::MIN), location);
                 BytecodeType::Integer
             }
         }
@@ -546,10 +549,23 @@ impl<'a> Builder<'a> {
                 }
             }
             HirExprKind::Call { target, arguments } => {
+                let builtin = matches!(target, CallTarget::Builtin { .. });
                 let parameter_types: Vec<_> = arguments
                     .iter()
-                    .flatten()
-                    .map(|argument| self.lower_expression(argument, fallback))
+                    .filter_map(|argument| match argument {
+                        HirCallArgument::Value(argument) => {
+                            Some(self.lower_expression(argument, fallback))
+                        }
+                        HirCallArgument::Place(place) => Some(self.lower_argument(
+                            &HirArgument::Place(place.clone()),
+                            expression.location,
+                        )),
+                        HirCallArgument::Omitted if builtin => {
+                            self.emit(opcode::push_integer(i64::MIN), expression.location);
+                            Some(BytecodeType::Integer)
+                        }
+                        HirCallArgument::Omitted => None,
+                    })
                     .collect();
                 match target {
                     CallTarget::User { function } => {

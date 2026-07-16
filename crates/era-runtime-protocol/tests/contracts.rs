@@ -90,6 +90,7 @@ fn storage_write_is_correlated_and_idempotent() {
             expected_revision: Some("old".into()),
         },
         idempotency_key: "session-1/save-10".into(),
+        deadline_ns: None,
     };
     let message = RuntimeMessage::StorageRequest(request);
     let encoded = message.encode_payload().expect("encode storage request");
@@ -112,7 +113,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(5, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(6, 0));
 }
 
 #[test]
@@ -125,6 +126,7 @@ fn getkey_uses_a_fresh_typed_input_state_service() {
         operation: GET_KEY_STATE_OPERATION.into(),
         operation_version: GET_KEY_STATE_OPERATION_VERSION,
         payload: ProtocolBytes::new(payload.clone()),
+        deadline_ns: None,
     };
     assert_eq!(request.kind, ServiceKind::InputState);
     assert_eq!(

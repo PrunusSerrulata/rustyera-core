@@ -8,6 +8,7 @@ mod controller;
 mod host;
 mod presentation;
 mod project;
+mod save_adapter;
 mod session;
 
 pub use session::{

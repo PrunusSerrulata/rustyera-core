@@ -663,6 +663,14 @@ fn analyze_instruction(
         }
         lowered.push(match argument {
             Argument::Expression(expression) => {
+                if key == "ARRAYSORT"
+                    && index == 1
+                    && let erabasic_ast::ExprKind::Identifier(order) = &expression.kind
+                    && matches!(order.to_ascii_uppercase().as_str(), "FORWARD" | "BACK")
+                {
+                    lowered.push(HirArgument::Raw(order.to_ascii_uppercase()));
+                    continue;
+                }
                 let expression = analyzer.analyze(expression);
                 let mutable = signature
                     .and_then(|signature| signature.arguments.get(index))
@@ -672,6 +680,7 @@ fn analyze_instruction(
                             crate::ArgumentConstraint::MutableInteger
                                 | crate::ArgumentConstraint::MutableString
                                 | crate::ArgumentConstraint::MutableAny
+                                | crate::ArgumentConstraint::ReferenceAny
                         )
                     });
                 if mutable {
