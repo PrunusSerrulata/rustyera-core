@@ -201,7 +201,7 @@ macOS 脚本使用项目内固定的 `.wine-prefix/emuera-reference-cli`，并�
 - 修改前检查相关文件和现有测试，修改后检查 `git diff --check`。
 - 构建产物、Wine prefix、测试日志和临时 NDJSON 不应加入版本控制。
 - 不要提交密钥、用户机器绝对路径或本地游戏数据。
-- 完成一次开发任务并执行完上述检查后，生成合适的commit message（标题和简要内容）并暂存。
+- 完成一次开发任务并执行完上述检查后，生成合适的commit message（标题和简要内容）并创建commit。
 
 ## 任务交付
 
