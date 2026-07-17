@@ -1,0 +1,297 @@
+# Runtime 全量功能审计
+
+审计日期：2026-07-17
+
+本审计以仓库固定的 `reference/emuera.em` 为行为基准，覆盖从项目加载、标题、新游戏、
+系统流程、脚本执行、输入与计时、展示、存档、热替换、调试到退出的完整生命周期。
+审计采用只读源码比对、真实 `reference/real-erb` 使用情况扫描、Rust workspace 验证和
+macOS Wine reference CLI smoke test；没有修改 Rust 实现、C# 参考实现或测试夹具。
+
+## 结论
+
+当前 runtime 不能视为“已完成”或“与参考实现完整兼容”。基础协议、VM 驱动、存档、
+snapshot、热替换和主要系统流程框架已经存在，但仍有数个会阻止真实游戏正常运行的
+高优先级缺口：
+
+- `PRINTDATA*`、`STRDATA`、动态函数调用等高频路径尚不可用。
+- `PRINT*` 被统一分派，但没有实现 K/D/N/SINGLE/C 等后缀的完整语义。
+- 调教、`EVENTCOMEND`、SHOP 自动存档存在系统流程差异。
+- 很多已进入 Host catalog 的命令最终落入通用 `UnsupportedRuntimeFeature`。
+- `docs/runtime-roadmap.md` 中“Batch 10/11 已关闭、无剩余任务”的结论与当前实现不符。
+
+主要证据集中在：
+
+- `crates/era-runtime/src/session.rs`
+- `crates/era-runtime/src/host.rs`
+- `crates/erabasic-compiler/src/lowering.rs`
+- `crates/erabasic-compiler/src/registry.rs`
+- `reference/emuera.em/Emuera/Runtime/Script/Process.SystemProc.cs`
+- `reference/emuera.em/Emuera/Runtime/Script/Statements/Instraction.Child.cs`
+
+## 生命周期覆盖概况
+
+| 阶段 | 当前状态 | 主要问题 |
+| --- | --- | --- |
+| 握手、能力协商 | 基本完成 | 一些能力被固定关闭；部分 catalog 能力实际不可执行 |
+| 项目提交、CSV/ERH/ERB 编译 | 部分完成 | 配置项覆盖不完整；动态调用及若干指令在编译期变成 trap |
+| 资源加载 | 架构已实现 | 图片解码前端化是有意设计；物理绘图能力大量不支持 |
+| 标题画面 | 部分完成 | 新游戏重置时机、标题内容、输入方式不同 |
+| 新游戏初始化、EVENTFIRST | 部分完成 | `SYSTEM_TITLE` 观察到的初始状态不同 |
+| TRAIN/连续调教 | 明显不完整 | 输出抑制、进度信息、`CALLTRAINEND`、`DOTRAIN` 限制不同 |
+| AFTERTRAIN/ABLUP/TURNEND | 主流程存在 | BEGIN 时的样式、SKIPDISP、连续调教清理不同 |
+| SHOP | 部分完成 | 自动存档条件、EVENTSHOP 中 BEGIN、失败等待不同 |
+| 普通脚本执行 | 部分完成 | 动态调用、打印数据块、THROW 等阻塞真实脚本 |
+| 输入/QTE/计时 | 主框架完成 | ONEINPUT 长度未由 runtime 校验；部分 UI 输入函数缺失 |
+| 文本、HTML、图片、音频 | 语义模型部分完成 | PRINT 后缀、HTML、图片参数和样式操作缺失 |
+| 传统存档、VM snapshot | 基础完成 | 菜单和失败行为不同；没有参考实现 Ctrl-Z 轨迹 |
+| 热替换 | Rust 扩展已实现 | 与参考 ReloadERB 流程并不相同 |
+| 调试 | 协议与主要接口存在 | DEBUGPRINT 系列、分析模式及部分高级能力缺失 |
+| 退出、重启、错误 | 协议化实现 | 参考的系统声音、窗口错误状态和日志 UI 未复刻 |
+
+## 1. 未明确写明的缺失功能
+
+以下项目此前没有被逐项列为未实现；部分只被“其他未实现 Host 操作”这一兜底说明
+笼统覆盖。
+
+### 1.1 会阻止真实脚本运行的编译或执行缺口
+
+#### PRINTDATA、STRDATA 和数据列表
+
+- 编译器只把精确的 `PRINTDATA` 当作控制结构，并生成不存在的
+  `control_printdata` Native 调用。
+- `PRINTDATAL`、`PRINTDATAW`、K/D 变体可能进入普通 Host 打印分支。
+- parser 仅识别 `PRINTDATA`、`PRINTDATAL`、`PRINTDATAW` 的块结构，没有覆盖 K/D
+  组合。
+- 参考实现会随机选择一个 `DATALIST`，可写回选择索引，并处理 K/D/L/W。
+- `STRDATA`、`TRYLIST/ENDLIST` 同样缺少可执行的控制结构实现。
+- `real-erb` 中检出约 2,432 次 `PRINTDATA*` 词法使用。
+
+#### 动态调用
+
+以下动态调用没有完整落地：
+
+- `CALLFORM`、`CALLFORMF`
+- `JUMPFORM`
+- `TRYCALLFORM`、`TRYCALLFORMF`
+- `TRYCCALL`、`TRYCCALLFORM`
+- `TRYCGOTO*`、`TRYCJUMP*`
+- `CALLEVENT`
+
+静态 `TRYCALL/TRYJUMP` 在目标缺失时也会 trap，而不是执行参考实现的 try 语义。
+`real-erb` 中约有 1,251 个 `CALLFORM`、748 个 `TRYCALLFORM` 和 73 个
+`TRYCCALLFORM`。
+
+#### 其他指令
+
+下列参考指令当前在编译期成为 Unsupported，或没有进入稳定执行 catalog：
+
+- `ASSERT`、`THROW`、`FORCEKANA`
+- `CUPCHECK`、`UPCHECK`
+- `CUSTOMDRAWLINE`、`DRAWLINEFORM`
+- `PRINT_ABL`、`PRINT_TALENT`、`PRINT_MARK`、`PRINT_EXP`
+- `PRINT_PALAM`、`PRINT_ITEM`、`PRINT_SHOPITEM`
+
+真实脚本中检出 138 个 `THROW`、20 个 `DRAWLINEFORM` 和 8 个
+`CUSTOMDRAWLINE`。
+
+指令形式的 `PRINTCPERLINE` 和 `SAVENOS` 应写入传入变量；当前 runtime 返回 Host
+result。由于编译后的指令不期待返回值，这会形成 Host result 类型不匹配，而不会
+写入目标变量。
+
+### 1.2 已注册但最终落入 Unsupported 的 Host 功能
+
+#### 输入及客户端状态
+
+- `GETTEXTBOX`、`SETTEXTBOX`、`CLEARTEXTBOX`
+- `HOTKEY_STATE`、`HOTKEY_STATE_INIT`
+- `MOUSEX`、`MOUSEY`、`MOUSEB`
+- `FLOWINPUT`、`FLOWINPUTS`
+- `BREAKBUTTON`
+
+#### 文本及样式
+
+- `BAR`、`BARL`
+- `DEBUGPRINT`、`DEBUGPRINTL`、`DEBUGPRINTFORM`、`DEBUGPRINTFORML`、`DEBUGCLEAR`
+- `HTML_PRINT_ISLAND`、`HTML_PRINT_ISLAND_CLEAR`、`HTML_TAGSPLIT`
+- `SETCOLORBYNAME`、`RESETCOLOR`
+- `SETBGCOLORBYNAME`、`RESETBGCOLOR`
+- `FONTBOLD`、`FONTITALIC`、`FONTREGULAR`
+- `REDRAW`
+- `CURRENTALIGN`、`CURRENTREDRAW`
+- `GETBGCOLOR`、`GETCOLOR`、`GETDEFBGCOLOR`、`GETDEFCOLOR`
+- `GETFOCUSCOLOR`、`GETFONT`、`GETSTYLE`
+- `HTML_ESCAPE`、`HTML_TOPLAINTEXT`
+
+#### 运行时元数据
+
+- `ENUMFUNCBEGINSWITH`、`ENUMFUNCENDSWITH`、`ENUMFUNCWITH`
+- `ENUMVARBEGINSWITH`、`ENUMVARENDSWITH`、`ENUMVARWITH`
+
+`GETMEMORYUSAGE` 已被明确记录为有意不支持，不属于遗漏。
+
+### 1.3 系统流程遗漏
+
+- `EVENTCOMEND` 自动等待没有实现。参考实现会跟踪期间是否执行过 WAIT；没有则自动
+  追加一次 WAIT。Rust 当前直接返回 `SHOW_STATUS`。
+- `STOPCALLTRAIN` 不调用 `CALLTRAINEND`。
+- 从连续调教通过 BEGIN 离开时，没有执行参考实现的
+  `ClearCommands -> CALLTRAINEND`。
+- 连续调教期间未隐藏 `SHOW_STATUS`、命令表和 `SHOW_USERCOM` 输出，也没有“第 x/y
+  个命令”“无法执行命令”提示。
+- `DOTRAIN` 只检查当前 flow 是 Train，没有按参考实现限制可调用的详细阶段，也没有
+  验证命令编号小于 `TRAINNAME` 长度。
+- 自动存档失败后没有参考实现的两条错误信息和按键等待。
+- 未实现参考实现的 Ctrl-Z 输入、保存和加载重放轨迹。
+
+### 1.4 输入验证遗漏
+
+`one_input` 目前只是发送给前端的展示信息。runtime 对
+`ONEINPUT/ONEINPUTS/TONEINPUT*` 提交内容没有执行单字符限制。
+
+这与“Runtime 判定输入结果”的既定边界冲突：前端可以负责采集和初步约束，但
+runtime 仍应拒绝非法提交。参考实现还受 `AllowLongInputByMouse` 配置影响。
+
+PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计，不属于缺失。
+
+### 1.5 初始化、配置和调试遗漏
+
+- runtime 只解析部分具有运行语义的 Emuera 配置。
+- `GETCONFIG/GETCONFIGS` 只暴露一个小型白名单，其他合法参考配置会直接 fault。
+- 真实脚本使用的 `GETCONFIGS("描画インターフェース")` 当前不支持。
+- 未实现 key macro、Hotkey 文件状态、分析模式启动流程和参考插件系统。
+- `CALLSHARP` 是已明确记录的有意不支持项。
+- 调试协议已实现主要变量、栈、断点、单步和安全控制台能力，但 EraBasic 的
+  `DEBUGPRINT*` 和 `DEBUGCLEAR` 本身仍不可执行。
+
+## 2. 与参考实现行为不同的功能
+
+### 2.1 已确认的有意差异
+
+- 全部源码和文本使用 UTF-8，不支持 GBK/Shift-JIS 文件编码。
+- 文件 I/O 由前端完成，runtime 只处理提交内容和 I/O 结果。
+- PrimitiveInput 由前端整理为 EraBasic 结果字段。
+- runtime 保存规范化逻辑展示模型，不追求 Windows GDI 像素一致。
+- 图片解码由前端完成；runtime 使用固有尺寸和像素查询服务。
+- `GETDISPLAYLINE`、`HTML_GETPRINTEDSTR`、`HTML_POPPRINTINGSTR`、
+  `HTML_STRINGLEN`、`HTML_SUBSTRING`、`HTML_STRINGLINES` 明确不支持。
+- 物理 GDI、CBG 绘制和 `GETMEMORYUSAGE` 明确不支持。
+- CLR 插件和部分动态元数据查询明确不支持。
+- Unicode 大小写转换取代进程文化相关的 .NET casing。
+- 整数格式只支持审计过的格式子集。
+- XPath 是确定性子集；DataTable ID 使用确定性递增值。
+- 存储采用前端事务、revision、atomic replace；删除菜单是 Rust 扩展。
+- 候选存档失败回滚展示和效果，而参考实现可能已经泄漏输出。
+- VM snapshot、热代际切换是 Rust 扩展。
+
+相关稳定差异记录于 `docs/runtime-operation-contracts.md`。
+
+### 2.2 本次新确认、此前未明确列出的差异
+
+1. **新游戏初始化顺序不同。** 参考实现先调用 `SYSTEM_TITLE`，用户选择新游戏后才
+   `ResetData` 并添加 CSV 角色 0 和默认角色。Rust 在调用 `SYSTEM_TITLE` 前已经
+   `ResetNewGame`。因此自定义标题函数看到的角色和变量状态不同，其修改还可能在
+   选择新游戏后被保留。
+2. **内建标题画面不同。** 参考实现输出分隔线、居中标题、版本、作者、年份、详情
+   以及 `[0]/[1]` 数字菜单；Rust 只输出两个语义按钮。
+3. **BEGIN 状态清理不同。** 参考实现会清除 `skipPrint`，标题还会 `ResetStyle`；
+   Rust 只清除 `message_skip`。`SKIPDISP` 和字体、颜色、对齐状态可能跨系统流程
+   泄漏。
+4. **EVENTSHOP 内 BEGIN 不同。** 参考实现丢弃从 `EVENTSHOP` 发起的 BEGIN；Rust
+   会立即取消当前 fiber 并切换流程。
+5. **SHOP 自动存档条件不同。** 参考实现只在 SHOP 从 Normal 进入时自动存档；Rust
+   只要启用 autosave 就执行。
+6. **连续调教行为不同。** 包括输出抑制、进度提示、失败提示、`STOPCALLTRAIN`、
+   `CALLTRAINEND` 和离开流程时的清理。
+7. **`EVENTCOMEND` 后等待行为不同。**
+8. **标题、存档和读档菜单输入不同。** 参考实现接受数字键盘输入，可直接输入其他
+   页的 slot 号跳页，`100` 返回、`99` 是自动存档。Rust 使用 opaque interaction
+   token 和前后页按钮，不接受等价的 `CommitText("42")`。
+9. **普通 PRINT 自动按钮识别不同。** 参考实现把普通文本中的 `[数字]` 转换成可
+   点击按钮，`PRINTPLAIN` 才禁止这一行为。Rust 普通 PRINT 永远不会生成按钮，只
+   支持显式 `PRINTBUTTON*`。
+10. **HTML 行为不同。** Rust 把 `HTML_PRINT` 保存为一个 opaque HTML run 并立即
+    提交一条逻辑行；参考实现解析 HTML 的按钮、图片、形状、样式和 div，并可根据
+    第二参数追加到当前 print buffer。
+11. **图片和形状参数不同。** Rust `PRINT_IMG` 只保留首个资源 ID，忽略背景图、
+    mask、宽高和 y 坐标；`PRINT_RECT` 丢失 px/% 的 MixedNum 语义；`PRINT_SPACE`
+    被普通 PRINT 分支错误地输出成数字文本。
+12. **热替换流程不同。** Rust 使用原子 project delta 和多代 VM；参考 `ReloadERB`
+    会保存当前系统状态、重新加载脚本、显示重新加载信息并等待按键。Rust 方案更
+    适合当前架构，但不能称为参考行为复刻。
+
+## 3. 参考实现中与客户端实际渲染显示有关的功能
+
+| 功能组 | 参考实现行为或依赖 | Rust 当前状态 |
+| --- | --- | --- |
+| 文本测量与折行 | `System.Drawing.Graphics`、WinForms `TextRenderer`、实际 Font；决定物理行、宽度和折行 | 规范化逻辑行；有意不做 GDI 像素复刻 |
+| 左、中、右对齐 | 计算所有 button/run 实际像素宽度，再相对 `DrawableWidth` 平移 | 保存 `LineAlignment` 意图，由前端投影 |
+| 字体及样式 | Font family、size、bold、italic、underline、strikeout、前景和背景色 | 部分状态可保存；reset/query/快捷字体命令缺失 |
+| 按钮 | `[数字]` 自动识别、generation、hit testing、hover/focus、tooltip、鼠标点击 | 只有显式 token button；自动按钮和 BREAKBUTTON 缺失 |
+| 文本框 | 直接操作 WinForms TextBox | `GET/SET/CLEARTEXTBOX` 缺失 |
+| 鼠标和窗口 | MainPicBox 坐标、鼠标悬停按钮、焦点、hotkey | primitive input 被有意规范化；查询类接口缺失 |
+| HTML | `<font>`、`b/i/u/s`、`p`、`nobr`、`button`、`img`、`shape`、`div`、对齐和 tooltip | opaque HTML 投影；不解析交互与布局 |
+| HTML island | 独立 overlay/island 图层 | 缺失 |
+| 静态图片 | 图片文件加载、裁切 sprite、前景/背景/mask、缩放和位置 | 元数据及资源 ID 可用；PRINT_IMG 参数不完整 |
+| 背景 | 有深度、透明度的背景 sprite 烘焙 | 保存语义背景列表 |
+| 动画 sprite | 帧、持续时间、位置、重绘计时器 | 语义 replay graph 已实现 |
+| G canvas | Bitmap 创建/加载/保存、DrawImage、mask、旋转、线、文本、填充、颜色矩阵、像素读写 | 仅部分语义 canvas 操作；物理 raster 操作明确不支持 |
+| GDI 对象 | Brush、Pen、Font、DashStyle 查询和修改 | 缺失或有意不支持 |
+| CBG | 背景 bitmap、按钮 sprite map、范围移除和合成 | 明确不支持 |
+| Bitmap cache | 每行是否缓存为 bitmap | 缺失 |
+| Tooltip | WinForms ToolTip 测量、绘制、字体、颜色、延时、图片 | 规范化 tooltip 配置已实现 |
+| Rikaichan | 鼠标位置、词典、TextRenderer popup | 未实现，属于具体客户端能力 |
+| 日志和回滚显示 | 物理显示行历史、滚动、删除、临时行、最大日志 | Rust 只维护规范化逻辑行历史 |
+
+推荐边界仍然是：runtime 保存完整语义和布局意图，前端负责字体测量与 raster；但
+目前不少语义参数本身尚未保存，不能都归结为“前端差异”。
+
+## 4. 非平凡文本输出功能
+
+| 功能 | 参考语义 | 当前问题 |
+| --- | --- | --- |
+| `ALIGNMENT RIGHT/CENTER` | 按实际物理宽度右对齐或居中 | 只保存意图；这是允许的跨平台投影 |
+| `PRINTC` | Shift-JIS 字节宽度补齐，并用 GDI 测量修正；右对齐 | 只对 4 个精确命令生成 ColumnCell |
+| `PRINTLC` | 左对齐并补齐到列宽 | 同上 |
+| `PRINTBUTTONC/LC` | 带值按钮和列布局 | 有语义按钮，但无参考补齐和测量 |
+| 表格式布局 | `PrintCPerLine` 自动换行；TRAIN、SHOP、PALAM 等内建输出依赖它 | TRAIN 当前输出普通 button，不是 ColumnCell；连续调教也错误输出 |
+| `PRINTSINGLE*` | 立即 flush 为单独物理行 | Rust 不提交行，因为名字不以 L/W 结尾 |
+| `PRINTN` | 保持 lineEnd=false，同时进入输入等待 | Rust 既不等待，也没有正确的物理行拼接 |
+| `PRINT*W` | 输出、换行并等待 | 基本存在 |
+| K 后缀 | 按 FORCEKANA 状态进行平假名、片假名、全半角转换 | 未实现 |
+| D 后缀 | 临时忽略 SETCOLOR，使用默认或用户颜色 | 未实现 |
+| L/W 后缀 | 控制换行和等待 | 只按名称末尾粗略处理 |
+| 嵌入 `\n` | 递归切成多个显示行 | Rust 将换行保留在同一个 Text run |
+| `PRINTPLAIN*` | 不把 `[数字]` 转换成按钮 | Rust 普通 PRINT 本身也不生成按钮 |
+| `PRINTDATA*` | 随机数据列表、多行输出、选择索引、K/D/L/W | 缺失 |
+| `STRDATA` | 随机选择并拼接字符串数据块 | 缺失 |
+| `BAR/BARL/BARSTR` | 按当前值、最大值、长度和配置字符生成进度条 | 仅 `BARSTR` 可用 |
+| `DRAWLINE` | 按可绘宽度重复 pattern | Rust 使用确定性逻辑分隔线 |
+| `CUSTOMDRAWLINE/DRAWLINEFORM` | 自定义 pattern 的分隔线 | 编译期不支持 |
+| `PRINT_RECT/SPACE` | px/% 混合尺寸形状 | RECT 部分实现，SPACE 错误 |
+| HTML div | 可形成带宽度、对齐、嵌套内容的表格式布局 | Rust opaque HTML，不生成结构化布局 |
+| 临时行/REUSELASTLINE | 替换最近临时行、保留 button generation | 只实现逻辑行层面的近似 |
+| 空行 | 强制空行时插入空格，确保形成显示行 | Rust 可形成空 runs，历史行为不同 |
+
+参考 PRINT 分派位于
+`reference/emuera.em/Emuera/Runtime/Script/Statements/Instraction.Child.cs`，自动按钮识别
+位于 `reference/emuera.em/Emuera/UI/Game/PrintStringBuffer.cs`，Rust 的统一打印分支
+位于 `crates/era-runtime/src/session.rs`。
+
+## 验证结果与限制
+
+审计时执行并通过：
+
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `git diff --check`
+- `git diff --cached --check`
+- `tools/emuera-reference-cli/test-macos-wine.sh`
+
+只读扫描 `reference/real-erb` 确认上述高风险指令在真实游戏中存在大量使用。
+
+reference CLI 当前没有覆盖完整 runtime 系统流程、规范化展示模型、存储事务和渲染
+输出的端点。因此 Wine smoke test 只能确认 oracle 可用，不能证明这些功能与 C#
+一致；这些项目需要新增同输入的 runtime/reference 差分夹具后才能动态确认。
+
+本次审计对 `reference/emuera.em` 的修改：无。
