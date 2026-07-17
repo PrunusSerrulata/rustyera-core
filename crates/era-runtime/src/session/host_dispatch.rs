@@ -1,0 +1,2516 @@
+//! Translation of VM host requests into runtime-owned semantic operations.
+
+// This is one part of the same split `RuntimeSession` implementation.
+#[allow(clippy::wildcard_imports)]
+use super::*;
+
+impl RuntimeSession {
+    #[allow(clippy::single_match_else, clippy::too_many_lines)]
+    pub(super) fn handle_host_call(
+        &mut self,
+        vm: &mut RuntimeVm,
+        request: &VmHostRequest,
+    ) -> Result<(), RuntimeError> {
+        if let Some(time) = self.candidate_clock {
+            match request.import.contract.candidate {
+                erabasic_bytecode::CandidatePolicy::Forbidden => {
+                    return Err(RuntimeError::Internal(format!(
+                        "{} is forbidden during candidate SAVEINFO execution",
+                        request.import.import.name
+                    )));
+                }
+                erabasic_bytecode::CandidatePolicy::FrozenClock => {
+                    return complete_frozen_clock(vm, request, time);
+                }
+                erabasic_bytecode::CandidatePolicy::ReadOnly
+                | erabasic_bytecode::CandidatePolicy::CloneCommit
+                | erabasic_bytecode::CandidatePolicy::BufferedEffect => {}
+            }
+        }
+        let name = request.import.import.name.to_ascii_uppercase();
+        if name == "SKIPDISP" {
+            self.skip_print = integer_argument_value(&request.arguments, 0)? != 0;
+            self.user_defined_skip = self.skip_print;
+            let writes = self.result_write(i64::from(self.skip_print))?;
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: None,
+                    writes,
+                }),
+            );
+        }
+        if name == "SKIPLOG" {
+            self.message_skip = integer_argument_value(&request.arguments, 0)? != 0;
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "NOSKIP" {
+            self.saved_skip = self.skip_print;
+            self.skip_print = false;
+            return commit_integer_result(vm, request.id, 1);
+        }
+        if name == "ENDNOSKIP" {
+            if self.saved_skip {
+                self.skip_print = true;
+            }
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "ASSERT" {
+            if integer_argument_value(&request.arguments, 0)? == 0 {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "ASSERT failed",
+                    Some(request.origin.clone()),
+                );
+            }
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "THROW" {
+            let message = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            return self.fault(FaultCode::VmFault, &message, Some(request.origin.clone()));
+        }
+        if name == "FORCEKANA" {
+            let mode = integer_argument_value(&request.arguments, 0)?;
+            let Ok(mode) = u8::try_from(mode) else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "FORCEKANA mode must be between 0 and 3",
+                    Some(request.origin.clone()),
+                );
+            };
+            if mode > 3 {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "FORCEKANA mode must be between 0 and 3",
+                    Some(request.origin.clone()),
+                );
+            }
+            self.force_kana_mode = mode;
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if matches!(name.as_str(), "UPCHECK" | "CUPCHECK") {
+            let (character, character_scoped) = if name == "CUPCHECK" {
+                let character = u64::try_from(integer_argument_value(&request.arguments, 0)?)
+                    .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+                (character, true)
+            } else {
+                let target = read_runtime_integer(vm, "TARGET", &[], None)?;
+                let Ok(character) = u64::try_from(target) else {
+                    clear_upcheck_arrays(vm, false, None)?;
+                    return commit_completion(
+                        vm,
+                        request.id,
+                        VmHostCompletion::Ready(HostReady::empty()),
+                    );
+                };
+                (character, false)
+            };
+            let lines = apply_upcheck(vm, character, character_scoped)?;
+            if !self.skip_print {
+                for line in lines {
+                    self.presentation.append_print_text(line, false, true);
+                }
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if matches!(
+            name.as_str(),
+            "ISSKIP" | "MESSKIP" | "MOUSESKIP" | "LINEISEMPTY" | "ISACTIVE"
+        ) {
+            let value = match name.as_str() {
+                "ISSKIP" => self.skip_print,
+                "MESSKIP" | "MOUSESKIP" => self.message_skip,
+                "LINEISEMPTY" => self.presentation.last_line_is_empty(),
+                "ISACTIVE" => self.client_focused,
+                _ => unreachable!(),
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(i64::from(value))),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "SETANIMETIMER" {
+            let milliseconds = integer_argument_value(&request.arguments, 0)?;
+            let result = self
+                .project_snapshot
+                .as_mut()
+                .ok_or_else(|| RuntimeError::Internal("SETANIMETIMER has no project".into()))?
+                .resource_graph
+                .set_animation_timer(milliseconds);
+            if let Err(message) = result {
+                return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+            }
+            self.sync_resource_replay();
+            commit_integer_result(vm, request.id, 1)?;
+            return self.emit_presentation();
+        }
+        if self.skip_print && is_runtime_print_command(&name) {
+            if self.user_defined_skip && is_input_command(&name) {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "an input command cannot execute while user SKIPDISP is active; wrap it in NOSKIP/ENDNOSKIP",
+                    Some(request.origin.clone()),
+                );
+            }
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "AWAIT" {
+            let milliseconds = match request.arguments.first() {
+                None | Some(VmValue::Integer(0)) => 0,
+                Some(VmValue::Integer(value @ 1..=10_000)) => *value,
+                _ => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        "AWAIT duration must be between 0 and 10000 milliseconds",
+                        Some(request.origin.clone()),
+                    );
+                }
+            };
+            if milliseconds == 0 {
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady::empty()),
+                );
+            }
+            commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Pending {
+                    stability: HostWaitStability::Transient,
+                    rebind_payload: Vec::new(),
+                },
+            )?;
+            self.operations.insert_delay(
+                request.id,
+                self.logical_time_ns
+                    .saturating_add(milliseconds.cast_unsigned().saturating_mul(1_000_000)),
+            );
+            return Ok(());
+        }
+        if matches!(
+            name.as_str(),
+            "QUIT" | "FORCE_QUIT" | "QUIT_AND_RESTART" | "FORCE_QUIT_AND_RESTART"
+        ) {
+            let exit = ExitRequested {
+                reason: if name.ends_with("AND_RESTART") {
+                    ExitReason::Restart
+                } else {
+                    ExitReason::Quit
+                },
+                force: name.starts_with("FORCE_"),
+                runtime_revision: self.revision.saturating_add(1),
+            };
+            vm.cancel_fiber(request.fiber)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            self.exit_requested = Some(exit);
+            self.emit(RuntimeMessage::ExitRequested(exit), None)?;
+            return self.set_phase(RuntimePhase::Stopping);
+        }
+        if name == "CHKFONT" {
+            let font = string_argument_value(&request.arguments, 0, "CHKFONT")?;
+            let available = self.available_fonts.contains(&font.to_lowercase());
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(i64::from(available))),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(name.as_str(), "GETCONFIG" | "GETCONFIGS") {
+            let key = string_argument_value(&request.arguments, 0, &name)?;
+            let project = self
+                .project_snapshot
+                .as_ref()
+                .ok_or_else(|| RuntimeError::Internal("GETCONFIG has no loaded project".into()))?;
+            let replace = &vm.vm().artifact().project_data.static_data.replace;
+            let value = if name == "GETCONFIG" {
+                let value = match key {
+                    "オートセーブを行なう" | "Make autosaves" => {
+                        i64::from(project.auto_save)
+                    }
+                    "単位の位置" | "Currency symbol position" => {
+                        i64::from(project.money_first)
+                    }
+                    "ウィンドウ幅" | "Window width" => i64::from(project.viewport_width),
+                    "PRINTCを並べる数" | "Items per line for PRINTC" => {
+                        i64::from(project.print_c_per_line)
+                    }
+                    "PRINTCの文字数" | "Number of Item characters for PRINTC" => {
+                        i64::from(project.print_c_length)
+                    }
+                    "フォントサイズ" | "Font size" => i64::from(project.font_size),
+                    "一行の高さ" | "Line height" => i64::from(project.line_height),
+                    "表示するセーブデータ数" | "Save data count per page" => {
+                        i64::from(project.save_slot_count)
+                    }
+                    "販売アイテム数" | "Max shop item storage" => {
+                        i64::from(project.maximum_shop_items)
+                    }
+                    "COM_ABLE初期値" | "COM_ABLE initial value" => {
+                        i64::from(replace.com_able_default)
+                    }
+                    "PBANDの初期値" | "PBAND initial value" => replace.pband_default,
+                    "RELATIONの初期値" | "RELATION initial value" => replace.relation_default,
+                    _ => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            &format!("GETCONFIG does not expose configuration key {key:?}"),
+                            Some(request.origin.clone()),
+                        );
+                    }
+                };
+                VmValue::Integer(value)
+            } else {
+                let value = match key {
+                    "お金の単位" | "Currency symbol" => project.money_label.clone(),
+                    "起動時簡略表示" | "Loading message" => replace.load_label.clone(),
+                    "DRAWLINE文字" | "DRAWLINE characters" => replace.draw_line_string.clone(),
+                    "システムメニュー0" | "System menu 0" => {
+                        replace.title_menu_string_0.clone()
+                    }
+                    "システムメニュー1" | "System menu 1" => {
+                        replace.title_menu_string_1.clone()
+                    }
+                    "時間切れ表示" | "Time-up message" => replace.timeup_label.clone(),
+                    "BAR文字1" | "BAR character 1" => replace.bar_char_1.to_string(),
+                    "BAR文字2" | "BAR character 2" => replace.bar_char_2.to_string(),
+                    _ => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            &format!("GETCONFIGS does not expose configuration key {key:?}"),
+                            Some(request.origin.clone()),
+                        );
+                    }
+                };
+                VmValue::String(value)
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(value),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "VARSIZE" {
+            let variable = string_argument_value(&request.arguments, 0, "VARSIZE")?;
+            let dimensions = vm
+                .variable_dimensions(request.fiber, variable)
+                .ok_or_else(|| {
+                    RuntimeError::Internal(format!(
+                        "VARSIZE argument is not a variable: {variable}"
+                    ))
+                })?;
+            let dimension = request
+                .arguments
+                .get(1)
+                .map(|_| integer_argument_value(&request.arguments, 1))
+                .transpose()?
+                .unwrap_or(0);
+            let dimension = usize::try_from(dimension).map_err(|_| {
+                RuntimeError::Internal("VARSIZE dimension must be non-negative".into())
+            })?;
+            let value = dimensions.get(dimension).copied().ok_or_else(|| {
+                RuntimeError::Internal("VARSIZE dimension exceeds the variable rank".into())
+            })?;
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(i64::try_from(value).unwrap_or(i64::MAX))),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "EXISTFUNCTION" {
+            let function = string_argument_value(&request.arguments, 0, "EXISTFUNCTION")?;
+            let insensitive = request
+                .arguments
+                .get(1)
+                .map(|_| integer_argument_value(&request.arguments, 1))
+                .transpose()?
+                .unwrap_or(0)
+                != 0;
+            let found = vm.vm().artifact().functions.iter().find(|candidate| {
+                if insensitive {
+                    candidate.name.eq_ignore_ascii_case(function)
+                } else {
+                    candidate.name == function
+                }
+            });
+            let value = found.map_or(0, |function| match function.result {
+                Some(erabasic_bytecode::BytecodeType::Integer) => 2,
+                Some(erabasic_bytecode::BytecodeType::String) => 3,
+                _ => 1,
+            });
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "EXISTVAR" {
+            let variable = string_argument_value(&request.arguments, 0, "EXISTVAR")?;
+            let value = vm
+                .vm()
+                .artifact()
+                .globals
+                .iter()
+                .find(|definition| {
+                    definition.owner.is_none() && definition.name.eq_ignore_ascii_case(variable)
+                })
+                .map_or(0, |definition| {
+                    let mut flags = match definition.value_type {
+                        erabasic_bytecode::BytecodeType::Integer
+                        | erabasic_bytecode::BytecodeType::IntegerPlace => 1,
+                        erabasic_bytecode::BytecodeType::String
+                        | erabasic_bytecode::BytecodeType::StringPlace => 2,
+                    };
+                    if !definition.mutable {
+                        flags |= 4;
+                    }
+                    if definition.dimensions.len() == 2 {
+                        flags |= 8;
+                    } else if definition.dimensions.len() == 3 {
+                        flags |= 16;
+                    }
+                    flags
+                });
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "GETDOINGFUNCTION" {
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(request.origin.function_name.clone())),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "ENUMFUNCBEGINSWITH"
+                | "ENUMFUNCENDSWITH"
+                | "ENUMFUNCWITH"
+                | "ENUMVARBEGINSWITH"
+                | "ENUMVARENDSWITH"
+                | "ENUMVARWITH"
+        ) {
+            let query = string_argument_value(&request.arguments, 0, &name)?;
+            let target = request.arguments.get(1).and_then(|value| match value {
+                VmValue::StringPlace(place) => Some(place.clone()),
+                _ => None,
+            });
+            let mut names = Vec::new();
+            if !query.is_empty() {
+                let event_functions: BTreeSet<_> = vm
+                    .vm()
+                    .artifact()
+                    .event_groups
+                    .iter()
+                    .flat_map(|group| {
+                        group
+                            .only
+                            .iter()
+                            .chain(&group.priority)
+                            .chain(&group.normal)
+                            .chain(&group.later)
+                    })
+                    .map(|entry| entry.function)
+                    .collect();
+                let candidates: Vec<&str> = if name.starts_with("ENUMFUNC") {
+                    vm.vm()
+                        .artifact()
+                        .functions
+                        .iter()
+                        .filter(|function| !event_functions.contains(&function.key))
+                        .map(|function| function.name.as_str())
+                        .collect()
+                } else {
+                    let mut seen = BTreeSet::new();
+                    vm.vm()
+                        .artifact()
+                        .globals
+                        .iter()
+                        .filter(|variable| {
+                            variable.owner.is_none()
+                                && seen.insert(variable.name.to_ascii_uppercase())
+                        })
+                        .map(|variable| variable.name.as_str())
+                        .collect()
+                };
+                names.extend(
+                    candidates
+                        .into_iter()
+                        .filter(|candidate| enum_name_matches(&name, candidate, query))
+                        .map(str::to_owned),
+                );
+            }
+            let writes = string_array_writes(vm, target, &names);
+            let output_length = i64::try_from(writes.len()).unwrap_or(i64::MAX);
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(output_length)),
+                    writes,
+                }),
+            );
+        }
+        if name == "GETTEXTBOX" {
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(self.text_box.clone())),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "SETTEXTBOX" {
+            string_argument_value(&request.arguments, 0, &name)?.clone_into(&mut self.text_box);
+            commit_integer_result(vm, request.id, 1)?;
+            return self.emit_projection_state();
+        }
+        if name == "CLEARTEXTBOX" {
+            self.text_box.clear();
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_projection_state();
+        }
+        if name == "HOTKEY_STATE_INIT" {
+            let size =
+                usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
+                    RuntimeError::Internal("HOTKEY_STATE_INIT size must be non-negative".into())
+                })?;
+            self.hotkey_state = vec![0; size];
+            commit_integer_result(vm, request.id, 0)?;
+            return self.emit_projection_state();
+        }
+        if name == "HOTKEY_STATE" {
+            let index =
+                usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
+                    RuntimeError::Internal("HOTKEY_STATE index must be non-negative".into())
+                })?;
+            let value = integer_argument_value(&request.arguments, 1)?;
+            let Some(slot) = self.hotkey_state.get_mut(index) else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "HOTKEY_STATE requires an initialized in-range index",
+                    Some(request.origin.clone()),
+                );
+            };
+            *slot = value;
+            commit_integer_result(vm, request.id, 0)?;
+            return self.emit_projection_state();
+        }
+        if name == "FLOWINPUT" {
+            self.flow_input_default = integer_argument_value(&request.arguments, 0)?;
+            if request.arguments.len() > 1 {
+                self.flow_input_enabled = integer_argument_value(&request.arguments, 1)? != 0;
+            }
+            if request.arguments.len() > 2 {
+                self.flow_input_can_skip = integer_argument_value(&request.arguments, 2)? != 0;
+            }
+            if request.arguments.len() > 3 {
+                self.flow_input_force_skip = integer_argument_value(&request.arguments, 3)? != 0;
+            }
+            return commit_integer_result(vm, request.id, 0);
+        }
+        if name == "FLOWINPUTS" {
+            self.flow_input_string = integer_argument_value(&request.arguments, 0)? != 0;
+            if request.arguments.len() > 1 {
+                string_argument_value(&request.arguments, 1, &name)?
+                    .clone_into(&mut self.flow_input_default_string);
+            }
+            return commit_integer_result(vm, request.id, 0);
+        }
+        if name == "BREAKBUTTON" {
+            self.button_generation = self.button_generation.saturating_add(1);
+            self.command_intents.clear();
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_projection_state();
+        }
+        if matches!(name.as_str(), "HTML_ESCAPE" | "HTML_TOPLAINTEXT") {
+            let source = string_argument_value(&request.arguments, 0, &name)?;
+            let value = if name == "HTML_ESCAPE" {
+                erabasic_html::escape(source)
+            } else {
+                match erabasic_html::to_plain_text(source) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            "malformed HTML text",
+                            Some(request.origin.clone()),
+                        );
+                    }
+                }
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "HTML_TAGSPLIT" {
+            let source = string_argument_value(&request.arguments, 0, &name)?;
+            let string_target = request.arguments.get(1).and_then(vm_place);
+            let integer_target = request
+                .arguments
+                .get(2)
+                .and_then(vm_place)
+                .or_else(|| global_place(vm, "RESULT"));
+            let values = match erabasic_html::split_tags(source) {
+                Ok(tokens) => tokens
+                    .into_iter()
+                    .map(|token| match token {
+                        erabasic_html::Token::Text(value) | erabasic_html::Token::Tag(value) => {
+                            value
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+                Err(_) => {
+                    let writes = integer_target
+                        .into_iter()
+                        .map(|target| HostWrite {
+                            target,
+                            value: VmValue::Integer(-1),
+                        })
+                        .collect();
+                    return commit_completion(
+                        vm,
+                        request.id,
+                        VmHostCompletion::Ready(HostReady {
+                            value: None,
+                            writes,
+                        }),
+                    );
+                }
+            };
+            let mut writes = string_array_writes(vm, string_target, &values);
+            if let Some(target) = integer_target {
+                writes.push(HostWrite {
+                    target,
+                    value: VmValue::Integer(i64::try_from(values.len()).unwrap_or(i64::MAX)),
+                });
+            }
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: None,
+                    writes,
+                }),
+            );
+        }
+        if name == "BARSTR" {
+            let value = integer_argument_value(&request.arguments, 0)?;
+            let maximum = integer_argument_value(&request.arguments, 1)?;
+            let length = integer_argument_value(&request.arguments, 2)?;
+            if maximum <= 0 {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "BARSTR maximum must be positive",
+                    Some(request.origin.clone()),
+                );
+            }
+            if !(1..100).contains(&length) {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "BARSTR length must be between 1 and 99",
+                    Some(request.origin.clone()),
+                );
+            }
+            let replace = &vm.vm().artifact().project_data.static_data.replace;
+            // Emuera performs the multiplication in an unchecked Int64 context.
+            let filled = value.wrapping_mul(length) / maximum;
+            let filled = filled.clamp(0, length);
+            let empty = length - filled;
+            let mut bar = String::from("[");
+            bar.push_str(
+                &replace
+                    .bar_char_1
+                    .to_string()
+                    .repeat(usize::try_from(filled).unwrap_or(0)),
+            );
+            bar.push_str(
+                &replace
+                    .bar_char_2
+                    .to_string()
+                    .repeat(usize::try_from(empty).unwrap_or(0)),
+            );
+            bar.push(']');
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(bar)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(name.as_str(), "MONEYSTR" | "TOSTR") {
+            let value = integer_argument_value(&request.arguments, 0)?;
+            let formatted = match request.arguments.get(1) {
+                None => value.to_string(),
+                Some(VmValue::String(format)) => match format_era_integer(value, format) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            &format!("{name} format is invalid: {error}"),
+                            Some(request.origin.clone()),
+                        );
+                    }
+                },
+                Some(_) => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        &format!("{name} argument 2 must be a string"),
+                        Some(request.origin.clone()),
+                    );
+                }
+            };
+            if name == "TOSTR" {
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady {
+                        value: Some(VmValue::String(formatted)),
+                        writes: Vec::new(),
+                    }),
+                );
+            }
+            let project = self
+                .project_snapshot
+                .as_ref()
+                .ok_or_else(|| RuntimeError::Internal("MONEYSTR has no loaded project".into()))?;
+            let value = if project.money_first {
+                format!("{}{formatted}", project.money_label)
+            } else {
+                format!("{formatted}{}", project.money_label)
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(name.as_str(), "TOFULL" | "TOHALF") {
+            let value = string_argument_value(&request.arguments, 0, &name)?;
+            let converted = if name == "TOFULL" {
+                to_full_width(value)
+            } else {
+                to_half_width(value)
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(converted)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "CALLTRAIN" {
+            let count =
+                usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
+                    RuntimeError::Internal("CALLTRAIN count must be non-negative".into())
+                })?;
+            self.controller.continuous_commands.clear();
+            for index in 0..count {
+                self.controller
+                    .continuous_commands
+                    .push_back(read_runtime_integer(
+                        vm,
+                        "SELECTCOM",
+                        &[u64::try_from(index + 1).unwrap_or(u64::MAX)],
+                        None,
+                    )?);
+            }
+            self.controller.continuous_train = true;
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "STOPCALLTRAIN" {
+            self.controller.continuous_commands.clear();
+            self.controller.continuous_train = false;
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "DOTRAIN" {
+            let command = integer_argument_value(&request.arguments, 0)?;
+            if command < 0 || self.controller.flow != Some(SystemFlow::Train) {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "DOTRAIN is only valid with a non-negative command during TRAIN",
+                    Some(request.origin.clone()),
+                );
+            }
+            vm.cancel_fiber(request.fiber)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            self.controller.clear();
+            self.controller.continuous_commands.clear();
+            self.controller.continuous_train = false;
+            self.controller.selected_command = Some(command);
+            write_runtime_integer(vm, "SELECTCOM", &[], None, command)?;
+            fill_runtime_variable(vm, "NOWEX", VmValue::Integer(0), true)?;
+            self.controller.step = SystemStep::TrainEventCom;
+            if !self.dispatch_system_event(vm, "EVENTCOM")? {
+                return self.continue_system_flow(vm);
+            }
+            return Ok(());
+        }
+        if matches!(name.as_str(), "BEGIN" | "FORCE_BEGIN") {
+            let Some(VmValue::String(keyword)) = request.arguments.first() else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "BEGIN expects a system keyword",
+                    Some(request.origin.clone()),
+                );
+            };
+            let Some(flow) = SystemFlow::parse(keyword) else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    &format!("unknown BEGIN system keyword: {keyword}"),
+                    Some(request.origin.clone()),
+                );
+            };
+            // The pinned fork treats BEGIN and FORCE_BEGIN as the same forced
+            // transition. The current fiber cannot resume after changing systems.
+            vm.cancel_fiber(request.fiber)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            self.controller.clear();
+            self.controller.flow = Some(flow);
+            return self.begin_flow(vm, flow);
+        }
+        if matches!(name.as_str(), "SAVEVAR" | "LOADVAR") {
+            return self.fault(
+                FaultCode::UnsupportedRuntimeFeature,
+                &format!("{name} is not implemented by the pinned reference runtime"),
+                Some(request.origin.clone()),
+            );
+        }
+        if name == "PUTFORM" {
+            let suffix = request
+                .arguments
+                .first()
+                .map(display_value)
+                .unwrap_or_default();
+            let variable = runtime_variable_key(vm, "SAVEDATA_TEXT")?;
+            let current = vm
+                .read_runtime_state(&[erabasic_vm::VmRuntimeRead {
+                    variable,
+                    indices: Vec::new(),
+                    character: None,
+                }])
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            let [VmValue::String(value)] = current.as_slice() else {
+                return Err(RuntimeError::Internal(
+                    "SAVEDATA_TEXT is not a scalar string".into(),
+                ));
+            };
+            let mut value = value.clone();
+            value.push_str(&suffix);
+            let prepared = vm
+                .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+                    writes: vec![VmRuntimeWrite {
+                        variable,
+                        indices: Vec::new(),
+                        character: None,
+                        value: VmValue::String(value),
+                    }],
+                    fills: Vec::new(),
+                    clear_characters: false,
+                    add_characters_from_csv: Vec::new(),
+                })
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            vm.commit_runtime_state(prepared)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "SAVENOS" {
+            let count = self
+                .project_snapshot
+                .as_ref()
+                .map_or(20, |snapshot| snapshot.save_slot_count);
+            let value = VmValue::Integer(i64::from(count));
+            let writes = request
+                .arguments
+                .first()
+                .and_then(vm_place)
+                .map(|target| {
+                    vec![HostWrite {
+                        target,
+                        value: value.clone(),
+                    }]
+                })
+                .unwrap_or_default();
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: writes.is_empty().then_some(value),
+                    writes,
+                }),
+            );
+        }
+        if matches!(name.as_str(), "SAVEGAME" | "LOADGAME") {
+            if !matches!(
+                self.controller.flow,
+                Some(SystemFlow::Shop | SystemFlow::Normal)
+            ) {
+                return self.fault(
+                    FaultCode::VmFault,
+                    &format!("{name} cannot open outside the reference __CAN_SAVE__ states"),
+                    Some(request.origin.clone()),
+                );
+            }
+            commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Pending {
+                    stability: HostWaitStability::StableInput,
+                    rebind_payload: name.as_bytes().to_vec(),
+                },
+            )?;
+            self.system_menu_host_request = Some(request.id);
+            let save = name == "SAVEGAME";
+            self.system_menu = if save {
+                SystemMenuState::SaveSlots
+            } else {
+                SystemMenuState::LoadSlots
+            };
+            return self.issue_storage(
+                if save {
+                    PendingStorage::ListSaveSlots
+                } else {
+                    PendingStorage::ListLoadSlots
+                },
+                StorageNamespace::Save,
+                StorageOperation::List {
+                    pattern: Some("save*.sav".into()),
+                    recursive: false,
+                },
+                String::new(),
+            );
+        }
+        if matches!(name.as_str(), "RESETDATA" | "RESETGLOBAL") {
+            let transaction = if name == "RESETDATA" {
+                VmRuntimeStateTransaction::ResetGameData
+            } else {
+                VmRuntimeStateTransaction::ResetGlobalData
+            };
+            let prepared = vm
+                .prepare_runtime_state(transaction)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            vm.commit_runtime_state(prepared)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "SAVEDATA" {
+            let slot = save_slot_argument(&request.arguments, 0, "SAVEDATA")?;
+            let description = string_argument_value(&request.arguments, 1, "SAVEDATA")?;
+            if description.contains(['\r', '\n']) {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "SAVEDATA description cannot contain a newline",
+                    Some(request.origin.clone()),
+                );
+            }
+            let bytes = encode_scoped_save(
+                &vm.export_era_state(),
+                vm.vm().artifact(),
+                era_runtime_save::SaveFileKind::Normal,
+                description.to_owned(),
+                merge_structured_extensions(
+                    &self.save_extensions,
+                    vm.structured_extensions(StructuredScope::Ordinary)
+                        .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                )
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                self.traditional_save_format(),
+            )
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostWrite {
+                    request: request.id,
+                },
+                StorageNamespace::Save,
+                StorageOperation::Write {
+                    data: ProtocolBytes::new(bytes),
+                    atomic_replace: true,
+                    precondition: StoragePrecondition::Any,
+                },
+                save_slot_path(slot),
+            );
+        }
+        if name == "LOADDATA" {
+            let slot = save_slot_argument(&request.arguments, 0, "LOADDATA")?;
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostLoadOrdinary { slot },
+                StorageNamespace::Save,
+                StorageOperation::Read,
+                save_slot_path(slot),
+            );
+        }
+        if name == "DELDATA" {
+            let slot = save_slot_argument(&request.arguments, 0, "DELDATA")?;
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostDelete {
+                    request: request.id,
+                },
+                StorageNamespace::Save,
+                StorageOperation::Delete {
+                    precondition: StoragePrecondition::Any,
+                },
+                save_slot_path(slot),
+            );
+        }
+        if name == "SAVEGLOBAL" {
+            let state = vm.vm().export_era_state_for(EraSaveScope::Global);
+            let bytes = encode_scoped_save(
+                &state,
+                vm.vm().artifact(),
+                era_runtime_save::SaveFileKind::Global,
+                String::new(),
+                merge_structured_extensions(
+                    &self.save_extensions,
+                    vm.structured_extensions(StructuredScope::Global)
+                        .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                )
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                self.traditional_save_format(),
+            )
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostWrite {
+                    request: request.id,
+                },
+                StorageNamespace::GlobalSave,
+                StorageOperation::Write {
+                    data: ProtocolBytes::new(bytes),
+                    atomic_replace: true,
+                    precondition: StoragePrecondition::Any,
+                },
+                "global.sav".into(),
+            );
+        }
+        if name == "LOADGLOBAL" {
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostLoadGlobal {
+                    request: request.id,
+                },
+                StorageNamespace::GlobalSave,
+                StorageOperation::Read,
+                "global.sav".into(),
+            );
+        }
+        if name == "SAVECHARA" {
+            let filename =
+                dat_filename(string_argument_value(&request.arguments, 0, "SAVECHARA")?)?;
+            let description = string_argument_value(&request.arguments, 1, "SAVECHARA")?;
+            let exported = vm.vm().export_era_state_for(EraSaveScope::Characters);
+            let mut selected = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            for index in 2..request.arguments.len() {
+                let value = usize::try_from(integer_argument_value(&request.arguments, index)?)
+                    .map_err(|_| {
+                        RuntimeError::Internal(format!(
+                            "SAVECHARA argument {} must be non-negative",
+                            index + 1
+                        ))
+                    })?;
+                if value >= exported.characters.len() {
+                    return Err(RuntimeError::Internal(format!(
+                        "SAVECHARA argument {} is not a character",
+                        index + 1
+                    )));
+                }
+                if !seen.insert(value) {
+                    return Err(RuntimeError::Internal(format!(
+                        "SAVECHARA character {value} is duplicated"
+                    )));
+                }
+                selected.push(exported.characters[value].clone());
+            }
+            let state = EraState {
+                unique_code: exported.unique_code,
+                version: exported.version,
+                variables: BTreeMap::new(),
+                characters: selected,
+            };
+            let bytes = encode_scoped_save(
+                &state,
+                vm.vm().artifact(),
+                era_runtime_save::SaveFileKind::Character,
+                description.to_owned(),
+                Vec::new(),
+                era_runtime_save::SaveFormat::Binary1808,
+            )
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostWrite {
+                    request: request.id,
+                },
+                StorageNamespace::Data,
+                StorageOperation::Write {
+                    data: ProtocolBytes::new(bytes),
+                    atomic_replace: true,
+                    precondition: StoragePrecondition::Any,
+                },
+                format!("chara_{filename}.dat"),
+            );
+        }
+        if name == "LOADCHARA" {
+            let filename =
+                dat_filename(string_argument_value(&request.arguments, 0, "LOADCHARA")?)?;
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostLoadCharacters {
+                    request: request.id,
+                },
+                StorageNamespace::Data,
+                StorageOperation::Read,
+                format!("chara_{filename}.dat"),
+            );
+        }
+        if name == "CHKDATA" {
+            let slot = save_slot_argument(&request.arguments, 0, "CHKDATA")?;
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostCheck {
+                    request: request.id,
+                    kind: era_runtime_save::SaveFileKind::Normal,
+                },
+                StorageNamespace::Save,
+                StorageOperation::Read,
+                save_slot_path(slot),
+            );
+        }
+        if name == "CHKCHARADATA" {
+            let filename = dat_filename(string_argument_value(
+                &request.arguments,
+                0,
+                "CHKCHARADATA",
+            )?)?;
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostCheck {
+                    request: request.id,
+                    kind: era_runtime_save::SaveFileKind::Character,
+                },
+                StorageNamespace::Data,
+                StorageOperation::Read,
+                format!("chara_{filename}.dat"),
+            );
+        }
+        if name == "SAVETEXT" {
+            let text = string_argument_value(&request.arguments, 0, "SAVETEXT")?;
+            let (namespace, path) = text_storage_target(
+                request
+                    .arguments
+                    .get(1)
+                    .ok_or_else(|| RuntimeError::Internal("SAVETEXT target is missing".into()))?,
+            )?;
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostFunctionWrite {
+                    request: request.id,
+                },
+                namespace,
+                StorageOperation::Write {
+                    data: ProtocolBytes::new(text.as_bytes().to_vec()),
+                    atomic_replace: true,
+                    precondition: StoragePrecondition::Any,
+                },
+                path,
+            );
+        }
+        if name == "LOADTEXT" {
+            let (namespace, path) = text_storage_target(
+                request
+                    .arguments
+                    .first()
+                    .ok_or_else(|| RuntimeError::Internal("LOADTEXT target is missing".into()))?,
+            )?;
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostReadText {
+                    request: request.id,
+                },
+                namespace,
+                StorageOperation::Read,
+                path,
+            );
+        }
+        if name == "EXISTFILE" {
+            let path =
+                safe_relative_path(string_argument_value(&request.arguments, 0, "EXISTFILE")?)?;
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostStat {
+                    request: request.id,
+                },
+                StorageNamespace::Data,
+                StorageOperation::Stat,
+                path,
+            );
+        }
+        if name == "ENUMFILES" {
+            let directory = safe_relative_directory(string_argument_value(
+                &request.arguments,
+                0,
+                "ENUMFILES",
+            )?)?;
+            let pattern = request.arguments.get(1).and_then(|value| match value {
+                VmValue::String(value) => Some(value.clone()),
+                _ => None,
+            });
+            let recursive =
+                matches!(request.arguments.get(2), Some(VmValue::Integer(value)) if *value != 0);
+            let target = request.arguments.get(3).and_then(|value| match value {
+                VmValue::StringPlace(place) => Some(place.clone()),
+                _ => None,
+            });
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostListFiles {
+                    request: request.id,
+                    target,
+                    strip_character_dat: false,
+                },
+                StorageNamespace::Data,
+                StorageOperation::List { pattern, recursive },
+                directory,
+            );
+        }
+        if name == "FIND_CHARADATA" {
+            let pattern = request
+                .arguments
+                .first()
+                .and_then(|value| match value {
+                    VmValue::String(value) => Some(value.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("*");
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostListFiles {
+                    request: request.id,
+                    target: None,
+                    strip_character_dat: true,
+                },
+                StorageNamespace::Data,
+                StorageOperation::List {
+                    pattern: Some(format!("chara_{pattern}.dat")),
+                    recursive: false,
+                },
+                String::new(),
+            );
+        }
+        if name == "OUTPUTLOG" {
+            let filename = request
+                .arguments
+                .first()
+                .and_then(|value| match value {
+                    VmValue::String(value) if !value.is_empty() => Some(value.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("emuera.log");
+            let path = safe_relative_path(filename)?;
+            let hide_info = matches!(request.arguments.get(1), Some(VmValue::Integer(1)));
+            let mut data = vec![0xef, 0xbb, 0xbf];
+            data.extend_from_slice(self.presentation.log_text(hide_info).as_bytes());
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::HostFunctionWrite {
+                    request: request.id,
+                },
+                StorageNamespace::Log,
+                StorageOperation::Write {
+                    data: ProtocolBytes::new(data),
+                    atomic_replace: true,
+                    precondition: StoragePrecondition::Any,
+                },
+                path,
+            );
+        }
+        if let Some(mut pending) = input_wait(
+            request,
+            self.allocate_wait(),
+            self.allocate_interaction(),
+            self.logical_time_ns,
+        ) {
+            if matches!(
+                pending.wait.kind,
+                WaitKind::IntegerValue | WaitKind::IntegerButton
+            ) {
+                pending.choices = std::mem::take(&mut self.command_intents);
+            }
+            if pending.wait.stop_message_skip {
+                self.message_skip = false;
+            }
+            if self.message_skip
+                && matches!(
+                    name.as_str(),
+                    "TINPUT" | "TONEINPUT" | "TINPUTS" | "TONEINPUTS"
+                )
+                && request.arguments.len() >= 6
+            {
+                let mouse = matches!(request.arguments.get(4), Some(VmValue::Integer(1)));
+                let target = pending.result_name.as_deref().and_then(|result| {
+                    if mouse {
+                        global_place_at(vm, result, 1)
+                    } else {
+                        global_place(vm, result)
+                    }
+                });
+                let value = pending
+                    .wait
+                    .default_value
+                    .as_ref()
+                    .map_or(VmValue::Integer(0), protocol_to_vm);
+                let writes = target
+                    .map(|target| vec![HostWrite { target, value }])
+                    .unwrap_or_default();
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady {
+                        value: None,
+                        writes,
+                    }),
+                );
+            }
+            let stability = match pending.wait.stability {
+                WaitStability::StableInput => HostWaitStability::StableInput,
+                WaitStability::Transient => HostWaitStability::Transient,
+            };
+            commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Pending {
+                    stability,
+                    rebind_payload: encode_canonical(&pending.wait)?,
+                },
+            )?;
+            return self.open_wait(pending, false);
+        }
+        if name == "GETLINESTR" {
+            let Some(VmValue::String(pattern)) = request.arguments.first() else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "GETLINESTR expects a string pattern",
+                    Some(request.origin.clone()),
+                );
+            };
+            let value = match logical_line_string(
+                pattern,
+                usize::try_from(self.line_columns).unwrap_or(usize::MAX),
+            ) {
+                Ok(value) => value,
+                Err(message) => {
+                    return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                }
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "CLIENTWIDTH" | "CLIENTHEIGHT" | "PRINTCPERLINE" | "PRINTCLENGTH"
+        ) {
+            let project = self.project_snapshot.as_ref().ok_or_else(|| {
+                RuntimeError::Internal("layout query has no loaded project".into())
+            })?;
+            let value = match name.as_str() {
+                "CLIENTWIDTH" => self.client_width,
+                "CLIENTHEIGHT" => self.client_height,
+                "PRINTCPERLINE" => project.print_c_per_line,
+                _ => project.print_c_length,
+            };
+            let result = VmValue::Integer(i64::from(value));
+            let writes = request
+                .arguments
+                .first()
+                .and_then(vm_place)
+                .map(|target| {
+                    vec![HostWrite {
+                        target,
+                        value: result.clone(),
+                    }]
+                })
+                .unwrap_or_default();
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: writes.is_empty().then_some(result),
+                    writes,
+                }),
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "GETDISPLAYLINE"
+                | "HTML_GETPRINTEDSTR"
+                | "HTML_POPPRINTINGSTR"
+                | "HTML_STRINGLEN"
+                | "HTML_SUBSTRING"
+                | "HTML_STRINGLINES"
+        ) {
+            return self.fault(
+                FaultCode::UnsupportedRuntimeFeature,
+                &format!("unsupported runtime presentation query: {name}"),
+                Some(request.origin.clone()),
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "DRAWLINE" | "CUSTOMDRAWLINE" | "DRAWLINEFORM"
+        ) {
+            let pattern = request
+                .arguments
+                .first()
+                .map_or_else(|| "-".into(), display_value);
+            self.presentation.append_separator(pattern);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "CLEARLINE" {
+            let count = request
+                .arguments
+                .first()
+                .and_then(|value| match value {
+                    VmValue::Integer(value) => usize::try_from(*value).ok(),
+                    _ => None,
+                })
+                .unwrap_or(1);
+            self.presentation.delete_last_lines(count);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "HTML_PRINT" {
+            let markup = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            if erabasic_html::split_tags(&markup).is_err() {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "HTML_PRINT found an unterminated tag",
+                    Some(request.origin.clone()),
+                );
+            }
+            if request.arguments.get(1).map_or(0, integer_value_or_zero) != 0 {
+                self.presentation.append_html_inline(markup);
+            } else {
+                self.presentation.append_html(markup);
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "HTML_PRINT_ISLAND" {
+            let markup = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            if erabasic_html::split_tags(&markup).is_err() {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "HTML_PRINT_ISLAND found an unterminated tag",
+                    Some(request.origin.clone()),
+                );
+            }
+            self.presentation.append_html_island(markup);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "HTML_PRINT_ISLAND_CLEAR" {
+            self.presentation.clear_html_island();
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if matches!(name.as_str(), "BAR" | "BARL") {
+            let value = integer_argument_value(&request.arguments, 0)?;
+            let maximum = integer_argument_value(&request.arguments, 1)?;
+            let length = integer_argument_value(&request.arguments, 2)?;
+            let replace = &vm.vm().artifact().project_data.static_data.replace;
+            let bar = match make_bar(
+                value,
+                maximum,
+                length,
+                replace.bar_char_1,
+                replace.bar_char_2,
+            ) {
+                Ok(value) => value,
+                Err(message) => {
+                    return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                }
+            };
+            self.presentation
+                .append_print_text(bar, false, name == "BARL");
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if matches!(
+            name.as_str(),
+            "DEBUGPRINT" | "DEBUGPRINTL" | "DEBUGPRINTFORM" | "DEBUGPRINTFORML"
+        ) {
+            let mut appended = String::new();
+            for value in &request.arguments {
+                appended.push_str(&display_value(value));
+            }
+            if name.ends_with('L') {
+                appended.push_str("\r\n");
+            }
+            let cursor = self
+                .debug_output_base
+                .saturating_add(u64::try_from(self.debug_output.len()).unwrap_or(u64::MAX));
+            self.debug_output.push_str(&appended);
+            if self.debug_output.len() > 1_048_576 {
+                let remove = self.debug_output.len() - 1_048_576;
+                let boundary = self
+                    .debug_output
+                    .char_indices()
+                    .find_map(|(index, _)| (index >= remove).then_some(index))
+                    .unwrap_or(remove);
+                self.debug_output.drain(..boundary);
+                self.debug_output_base = self
+                    .debug_output_base
+                    .saturating_add(u64::try_from(boundary).unwrap_or(u64::MAX));
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            if self.debug_output_subscribed {
+                self.emit_debug(
+                    DebugMessage::Response(DebugResponse::ScriptOutput(ScriptOutputChunk {
+                        cursor,
+                        next_cursor: cursor
+                            .saturating_add(u64::try_from(appended.len()).unwrap_or(u64::MAX)),
+                        text: appended,
+                        truncated: false,
+                    })),
+                    None,
+                )?;
+            }
+            return Ok(());
+        }
+        if name == "DEBUGCLEAR" {
+            self.debug_output_base = self
+                .debug_output_base
+                .saturating_add(u64::try_from(self.debug_output.len()).unwrap_or(u64::MAX));
+            self.debug_output.clear();
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "ALIGNMENT" {
+            let alignment = match request.arguments.first() {
+                Some(VmValue::String(value)) if value.eq_ignore_ascii_case("CENTER") => {
+                    LineAlignment::Center
+                }
+                Some(VmValue::String(value)) if value.eq_ignore_ascii_case("RIGHT") => {
+                    LineAlignment::Right
+                }
+                Some(VmValue::String(value)) if value.eq_ignore_ascii_case("LEFT") => {
+                    LineAlignment::Left
+                }
+                _ => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        "ALIGNMENT expects LEFT, CENTER, or RIGHT",
+                        Some(request.origin.clone()),
+                    );
+                }
+            };
+            self.presentation.set_alignment(alignment);
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "FONTSTYLE" {
+            let bits = integer_argument_value(&request.arguments, 0)?;
+            self.presentation.set_font_style(bits);
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if matches!(name.as_str(), "FONTBOLD" | "FONTITALIC" | "FONTREGULAR") {
+            match name.as_str() {
+                "FONTBOLD" => self.presentation.set_bold(true),
+                "FONTITALIC" => self.presentation.set_italic(true),
+                _ => self.presentation.clear_font_style(),
+            }
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "SETFONT" {
+            let family = request.arguments.first().map(display_value);
+            self.presentation.set_font(family);
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "SETCOLOR" {
+            self.presentation
+                .set_foreground(integer_argument_value(&request.arguments, 0)?);
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if matches!(name.as_str(), "SETCOLORBYNAME" | "SETBGCOLORBYNAME") {
+            let color_name = string_argument_value(&request.arguments, 0, &name)?;
+            let Some(color) = named_color(color_name) else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "unknown or transparent color name",
+                    Some(request.origin.clone()),
+                );
+            };
+            if name == "SETCOLORBYNAME" {
+                self.presentation.set_foreground(color);
+            } else {
+                self.presentation.set_background(color);
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return if name == "SETBGCOLORBYNAME" {
+                self.emit_presentation()
+            } else {
+                Ok(())
+            };
+        }
+        if name == "RESETCOLOR" {
+            self.presentation.reset_foreground();
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "RESETBGCOLOR" {
+            self.presentation.reset_background();
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "REDRAW" {
+            let flags = integer_argument_value(&request.arguments, 0)?;
+            self.presentation.set_redraw(flags & 1 != 0);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return if flags & 2 != 0 {
+                self.emit_presentation()
+            } else {
+                Ok(())
+            };
+        }
+        if matches!(name.as_str(), "CURRENTALIGN" | "GETFONT") {
+            let value = if name == "GETFONT" {
+                self.presentation.font()
+            } else {
+                match self.presentation.alignment() {
+                    LineAlignment::Left => "LEFT",
+                    LineAlignment::Center => "CENTER",
+                    LineAlignment::Right => "RIGHT",
+                }
+                .into()
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "CURRENTREDRAW"
+                | "GETBGCOLOR"
+                | "GETCOLOR"
+                | "GETDEFBGCOLOR"
+                | "GETDEFCOLOR"
+                | "GETFOCUSCOLOR"
+                | "GETSTYLE"
+        ) {
+            let value = match name.as_str() {
+                "CURRENTREDRAW" => i64::from(self.presentation.redraw_enabled()),
+                "GETBGCOLOR" => self.presentation.background_rgb(),
+                "GETCOLOR" => self.presentation.foreground_rgb(),
+                "GETDEFBGCOLOR" => 0,
+                "GETDEFCOLOR" => 0x00c0_c0c0,
+                "GETFOCUSCOLOR" => 0x00ff_ff00,
+                _ => self.presentation.style_bits(),
+            };
+            return commit_integer_result(vm, request.id, value);
+        }
+        if name == "SETBGCOLOR" {
+            self.presentation
+                .set_background(integer_argument_value(&request.arguments, 0)?);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "SETBGIMAGE" {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let depth = request.arguments.get(1).map_or(0, integer_value_or_zero);
+            let opacity = request.arguments.get(2).map_or(255, integer_value_or_zero);
+            let exists = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.sprite(&resource))
+                .is_some();
+            if exists {
+                self.presentation.add_background(resource, depth, opacity);
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "REMOVEBGIMAGE" {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            self.presentation.remove_background(&resource);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "CLEARBGIMAGE" {
+            self.presentation.clear_backgrounds();
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name.starts_with("TOOLTIP_") {
+            let result = match name.as_str() {
+                "TOOLTIP_SETCOLOR" => {
+                    let foreground = integer_argument_value(&request.arguments, 0)?;
+                    let background = integer_argument_value(&request.arguments, 1)?;
+                    if !(0..=0xff_ffff).contains(&foreground)
+                        || !(0..=0xff_ffff).contains(&background)
+                    {
+                        Err("tooltip color is out of range")
+                    } else {
+                        self.presentation.set_tooltip_colors(foreground, background);
+                        Ok(())
+                    }
+                }
+                "TOOLTIP_SETDELAY" => self
+                    .presentation
+                    .set_tooltip_delay(integer_argument_value(&request.arguments, 0)?),
+                "TOOLTIP_SETDURATION" => self
+                    .presentation
+                    .set_tooltip_duration(integer_argument_value(&request.arguments, 0)?),
+                "TOOLTIP_SETFONT" => {
+                    self.presentation.set_tooltip_font(
+                        request
+                            .arguments
+                            .first()
+                            .map_or_else(String::new, display_value),
+                    );
+                    Ok(())
+                }
+                "TOOLTIP_SETFONTSIZE" => self
+                    .presentation
+                    .set_tooltip_font_size(integer_argument_value(&request.arguments, 0)?),
+                "TOOLTIP_CUSTOM" => {
+                    self.presentation
+                        .set_tooltip_custom(integer_argument_value(&request.arguments, 0)? != 0);
+                    Ok(())
+                }
+                "TOOLTIP_FORMAT" => {
+                    self.presentation
+                        .set_tooltip_format(integer_argument_value(&request.arguments, 0)?);
+                    Ok(())
+                }
+                "TOOLTIP_IMG" => {
+                    self.presentation
+                        .set_tooltip_images(integer_argument_value(&request.arguments, 0)? != 0);
+                    Ok(())
+                }
+                _ => Err("unsupported tooltip operation"),
+            };
+            if let Err(message) = result {
+                return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "PRINT_IMG" {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let exists = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.sprite(&resource))
+                .is_some();
+            if exists {
+                self.presentation.append_image(resource, None);
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "PRINT_RECT" {
+            let parameters = request
+                .arguments
+                .iter()
+                .filter_map(|value| match value {
+                    VmValue::Integer(value) => Some(*value),
+                    _ => None,
+                })
+                .collect();
+            self.presentation.append_rectangle(parameters);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "EXISTSOUND" {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let exists = self
+                .project_snapshot
+                .as_ref()
+                .is_some_and(|project| project.resource_graph.contains_audio(&resource));
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(i64::from(exists))),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "SPRITECREATED" | "SPRITEWIDTH" | "SPRITEHEIGHT" | "SPRITEPOSX" | "SPRITEPOSY"
+        ) {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let value = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.sprite(&resource))
+                .map_or(0, |sprite| match name.as_str() {
+                    "SPRITECREATED" => 1,
+                    "SPRITEWIDTH" => i64::from(sprite.width),
+                    "SPRITEHEIGHT" => i64::from(sprite.height),
+                    "SPRITEPOSX" => i64::from(sprite.position_x),
+                    _ => i64::from(sprite.position_y),
+                });
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "SPRITEGETCOLOR" {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let x = integer_argument_value(&request.arguments, 1)?;
+            let y = integer_argument_value(&request.arguments, 2)?;
+            let Some((resource_id, digest, x, y)) = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.sprite_pixel_request(&resource, x, y))
+            else {
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady {
+                        value: Some(VmValue::Integer(-1)),
+                        writes: Vec::new(),
+                    }),
+                );
+            };
+            return self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::SpritePixel {
+                    request: request.id,
+                },
+                ServiceKind::Image,
+                IMAGE_PIXEL_OPERATION,
+                IMAGE_PIXEL_OPERATION_VERSION,
+                &ImagePixelRequest {
+                    resource_id,
+                    content_digest: ProtocolBytes::new(digest),
+                    x,
+                    y,
+                },
+            );
+        }
+        if matches!(name.as_str(), "SPRITEMOVE" | "SPRITESETPOS") {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let x = i32::try_from(integer_argument_value(&request.arguments, 1)?).unwrap_or(0);
+            let y = i32::try_from(integer_argument_value(&request.arguments, 2)?).unwrap_or(0);
+            let changed = self.project_snapshot.as_mut().is_some_and(|project| {
+                project
+                    .resource_graph
+                    .move_sprite(&resource, x, y, name == "SPRITEMOVE")
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(changed));
+        }
+        if name == "GCREATE" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let width = integer_argument_value(&request.arguments, 1)?;
+            let height = integer_argument_value(&request.arguments, 2)?;
+            let result = self
+                .project_snapshot
+                .as_mut()
+                .ok_or_else(|| RuntimeError::Internal("GCREATE has no loaded project".into()))?
+                .resource_graph
+                .create_canvas(id, width, height);
+            let created = match result {
+                Ok(value) => value,
+                Err(message) => {
+                    return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                }
+            };
+            return self.complete_graphics_result(vm, request.id, i64::from(created));
+        }
+        if name == "GDISPOSE" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let disposed = self
+                .project_snapshot
+                .as_mut()
+                .is_some_and(|project| project.resource_graph.dispose_canvas(id));
+            return self.complete_graphics_result(vm, request.id, i64::from(disposed));
+        }
+        if matches!(name.as_str(), "GCREATED" | "GWIDTH" | "GHEIGHT") {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let state = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.canvas_state(id));
+            let value = match (name.as_str(), state) {
+                ("GCREATED", Some(_)) => 1,
+                ("GWIDTH", Some((width, _))) => i64::from(width),
+                ("GHEIGHT", Some((_, height))) => i64::from(height),
+                _ => 0,
+            };
+            return commit_integer_result(vm, request.id, value);
+        }
+        if name == "GCLEAR" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let color = integer_argument_value(&request.arguments, 1)?;
+            let rectangle = if request.arguments.len() == 6 {
+                Some([
+                    i32_argument_value(&request.arguments, 2)?,
+                    i32_argument_value(&request.arguments, 3)?,
+                    i32_argument_value(&request.arguments, 4)?,
+                    i32_argument_value(&request.arguments, 5)?,
+                ])
+            } else {
+                None
+            };
+            let changed = self
+                .project_snapshot
+                .as_mut()
+                .is_some_and(|project| project.resource_graph.clear_canvas(id, color, rectangle));
+            return self.complete_graphics_result(vm, request.id, i64::from(changed));
+        }
+        if name == "GDRAWSPRITE" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let sprite = request
+                .arguments
+                .get(1)
+                .map_or_else(String::new, display_value);
+            let destination = match request.arguments.len() {
+                2 => None,
+                4 => Some([
+                    i32_argument_value(&request.arguments, 2)?,
+                    i32_argument_value(&request.arguments, 3)?,
+                    self.project_snapshot
+                        .as_ref()
+                        .and_then(|project| project.resource_graph.sprite(&sprite))
+                        .map_or(0, |value| i32::try_from(value.width).unwrap_or(i32::MAX)),
+                    self.project_snapshot
+                        .as_ref()
+                        .and_then(|project| project.resource_graph.sprite(&sprite))
+                        .map_or(0, |value| i32::try_from(value.height).unwrap_or(i32::MAX)),
+                ]),
+                _ => Some([
+                    i32_argument_value(&request.arguments, 2)?,
+                    i32_argument_value(&request.arguments, 3)?,
+                    i32_argument_value(&request.arguments, 4)?,
+                    i32_argument_value(&request.arguments, 5)?,
+                ]),
+            };
+            let changed = self.project_snapshot.as_mut().is_some_and(|project| {
+                project.resource_graph.draw_sprite(id, &sprite, destination)
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(changed));
+        }
+        if name == "SPRITEANIMECREATE" {
+            let sprite = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let width = integer_argument_value(&request.arguments, 1)?;
+            let height = integer_argument_value(&request.arguments, 2)?;
+            if !(1..=8_192).contains(&width) || !(1..=8_192).contains(&height) {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "animation sprite dimensions are out of range",
+                    Some(request.origin.clone()),
+                );
+            }
+            let created = self.project_snapshot.as_mut().is_some_and(|project| {
+                project
+                    .resource_graph
+                    .create_animation_sprite(&sprite, width, height)
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(created));
+        }
+        if name == "SPRITEANIMEADDFRAME" {
+            let sprite = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let canvas_id = integer_argument_value(&request.arguments, 1)?;
+            let rectangle = [
+                i32_argument_value(&request.arguments, 2)?,
+                i32_argument_value(&request.arguments, 3)?,
+                i32_argument_value(&request.arguments, 4)?,
+                i32_argument_value(&request.arguments, 5)?,
+            ];
+            let offset = [
+                i32_argument_value(&request.arguments, 6)?,
+                i32_argument_value(&request.arguments, 7)?,
+            ];
+            let delay = integer_argument_value(&request.arguments, 8)?;
+            let added = self.project_snapshot.as_mut().is_some_and(|project| {
+                project
+                    .resource_graph
+                    .add_animation_frame(&sprite, canvas_id, rectangle, offset, delay)
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(added));
+        }
+        if name == "SPRITECREATE" {
+            let sprite = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let id = integer_argument_value(&request.arguments, 1)?;
+            let rectangle = if request.arguments.len() == 6 {
+                Some([
+                    i32_argument_value(&request.arguments, 2)?,
+                    i32_argument_value(&request.arguments, 3)?,
+                    i32_argument_value(&request.arguments, 4)?,
+                    i32_argument_value(&request.arguments, 5)?,
+                ])
+            } else {
+                None
+            };
+            let created = self.project_snapshot.as_mut().is_some_and(|project| {
+                project
+                    .resource_graph
+                    .create_canvas_sprite(&sprite, id, rectangle)
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(created));
+        }
+        if name == "SPRITEDISPOSE" {
+            let sprite = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let disposed = self
+                .project_snapshot
+                .as_mut()
+                .is_some_and(|project| project.resource_graph.dispose_sprite(&sprite));
+            return self.complete_graphics_result(vm, request.id, i64::from(disposed));
+        }
+        if name == "SPRITEDISPOSEALL" {
+            let include_static = integer_argument_value(&request.arguments, 0)? != 0;
+            let count = self.project_snapshot.as_mut().map_or(0, |project| {
+                project.resource_graph.dispose_sprites(include_static)
+            });
+            return self.complete_graphics_result(
+                vm,
+                request.id,
+                i64::try_from(count).unwrap_or(i64::MAX),
+            );
+        }
+        if matches!(name.as_str(), "PLAYBGM" | "PLAYSOUND") {
+            let resource = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let bgm = name == "PLAYBGM";
+            let exists = self
+                .project_snapshot
+                .as_ref()
+                .is_some_and(|project| project.resource_graph.contains_audio(&resource));
+            if !exists {
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady::empty()),
+                );
+            }
+            self.presentation.set_audio(resource.clone(), bgm, true);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            self.emit_presentation()?;
+            if self.presentation.projects_audio() && self.client_audio_available {
+                return self.emit_effect(EffectKind::Audio(AudioEffect {
+                    channel_id: u64::from(bgm),
+                    action: AudioEffectAction::Play,
+                    resource_id: Some(resource),
+                    repeat_count: if bgm { -1 } else { 1 },
+                    volume_millionths: 1_000_000,
+                }));
+            }
+            if self.presentation.projects_audio() {
+                return self.emit_audio_unavailable();
+            }
+            return Ok(());
+        }
+        if matches!(name.as_str(), "STOPBGM" | "STOPSOUND") {
+            let bgm = name == "STOPBGM";
+            self.presentation.set_audio(String::new(), bgm, false);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            self.emit_presentation()?;
+            if self.presentation.projects_audio() && self.client_audio_available {
+                return self.emit_effect(EffectKind::Audio(AudioEffect {
+                    channel_id: u64::from(bgm),
+                    action: AudioEffectAction::Stop,
+                    resource_id: None,
+                    repeat_count: 0,
+                    volume_millionths: 0,
+                }));
+            }
+            if self.presentation.projects_audio() {
+                return self.emit_audio_unavailable();
+            }
+            return Ok(());
+        }
+        if matches!(name.as_str(), "SETBGMVOLUME" | "SETSOUNDVOLUME") {
+            let bgm = name == "SETBGMVOLUME";
+            let volume = integer_argument_value(&request.arguments, 0)?;
+            self.presentation.set_audio_volume(bgm, volume);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            self.emit_presentation()?;
+            if self.presentation.projects_audio() && self.client_audio_available {
+                return self.emit_effect(EffectKind::Audio(AudioEffect {
+                    channel_id: u64::from(bgm),
+                    action: AudioEffectAction::SetVolume,
+                    resource_id: None,
+                    repeat_count: 0,
+                    volume_millionths: u32::try_from(volume.clamp(0, 100)).unwrap_or_default()
+                        * 10_000,
+                }));
+            }
+            if self.presentation.projects_audio() {
+                return self.emit_audio_unavailable();
+            }
+            return Ok(());
+        }
+        if matches!(
+            name.as_str(),
+            "PRINTBUTTON" | "PRINTBUTTONC" | "PRINTBUTTONLC"
+        ) {
+            let text = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value)
+                .replace('\n', "");
+            let value = request
+                .arguments
+                .get(1)
+                .cloned()
+                .ok_or_else(|| RuntimeError::Internal("PRINTBUTTON value is missing".into()))?;
+            let token = self.allocate_interaction();
+            let alignment = match name.as_str() {
+                "PRINTBUTTONC" => Some(CellAlignment::Right),
+                "PRINTBUTTONLC" => Some(CellAlignment::Left),
+                _ => None,
+            };
+            self.presentation.append_button(text, token, alignment);
+            self.command_intents.insert(token, value);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if matches!(
+            name.as_str(),
+            "PRINT_ABL" | "PRINT_TALENT" | "PRINT_MARK" | "PRINT_EXP"
+        ) {
+            let target = u64::try_from(integer_argument_value(&request.arguments, 0)?)
+                .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+            let (variable, table, format) = match name.as_str() {
+                "PRINT_ABL" => ("ABL", erabasic_data::NameTableKind::Abl, 0),
+                "PRINT_TALENT" => ("TALENT", erabasic_data::NameTableKind::Talent, 1),
+                "PRINT_MARK" => ("MARK", erabasic_data::NameTableKind::Mark, 0),
+                "PRINT_EXP" => ("EXP", erabasic_data::NameTableKind::Exp, 2),
+                _ => unreachable!(),
+            };
+            let text = format_named_character_values(vm, variable, table, target, format)?;
+            self.presentation.append_print_text(text, false, true);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "PRINT_ITEM" {
+            let text = format_having_items(vm)?;
+            self.presentation.append_print_text(text, false, true);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "PRINT_PALAM" {
+            let target = u64::try_from(integer_argument_value(&request.arguments, 0)?)
+                .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+            for text in format_character_palam(vm, target)? {
+                self.presentation
+                    .append_column_cell(text, CellAlignment::Right);
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "PRINT_SHOPITEM" {
+            let project = self.project_snapshot.as_ref().ok_or_else(|| {
+                RuntimeError::Internal("PRINT_SHOPITEM has no loaded project".into())
+            })?;
+            let entries = format_shop_items(vm, project)?;
+            for (text, value) in entries {
+                let token = self.allocate_interaction();
+                self.presentation
+                    .append_button(text, token, Some(CellAlignment::Left));
+                self.command_intents.insert(token, VmValue::Integer(value));
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if is_print(&name) {
+            let mut text = request
+                .arguments
+                .iter()
+                .map(display_value)
+                .collect::<String>();
+            if print_uses_kana_conversion(&name) {
+                text = convert_kana_mode(&text, self.force_kana_mode);
+            }
+            if name == "REUSELASTLINE" {
+                self.presentation.print_temporary_line(text);
+            } else if is_column_print(&name) {
+                let alignment = if name.ends_with("LC") {
+                    CellAlignment::Left
+                } else {
+                    CellAlignment::Right
+                };
+                self.presentation.append_column_cell(text, alignment);
+            } else if print_uses_default_color(&name) {
+                self.presentation
+                    .append_default_color_text(text, false, print_commits_line(&name));
+            } else {
+                self.presentation
+                    .append_print_text(text, false, print_commits_line(&name));
+            }
+            if name.ends_with('W') {
+                let wait = InputWait {
+                    wait_id: self.allocate_wait(),
+                    kind: WaitKind::EnterKey,
+                    stability: WaitStability::StableInput,
+                    one_input: false,
+                    stop_message_skip: false,
+                    system_input: false,
+                    mouse_input: false,
+                    default_value: None,
+                    deadline_ns: None,
+                    display_time: false,
+                    timeout_message: None,
+                    submission_token: self.allocate_interaction(),
+                    countdown_remaining_ms: None,
+                };
+                let pending = PendingInput {
+                    host_request: Some(request.id),
+                    wait,
+                    result_name: None,
+                    choices: BTreeMap::new(),
+                    timeout_duration_ns: None,
+                    post_input: None,
+                };
+                commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Pending {
+                        stability: HostWaitStability::StableInput,
+                        rebind_payload: encode_canonical(&pending.wait)?,
+                    },
+                )?;
+                return self.open_wait(pending, false);
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "UPDATECHECK" {
+            let game_base = &vm.vm().artifact().project_data.static_data.game_base;
+            if game_base.update_url.is_empty() {
+                return commit_host_result_write(vm, request.id, 3);
+            }
+            return self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::UpdateCheck {
+                    request: request.id,
+                },
+                ServiceKind::Network,
+                UPDATE_CHECK_OPERATION,
+                UPDATE_CHECK_OPERATION_VERSION,
+                &UpdateCheckRequest {
+                    url: game_base.update_url.clone(),
+                },
+            );
+        }
+        if matches!(name.as_str(), "MOUSEX" | "MOUSEY" | "MOUSEB") {
+            let coordinate = match name.as_str() {
+                "MOUSEX" => PointerCoordinate::X,
+                "MOUSEY" => PointerCoordinate::Y,
+                _ => PointerCoordinate::Button,
+            };
+            let presentation_revision = self.presentation.revision();
+            let environment_revision = self.projection_environment_revision;
+            self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::PointerState {
+                    request: request.id,
+                    coordinate,
+                    presentation_revision,
+                    environment_revision,
+                },
+                ServiceKind::InputState,
+                POINTER_STATE_OPERATION,
+                POINTER_STATE_OPERATION_VERSION,
+                &PointerStateRequest {
+                    presentation_revision,
+                    environment_revision,
+                },
+            )
+        } else if matches!(name.as_str(), "GETKEY" | "GETKEYTRIGGERED") {
+            let key = match request.arguments.first() {
+                Some(VmValue::Integer(value)) => match u8::try_from(*value) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return commit_completion(
+                            vm,
+                            request.id,
+                            VmHostCompletion::Ready(HostReady {
+                                value: Some(VmValue::Integer(0)),
+                                writes: Vec::new(),
+                            }),
+                        );
+                    }
+                },
+                _ => {
+                    return commit_completion(
+                        vm,
+                        request.id,
+                        VmHostCompletion::Ready(HostReady {
+                            value: Some(VmValue::Integer(0)),
+                            writes: Vec::new(),
+                        }),
+                    );
+                }
+            };
+            self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::GetKey {
+                    request: request.id,
+                    key_code: key,
+                    triggered: name == "GETKEYTRIGGERED",
+                },
+                ServiceKind::InputState,
+                GET_KEY_STATE_OPERATION,
+                GET_KEY_STATE_OPERATION_VERSION,
+                &GetKeyStateRequest { key_code: key },
+            )
+        } else if matches!(
+            name.as_str(),
+            "GETTIME" | "GETTIMES" | "GETMILLISECOND" | "GETSECOND"
+        ) {
+            let operation = match name.as_str() {
+                "GETTIMES" => ClockOperation::Times,
+                "GETMILLISECOND" => ClockOperation::Millisecond,
+                "GETSECOND" => ClockOperation::Second,
+                _ => ClockOperation::Time,
+            };
+            self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::LocalDateTime {
+                    request: request.id,
+                    operation,
+                    result: request.import.import.result,
+                },
+                ServiceKind::Clock,
+                LOCAL_DATE_TIME_OPERATION,
+                LOCAL_DATE_TIME_OPERATION_VERSION,
+                &LocalDateTimeRequest {},
+            )
+        } else {
+            self.fault(
+                FaultCode::UnsupportedRuntimeFeature,
+                &format!("unsupported host import: {}", request.import.import.name),
+                Some(request.origin.clone()),
+            )
+        }
+    }
+
+    // The typed operation tuple is deliberately explicit at this single protocol edge.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn issue_host_service<T: minicbor::Encode<()>>(
+        &mut self,
+        vm: &mut RuntimeVm,
+        request: &VmHostRequest,
+        completion: ExternalCompletion,
+        kind: ServiceKind,
+        operation: &str,
+        operation_version: ProtocolVersion,
+        payload: &T,
+    ) -> Result<(), RuntimeError> {
+        if self.service_capabilities.get(&(kind, operation.to_owned())) != Some(&operation_version)
+        {
+            return self.fault(
+                FaultCode::UnsupportedRuntimeFeature,
+                &format!(
+                    "frontend did not negotiate service {kind:?}/{operation} {operation_version:?}"
+                ),
+                Some(request.origin.clone()),
+            );
+        }
+        commit_completion(
+            vm,
+            request.id,
+            VmHostCompletion::Pending {
+                stability: HostWaitStability::Transient,
+                rebind_payload: Vec::new(),
+            },
+        )?;
+        let request_id = self.allocate_request()?;
+        self.operations
+            .insert_service(request_id, PendingService::Host(completion));
+        self.emit(
+            RuntimeMessage::ServiceRequest(ServiceRequest {
+                request_id,
+                kind,
+                operation: operation.into(),
+                operation_version,
+                payload: ProtocolBytes::new(encode_canonical(payload)?),
+                deadline_ns: None,
+            }),
+            None,
+        )
+    }
+
+    pub(super) fn issue_platform_effect<T: minicbor::Encode<()>>(
+        &mut self,
+        kind: ServiceKind,
+        operation: &str,
+        operation_version: ProtocolVersion,
+        payload: &T,
+    ) -> Result<(), RuntimeError> {
+        if self.service_capabilities.get(&(kind, operation.to_owned())) != Some(&operation_version)
+        {
+            return self.emit(
+                RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    code: "runtime.platform_capability_unavailable".into(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: format!("frontend did not negotiate service {kind:?}/{operation}"),
+                    source: None,
+                }),
+                None,
+            );
+        }
+        let request_id = self.allocate_request()?;
+        self.operations.insert_service(
+            request_id,
+            PendingService::PlatformEffect {
+                operation: operation.into(),
+            },
+        );
+        self.emit(
+            RuntimeMessage::ServiceRequest(ServiceRequest {
+                request_id,
+                kind,
+                operation: operation.into(),
+                operation_version,
+                payload: ProtocolBytes::new(encode_canonical(payload)?),
+                deadline_ns: None,
+            }),
+            None,
+        )
+    }
+
+    pub(super) fn issue_host_storage(
+        &mut self,
+        vm: &mut RuntimeVm,
+        request: &VmHostRequest,
+        pending: PendingStorage,
+        namespace: StorageNamespace,
+        operation: StorageOperation,
+        relative_path: String,
+    ) -> Result<(), RuntimeError> {
+        commit_completion(
+            vm,
+            request.id,
+            VmHostCompletion::Pending {
+                stability: HostWaitStability::Transient,
+                rebind_payload: Vec::new(),
+            },
+        )?;
+        self.issue_storage(pending, namespace, operation, relative_path)
+    }
+}
