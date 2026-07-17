@@ -3,9 +3,9 @@ use std::{collections::BTreeMap, fmt};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
-    ArtifactManifest, BYTECODE_MAGIC, BytecodeArtifact, BytecodeEventGroup, BytecodeFunction,
-    BytecodeGlobal, CONTAINER_VERSION, DecodeLimits, HostImport, NativeImport, SourceMap,
-    UnvalidatedArtifact,
+    ArtifactManifest, BYTECODE_MAGIC, BytecodeArtifact, BytecodeCallCompatibility,
+    BytecodeEventGroup, BytecodeFunction, BytecodeGlobal, CONTAINER_VERSION, DecodeLimits,
+    HostImport, NativeImport, SourceMap, UnvalidatedArtifact,
 };
 
 const MANIFEST: u16 = 1;
@@ -16,6 +16,7 @@ const HOST_IMPORTS: u16 = 5;
 const FUNCTIONS: u16 = 6;
 const SOURCE_MAP: u16 = 7;
 const EVENT_GROUPS: u16 = 8;
+const CALL_COMPATIBILITY: u16 = 9;
 
 #[derive(Debug)]
 pub enum EncodeError {
@@ -78,6 +79,7 @@ pub fn encode_artifact(artifact: &BytecodeArtifact) -> Result<Vec<u8>, EncodeErr
         section(HOST_IMPORTS, &artifact.host_imports)?,
         section(FUNCTIONS, &artifact.functions)?,
         section(EVENT_GROUPS, &artifact.event_groups)?,
+        section(CALL_COMPATIBILITY, &artifact.call_compatibility)?,
         section(SOURCE_MAP, &artifact.source_map)?,
     ];
     let mut output = Vec::new();
@@ -140,7 +142,7 @@ pub fn decode_artifact(
         if blake3::hash(payload).as_bytes() != expected {
             return Err(DecodeError::CorruptSection(kind));
         }
-        if !(MANIFEST..=EVENT_GROUPS).contains(&kind) {
+        if !(MANIFEST..=CALL_COMPATIBILITY).contains(&kind) {
             if required {
                 return Err(DecodeError::UnknownRequiredSection(kind));
             }
@@ -160,6 +162,7 @@ pub fn decode_artifact(
     let manifest = parse::<ArtifactManifest>(&sections, MANIFEST)?;
     let mut artifact = BytecodeArtifact {
         manifest,
+        call_compatibility: parse::<BytecodeCallCompatibility>(&sections, CALL_COMPATIBILITY)?,
         project_data: parse(&sections, PROJECT_DATA)?,
         globals: parse::<Vec<BytecodeGlobal>>(&sections, GLOBALS)?,
         native_imports: parse::<Vec<NativeImport>>(&sections, NATIVE_IMPORTS)?,

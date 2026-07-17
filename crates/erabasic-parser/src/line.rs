@@ -257,9 +257,13 @@ fn parse_dynamic_call_arguments(
     base: usize,
     context: &dyn ParserContext,
 ) -> ParseOutput<Vec<Argument>> {
-    let split = dynamic_call_parenthesis(source);
-    let (target, arguments) = split.map_or((source.trim(), None), |index| {
-        let end = source.rfind(')').unwrap_or(source.len());
+    let split = dynamic_call_separator(source);
+    let (target, arguments) = split.map_or((source.trim(), None), |(index, separator)| {
+        let end = if separator == '(' {
+            source.rfind(')').unwrap_or(source.len())
+        } else {
+            source.len()
+        };
         (source[..index].trim(), Some(&source[index + 1..end]))
     });
     let target_offset = source.find(target).unwrap_or(0);
@@ -288,7 +292,7 @@ fn parse_dynamic_call_arguments(
     }
 }
 
-fn dynamic_call_parenthesis(source: &str) -> Option<usize> {
+fn dynamic_call_separator(source: &str) -> Option<(usize, char)> {
     let mut braces = 0_u32;
     let mut brackets = 0_u32;
     let mut percent = false;
@@ -301,7 +305,9 @@ fn dynamic_call_parenthesis(source: &str) -> Option<usize> {
             '}' if !quoted && !percent => braces = braces.saturating_sub(1),
             '[' if !quoted && !percent && braces == 0 => brackets = brackets.saturating_add(1),
             ']' if !quoted && !percent && braces == 0 => brackets = brackets.saturating_sub(1),
-            '(' if !quoted && !percent && braces == 0 && brackets == 0 => return Some(index),
+            '(' | ',' if !quoted && !percent && braces == 0 && brackets == 0 => {
+                return Some((index, character));
+            }
             _ => {}
         }
     }

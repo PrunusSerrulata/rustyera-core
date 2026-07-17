@@ -217,6 +217,14 @@ pub fn compile_project(
     }
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(compiler_options),
+        call_compatibility: erabasic_bytecode::BytecodeCallCompatibility {
+            allow_event_as_normal: project.program.call_compatibility.allow_event_as_normal,
+            allow_omitted_arguments: project.program.call_compatibility.allow_omitted_arguments,
+            auto_convert_integer_to_string: project
+                .program
+                .call_compatibility
+                .auto_convert_integer_to_string,
+        },
         project_data: project.data.clone(),
         globals: globals(&project.program.variables, &variable_keys, &function_keys),
         native_imports: native_imports.into_values().collect(),

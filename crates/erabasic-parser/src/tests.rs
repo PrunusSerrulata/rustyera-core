@@ -138,4 +138,14 @@ fn dynamic_call_separates_formatted_target_from_lazy_arguments() {
     };
     assert!(matches!(arguments.first(), Some(Argument::Formatted(_))));
     assert_eq!(arguments.len(), 3);
+
+    let comma = parse_line(
+        "FUNC CHARAMOVE_{ARG}, 4, LOCAL",
+        &DefaultParserContext::default(),
+    );
+    assert!(!comma.has_errors(), "{:#?}", comma.diagnostics);
+    let StatementKind::Instruction { arguments, .. } = comma.value.unwrap().kind else {
+        panic!("expected instruction");
+    };
+    assert_eq!(arguments.len(), 3);
 }

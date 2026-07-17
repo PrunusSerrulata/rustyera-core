@@ -73,12 +73,36 @@ pub struct BytecodeParameter {
     pub default: Option<BytecodeConstant>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BytecodeCallCompatibility {
+    pub allow_event_as_normal: bool,
+    pub allow_omitted_arguments: bool,
+    pub auto_convert_integer_to_string: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BytecodeFunctionKind {
+    Normal,
+    Event,
+    System,
+    Method,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BytecodeLabel {
+    pub name: String,
+    pub instruction: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BytecodeFunction {
     pub key: SymbolKey,
     pub name: String,
+    pub kind: BytecodeFunctionKind,
     pub parameters: Vec<BytecodeParameter>,
     pub result: Option<BytecodeType>,
+    pub labels: Vec<BytecodeLabel>,
     pub imports: Vec<FunctionImport>,
     pub code: Vec<crate::EncodedInstruction>,
     pub max_stack: u32,
@@ -135,6 +159,7 @@ impl ArtifactManifest {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BytecodeArtifact {
     pub manifest: ArtifactManifest,
+    pub call_compatibility: BytecodeCallCompatibility,
     pub project_data: ProjectData,
     pub globals: Vec<BytecodeGlobal>,
     pub native_imports: Vec<NativeImport>,
@@ -153,6 +178,11 @@ impl BytecodeArtifact {
         self.native_imports.sort_by_key(|import| import.import.key);
         self.host_imports.sort_by_key(|import| import.import.key);
         self.functions.sort_by_key(|function| function.key);
+        for function in &mut self.functions {
+            function
+                .labels
+                .sort_by_key(|label| (label.name.to_ascii_uppercase(), label.name.clone()));
+        }
         self.event_groups
             .sort_by_key(|group| (group.name.to_ascii_uppercase(), group.name.clone()));
         self.source_map
@@ -182,10 +212,18 @@ impl BytecodeArtifact {
         let host = serde_json::to_vec(&self.host_imports)?;
         let functions = serde_json::to_vec(&self.functions)?;
         let events = serde_json::to_vec(&self.event_groups)?;
+        let call_compatibility = serde_json::to_vec(&self.call_compatibility)?;
         let execution_id = Digest::hash(
             "rustyera.bytecode.execution.v1",
             &[
-                &versions, &project, &globals, &native, &host, &functions, &events,
+                &versions,
+                &project,
+                &globals,
+                &native,
+                &host,
+                &functions,
+                &events,
+                &call_compatibility,
             ],
         );
         self.manifest.program_version.execution_id = execution_id;

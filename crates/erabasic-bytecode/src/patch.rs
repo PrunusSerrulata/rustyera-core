@@ -4,8 +4,8 @@ use erabasic_data::ProjectData;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ArtifactManifest, BytecodeArtifact, BytecodeEventGroup, BytecodeFunction, BytecodeGlobal,
-    Digest, HostImport, NativeImport, SourceMap, SymbolKey,
+    ArtifactManifest, BytecodeArtifact, BytecodeCallCompatibility, BytecodeEventGroup,
+    BytecodeFunction, BytecodeGlobal, Digest, HostImport, NativeImport, SourceMap, SymbolKey,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -13,6 +13,7 @@ pub struct BytecodePatch {
     pub base_artifact_id: Digest,
     pub base_execution_id: Digest,
     pub target_manifest: ArtifactManifest,
+    pub call_compatibility: Option<BytecodeCallCompatibility>,
     pub project_data: Option<ProjectData>,
     pub globals: Option<Vec<BytecodeGlobal>>,
     pub native_imports: Option<Vec<NativeImport>>,
@@ -53,6 +54,8 @@ pub fn create_patch(base: &BytecodeArtifact, target: &BytecodeArtifact) -> Bytec
         base_artifact_id: base.manifest.artifact_id,
         base_execution_id: base.manifest.program_version.execution_id,
         target_manifest: target.manifest.clone(),
+        call_compatibility: (base.call_compatibility != target.call_compatibility)
+            .then_some(target.call_compatibility),
         project_data: (base.project_data != target.project_data)
             .then(|| target.project_data.clone()),
         globals: (base.globals != target.globals).then(|| target.globals.clone()),
@@ -106,6 +109,7 @@ pub fn apply_patch(
     }
     let mut target = BytecodeArtifact {
         manifest: patch.target_manifest.clone(),
+        call_compatibility: patch.call_compatibility.unwrap_or(base.call_compatibility),
         project_data: patch
             .project_data
             .clone()

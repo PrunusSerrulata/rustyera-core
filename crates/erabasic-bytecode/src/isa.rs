@@ -24,6 +24,7 @@ pub enum Opcode {
     MakePlace = 9,
     Pop = 10,
     Dup = 11,
+    StorePlace = 12,
     Jump = 16,
     JumpIfFalse = 17,
     Call = 32,
@@ -32,6 +33,8 @@ pub enum Opcode {
     CallHost = 35,
     ResolveFunction = 36,
     InvokeDynamic = 37,
+    JumpDynamicLabel = 38,
+    InvokeEvent = 39,
     Yield = 48,
     AwaitResume = 49,
     Trap = 255,
@@ -54,6 +57,7 @@ impl TryFrom<u16> for Opcode {
             9 => Self::MakePlace,
             10 => Self::Pop,
             11 => Self::Dup,
+            12 => Self::StorePlace,
             16 => Self::Jump,
             17 => Self::JumpIfFalse,
             32 => Self::Call,
@@ -62,6 +66,8 @@ impl TryFrom<u16> for Opcode {
             35 => Self::CallHost,
             36 => Self::ResolveFunction,
             37 => Self::InvokeDynamic,
+            38 => Self::JumpDynamicLabel,
+            39 => Self::InvokeEvent,
             48 => Self::Yield,
             49 => Self::AwaitResume,
             255 => Self::Trap,
@@ -159,9 +165,14 @@ pub mod opcode {
     }
 
     #[must_use]
-    pub fn resolve_function(missing_target: u32, allow_missing: bool) -> EncodedInstruction {
+    pub fn resolve_function(
+        missing_target: u32,
+        allow_missing: bool,
+        method: bool,
+    ) -> EncodedInstruction {
         let mut payload = missing_target.to_le_bytes().to_vec();
         payload.push(u8::from(allow_missing));
+        payload.push(u8::from(method));
         EncodedInstruction::new(Opcode::ResolveFunction, payload)
     }
 
@@ -170,6 +181,19 @@ pub mod opcode {
         let mut payload = arguments.to_le_bytes().to_vec();
         payload.push(u8::from(tail));
         EncodedInstruction::new(Opcode::InvokeDynamic, payload)
+    }
+
+    #[must_use]
+    pub fn jump_dynamic_label(missing_target: u32) -> EncodedInstruction {
+        EncodedInstruction::new(
+            Opcode::JumpDynamicLabel,
+            missing_target.to_le_bytes().to_vec(),
+        )
+    }
+
+    #[must_use]
+    pub fn invoke_event() -> EncodedInstruction {
+        EncodedInstruction::new(Opcode::InvokeEvent, Vec::new())
     }
 
     #[must_use]

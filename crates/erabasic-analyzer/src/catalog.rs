@@ -371,6 +371,7 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     ] {
         add(name, Expressions, &[Any], 1, true, true);
     }
+    add("CALLEVENT", Raw, &[], 1, false, false);
     for name in [
         "CALLFORM",
         "CALLFORMF",
@@ -382,7 +383,9 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "TRYCCALL",
         "TRYCJUMP",
         "TRYCJUMPFORM",
+        "TRYCGOTO",
         "TRYCGOTOFORM",
+        "FUNC",
     ] {
         add(
             name,
@@ -465,7 +468,6 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "DOTRAIN",
         "DO",
         "TRYC",
-        "FUNC",
         "RANDOMIZE",
         "DUMPRAND",
         "INITRAND",

@@ -55,13 +55,18 @@ pub(crate) fn build_control_flow(
         match name {
             "IF" | "SELECTCASE" | "REPEAT" | "FOR" | "WHILE" | "DO" | "TRYC" | "TRYCCALL"
             | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" | "TRYCGOTO" | "TRYCGOTOFORM"
-            | "STRDATA" | "NOSKIP" | "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST" => {
+            | "NOSKIP" | "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST" => {
                 blocks.push(OpenBlock {
                     name: name.to_owned(),
                     line: line.id,
                     alternatives: Vec::new(),
                 });
             }
+            "STRDATA" => blocks.push(OpenBlock {
+                name: "PRINTDATA".to_owned(),
+                line: line.id,
+                alternatives: Vec::new(),
+            }),
             name if name.starts_with("PRINTDATA") => blocks.push(OpenBlock {
                 // All suffix variants share the same structural block contract.
                 name: "PRINTDATA".to_owned(),

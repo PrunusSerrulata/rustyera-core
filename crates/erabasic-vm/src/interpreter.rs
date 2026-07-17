@@ -1,8 +1,9 @@
 use erabasic_bytecode::{
-    BytecodeStorage, BytecodeType, EncodedInstruction, HostSnapshotCapability, ImportKind, Opcode,
-    SymbolKey, opcode,
+    BytecodeFunctionKind, BytecodeStorage, BytecodeType, EncodedInstruction,
+    HostSnapshotCapability, ImportKind, Opcode, SymbolKey, opcode,
 };
 
+use crate::state::{EventDispatch, EventDispatchEntry};
 use crate::{
     Fiber, FiberId, FiberState, HostCallRequest, HostCallResult, HostReady, HostWaitStability,
     NativeCallRequest, NativePlaceView, NativeReady, NativeServiceRegistry, PlaceDescriptor,
@@ -466,6 +467,22 @@ impl Vm {
                 })?;
                 stack.push(value);
             }
+            Opcode::StorePlace => {
+                let place = pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?;
+                let value = pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?;
+                let place = match place {
+                    VmValue::IntegerPlace(place) if matches!(value, VmValue::Integer(_)) => place,
+                    VmValue::StringPlace(place) if matches!(value, VmValue::String(_)) => place,
+                    _ => {
+                        return Err(StepError::new(
+                            VmFaultCode::TypeMismatch,
+                            "indirect store place and value types differ",
+                        ));
+                    }
+                };
+                self.write_place(fiber, &place, value)
+                    .map_err(map_vm_error)?;
+            }
             Opcode::Concat => {
                 let count = read_u16(&position.encoded.payload, 0)? as usize;
                 let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
@@ -508,6 +525,7 @@ impl Vm {
             Opcode::ResolveFunction => {
                 let missing_target = read_u32(&position.encoded.payload, 0)? as usize;
                 let allow_missing = position.encoded.payload.get(4).copied() == Some(1);
+                let method = position.encoded.payload.get(5).copied() == Some(1);
                 let VmValue::String(name) =
                     pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?
                 else {
@@ -526,6 +544,30 @@ impl Vm {
                     .iter()
                     .find(|function| function.name.eq_ignore_ascii_case(&name))
                 {
+                    let kind_matches = if method {
+                        target.kind == BytecodeFunctionKind::Method
+                    } else {
+                        target.kind != BytecodeFunctionKind::Method
+                            && (target.kind != BytecodeFunctionKind::Event
+                                || artifact.call_compatibility.allow_event_as_normal)
+                    };
+                    if !kind_matches {
+                        if method && allow_missing {
+                            fiber
+                                .frames
+                                .last_mut()
+                                .expect("frame exists")
+                                .stack
+                                .push(VmValue::String(String::new()));
+                            fiber.frames.last_mut().expect("frame exists").instruction =
+                                missing_target;
+                            return Ok(StepOutcome::Continue);
+                        }
+                        return Err(StepError::new(
+                            VmFaultCode::TypeMismatch,
+                            format!("dynamic target {name} has an incompatible function kind"),
+                        ));
+                    }
                     fiber
                         .frames
                         .last_mut()
@@ -577,7 +619,8 @@ impl Vm {
                         StepError::new(VmFaultCode::MissingSymbol, "resolved function disappeared")
                     })?;
                 let arguments =
-                    prepare_dynamic_arguments(&target, arguments).map_err(map_vm_error)?;
+                    prepare_dynamic_arguments(&target, arguments, artifact.call_compatibility)
+                        .map_err(map_vm_error)?;
                 bind_persistent_arguments(
                     &mut self.memory,
                     position.generation,
@@ -586,6 +629,8 @@ impl Vm {
                     &arguments,
                 )
                 .map_err(map_vm_error)?;
+                let event_context = fiber.frames.last().expect("frame exists").event_context
+                    || target.kind == BytecodeFunctionKind::Event;
                 let frame = make_frame(
                     new_frame,
                     position.generation,
@@ -593,6 +638,7 @@ impl Vm {
                     artifact,
                     arguments,
                     false,
+                    event_context,
                 );
                 if tail {
                     *fiber.frames.last_mut().expect("frame exists") = frame;
@@ -646,6 +692,17 @@ impl Vm {
                                     "called function is missing",
                                 )
                             })?;
+                        if target.kind == BytecodeFunctionKind::Event
+                            && !artifact.call_compatibility.allow_event_as_normal
+                        {
+                            return Err(StepError::new(
+                                VmFaultCode::TypeMismatch,
+                                format!(
+                                    "event function {} cannot be called as an ordinary function",
+                                    target.name
+                                ),
+                            ));
+                        }
                         validate_arguments(&target, &arguments).map_err(map_vm_error)?;
                         bind_persistent_arguments(
                             &mut self.memory,
@@ -661,7 +718,13 @@ impl Vm {
                             &target,
                             artifact,
                             arguments,
-                            true,
+                            target.result.is_some(),
+                            fiber
+                                .frames
+                                .last()
+                                .expect("caller frame exists")
+                                .event_context
+                                || target.kind == BytecodeFunctionKind::Event,
                         ));
                     }
                     (Opcode::CallNative, ImportKind::Native) => {
@@ -933,6 +996,115 @@ impl Vm {
                     }
                 }
             }
+            Opcode::JumpDynamicLabel => {
+                let missing_target = read_u32(&position.encoded.payload, 0)? as usize;
+                let VmValue::String(name) =
+                    pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?
+                else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "dynamic label target must be a string",
+                    ));
+                };
+                let artifact = &self
+                    .generations
+                    .get(&position.generation)
+                    .expect("validated frame generation exists")
+                    .artifact;
+                let function = artifact
+                    .functions
+                    .iter()
+                    .find(|function| function.key == position.function)
+                    .expect("validated function exists");
+                fiber.frames.last_mut().expect("frame exists").instruction = function
+                    .labels
+                    .iter()
+                    .find(|label| label.name.eq_ignore_ascii_case(&name))
+                    .map_or(missing_target, |label| label.instruction as usize);
+            }
+            Opcode::InvokeEvent => {
+                let VmValue::String(name) =
+                    pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?
+                else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "event target must be a string",
+                    ));
+                };
+                if fiber.frames.last().expect("frame exists").event_context {
+                    return Err(StepError::new(
+                        VmFaultCode::Trap,
+                        "CALLEVENT is not allowed inside an event dispatch",
+                    ));
+                }
+                let frame_id = self.allocate_frame_id();
+                let artifact = &self
+                    .generations
+                    .get(&position.generation)
+                    .expect("validated frame generation exists")
+                    .artifact;
+                let Some(group) = artifact
+                    .event_groups
+                    .iter()
+                    .find(|group| group.name.eq_ignore_ascii_case(&name))
+                else {
+                    if artifact.functions.iter().any(|function| {
+                        function.name.eq_ignore_ascii_case(&name)
+                            && function.kind != BytecodeFunctionKind::Event
+                    }) {
+                        return Err(StepError::new(
+                            VmFaultCode::TypeMismatch,
+                            format!("CALLEVENT target {name} is not an event"),
+                        ));
+                    }
+                    return Ok(StepOutcome::Continue);
+                };
+                let mut pending = std::collections::VecDeque::new();
+                let groups: &[(&[erabasic_bytecode::BytecodeEventEntry], u8)] =
+                    if group.only.is_empty() {
+                        &[(&group.priority, 1), (&group.normal, 2), (&group.later, 3)]
+                    } else {
+                        &[(&group.only, 0)]
+                    };
+                for (entries, group_id) in groups {
+                    pending.extend(entries.iter().map(|entry| EventDispatchEntry {
+                        function: entry.function,
+                        single: entry.single,
+                        group: *group_id,
+                    }));
+                }
+                let Some(active) = pending.pop_front() else {
+                    return Ok(StepOutcome::Continue);
+                };
+                if fiber.frames.len() >= self.config.maximum_call_depth {
+                    return Err(StepError::new(
+                        VmFaultCode::ResourceLimit,
+                        "maximum call depth exceeded",
+                    ));
+                }
+                let target = artifact
+                    .functions
+                    .iter()
+                    .find(|function| function.key == active.function)
+                    .cloned()
+                    .ok_or_else(|| {
+                        StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
+                    })?;
+                fiber
+                    .frames
+                    .last_mut()
+                    .expect("frame exists")
+                    .event_dispatch = Some(EventDispatch { active, pending });
+                fiber.frames.push(make_frame(
+                    frame_id,
+                    position.generation,
+                    &target,
+                    artifact,
+                    Vec::new(),
+                    false,
+                    true,
+                ));
+            }
             Opcode::Return => {
                 let has_value = position.encoded.payload.first().copied().unwrap_or(0) != 0;
                 let value = has_value
@@ -941,9 +1113,54 @@ impl Vm {
                 let returned_frame = fiber.frames.pop().expect("returning frame exists");
                 if let Some(caller) = fiber.frames.last_mut() {
                     if returned_frame.return_value_to_caller
-                        && let Some(value) = value
+                        && let Some(value) = value.clone()
                     {
                         caller.stack.push(value);
+                    }
+                    let next_event = caller.event_dispatch.as_mut().and_then(|dispatch| {
+                        if dispatch.active.single && value == Some(VmValue::Integer(1)) {
+                            while dispatch
+                                .pending
+                                .front()
+                                .is_some_and(|entry| entry.group == dispatch.active.group)
+                            {
+                                dispatch.pending.pop_front();
+                            }
+                        }
+                        dispatch.pending.pop_front().inspect(|next| {
+                            dispatch.active = next.clone();
+                        })
+                    });
+                    if let Some(next) = next_event {
+                        let generation = caller.generation;
+                        let frame_id = self.allocate_frame_id();
+                        let artifact = &self
+                            .generations
+                            .get(&generation)
+                            .expect("validated frame generation exists")
+                            .artifact;
+                        let target = artifact
+                            .functions
+                            .iter()
+                            .find(|function| function.key == next.function)
+                            .cloned()
+                            .ok_or_else(|| {
+                                StepError::new(
+                                    VmFaultCode::MissingSymbol,
+                                    "event function is missing",
+                                )
+                            })?;
+                        fiber.frames.push(make_frame(
+                            frame_id,
+                            generation,
+                            &target,
+                            artifact,
+                            Vec::new(),
+                            false,
+                            true,
+                        ));
+                    } else if caller.event_dispatch.is_some() {
+                        caller.event_dispatch = None;
                     }
                 } else {
                     fiber.state = FiberState::Completed(value.clone());
