@@ -85,6 +85,38 @@ pub struct ClientStateChanged {
     pub screen_reader: bool,
 }
 
+/// Authoritative main-frontend observation used by script-visible layout and textbox queries.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectionObservation {
+    #[n(0)]
+    pub environment_revision: u64,
+    #[n(1)]
+    pub presentation_revision: u64,
+    #[n(2)]
+    pub client_width: u32,
+    #[n(3)]
+    pub client_height: u32,
+    #[n(4)]
+    pub line_columns: u32,
+    #[n(5)]
+    pub text_box: String,
+}
+
+/// Runtime-owned state that the main frontend projects into platform controls.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectionState {
+    #[n(0)]
+    pub runtime_revision: u64,
+    #[n(1)]
+    pub text_box: String,
+    #[n(2)]
+    pub hotkey_state: Vec<i64>,
+    #[n(3)]
+    pub button_generation: u64,
+}
+
 #[derive(
     Clone, Copy, Debug, Decode, Encode, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
 )]

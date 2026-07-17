@@ -152,6 +152,7 @@ fn rejects_contradictory_persisted_operation_contracts() {
         wait: OperationWaitPolicy::Immediate,
         capability_fallback: CapabilityFallback::NotApplicable,
         debug: OperationDebugPolicy::Pure,
+        portability: erabasic_bytecode::OperationPortability::Portable,
     };
     assert!(
         !OperationContract {

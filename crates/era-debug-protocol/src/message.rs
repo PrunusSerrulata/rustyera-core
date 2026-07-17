@@ -12,7 +12,7 @@ use crate::{
     VariablePage, VariableValue, VariableWrite, VariableWriteOutcome,
 };
 
-pub const DEBUG_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(3, 0);
+pub const DEBUG_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(4, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -120,6 +120,18 @@ pub enum DebugCommand {
         #[n(0)]
         update: BreakpointUpdate,
     },
+    #[n(60)]
+    ReadScriptOutput {
+        #[n(0)]
+        cursor: u64,
+        #[n(1)]
+        limit: u32,
+    },
+    #[n(61)]
+    SubscribeScriptOutput {
+        #[n(0)]
+        enabled: bool,
+    },
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -158,6 +170,21 @@ pub enum DebugResponse {
     VariablesWritten(#[n(0)] VariableWriteOutcome),
     #[n(11)]
     GameFieldsWritten(#[n(0)] GameFieldWriteOutcome),
+    #[n(12)]
+    ScriptOutput(#[n(0)] ScriptOutputChunk),
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ScriptOutputChunk {
+    #[n(0)]
+    pub cursor: u64,
+    #[n(1)]
+    pub next_cursor: u64,
+    #[n(2)]
+    pub text: String,
+    #[n(3)]
+    pub truncated: bool,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

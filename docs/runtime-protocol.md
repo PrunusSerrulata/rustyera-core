@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 13.0 and debug protocol 3.0 over common wire 2.0 are
+dynamic library. Runtime protocol 14.0 and debug protocol 4.0 over common wire 2.0 are
 development contracts: by explicit project policy they
 do not promise backward compatibility until a frontend exists.
 
@@ -106,7 +106,8 @@ Frontend-observation requests additionally bind the presentation revision and fr
 environment revision they observe. A stale response is rejected. If the selected
 frontend lacks the exact operation/version, the query is unsupported; the runtime does
 not substitute a logical-width or default-font approximation. These projection-query
-operations and payloads are target design and are not yet present in protocol 13.0.
+operations and payloads are implemented for projection observations and pointer state in
+protocol 14.0. Further font/raster operations must use the same revision-binding rule.
 
 The runtime and all lower crates perform no concrete file I/O and sample no system clock.
 Current ordinary text, binary and gzip traditional saves are encoded and decoded in memory. Export is
@@ -182,8 +183,8 @@ tokens runtime-owned. `Separator` preserves `DRAWLINE` as a semantic line role. 
 font-dependent padding into authoritative state; GUI clients may use grid/flex layout, TUI clients
 may repeat a pattern, and clients without these nodes receive a deterministic plain projection.
 Physical WinForms history, realized HTML layout and pixel-width queries are not canonical
-state. Protocol 13.0 still leaves those queries unsupported, and currently computes
-`GETLINESTR` from a fixed logical width; both behaviors require command-by-command review
+state. Protocol 14.0 obtains client dimensions and logical line columns from an accepted
+projection observation; physical display-history queries still require command-by-command review
 under the frontend-observation policy. Pixel buffers, font objects and audio devices remain
 frontend caches. Content-addressed image facts and future realized-projection observations
 return through ordered service responses, but only resource facts update the runtime's logical
@@ -234,7 +235,7 @@ journal. `UPDATECHECK` uses typed network and open-URL services, while focus rem
 client state queried by `ISACTIVE`. Built-in shop autosave now uses the isolated candidate
 `SAVEINFO` transaction and revision-checked storage commit. Runtime-owned fixed-page save/load
 menus, overwrite confirmation and nested SAVEGAME/LOADGAME cancellation continuations are stable
-input operations. Protocol 13.0 adds the canonical animation redraw interval to resource replay;
+input operations. Protocol 14.0 retains the canonical animation redraw interval in resource replay;
 the frontend schedules redraws but never advances authoritative game time. Protocol 12.0 separates
 external waits from debugger pauses. The independent debug channel supports creator-bounded scope
 grants, coherent stop tokens, global pause/continue/stepping, source breakpoints, fiber/frame/stack
@@ -246,6 +247,6 @@ are rejected without mutation. Protocol 12.0 added operation-versioned service c
 resource decoder services, exact effect outcomes, tooltip state and runtime diagnostics. The
 session-fixed `available_fonts` list is used only for the script-observable `CHKFONT` result.
 Canonical semantic layout intent remains runtime-owned; realized device layout does not.
-Protocol 13.0 negotiates but currently disables font-metric services, so renderer-dependent
+Protocol 14.0 negotiates but currently disables font-metric services, so remaining renderer-dependent
 queries cannot yet obtain a frontend result. The frontend cannot change the available-font list
 after the handshake.

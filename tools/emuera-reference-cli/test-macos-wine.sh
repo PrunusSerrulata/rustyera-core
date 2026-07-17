@@ -80,6 +80,7 @@ printf '%s\n' \
     '{"id":"wine-map","op":"run","entry":"ORACLE_MAP","watch":["RESULT","RESULTS"]}' \
     '{"id":"wine-presentation","op":"run","entry":"ORACLE_PRESENTATION"}' \
     '{"id":"wine-structured","op":"run","entry":"ORACLE_STRUCTURED","watch":["RESULT:0","RESULT:1","RESULT:2","RESULT:3","RESULT:4","RESULT:5","RESULTS:0","RESULTS:1","RESULTS:2"]}' \
+    '{"id":"wine-compat-12","op":"run","entry":"ORACLE_COMPAT_12","watch":["RESULT:20","RESULT:21","RESULT:22","RESULT:23","RESULT:24","RESULTS:20","RESULTS:21","RESULTS:22"]}' \
     '{"id":"wine-input","op":"run","entry":"ORACLE_INPUT","inputs":["42"],"watch":["RESULT"]}' \
     '{"id":"wine-reset","op":"reset"}' \
     >>"$REQUEST_FILE"
@@ -93,18 +94,18 @@ perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 28 and
+    length == 29 and
     map(.id) == [
         "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-toneinput",
         "wine-getmillisecond", "wine-getsecond", "wine-project",
         "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
         "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
         "wine-putform", "wine-savenos",
-        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-reflection", "wine-map", "wine-presentation", "wine-structured", "wine-input", "wine-reset"
+        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-reflection", "wine-map", "wine-presentation", "wine-structured", "wine-compat-12", "wine-input", "wine-reset"
     ] and
     all(.[]; .ok == true) and
     (map(select(.id == "wine-load"))[0].result.termination == "waitingInput") and
-    (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["EVENTFIRST", "ORACLE_COMPAT", "ORACLE_COMPAT_REST", "ORACLE_DYNAMIC_1", "ORACLE_INPUT", "ORACLE_LIST_TARGET", "ORACLE_MAP", "ORACLE_NATIVE", "ORACLE_PRESENTATION", "ORACLE_REFLECTION", "ORACLE_STRUCTURED", "ORACLE_TEST", "SYSTEM_TITLE"]) and
+    (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["EVENTFIRST", "ORACLE_COMPAT", "ORACLE_COMPAT_12", "ORACLE_COMPAT_REST", "ORACLE_DYNAMIC_1", "ORACLE_INPUT", "ORACLE_LIST_TARGET", "ORACLE_MAP", "ORACLE_NATIVE", "ORACLE_PRESENTATION", "ORACLE_REFLECTION", "ORACLE_STRUCTURED", "ORACLE_TEST", "SYSTEM_TITLE"]) and
     (map(select(.id == "wine-project"))[0].result.functions | map(select(.name == "SYSTEM_TITLE"))[0].lines | map(.functionCode) | contains(["IF", "CALL", "CALL", "ENDIF", "INPUT", "RETURN"])) and
     (map(select(.id == "wine-csv-varsize"))[0].result.value == 120) and
     (map(select(.id == "wine-csv-name"))[0].result.value == 2) and
@@ -141,6 +142,8 @@ jq -e -s '
     (map(select(.id == "wine-structured"))[0].result.watches."RESULTS:2" == "<root><item id=\"a\" kind=\"first\">one</item><item id=\"b\">changed</item></root>") and
     (map(select(.id == "wine-structured"))[0].result.watches."RESULT:4" == 1) and
     (map(select(.id == "wine-structured"))[0].result.watches."RESULT:5" == 1) and
+    (map(select(.id == "wine-compat-12"))[0].result.termination == "completed") and
+    (map(select(.id == "wine-compat-12"))[0].result.watches == {"RESULT:20":4,"RESULT:21":0,"RESULT:22":0,"RESULT:23":66051,"RESULT:24":3,"RESULTS:20":"&lt;&amp;&gt;&apos;&quot;","RESULTS:21":"A&Bあ","RESULTS:22":"LEFT"}) and
     (map(select(.id == "wine-input"))[0].result.termination == "completed") and
     (map(select(.id == "wine-input"))[0].result.watches.RESULT == 42) and
     (map(select(.id == "wine-toneinput"))[0].result.termination == "waitingInput") and

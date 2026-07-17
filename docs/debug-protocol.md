@@ -1,9 +1,15 @@
 # EraBasic debugger protocol
 
-`era-debug-protocol` 3.0 is independent from normal runtime control. It shares only the
+`era-debug-protocol` 4.0 is independent from normal runtime control. It shares only the
 common envelope and has its own version negotiation, payload tags and authorization. Active
 debug traffic is bound to the runtime's current `SessionEpoch`.
 No debugger functionality is enabled merely because a runtime session exists.
+
+Protocol 4.0 adds the independent `ScriptOutput` scope. `ReadScriptOutput` pages through
+the runtime-owned one-megabyte UTF-8 buffer with absolute byte cursors and reports when an
+old cursor was truncated. `SubscribeScriptOutput` enables unsolicited output chunks.
+`DEBUGPRINT*` capture is deterministic and always active; clients without this scope cannot
+observe it, and `DEBUGCLEAR` advances the cursor before clearing the buffer.
 
 ## Authorization
 
@@ -15,7 +21,7 @@ revoked at any time.
 
 Scopes separately control variable read/write, game-field read/write, execution read,
 execution control, expression evaluation, safe statement execution and breakpoint
-management. A dynamic-library grant prevents accidental privilege use; a future server
+management and script-output read/subscribe. A dynamic-library grant prevents accidental privilege use; a future server
 transport must additionally authenticate the client.
 
 ## Coherent stopped state

@@ -101,9 +101,9 @@ generation 的函数表，JUMP 使用帧替换，缺失 try 目标不求值实�
 指令形式的 `PRINTCPERLINE` 和 `SAVENOS` 现在通过 VM 验证的 `HostWrite` 写入传入
 place；同名函数形式仍返回整数。
 
-### 1.2 已注册但最终落入 Unsupported 的 Host 功能
+### 1.2 已实现的扩展 Host 功能
 
-#### 输入及客户端状态
+输入及客户端状态：
 
 - `GETTEXTBOX`、`SETTEXTBOX`、`CLEARTEXTBOX`
 - `HOTKEY_STATE`、`HOTKEY_STATE_INIT`
@@ -111,7 +111,7 @@ place；同名函数形式仍返回整数。
 - `FLOWINPUT`、`FLOWINPUTS`
 - `BREAKBUTTON`
 
-#### 文本及样式
+文本及样式：
 
 - `BAR`、`BARL`
 - `DEBUGPRINT`、`DEBUGPRINTL`、`DEBUGPRINTFORM`、`DEBUGPRINTFORML`、`DEBUGCLEAR`
@@ -125,12 +125,20 @@ place；同名函数形式仍返回整数。
 - `GETFOCUSCOLOR`、`GETFONT`、`GETSTYLE`
 - `HTML_ESCAPE`、`HTML_TOPLAINTEXT`
 
-#### 运行时元数据
+运行时元数据：
 
 - `ENUMFUNCBEGINSWITH`、`ENUMFUNCENDSWITH`、`ENUMFUNCWITH`
 - `ENUMVARBEGINSWITH`、`ENUMVARENDSWITH`、`ENUMVARWITH`
 
 `GETMEMORYUSAGE` 已被明确记录为有意不支持，不属于遗漏。
+
+本节列出的全部 Host 名称现已接入稳定执行路径。跨客户端边界如下：`HOTKEY.ERB`
+的平台按键映射由主展示前端执行，runtime 只持有并投影 `HOTKEY_STATE*` 数组；鼠标
+查询通过绑定 presentation revision 的 `pointer_state` 服务返回逻辑/CSS pixel 与
+EraBasic button value。`DEBUGPRINT*` 始终进入有界 runtime 缓冲区，仅具有
+`ScriptOutput` 权限的调试客户端可读取或订阅。普通 `HTML_PRINT` 与 island 共用
+`erabasic-html` 的确定性 tokenizer，不依赖 DOM、WinForms 或 GDI。枚举函数此前已有
+实现，本轮审计确认其保留声明顺序和大小写不敏感匹配行为。
 
 ### 1.3 系统流程遗漏
 
@@ -189,22 +197,16 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 
 ### 2.2 更新后设计原则与当前实现的矛盾
 
-以下内容是当前代码和 protocol 13.0 的现状，不是未来目标设计。它们不能继续被笼统
+以下内容是当前代码和 protocol 14.0 的现状，不是未来目标设计。它们不能继续被笼统
 描述为“规范化展示的有意差异”：
 
-1. **权威 snapshot 中仍有物理布局字段。** `DisplayRun::Text`、`Button`、`Shape`
-   携带 `RunLayout`；该类型的注释宣称布局由 runtime 获取字体度量后生成，并保存
-   `x/y/width/height_millipixels`。`DisplayLine` 还携带
-   `layout_width_millipixels`。这与“runtime 只保存展示意图，不接触前端实际布局”
-   直接冲突。当前 runtime 大多把这些值填为零，因此既不是前端真实布局，也不是
-   有意义的可移植布局。
+1. **已解决：权威 snapshot 的伪物理文本布局。** Protocol 14.0 删除 `RunLayout` 和
+   `DisplayLine::layout_width_millipixels`；文本、按钮、shape 仅保存语义结构。
 2. **字体度量能力存在于 Schema，但不可执行。** `ClientCapabilities::font_metrics`
    和 `ServiceKind::FontMetrics` 已定义，runtime 协商时却固定选择 `false`，协议也没有
    为具体测量操作定义 revision-bound typed payload。类型存在不能视为能力已实现。
-3. **`CLIENTWIDTH/CLIENTHEIGHT` 返回错误的权威来源。** 当前 runtime 返回项目配置中
-   的 viewport 宽高，而参考函数读取实际 console client size。按新原则，这两个值
-   应来自当前 session 的权威投影前端，并绑定前端环境 revision；runtime 不应把项目
-   配置冒充实际窗口尺寸。
+3. **已解决：`CLIENTWIDTH/CLIENTHEIGHT` 权威来源。** 主展示前端以
+   `ProjectionObservation` 提交 revision-bound client size；runtime 验证后供查询使用。
 4. **物理历史和 HTML 投影查询仍直接 fault。** `GETDISPLAYLINE`、
    `HTML_GETPRINTEDSTR`、`HTML_POPPRINTINGSTR`、`HTML_STRINGLEN`、
    `HTML_SUBSTRING`、`HTML_STRINGLINES` 当前返回
@@ -212,23 +214,19 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
    判断：可在规范化 markup/逻辑状态上定义的由 runtime 实现，确实观察物理投影的
    通过权威前端服务返回真实值。该拆分尚未完成，因此当前状态是缺失/待设计，而不是
    最终的稳定不支持。
-5. **`GETLINESTR` 使用固定逻辑宽度近似。** 当前实现按固定 75 列和 Unicode
-   display width 构造字符串，既不符合参考的实际 console 宽度，也不符合“投影查询
-   不得伪造近似值”的新原则。需先确认其用途：输出分隔线应迁移到语义
-   `Separator`；若脚本确实请求实际可显示字符串，则应由权威前端返回并产生可移植性
-   诊断。
+5. **已解决：`GETLINESTR` 固定 75 列近似。** 该函数使用经 revision-bound
+   `ProjectionObservation` 验证的主前端逻辑列数；`DRAWLINE` 继续使用 `Separator`。
 6. **canvas/text raster 查询没有统一边界。** `SPRITEGETCOLOR` 查询内容寻址的源图片
    像素，当前 frontend image service 方向合理；而 `GGETTEXTSIZE`、`GGETCOLOR` 等
    依赖实际字体或 raster 算法的操作仍缺少权威前端观测服务，不能由 runtime 自行
    近似，也不能与源图片事实混为一类。
-7. **服务请求缺少投影因果字段。** 通用 `ServiceRequest` 有 request ID、操作版本和
-   deadline，但目前没有统一的 presentation revision、frontend environment revision
-   或“权威投影前端”角色。未来 C/S 多客户端场景下会无法唯一确定谁可以回答以及
-   回答对应哪一次展示状态。
-8. **没有可移植性诊断和弃用状态。** analyzer/runtime 尚未为前端环境或投影依赖
-   发出 source-located 诊断，也没有追踪结果是否流入影响游戏内容的控制流、持久变量、
-   随机种子、动态调用或存档。现有兼容性四分类也尚未落实独立的 `FrontendEnvironment`、
-   `FrontendProjection`、`Discouraged` 和 `Deprecated` 可移植性分类。
+7. **部分解决：投影因果字段。** `ProjectionObservation` 与 `pointer_state` 均绑定
+   presentation revision，环境观测使用单调 environment revision。当前单 session
+   动态库只有一个主前端；未来 C/S 多客户端仍需在连接层增加明确角色租约。
+8. **部分解决：可移植性元数据。** 字节码 operation contract 现持久化 `Portable`、
+   `FrontendObservation`、`PlatformIntent`、`ExtensionDefined`，compiler 对直接使用
+   发出 source-located Notice。跨表达式追踪到控制流、持久变量、随机种子、动态调用或
+   存档等 taint sink 的 Warning 仍待 analyzer 数据流诊断基础设施完成。
 9. **坐标单位语义仍含混。** 图片、shape 和 canvas 字段使用 `millipixels` 命名，容易
    被理解为设备像素。脚本提供的坐标可以作为 runtime 持有的逻辑坐标保留，但协议
    必须明确其坐标空间及前端缩放规则；由字体测量产生的设备布局不能混入其中。

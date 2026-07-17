@@ -162,6 +162,14 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
                 instruction(name, style, arguments, minimum, variadic, omitted),
             );
         };
+    add(
+        "HTML_TAGSPLIT",
+        Expressions,
+        &[String, MutableString, MutableInteger],
+        1,
+        false,
+        false,
+    );
 
     for name in [
         "ELSE",
@@ -907,6 +915,47 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     // integer virtual-key code. HIR calls are never folded, so the signature is
     // sufficient to retain that behavior in the current analyzer.
     add("GETKEY", IntType, &[Integer], 1, false);
+    add("GETTEXTBOX", StrType, &[], 0, false);
+    add("SETTEXTBOX", IntType, &[String], 1, false);
+    add("HOTKEY_STATE_INIT", IntType, &[Integer], 1, false);
+    add("HOTKEY_STATE", IntType, &[Integer, Integer], 2, false);
+    add(
+        "FLOWINPUT",
+        IntType,
+        &[Integer, Integer, Integer, Integer],
+        1,
+        false,
+    );
+    add("FLOWINPUTS", IntType, &[Integer, String], 1, false);
+    add("MOUSEX", IntType, &[], 0, false);
+    add("MOUSEY", IntType, &[], 0, false);
+    add("MOUSEB", StrType, &[], 0, false);
+    add("CURRENTALIGN", StrType, &[], 0, false);
+    add("CURRENTREDRAW", IntType, &[], 0, false);
+    add("GETFONT", StrType, &[], 0, false);
+    add("GETSTYLE", IntType, &[], 0, false);
+    for name in [
+        "GETBGCOLOR",
+        "GETCOLOR",
+        "GETDEFBGCOLOR",
+        "GETDEFCOLOR",
+        "GETFOCUSCOLOR",
+    ] {
+        add(name, IntType, &[], 0, false);
+    }
+    for name in ["HTML_ESCAPE", "HTML_TOPLAINTEXT"] {
+        add(name, StrType, &[String], 1, false);
+    }
+    for name in [
+        "ENUMFUNCBEGINSWITH",
+        "ENUMFUNCENDSWITH",
+        "ENUMFUNCWITH",
+        "ENUMVARBEGINSWITH",
+        "ENUMVARENDSWITH",
+        "ENUMVARWITH",
+    ] {
+        add(name, IntType, &[String, MutableString], 1, false);
+    }
 
     // Structured native functions are declared explicitly. The older fallback
     // catalog accepted any arity and hid both reference mistakes and missing

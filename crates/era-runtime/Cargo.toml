@@ -16,6 +16,7 @@ erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-compiler = { path = "../erabasic-compiler" }
 erabasic-csv = { path = "../erabasic-csv" }
 erabasic-data = { path = "../erabasic-data" }
+erabasic-html = { path = "../erabasic-html" }
 erabasic-parser = { path = "../erabasic-parser" }
 erabasic-validator = { path = "../erabasic-validator" }
 erabasic-vm = { path = "../erabasic-vm" }

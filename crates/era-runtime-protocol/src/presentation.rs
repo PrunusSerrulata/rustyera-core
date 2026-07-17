@@ -120,23 +120,6 @@ pub enum SeparatorRole {
     Rule,
 }
 
-/// Deterministic layout produced after the runtime has obtained font metrics.
-/// Coordinates use 1/1000 pixel units and are relative to the logical line.
-#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
-#[cbor(map)]
-pub struct RunLayout {
-    #[n(0)]
-    pub x_millipixels: i64,
-    #[n(1)]
-    pub y_millipixels: i64,
-    #[n(2)]
-    pub width_millipixels: i64,
-    #[n(3)]
-    pub height_millipixels: i64,
-    #[n(4)]
-    pub depth: i64,
-}
-
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct MediaPlacement {
@@ -177,8 +160,6 @@ pub enum DisplayRun {
         #[n(1)]
         style: TextStyle,
         #[n(2)]
-        layout: RunLayout,
-        #[n(3)]
         system_text: Option<SystemTextRef>,
     },
     #[n(1)]
@@ -190,8 +171,6 @@ pub enum DisplayRun {
         #[n(2)]
         title: Option<String>,
         #[n(3)]
-        layout: RunLayout,
-        #[n(4)]
         hover_style: Option<TextStyle>,
     },
     #[n(2)]
@@ -210,8 +189,6 @@ pub enum DisplayRun {
     Shape {
         #[n(0)]
         shape: Shape,
-        #[n(1)]
-        layout: RunLayout,
     },
     /// A PRINTC-family layout intent. Runtime state contains no font-dependent padding.
     #[n(5)]
@@ -247,8 +224,6 @@ pub struct DisplayLine {
     #[n(4)]
     pub alignment: LineAlignment,
     #[n(5)]
-    pub layout_width_millipixels: Option<i64>,
-    #[n(6)]
     pub runs: Vec<DisplayRun>,
 }
 
@@ -408,6 +383,9 @@ pub struct PresentationSnapshot {
     pub tooltip: TooltipSettings,
     #[n(8)]
     pub resources: ResourceReplay,
+    /// Independent top-layer HTML documents, in script insertion order.
+    #[n(9)]
+    pub html_island: Vec<String>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

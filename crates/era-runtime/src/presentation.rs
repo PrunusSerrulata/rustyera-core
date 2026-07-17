@@ -1,7 +1,7 @@
 use era_runtime_protocol::{
     AudioState, CellAlignment, Color, DisplayLine, DisplayRun, InputWait, InteractionToken,
     LineAlignment, MediaPlacement, PresentationSettings, PresentationSnapshot, ResourceReplay,
-    RunLayout, SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
+    SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
     TooltipSettings,
 };
 use erabasic_vm::VmValue;
@@ -28,6 +28,8 @@ pub(crate) struct PresentationModel {
     project_audio: bool,
     current_style: TextStyle,
     current_alignment: LineAlignment,
+    redraw_enabled: bool,
+    html_island: Vec<String>,
     backgrounds: Vec<MediaPlacement>,
     audio: Vec<AudioState>,
     tooltip: TooltipSettings,
@@ -70,6 +72,8 @@ impl Default for PresentationModel {
             project_audio: false,
             current_style: default_style(),
             current_alignment: LineAlignment::Left,
+            redraw_enabled: true,
+            html_island: Vec::new(),
             backgrounds: Vec::new(),
             audio: Vec::new(),
             tooltip: TooltipSettings {
@@ -92,6 +96,10 @@ impl Default for PresentationModel {
 }
 
 impl PresentationModel {
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub(crate) fn rebind_interactions(
         &mut self,
         tokens: &BTreeMap<InteractionToken, InteractionToken>,
@@ -259,6 +267,21 @@ impl PresentationModel {
         self.commit_line();
     }
 
+    pub(crate) fn append_html_inline(&mut self, markup: String) {
+        self.pending_runs.push(DisplayRun::Html { markup });
+        self.bump();
+    }
+
+    pub(crate) fn append_html_island(&mut self, markup: String) {
+        self.html_island.push(markup);
+        self.bump();
+    }
+
+    pub(crate) fn clear_html_island(&mut self) {
+        self.html_island.clear();
+        self.bump();
+    }
+
     pub(crate) fn append_image(&mut self, resource_id: String, alt_text: Option<String>) {
         self.pending_runs.push(DisplayRun::Image {
             placement: MediaPlacement {
@@ -281,13 +304,6 @@ impl PresentationModel {
             shape: Shape {
                 kind: "rectangle".into(),
                 parameters,
-            },
-            layout: RunLayout {
-                x_millipixels: 0,
-                y_millipixels: 0,
-                width_millipixels: 0,
-                height_millipixels: self.settings.line_height_millipixels,
-                depth: 0,
             },
         });
         self.bump();
@@ -319,6 +335,62 @@ impl PresentationModel {
     pub(crate) fn set_background(&mut self, rgb: i64) {
         self.settings.background = rgb_color(rgb);
         self.bump();
+    }
+
+    pub(crate) fn reset_foreground(&mut self) {
+        self.current_style.foreground = default_style().foreground;
+        self.bump();
+    }
+
+    pub(crate) fn reset_background(&mut self) {
+        self.settings.background = rgb_color(0);
+        self.bump();
+    }
+
+    pub(crate) fn set_bold(&mut self, enabled: bool) {
+        self.current_style.bold = enabled;
+        self.bump();
+    }
+
+    pub(crate) fn set_italic(&mut self, enabled: bool) {
+        self.current_style.italic = enabled;
+        self.bump();
+    }
+
+    pub(crate) fn clear_font_style(&mut self) {
+        self.set_font_style(0);
+    }
+
+    pub(crate) fn set_redraw(&mut self, enabled: bool) {
+        self.redraw_enabled = enabled;
+        self.bump();
+    }
+
+    pub(crate) fn redraw_enabled(&self) -> bool {
+        self.redraw_enabled
+    }
+
+    pub(crate) fn alignment(&self) -> LineAlignment {
+        self.current_alignment
+    }
+
+    pub(crate) fn foreground_rgb(&self) -> i64 {
+        color_rgb(self.current_style.foreground)
+    }
+
+    pub(crate) fn background_rgb(&self) -> i64 {
+        color_rgb(self.settings.background)
+    }
+
+    pub(crate) fn font(&self) -> String {
+        self.current_style.font_family.clone().unwrap_or_default()
+    }
+
+    pub(crate) fn style_bits(&self) -> i64 {
+        i64::from(self.current_style.bold)
+            | (i64::from(self.current_style.italic) << 1)
+            | (i64::from(self.current_style.strikeout) << 2)
+            | (i64::from(self.current_style.underline) << 3)
     }
 
     pub(crate) fn set_audio(&mut self, resource_id: String, bgm: bool, playing: bool) {
@@ -472,7 +544,6 @@ impl PresentationModel {
             logical_line_start: true,
             line_end: true,
             alignment: self.current_alignment,
-            layout_width_millipixels: None,
             runs: std::mem::take(&mut self.pending_runs),
         };
         self.pending_temporary = false;
@@ -486,13 +557,6 @@ impl PresentationModel {
         DisplayRun::Text {
             text,
             style: self.current_style.clone(),
-            layout: RunLayout {
-                x_millipixels: 0,
-                y_millipixels: 0,
-                width_millipixels: 0,
-                height_millipixels: self.settings.line_height_millipixels,
-                depth: 0,
-            },
             system_text: None,
         }
     }
@@ -542,7 +606,6 @@ impl PresentationModel {
             logical_line_start: true,
             line_end: true,
             alignment: self.current_alignment,
-            layout_width_millipixels: None,
             runs: vec![self.button_run(text, token, system_text)],
         };
         self.next_line = self.next_line.saturating_add(1);
@@ -556,23 +619,14 @@ impl PresentationModel {
         token: InteractionToken,
         system_text: Option<SystemTextRef>,
     ) -> DisplayRun {
-        let layout = RunLayout {
-            x_millipixels: 0,
-            y_millipixels: 0,
-            width_millipixels: 0,
-            height_millipixels: self.settings.line_height_millipixels,
-            depth: 0,
-        };
         DisplayRun::Button {
             runs: vec![DisplayRun::Text {
                 text,
                 style: self.current_style.clone(),
-                layout,
                 system_text,
             }],
             token,
             title: None,
-            layout,
             hover_style: None,
         }
     }
@@ -591,7 +645,6 @@ impl PresentationModel {
                 logical_line_start: true,
                 line_end: false,
                 alignment: self.current_alignment,
-                layout_width_millipixels: None,
                 runs: self.pending_runs.clone(),
             });
         }
@@ -625,6 +678,7 @@ impl PresentationModel {
             } else {
                 ResourceReplay::default()
             },
+            html_island: self.html_island.clone(),
         }
     }
 
@@ -751,17 +805,14 @@ fn rgb_color(value: i64) -> Color {
     }
 }
 
-fn plain_text(text: String, line_height: i64) -> DisplayRun {
+fn color_rgb(color: Color) -> i64 {
+    (i64::from(color.red) << 16) | (i64::from(color.green) << 8) | i64::from(color.blue)
+}
+
+fn plain_text(text: String, _line_height: i64) -> DisplayRun {
     DisplayRun::Text {
         text,
         style: default_style(),
-        layout: RunLayout {
-            x_millipixels: 0,
-            y_millipixels: 0,
-            width_millipixels: 0,
-            height_millipixels: line_height,
-            depth: 0,
-        },
         system_text: None,
     }
 }
@@ -818,7 +869,7 @@ fn default_style() -> TextStyle {
         italic: false,
         underline: false,
         strikeout: false,
-        font_family: None,
+        font_family: Some("ＭＳ ゴシック".into()),
         font_millipoints: 18_000,
     }
 }
@@ -927,6 +978,20 @@ mod tests {
         assert_eq!(rich.audio.len(), 1);
         assert!(matches!(rich.lines[1].runs[0], DisplayRun::Html { .. }));
         assert!(matches!(rich.lines[2].runs[0], DisplayRun::Image { .. }));
+    }
+
+    #[test]
+    fn style_queries_and_html_island_remain_canonical() {
+        let mut model = PresentationModel::default();
+        model.set_bold(true);
+        model.set_italic(true);
+        model.set_alignment(LineAlignment::Right);
+        model.append_html_island("<b>x</b>".into());
+        assert_eq!(model.style_bits(), 3);
+        assert_eq!(model.alignment(), LineAlignment::Right);
+        assert_eq!(model.snapshot().html_island, vec!["<b>x</b>"]);
+        model.clear_html_island();
+        assert!(model.snapshot().html_island.is_empty());
     }
 
     #[test]

@@ -21,7 +21,7 @@ extern "C" {
 #define ERA_DEBUG_SCOPE_CONSOLE_EVALUATE (UINT64_C(1) << 6)
 #define ERA_DEBUG_SCOPE_CONSOLE_EXECUTE (UINT64_C(1) << 7)
 #define ERA_DEBUG_SCOPE_BREAKPOINTS_MANAGE (UINT64_C(1) << 8)
-#define ERA_DEBUG_SCOPE_ALL ((UINT64_C(1) << 9) - 1)
+#define ERA_DEBUG_SCOPE_ALL ((UINT64_C(1) << 10) - 1)
 
 typedef struct EraAbiVersion { uint16_t major; uint16_t minor; } EraAbiVersion;
 typedef struct EraCallHeader { uint32_t struct_size; EraAbiVersion abi_version; } EraCallHeader;

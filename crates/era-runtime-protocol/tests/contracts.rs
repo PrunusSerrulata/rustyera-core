@@ -7,9 +7,11 @@ use era_runtime_protocol::{
     EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcome,
     EffectOutcomeStatus, ExitReason, ExitRequested, FrontendInput, GET_KEY_STATE_OPERATION,
     GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
-    InteractionToken, PrimitiveInput, RUNTIME_PROTOCOL_VERSION, ResourceReplay, RuntimeMessage,
-    ServiceKind, ServiceRequest, StateExportChunkRequest, StateExportKind, StateImportBegin,
-    StorageNamespace, StorageOperation, StorageRequest, validate_relative_path,
+    InteractionToken, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION,
+    PointerStateRequest, PointerStateResponse, PrimitiveInput, ProjectionObservation,
+    RUNTIME_PROTOCOL_VERSION, ResourceReplay, RuntimeMessage, ServiceKind, ServiceRequest,
+    StateExportChunkRequest, StateExportKind, StateImportBegin, StorageNamespace, StorageOperation,
+    StorageRequest, validate_relative_path,
 };
 
 #[test]
@@ -30,6 +32,44 @@ fn runtime_payload_and_envelope_tags_agree() {
     assert_eq!(
         RuntimeMessage::from_envelope(&envelope).expect("decode runtime message"),
         message
+    );
+}
+
+#[test]
+fn projection_observations_and_pointer_results_bind_presentation_revisions() {
+    let message = RuntimeMessage::ProjectionObservation(ProjectionObservation {
+        environment_revision: 7,
+        presentation_revision: 9,
+        client_width: 800,
+        client_height: 600,
+        line_columns: 80,
+        text_box: "typed".into(),
+    });
+    assert_eq!(message.tag(), 35);
+    assert_eq!(
+        RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
+        message
+    );
+    assert_eq!(POINTER_STATE_OPERATION, "pointer_state");
+    assert_eq!(POINTER_STATE_OPERATION_VERSION, ProtocolVersion::new(1, 0));
+    let request = PointerStateRequest {
+        presentation_revision: 9,
+        environment_revision: 7,
+    };
+    let response = PointerStateResponse {
+        x: 10,
+        y: 20,
+        button_value: "3".into(),
+        presentation_revision: 9,
+        environment_revision: 7,
+    };
+    assert_eq!(
+        decode_canonical::<PointerStateRequest>(&encode_canonical(&request).unwrap()).unwrap(),
+        request
+    );
+    assert_eq!(
+        decode_canonical::<PointerStateResponse>(&encode_canonical(&response).unwrap()).unwrap(),
+        response
     );
 }
 
@@ -104,7 +144,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(13, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(14, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -143,7 +183,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(13, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(14, 0));
 }
 
 #[test]

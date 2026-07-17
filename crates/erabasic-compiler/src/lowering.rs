@@ -1659,6 +1659,17 @@ impl<'a> Builder<'a> {
                 })
         };
         if let ExecutionBinding::Host(binding) = classification {
+            if binding.contract.portability
+                == erabasic_bytecode::OperationPortability::FrontendObservation
+            {
+                self.diagnostics.push(CompilerDiagnostic::notice_at(
+                    CompilerDiagnosticCode::FrontendObservation,
+                    location,
+                    format!(
+                        "{name} observes the authoritative frontend environment and may vary across clients"
+                    ),
+                ));
+            }
             let import = runtime_import(
                 &binding.namespace,
                 &binding.name,
@@ -1766,6 +1777,7 @@ fn compiler_native_contract(pure: bool) -> erabasic_bytecode::OperationContract 
         wait: OperationWaitPolicy::Immediate,
         capability_fallback: CapabilityFallback::NotApplicable,
         debug: OperationDebugPolicy::Pure,
+        portability: erabasic_bytecode::OperationPortability::Portable,
     }
 }
 
