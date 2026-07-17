@@ -73,7 +73,7 @@ printf '%s\n' \
     '{"id":"wine-putform","op":"execute","statement":"PUTFORM suffix","watch":["SAVEDATA_TEXT"]}' \
     '{"id":"wine-savenos","op":"eval","source":"SAVENOS()"}' \
     '{"id":"wine-run","op":"run","entry":"ORACLE_TEST","watch":["RESULT"]}' \
-    '{"id":"wine-native-tail","op":"run","entry":"ORACLE_NATIVE","watch":["RESULT:0","RESULT:1","RESULT:2","RESULT:3","RESULTS:0"]}' \
+    '{"id":"wine-native-tail","op":"run","entry":"ORACLE_NATIVE","watch":["RESULT:0","RESULT:1","RESULT:2","RESULT:3","RESULT:4","RESULT:5","RESULT:6","RESULT:7","RESULT:8","RESULTS:0","RESULTS:1","RESULTS:2","RESULTS:3","RESULTS:4","RESULTS:5"]}' \
     '{"id":"wine-map","op":"run","entry":"ORACLE_MAP","watch":["RESULT","RESULTS"]}' \
     '{"id":"wine-presentation","op":"run","entry":"ORACLE_PRESENTATION"}' \
     '{"id":"wine-structured","op":"run","entry":"ORACLE_STRUCTURED","watch":["RESULT:0","RESULT:1","RESULT:2","RESULT:3","RESULT:4","RESULT:5","RESULTS:0","RESULTS:1","RESULTS:2"]}' \
@@ -115,7 +115,7 @@ jq -e -s '
     (map(select(.id == "wine-savenos"))[0].result.value == 20) and
     (map(select(.id == "wine-run"))[0].result.termination == "completed") and
     (map(select(.id == "wine-run"))[0].result.output | join("\n") | contains("ORACLE_OK")) and
-    (map(select(.id == "wine-native-tail"))[0].result.watches == {"RESULT:0":0,"RESULT:1":4,"RESULT:2":1,"RESULT:3":1,"RESULTS:0":"a\\+b"}) and
+    (map(select(.id == "wine-native-tail"))[0].result.watches == {"RESULT:0":0,"RESULT:1":4,"RESULT:2":1,"RESULT:3":1,"RESULT:4":2,"RESULT:5":2,"RESULT:6":1,"RESULT:7":946,"RESULT:8":946,"RESULTS:0":"a\\+b","RESULTS:1":"β","RESULTS:2":"ABC","RESULTS:3":"abc","RESULTS:4":"b/c","RESULTS:5":"a,b,c,"}) and
     (map(select(.id == "wine-map"))[0].result.termination == "completed") and
     (map(select(.id == "wine-map"))[0].result.output | join("\n") | contains("MAP=2,1,1,1|3|b,a")) and
     (map(select(.id == "wine-presentation"))[0].result.termination == "completed") and

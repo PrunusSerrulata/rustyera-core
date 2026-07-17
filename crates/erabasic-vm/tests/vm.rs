@@ -1652,7 +1652,7 @@ fn getnum_resolves_the_referenced_builtin_name_table_at_runtime() {
 #[test]
 fn native_tail_matches_the_reference_oracle_fixture() {
     let artifact = compile_source(
-        "@ORACLE_NATIVE\n#DIMS PARTS, 4\nRESULT:0 = 0\nSETBIT RESULT:0, 1, 3\nINVERTBIT RESULT:0, 1\nCLEARBIT RESULT:0, 3\nSPLIT \"a//b/\", \"/\", PARTS, RESULT:1\nRESULT:2 = STRCOUNT(\"ababa\", \"aba\")\nRESULT:3 = GETPALAMLV(499, 5)\nRESULTS:0 = %ESCAPE(\"a+b\")%\nRETURN\n",
+        "@ORACLE_NATIVE\n#DIMS PARTS, 4\n#DIMS JOINED, 4\nRESULT:0 = 0\nSETBIT RESULT:0, 1, 3\nINVERTBIT RESULT:0, 1\nCLEARBIT RESULT:0, 3\nSPLIT \"a//b/\", \"/\", PARTS, RESULT:1\nRESULT:2 = STRCOUNT(\"ababa\", \"aba\")\nRESULT:3 = GETPALAMLV(499, 5)\nRESULTS:0 = %ESCAPE(\"a+b\")%\nJOINED:0 = %\"a\"%\nJOINED:1 = %\"b\"%\nJOINED:2 = %\"c\"%\nRESULT:4 = STRLENS(\"Ab\")\nRESULT:5 = STRLENSU(\"Aé\")\nRESULT:6 = STRFINDU(\"aβc\", \"β\")\nRESULT:7 = ENCODETOUNI(\"β\")\nRESULT:8 = UNICODEBYTE(\"β\")\nRESULTS:1 = %CHARATU(\"aβ\", 1)%\nRESULTS:2 = %TOUPPER(\"Abc\")%\nRESULTS:3 = %TOLOWER(\"AbC\")%\nRESULTS:4 = %STRJOIN(JOINED, \"/\", 1, 2)%\nRESULTS:5 = %STRJOIN(JOINED)%\nRETURN\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -1702,6 +1702,70 @@ fn native_tail_matches_the_reference_oracle_fixture() {
     assert_eq!(
         vm.read_variable(results, &[0], None),
         Ok(VmValue::String("a\\+b".into()))
+    );
+    for (index, expected) in [(4, 2), (5, 2), (6, 1), (7, 946), (8, 946)] {
+        assert_eq!(
+            vm.read_variable(result, &[index], None),
+            Ok(VmValue::Integer(expected))
+        );
+    }
+    for (index, expected) in [(1, "β"), (2, "ABC"), (3, "abc"), (4, "b/c"), (5, "a,b,c,")] {
+        assert_eq!(
+            vm.read_variable(results, &[index], None),
+            Ok(VmValue::String(expected.into()))
+        );
+    }
+}
+
+#[test]
+fn unicode_u_functions_use_scalar_positions_for_utf8_runtime_strings() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULT:0 = STRLENSU(\"A😀\")\nRESULT:1 = STRFINDU(\"A😀B\", \"B\")\nRESULT:2 = STRLENS(\"Aé\")\nRESULTS:0 = %CHARATU(\"A😀B\", 1)%\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(2))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[1], None),
+        Ok(VmValue::Integer(2))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[2], None),
+        Ok(VmValue::Integer(3))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[0], None),
+        Ok(VmValue::String("😀".into()))
     );
 }
 

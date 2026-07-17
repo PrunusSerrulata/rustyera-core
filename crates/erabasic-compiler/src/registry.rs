@@ -360,6 +360,7 @@ const TEXT: &[&str] = &[
     "HTML_SUBSTRING",
     "HTML_TOPLAINTEXT",
     "PRINTCLENGTH",
+    "BARSTR",
     "MESSKIP",
     "MOUSESKIP",
     "ISSKIP",
@@ -577,6 +578,15 @@ fn native_contract(name: &str) -> OperationContract {
 #[allow(clippy::too_many_lines)]
 fn host_contract(namespace: &str, name: &str) -> OperationContract {
     let (state, transaction, persistence, snapshot, hot_reload, wait, fallback) = match namespace {
+        "rustyera.text" if name == "BARSTR" => (
+            OperationState::Controller,
+            TransactionPolicy::ReadOnly,
+            OperationPersistence::ProjectDerived,
+            OperationSnapshotPolicy::Included,
+            OperationHotReloadPolicy::Rebuild,
+            OperationWaitPolicy::Immediate,
+            CapabilityFallback::CanonicalProjection,
+        ),
         "rustyera.text" => (
             OperationState::Presentation,
             TransactionPolicy::CloneCommit,

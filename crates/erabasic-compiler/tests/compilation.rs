@@ -301,6 +301,10 @@ fn candidate_contract_distinguishes_frozen_clock_from_storage_and_putform() {
         erabasic_bytecode::CandidatePolicy::CloneCommit
     );
     assert_eq!(
+        registry.resolve("BARSTR").unwrap().contract.candidate,
+        erabasic_bytecode::CandidatePolicy::ReadOnly
+    );
+    assert_eq!(
         registry.resolve("SAVEDATA").unwrap().contract.candidate,
         erabasic_bytecode::CandidatePolicy::Forbidden
     );

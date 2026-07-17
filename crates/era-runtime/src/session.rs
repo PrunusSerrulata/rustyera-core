@@ -1586,6 +1586,52 @@ impl RuntimeSession {
                 }),
             );
         }
+        if name == "BARSTR" {
+            let value = integer_argument_value(&request.arguments, 0)?;
+            let maximum = integer_argument_value(&request.arguments, 1)?;
+            let length = integer_argument_value(&request.arguments, 2)?;
+            if maximum <= 0 {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "BARSTR maximum must be positive",
+                    Some(request.origin.clone()),
+                );
+            }
+            if !(1..100).contains(&length) {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "BARSTR length must be between 1 and 99",
+                    Some(request.origin.clone()),
+                );
+            }
+            let replace = &vm.vm().artifact().project_data.static_data.replace;
+            // Emuera performs the multiplication in an unchecked Int64 context.
+            let filled = value.wrapping_mul(length) / maximum;
+            let filled = filled.clamp(0, length);
+            let empty = length - filled;
+            let mut bar = String::from("[");
+            bar.push_str(
+                &replace
+                    .bar_char_1
+                    .to_string()
+                    .repeat(usize::try_from(filled).unwrap_or(0)),
+            );
+            bar.push_str(
+                &replace
+                    .bar_char_2
+                    .to_string()
+                    .repeat(usize::try_from(empty).unwrap_or(0)),
+            );
+            bar.push(']');
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(bar)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
         if name == "CALLTRAIN" {
             let count =
                 usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
@@ -7836,7 +7882,7 @@ mod tests {
                     relative_path: "candidate.erb".into(),
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\nWAIT\nRETURN\n@SAVEINFO\nRESULT = 99\nRESULT:1 = GETCONFIG(\"Font size\")\nPUTFORM suffix\nRETURN\n"
+                        "@SYSTEM_TITLE\nWAIT\nRETURN\n@SAVEINFO\nRESULT = 99\nRESULT:1 = GETCONFIG(\"Font size\")\nRESULTS:1 = %BARSTR(2, 4, 4)%\nPUTFORM suffix\nRETURN\n"
                             .into(),
                     ),
                     content_hash: None,
@@ -7964,6 +8010,12 @@ mod tests {
         assert_eq!(
             read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[1], None).unwrap(),
             18
+        );
+        let vm = session.vm.as_ref().unwrap();
+        let results = runtime_variable_key(vm, "RESULTS").unwrap();
+        assert_eq!(
+            vm.vm().read_variable(results, &[1], None),
+            Ok(VmValue::String("[**..]".into()))
         );
     }
 
