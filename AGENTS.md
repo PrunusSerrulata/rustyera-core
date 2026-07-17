@@ -39,13 +39,13 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
 - `crates/era-runtime-ffi`、`crates/era-runtime-capi`：安全 Rust FFI 契约及唯一包含
   `unsafe` 指针边界的 C ABI 动态库实现。
 - `reference/emuera.em`：固定版本的 C# Emuera 参考实现。
-- `reference/real-erb`：真实游戏eraTW中使用的完整脚本集，包含csv、erh和erb。由于文本量过大（80余MB），一般不要全量引用。
+- `reference/real-erb`：真实游戏eraTW中使用的完整脚本集，包含csv、erh和erb。由于文本量过大（80余MB），
+  一般不要全量引用。
 - `reference/eraTW-minimal`：用于测试游戏功能的最小脚本子集。
 - `tools/emuera-reference-cli`：绕过 UI 调用参考实现的 NDJSON 测试工具及平台脚本。
 
-保持各 crate 的职责边界。较大的实现应按语法领域拆分为 module，不要把 lexer
-或 parser 重新堆积到单个源文件中。公共类型应尽量由 crate 根模块稳定地重新
-导出。
+保持各 crate 的职责边界。较大的实现应合理拆分为 module，不要堆积至单个源文件中。
+公共类型应尽量由 crate 根模块稳定地重新导出。
 
 ## 当前实现状态与范围
 
