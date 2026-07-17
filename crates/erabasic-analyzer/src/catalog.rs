@@ -696,7 +696,6 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "STRLENU",
         "TOINT",
         "ISNUMERIC",
-        "UNICODE",
     ] {
         add(name, IntType, &[Any], 1, true);
     }
@@ -715,6 +714,14 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     ] {
         add(name, StrType, &[Any], 1, true);
     }
+    // Emuera's UNICODE converts one UTF-16 code unit value to a string.  It is
+    // the inverse-shaped operation of ENCODETOUNI; keeping the signature here
+    // exact prevents lowering it as the old string-to-integer approximation.
+    add("UNICODE", StrType, &[Integer], 1, false);
+    for name in ["TOFULL", "TOHALF"] {
+        add(name, StrType, &[String], 1, false);
+    }
+    add("MONEYSTR", StrType, &[Integer, String], 1, false);
     add("STRFIND", IntType, &[String, String, Integer], 2, true);
     add("STRFINDU", IntType, &[String, String, Integer], 2, true);
     for name in ["STRLENS", "STRLENSU", "UNICODEBYTE"] {

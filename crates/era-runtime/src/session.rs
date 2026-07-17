@@ -50,7 +50,9 @@ use crate::operation::{
 };
 use crate::presentation::{PresentationModel, display_value, logical_line_string};
 use crate::project::{NormalizedProjectSnapshot, apply_project_delta, build_project};
-use crate::runtime_snapshot::{self, RUNTIME_SNAPSHOT_FORMAT_VERSION, RuntimeSnapshotPayload};
+use crate::runtime_snapshot::{
+    self, CULTURE_TABLE_VERSION, RUNTIME_SNAPSHOT_FORMAT_VERSION, RuntimeSnapshotPayload,
+};
 use crate::save_adapter::{
     decode_era_save, decode_scoped_save, encode_era_save, encode_scoped_save,
     merge_opaque_extensions, merge_structured_extensions,
@@ -256,6 +258,12 @@ struct PendingProjectLoad {
     message_id: u64,
     report: ProjectLoadReport,
     remaining_metadata: BTreeSet<String>,
+    reload: Option<PendingProjectReload>,
+}
+
+struct PendingProjectReload {
+    build: crate::project::ProjectBuild,
+    previous_phase: RuntimePhase,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -781,6 +789,7 @@ impl RuntimeSession {
             message_id,
             report: build.report,
             remaining_metadata,
+            reload: None,
         });
         for (relative_path, digest) in metadata {
             let request_id = self.allocate_request()?;
@@ -884,25 +893,80 @@ impl RuntimeSession {
             next.resource_graph
                 .inherit_runtime_graph(&previous.resource_graph);
         }
-        if build
+        let metadata = build
             .snapshot
             .as_ref()
-            .is_some_and(|snapshot| !snapshot.resource_graph.metadata_requests().is_empty())
-        {
-            build.report.success = false;
-            build.report.diagnostics.push(ProtocolDiagnostic {
-                code: "runtime.reload_image_metadata_requires_full_load".into(),
-                severity: DiagnosticSeverity::Error,
-                message: "hot reload of new or changed image bytes requires a full project load"
-                    .into(),
-                source: None,
+            .map(|snapshot| snapshot.resource_graph.metadata_requests())
+            .unwrap_or_default();
+        if !metadata.is_empty() {
+            if self
+                .service_capabilities
+                .get(&(ServiceKind::Image, IMAGE_METADATA_OPERATION.into()))
+                != Some(&IMAGE_METADATA_OPERATION_VERSION)
+            {
+                build.report.success = false;
+                build.report.diagnostics.push(ProtocolDiagnostic {
+                    code: "runtime.missing_image_metadata_service".into(),
+                    severity: DiagnosticSeverity::Error,
+                    message:
+                        "changed image resources require the negotiated image_metadata service"
+                            .into(),
+                    source: None,
+                });
+                self.emit(
+                    RuntimeMessage::ProjectLoadReport(build.report),
+                    Some(message_id),
+                )?;
+                return self.set_phase(previous_phase);
+            }
+            let remaining_metadata = metadata
+                .iter()
+                .map(|(path, _)| path.to_ascii_lowercase())
+                .collect();
+            let report = build.report.clone();
+            self.pending_project_load = Some(PendingProjectLoad {
+                message_id,
+                report,
+                remaining_metadata,
+                reload: Some(PendingProjectReload {
+                    build,
+                    previous_phase,
+                }),
             });
-            self.emit(
-                RuntimeMessage::ProjectLoadReport(build.report),
-                Some(message_id),
-            )?;
-            return self.set_phase(previous_phase);
+            for (relative_path, digest) in metadata {
+                let request_id = self.allocate_request()?;
+                self.operations.insert_service(
+                    request_id,
+                    PendingService::ProjectImageMetadata {
+                        relative_path: relative_path.clone(),
+                    },
+                );
+                self.emit(
+                    RuntimeMessage::ServiceRequest(ServiceRequest {
+                        request_id,
+                        kind: ServiceKind::Image,
+                        operation: IMAGE_METADATA_OPERATION.into(),
+                        operation_version: IMAGE_METADATA_OPERATION_VERSION,
+                        payload: ProtocolBytes::new(encode_canonical(&ImageMetadataRequest {
+                            resource_id: relative_path,
+                            content_digest: ProtocolBytes::new(digest),
+                        })?),
+                        deadline_ns: None,
+                    }),
+                    None,
+                )?;
+            }
+            return Ok(());
         }
+        self.commit_project_reload(message_id, build, previous_phase)
+    }
+
+    fn commit_project_reload(
+        &mut self,
+        message_id: u64,
+        mut build: crate::project::ProjectBuild,
+        previous_phase: RuntimePhase,
+    ) -> Result<(), RuntimeError> {
         let target = build
             .artifact
             .take()
@@ -1113,6 +1177,8 @@ impl RuntimeSession {
         if payload.artifact_id != artifact.artifact().manifest.artifact_id
             || payload.project_identity != project.project_identity
             || payload.resource_count != u64::try_from(project.resources.len()).unwrap_or(u64::MAX)
+            || payload.selected_locale != self.selected_locale
+            || payload.culture_table_version != CULTURE_TABLE_VERSION
             || !payload.operations.is_snapshot_stable()
         {
             return self.reject(
@@ -1628,6 +1694,62 @@ impl RuntimeSession {
                 request.id,
                 VmHostCompletion::Ready(HostReady {
                     value: Some(VmValue::String(bar)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "MONEYSTR" {
+            let value = integer_argument_value(&request.arguments, 0)?;
+            let formatted = match request.arguments.get(1) {
+                None => value.to_string(),
+                Some(VmValue::String(format)) => match format_era_integer(value, format) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            &format!("MONEYSTR format is invalid: {error}"),
+                            Some(request.origin.clone()),
+                        );
+                    }
+                },
+                Some(_) => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        "MONEYSTR argument 2 must be a string",
+                        Some(request.origin.clone()),
+                    );
+                }
+            };
+            let project = self
+                .project_snapshot
+                .as_ref()
+                .ok_or_else(|| RuntimeError::Internal("MONEYSTR has no loaded project".into()))?;
+            let value = if project.money_first {
+                format!("{}{formatted}", project.money_label)
+            } else {
+                format!("{formatted}{}", project.money_label)
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(name.as_str(), "TOFULL" | "TOHALF") {
+            let value = string_argument_value(&request.arguments, 0, &name)?;
+            let converted = if name == "TOFULL" {
+                to_full_width(value)
+            } else {
+                to_half_width(value)
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(converted)),
                     writes: Vec::new(),
                 }),
             );
@@ -3909,13 +4031,21 @@ impl RuntimeSession {
             let result = match response.result {
                 ServiceResult::Ready { payload } => {
                     let metadata: ImageMetadataResponse = decode_canonical(payload.as_slice())?;
-                    self.project_snapshot
-                        .as_mut()
-                        .ok_or_else(|| {
-                            RuntimeError::Internal(
-                                "image metadata completion has no pending project".into(),
-                            )
-                        })?
+                    let pending = self.pending_project_load.as_mut().ok_or_else(|| {
+                        RuntimeError::Internal(
+                            "image metadata completion has no pending project".into(),
+                        )
+                    })?;
+                    let snapshot = match pending.reload.as_mut() {
+                        Some(reload) => reload.build.snapshot.as_mut(),
+                        None => self.project_snapshot.as_mut(),
+                    }
+                    .ok_or_else(|| {
+                        RuntimeError::Internal(
+                            "image metadata completion has no resource graph".into(),
+                        )
+                    })?;
+                    snapshot
                         .resource_graph
                         .apply_metadata(&relative_path, metadata)
                 }
@@ -3943,7 +4073,22 @@ impl RuntimeSession {
                 });
             }
             if pending.remaining_metadata.is_empty() {
-                let pending = self.pending_project_load.take().expect("checked above");
+                let mut pending = self.pending_project_load.take().expect("checked above");
+                if let Some(mut reload) = pending.reload.take() {
+                    reload.build.report = pending.report;
+                    if reload.build.report.success {
+                        return self.commit_project_reload(
+                            pending.message_id,
+                            reload.build,
+                            reload.previous_phase,
+                        );
+                    }
+                    self.emit(
+                        RuntimeMessage::ProjectLoadReport(reload.build.report),
+                        Some(pending.message_id),
+                    )?;
+                    return self.set_phase(reload.previous_phase);
+                }
                 return self.finish_project_load(pending.message_id, pending.report);
             }
             return Ok(());
@@ -5056,6 +5201,8 @@ impl RuntimeSession {
                         controller: self.controller.clone(),
                         logical_time_ns: self.logical_time_ns,
                         random_seed: self.random_seed,
+                        selected_locale: self.selected_locale.clone(),
+                        culture_table_version: CULTURE_TABLE_VERSION,
                         message_skip: self.message_skip,
                         skip_print: self.skip_print,
                         user_defined_skip: self.user_defined_skip,
@@ -6597,6 +6744,154 @@ fn debugger_suspends_message(message: &RuntimeMessage) -> bool {
             | RuntimeMessage::StateTransferCancel(_)
             | RuntimeMessage::ReloadProject(_)
     )
+}
+
+fn format_era_integer(value: i64, format: &str) -> Result<String, &'static str> {
+    if format.is_empty() {
+        return Ok(value.to_string());
+    }
+    let mut chars = format.chars();
+    let first = chars.next().expect("non-empty format");
+    let precision = chars.as_str().parse::<usize>().ok();
+    match first.to_ascii_uppercase() {
+        'D' if chars.as_str().is_empty() || precision.is_some() => {
+            let width = precision.unwrap_or(0);
+            let magnitude = value.unsigned_abs().to_string();
+            let digits = format!("{magnitude:0>width$}");
+            Ok(if value < 0 {
+                format!("-{digits}")
+            } else {
+                digits
+            })
+        }
+        'X' if chars.as_str().is_empty() || precision.is_some() => {
+            let width = precision.unwrap_or(0);
+            if first.is_ascii_lowercase() {
+                Ok(format!("{value:0>width$x}"))
+            } else {
+                Ok(format!("{value:0>width$X}"))
+            }
+        }
+        'N' if chars.as_str().is_empty() || precision.is_some() => {
+            let decimals = precision.unwrap_or(2);
+            let grouped = group_decimal(value);
+            Ok(if decimals == 0 {
+                grouped
+            } else {
+                format!("{grouped}.{}", "0".repeat(decimals))
+            })
+        }
+        _ if format
+            .chars()
+            .all(|character| matches!(character, '#' | '0' | ','))
+            && format.contains('0') =>
+        {
+            let minimum = format.chars().filter(|character| *character == '0').count();
+            let magnitude = value.unsigned_abs().to_string();
+            let mut digits = format!("{magnitude:0>minimum$}");
+            if format.contains(',') {
+                digits = group_unsigned_decimal(&digits);
+            }
+            Ok(if value < 0 {
+                format!("-{digits}")
+            } else {
+                digits
+            })
+        }
+        _ => Err("unsupported integer format"),
+    }
+}
+
+fn group_decimal(value: i64) -> String {
+    let digits = group_unsigned_decimal(&value.unsigned_abs().to_string());
+    if value < 0 {
+        format!("-{digits}")
+    } else {
+        digits
+    }
+}
+
+fn group_unsigned_decimal(value: &str) -> String {
+    let mut output = String::with_capacity(value.len() + value.len() / 3);
+    for (index, character) in value.chars().enumerate() {
+        if index != 0 && (value.len() - index).is_multiple_of(3) {
+            output.push(',');
+        }
+        output.push(character);
+    }
+    output
+}
+
+// Version 1 of the deterministic width table covers the ASCII block and the
+// half-width katakana block used by Emuera projects.  It deliberately avoids
+// the platform-dependent VisualBasic StrConv implementation.
+const HALF_KANA: &str = "｡｢｣､･ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝﾞﾟ";
+const FULL_KANA: &str = "。「」、・ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン゛゜";
+
+fn to_full_width(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut input = value.chars().peekable();
+    while let Some(character) = input.next() {
+        if let Some(mark) = input.peek().copied()
+            && matches!(mark, 'ﾞ' | 'ﾟ')
+            && let Some(composed) = compose_half_kana(character, mark)
+        {
+            output.push(composed);
+            input.next();
+            continue;
+        }
+        match character {
+            ' ' => output.push('　'),
+            '!'..='~' => output.push(char::from_u32(u32::from(character) + 0xfee0).unwrap()),
+            _ => output.push(map_width_char(character, HALF_KANA, FULL_KANA).unwrap_or(character)),
+        }
+    }
+    output
+}
+
+fn to_half_width(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for character in value.chars() {
+        if let Some(pair) = decompose_full_kana(character) {
+            output.extend(pair);
+            continue;
+        }
+        match character {
+            '　' => output.push(' '),
+            '\u{ff01}'..='\u{ff5e}' => {
+                output.push(char::from_u32(u32::from(character) - 0xfee0).unwrap());
+            }
+            _ => output.push(map_width_char(character, FULL_KANA, HALF_KANA).unwrap_or(character)),
+        }
+    }
+    output
+}
+
+fn map_width_char(character: char, source: &str, target: &str) -> Option<char> {
+    source
+        .chars()
+        .position(|candidate| candidate == character)
+        .and_then(|index| target.chars().nth(index))
+}
+
+fn compose_half_kana(base: char, mark: char) -> Option<char> {
+    let bases = "ｳｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾊﾋﾌﾍﾎﾊﾋﾌﾍﾎ";
+    let marks = "ﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾟﾟﾟﾟﾟ";
+    let full = "ヴガギグゲゴザジズゼゾダヂヅデドバビブベボパピプペポ";
+    bases
+        .chars()
+        .zip(marks.chars())
+        .position(|(candidate, candidate_mark)| candidate == base && candidate_mark == mark)
+        .and_then(|index| full.chars().nth(index))
+}
+
+fn decompose_full_kana(character: char) -> Option<[char; 2]> {
+    let full = "ヴガギグゲゴザジズゼゾダヂヅデドバビブベボパピプペポ";
+    let bases = "ｳｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾊﾋﾌﾍﾎﾊﾋﾌﾍﾎ";
+    let marks = "ﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾞﾟﾟﾟﾟﾟ";
+    full.chars()
+        .position(|candidate| candidate == character)
+        .and_then(|index| Some([bases.chars().nth(index)?, marks.chars().nth(index)?]))
 }
 
 #[cfg(test)]
@@ -8167,6 +8462,15 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_width_and_integer_format_tables_cover_era_usage() {
+        assert_eq!(to_full_width("ABC 123 ｶﾞﾊﾟ"), "ＡＢＣ　１２３　ガパ");
+        assert_eq!(to_half_width("ＡＢＣ　１２３　ガパ"), "ABC 123 ｶﾞﾊﾟ");
+        assert_eq!(format_era_integer(12_345, "#,##0"), Ok("12,345".into()));
+        assert_eq!(format_era_integer(-7, "D3"), Ok("-007".into()));
+        assert_eq!(format_era_integer(255, "X4"), Ok("00FF".into()));
+    }
+
+    #[test]
     fn frontend_monotonic_time_rebases_onto_restored_logical_time() {
         let mut session = RuntimeSession::new(RuntimeOptions::default());
         session.logical_time_ns = 100;
@@ -8246,6 +8550,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn project_resource_metadata_is_frontend_decoded_before_load_commit() {
         let mut session = RuntimeSession::new(RuntimeOptions::default());
         let mut client = capabilities();
@@ -8343,6 +8648,130 @@ mod tests {
                 .and_then(|project| project.resource_graph.sprite("face"))
                 .map(|sprite| (sprite.width, sprite.height)),
             Some((32, 16))
+        );
+
+        submit(
+            &mut session,
+            3,
+            RuntimeMessage::ReloadProject(ReloadProject {
+                base_revision: 1,
+                target_revision: 2,
+                changes: vec![FileChange::Upsert {
+                    file: SubmittedFile {
+                        relative_path: "resources/face.png".into(),
+                        category: FileCategory::Resource,
+                        payload: FilePayload::Bytes(ProtocolBytes::new(vec![4, 5, 6])),
+                        content_hash: None,
+                    },
+                }],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let reload_messages = drain(&mut session);
+        let reload_request = reload_messages
+            .iter()
+            .find_map(|message| match message {
+                RuntimeMessage::ServiceRequest(request)
+                    if request.operation == IMAGE_METADATA_OPERATION =>
+                {
+                    Some(request.request_id)
+                }
+                _ => None,
+            })
+            .expect("changed image metadata request");
+        assert_eq!(
+            session
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.sprite("face"))
+                .map(|sprite| (sprite.width, sprite.height)),
+            Some((32, 16)),
+            "the live graph must not change before candidate metadata commits"
+        );
+        submit(
+            &mut session,
+            4,
+            RuntimeMessage::ServiceResponse(ServiceResponse {
+                request_id: reload_request,
+                result: ServiceResult::Ready {
+                    payload: ProtocolBytes::new(
+                        encode_canonical(&ImageMetadataResponse {
+                            width: 64,
+                            height: 24,
+                            format: "png".into(),
+                            animated: false,
+                        })
+                        .unwrap(),
+                    ),
+                },
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        assert!(drain(&mut session).iter().any(|message| {
+            matches!(message, RuntimeMessage::ProjectLoadReport(report) if report.success && report.project_revision == 2)
+        }));
+        assert_eq!(
+            session
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.sprite("face"))
+                .map(|sprite| (sprite.width, sprite.height)),
+            Some((64, 24))
+        );
+
+        submit(
+            &mut session,
+            5,
+            RuntimeMessage::ReloadProject(ReloadProject {
+                base_revision: 2,
+                target_revision: 3,
+                changes: vec![FileChange::Upsert {
+                    file: SubmittedFile {
+                        relative_path: "resources/face.png".into(),
+                        category: FileCategory::Resource,
+                        payload: FilePayload::Bytes(ProtocolBytes::new(vec![7, 8, 9])),
+                        content_hash: None,
+                    },
+                }],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let failed_request = drain(&mut session)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::ServiceRequest(request)
+                    if request.operation == IMAGE_METADATA_OPERATION =>
+                {
+                    Some(request.request_id)
+                }
+                _ => None,
+            })
+            .expect("second changed image metadata request");
+        submit(
+            &mut session,
+            6,
+            RuntimeMessage::ServiceResponse(ServiceResponse {
+                request_id: failed_request,
+                result: ServiceResult::Error {
+                    error: era_runtime_protocol::ServiceError {
+                        code: "decoder.invalid".into(),
+                        message: "invalid image".into(),
+                    },
+                },
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let failed = drain(&mut session);
+        assert!(failed.iter().any(|message| {
+            matches!(message, RuntimeMessage::ProjectLoadReport(report) if !report.success && report.project_revision == 3)
+        }));
+        assert_eq!(
+            session
+                .project_snapshot
+                .as_ref()
+                .map(|project| project.manifest.project_revision),
+            Some(2),
+            "failed candidate metadata must leave the previous project authoritative"
         );
     }
 

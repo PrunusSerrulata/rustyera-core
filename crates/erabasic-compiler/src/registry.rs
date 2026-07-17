@@ -361,6 +361,9 @@ const TEXT: &[&str] = &[
     "HTML_TOPLAINTEXT",
     "PRINTCLENGTH",
     "BARSTR",
+    "MONEYSTR",
+    "TOFULL",
+    "TOHALF",
     "MESSKIP",
     "MOUSESKIP",
     "ISSKIP",
@@ -578,7 +581,7 @@ fn native_contract(name: &str) -> OperationContract {
 #[allow(clippy::too_many_lines)]
 fn host_contract(namespace: &str, name: &str) -> OperationContract {
     let (state, transaction, persistence, snapshot, hot_reload, wait, fallback) = match namespace {
-        "rustyera.text" if name == "BARSTR" => (
+        "rustyera.text" if matches!(name, "BARSTR" | "MONEYSTR" | "TOFULL" | "TOHALF") => (
             OperationState::Controller,
             TransactionPolicy::ReadOnly,
             OperationPersistence::ProjectDerived,

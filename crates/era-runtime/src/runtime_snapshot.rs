@@ -10,7 +10,8 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 4;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 5;
+pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 52;
 
@@ -29,6 +30,8 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) controller: SystemController,
     pub(crate) logical_time_ns: u64,
     pub(crate) random_seed: Option<u64>,
+    pub(crate) selected_locale: String,
+    pub(crate) culture_table_version: u32,
     pub(crate) message_skip: bool,
     pub(crate) skip_print: bool,
     pub(crate) user_defined_skip: bool,
@@ -109,6 +112,8 @@ mod tests {
             controller: SystemController::default(),
             logical_time_ns: 4,
             random_seed: Some(5),
+            selected_locale: "ja".into(),
+            culture_table_version: CULTURE_TABLE_VERSION,
             message_skip: false,
             skip_print: false,
             user_defined_skip: false,
@@ -142,6 +147,8 @@ mod tests {
             controller: SystemController::default(),
             logical_time_ns: 4,
             random_seed: Some(5),
+            selected_locale: "ja".into(),
+            culture_table_version: CULTURE_TABLE_VERSION,
             message_skip: false,
             skip_print: false,
             user_defined_skip: false,
@@ -155,5 +162,7 @@ mod tests {
         let encoded = encode(&payload).unwrap();
         let decoded = decode(&encoded, encoded.len()).unwrap();
         assert_eq!(decoded.resource_graph.canvas_state(7), Some((20, 10)));
+        assert_eq!(decoded.selected_locale, "ja");
+        assert_eq!(decoded.culture_table_version, CULTURE_TABLE_VERSION);
     }
 }
