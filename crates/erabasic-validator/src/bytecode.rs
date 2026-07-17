@@ -561,6 +561,21 @@ fn validate_function(
         ));
         return;
     }
+    let mut label_names = BTreeSet::new();
+    if function.labels.iter().any(|label| {
+        label.name.is_empty()
+            || !label_names.insert(label.name.to_ascii_uppercase())
+            || label.instruction as usize >= function.code.len()
+    }) {
+        diagnostics.push(ValidationDiagnostic::project(
+            ValidationCode::InvalidControlFlow,
+            format!(
+                "function {} has an invalid dynamic-label table",
+                function.name
+            ),
+        ));
+        return;
+    }
     let mut states = vec![None; function.code.len()];
     states[0] = Some(Vec::<BytecodeType>::new());
     let mut work = VecDeque::from([0usize]);
@@ -793,6 +808,27 @@ fn apply_instruction(
             ))?;
             stack.push(value);
         }
+        Opcode::StorePlace => {
+            expect_payload(&instruction.payload, 0)?;
+            let place = stack.pop().ok_or((
+                ValidationCode::StackMismatch,
+                "indirect store underflows the stack".into(),
+            ))?;
+            let value = stack.pop().ok_or((
+                ValidationCode::StackMismatch,
+                "indirect store underflows the stack".into(),
+            ))?;
+            if !matches!(
+                (place, value),
+                (BytecodeType::IntegerPlace, BytecodeType::Integer)
+                    | (BytecodeType::StringPlace, BytecodeType::String)
+            ) {
+                return Err((
+                    ValidationCode::TypeMismatch,
+                    "indirect store place and value types differ".into(),
+                ));
+            }
+        }
         Opcode::Jump => {
             expect_payload(&instruction.payload, 4)?;
             return Ok(vec![read_u32(&instruction.payload, 0)? as usize]);
@@ -803,13 +839,19 @@ fn apply_instruction(
             return Ok(vec![read_u32(&instruction.payload, 0)? as usize, index + 1]);
         }
         Opcode::ResolveFunction => {
-            expect_payload(&instruction.payload, 5)?;
+            expect_payload(&instruction.payload, 6)?;
             pop_type(stack, BytecodeType::String)?;
             stack.push(BytecodeType::String);
             if instruction.payload[4] > 1 {
                 return Err((
                     ValidationCode::InvalidOperand,
                     "resolve-function allow-missing flag is invalid".into(),
+                ));
+            }
+            if instruction.payload[5] > 1 {
+                return Err((
+                    ValidationCode::InvalidOperand,
+                    "resolve-function method flag is invalid".into(),
                 ));
             }
             if instruction.payload[4] == 1 {
@@ -830,6 +872,24 @@ fn apply_instruction(
                     "dynamic call argument underflows the stack".into(),
                 ))?;
             }
+            pop_type(stack, BytecodeType::String)?;
+        }
+        Opcode::JumpDynamicLabel => {
+            expect_payload(&instruction.payload, 4)?;
+            pop_type(stack, BytecodeType::String)?;
+            let mut successors = vec![read_u32(&instruction.payload, 0)? as usize];
+            successors.extend(
+                function
+                    .labels
+                    .iter()
+                    .map(|label| label.instruction as usize),
+            );
+            successors.sort_unstable();
+            successors.dedup();
+            return Ok(successors);
+        }
+        Opcode::InvokeEvent => {
+            expect_payload(&instruction.payload, 0)?;
             pop_type(stack, BytecodeType::String)?;
         }
         Opcode::Call | Opcode::CallNative | Opcode::CallHost => {
@@ -907,12 +967,20 @@ fn apply_instruction(
                 ));
             }
             if instruction.payload[0] != 0 {
-                let result = function.result.ok_or((
-                    ValidationCode::TypeMismatch,
-                    "void function returns a value".into(),
-                ))?;
+                let result = function
+                    .result
+                    .or_else(|| {
+                        (function.kind != erabasic_bytecode::BytecodeFunctionKind::Method)
+                            .then_some(BytecodeType::Integer)
+                    })
+                    .ok_or((
+                        ValidationCode::TypeMismatch,
+                        "void function returns a value".into(),
+                    ))?;
                 pop_type(stack, result)?;
-            } else if function.result.is_some() {
+            } else if function.result.is_some()
+                && function.kind != erabasic_bytecode::BytecodeFunctionKind::Event
+            {
                 return Err((
                     ValidationCode::TypeMismatch,
                     "value-returning function has an empty return".into(),

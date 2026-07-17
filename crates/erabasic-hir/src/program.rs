@@ -43,6 +43,17 @@ pub enum FunctionKind {
     Method,
 }
 
+/// Script-visible compatibility switches that affect late-bound calls.
+///
+/// They are part of HIR rather than compiler process state because dynamic targets
+/// cannot be validated until VM execution.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CallCompatibility {
+    pub allow_event_as_normal: bool,
+    pub allow_omitted_arguments: bool,
+    pub auto_convert_integer_to_string: bool,
+}
+
 /// Reference event modifiers retained after parsing. They affect dispatch order rather
 /// than the body of an individual function definition.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -156,6 +167,7 @@ pub struct ControlFlowEdge {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Program {
     pub format_version: u32,
+    pub call_compatibility: CallCompatibility,
     pub sources: Vec<SourceFile>,
     pub variables: Vec<Variable>,
     pub functions: Vec<Function>,
@@ -166,6 +178,7 @@ impl Program {
     pub fn new(sources: Vec<SourceFile>) -> Self {
         Self {
             format_version: HIR_FORMAT_VERSION,
+            call_compatibility: CallCompatibility::default(),
             sources,
             variables: Vec::new(),
             functions: Vec::new(),

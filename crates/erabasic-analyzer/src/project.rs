@@ -333,6 +333,11 @@ fn analyze_with_context(
     }
 
     let mut program = Program::new(sources.iter().map(|source| source.source.clone()).collect());
+    program.call_compatibility = erabasic_hir::CallCompatibility {
+        allow_event_as_normal: options.compatible_call_event,
+        allow_omitted_arguments: options.compatible_function_argument_optional,
+        auto_convert_integer_to_string: options.compatible_function_argument_auto_convert,
+    };
     program.variables = symbols.variables;
     program.functions = functions;
     diagnostics.sort_by_key(|diagnostic| {
@@ -768,7 +773,9 @@ fn analyze_instruction(
             .collect();
         if !matches!(
             signature.argument_style,
-            erabasic_parser::ArgumentStyle::Formatted | erabasic_parser::ArgumentStyle::Raw
+            erabasic_parser::ArgumentStyle::Formatted
+                | erabasic_parser::ArgumentStyle::Raw
+                | erabasic_parser::ArgumentStyle::DynamicCall
         ) && !static_target
         {
             analyzer.check_arguments(

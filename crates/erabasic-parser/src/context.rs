@@ -138,7 +138,9 @@ const DYNAMIC_CALL_INSTRUCTIONS: &[&str] = &[
     "TRYCCALL",
     "TRYCJUMP",
     "TRYCJUMPFORM",
+    "TRYCGOTO",
     "TRYCGOTOFORM",
+    "FUNC",
 ];
 
 const NO_ARG_INSTRUCTIONS: &[&str] = &[

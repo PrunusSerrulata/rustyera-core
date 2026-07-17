@@ -15,8 +15,8 @@
 snapshot、热替换和主要系统流程框架已经存在，但仍有数个会阻止真实游戏正常运行的
 高优先级缺口：
 
-- `PRINTDATA*`、`STRDATA` 与主要动态函数调用路径已经可用；带下标数据目标、动态
-  label、事件调用和候选调用列表仍未实现。
+- `PRINTDATA*`、`STRDATA`、带下标目标、动态 label、事件调用和候选调用列表已经
+  可用；这些原 1.1 阻断项不再属于已知缺口。
 - `PRINT*` 的 K/D 后缀和常用专用输出已经实现，但 N/SINGLE/C 等后缀仍缺少完整语义。
 - 调教、`EVENTCOMEND`、SHOP 自动存档存在系统流程差异。
 - 很多已进入 Host catalog 的命令最终落入通用 `UnsupportedRuntimeFeature`。
@@ -37,14 +37,14 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 | 阶段 | 当前状态 | 主要问题 |
 | --- | --- | --- |
 | 握手、能力协商 | 基本完成 | 一些能力被固定关闭；部分 catalog 能力实际不可执行 |
-| 项目提交、CSV/ERH/ERB 编译 | 部分完成 | 配置项覆盖不完整；动态 label、事件调用及候选调用列表仍不可执行 |
+| 项目提交、CSV/ERH/ERB 编译 | 部分完成 | 1.1 的调用兼容配置已投影；其他非调用配置项覆盖仍不完整 |
 | 资源加载 | 架构已实现 | 图片解码前端化是有意设计；物理绘图能力大量不支持 |
 | 标题画面 | 部分完成 | 新游戏重置时机、标题内容、输入方式不同 |
 | 新游戏初始化、EVENTFIRST | 部分完成 | `SYSTEM_TITLE` 观察到的初始状态不同 |
 | TRAIN/连续调教 | 明显不完整 | 输出抑制、进度信息、`CALLTRAINEND`、`DOTRAIN` 限制不同 |
 | AFTERTRAIN/ABLUP/TURNEND | 主流程存在 | BEGIN 时的样式、SKIPDISP、连续调教清理不同 |
 | SHOP | 部分完成 | 自动存档条件、EVENTSHOP 中 BEGIN、失败等待不同 |
-| 普通脚本执行 | 部分完成 | 主要动态调用、打印数据块和 THROW 已实现；1.1 所列边缘调用仍阻塞部分脚本 |
+| 普通脚本执行 | 部分完成 | 1.1 所列动态调用、打印数据块和阻断指令已实现；其余差异见后续各节 |
 | 输入/QTE/计时 | 主框架完成 | ONEINPUT 长度未由 runtime 校验；部分 UI 输入函数缺失 |
 | 文本、HTML、图片、音频 | 语义模型部分完成 | PRINT 后缀、HTML、图片参数和样式操作缺失 |
 | 传统存档、VM snapshot | 基础完成 | 菜单和失败行为不同；没有参考实现 Ctrl-Z 轨迹 |
@@ -56,18 +56,17 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 
 以下项目尚未完整实现；部分曾只被“其他未实现 Host 操作”这一兜底说明笼统覆盖。
 
-### 1.1 会阻止真实脚本运行的编译或执行缺口
+### 1.1 已补齐的原编译或执行阻断项
 
 #### PRINTDATA、STRDATA 和数据列表
 
 - 已实现 `PRINTDATA*` 和 `STRDATA` 的惰性随机选择：skip 时不消耗 RAND，未选中的
-  DATA 表达式不求值，`DATALIST` 作为一个多行候选，支持标量选择索引及 K/D/L/W。
+  DATA 表达式不求值，`DATALIST` 作为一个多行候选，支持带下标选择索引及 K/D/L/W。
 - parser、analyzer、compiler 识别全部 K/D/L/W 组合，并将 `ENDLIST` 正确匹配
-  `DATALIST`。
+  `DATALIST`；三类 `TRY*LIST` 的候选执行也已落地。
 - 旧文档中的 `TRYLIST/ENDLIST` 是审计笔误；参考语法实际为
   `TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST`、`FUNC`、`ENDFUNC`。结构解析已修正，候选
-  调用的执行仍归入下节的动态调用缺口。
-- 当前选择索引和 `STRDATA` 目标仅支持标量 place；带下标目标仍会产生稳定编译诊断。
+  调用使用 VM 原生的惰性逐项解析。
 - `real-erb` 中检出约 2,432 次 `PRINTDATA*` 词法使用。
 
 #### 动态调用
@@ -77,16 +76,12 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 generation 的函数表，JUMP 使用帧替换，缺失 try 目标不求值实参。参数默认值已进入
 字节码并在 VM 绑定。
 
-以下动态调用仍未完整落地：
-
-- `TRYCGOTO*`（动态 label 跳转）
-- `CALLEVENT`
-- `TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST` 的候选执行
-- `CompatiFuncArgOptional`、`CompatiFuncArgAutoConvert`、`CompatiCallEvent` 配置投影，以及
-  normal/method/event 的运行时种类限制
-
-静态 `TRYCALL/TRYJUMP` 的缺失目标已改为不求值参数并继续执行；`TRY*LIST` 的执行仍
-未落地。
+`TRYCGOTO*` 使用函数内版本化 label 表，并保留参考实现中“常量缺失”和“运行时动态
+缺失”进入 CATCH 路径不同的行为。`CALLEVENT` 在当前 fiber 内按 ONLY/PRI/normal/LATER
+顺序运行事件组，保留 SINGLE 返回值规则，并拒绝事件上下文中的递归 CALLEVENT。
+`CompatiFuncArgOptional`、`CompatiFuncArgAutoConvert`、`CompatiCallEvent` 已从文本/JSON
+配置投影至 HIR 和字节码，VM 对 normal/method/event 种类进行运行时限制。静态
+`TRYCALL/TRYJUMP` 的缺失目标也不会求值参数。
 `real-erb` 中约有 1,251 个 `CALLFORM`、748 个 `TRYCALLFORM` 和 73 个
 `TRYCCALLFORM`。
 
@@ -333,8 +328,8 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 | L/W 后缀 | 控制换行和等待 | 只按名称末尾粗略处理 |
 | 嵌入 `\n` | 递归切成多个显示行 | Rust 将换行保留在同一个 Text run |
 | `PRINTPLAIN*` | 不把 `[数字]` 转换成按钮 | Rust 普通 PRINT 本身也不生成按钮 |
-| `PRINTDATA*` | 随机数据列表、多行输出、选择索引、K/D/L/W | 已实现；带下标选择目标尚不支持 |
-| `STRDATA` | 随机选择并拼接字符串数据块 | 已实现；带下标目标尚不支持 |
+| `PRINTDATA*` | 随机数据列表、多行输出、选择索引、K/D/L/W | 已实现，包括带下标选择目标 |
+| `STRDATA` | 随机选择并拼接字符串数据块 | 已实现，包括带下标目标 |
 | `BAR/BARL/BARSTR` | 按当前值、最大值、长度和配置字符生成进度条 | 仅 `BARSTR` 可用 |
 | `DRAWLINE` | 按可绘宽度重复 pattern | Rust 使用确定性逻辑分隔线 |
 | `GETLINESTR` | 按实际 console 可绘宽度返回重复 pattern 字符串 | Rust 固定按 75 逻辑列近似；与新前端观测原则冲突 |

@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use erabasic_ast::{AssignOp, BinaryOp, PostfixOp, UnaryOp};
 use erabasic_bytecode::{
-    BytecodeFunction, BytecodeParameter, BytecodeType, Digest, EncodedInstruction, FunctionImport,
-    HostImport, ImportKind, NATIVE_ABI_VERSION, NativeImport, Opcode, RuntimeImport,
-    SourceMapEntry, SymbolKey, opcode,
+    BytecodeFunction, BytecodeFunctionKind, BytecodeLabel, BytecodeParameter, BytecodeType, Digest,
+    EncodedInstruction, FunctionImport, HostImport, ImportKind, NATIVE_ABI_VERSION, NativeImport,
+    Opcode, RuntimeImport, SourceMapEntry, SymbolKey, opcode,
 };
 use erabasic_hir::{
-    CallTarget, ControlFlowKind, Function, FunctionId, HirArgument, HirCallArgument, HirExpr,
-    HirExprKind, HirFormPart, HirFormattedString, HirStatementKind, InstructionTarget, LineId,
-    Program, SemanticType, SourceLocation, VariableId,
+    CallTarget, ControlFlowKind, Function, FunctionId, FunctionKind, HirArgument, HirCallArgument,
+    HirExpr, HirExprKind, HirFormPart, HirFormattedString, HirStatementKind, InstructionTarget,
+    LineId, Program, SemanticType, SourceLocation, VariableId,
 };
 
 use crate::{
@@ -45,6 +45,7 @@ pub(crate) fn lower_function(
     let mut builder = Builder::new(function, key, context);
     let structured = structured_if_flow(function);
     let (data_blocks, data_body_lines) = collect_data_blocks(function);
+    let (try_lists, try_list_body_lines) = collect_try_lists(function);
     let mut line_starts = BTreeMap::new();
     let mut line_entries = BTreeMap::new();
     let mut pending_jumps = Vec::new();
@@ -59,7 +60,9 @@ pub(crate) fn lower_function(
         let before = builder.code.len();
         if let Some(block) = data_blocks.get(&line.id) {
             builder.lower_data_block(block);
-        } else if data_body_lines.contains(&line.id) {
+        } else if let Some(block) = try_lists.get(&line.id) {
+            builder.lower_try_list(block);
+        } else if data_body_lines.contains(&line.id) || try_list_body_lines.contains(&line.id) {
             // The opener emits the complete selection so unselected DATA expressions
             // are never evaluated. Body lines retain a NOP for source-map anchoring.
         } else {
@@ -119,7 +122,11 @@ pub(crate) fn lower_function(
                 line.location,
             );
         }
-        if !data_blocks.contains_key(&line.id) && !data_body_lines.contains(&line.id) {
+        if !data_blocks.contains_key(&line.id)
+            && !data_body_lines.contains(&line.id)
+            && !try_lists.contains_key(&line.id)
+            && !try_list_body_lines.contains(&line.id)
+        {
             add_control_flow(
                 function,
                 line.id,
@@ -229,13 +236,30 @@ pub(crate) fn lower_function(
         })
         .collect();
     let result = bytecode_type(function.return_type);
+    let labels = function
+        .labels
+        .iter()
+        .filter_map(|(_, name, line)| {
+            Some(BytecodeLabel {
+                name: name.clone(),
+                instruction: u32::try_from(*line_starts.get(line)?).ok()?,
+            })
+        })
+        .collect();
     LoweredFunction {
         cache_key,
         function: BytecodeFunction {
             key,
             name: function.name.clone(),
+            kind: match function.kind {
+                FunctionKind::Normal => BytecodeFunctionKind::Normal,
+                FunctionKind::Event => BytecodeFunctionKind::Event,
+                FunctionKind::System => BytecodeFunctionKind::System,
+                FunctionKind::Method => BytecodeFunctionKind::Method,
+            },
             parameters,
             result,
+            labels,
             imports: builder.imports,
             max_stack: u32::try_from(builder.code.len().saturating_mul(2).saturating_add(16))
                 .unwrap_or(u32::MAX),
@@ -277,6 +301,46 @@ fn strip_source_locations(value: &mut serde_json::Value) {
 struct DataBlock<'a> {
     opener: &'a erabasic_hir::HirStatement,
     choices: Vec<Vec<&'a erabasic_hir::HirStatement>>,
+}
+
+struct TryListBlock<'a> {
+    opener: &'a erabasic_hir::HirStatement,
+    candidates: Vec<&'a erabasic_hir::HirStatement>,
+}
+
+fn collect_try_lists(
+    function: &Function,
+) -> (BTreeMap<LineId, TryListBlock<'_>>, BTreeSet<LineId>) {
+    let mut blocks = BTreeMap::new();
+    let mut body = BTreeSet::new();
+    let mut index = 0;
+    while index < function.lines.len() {
+        let opener = &function.lines[index];
+        if !matches!(
+            instruction_name(opener),
+            Some("TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST")
+        ) {
+            index += 1;
+            continue;
+        }
+        let mut candidates = Vec::new();
+        let mut cursor = index + 1;
+        while cursor < function.lines.len() {
+            let candidate = &function.lines[cursor];
+            body.insert(candidate.id);
+            if instruction_name(candidate) == Some("ENDFUNC") {
+                cursor += 1;
+                break;
+            }
+            if instruction_name(candidate) == Some("FUNC") {
+                candidates.push(candidate);
+            }
+            cursor += 1;
+        }
+        blocks.insert(opener.id, TryListBlock { opener, candidates });
+        index = cursor;
+    }
+    (blocks, body)
 }
 
 fn collect_data_blocks(function: &Function) -> (BTreeMap<LineId, DataBlock<'_>>, BTreeSet<LineId>) {
@@ -357,6 +421,18 @@ fn argument_place(argument: Option<&HirArgument>) -> Option<&erabasic_hir::HirPl
     }
 }
 
+fn formatted_constant(value: &HirFormattedString) -> Option<String> {
+    let mut result = String::new();
+    for part in &value.parts {
+        match part {
+            HirFormPart::Text { value } => result.push_str(value),
+            HirFormPart::Triple { symbol, .. } => result.push(*symbol),
+            HirFormPart::Interpolation { .. } | HirFormPart::Conditional { .. } => return None,
+        }
+    }
+    Some(result)
+}
+
 fn add_control_flow(
     function: &Function,
     line: LineId,
@@ -366,6 +442,14 @@ fn add_control_flow(
     pending: &mut Vec<(usize, LineId, bool)>,
 ) {
     if let Some(target) = structured.false_targets.get(&line) {
+        if builder
+            .code
+            .last()
+            .is_some_and(|instruction| instruction.opcode == Opcode::JumpDynamicLabel as u16)
+        {
+            pending.push((builder.code.len() - 1, *target, true));
+            return;
+        }
         let instruction = builder.code.len();
         builder.emit(opcode::jump(Opcode::JumpIfFalse, 0), location);
         pending.push((instruction, *target, true));
@@ -423,7 +507,8 @@ fn structured_if_flow(function: &Function) -> StructuredFlow {
             continue;
         };
         match target.name() {
-            "IF" | "TRYCCALL" | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" => open.push(OpenIf {
+            "IF" | "TRYCCALL" | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" | "TRYCGOTO"
+            | "TRYCGOTOFORM" => open.push(OpenIf {
                 opener: line.id,
                 alternatives: Vec::new(),
             }),
@@ -522,19 +607,27 @@ impl<'a> Builder<'a> {
             location,
         );
 
-        if !is_string && let Some(place) = argument_place(arguments.first()) {
-            if place.indices.is_empty()
-                && let Some(key) = self.context.variable_keys.get(&place.variable).copied()
-            {
-                self.emit(EncodedInstruction::new(Opcode::Dup, Vec::new()), location);
-                self.emit(opcode::variable(Opcode::StoreVariable, key, 0, 0), location);
-            } else {
-                self.diagnostics.push(CompilerDiagnostic::at(
-                    CompilerDiagnosticCode::UnsupportedConstruct,
-                    location,
-                    "PRINTDATA selected-index destination must currently be scalar",
-                ));
+        if !is_string
+            && let Some(place) = argument_place(arguments.first())
+            && let Some(key) = self.context.variable_keys.get(&place.variable).copied()
+        {
+            self.emit(EncodedInstruction::new(Opcode::Dup, Vec::new()), location);
+            for index in &place.indices {
+                self.lower_expression(index, location);
             }
+            self.emit(
+                opcode::variable(
+                    Opcode::MakePlace,
+                    key,
+                    u16::try_from(place.indices.len()).unwrap_or(u16::MAX),
+                    0,
+                ),
+                location,
+            );
+            self.emit(
+                EncodedInstruction::new(Opcode::StorePlace, Vec::new()),
+                location,
+            );
         }
 
         let mut end_jumps = Vec::new();
@@ -638,20 +731,97 @@ impl<'a> Builder<'a> {
             self.emit(EncodedInstruction::new(Opcode::Pop, Vec::new()), location);
             return;
         };
-        if place.indices.is_empty()
-            && let Some(key) = self.context.variable_keys.get(&place.variable).copied()
-        {
-            self.emit(opcode::variable(Opcode::StoreVariable, key, 0, 0), location);
+        if let Some(key) = self.context.variable_keys.get(&place.variable).copied() {
+            for index in &place.indices {
+                self.lower_expression(index, location);
+            }
+            self.emit(
+                opcode::variable(
+                    Opcode::MakePlace,
+                    key,
+                    u16::try_from(place.indices.len()).unwrap_or(u16::MAX),
+                    0,
+                ),
+                location,
+            );
+            self.emit(
+                EncodedInstruction::new(Opcode::StorePlace, Vec::new()),
+                location,
+            );
         } else {
             self.emit(EncodedInstruction::new(Opcode::Pop, Vec::new()), location);
             self.diagnostics.push(CompilerDiagnostic::at(
-                CompilerDiagnosticCode::UnsupportedConstruct,
+                CompilerDiagnosticCode::InvalidHir,
                 location,
-                "STRDATA destination must currently be scalar",
+                "STRDATA destination has no stable symbol key",
             ));
         }
     }
 
+    fn lower_try_list(&mut self, block: &TryListBlock<'_>) {
+        let HirStatementKind::Instruction { target, .. } = &block.opener.kind else {
+            return;
+        };
+        let opener = target.name();
+        let mut end_jumps = Vec::new();
+        for candidate in &block.candidates {
+            let HirStatementKind::Instruction { arguments, .. } = &candidate.kind else {
+                continue;
+            };
+            let Some(target) = arguments.first() else {
+                continue;
+            };
+            self.lower_argument(target, candidate.location);
+            if opener == "TRYGOTOLIST" {
+                let instruction = self.code.len();
+                self.emit(opcode::jump_dynamic_label(0), candidate.location);
+                self.code[instruction].payload = u32::try_from(self.code.len())
+                    .unwrap_or(u32::MAX)
+                    .to_le_bytes()
+                    .to_vec();
+                continue;
+            }
+            let resolve = self.code.len();
+            self.emit(opcode::resolve_function(0, true, false), candidate.location);
+            let parameter_types = arguments
+                .iter()
+                .skip(1)
+                .map(|argument| self.lower_argument(argument, candidate.location))
+                .collect::<Vec<_>>();
+            self.emit(
+                opcode::invoke_dynamic(
+                    u16::try_from(parameter_types.len()).unwrap_or(u16::MAX),
+                    opener == "TRYJUMPLIST",
+                ),
+                candidate.location,
+            );
+            if opener != "TRYJUMPLIST" {
+                let end = self.code.len();
+                self.emit(opcode::jump(Opcode::Jump, 0), candidate.location);
+                end_jumps.push(end);
+            }
+            let missing = self.code.len();
+            self.emit(
+                EncodedInstruction::new(Opcode::Pop, Vec::new()),
+                candidate.location,
+            );
+            self.code[resolve].payload = {
+                let mut payload = u32::try_from(missing)
+                    .unwrap_or(u32::MAX)
+                    .to_le_bytes()
+                    .to_vec();
+                payload.push(1);
+                payload.push(0);
+                payload
+            };
+        }
+        let end = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+        for jump in end_jumps {
+            self.code[jump].payload = end.to_le_bytes().to_vec();
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
     fn lower_statement(
         &mut self,
         target: &InstructionTarget,
@@ -735,6 +905,71 @@ impl<'a> Builder<'a> {
             self.emit(opcode::return_value(!arguments.is_empty()), location);
             return;
         }
+        if matches!(name, "TRYCGOTO" | "TRYCGOTOFORM") {
+            let Some(target) = arguments.first() else {
+                self.emit(
+                    EncodedInstruction::new(Opcode::Trap, b"missing dynamic label".to_vec()),
+                    location,
+                );
+                return;
+            };
+            if let HirArgument::Formatted(formatted) = target
+                && let Some(constant) = formatted_constant(formatted)
+                && !self
+                    .hir_function
+                    .labels
+                    .iter()
+                    .any(|(_, label, _)| label.eq_ignore_ascii_case(&constant))
+            {
+                // The reference loader resolves constant TRYCGOTO targets early.
+                // A missing constant then falls through to CATCH, whose marker skips
+                // the fallback body; only a late-bound miss enters that body.
+                self.emit(EncodedInstruction::new(Opcode::Nop, Vec::new()), location);
+                return;
+            }
+            self.lower_argument(target, location);
+            self.emit(opcode::jump_dynamic_label(0), location);
+            return;
+        }
+        if name == "CALLEVENT" {
+            if self.hir_function.kind == FunctionKind::Event {
+                self.diagnostics.push(CompilerDiagnostic::at(
+                    CompilerDiagnosticCode::InvalidHir,
+                    location,
+                    "CALLEVENT is not allowed inside an event function",
+                ));
+                self.emit(
+                    EncodedInstruction::new(Opcode::Trap, b"CALLEVENT inside event".to_vec()),
+                    location,
+                );
+                return;
+            }
+            let Some(target) = arguments.first() else {
+                self.emit(
+                    EncodedInstruction::new(Opcode::Trap, b"missing event name".to_vec()),
+                    location,
+                );
+                return;
+            };
+            let constant_name = match target {
+                HirArgument::Raw(value) => Some(value.as_str()),
+                HirArgument::Expression(expression) => match &expression.constant {
+                    Some(erabasic_hir::ConstantValue::String(value)) => Some(value.as_str()),
+                    _ => None,
+                },
+                HirArgument::Formatted(_) | HirArgument::Place(_) | HirArgument::Omitted => None,
+            };
+            if constant_name.is_none() {
+                self.diagnostics.push(CompilerDiagnostic::at(
+                    CompilerDiagnosticCode::InvalidHir,
+                    location,
+                    "CALLEVENT requires a constant string event name",
+                ));
+            }
+            self.lower_argument(target, location);
+            self.emit(opcode::invoke_event(), location);
+            return;
+        }
         if matches!(
             name,
             "CALLFORM"
@@ -751,7 +986,10 @@ impl<'a> Builder<'a> {
             self.lower_dynamic_call(arguments, line, name, location);
             return;
         }
-        if matches!(name, "CALL" | "CALLF" | "JUMP" | "TRYCALL" | "TRYJUMP") {
+        if matches!(
+            name,
+            "CALL" | "CALLF" | "JUMP" | "TRYCALL" | "TRYCALLF" | "TRYJUMP"
+        ) {
             self.lower_static_call(arguments, line, name, location);
             return;
         }
@@ -763,6 +1001,7 @@ impl<'a> Builder<'a> {
         self.emit_runtime_call(name, &parameter_types, None, extension, location);
     }
 
+    #[allow(clippy::too_many_lines)]
     fn lower_static_call(
         &mut self,
         arguments: &[HirArgument],
@@ -802,6 +1041,35 @@ impl<'a> Builder<'a> {
             .functions
             .iter()
             .find(|function| self.context.function_keys.get(&function.id) == Some(&target));
+        if let Some(function) = target_function {
+            let method_call = name.ends_with('F');
+            let valid_kind = if method_call {
+                function.kind == FunctionKind::Method
+            } else {
+                function.kind != FunctionKind::Method
+                    && (function.kind != FunctionKind::Event
+                        || self
+                            .context
+                            .program
+                            .call_compatibility
+                            .allow_event_as_normal)
+            };
+            if !valid_kind {
+                if name.starts_with("TRY") && method_call {
+                    return;
+                }
+                self.diagnostics.push(CompilerDiagnostic::at(
+                    CompilerDiagnosticCode::InvalidHir,
+                    location,
+                    format!("{name} target has an incompatible function kind"),
+                ));
+                self.emit(
+                    EncodedInstruction::new(Opcode::Trap, b"incompatible function kind".to_vec()),
+                    location,
+                );
+                return;
+            }
+        }
         let reference_parameters = target_function
             .map(|function| {
                 function
@@ -820,11 +1088,32 @@ impl<'a> Builder<'a> {
         let supplied = arguments.iter().skip(1).collect::<Vec<_>>();
         let mut parameter_types = Vec::new();
         if let Some(function) = target_function {
+            if supplied.len() > function.parameters.len() {
+                self.diagnostics.push(CompilerDiagnostic::at(
+                    CompilerDiagnosticCode::InvalidHir,
+                    location,
+                    format!("{name} supplies too many arguments"),
+                ));
+            }
             for (index, parameter) in function.parameters.iter().enumerate() {
                 let argument = supplied.get(index).copied();
                 if matches!(argument, None | Some(HirArgument::Omitted)) {
                     if let Some(default) = &parameter.default {
                         parameter_types.push(self.lower_expression(default, location));
+                    } else if self
+                        .context
+                        .program
+                        .call_compatibility
+                        .allow_omitted_arguments
+                    {
+                        match parameter.target.value_type {
+                            SemanticType::String => self.emit(opcode::push_string(""), location),
+                            _ => self.emit(opcode::push_integer(0), location),
+                        }
+                        parameter_types.push(
+                            bytecode_type(parameter.target.value_type)
+                                .unwrap_or(BytecodeType::Integer),
+                        );
                     } else {
                         self.diagnostics.push(CompilerDiagnostic::at(
                             CompilerDiagnosticCode::InvalidHir,
@@ -849,7 +1138,32 @@ impl<'a> Builder<'a> {
                     parameter_types
                         .push(self.lower_argument(&HirArgument::Place(place.clone()), location));
                 } else {
-                    parameter_types.push(self.lower_argument(argument, location));
+                    let actual = self.lower_argument(argument, location);
+                    let expected =
+                        bytecode_type(parameter.target.value_type).unwrap_or(BytecodeType::Integer);
+                    if actual == BytecodeType::Integer
+                        && expected == BytecodeType::String
+                        && self
+                            .context
+                            .program
+                            .call_compatibility
+                            .auto_convert_integer_to_string
+                    {
+                        self.emit(
+                            EncodedInstruction::new(Opcode::ToString, Vec::new()),
+                            location,
+                        );
+                        parameter_types.push(BytecodeType::String);
+                    } else {
+                        if actual != expected {
+                            self.diagnostics.push(CompilerDiagnostic::at(
+                                CompilerDiagnosticCode::InvalidHir,
+                                location,
+                                format!("{name} argument {} has an incompatible type", index + 1),
+                            ));
+                        }
+                        parameter_types.push(actual);
+                    }
                 }
             }
         }
@@ -901,7 +1215,8 @@ impl<'a> Builder<'a> {
             .iter()
             .any(|edge| edge.from == line && edge.kind == ControlFlowKind::Branch);
         let resolve = self.code.len();
-        self.emit(opcode::resolve_function(0, allow_missing), location);
+        let method = name.ends_with('F');
+        self.emit(opcode::resolve_function(0, allow_missing, method), location);
         let parameter_types = arguments
             .iter()
             .skip(1)
@@ -915,10 +1230,10 @@ impl<'a> Builder<'a> {
             location,
         );
         if allow_missing {
-            let success = self.code.len();
             if has_catch {
                 self.emit(opcode::push_integer(1), location);
             }
+            let success = self.code.len();
             self.emit(opcode::jump(Opcode::Jump, 0), location);
             let missing = self.code.len();
             self.emit(EncodedInstruction::new(Opcode::Pop, Vec::new()), location);
@@ -932,6 +1247,7 @@ impl<'a> Builder<'a> {
                     .to_le_bytes()
                     .to_vec();
                 payload.push(1);
+                payload.push(u8::from(method));
                 payload
             };
             self.code[success].payload = end.to_le_bytes().to_vec();
@@ -1014,32 +1330,154 @@ impl<'a> Builder<'a> {
             }
             HirExprKind::Call { target, arguments } => {
                 let builtin = matches!(target, CallTarget::Builtin { .. });
-                let parameter_types: Vec<_> = arguments
-                    .iter()
-                    .filter_map(|argument| match argument {
-                        HirCallArgument::Value(argument) => {
-                            Some(self.lower_expression(argument, fallback))
-                        }
-                        HirCallArgument::Place(place) => Some(self.lower_argument(
-                            &HirArgument::Place(place.clone()),
-                            expression.location,
-                        )),
-                        HirCallArgument::Omitted if builtin => {
-                            self.emit(opcode::push_integer(i64::MIN), expression.location);
-                            Some(BytecodeType::Integer)
-                        }
-                        HirCallArgument::Omitted => None,
-                    })
-                    .collect();
+                let parameter_types: Vec<_> = if matches!(target, CallTarget::User { .. }) {
+                    Vec::new()
+                } else {
+                    arguments
+                        .iter()
+                        .filter_map(|argument| match argument {
+                            HirCallArgument::Value(argument) => {
+                                Some(self.lower_expression(argument, fallback))
+                            }
+                            HirCallArgument::Place(place) => Some(self.lower_argument(
+                                &HirArgument::Place(place.clone()),
+                                expression.location,
+                            )),
+                            HirCallArgument::Omitted if builtin => {
+                                self.emit(opcode::push_integer(i64::MIN), expression.location);
+                                Some(BytecodeType::Integer)
+                            }
+                            HirCallArgument::Omitted => None,
+                        })
+                        .collect()
+                };
                 match target {
                     CallTarget::User { function } => {
-                        if let Some(key) = self.context.function_keys.get(function).copied() {
+                        if let Some(key) = self.context.function_keys.get(function).copied()
+                            && let Some(target_function) = self
+                                .context
+                                .program
+                                .functions
+                                .iter()
+                                .find(|candidate| candidate.id == *function)
+                        {
+                            if target_function.kind != FunctionKind::Method {
+                                self.diagnostics.push(CompilerDiagnostic::at(
+                                    CompilerDiagnosticCode::InvalidHir,
+                                    location,
+                                    format!(
+                                        "expression target {} is not a method",
+                                        target_function.name
+                                    ),
+                                ));
+                            }
+                            if arguments.len() > target_function.parameters.len() {
+                                self.diagnostics.push(CompilerDiagnostic::at(
+                                    CompilerDiagnosticCode::InvalidHir,
+                                    location,
+                                    format!(
+                                        "method {} receives too many arguments",
+                                        target_function.name
+                                    ),
+                                ));
+                            }
+                            let mut user_parameter_types = Vec::new();
+                            for (index, parameter) in target_function.parameters.iter().enumerate()
+                            {
+                                let reference = self
+                                    .context
+                                    .program
+                                    .variables
+                                    .get(parameter.target.variable.0 as usize)
+                                    .is_some_and(|variable| variable.reference);
+                                let expected = if reference {
+                                    match parameter.target.value_type {
+                                        SemanticType::String => BytecodeType::StringPlace,
+                                        _ => BytecodeType::IntegerPlace,
+                                    }
+                                } else {
+                                    bytecode_type(parameter.target.value_type)
+                                        .unwrap_or(BytecodeType::Integer)
+                                };
+                                let actual = match arguments.get(index) {
+                                    Some(HirCallArgument::Value(value)) => {
+                                        self.lower_expression(value, fallback)
+                                    }
+                                    Some(HirCallArgument::Place(place)) => self.lower_argument(
+                                        &HirArgument::Place(place.clone()),
+                                        location,
+                                    ),
+                                    Some(HirCallArgument::Omitted) | None => {
+                                        if let Some(default) = &parameter.default {
+                                            self.lower_expression(default, fallback)
+                                        } else if !reference
+                                            && self
+                                                .context
+                                                .program
+                                                .call_compatibility
+                                                .allow_omitted_arguments
+                                        {
+                                            match expected {
+                                                BytecodeType::String => {
+                                                    self.emit(opcode::push_string(""), location);
+                                                }
+                                                _ => self.emit(opcode::push_integer(0), location),
+                                            }
+                                            expected
+                                        } else {
+                                            self.diagnostics.push(CompilerDiagnostic::at(
+                                                CompilerDiagnosticCode::InvalidHir,
+                                                location,
+                                                format!(
+                                                    "method {} omits required argument {}",
+                                                    target_function.name,
+                                                    index + 1
+                                                ),
+                                            ));
+                                            match expected {
+                                                BytecodeType::String => {
+                                                    self.emit(opcode::push_string(""), location);
+                                                }
+                                                _ => self.emit(opcode::push_integer(0), location),
+                                            }
+                                            expected
+                                        }
+                                    }
+                                };
+                                if actual == BytecodeType::Integer
+                                    && expected == BytecodeType::String
+                                    && self
+                                        .context
+                                        .program
+                                        .call_compatibility
+                                        .auto_convert_integer_to_string
+                                {
+                                    self.emit(
+                                        EncodedInstruction::new(Opcode::ToString, Vec::new()),
+                                        location,
+                                    );
+                                    user_parameter_types.push(BytecodeType::String);
+                                } else {
+                                    if actual != expected {
+                                        self.diagnostics.push(CompilerDiagnostic::at(
+                                            CompilerDiagnosticCode::InvalidHir,
+                                            location,
+                                            format!(
+                                                "method {} argument {} has an incompatible type",
+                                                target_function.name,
+                                                index + 1
+                                            ),
+                                        ));
+                                    }
+                                    user_parameter_types.push(actual);
+                                }
+                            }
                             let import = self.add_import(ImportKind::Function, key);
                             self.emit(
                                 opcode::call(
                                     Opcode::Call,
                                     import,
-                                    u16::try_from(parameter_types.len()).unwrap_or(u16::MAX),
+                                    u16::try_from(user_parameter_types.len()).unwrap_or(u16::MAX),
                                     Some(result),
                                 ),
                                 location,

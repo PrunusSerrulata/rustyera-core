@@ -331,6 +331,9 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             "SYSTEM_TITLE",
             "ORACLE_COMPAT",
             "ORACLE_DYNAMIC_1",
+            "ORACLE_COMPAT_REST",
+            "ORACLE_LIST_TARGET",
+            "EVENTFIRST",
             "ORACLE_PRESENTATION",
             "ORACLE_TEST",
             "ORACLE_NATIVE",
@@ -340,14 +343,14 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             "ORACLE_STRUCTURED"
         ]
     );
-    assert_eq!(program.functions[0].lines.len(), 13);
+    assert_eq!(program.functions[0].lines.len(), 14);
     assert_eq!(
         program.functions[0]
             .control_flow
             .iter()
             .filter(|edge| edge.kind == erabasic_hir::ControlFlowKind::Call)
             .count(),
-        8
+        9
     );
 }
 

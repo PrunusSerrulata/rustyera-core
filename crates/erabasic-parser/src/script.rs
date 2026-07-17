@@ -276,7 +276,10 @@ fn check_structure(
     blocks: &mut Vec<(String, Span)>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let StatementKind::Instruction { name, .. } = &statement.kind else {
+    let StatementKind::Instruction {
+        name, arguments, ..
+    } = &statement.kind
+    else {
         return;
     };
     let opener = match name.as_str() {
@@ -289,13 +292,42 @@ fn check_structure(
         "TRYC" | "TRYCCALL" | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" | "TRYCGOTO"
         | "TRYCGOTOFORM" => Some("TRYC"),
         "PRINTDATA" | "PRINTDATAL" | "PRINTDATAW" | "PRINTDATAK" | "PRINTDATAKL"
-        | "PRINTDATAKW" | "PRINTDATAD" | "PRINTDATADL" | "PRINTDATADW" => Some("PRINTDATA"),
+        | "PRINTDATAKW" | "PRINTDATAD" | "PRINTDATADL" | "PRINTDATADW" | "STRDATA" => {
+            Some("PRINTDATA")
+        }
         "DATALIST" => Some("DATALIST"),
         "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST" => Some(name.as_str()),
         _ => None,
     };
     if let Some(opener) = opener {
+        if matches!(opener, "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST")
+            && blocks.iter().any(|(name, _)| {
+                matches!(name.as_str(), "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST")
+            })
+        {
+            diagnostics.push(Diagnostic::error(
+                DiagnosticCode::UnmatchedBlock,
+                statement.span,
+                "TRY*LIST blocks may not be nested",
+            ));
+        }
         blocks.push((opener.to_string(), statement.span));
+        return;
+    }
+    if name == "FUNC" {
+        match blocks.last().map(|(name, _)| name.as_str()) {
+            Some("TRYGOTOLIST") if arguments.len() != 1 => diagnostics.push(Diagnostic::error(
+                DiagnosticCode::UnexpectedToken,
+                statement.span,
+                "TRYGOTOLIST candidates may not have arguments",
+            )),
+            Some("TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST") => {}
+            _ => diagnostics.push(Diagnostic::error(
+                DiagnosticCode::UnmatchedBlock,
+                statement.span,
+                "FUNC is outside a TRY*LIST block",
+            )),
+        }
         return;
     }
     let expected = match name.as_str() {

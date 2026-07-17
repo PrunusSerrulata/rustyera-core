@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use erabasic_bytecode::{
-    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeStorage, BytecodeType, Digest,
-    SymbolKey,
+    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeFunctionKind, BytecodeStorage,
+    BytecodeType, Digest, SymbolKey,
 };
 use erabasic_validator::ValidatedArtifact;
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,23 @@ pub(crate) struct Frame {
     pub locals: BTreeMap<SymbolKey, VariableCell>,
     /// Dynamic statement calls discard method results without exposing them to Host code.
     pub return_value_to_caller: bool,
+    /// True for an event handler and every ordinary function called beneath it.
+    pub event_context: bool,
+    /// Nested CALLEVENT handlers are sequenced in the initiating caller frame.
+    pub event_dispatch: Option<EventDispatch>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct EventDispatchEntry {
+    pub function: SymbolKey,
+    pub single: bool,
+    pub group: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct EventDispatch {
+    pub active: EventDispatchEntry,
+    pub pending: VecDeque<EventDispatchEntry>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -229,6 +246,7 @@ impl Vm {
             artifact,
             arguments,
             true,
+            function_definition.kind == BytecodeFunctionKind::Event,
         );
         self.fibers.insert(
             fiber_id,
@@ -767,6 +785,7 @@ pub(crate) fn make_frame(
     artifact: &BytecodeArtifact,
     arguments: Vec<VmValue>,
     return_value_to_caller: bool,
+    event_context: bool,
 ) -> Frame {
     let mut locals: BTreeMap<_, _> = artifact
         .globals
@@ -801,6 +820,8 @@ pub(crate) fn make_frame(
         stack: Vec::new(),
         locals,
         return_value_to_caller,
+        event_context,
+        event_dispatch: None,
     }
 }
 
@@ -859,6 +880,7 @@ pub(crate) fn bind_persistent_arguments(
 pub(crate) fn prepare_dynamic_arguments(
     function: &BytecodeFunction,
     mut arguments: Vec<VmValue>,
+    compatibility: erabasic_bytecode::BytecodeCallCompatibility,
 ) -> Result<Vec<VmValue>, VmError> {
     if arguments.len() > function.parameters.len() {
         return Err(VmError::InvalidArguments(format!(
@@ -873,16 +895,42 @@ pub(crate) fn prepare_dynamic_arguments(
     }
     for (parameter, argument) in function.parameters.iter().zip(&mut arguments) {
         if matches!(argument, VmValue::Integer(value) if *value == i64::MIN) {
-            let Some(default) = &parameter.default else {
+            if parameter.by_reference {
                 return Err(VmError::InvalidArguments(format!(
-                    "function {} omits a required argument",
+                    "function {} omits a reference argument",
                     function.name
                 )));
+            }
+            *argument = match &parameter.default {
+                Some(BytecodeConstant::Integer(value)) => VmValue::Integer(*value),
+                Some(BytecodeConstant::String(value)) => VmValue::String(value.clone()),
+                None if compatibility.allow_omitted_arguments => match parameter.value_type {
+                    BytecodeType::Integer => VmValue::Integer(0),
+                    BytecodeType::String => VmValue::String(String::new()),
+                    BytecodeType::IntegerPlace | BytecodeType::StringPlace => {
+                        return Err(VmError::InvalidArguments(format!(
+                            "function {} omits a reference argument",
+                            function.name
+                        )));
+                    }
+                },
+                None => {
+                    return Err(VmError::InvalidArguments(format!(
+                        "function {} omits a required argument",
+                        function.name
+                    )));
+                }
             };
-            *argument = match default {
-                BytecodeConstant::Integer(value) => VmValue::Integer(*value),
-                BytecodeConstant::String(value) => VmValue::String(value.clone()),
+        }
+        if compatibility.auto_convert_integer_to_string
+            && parameter.value_type == BytecodeType::String
+            && matches!(argument, VmValue::Integer(_))
+            && !parameter.by_reference
+        {
+            let VmValue::Integer(value) = argument else {
+                unreachable!("checked integer argument")
             };
+            *argument = VmValue::String(value.to_string());
         }
     }
     validate_arguments(function, &arguments)?;

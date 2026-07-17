@@ -10,6 +10,7 @@ fn artifact() -> BytecodeArtifact {
         .expect("default project data should load");
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
+        call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
         project_data,
         globals: Vec::new(),
         native_imports: Vec::new(),

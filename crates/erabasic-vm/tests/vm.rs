@@ -37,8 +37,10 @@ fn function(
     BytecodeFunction {
         key,
         name: name.into(),
+        kind: erabasic_bytecode::BytecodeFunctionKind::Normal,
         parameters: Vec::new(),
         result: None,
+        labels: Vec::new(),
         imports: Vec::new(),
         max_stack: 16,
         code,
@@ -48,6 +50,7 @@ fn function(
 fn artifact(functions: Vec<BytecodeFunction>, globals: Vec<BytecodeGlobal>) -> BytecodeArtifact {
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
+        call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
         project_data: project_data(),
         globals,
         native_imports: Vec::new(),
@@ -85,6 +88,33 @@ fn global(key: SymbolKey, dimensions: Vec<u64>) -> BytecodeGlobal {
 
 fn compile_source(source: &str) -> BytecodeArtifact {
     compile_source_with_data(source, project_data())
+}
+
+fn compile_source_with_options(source: &str, options: &AnalyzerOptions) -> BytecodeArtifact {
+    let analysis = analyze_project(
+        AnalysisInput {
+            project_data: project_data(),
+            sources: vec![ProjectSource {
+                relative_path: "main.erb".into(),
+                payload: SourcePayload::Utf8(source.into()),
+            }],
+        },
+        options,
+        &ExtensionRegistry::default(),
+    );
+    assert!(analysis.project.is_some(), "{:#?}", analysis.diagnostics);
+    let compilation = compile_project(
+        &analysis.project.unwrap(),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(
+        compilation.artifact.is_some(),
+        "{:#?}",
+        compilation.diagnostics
+    );
+    compilation.artifact.unwrap()
 }
 
 fn compile_source_with_data(
@@ -1015,7 +1045,17 @@ impl VmHost for ReadyHost {
         if let Some(VmValue::Integer(value)) = request.arguments.first() {
             self.calls.push(*value);
         }
-        HostCallResult::Ready(HostReady::empty())
+        let value = request.import.result.map(|result| match result {
+            BytecodeType::Integer => VmValue::Integer(0),
+            BytecodeType::String => VmValue::String(String::new()),
+            BytecodeType::IntegerPlace | BytecodeType::StringPlace => {
+                panic!("test host cannot synthesize a place result")
+            }
+        });
+        HostCallResult::Ready(HostReady {
+            value,
+            writes: Vec::new(),
+        })
     }
 }
 
@@ -1652,6 +1692,278 @@ fn dynamic_try_resolves_before_arguments_and_form_call_invokes_target() {
         report.events
     );
     assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(4)));
+}
+
+#[test]
+fn indexed_data_targets_dynamic_labels_and_try_lists_execute_lazily() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nPRINTDATA RESULT:2\nDATA chosen\nENDDATA\nSTRDATA RESULTS:3\nDATA stored\nENDDATA\nTRYCALLLIST\nFUNC MISSING, 1 / LOCAL\nFUNC LIST_TARGET, 7\nENDFUNC\nRESULTS:11 = %\"MISSING_LABEL\"%\nTRYCGOTOFORM %RESULTS:11%\nCATCH\nRESULT:3 = 3\nENDCATCH\nTRYGOTOLIST\nFUNC MISSING_LABEL\nFUNC FOUND_LABEL\nENDFUNC\nRESULT:4 = 99\n$FOUND_LABEL\nRESULT:4 = 4\nRETURN\n@LIST_TARGET(ARG)\nFLAG:0 = ARG\nRETURN\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("entry")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .expect("RESULTS")
+        .key;
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .expect("FLAG")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[2], None),
+        Ok(VmValue::Integer(0))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[3], None),
+        Ok(VmValue::Integer(3))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[4], None),
+        Ok(VmValue::Integer(4))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[3], None),
+        Ok(VmValue::String("stored".into()))
+    );
+    assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(7)));
+}
+
+#[test]
+fn callevent_runs_the_reference_event_group_inside_the_calling_fiber() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULT = 0\nCALLEVENT EVENTFIRST\nRESULT:3 = 9\nRETURN\n@EVENTFIRST\n#PRI\nRESULT:0 += 1\nRETURN\n@EVENTFIRST\nRESULT:1 += 2\nRETURN\n@EVENTFIRST\n#LATER\nRESULT:2 += 4\nRETURN\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("entry")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    for (index, expected) in [(0, 1), (1, 2), (2, 4), (3, 9)] {
+        assert_eq!(
+            vm.read_variable(result, &[index], None),
+            Ok(VmValue::Integer(expected))
+        );
+    }
+}
+
+#[test]
+fn dynamic_calls_apply_omission_conversion_and_event_compatibility_options() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatible_function_argument_optional = true;
+    options.compatible_function_argument_auto_convert = true;
+    options.compatible_call_event = true;
+    let artifact = compile_source_with_options(
+        "@SYSTEM_TITLE\nCALLFORM STRING_TARGET()\nCALLFORM STRING_TARGET(7)\nCALLFORM EVENTFIRST\nRETURN\n@STRING_TARGET(ARGS)\nRESULTS:0 = %ARGS%\nRETURN\n@EVENTFIRST\nRESULT:0 = 8\nRETURN\n",
+        &options,
+    );
+    assert!(artifact.call_compatibility.allow_omitted_arguments);
+    assert!(artifact.call_compatibility.auto_convert_integer_to_string);
+    assert!(artifact.call_compatibility.allow_event_as_normal);
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("entry")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .expect("RESULTS")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(8))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[0], None),
+        Ok(VmValue::String("7".into()))
+    );
+}
+
+#[test]
+fn compatibility_rest_matches_the_reference_oracle_fixture() {
+    let artifact = compile_source(include_str!(
+        "../../../tools/emuera-reference-cli/tests/fixture/erb/oracle.erb"
+    ));
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "ORACLE_COMPAT_REST")
+        .expect("oracle entry")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .expect("RESULTS")
+        .key;
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .expect("FLAG")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    for (index, expected) in [(1, 0), (2, 3), (3, 4), (4, 1), (5, 2)] {
+        assert_eq!(
+            vm.read_variable(result, &[index], None),
+            Ok(VmValue::Integer(expected))
+        );
+    }
+    assert_eq!(
+        vm.read_variable(results, &[10], None),
+        Ok(VmValue::String("STORED".into()))
+    );
+    assert_eq!(vm.read_variable(flag, &[1], None), Ok(VmValue::Integer(7)));
+    assert_eq!(vm.read_variable(flag, &[2], None), Ok(VmValue::Integer(8)));
+}
+
+#[test]
+fn dynamic_statement_calls_enforce_method_and_normal_function_kinds() {
+    let valid = compile_source(
+        "@SYSTEM_TITLE\nCALLFORMF METHOD_TARGET(3)\nRETURN\n@METHOD_TARGET(ARG)\n#FUNCTION\nRETURNF ARG + 1\n",
+    );
+    let entry = valid
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("entry")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&valid);
+    let mut vm = Vm::new(validated(&valid), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+
+    let invalid = compile_source(
+        "@SYSTEM_TITLE\nCALLFORM METHOD_TARGET(3)\nRETURN\n@METHOD_TARGET(ARG)\n#FUNCTION\nRETURNF ARG + 1\n",
+    );
+    let entry = invalid
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("entry")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&invalid);
+    let mut vm = Vm::new(validated(&invalid), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        VmEvent::FiberFaulted { fault, .. } if fault.code == VmFaultCode::TypeMismatch
+    )));
 }
 
 #[test]

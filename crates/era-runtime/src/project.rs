@@ -695,6 +695,17 @@ fn parse_configuration(
                     config.csv.use_erd = boolean;
                     config.analyzer.use_erd = boolean;
                 }
+                "イベント関数のCALLを許可する" | "Allow CALL on event functions" => {
+                    config.analyzer.compatible_call_event = boolean;
+                }
+                "ユーザー関数の全ての引数の省略を許可する"
+                | "Allow arguments omission for user functions" => {
+                    config.analyzer.compatible_function_argument_optional = boolean;
+                }
+                "ユーザー関数の引数に自動的にTOSTRを補完する"
+                | "Auto TOSTR conversion for user function arguments" => {
+                    config.analyzer.compatible_function_argument_auto_convert = boolean;
+                }
                 "UseNewRandom" | "新しい高速な乱数アルゴリズムを使う" => {
                     config.use_new_random = boolean;
                 }
@@ -737,6 +748,24 @@ fn parse_json_configuration(
                 .and_then(serde_json::Value::as_bool)
             {
                 config.use_new_random = boolean;
+            }
+            if let Some(boolean) = value
+                .get("CompatiCallEvent")
+                .and_then(serde_json::Value::as_bool)
+            {
+                config.analyzer.compatible_call_event = boolean;
+            }
+            if let Some(boolean) = value
+                .get("CompatiFuncArgOptional")
+                .and_then(serde_json::Value::as_bool)
+            {
+                config.analyzer.compatible_function_argument_optional = boolean;
+            }
+            if let Some(boolean) = value
+                .get("CompatiFuncArgAutoConvert")
+                .and_then(serde_json::Value::as_bool)
+            {
+                config.analyzer.compatible_function_argument_auto_convert = boolean;
             }
             if let Some(boolean) = value.get("AutoSave").and_then(serde_json::Value::as_bool) {
                 config.auto_save = boolean;
@@ -910,7 +939,7 @@ mod tests {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
-                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nCurrency symbol:円\nCurrency symbol position:NO\nMax shop item storage:77\nFont size:20\nLine height:22\nフォント名:Test\n",
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nCurrency symbol:円\nCurrency symbol position:NO\nMax shop item storage:77\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nフォント名:Test\n",
             )],
             &mut diagnostics,
         );
@@ -927,6 +956,9 @@ mod tests {
         assert_eq!(config.maximum_shop_items, 77);
         assert_eq!(config.font_size, 20);
         assert_eq!(config.line_height, 22);
+        assert!(config.analyzer.compatible_call_event);
+        assert!(config.analyzer.compatible_function_argument_optional);
+        assert!(config.analyzer.compatible_function_argument_auto_convert);
         assert_eq!(
             diagnostics
                 .iter()
@@ -941,13 +973,16 @@ mod tests {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
-                r#"{"UseNewRandom":true,"UseMouse":false,"WindowWidth":1200,"FontSize":21,"LineHeight":19}"#,
+                r#"{"UseNewRandom":true,"UseMouse":false,"WindowWidth":1200,"FontSize":21,"LineHeight":19,"CompatiCallEvent":true,"CompatiFuncArgOptional":true,"CompatiFuncArgAutoConvert":true}"#,
             )],
             &mut diagnostics,
         );
         assert!(config.use_new_random);
         assert_eq!(config.font_size, 21);
         assert_eq!(config.line_height, 21);
+        assert!(config.analyzer.compatible_call_event);
+        assert!(config.analyzer.compatible_function_argument_optional);
+        assert!(config.analyzer.compatible_function_argument_auto_convert);
         assert!(
             diagnostics
                 .iter()

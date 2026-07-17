@@ -19,6 +19,7 @@ fn rejects_stack_type_mismatches_before_vm_execution() {
     let function_key = SymbolKey::derive("test.function", b"bad");
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
+        call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
         project_data: project_data(),
         globals: Vec::new(),
         native_imports: Vec::new(),
@@ -26,8 +27,10 @@ fn rejects_stack_type_mismatches_before_vm_execution() {
         functions: vec![BytecodeFunction {
             key: function_key,
             name: "BAD".into(),
+            kind: erabasic_bytecode::BytecodeFunctionKind::Normal,
             parameters: Vec::new(),
             result: None,
+            labels: Vec::new(),
             imports: Vec::new(),
             code: vec![
                 opcode::push_string("not an integer"),
@@ -58,6 +61,7 @@ fn rejects_unknown_opcodes() {
     let function_key = SymbolKey::derive("test.function", b"unknown");
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
+        call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
         project_data: project_data(),
         globals: Vec::new(),
         native_imports: Vec::new(),
@@ -65,8 +69,10 @@ fn rejects_unknown_opcodes() {
         functions: vec![BytecodeFunction {
             key: function_key,
             name: "UNKNOWN".into(),
+            kind: erabasic_bytecode::BytecodeFunctionKind::Normal,
             parameters: Vec::new(),
             result: None,
+            labels: Vec::new(),
             imports: Vec::new(),
             code: vec![erabasic_bytecode::EncodedInstruction {
                 opcode: Opcode::Trap as u16 + 1,
@@ -101,6 +107,7 @@ fn rejects_snapshot_vm_abi_mismatch() {
     let function_key = SymbolKey::derive("test.function", b"version");
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
+        call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
         project_data: project_data(),
         globals: Vec::new(),
         native_imports: Vec::new(),
@@ -108,8 +115,10 @@ fn rejects_snapshot_vm_abi_mismatch() {
         functions: vec![BytecodeFunction {
             key: function_key,
             name: "VERSION".into(),
+            kind: erabasic_bytecode::BytecodeFunctionKind::Normal,
             parameters: Vec::new(),
             result: None,
+            labels: Vec::new(),
             imports: Vec::new(),
             code: vec![opcode::return_value(false)],
             max_stack: 0,
@@ -153,6 +162,7 @@ fn rejects_contradictory_persisted_operation_contracts() {
     );
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
+        call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
         project_data: project_data(),
         globals: Vec::new(),
         native_imports: Vec::new(),
