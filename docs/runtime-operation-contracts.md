@@ -2,7 +2,7 @@
 
 This table is the Batch 10 handoff gate for candidate-save work. Every analyzer-visible built-in
 has exactly one compiler catalog entry. Native and Host imports persist the resolved contract in
-bytecode container 7; the validator rejects incoherent combinations or legacy flags which do not
+bytecode container 8; the validator rejects incoherent combinations or legacy flags which do not
 match the contract. Unknown runtime dispatch never silently succeeds: it emits
 `UnsupportedRuntimeFeature` with the import name.
 

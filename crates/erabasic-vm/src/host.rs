@@ -223,12 +223,20 @@ impl NativeServiceRegistry {
                     | "substring"
                     | "substringu"
                     | "strfind"
+                    | "strfindu"
                     | "strcount"
+                    | "strlens"
+                    | "strlensu"
                     | "getpalamlv"
                     | "getexplv"
                     | "replace"
                     | "escape"
                     | "unicodetostr"
+                    | "encodetouni"
+                    | "unicodebyte"
+                    | "charatu"
+                    | "tolower"
+                    | "toupper"
             ) {
                 registry.register(native.import.key, CoreNative { name: name.into() });
             }
@@ -517,8 +525,10 @@ impl NativeService for CoreNative {
                 })
             }
             "bitcount" => VmValue::Integer(i64::from(integer(0)?.count_ones())),
-            "strlen" => VmValue::Integer(i64::try_from(string(0)?.len()).unwrap_or(i64::MAX)),
-            "strlenu" => {
+            "strlen" | "strlens" => {
+                VmValue::Integer(i64::try_from(string(0)?.len()).unwrap_or(i64::MAX))
+            }
+            "strlenu" | "strlensu" => {
                 VmValue::Integer(i64::try_from(string(0)?.chars().count()).unwrap_or(i64::MAX))
             }
             "toint" => VmValue::Integer(
@@ -585,6 +595,30 @@ impl NativeService for CoreNative {
                         .unwrap_or(-1),
                 )
             }
+            "strfindu" => {
+                let haystack = string(0)?;
+                let start = integer(2).unwrap_or(0);
+                let Ok(start) = usize::try_from(start) else {
+                    return Ok(NativeReady::value(VmValue::Integer(-1)));
+                };
+                let scalar_count = haystack.chars().count();
+                if start >= scalar_count {
+                    VmValue::Integer(-1)
+                } else {
+                    let byte_start = haystack
+                        .char_indices()
+                        .nth(start)
+                        .map_or(haystack.len(), |(offset, _)| offset);
+                    VmValue::Integer(
+                        haystack[byte_start..]
+                            .find(string(1)?)
+                            .and_then(|offset| {
+                                i64::try_from(haystack[..byte_start + offset].chars().count()).ok()
+                            })
+                            .unwrap_or(-1),
+                    )
+                }
+            }
             "strcount" => {
                 let regex = regex::Regex::new(string(1)?)
                     .map_err(|error| format!("STRCOUNT argument 2 is not a regex: {error}"))?;
@@ -619,6 +653,37 @@ impl NativeService for CoreNative {
             }
             "replace" => VmValue::String(string(0)?.replace(string(1)?, string(2)?)),
             "escape" => VmValue::String(regex::escape(string(0)?)),
+            "charatu" => {
+                let position = usize::try_from(integer(1)?).unwrap_or(usize::MAX);
+                VmValue::String(
+                    string(0)?
+                        .chars()
+                        .nth(position)
+                        .map_or_else(String::new, |value| value.to_string()),
+                )
+            }
+            "encodetouni" => {
+                let value = string(0)?;
+                if value.is_empty() {
+                    VmValue::Integer(-1)
+                } else {
+                    let position = usize::try_from(integer(1).unwrap_or(0))
+                        .map_err(|_| "ENCODETOUNI position is negative")?;
+                    let scalar = value
+                        .chars()
+                        .nth(position)
+                        .ok_or("ENCODETOUNI position exceeds the string")?;
+                    VmValue::Integer(i64::from(u32::from(scalar)))
+                }
+            }
+            "unicodebyte" => VmValue::Integer(i64::from(u32::from(
+                string(0)?
+                    .chars()
+                    .next()
+                    .ok_or("UNICODEBYTE input is empty")?,
+            ))),
+            "tolower" => VmValue::String(string(0)?.to_lowercase()),
+            "toupper" => VmValue::String(string(0)?.to_uppercase()),
             "unicodetostr" => {
                 let scalar = u32::try_from(integer(0)?)
                     .ok()

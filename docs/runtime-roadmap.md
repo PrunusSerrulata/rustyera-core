@@ -365,11 +365,18 @@ operation contracts; and parser-backed atomic safe-console expressions. New or c
 during hot reload deliberately require a full project load, while unchanged resource metadata and
 runtime-created replay state are preserved. The reopened closure slice adds an independent
 persisted candidate policy (`ReadOnly`/`CloneCommit`/`BufferedEffect`/`FrozenClock`/`Forbidden`),
-container 7, ISA 3, compiler ABI 11, Native ABI 10, Host ABI 6 and VM ABI 4. It also closes the
+container 8, ISA 3, HIR 7, compiler ABI 12, Native ABI 11, Host ABI 7 and VM ABI 4. It also closes the
 high-use `SETBIT`/`CLEARBIT`/`INVERTBIT`, `SPLIT`, `GETNUM`, `GETPALAMLV`/`GETEXPLV`, `STRCOUNT`
-and `ESCAPE` paths, including the missing mutable/reference analyzer signatures. Remaining
-deterministic Built-ins, the wider semantic graphics replay tail, changed-image staged metadata
-reload and the final machine-checked execution matrix still block Batch 10 completion.
+and `ESCAPE` paths, including the missing mutable/reference analyzer signatures. The next closure
+slice implements `STRLENS`, `STRLENSU`, `STRFINDU`, `CHARATU`, `ENCODETOUNI`, `UNICODEBYTE`,
+`TOLOWER`, `TOUPPER` and reference-array `STRJOIN`; project-derived `BARSTR` is now a read-only Host
+operation and is safe inside candidate `SAVEINFO`. BMP/ASCII behavior has a same-input C# oracle.
+Under the repository's UTF-8-only rule, non-U lengths remain UTF-8 byte counts; supplementary-plane
+U operations use Unicode scalar indices because a valid Rust UTF-8 string cannot represent an
+isolated UTF-16 surrogate. This is a tested intentional difference from .NET UTF-16 code-unit
+indexing. Remaining deterministic Built-ins (including locale-dependent `TOHALF`/`TOFULL`), the
+wider semantic graphics replay tail, changed-image staged metadata reload and the final
+machine-checked execution matrix still block Batch 10 completion.
 
 ## Batch 11: persistence, controller and final compatibility closure
 

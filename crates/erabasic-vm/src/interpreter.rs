@@ -588,6 +588,10 @@ impl Vm {
                             NativeReady::value(
                                 execute_getnum(self, fiber, &arguments).map_err(map_vm_error)?,
                             )
+                        } else if native_name == "strjoin" {
+                            NativeReady::value(
+                                execute_strjoin(self, fiber, &arguments).map_err(map_vm_error)?,
+                            )
                         } else if matches!(
                             native_name.as_str(),
                             "arrayremove" | "arrayshift" | "arraysort"
@@ -1234,6 +1238,61 @@ fn execute_getnum(vm: &Vm, fiber: &Fiber, arguments: &[VmValue]) -> Result<VmVal
         .and_then(|table| table.lookup.get(key))
         .map_or(-1, |index| i64::from(*index));
     Ok(VmValue::Integer(value))
+}
+
+fn execute_strjoin(vm: &Vm, fiber: &Fiber, arguments: &[VmValue]) -> Result<VmValue, VmError> {
+    let place = array_place(arguments)?;
+    let values = array_snapshot_any_rank(vm, fiber, place)?;
+    let delimiter = match arguments.get(1) {
+        None => ",",
+        Some(VmValue::String(value)) => value,
+        _ => {
+            return Err(VmError::InvalidArguments(
+                "STRJOIN delimiter must be a string".into(),
+            ));
+        }
+    };
+    let start = match arguments.get(2) {
+        None => 0,
+        Some(VmValue::Integer(value)) => usize::try_from(*value)
+            .map_err(|_| VmError::InvalidArguments("STRJOIN start is negative".into()))?,
+        _ => {
+            return Err(VmError::InvalidArguments(
+                "STRJOIN start must be an integer".into(),
+            ));
+        }
+    };
+    if start > values.len() {
+        return Err(VmError::InvalidArguments(
+            "STRJOIN start exceeds the array".into(),
+        ));
+    }
+    let count = match arguments.get(3) {
+        None => values.len() - start,
+        Some(VmValue::Integer(value)) => usize::try_from(*value)
+            .map_err(|_| VmError::InvalidArguments("STRJOIN count is negative".into()))?,
+        _ => {
+            return Err(VmError::InvalidArguments(
+                "STRJOIN count must be an integer".into(),
+            ));
+        }
+    };
+    let end = start
+        .checked_add(count)
+        .filter(|end| *end <= values.len())
+        .ok_or_else(|| VmError::InvalidArguments("STRJOIN range exceeds the array".into()))?;
+    let joined = values[start..end]
+        .iter()
+        .map(|value| match value {
+            VmValue::Integer(value) => Ok(value.to_string()),
+            VmValue::String(value) => Ok(value.clone()),
+            VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => Err(VmError::InvalidState(
+                "STRJOIN array contains a place".into(),
+            )),
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .join(delimiter);
+    Ok(VmValue::String(joined))
 }
 
 fn array_snapshot(

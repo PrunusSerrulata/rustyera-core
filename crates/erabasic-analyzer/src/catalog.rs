@@ -710,10 +710,26 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "STRFORM",
         "REPLACE",
         "UNICODETOSTR",
+        "TOLOWER",
+        "TOUPPER",
     ] {
         add(name, StrType, &[Any], 1, true);
     }
     add("STRFIND", IntType, &[String, String, Integer], 2, true);
+    add("STRFINDU", IntType, &[String, String, Integer], 2, true);
+    for name in ["STRLENS", "STRLENSU", "UNICODEBYTE"] {
+        add(name, IntType, &[String], 1, false);
+    }
+    add("ENCODETOUNI", IntType, &[String, Integer], 1, true);
+    add("CHARATU", StrType, &[String, Integer], 2, false);
+    add(
+        "STRJOIN",
+        StrType,
+        &[ReferenceAny, String, Integer, Integer],
+        1,
+        false,
+    );
+    add("BARSTR", StrType, &[Integer, Integer, Integer], 3, false);
     add("GETCONFIG", IntType, &[String], 1, false);
     add("GETCONFIGS", StrType, &[String], 1, false);
     add(
@@ -989,6 +1005,10 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     );
     add("DT_TOXML", StrType, &[String, MutableString], 1, false);
     add("DT_FROMXML", IntType, &[String, String, String], 3, false);
+    result
+        .get_mut("STRJOIN")
+        .expect("STRJOIN signature was inserted")
+        .allow_omitted = true;
     for name in ["DT_SELECT", "DT_ROW_ADD", "DT_ROW_SET", "DT_CELL_SET"] {
         result
             .get_mut(name)
