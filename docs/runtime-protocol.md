@@ -26,6 +26,14 @@ audio devices, operating-system input and monotonic-clock sampling. Renderer and
 objects are projections. A frontend result that affects EraBasic execution is submitted
 as an ordered message and becomes authoritative only when the runtime accepts it.
 
+The runtime is authoritative for presentation intent, not realized frontend layout. It
+does not measure fonts, reproduce a frontend's line wrapping or make raster caches part
+of recoverable presentation. If an EraBasic operation explicitly queries such a result,
+the target design obtains it from the single authoritative projection frontend as a
+revision-bound external service response. The runtime validates and orders that response
+without interpreting the renderer algorithm. Mirrors and debugger clients cannot answer
+projection queries.
+
 ## Versioned envelope
 
 `era-protocol` defines the common deterministic-CBOR envelope. Every request, response
@@ -94,6 +102,12 @@ Runtime-initiated work is asynchronous:
 - shutdown and other cancellation policies use a typed cancellation message. Late responses are
   rejected by request ID and cannot modify the new runtime timeline.
 
+Frontend-observation requests additionally bind the presentation revision and frontend
+environment revision they observe. A stale response is rejected. If the selected
+frontend lacks the exact operation/version, the query is unsupported; the runtime does
+not substitute a logical-width or default-font approximation. These projection-query
+operations and payloads are target design and are not yet present in protocol 13.0.
+
 The runtime and all lower crates perform no concrete file I/O and sample no system clock.
 Current ordinary text, binary and gzip traditional saves are encoded and decoded in memory. Export is
 eligible only at a stable untimed input wait; restore validates a candidate VM state before an
@@ -156,9 +170,9 @@ with arguments, allowing accessible clients to understand its role without becom
 for wording or game state.
 
 The runtime stores a revisioned semantic presentation snapshot and emits deltas based on
-that revision. It includes text/styles/buttons, HTML, image/shape placement, backgrounds,
+that revision. It includes text/styles/buttons, HTML, image/shape intent, backgrounds,
 tooltip policy, parsed sprite definitions, canvas replay commands, logical audio state, title and
-the current wait. Numeric media measurements use fixed
+the current wait. Script-defined logical media coordinates use fixed
 integer units rather than floating point. Recoverable state is separate from acknowledged
 one-shot `EffectBatch` events. Every effect has an independent ID; the frontend returns an
 exact completed/failed/cancelled outcome rather than acknowledging an ambiguous prefix. Device
@@ -167,11 +181,13 @@ failures produce diagnostics and never rewrite already-decided game state. `Colu
 tokens runtime-owned. `Separator` preserves `DRAWLINE` as a semantic line role. Neither inserts
 font-dependent padding into authoritative state; GUI clients may use grid/flex layout, TUI clients
 may repeat a pattern, and clients without these nodes receive a deterministic plain projection.
-`GETLINESTR` is computed from the session-fixed logical column count with Unicode
-grapheme/display width and never from a client font or viewport. Physical WinForms history and
-pixel-width queries remain stable unsupported operations. Pixel buffers, font objects and audio devices
-remain frontend caches; script-observable service results return through ordered service
-responses and update the runtime's logical resource revision.
+Physical WinForms history, realized HTML layout and pixel-width queries are not canonical
+state. Protocol 13.0 still leaves those queries unsupported, and currently computes
+`GETLINESTR` from a fixed logical width; both behaviors require command-by-command review
+under the frontend-observation policy. Pixel buffers, font objects and audio devices remain
+frontend caches. Content-addressed image facts and future realized-projection observations
+return through ordered service responses, but only resource facts update the runtime's logical
+resource revision.
 
 ## Runtime and VM boundary
 
@@ -229,6 +245,7 @@ and atomic scalar assignment; Host calls, flow, waits, increment/decrement and u
 are rejected without mutation. Protocol 12.0 added operation-versioned service capabilities,
 resource decoder services, exact effect outcomes, tooltip state and runtime diagnostics. The
 session-fixed `available_fonts` list is used only for the script-observable `CHKFONT` result.
-Canonical semantic layout remains runtime-owned; device font metrics remain a typed frontend
-service and cannot silently rewrite semantic state. The frontend cannot change the available-font
-list after the handshake.
+Canonical semantic layout intent remains runtime-owned; realized device layout does not.
+Protocol 13.0 negotiates but currently disables font-metric services, so renderer-dependent
+queries cannot yet obtain a frontend result. The frontend cannot change the available-font list
+after the handshake.

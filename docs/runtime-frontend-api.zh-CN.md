@@ -461,6 +461,18 @@ command graph，以及 `SETANIMETIMER` 选定的 `animation_timer_ms` 重绘间�
 前端不得根据本地字体重新推导脚本可观察的语义值；需要字体或资源信息时，应通过
 对应 `ServiceRequest` 返回版本化结果。
 
+这里的“不得写回”只针对普通展示投影。若 EraBasic 命令本身明确查询实际 viewport、
+字体测量、物理折行、显示历史或 raster 结果，该值属于前端观测，而不是 Runtime
+规范化展示状态。目标协议会向当前 session 唯一的权威投影前端发送携带 presentation
+revision 和前端环境 revision 的 typed service request；前端必须先应用到指定 revision，
+再返回其实际投影引擎的结果。Runtime 只负责关联、版本、revision、类型和范围验证，
+不能用逻辑列宽或默认字体伪造回退值。镜像、旁观者和调试客户端不得回答此类请求。
+
+上述投影观测服务尚未在 runtime protocol 13.0 中定义或实现。当前 `RunLayout` 和
+`layout_width_millipixels` 仍出现在规范化 snapshot 类型中，`CLIENTWIDTH/CLIENTHEIGHT`
+仍返回项目配置，字体度量能力也会在握手选择时被关闭。这些是已记录的现行实现与
+目标边界的矛盾，前端不得把现有字段误认为最终稳定契约。
+
 一次性音频、视频和动画设备动作通过 `EffectBatch`（tag `42`）发送，与可恢复展示
 状态分离。前端必须为每个 `effect_id` 单独返回 `EffectAcknowledgement`（tag `43`）中的
 `Completed`、`Failed` 或 `Cancelled` 结果；不能用累计前缀掩盖中间失败。失败只产生
@@ -526,6 +538,12 @@ Runtime 需要操作系统能力时发送 `ServiceRequest`（tag `52`）：
 | `Image / image_pixel` v1.0 | 资源 ID、内容摘要与坐标 | ARGB 像素值 |
 | `Network / update_check` v1.0 | 更新地址 | 远端版本和下载地址 |
 | `OpenUrl / open_url` v1.0 | URL | 是否已交给平台打开 |
+
+未来的字体测量、实际布局、物理显示历史和 canvas raster 查询也必须各自定义稳定的
+operation、版本和专用 payload，并绑定 presentation/environment revision。未协商精确
+operation 时必须返回不支持，不能使用 `Ready` 返回近似值。此类请求属于瞬态等待，
+未完成时阻止稳定 VM snapshot 和热替换提交；成功响应应进入可重放的外部输入轨迹，
+但物理布局本身不进入 Runtime 的规范化展示 snapshot。
 
 服务响应也必须作为正常入站消息取得连续 `sequence`。未知或已完成的 `request_id`
 会被视为 stale request。前端不能在处理 `ServiceRequest` 的同一 C 调用栈中回调

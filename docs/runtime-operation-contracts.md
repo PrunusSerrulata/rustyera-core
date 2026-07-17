@@ -39,6 +39,13 @@ intent; they do not promise WinForms/GDI pixel equivalence.
 | Storage and system-flow operations | Controller or external / forbidden | Ordinary, global or runtime-only | Per-operation included or pending-blocking policy | Script result or unsupported | Forbidden |
 | Extension Host imports | External / forbidden | Runtime-only | Pending blocks / active blocks / transient external | Unsupported | Forbidden |
 
+`CanonicalProjection` applies to output intent, never to a query that asks what a
+frontend actually rendered. A renderer-observation query is an ordered external service:
+if the authoritative frontend cannot perform it, the result is explicitly unsupported
+rather than a runtime-computed approximation. Its pending request blocks snapshots and
+hot-reload commits. Accepted responses are part of the reproducibility trace, not part of
+canonical presentation state.
+
 The compiler test `every_analyzer_builtin_has_one_explicit_execution_class` enumerates both
 instruction and function catalogs and verifies classification completeness, contract coherence,
 derived effects and snapshot capability. Artifact validation repeats the checks for untrusted
@@ -47,9 +54,12 @@ containers.
 ## Stable intentional differences and unsupported surface
 
 - `GETDISPLAYLINE`, `HTML_GETPRINTEDSTR`, `HTML_POPPRINTINGSTR`, `HTML_STRINGLEN`,
-  `HTML_SUBSTRING` and `HTML_STRINGLINES` return `UnsupportedRuntimeFeature`. Their reference
-  results depend on the WinForms physical line/history model; RustyEra keeps canonical logical
-  lines and does not invent pixel-dependent values.
+  `HTML_SUBSTRING` and `HTML_STRINGLINES` currently return `UnsupportedRuntimeFeature`. Their
+  reference results depend on the WinForms physical line/history model. Under the target
+  design, commands confirmed to observe realized presentation should use a versioned
+  authoritative-frontend service and return its real result, with a portability diagnostic;
+  commands that can instead be defined over canonical markup or logical state remain runtime
+  operations. That command-by-command service split is not implemented yet.
 - XPath supports the documented deterministic element/attribute, descendant, wildcard, numeric,
   `last()`, attribute and text predicate subset. Namespace axes, unions and arbitrary XPath
   functions return `native.xpath.unsupported` without committing a mutation.
