@@ -53,9 +53,23 @@ pub(crate) fn build_control_flow(
         };
         let name = target.name();
         match name {
-            "IF" | "SELECTCASE" | "REPEAT" | "FOR" | "WHILE" | "DO" | "TRYC" | "PRINTDATA"
-            | "STRDATA" | "TRYLIST" | "NOSKIP" => blocks.push(OpenBlock {
-                name: name.to_owned(),
+            "IF" | "SELECTCASE" | "REPEAT" | "FOR" | "WHILE" | "DO" | "TRYC" | "TRYCCALL"
+            | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" | "TRYCGOTO" | "TRYCGOTOFORM"
+            | "STRDATA" | "NOSKIP" | "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST" => {
+                blocks.push(OpenBlock {
+                    name: name.to_owned(),
+                    line: line.id,
+                    alternatives: Vec::new(),
+                });
+            }
+            name if name.starts_with("PRINTDATA") => blocks.push(OpenBlock {
+                // All suffix variants share the same structural block contract.
+                name: "PRINTDATA".to_owned(),
+                line: line.id,
+                alternatives: Vec::new(),
+            }),
+            "DATALIST" => blocks.push(OpenBlock {
+                name: "DATALIST".to_owned(),
                 line: line.id,
                 alternatives: Vec::new(),
             }),
@@ -141,16 +155,32 @@ pub(crate) fn build_control_flow(
                 text,
                 diagnostics,
             ),
-            "ENDCATCH" => close_block(
-                "TRYC",
-                line,
-                &mut blocks,
-                &mut edges,
-                source,
-                path,
-                text,
-                diagnostics,
-            ),
+            "ENDCATCH" => {
+                let expected = blocks
+                    .last()
+                    .map_or_else(|| "TRYC".to_owned(), |block| block.name.clone());
+                if matches!(
+                    expected.as_str(),
+                    "TRYC"
+                        | "TRYCCALL"
+                        | "TRYCCALLFORM"
+                        | "TRYCJUMP"
+                        | "TRYCJUMPFORM"
+                        | "TRYCGOTO"
+                        | "TRYCGOTOFORM"
+                ) {
+                    close_block(
+                        &expected,
+                        line,
+                        &mut blocks,
+                        &mut edges,
+                        source,
+                        path,
+                        text,
+                        diagnostics,
+                    );
+                }
+            }
             "ENDDATA" => close_block(
                 "PRINTDATA",
                 line,
@@ -162,7 +192,7 @@ pub(crate) fn build_control_flow(
                 diagnostics,
             ),
             "ENDLIST" => close_block(
-                "TRYLIST",
+                "DATALIST",
                 line,
                 &mut blocks,
                 &mut edges,
@@ -171,6 +201,24 @@ pub(crate) fn build_control_flow(
                 text,
                 diagnostics,
             ),
+            "ENDFUNC" => {
+                let expected = blocks.last().map(|block| block.name.clone());
+                if matches!(
+                    expected.as_deref(),
+                    Some("TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST")
+                ) {
+                    close_block(
+                        expected.as_deref().expect("checked above"),
+                        line,
+                        &mut blocks,
+                        &mut edges,
+                        source,
+                        path,
+                        text,
+                        diagnostics,
+                    );
+                }
+            }
             "ENDNOSKIP" => close_block(
                 "NOSKIP",
                 line,

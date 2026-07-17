@@ -9,14 +9,14 @@ pub struct FormatVersion {
 }
 
 pub const CONTAINER_VERSION: FormatVersion = FormatVersion {
-    major: 10,
+    major: 11,
     minor: 0,
 };
-pub const ISA_VERSION: FormatVersion = FormatVersion { major: 3, minor: 0 };
-pub const COMPILER_ABI_VERSION: u32 = 14;
+pub const ISA_VERSION: FormatVersion = FormatVersion { major: 4, minor: 0 };
+pub const COMPILER_ABI_VERSION: u32 = 15;
 pub const NATIVE_ABI_VERSION: u32 = 13;
-pub const HOST_ABI_VERSION: u32 = 9;
-pub const VM_ABI_VERSION: u32 = 6;
+pub const HOST_ABI_VERSION: u32 = 10;
+pub const VM_ABI_VERSION: u32 = 7;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProgramVersion {

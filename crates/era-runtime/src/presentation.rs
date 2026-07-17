@@ -212,6 +212,20 @@ impl PresentationModel {
         }
     }
 
+    /// D-suffixed print commands intentionally ignore SETCOLOR while preserving
+    /// the remaining canonical style fields.
+    pub(crate) fn append_default_color_text(
+        &mut self,
+        text: String,
+        temporary: bool,
+        commit: bool,
+    ) {
+        let foreground = self.current_style.foreground;
+        self.current_style.foreground = default_style().foreground;
+        self.append_print_text(text, temporary, commit);
+        self.current_style.foreground = foreground;
+    }
+
     pub(crate) fn append_column_cell(&mut self, text: String, alignment: CellAlignment) {
         let content = vec![self.text_run(text)];
         self.pending_runs.push(DisplayRun::ColumnCell {

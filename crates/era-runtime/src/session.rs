@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use era_debug_protocol::{DebugMessage, DebugScope, GrantToken};
 use era_protocol::{
@@ -237,6 +237,7 @@ pub struct RuntimeSession {
     skip_print: bool,
     user_defined_skip: bool,
     saved_skip: bool,
+    force_kana_mode: u8,
     client_focused: bool,
     client_audio_available: bool,
     command_intents: BTreeMap<InteractionToken, VmValue>,
@@ -285,6 +286,7 @@ struct PendingCandidateCommit {
     skip_print: bool,
     user_defined_skip: bool,
     saved_skip: bool,
+    force_kana_mode: u8,
     effects: Vec<EffectKind>,
 }
 
@@ -330,6 +332,7 @@ impl RuntimeSession {
             skip_print: false,
             user_defined_skip: false,
             saved_skip: false,
+            force_kana_mode: 0,
             client_focused: true,
             client_audio_available: true,
             command_intents: BTreeMap::new(),
@@ -1298,6 +1301,7 @@ impl RuntimeSession {
         self.skip_print = payload.skip_print;
         self.user_defined_skip = payload.user_defined_skip;
         self.saved_skip = payload.saved_skip;
+        self.force_kana_mode = payload.force_kana_mode;
         self.command_intents = remap_intents(payload.command_intents);
         self.reusable_system_intents = remap_intents(payload.reusable_system_intents);
         self.save_extensions = payload.save_extensions;
@@ -1537,6 +1541,68 @@ impl RuntimeSession {
                 self.skip_print = true;
             }
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "ASSERT" {
+            if integer_argument_value(&request.arguments, 0)? == 0 {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "ASSERT failed",
+                    Some(request.origin.clone()),
+                );
+            }
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "THROW" {
+            let message = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            return self.fault(FaultCode::VmFault, &message, Some(request.origin.clone()));
+        }
+        if name == "FORCEKANA" {
+            let mode = integer_argument_value(&request.arguments, 0)?;
+            let Ok(mode) = u8::try_from(mode) else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "FORCEKANA mode must be between 0 and 3",
+                    Some(request.origin.clone()),
+                );
+            };
+            if mode > 3 {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "FORCEKANA mode must be between 0 and 3",
+                    Some(request.origin.clone()),
+                );
+            }
+            self.force_kana_mode = mode;
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if matches!(name.as_str(), "UPCHECK" | "CUPCHECK") {
+            let (character, character_scoped) = if name == "CUPCHECK" {
+                let character = u64::try_from(integer_argument_value(&request.arguments, 0)?)
+                    .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+                (character, true)
+            } else {
+                let target = read_runtime_integer(vm, "TARGET", &[], None)?;
+                let Ok(character) = u64::try_from(target) else {
+                    clear_upcheck_arrays(vm, false, None)?;
+                    return commit_completion(
+                        vm,
+                        request.id,
+                        VmHostCompletion::Ready(HostReady::empty()),
+                    );
+                };
+                (character, false)
+            };
+            let lines = apply_upcheck(vm, character, character_scoped)?;
+            if !self.skip_print {
+                for line in lines {
+                    self.presentation.append_print_text(line, false, true);
+                }
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
         }
         if matches!(
             name.as_str(),
@@ -2133,12 +2199,24 @@ impl RuntimeSession {
                 .project_snapshot
                 .as_ref()
                 .map_or(20, |snapshot| snapshot.save_slot_count);
+            let value = VmValue::Integer(i64::from(count));
+            let writes = request
+                .arguments
+                .first()
+                .and_then(vm_place)
+                .map(|target| {
+                    vec![HostWrite {
+                        target,
+                        value: value.clone(),
+                    }]
+                })
+                .unwrap_or_default();
             return commit_completion(
                 vm,
                 request.id,
                 VmHostCompletion::Ready(HostReady {
-                    value: Some(VmValue::Integer(i64::from(count))),
-                    writes: Vec::new(),
+                    value: writes.is_empty().then_some(value),
+                    writes,
                 }),
             );
         }
@@ -2641,12 +2719,24 @@ impl RuntimeSession {
                 "PRINTCPERLINE" => project.print_c_per_line,
                 _ => project.print_c_length,
             };
+            let result = VmValue::Integer(i64::from(value));
+            let writes = request
+                .arguments
+                .first()
+                .and_then(vm_place)
+                .map(|target| {
+                    vec![HostWrite {
+                        target,
+                        value: result.clone(),
+                    }]
+                })
+                .unwrap_or_default();
             return commit_completion(
                 vm,
                 request.id,
                 VmHostCompletion::Ready(HostReady {
-                    value: Some(VmValue::Integer(i64::from(value))),
-                    writes: Vec::new(),
+                    value: writes.is_empty().then_some(result),
+                    writes,
                 }),
             );
         }
@@ -2665,7 +2755,10 @@ impl RuntimeSession {
                 Some(request.origin.clone()),
             );
         }
-        if name == "DRAWLINE" {
+        if matches!(
+            name.as_str(),
+            "DRAWLINE" | "CUSTOMDRAWLINE" | "DRAWLINEFORM"
+        ) {
             let pattern = request
                 .arguments
                 .first()
@@ -3221,12 +3314,63 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
+        if matches!(
+            name.as_str(),
+            "PRINT_ABL" | "PRINT_TALENT" | "PRINT_MARK" | "PRINT_EXP"
+        ) {
+            let target = u64::try_from(integer_argument_value(&request.arguments, 0)?)
+                .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+            let (variable, table, format) = match name.as_str() {
+                "PRINT_ABL" => ("ABL", erabasic_data::NameTableKind::Abl, 0),
+                "PRINT_TALENT" => ("TALENT", erabasic_data::NameTableKind::Talent, 1),
+                "PRINT_MARK" => ("MARK", erabasic_data::NameTableKind::Mark, 0),
+                "PRINT_EXP" => ("EXP", erabasic_data::NameTableKind::Exp, 2),
+                _ => unreachable!(),
+            };
+            let text = format_named_character_values(vm, variable, table, target, format)?;
+            self.presentation.append_print_text(text, false, true);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "PRINT_ITEM" {
+            let text = format_having_items(vm)?;
+            self.presentation.append_print_text(text, false, true);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "PRINT_PALAM" {
+            let target = u64::try_from(integer_argument_value(&request.arguments, 0)?)
+                .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+            for text in format_character_palam(vm, target)? {
+                self.presentation
+                    .append_column_cell(text, CellAlignment::Right);
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "PRINT_SHOPITEM" {
+            let project = self.project_snapshot.as_ref().ok_or_else(|| {
+                RuntimeError::Internal("PRINT_SHOPITEM has no loaded project".into())
+            })?;
+            let entries = format_shop_items(vm, project)?;
+            for (text, value) in entries {
+                let token = self.allocate_interaction();
+                self.presentation
+                    .append_button(text, token, Some(CellAlignment::Left));
+                self.command_intents.insert(token, VmValue::Integer(value));
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
         if is_print(&name) {
-            let text = request
+            let mut text = request
                 .arguments
                 .iter()
                 .map(display_value)
                 .collect::<String>();
+            if print_uses_kana_conversion(&name) {
+                text = convert_kana_mode(&text, self.force_kana_mode);
+            }
             if name == "REUSELASTLINE" {
                 self.presentation.print_temporary_line(text);
             } else if is_column_print(&name) {
@@ -3236,6 +3380,9 @@ impl RuntimeSession {
                     CellAlignment::Right
                 };
                 self.presentation.append_column_cell(text, alignment);
+            } else if print_uses_default_color(&name) {
+                self.presentation
+                    .append_default_color_text(text, false, print_commits_line(&name));
             } else {
                 self.presentation
                     .append_print_text(text, false, print_commits_line(&name));
@@ -3610,6 +3757,7 @@ impl RuntimeSession {
             self.skip_print,
             self.user_defined_skip,
             self.saved_skip,
+            self.force_kana_mode,
         );
         let original_phase = self.phase;
         let original_revision = self.revision;
@@ -3683,6 +3831,7 @@ impl RuntimeSession {
             self.skip_print,
             self.user_defined_skip,
             self.saved_skip,
+            self.force_kana_mode,
         );
         let effects = self
             .effect_journal
@@ -3696,6 +3845,7 @@ impl RuntimeSession {
             self.skip_print,
             self.user_defined_skip,
             self.saved_skip,
+            self.force_kana_mode,
         ) = original_flags;
         self.phase = original_phase;
         self.revision = original_revision;
@@ -3732,6 +3882,7 @@ impl RuntimeSession {
                 skip_print: candidate_flags.1,
                 user_defined_skip: candidate_flags.2,
                 saved_skip: candidate_flags.3,
+                force_kana_mode: candidate_flags.4,
                 effects,
             },
             bytes,
@@ -3780,6 +3931,7 @@ impl RuntimeSession {
         self.skip_print = candidate.skip_print;
         self.user_defined_skip = candidate.user_defined_skip;
         self.saved_skip = candidate.saved_skip;
+        self.force_kana_mode = candidate.force_kana_mode;
         self.emit_presentation()?;
         for effect in candidate.effects {
             self.emit_effect(effect)?;
@@ -5994,6 +6146,7 @@ impl RuntimeSession {
                         skip_print: self.skip_print,
                         user_defined_skip: self.user_defined_skip,
                         saved_skip: self.saved_skip,
+                        force_kana_mode: self.force_kana_mode,
                         command_intents: self.command_intents.clone(),
                         reusable_system_intents: self.reusable_system_intents.clone(),
                         save_extensions: self.save_extensions.clone(),
@@ -6637,6 +6790,271 @@ fn runtime_variable_key(
         .ok_or_else(|| RuntimeError::Internal(format!("system variable {name} is missing")))
 }
 
+fn runtime_variable_length(vm: &RuntimeVm, name: &str) -> usize {
+    vm.vm()
+        .artifact()
+        .globals
+        .iter()
+        .find(|global| global.name.eq_ignore_ascii_case(name))
+        .and_then(|global| global.dimensions.first())
+        .and_then(|length| usize::try_from(*length).ok())
+        .unwrap_or(0)
+}
+
+fn table_names(vm: &RuntimeVm, kind: erabasic_data::NameTableKind) -> Vec<Option<String>> {
+    vm.vm()
+        .artifact()
+        .project_data
+        .static_data
+        .name_tables
+        .get(&kind)
+        .map_or_else(Vec::new, |table| table.names.clone())
+}
+
+fn format_named_character_values(
+    vm: &RuntimeVm,
+    variable: &str,
+    table: erabasic_data::NameTableKind,
+    character: u64,
+    format: u8,
+) -> Result<String, RuntimeError> {
+    let names = table_names(vm, table);
+    let length = names.len().min(runtime_variable_length(vm, variable));
+    let mut output = String::new();
+    for (index, name) in names.into_iter().take(length).enumerate() {
+        let Some(name) = name.filter(|name| !name.is_empty()) else {
+            continue;
+        };
+        let value = read_runtime_integer(
+            vm,
+            variable,
+            &[u64::try_from(index).unwrap_or(u64::MAX)],
+            Some(character),
+        )?;
+        if value == 0 {
+            continue;
+        }
+        match format {
+            1 => write!(output, "[{name}]").expect("writing to String cannot fail"),
+            2 => write!(output, "{name}{value} ").expect("writing to String cannot fail"),
+            _ => write!(output, "{name}LV{value} ").expect("writing to String cannot fail"),
+        }
+    }
+    Ok(output)
+}
+
+fn format_having_items(vm: &RuntimeVm) -> Result<String, RuntimeError> {
+    let names = table_names(vm, erabasic_data::NameTableKind::Item);
+    let length = names.len().min(runtime_variable_length(vm, "ITEM"));
+    let mut items = String::new();
+    for (index, name) in names.into_iter().take(length).enumerate() {
+        let Some(name) = name.filter(|name| !name.is_empty()) else {
+            continue;
+        };
+        let count = read_runtime_integer(
+            vm,
+            "ITEM",
+            &[u64::try_from(index).unwrap_or(u64::MAX)],
+            None,
+        )?;
+        if count != 0 {
+            write!(items, "{name}({count}) ").expect("writing to String cannot fail");
+        }
+    }
+    if items.is_empty() {
+        items.push_str("なし");
+    }
+    Ok(format!("所持アイテム：{items}"))
+}
+
+fn format_character_palam(vm: &RuntimeVm, character: u64) -> Result<Vec<String>, RuntimeError> {
+    let names = table_names(vm, erabasic_data::NameTableKind::Palam);
+    let length = names
+        .len()
+        .min(runtime_variable_length(vm, "PALAM"))
+        .min(100);
+    let borders = (1_u64..=4)
+        .map(|index| read_runtime_integer(vm, "PALAMLV", &[index], None))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut output = Vec::new();
+    for (index, name) in names.into_iter().take(length).enumerate() {
+        let value = read_runtime_integer(
+            vm,
+            "PALAM",
+            &[u64::try_from(index).unwrap_or(u64::MAX)],
+            Some(character),
+        )?;
+        if value == 0 && name.as_deref().is_none_or(str::is_empty) {
+            continue;
+        }
+        let (mark, border) = if value >= borders[2] {
+            ('*', borders[3])
+        } else if value >= borders[1] {
+            ('>', borders[2])
+        } else if value >= borders[0] {
+            ('=', borders[1])
+        } else {
+            ('-', borders[0])
+        };
+        let filled = if border <= 0 || value >= border {
+            10
+        } else if value <= 0 {
+            0
+        } else {
+            usize::try_from(value.saturating_mul(10) / border)
+                .unwrap_or_default()
+                .min(10)
+        };
+        let bar = format!(
+            "{}{}",
+            mark.to_string().repeat(filled),
+            ".".repeat(10 - filled)
+        );
+        output.push(format!("{}[{bar}]{value:>6}", name.unwrap_or_default()));
+    }
+    Ok(output)
+}
+
+fn format_shop_items(
+    vm: &RuntimeVm,
+    project: &NormalizedProjectSnapshot,
+) -> Result<Vec<(String, i64)>, RuntimeError> {
+    let names = table_names(vm, erabasic_data::NameTableKind::Item);
+    let prices = &vm.vm().artifact().project_data.static_data.item_prices;
+    let length = names
+        .len()
+        .min(prices.len())
+        .min(runtime_variable_length(vm, "ITEMSALES"));
+    let mut output = Vec::new();
+    for (index, name) in names.into_iter().take(length).enumerate() {
+        if read_runtime_integer(
+            vm,
+            "ITEMSALES",
+            &[u64::try_from(index).unwrap_or(u64::MAX)],
+            None,
+        )? == 0
+        {
+            continue;
+        }
+        let price = prices[index];
+        let price = if project.money_first {
+            format!("{}{price}", project.money_label)
+        } else {
+            format!("{price}{}", project.money_label)
+        };
+        output.push((
+            format!("[{index}] {}({price})", name.unwrap_or_default()),
+            i64::try_from(index).unwrap_or(i64::MAX),
+        ));
+    }
+    Ok(output)
+}
+
+fn clear_upcheck_arrays(
+    vm: &mut RuntimeVm,
+    character_scoped: bool,
+    character: Option<u64>,
+) -> Result<(), RuntimeError> {
+    let variables = if character_scoped {
+        ["CUP", "CDOWN"]
+    } else {
+        ["UP", "DOWN"]
+    };
+    let mut writes = Vec::new();
+    for variable in variables {
+        let key = runtime_variable_key(vm, variable)?;
+        for index in 0..runtime_variable_length(vm, variable) {
+            writes.push(VmRuntimeWrite {
+                variable: key,
+                indices: vec![u64::try_from(index).unwrap_or(u64::MAX)],
+                character,
+                value: VmValue::Integer(0),
+            });
+        }
+    }
+    let prepared = vm
+        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+            writes,
+            fills: Vec::new(),
+            clear_characters: false,
+            add_characters_from_csv: Vec::new(),
+        })
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    vm.commit_runtime_state(prepared)
+        .map_err(|error| RuntimeError::Internal(error.to_string()))
+}
+
+fn apply_upcheck(
+    vm: &mut RuntimeVm,
+    character: u64,
+    character_scoped: bool,
+) -> Result<Vec<String>, RuntimeError> {
+    let (up_name, down_name, delta_character) = if character_scoped {
+        ("CUP", "CDOWN", Some(character))
+    } else {
+        ("UP", "DOWN", None)
+    };
+    let length = runtime_variable_length(vm, "PALAM")
+        .min(runtime_variable_length(vm, up_name))
+        .min(runtime_variable_length(vm, down_name));
+    let names = table_names(vm, erabasic_data::NameTableKind::Palam);
+    let mut writes = Vec::with_capacity(length.saturating_mul(3));
+    let mut lines = Vec::new();
+    for index in 0..length {
+        let coordinate = [u64::try_from(index).unwrap_or(u64::MAX)];
+        let current = match read_runtime_integer(vm, "PALAM", &coordinate, Some(character)) {
+            Ok(value) => value,
+            Err(_error) if character_scoped => return Ok(Vec::new()),
+            Err(_) => {
+                clear_upcheck_arrays(vm, false, None)?;
+                return Ok(Vec::new());
+            }
+        };
+        let up = read_runtime_integer(vm, up_name, &coordinate, delta_character)?;
+        let down = read_runtime_integer(vm, down_name, &coordinate, delta_character)?;
+        if up > 0 || down > 0 {
+            let updated = current.wrapping_add(up).wrapping_sub(down);
+            let mut text = format!(
+                "{} {current}",
+                names.get(index).and_then(Clone::clone).unwrap_or_default()
+            );
+            if up > 0 {
+                write!(text, "+{up}").expect("writing to String cannot fail");
+            }
+            if down > 0 {
+                write!(text, "-{down}").expect("writing to String cannot fail");
+            }
+            write!(text, "={updated}").expect("writing to String cannot fail");
+            lines.push(text);
+            writes.push(VmRuntimeWrite {
+                variable: runtime_variable_key(vm, "PALAM")?,
+                indices: coordinate.to_vec(),
+                character: Some(character),
+                value: VmValue::Integer(updated),
+            });
+        }
+        for variable in [up_name, down_name] {
+            writes.push(VmRuntimeWrite {
+                variable: runtime_variable_key(vm, variable)?,
+                indices: coordinate.to_vec(),
+                character: delta_character,
+                value: VmValue::Integer(0),
+            });
+        }
+    }
+    let prepared = vm
+        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+            writes,
+            fills: Vec::new(),
+            clear_characters: false,
+            add_characters_from_csv: Vec::new(),
+        })
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    vm.commit_runtime_state(prepared)
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+    Ok(lines)
+}
+
 fn integer_argument_value(arguments: &[VmValue], index: usize) -> Result<i64, RuntimeError> {
     match arguments.get(index) {
         Some(VmValue::Integer(value)) => Ok(*value),
@@ -6644,6 +7062,13 @@ fn integer_argument_value(arguments: &[VmValue], index: usize) -> Result<i64, Ru
             "host argument {} must be integer",
             index + 1
         ))),
+    }
+}
+
+fn vm_place(value: &VmValue) -> Option<PlaceDescriptor> {
+    match value {
+        VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => Some(place.clone()),
+        VmValue::Integer(_) | VmValue::String(_) => None,
     }
 }
 
@@ -7227,6 +7652,14 @@ fn is_print(name: &str) -> bool {
     name.starts_with("PRINT") || name == "REUSELASTLINE"
 }
 
+fn print_uses_kana_conversion(name: &str) -> bool {
+    name.starts_with("PRINT") && name.contains('K')
+}
+
+fn print_uses_default_color(name: &str) -> bool {
+    name.starts_with("PRINT") && name.contains('D') && !name.starts_with("PRINTDATA")
+}
+
 fn is_input_command(name: &str) -> bool {
     matches!(
         name,
@@ -7264,6 +7697,8 @@ fn is_runtime_print_command(name: &str) -> bool {
                 | "PRINT_IMG"
                 | "PRINT_RECT"
                 | "PRINT_SPACE"
+                | "CUSTOMDRAWLINE"
+                | "DRAWLINEFORM"
         )
 }
 
@@ -7718,6 +8153,42 @@ fn to_half_width(value: &str) -> String {
         }
     }
     output
+}
+
+/// Apply the pinned Japanese LCID 0x0411 subset used by FORCEKANA. The table is
+/// embedded so execution never depends on the host locale or platform APIs.
+fn convert_kana_mode(value: &str, mode: u8) -> String {
+    let value = if mode == 3 {
+        to_full_width(value)
+    } else {
+        value.to_owned()
+    };
+    value
+        .chars()
+        .map(|character| match mode {
+            1 => hiragana_to_katakana(character),
+            2 | 3 => katakana_to_hiragana(character),
+            _ => character,
+        })
+        .collect()
+}
+
+fn hiragana_to_katakana(character: char) -> char {
+    match character {
+        '\u{3041}'..='\u{3096}' => char::from_u32(u32::from(character) + 0x60).unwrap_or(character),
+        'ゝ' => 'ヽ',
+        'ゞ' => 'ヾ',
+        _ => character,
+    }
+}
+
+fn katakana_to_hiragana(character: char) -> char {
+    match character {
+        '\u{30a1}'..='\u{30f6}' => char::from_u32(u32::from(character) - 0x60).unwrap_or(character),
+        'ヽ' => 'ゝ',
+        'ヾ' => 'ゞ',
+        _ => character,
+    }
 }
 
 fn map_width_char(character: char, source: &str, target: &str) -> Option<char> {
@@ -9610,6 +10081,9 @@ mod tests {
     fn deterministic_width_and_integer_format_tables_cover_era_usage() {
         assert_eq!(to_full_width("ABC 123 ｶﾞﾊﾟ"), "ＡＢＣ　１２３　ガパ");
         assert_eq!(to_half_width("ＡＢＣ　１２３　ガパ"), "ABC 123 ｶﾞﾊﾟ");
+        assert_eq!(convert_kana_mode("あいうガ", 1), "アイウガ");
+        assert_eq!(convert_kana_mode("アイウガ", 2), "あいうが");
+        assert_eq!(convert_kana_mode("ｶﾞ ABC", 3), "が　ＡＢＣ");
         assert_eq!(format_era_integer(12_345, "#,##0"), Ok("12,345".into()));
         assert_eq!(format_era_integer(-7, "D3"), Ok("-007".into()));
         assert_eq!(format_era_integer(255, "X4"), Ok("00FF".into()));

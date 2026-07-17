@@ -10,7 +10,7 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 6;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 7;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 52;
@@ -36,6 +36,7 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) skip_print: bool,
     pub(crate) user_defined_skip: bool,
     pub(crate) saved_skip: bool,
+    pub(crate) force_kana_mode: u8,
     #[serde(with = "token_value_map")]
     pub(crate) command_intents: BTreeMap<InteractionToken, VmValue>,
     #[serde(with = "token_value_map")]
@@ -162,6 +163,7 @@ mod tests {
             skip_print: false,
             user_defined_skip: false,
             saved_skip: false,
+            force_kana_mode: 0,
             command_intents: BTreeMap::new(),
             reusable_system_intents: BTreeMap::new(),
             save_extensions: Vec::new(),
@@ -201,6 +203,7 @@ mod tests {
             skip_print: false,
             user_defined_skip: false,
             saved_skip: false,
+            force_kana_mode: 0,
             command_intents: BTreeMap::new(),
             reusable_system_intents: BTreeMap::new(),
             save_extensions: Vec::new(),
@@ -216,6 +219,7 @@ mod tests {
         assert_eq!(decoded.resource_graph.canvas_state(7), Some((20, 10)));
         assert_eq!(decoded.selected_locale, "ja");
         assert_eq!(decoded.culture_table_version, CULTURE_TABLE_VERSION);
+        assert_eq!(decoded.force_kana_mode, 0);
         assert_eq!(decoded.system_menu, 3);
         assert_eq!(decoded.system_menu_slot, Some(17));
     }

@@ -105,3 +105,37 @@ fn reports_unclosed_control_structure() {
             .any(|diagnostic| diagnostic.code == DiagnosticCode::UnmatchedBlock)
     );
 }
+
+#[test]
+fn printdata_suffixes_and_nested_datalist_have_reference_block_shape() {
+    let source = "@TEST\nPRINTDATADW\nDATALIST\nDATAFORM one\nDATAFORM two\nENDLIST\nENDDATA\n";
+    let output = parse_erb(source, &mut DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+}
+
+#[test]
+fn try_function_lists_close_with_endfunc_not_endlist() {
+    let source = "@TEST\nTRYCALLLIST\nFUNC FIRST, 1\nFUNC SECOND, 2\nENDFUNC\n";
+    let output = parse_erb(source, &mut DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+
+    let invalid = parse_erb(
+        "@TEST\nTRYCALLLIST\nFUNC FIRST\nENDLIST\n",
+        &mut DefaultParserContext::default(),
+    );
+    assert!(invalid.has_errors());
+}
+
+#[test]
+fn dynamic_call_separates_formatted_target_from_lazy_arguments() {
+    let output = parse_line(
+        "CALLFORM CHARAMOVE_{ARG}(4, LOCAL)",
+        &DefaultParserContext::default(),
+    );
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Instruction { arguments, .. } = output.value.unwrap().kind else {
+        panic!("expected instruction");
+    };
+    assert!(matches!(arguments.first(), Some(Argument::Formatted(_))));
+    assert_eq!(arguments.len(), 3);
+}

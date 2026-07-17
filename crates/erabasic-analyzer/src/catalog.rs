@@ -191,6 +191,37 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     ] {
         add(name, NoArgs, &[], 0, false, false);
     }
+    for name in ["PRINTCPERLINE", "SAVENOS"] {
+        // Statement forms write through their argument; expression functions with
+        // the same spelling are registered independently below.
+        add(name, Expressions, &[MutableInteger], 1, false, false);
+    }
+    add("ASSERT", Expressions, &[Integer], 1, false, false);
+    add("THROW", Expressions, &[String], 1, false, false);
+    add("FORCEKANA", Expressions, &[Integer], 1, false, false);
+    add("UPCHECK", NoArgs, &[], 0, false, false);
+    add("CUPCHECK", Expressions, &[Integer], 1, false, false);
+    add(
+        "CUSTOMDRAWLINE",
+        Raw,
+        &[ArgumentConstraint::Raw],
+        1,
+        false,
+        false,
+    );
+    add("DRAWLINEFORM", FormStyle, &[Formatted], 1, false, false);
+    for name in [
+        "PRINT_ABL",
+        "PRINT_TALENT",
+        "PRINT_MARK",
+        "PRINT_EXP",
+        "PRINT_PALAM",
+    ] {
+        add(name, Expressions, &[Integer], 1, false, false);
+    }
+    for name in ["PRINT_ITEM", "PRINT_SHOPITEM"] {
+        add(name, NoArgs, &[], 0, false, false);
+    }
     for name in [
         "PRINT",
         "PRINTL",
@@ -207,6 +238,7 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "PRINTSINGLEFORM",
         "RETURNFORM",
         "DATA",
+        "DATAFORM",
         "DATALIST",
         "PUTFORM",
     ] {
@@ -332,16 +364,34 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "BEGIN",
         "TRYCALL",
         "TRYJUMP",
-        "CALLFORM",
-        "JUMPFORM",
-        "TRYCALLFORM",
-        "TRYJUMPFORM",
         "GOTO",
         "TRYGOTO",
         "GOTOFORM",
         "TRYGOTOFORM",
     ] {
         add(name, Expressions, &[Any], 1, true, true);
+    }
+    for name in [
+        "CALLFORM",
+        "CALLFORMF",
+        "JUMPFORM",
+        "TRYCALLFORM",
+        "TRYCALLFORMF",
+        "TRYJUMPFORM",
+        "TRYCCALLFORM",
+        "TRYCCALL",
+        "TRYCJUMP",
+        "TRYCJUMPFORM",
+        "TRYCGOTOFORM",
+    ] {
+        add(
+            name,
+            ArgumentStyle::DynamicCall,
+            &[Formatted, Any],
+            1,
+            true,
+            true,
+        );
     }
     for name in ["RETURNF", "INPUT", "ONEINPUT", "AWAIT"] {
         add(name, Expressions, &[Integer], 0, true, true);
@@ -415,9 +465,6 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "DOTRAIN",
         "DO",
         "TRYC",
-        "PRINTDATA",
-        "STRDATA",
-        "TRYLIST",
         "FUNC",
         "RANDOMIZE",
         "DUMPRAND",
@@ -425,6 +472,8 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     ] {
         add(name, Expressions, &[Any], 0, true, true);
     }
+    add("PRINTDATA", Expressions, &[MutableInteger], 0, false, true);
+    add("STRDATA", Expressions, &[MutableString], 1, false, false);
     // Raw is used only for host/plugin statements whose grammar is intentionally
     // opaque to the core analyzer.
     add("CALLSHARP", Raw, &[], 0, false, true);
@@ -646,7 +695,7 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     for name in PRINT_DATA_FAMILY {
         result.insert(
             (*name).to_owned(),
-            instruction(name, Expressions, &[Any], 0, true, true),
+            instruction(name, Expressions, &[MutableInteger], 0, false, true),
         );
     }
     result

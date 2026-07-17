@@ -369,7 +369,16 @@ fn validate_function_parameters(
     for function in &artifact.functions {
         let mut parameter_keys = BTreeSet::new();
         for parameter in &function.parameters {
+            let default_valid = match (&parameter.default, parameter.value_type) {
+                (None, _) => true,
+                (Some(erabasic_bytecode::BytecodeConstant::Integer(_)), BytecodeType::Integer)
+                | (Some(erabasic_bytecode::BytecodeConstant::String(_)), BytecodeType::String) => {
+                    !parameter.by_reference
+                }
+                _ => false,
+            };
             let valid = parameter_keys.insert(parameter.key)
+                && default_valid
                 && artifact.globals.iter().any(|global| {
                     let owner_matches = global.owner == Some(function.key)
                         || (global.storage == BytecodeStorage::FunctionPersistent
@@ -769,6 +778,21 @@ fn apply_instruction(
             }
             stack.push(BytecodeType::String);
         }
+        Opcode::Pop => {
+            expect_payload(&instruction.payload, 0)?;
+            stack.pop().ok_or((
+                ValidationCode::StackMismatch,
+                "pop underflows the stack".into(),
+            ))?;
+        }
+        Opcode::Dup => {
+            expect_payload(&instruction.payload, 0)?;
+            let value = *stack.last().ok_or((
+                ValidationCode::StackMismatch,
+                "dup underflows the stack".into(),
+            ))?;
+            stack.push(value);
+        }
         Opcode::Jump => {
             expect_payload(&instruction.payload, 4)?;
             return Ok(vec![read_u32(&instruction.payload, 0)? as usize]);
@@ -777,6 +801,36 @@ fn apply_instruction(
             expect_payload(&instruction.payload, 4)?;
             pop_type(stack, BytecodeType::Integer)?;
             return Ok(vec![read_u32(&instruction.payload, 0)? as usize, index + 1]);
+        }
+        Opcode::ResolveFunction => {
+            expect_payload(&instruction.payload, 5)?;
+            pop_type(stack, BytecodeType::String)?;
+            stack.push(BytecodeType::String);
+            if instruction.payload[4] > 1 {
+                return Err((
+                    ValidationCode::InvalidOperand,
+                    "resolve-function allow-missing flag is invalid".into(),
+                ));
+            }
+            if instruction.payload[4] == 1 {
+                return Ok(vec![read_u32(&instruction.payload, 0)? as usize, index + 1]);
+            }
+        }
+        Opcode::InvokeDynamic => {
+            expect_payload(&instruction.payload, 3)?;
+            if instruction.payload[2] > 1 {
+                return Err((
+                    ValidationCode::InvalidOperand,
+                    "dynamic-invoke tail flag is invalid".into(),
+                ));
+            }
+            for _ in 0..read_u16(&instruction.payload, 0)? {
+                stack.pop().ok_or((
+                    ValidationCode::StackMismatch,
+                    "dynamic call argument underflows the stack".into(),
+                ))?;
+            }
+            pop_type(stack, BytecodeType::String)?;
         }
         Opcode::Call | Opcode::CallNative | Opcode::CallHost => {
             expect_payload(&instruction.payload, 7)?;

@@ -7,7 +7,8 @@ use crate::{
     Fiber, FiberId, FiberState, HostCallRequest, HostCallResult, HostReady, HostWaitStability,
     NativeCallRequest, NativePlaceView, NativeReady, NativeServiceRegistry, PlaceDescriptor,
     RunBudget, Vm, VmError, VmEvent, VmFault, VmFaultCode, VmHost, VmRunReport, VmRunStop, VmValue,
-    WaitingHost, find_global, make_frame, validate_arguments,
+    WaitingHost, bind_persistent_arguments, find_global, make_frame, prepare_dynamic_arguments,
+    validate_arguments,
 };
 
 enum StepOutcome {
@@ -455,6 +456,16 @@ impl Vm {
                     .stack
                     .push(VmValue::String(value));
             }
+            Opcode::Pop => {
+                pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?;
+            }
+            Opcode::Dup => {
+                let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
+                let value = stack.last().cloned().ok_or_else(|| {
+                    StepError::new(VmFaultCode::InvalidInstruction, "dup underflows the stack")
+                })?;
+                stack.push(value);
+            }
             Opcode::Concat => {
                 let count = read_u16(&position.encoded.payload, 0)? as usize;
                 let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
@@ -492,6 +503,107 @@ impl Vm {
                             fiber.backward_branches_without_progress.saturating_add(1);
                     }
                     fiber.frames.last_mut().expect("frame exists").instruction = target;
+                }
+            }
+            Opcode::ResolveFunction => {
+                let missing_target = read_u32(&position.encoded.payload, 0)? as usize;
+                let allow_missing = position.encoded.payload.get(4).copied() == Some(1);
+                let VmValue::String(name) =
+                    pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?
+                else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "dynamic function target must be a string",
+                    ));
+                };
+                let artifact = &self
+                    .generations
+                    .get(&position.generation)
+                    .expect("validated frame generation exists")
+                    .artifact;
+                if let Some(target) = artifact
+                    .functions
+                    .iter()
+                    .find(|function| function.name.eq_ignore_ascii_case(&name))
+                {
+                    fiber
+                        .frames
+                        .last_mut()
+                        .expect("frame exists")
+                        .stack
+                        .push(VmValue::String(target.name.clone()));
+                } else if allow_missing {
+                    fiber
+                        .frames
+                        .last_mut()
+                        .expect("frame exists")
+                        .stack
+                        .push(VmValue::String(String::new()));
+                    fiber.frames.last_mut().expect("frame exists").instruction = missing_target;
+                } else {
+                    return Err(StepError::new(
+                        VmFaultCode::MissingSymbol,
+                        format!("dynamic function {name} is missing"),
+                    ));
+                }
+            }
+            Opcode::InvokeDynamic => {
+                let argument_count = read_u16(&position.encoded.payload, 0)? as usize;
+                let tail = position.encoded.payload.get(2).copied() == Some(1);
+                let new_frame = self.allocate_frame_id();
+                let arguments = pop_arguments(
+                    &mut fiber.frames.last_mut().expect("frame exists").stack,
+                    argument_count,
+                )?;
+                let VmValue::String(name) =
+                    pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?
+                else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "resolved function target must be a string",
+                    ));
+                };
+                let artifact = &self
+                    .generations
+                    .get(&position.generation)
+                    .expect("validated frame generation exists")
+                    .artifact;
+                let target = artifact
+                    .functions
+                    .iter()
+                    .find(|function| function.name.eq_ignore_ascii_case(&name))
+                    .cloned()
+                    .ok_or_else(|| {
+                        StepError::new(VmFaultCode::MissingSymbol, "resolved function disappeared")
+                    })?;
+                let arguments =
+                    prepare_dynamic_arguments(&target, arguments).map_err(map_vm_error)?;
+                bind_persistent_arguments(
+                    &mut self.memory,
+                    position.generation,
+                    &target,
+                    artifact,
+                    &arguments,
+                )
+                .map_err(map_vm_error)?;
+                let frame = make_frame(
+                    new_frame,
+                    position.generation,
+                    &target,
+                    artifact,
+                    arguments,
+                    false,
+                );
+                if tail {
+                    *fiber.frames.last_mut().expect("frame exists") = frame;
+                } else {
+                    if fiber.frames.len() >= self.config.maximum_call_depth {
+                        return Err(StepError::new(
+                            VmFaultCode::ResourceLimit,
+                            "maximum call depth exceeded",
+                        ));
+                    }
+                    fiber.frames.push(frame);
                 }
             }
             Opcode::Call | Opcode::CallNative | Opcode::CallHost => {
@@ -535,12 +647,21 @@ impl Vm {
                                 )
                             })?;
                         validate_arguments(&target, &arguments).map_err(map_vm_error)?;
+                        bind_persistent_arguments(
+                            &mut self.memory,
+                            position.generation,
+                            &target,
+                            artifact,
+                            &arguments,
+                        )
+                        .map_err(map_vm_error)?;
                         fiber.frames.push(make_frame(
                             new_frame.expect("function call reserved a frame id"),
                             position.generation,
                             &target,
                             artifact,
                             arguments,
+                            true,
                         ));
                     }
                     (Opcode::CallNative, ImportKind::Native) => {
@@ -817,9 +938,11 @@ impl Vm {
                 let value = has_value
                     .then(|| pop(&mut fiber.frames.last_mut().expect("frame exists").stack))
                     .transpose()?;
-                fiber.frames.pop();
+                let returned_frame = fiber.frames.pop().expect("returning frame exists");
                 if let Some(caller) = fiber.frames.last_mut() {
-                    if let Some(value) = value {
+                    if returned_frame.return_value_to_caller
+                        && let Some(value) = value
+                    {
                         caller.stack.push(value);
                     }
                 } else {

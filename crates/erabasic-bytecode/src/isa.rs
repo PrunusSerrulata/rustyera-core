@@ -22,12 +22,16 @@ pub enum Opcode {
     ToString = 7,
     Concat = 8,
     MakePlace = 9,
+    Pop = 10,
+    Dup = 11,
     Jump = 16,
     JumpIfFalse = 17,
     Call = 32,
     Return = 33,
     CallNative = 34,
     CallHost = 35,
+    ResolveFunction = 36,
+    InvokeDynamic = 37,
     Yield = 48,
     AwaitResume = 49,
     Trap = 255,
@@ -48,12 +52,16 @@ impl TryFrom<u16> for Opcode {
             7 => Self::ToString,
             8 => Self::Concat,
             9 => Self::MakePlace,
+            10 => Self::Pop,
+            11 => Self::Dup,
             16 => Self::Jump,
             17 => Self::JumpIfFalse,
             32 => Self::Call,
             33 => Self::Return,
             34 => Self::CallNative,
             35 => Self::CallHost,
+            36 => Self::ResolveFunction,
+            37 => Self::InvokeDynamic,
             48 => Self::Yield,
             49 => Self::AwaitResume,
             255 => Self::Trap,
@@ -148,6 +156,20 @@ pub mod opcode {
     #[must_use]
     pub fn return_value(has_value: bool) -> EncodedInstruction {
         EncodedInstruction::new(Opcode::Return, vec![u8::from(has_value)])
+    }
+
+    #[must_use]
+    pub fn resolve_function(missing_target: u32, allow_missing: bool) -> EncodedInstruction {
+        let mut payload = missing_target.to_le_bytes().to_vec();
+        payload.push(u8::from(allow_missing));
+        EncodedInstruction::new(Opcode::ResolveFunction, payload)
+    }
+
+    #[must_use]
+    pub fn invoke_dynamic(arguments: u16, tail: bool) -> EncodedInstruction {
+        let mut payload = arguments.to_le_bytes().to_vec();
+        payload.push(u8::from(tail));
+        EncodedInstruction::new(Opcode::InvokeDynamic, payload)
     }
 
     #[must_use]

@@ -15,8 +15,9 @@
 snapshot、热替换和主要系统流程框架已经存在，但仍有数个会阻止真实游戏正常运行的
 高优先级缺口：
 
-- `PRINTDATA*`、`STRDATA`、动态函数调用等高频路径尚不可用。
-- `PRINT*` 被统一分派，但没有实现 K/D/N/SINGLE/C 等后缀的完整语义。
+- `PRINTDATA*`、`STRDATA` 与主要动态函数调用路径已经可用；带下标数据目标、动态
+  label、事件调用和候选调用列表仍未实现。
+- `PRINT*` 的 K/D 后缀和常用专用输出已经实现，但 N/SINGLE/C 等后缀仍缺少完整语义。
 - 调教、`EVENTCOMEND`、SHOP 自动存档存在系统流程差异。
 - 很多已进入 Host catalog 的命令最终落入通用 `UnsupportedRuntimeFeature`。
 - 前端实际渲染观测尚无 typed service，且现有规范化展示类型仍携带声称由 runtime
@@ -36,14 +37,14 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 | 阶段 | 当前状态 | 主要问题 |
 | --- | --- | --- |
 | 握手、能力协商 | 基本完成 | 一些能力被固定关闭；部分 catalog 能力实际不可执行 |
-| 项目提交、CSV/ERH/ERB 编译 | 部分完成 | 配置项覆盖不完整；动态调用及若干指令在编译期变成 trap |
+| 项目提交、CSV/ERH/ERB 编译 | 部分完成 | 配置项覆盖不完整；动态 label、事件调用及候选调用列表仍不可执行 |
 | 资源加载 | 架构已实现 | 图片解码前端化是有意设计；物理绘图能力大量不支持 |
 | 标题画面 | 部分完成 | 新游戏重置时机、标题内容、输入方式不同 |
 | 新游戏初始化、EVENTFIRST | 部分完成 | `SYSTEM_TITLE` 观察到的初始状态不同 |
 | TRAIN/连续调教 | 明显不完整 | 输出抑制、进度信息、`CALLTRAINEND`、`DOTRAIN` 限制不同 |
 | AFTERTRAIN/ABLUP/TURNEND | 主流程存在 | BEGIN 时的样式、SKIPDISP、连续调教清理不同 |
 | SHOP | 部分完成 | 自动存档条件、EVENTSHOP 中 BEGIN、失败等待不同 |
-| 普通脚本执行 | 部分完成 | 动态调用、打印数据块、THROW 等阻塞真实脚本 |
+| 普通脚本执行 | 部分完成 | 主要动态调用、打印数据块和 THROW 已实现；1.1 所列边缘调用仍阻塞部分脚本 |
 | 输入/QTE/计时 | 主框架完成 | ONEINPUT 长度未由 runtime 校验；部分 UI 输入函数缺失 |
 | 文本、HTML、图片、音频 | 语义模型部分完成 | PRINT 后缀、HTML、图片参数和样式操作缺失 |
 | 传统存档、VM snapshot | 基础完成 | 菜单和失败行为不同；没有参考实现 Ctrl-Z 轨迹 |
@@ -59,33 +60,39 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 
 #### PRINTDATA、STRDATA 和数据列表
 
-- 编译器只把精确的 `PRINTDATA` 当作控制结构，并生成不存在的
-  `control_printdata` Native 调用。
-- `PRINTDATAL`、`PRINTDATAW`、K/D 变体可能进入普通 Host 打印分支。
-- parser 仅识别 `PRINTDATA`、`PRINTDATAL`、`PRINTDATAW` 的块结构，没有覆盖 K/D
-  组合。
-- 参考实现会随机选择一个 `DATALIST`，可写回选择索引，并处理 K/D/L/W。
-- `STRDATA`、`TRYLIST/ENDLIST` 同样缺少可执行的控制结构实现。
+- 已实现 `PRINTDATA*` 和 `STRDATA` 的惰性随机选择：skip 时不消耗 RAND，未选中的
+  DATA 表达式不求值，`DATALIST` 作为一个多行候选，支持标量选择索引及 K/D/L/W。
+- parser、analyzer、compiler 识别全部 K/D/L/W 组合，并将 `ENDLIST` 正确匹配
+  `DATALIST`。
+- 旧文档中的 `TRYLIST/ENDLIST` 是审计笔误；参考语法实际为
+  `TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST`、`FUNC`、`ENDFUNC`。结构解析已修正，候选
+  调用的执行仍归入下节的动态调用缺口。
+- 当前选择索引和 `STRDATA` 目标仅支持标量 place；带下标目标仍会产生稳定编译诊断。
 - `real-erb` 中检出约 2,432 次 `PRINTDATA*` 词法使用。
 
 #### 动态调用
 
-以下动态调用没有完整落地：
+本轮已实现 VM 原生的两阶段动态函数解析与调用：目标先解析，成功后才求值实参；
+`CALLFORM*`、`JUMPFORM`、`TRYCALLFORM*`、`TRYCCALL*` 和 `TRYCJUMP*` 使用固定于调用帧
+generation 的函数表，JUMP 使用帧替换，缺失 try 目标不求值实参。参数默认值已进入
+字节码并在 VM 绑定。
 
-- `CALLFORM`、`CALLFORMF`
-- `JUMPFORM`
-- `TRYCALLFORM`、`TRYCALLFORMF`
-- `TRYCCALL`、`TRYCCALLFORM`
-- `TRYCGOTO*`、`TRYCJUMP*`
+以下动态调用仍未完整落地：
+
+- `TRYCGOTO*`（动态 label 跳转）
 - `CALLEVENT`
+- `TRYCALLLIST/TRYJUMPLIST/TRYGOTOLIST` 的候选执行
+- `CompatiFuncArgOptional`、`CompatiFuncArgAutoConvert`、`CompatiCallEvent` 配置投影，以及
+  normal/method/event 的运行时种类限制
 
-静态 `TRYCALL/TRYJUMP` 在目标缺失时也会 trap，而不是执行参考实现的 try 语义。
+静态 `TRYCALL/TRYJUMP` 的缺失目标已改为不求值参数并继续执行；`TRY*LIST` 的执行仍
+未落地。
 `real-erb` 中约有 1,251 个 `CALLFORM`、748 个 `TRYCALLFORM` 和 73 个
 `TRYCCALLFORM`。
 
 #### 其他指令
 
-下列参考指令当前在编译期成为 Unsupported，或没有进入稳定执行 catalog：
+下列参考指令已进入稳定执行 catalog：
 
 - `ASSERT`、`THROW`、`FORCEKANA`
 - `CUPCHECK`、`UPCHECK`
@@ -96,9 +103,8 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 真实脚本中检出 138 个 `THROW`、20 个 `DRAWLINEFORM` 和 8 个
 `CUSTOMDRAWLINE`。
 
-指令形式的 `PRINTCPERLINE` 和 `SAVENOS` 应写入传入变量；当前 runtime 返回 Host
-result。由于编译后的指令不期待返回值，这会形成 Host result 类型不匹配，而不会
-写入目标变量。
+指令形式的 `PRINTCPERLINE` 和 `SAVENOS` 现在通过 VM 验证的 `HostWrite` 写入传入
+place；同名函数形式仍返回整数。
 
 ### 1.2 已注册但最终落入 Unsupported 的 Host 功能
 
@@ -322,17 +328,17 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 | `PRINTSINGLE*` | 立即 flush 为单独物理行 | Rust 不提交行，因为名字不以 L/W 结尾 |
 | `PRINTN` | 保持 lineEnd=false，同时进入输入等待 | Rust 既不等待，也没有正确的物理行拼接 |
 | `PRINT*W` | 输出、换行并等待 | 基本存在 |
-| K 后缀 | 按 FORCEKANA 状态进行平假名、片假名、全半角转换 | 未实现 |
-| D 后缀 | 临时忽略 SETCOLOR，使用默认或用户颜色 | 未实现 |
+| K 后缀 | 按 FORCEKANA 状态进行平假名、片假名、全半角转换 | 使用内置日语 LCID 0x0411 兼容表，不依赖平台 locale |
+| D 后缀 | 临时忽略 SETCOLOR，使用默认或用户颜色 | 使用规范化默认前景色，不改变其余样式 |
 | L/W 后缀 | 控制换行和等待 | 只按名称末尾粗略处理 |
 | 嵌入 `\n` | 递归切成多个显示行 | Rust 将换行保留在同一个 Text run |
 | `PRINTPLAIN*` | 不把 `[数字]` 转换成按钮 | Rust 普通 PRINT 本身也不生成按钮 |
-| `PRINTDATA*` | 随机数据列表、多行输出、选择索引、K/D/L/W | 缺失 |
-| `STRDATA` | 随机选择并拼接字符串数据块 | 缺失 |
+| `PRINTDATA*` | 随机数据列表、多行输出、选择索引、K/D/L/W | 已实现；带下标选择目标尚不支持 |
+| `STRDATA` | 随机选择并拼接字符串数据块 | 已实现；带下标目标尚不支持 |
 | `BAR/BARL/BARSTR` | 按当前值、最大值、长度和配置字符生成进度条 | 仅 `BARSTR` 可用 |
 | `DRAWLINE` | 按可绘宽度重复 pattern | Rust 使用确定性逻辑分隔线 |
 | `GETLINESTR` | 按实际 console 可绘宽度返回重复 pattern 字符串 | Rust 固定按 75 逻辑列近似；与新前端观测原则冲突 |
-| `CUSTOMDRAWLINE/DRAWLINEFORM` | 自定义 pattern 的分隔线 | 编译期不支持 |
+| `CUSTOMDRAWLINE/DRAWLINEFORM` | 自定义 pattern 的分隔线 | 输出规范化 Separator，不复刻 GDI 像素重复 |
 | `PRINT_RECT/SPACE` | px/% 混合尺寸形状 | RECT 部分实现，SPACE 错误 |
 | HTML div | 可形成带宽度、对齐、嵌套内容的表格式布局 | Rust opaque HTML，不生成结构化布局 |
 | 临时行/REUSELASTLINE | 替换最近临时行、保留 button generation | 只实现逻辑行层面的近似 |

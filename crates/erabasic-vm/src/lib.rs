@@ -55,5 +55,6 @@ pub use value::{HostWrite, PlaceDescriptor, VmValue};
 
 pub(crate) use memory::{Memory, VariableCell};
 pub(crate) use state::{
-    Fiber, FiberState, ProgramGeneration, WaitingHost, find_global, make_frame, validate_arguments,
+    Fiber, FiberState, ProgramGeneration, WaitingHost, bind_persistent_arguments, find_global,
+    make_frame, prepare_dynamic_arguments, validate_arguments,
 };
