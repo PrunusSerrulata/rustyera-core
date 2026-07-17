@@ -19,6 +19,8 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 - `PRINT*` 被统一分派，但没有实现 K/D/N/SINGLE/C 等后缀的完整语义。
 - 调教、`EVENTCOMEND`、SHOP 自动存档存在系统流程差异。
 - 很多已进入 Host catalog 的命令最终落入通用 `UnsupportedRuntimeFeature`。
+- 前端实际渲染观测尚无 typed service，且现有规范化展示类型仍携带声称由 runtime
+  产生的物理布局字段，与更新后的 runtime/前端边界矛盾。
 
 主要证据集中在：
 
@@ -172,9 +174,8 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 - PrimitiveInput 由前端整理为 EraBasic 结果字段。
 - runtime 保存规范化逻辑展示模型，不追求 Windows GDI 像素一致。
 - 图片解码由前端完成；runtime 使用固有尺寸和像素查询服务。
-- `GETDISPLAYLINE`、`HTML_GETPRINTEDSTR`、`HTML_POPPRINTINGSTR`、
-  `HTML_STRINGLEN`、`HTML_SUBSTRING`、`HTML_STRINGLINES` 明确不支持。
-- 物理 GDI、CBG 绘制和 `GETMEMORYUSAGE` 明确不支持。
+- 物理 GDI/CBG 对象 API 和 `GETMEMORYUSAGE` 明确不支持。显式查询实际投影结果的
+  命令不属于对象 API；目标设计是由权威前端返回真实观测值。
 - CLR 插件和部分动态元数据查询明确不支持。
 - Unicode 大小写转换取代进程文化相关的 .NET casing。
 - 整数格式只支持已验证的格式子集。
@@ -185,7 +186,58 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 
 相关稳定差异记录于 `docs/runtime-operation-contracts.md`。
 
-### 2.2 尚未解决的行为差异
+### 2.2 更新后设计原则与当前实现的矛盾
+
+以下内容是当前代码和 protocol 13.0 的现状，不是未来目标设计。它们不能继续被笼统
+描述为“规范化展示的有意差异”：
+
+1. **权威 snapshot 中仍有物理布局字段。** `DisplayRun::Text`、`Button`、`Shape`
+   携带 `RunLayout`；该类型的注释宣称布局由 runtime 获取字体度量后生成，并保存
+   `x/y/width/height_millipixels`。`DisplayLine` 还携带
+   `layout_width_millipixels`。这与“runtime 只保存展示意图，不接触前端实际布局”
+   直接冲突。当前 runtime 大多把这些值填为零，因此既不是前端真实布局，也不是
+   有意义的可移植布局。
+2. **字体度量能力存在于 Schema，但不可执行。** `ClientCapabilities::font_metrics`
+   和 `ServiceKind::FontMetrics` 已定义，runtime 协商时却固定选择 `false`，协议也没有
+   为具体测量操作定义 revision-bound typed payload。类型存在不能视为能力已实现。
+3. **`CLIENTWIDTH/CLIENTHEIGHT` 返回错误的权威来源。** 当前 runtime 返回项目配置中
+   的 viewport 宽高，而参考函数读取实际 console client size。按新原则，这两个值
+   应来自当前 session 的权威投影前端，并绑定前端环境 revision；runtime 不应把项目
+   配置冒充实际窗口尺寸。
+4. **物理历史和 HTML 投影查询仍直接 fault。** `GETDISPLAYLINE`、
+   `HTML_GETPRINTEDSTR`、`HTML_POPPRINTINGSTR`、`HTML_STRINGLEN`、
+   `HTML_SUBSTRING`、`HTML_STRINGLINES` 当前返回
+   `UnsupportedRuntimeFeature`。这曾被记录为稳定有意差异；更新后的原则要求逐命令
+   判断：可在规范化 markup/逻辑状态上定义的由 runtime 实现，确实观察物理投影的
+   通过权威前端服务返回真实值。该拆分尚未完成，因此当前状态是缺失/待设计，而不是
+   最终的稳定不支持。
+5. **`GETLINESTR` 使用固定逻辑宽度近似。** 当前实现按固定 75 列和 Unicode
+   display width 构造字符串，既不符合参考的实际 console 宽度，也不符合“投影查询
+   不得伪造近似值”的新原则。需先确认其用途：输出分隔线应迁移到语义
+   `Separator`；若脚本确实请求实际可显示字符串，则应由权威前端返回并产生可移植性
+   诊断。
+6. **canvas/text raster 查询没有统一边界。** `SPRITEGETCOLOR` 查询内容寻址的源图片
+   像素，当前 frontend image service 方向合理；而 `GGETTEXTSIZE`、`GGETCOLOR` 等
+   依赖实际字体或 raster 算法的操作仍缺少权威前端观测服务，不能由 runtime 自行
+   近似，也不能与源图片事实混为一类。
+7. **服务请求缺少投影因果字段。** 通用 `ServiceRequest` 有 request ID、操作版本和
+   deadline，但目前没有统一的 presentation revision、frontend environment revision
+   或“权威投影前端”角色。未来 C/S 多客户端场景下会无法唯一确定谁可以回答以及
+   回答对应哪一次展示状态。
+8. **没有可移植性诊断和弃用状态。** analyzer/runtime 尚未为前端环境或投影依赖
+   发出 source-located 诊断，也没有追踪结果是否流入影响游戏内容的控制流、持久变量、
+   随机种子、动态调用或存档。现有兼容性四分类也尚未落实独立的 `FrontendEnvironment`、
+   `FrontendProjection`、`Discouraged` 和 `Deprecated` 可移植性分类。
+9. **坐标单位语义仍含混。** 图片、shape 和 canvas 字段使用 `millipixels` 命名，容易
+   被理解为设备像素。脚本提供的坐标可以作为 runtime 持有的逻辑坐标保留，但协议
+   必须明确其坐标空间及前端缩放规则；由字体测量产生的设备布局不能混入其中。
+
+这些矛盾的推荐解决顺序是：先建立操作分类和诊断，再定义 revision-bound 前端观测
+服务，随后迁移查询命令，最后从下一版协议的规范化 snapshot 中移除 realized-layout
+字段。当前开发阶段公共协议不要求向下兼容，但变更时仍需同步升级协议版本、C Schema、
+文档和测试。
+
+### 2.3 尚未解决的行为差异
 
 1. **新游戏初始化顺序不同。** 参考实现先调用 `SYSTEM_TITLE`，用户选择新游戏后才
    `ResetData` 并添加 CSV 角色 0 和默认角色。Rust 在调用 `SYSTEM_TITLE` 前已经
@@ -223,27 +275,40 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 
 | 功能组 | 参考实现行为或依赖 | Rust 当前状态 |
 | --- | --- | --- |
-| 文本测量与折行 | `System.Drawing.Graphics`、WinForms `TextRenderer`、实际 Font；决定物理行、宽度和折行 | 规范化逻辑行；有意不做 GDI 像素复刻 |
+| 文本测量与折行 | `System.Drawing.Graphics`、WinForms `TextRenderer`、实际 Font；决定物理行、宽度和折行 | 普通输出只保存意图；显式测量查询目标为前端观测服务，当前未实现 |
 | 左、中、右对齐 | 计算所有 button/run 实际像素宽度，再相对 `DrawableWidth` 平移 | 保存 `LineAlignment` 意图，由前端投影 |
 | 字体及样式 | Font family、size、bold、italic、underline、strikeout、前景和背景色 | 部分状态可保存；reset/query/快捷字体命令缺失 |
 | 按钮 | `[数字]` 自动识别、generation、hit testing、hover/focus、tooltip、鼠标点击 | 只有显式 token button；自动按钮和 BREAKBUTTON 缺失 |
 | 文本框 | 直接操作 WinForms TextBox | `GET/SET/CLEARTEXTBOX` 缺失 |
-| 鼠标和窗口 | MainPicBox 坐标、鼠标悬停按钮、焦点、hotkey | primitive input 被有意规范化；查询类接口缺失 |
+| 鼠标和窗口 | MainPicBox 坐标、client width/height、鼠标悬停按钮、焦点、hotkey | primitive input 被有意规范化；`CLIENTWIDTH/HEIGHT` 当前错误地使用项目配置，其他查询多缺失 |
 | HTML | `<font>`、`b/i/u/s`、`p`、`nobr`、`button`、`img`、`shape`、`div`、对齐和 tooltip | opaque HTML 投影；不解析交互与布局 |
 | HTML island | 独立 overlay/island 图层 | 缺失 |
 | 静态图片 | 图片文件加载、裁切 sprite、前景/背景/mask、缩放和位置 | 元数据及资源 ID 可用；PRINT_IMG 参数不完整 |
 | 背景 | 有深度、透明度的背景 sprite 烘焙 | 保存语义背景列表 |
 | 动画 sprite | 帧、持续时间、位置、重绘计时器 | 语义 replay graph 已实现 |
-| G canvas | Bitmap 创建/加载/保存、DrawImage、mask、旋转、线、文本、填充、颜色矩阵、像素读写 | 仅部分语义 canvas 操作；物理 raster 操作明确不支持 |
+| G canvas | Bitmap 创建/加载/保存、DrawImage、mask、旋转、线、文本、填充、颜色矩阵、像素读写 | 仅部分语义 canvas replay；显式 raster 结果查询目标为前端观测，当前未实现 |
 | GDI 对象 | Brush、Pen、Font、DashStyle 查询和修改 | 缺失或有意不支持 |
 | CBG | 背景 bitmap、按钮 sprite map、范围移除和合成 | 明确不支持 |
 | Bitmap cache | 每行是否缓存为 bitmap | 缺失 |
 | Tooltip | WinForms ToolTip 测量、绘制、字体、颜色、延时、图片 | 规范化 tooltip 配置已实现 |
 | Rikaichan | 鼠标位置、词典、TextRenderer popup | 未实现，属于具体客户端能力 |
-| 日志和回滚显示 | 物理显示行历史、滚动、删除、临时行、最大日志 | Rust 只维护规范化逻辑行历史 |
+| 日志和回滚显示 | 物理显示行历史、滚动、删除、临时行、最大日志 | Rust 只维护规范化逻辑行历史；真实物理历史查询服务未实现 |
 
-权威边界是：runtime 保存完整语义和布局意图，前端负责字体测量与 raster；但
-目前不少语义参数本身尚未保存，不能都归结为“前端差异”。
+权威边界是：runtime 保存完整语义和布局意图，前端负责字体测量与 raster。普通输出
+不会把前端投影反写进游戏状态；只有脚本显式调用投影查询命令时，前端观测值才通过
+有序服务响应进入 VM，runtime 负责校验和后续状态转移。当前这些服务尚未实现，而且
+不少语义参数本身也尚未保存，不能都归结为“前端差异”。
+
+投影依赖命令本身不必立即弃用。用于字体 fallback、响应式排版等展示适配时可以合理
+存在，但必须报告结果随前端、字体、DPI、viewport 或 renderer 变化。若结果影响剧情、
+角色属性、持久变量、随机性、动态调用或存档内容，应给出更强的
+`portability.frontend_projection_affects_gameplay` 类诊断，说明该用法仅为兼容保留且
+命令可能在提供可移植替代后弃用。正式弃用必须先有替代方案、真实脚本审计和明确的
+语言/协议版本迁移。
+
+对 `reference/real-erb` 的只读词法检查在典型投影查询中只发现 4 处 `CHKFONT`；它们
+均用于 Saitamaar 字体和字符画的展示 fallback，没有发现以这些查询决定持久游戏内容
+的证据。该结果只说明当前语料风险较低，不是完整跨函数数据流证明。
 
 ## 4. 非平凡文本输出功能
 
@@ -266,6 +331,7 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 | `STRDATA` | 随机选择并拼接字符串数据块 | 缺失 |
 | `BAR/BARL/BARSTR` | 按当前值、最大值、长度和配置字符生成进度条 | 仅 `BARSTR` 可用 |
 | `DRAWLINE` | 按可绘宽度重复 pattern | Rust 使用确定性逻辑分隔线 |
+| `GETLINESTR` | 按实际 console 可绘宽度返回重复 pattern 字符串 | Rust 固定按 75 逻辑列近似；与新前端观测原则冲突 |
 | `CUSTOMDRAWLINE/DRAWLINEFORM` | 自定义 pattern 的分隔线 | 编译期不支持 |
 | `PRINT_RECT/SPACE` | px/% 混合尺寸形状 | RECT 部分实现，SPACE 错误 |
 | HTML div | 可形成带宽度、对齐、嵌套内容的表格式布局 | Rust opaque HTML，不生成结构化布局 |

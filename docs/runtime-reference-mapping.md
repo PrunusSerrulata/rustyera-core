@@ -19,8 +19,8 @@ unsupported portable operations.
 | `UI/Game/EmueraConsole.Print.cs` | Text/style/buttons, HTML, images, shapes, backgrounds, window title and log buffer are observable. | Revisioned `PresentationSnapshot`/`PresentationDelta`; frontend render objects are projections. |
 | `Statements/Instraction.Child.cs` and `Function/Creator.Method.cs` | Sound, dynamic graphics, font metrics, files, network update checks and external URLs directly use platform APIs. | Asynchronous storage/platform service messages; no VM instruction or runtime layer performs OS I/O. |
 | `Statements/Variable/VariableEvaluator.cs` | Save slots, global saves and DAT files are listed/read/written directly, with game/version compatibility checks. | Runtime-owned in-memory codecs, validation and transactions over correlated frontend storage namespaces. |
-| `UI/Game/PrintStringBuffer.cs` and console line types | `PRINTC`, alignment, separators, automatic buttons, HTML and physical history combine semantic output with GDI/WinForms measurement. | Runtime-owned logical lines, `ColumnCell`, `Separator`, tokens and deterministic text projection; client pixel layout is not authoritative. |
-| GDI/canvas/resource classes | Image decoding, raster mutation, font measurement and animation scheduling use Windows device objects. | Canonical resource/canvas replay and typed frontend services; physical GDI/CBG operations are explicitly unsupported where no portable semantic result exists. |
+| `UI/Game/PrintStringBuffer.cs` and console line types | `PRINTC`, alignment, separators, automatic buttons, HTML and physical history combine semantic output with GDI/WinForms measurement. | Runtime-owned logical lines, `ColumnCell`, `Separator` and tokens express intent. Client pixel layout is not canonical state; explicit queries of realized layout are target typed frontend observations and are currently mostly unsupported. |
+| GDI/canvas/resource classes | Image decoding, raster mutation, font measurement and animation scheduling use Windows device objects. | Canonical resource/canvas replay plus typed frontend services. Content-addressed source-image facts are distinct from frontend-dependent text/canvas raster observations. Physical GDI/CBG object APIs remain unsupported where no portable contract exists. |
 | `Process.CalledFunction.cs` | Frames retain function identity, return address, event state, arguments and local scope. | Generation/frame-aware VM debug descriptors and source-mapped call stacks. |
 | `EmueraConsole.DebugCommand` and `UI/DebugDialog.cs` | Watches evaluate current expressions; debug commands clone/restore control state and reject flow, waits, partial and unsafe instructions. | Separate debug channel, coherent stop tokens and the reference-safe console subset. |
 
@@ -29,3 +29,10 @@ presentation state, whereas RustyEra makes them runtime-authoritative messages; 
 save/resource code performs I/O directly, whereas the Rust contract never does; the new
 permission model, breakpoints and stepping are debugger extensions rather than claimed
 Emuera behavior.
+
+Runtime authority covers semantic presentation and the game-state transition that follows
+an observation; it does not make runtime a renderer. Where a script explicitly asks for a
+font-, viewport- or raster-dependent result, the target contract uses the selected
+authoritative frontend's revision-bound response. Using that value to determine persistent
+gameplay is diagnosed as a portability hazard and may become deprecated after a portable
+replacement and real-script review exist.
