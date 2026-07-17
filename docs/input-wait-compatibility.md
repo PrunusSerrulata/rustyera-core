@@ -46,9 +46,12 @@ the VM or runtime library itself.
 Exact snapshots remain legal only at stable input waits. Traditional Era saves
 do not serialize VM stacks or pending input/service requests.
 
-The current stage implements typed waits, positive monotonic deadlines, defaults,
-timeout messages, FORCEWAIT flags, TWAIT Void classification, fresh GETKEY queries and
-the shared GETKEYTRIGGERED toggle observation. The message-skip shortcut controlled by
-the sixth TINPUT-family slot and primitive mouse/key completion are still unimplemented;
-until the runtime gains the corresponding authoritative message-skip and primitive-input
-state, those paths must not be described as reference-complete.
+The runtime implements typed waits, positive monotonic deadlines, defaults, timeout messages,
+FORCEWAIT flags, TWAIT Void classification, fresh GETKEY queries, the shared
+GETKEYTRIGGERED toggle observation and the sixth-slot message-skip shortcut. Primitive mouse/key
+input intentionally arrives as frontend-normalized EraBasic-shaped result fields; runtime still
+validates the wait, token, epoch and ordering and alone synthesizes timeouts. This keeps platform
+event interpretation outside the runtime while preserving authoritative game results.
+
+One-input maximum-length validation is not yet fully enforced by the runtime. That remaining
+gap is tracked in [Runtime compatibility status](runtime-compatibility-status.zh-CN.md).

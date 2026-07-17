@@ -1,10 +1,11 @@
 # RustyEra
 
-RustyEra is a UTF-8 Rust implementation of the EraBasic language front end and
-project-data loading contracts used by Emuera.EM. Compatibility is pinned to
+RustyEra is a UTF-8 Rust implementation of the EraBasic language and runtime
+used by Emuera.EM. Compatibility is pinned to
 reference commit `26a35dc9334bb67590b96f7b8efbefbf199e391e` (the Emuera 1.824
-family). Compatibility with that fixed implementation takes priority over
-redesigning the language.
+family). When requirements conflict, the project prioritizes cross-client and
+cross-platform support, then architectural purity, then strict reference behavior.
+The [design principles](docs/design-principles.md) define how that ordering is applied.
 
 Only UTF-8 input is supported. The Rust crates do not detect or decode
 Shift-JIS, GBK, or other legacy encodings.
@@ -18,7 +19,7 @@ The workspace currently contains these implemented components:
 | `erabasic-ast` | Syntax AST, UTF-8 byte spans, and stable diagnostics shared by the lexer and parser. |
 | `erabasic-lexer` | Context-sensitive tokenization, caller-selected terminators, macros, and FORM string decomposition. |
 | `erabasic-parser` | Expressions, logical lines, ERH declarations, ERB functions, preprocessors, and block structure. |
-| `erabasic-data` | Deterministic, Serde-compatible project schema, static data, and initialization/save-loading contracts for future consumers. |
+| `erabasic-data` | Deterministic, Serde-compatible project schema, static data, and initialization/save-loading contracts used by the analyzer, runtime and persistence layer. |
 | `erabasic-csv` | Emuera-compatible loading of an in-memory project file snapshot. It performs no filesystem I/O. |
 | `erabasic-hir` | Deterministic, Serde-compatible typed expressions, variables, functions, lines, and control-flow links. |
 | `erabasic-analyzer` | Project-level ERH/ERB symbol resolution, type checking, declaration processing, instruction reduction, and control-flow analysis. |
@@ -30,7 +31,8 @@ The workspace currently contains these implemented components:
 | `era-protocol` | Deterministic CBOR envelope, version negotiation, identifiers, limits, and diagnostic JSON projection for future runtime transports. |
 | `era-runtime-protocol` | Normal runtime/frontend lifecycle, project, input, presentation, storage, and service interface definitions. |
 | `era-debug-protocol` | Separately versioned, capability-gated EraBasic debugger interface definitions. |
-| `era-runtime` | Caller-pumped runtime actor for handshake, in-memory project compilation, new-game startup, bounded VM execution, text/input waits, clock/key/entropy services, and shutdown. |
+| `era-runtime-save` | In-memory traditional-save codecs, migration policy, and schema-aware state restoration. |
+| `era-runtime` | Caller-pumped authoritative runtime for the project lifecycle, VM scheduling, presentation/input, services, persistence, hot reload, system flows, and debugging. |
 | `era-runtime-ffi` | Safe C ABI function-table and checked header declarations. |
 | `era-runtime-capi` | Dynamic-library implementation of the C ABI; this is the only crate that audits raw pointers and uses `unsafe`. |
 
@@ -54,22 +56,25 @@ frontend envelopes -> era-runtime -> erabasic-vm
 Public types are re-exported from each crate root. Larger implementations are split
 into modules by syntax, data domain, executable format, or compilation phase.
 
-## Runtime scope and staged compatibility
+## Runtime scope and compatibility status
 
-The first host-runtime stage is implemented as a transport-neutral actor and a C ABI
-dynamic library. It never performs file I/O or samples a clock/device directly. The
+The runtime is implemented as a transport-neutral actor and a C ABI dynamic library.
+It never performs file I/O or samples a clock/device directly. The
 frontend submits project contents and pumps versioned envelopes through
 `session_submit`, `session_drive`, and `session_poll`.
 
-The runtime now includes current-format traditional saves, frontend-normalized primitive input,
-core system flows, stable-wait exact snapshots, and normalized incremental hot reload. It does not
-yet implement candidate `SAVEINFO` transactions, the complete save/delete controller,
-mutable XML and reference DataTable XML compatibility, runtime-owned menu snapshots, the debugger
-protocol, or the complete set of presentation/storage/media Host calls. Map and the documented
-XML/DataTable subsets now execute transactionally, and VAREXT participates in binary saves. Only
-implemented capabilities are advertised during
-handshake. The
-interfaces and current boundary are documented in
+The implemented surface includes project loading and compilation, bounded VM execution,
+canonical presentation and input/QTE handling, clock/key/entropy services, current and
+historical traditional-save restoration, candidate `SAVEINFO` transactions, stable-wait
+exact snapshots, incremental hot reload, runtime-owned save/load menus, the independent
+debug channel, Map/XML/DataTable/VAREXT Native services, resource/canvas replay and typed
+image/audio/network/storage boundaries. Only implemented capabilities are advertised.
+
+This is not full Emuera runtime coverage. Remaining compiler/runtime instructions,
+system-flow deviations, unsupported WinForms/GDI-dependent operations and non-trivial
+text/presentation gaps are tracked explicitly in the
+[runtime compatibility status](docs/runtime-compatibility-status.zh-CN.md). The public
+interfaces and ownership boundary are documented in
 [`docs/runtime-protocol.md`](docs/runtime-protocol.md),
 [`docs/debug-protocol.md`](docs/debug-protocol.md), and the
 [`reference mapping`](docs/runtime-reference-mapping.md).
@@ -78,7 +83,7 @@ The parser still produces a syntax AST. `ParserContext` supports syntax decision
 that depend on registries, while `erabasic-analyzer` owns the project-level semantic
 passes and produces HIR. CSV loading checks and normalizes project data, but it is
 separate from executable artifact validation. The C# reference CLI can invoke Emuera's existing evaluator
-and VM for oracle purposes. The Rust VM and staged runtime are separate implementations;
+and VM for oracle purposes. The Rust VM and runtime are separate implementations;
 an unlisted reference runtime operation must not be inferred to be supported.
 
 RustyEra does not implement a concrete application frontend: no GUI, TUI, game

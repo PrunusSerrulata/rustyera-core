@@ -3,6 +3,11 @@
 本文面向后续 GUI、TUI、启动器或 C/S 前端开发者，说明 RustyEra runtime
 边界的接口用途、参数、返回值、消息顺序和资源所有权。
 
+发生冲突时遵循项目统一优先级：跨客户端/跨平台支持，其次架构纯净，最后才是对
+参考客户端实现细节的严格复刻。Runtime 提供唯一的规范化语义表示，各前端负责自身
+平台上的渲染和设备适配；完整规则见 [设计准则](design-principles.md)，能力缺口见
+[runtime 兼容性状态](runtime-compatibility-status.zh-CN.md)。
+
 > 当前开发阶段不承诺协议向下兼容。本文描述已经定义的 ABI 与消息合同，不表示
 > 所有预留的 runtime、存档、热重载、媒体或调试能力均已实现。前端必须以握手返回
 > 的功能集合为准，不能仅根据类型或消息标签存在就假定功能可用。
@@ -57,7 +62,7 @@ ABI 当前版本为 `2.1`：
 
 ```c
 #define ERA_RUNTIME_ABI_MAJOR 2u
-#define ERA_RUNTIME_ABI_MINOR 0u
+#define ERA_RUNTIME_ABI_MINOR 1u
 ```
 
 动态库只要求导出一个固定符号：
@@ -443,8 +448,11 @@ command graph，以及 `SETANIMETIMER` 选定的 `animation_timer_ms` 重绘间�
 和调度绘制，但仍自行解码像素并持有 renderer 对象，且不得用该计时器推进 Runtime 的
 逻辑时间。
 
-`DisplayRun` 支持文本、嵌套按钮、HTML、图片和形状。按钮只携带 opaque
-`InteractionToken`，前端不得读取或推导游戏值。尺寸使用整数固定单位：
+`DisplayRun` 支持文本、嵌套按钮、HTML、图片、形状、`ColumnCell` 和 `Separator`。
+`ColumnCell` 保存 PRINTC/PRINTLC 的对齐和建议列数，`Separator` 保存 DRAWLINE 的
+分隔意图；前端可使用 grid、flex、TUI pattern 或无障碍结构投影，但不得把字体测量
+结果写回权威游戏状态。按钮只携带 opaque `InteractionToken`，前端不得读取或推导
+游戏值。尺寸使用整数固定单位：
 
 - `millipixels`：1/1000 pixel；
 - `font_millipoints`：1/1000 point；
@@ -525,7 +533,7 @@ runtime；应先取出消息，再异步或同步完成平台工作，最后通�
 
 ## 10. Storage 接口
 
-协议预留 `StorageRequest`（tag `50`）和 `StorageResponse`（tag `51`），用于
+Runtime 使用 `StorageRequest`（tag `50`）和 `StorageResponse`（tag `51`）完成
 `Project`、`Save`、`GlobalSave`、`Data`、`Log`、`Resource` 命名空间中的读取、写入、
 列举、元数据查询和删除。路径仍是相对路径。
 

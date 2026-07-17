@@ -3,10 +3,15 @@
 面向应用前端开发的中文 ABI、参数、返回值和消息流程说明见
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
-This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
+This document specifies the interfaces used by the RustyEra runtime and its C ABI
 dynamic library. Runtime protocol 13.0 and debug protocol 3.0 over common wire 2.0 are
 development contracts: by explicit project policy they
 do not promise backward compatibility until a frontend exists.
+
+Design conflicts follow the project-wide order: cross-client/cross-platform support,
+architectural purity, then strict reference behavior. See
+[Design principles](design-principles.md) and the living
+[compatibility status](runtime-compatibility-status.zh-CN.md).
 
 ## Authority and ownership
 
@@ -157,10 +162,14 @@ the current wait. Numeric media measurements use fixed
 integer units rather than floating point. Recoverable state is separate from acknowledged
 one-shot `EffectBatch` events. Every effect has an independent ID; the frontend returns an
 exact completed/failed/cancelled outcome rather than acknowledging an ambiguous prefix. Device
-failures produce diagnostics and never rewrite already-decided game state. `ColumnCell` and
-`Separator` preserve PRINTC/DRAWLINE intent
-without font-dependent padding, with deterministic plain projection for clients that do not
-negotiate those nodes. Pixel buffers, font objects and audio devices
+failures produce diagnostics and never rewrite already-decided game state. `ColumnCell` preserves
+`PRINTC`/`PRINTLC` alignment and preferred-column intent while keeping buttons and interaction
+tokens runtime-owned. `Separator` preserves `DRAWLINE` as a semantic line role. Neither inserts
+font-dependent padding into authoritative state; GUI clients may use grid/flex layout, TUI clients
+may repeat a pattern, and clients without these nodes receive a deterministic plain projection.
+`GETLINESTR` is computed from the session-fixed logical column count with Unicode
+grapheme/display width and never from a client font or viewport. Physical WinForms history and
+pixel-width queries remain stable unsupported operations. Pixel buffers, font objects and audio devices
 remain frontend caches; script-observable service results return through ordered service
 responses and update the runtime's logical resource revision.
 
@@ -185,9 +194,10 @@ dynamic-sprite replay state is preserved. New or changed image payloads use the 
 versioned image-metadata service as initial loading. The runtime keeps the old artifact and resource
 graph authoritative until all candidate metadata has been validated, then commits them atomically.
 
-## Implemented stage
+## Current implementation status
 
-The current runtime implements handshake, locale/semantic-system-text negotiation, epoch-scoped sessions, normalized text input,
+The current runtime implements handshake, locale/semantic-system-text negotiation,
+epoch-scoped sessions, normalized text input,
 capability intersection, bounded journals with idempotent retransmission, full-state
 resynchronization, full in-memory project load/analyze/compile/validate, deterministic new-game
 startup, bounded VM driving, logical-line text/column/separator presentation, reference-shaped
@@ -218,6 +228,7 @@ EraBasic expression subset (operator precedence, ternary expressions and a pure-
 and atomic scalar assignment; Host calls, flow, waits, increment/decrement and unsupported methods
 are rejected without mutation. Protocol 12.0 added operation-versioned service capabilities,
 resource decoder services, exact effect outcomes, tooltip state and runtime diagnostics. The
-session-fixed `available_fonts` list is used only
-for the script-observable `CHKFONT` result. Font metrics and canonical layout remain runtime-owned;
-the frontend cannot change this list after the handshake.
+session-fixed `available_fonts` list is used only for the script-observable `CHKFONT` result.
+Canonical semantic layout remains runtime-owned; device font metrics remain a typed frontend
+service and cannot silently rewrite semantic state. The frontend cannot change the available-font
+list after the handshake.

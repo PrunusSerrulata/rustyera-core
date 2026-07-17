@@ -1,6 +1,6 @@
 # EraBasic debugger protocol
 
-`era-debug-protocol` 2.0 is independent from normal runtime control. It shares only the
+`era-debug-protocol` 3.0 is independent from normal runtime control. It shares only the
 common envelope and has its own version negotiation, payload tags and authorization. Active
 debug traffic is bound to the runtime's current `SessionEpoch`.
 No debugger functionality is enabled merely because a runtime session exists.
@@ -43,7 +43,7 @@ is deliberately no operand-stack or call-frame mutation method.
 
 ## Breakpoints and stepping
 
-Version 1 supports unconditional source and function-entry breakpoints. A source breakpoint
+The current protocol supports unconditional source and function-entry breakpoints. A source breakpoint
 contains relative path, content hash and UTF-8 byte offset. Function breakpoints contain a
 stable symbol key. Resolution reports verified, moved or unbound status for each program
 generation, allowing a frontend to display hot-reload rebinding explicitly. Conditional
@@ -56,9 +56,10 @@ pause.
 
 ## Debug console
 
-Expression evaluation is read-only. Safe statement execution follows the reference debug
-command boundary: assignment and method-safe instructions are allowed, while flow control,
-input waits, partial instructions, file/platform I/O and all Host effects are rejected.
-Allowed variable mutations remain committed. Synthetic control state, stacks and normal
-presentation state are restored on success or failure; result text and diagnostics return
-only on the debug channel.
+Expression evaluation is read-only and accepts the currently implemented EraBasic expression
+subset, including operator precedence, ternary expressions and a pure-method whitelist. Safe
+statement execution currently permits atomic scalar assignment. Flow control, input waits,
+Host effects, increment/decrement, unsupported methods and partial instructions are rejected
+without mutation. Allowed variable mutations remain committed. Synthetic control state, stacks
+and normal presentation state are restored on success or failure; result text and diagnostics
+return only on the debug channel.

@@ -5,10 +5,13 @@
 
 ## 项目目标
 
-RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言前端、项目数据加载以及未来的
-运行相关组件。首要目标是与固定版本的 Emuera 参考实现保持行为兼容，而不是
-重新设计语言。除项目明确记录的差异外，边界情况、错误行为、运算符优先级、
-格式化字符串和上下文相关语法都应以参考实现为准。
+RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生目标冲突时，
+最高设计准则依次为：**跨客户端/跨平台支持 > 架构纯净 > 与固定 Emuera 参考实现
+严格行为一致**。该顺序是冲突裁决规则，不代表可以忽略参考实现；游戏规则、输入
+判定、状态变化及其他脚本可观察行为，在不违反更高优先级原则时仍应严格兼容。
+依赖 WinForms、GDI、设备或平台状态的行为应提炼为 runtime 持有的可移植语义，
+由不同前端投影。有意差异、稳定不支持项和遗漏功能必须分别记录，详见
+`docs/design-principles.md` 和 `docs/runtime-compatibility-status.zh-CN.md`。
 
 所有输入源码直接按 UTF-8 处理，不需要支持 GBK、Shift-JIS 等传统编码。
 
@@ -28,6 +31,13 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言前端、项目数据加�
 - `crates/erabasic-vm`：确定性解释器、协作式多 fiber 调度、Host/Native 边界、双轨
   状态保存与多代热替换。
 - `crates/erabasic-repl`：用于人工检查的 Read-Parse-Print Loop。
+- `crates/era-protocol`、`crates/era-runtime-protocol`、`crates/era-debug-protocol`：
+  版本化公共消息信封、正常运行协议和独立调试协议。
+- `crates/era-runtime-save`：不执行文件 I/O 的传统存档编解码、迁移和恢复契约。
+- `crates/era-runtime`：驱动 VM 并持有权威游戏、展示、交互、存档和协议状态的
+  caller-pumped runtime。
+- `crates/era-runtime-ffi`、`crates/era-runtime-capi`：安全 Rust FFI 契约及唯一包含
+  `unsafe` 指针边界的 C ABI 动态库实现。
 - `reference/emuera.em`：固定版本的 C# Emuera 参考实现。
 - `reference/real-erb`：真实游戏eraTW中使用的完整脚本集，包含csv、erh和erb。由于文本量过大（80余MB），一般不要全量引用。
 - `reference/eraTW-minimal`：用于测试游戏功能的最小脚本子集。
@@ -40,7 +50,7 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言前端、项目数据加�
 ## 当前实现状态与范围
 
 当前已实现的是 AST、lexer、parser、项目数据契约、CSV 加载器、类型化 HIR、
-项目级语义分析器、字节码、编译器、验证器、VM、用于人工检查的 REPL，以及首阶段
+项目级语义分析器、字节码、编译器、验证器、VM、用于人工检查的 REPL、
 caller-pumped runtime 和 C ABI 动态库。这里的 AST 是语法 AST；`ParserContext`
 提供语法解析所需的注册表上下文，项目级符号解析和类型检查由 analyzer 完成。
 
@@ -48,11 +58,13 @@ caller-pumped runtime 和 C ABI 动态库。这里的 AST 是语法 AST；`Parse
 输入等待、时钟/按键/熵服务、当前格式传统存档、稳定等待 VM snapshot、增量热替换、
 部分系统流程、独立调试通道与 VM 调试端口，以及 Map、可变 XML、固定 XPath 子集、
 参考形状 DataTable XSD/XML Native、VAREXT、资源图、canvas replay、规范化展示状态、
-typed image/audio/update/open-URL 边界和持久化 operation contract。候选 `SAVEINFO`
-事务、完整存档菜单、GDI 相关绘图尾部以及文档列出的稳定不支持 Host 调用仍未实现。
-在这些能力实际落地前，
-不得在 README、crate 文档、测试结果
-或交付说明中将其描述为已实现。CSV 加载期间的格式检查不是字节码验证器；C#
+typed image/audio/update/open-URL 边界、候选 `SAVEINFO` 事务、runtime 自有存档菜单、
+独立调试通道和持久化 operation contract。
+
+当前尚未实现或仅部分实现的范围包括若干数据列表/动态调用/专用输出指令、部分完整
+系统流程、客户端物理文本历史与 WinForms/GDI/CBG 相关能力，以及兼容性状态文档中
+列出的 Host 调用。不得仅因协议中存在类型、参考 CLI 存在端点或源码中存在占位分支，
+就将能力描述为已实现。CSV 加载期间的格式检查不是字节码验证器；C#
 reference CLI 能够调用参考实现的 evaluator、VM 和 runtime，也不代表 Rust 侧已实现
 参考 runtime 的全部能力。未实现组件的说明只记录范围和状态，不预先承诺具体内部架构。
 
@@ -69,9 +81,10 @@ reference CLI 能够调用参考实现的 evaluator、VM 和 runtime，也不代
 - Runtime、VM 及其以下层级的组件将作为单一实体发布，因此这些组件之间的内部
   Rust 接口、消息和数据契约在更新时默认无需保持向下兼容。尤其是 runtime 与 VM
   的接口可以随二者同步演进，不需要为尚未独立发布的旧内部接口保留适配层。
-- 上述规则只适用于同一发布实体内部的接口演进，不放宽与固定 Emuera 参考实现的
-  行为兼容要求，也不取消字节码、存档或 VM snapshot 等持久化格式应有的版本标识、
-  兼容性检查和不兼容时拒绝加载的要求。
+- 上述规则只适用于同一发布实体内部的接口演进，不放宽可移植游戏规则和脚本可观察
+  行为的兼容要求；因更高优先级设计准则产生的差异仍须明确记录。该规则也不取消
+  字节码、存档或 VM snapshot 等持久化格式应有的版本标识、兼容性检查和不兼容时
+  拒绝加载的要求。
 - 当前开发版本的 runtime—应用前端公共接口同样默认不保证向下兼容。进行破坏性
   更新时，应同步更新协议版本、Schema/C 头文件、接口文档和测试，不能留下互相
   矛盾的新旧定义。
@@ -82,7 +95,9 @@ reference CLI 能够调用参考实现的 evaluator、VM 和 runtime，也不代
 
 ## C# 参考实现边界
 
-`reference/emuera.em` 是行为标准，默认视为只读第三方代码。
+`reference/emuera.em` 是可移植语言与运行行为的兼容性标准，默认视为只读第三方代码。
+若其行为依赖特定客户端或平台，应按最高设计准则提炼语义并记录有意差异，而不是把
+WinForms/GDI 的实现细节引入 runtime。
 
 - 除非用户明确要求修改 C# 参考实现，否则不允许修改、格式化、重构或自动修复
   `reference/emuera.em` 中的任何代码。
@@ -135,8 +150,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 - lexer 修改应覆盖 token 类型、内容、终止位置、UTF-8 span 和错误路径。
 - parser 修改应覆盖 AST 形状、优先级、恢复行为和诊断。
-- 未来新增语义分析或 VM 后，相关修改应覆盖状态变化、输出、输入等待、限制条件
-  及错误终止；在当前未实现阶段不得用 C# oracle 测试冒充 Rust 实现测试。
+- analyzer、compiler、VM 或 runtime 修改应覆盖状态变化、输出、输入等待、限制条件
+  及错误终止；不得用 C# oracle 测试冒充 Rust 实现测试。
 - 修复 bug 时先添加能够稳定复现问题的回归用例。
 - 测试数据应尽可能小，并明确体现所验证的 Emuera 行为。
 
