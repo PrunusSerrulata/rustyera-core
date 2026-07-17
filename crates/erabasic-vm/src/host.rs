@@ -538,12 +538,24 @@ impl NativeService for CoreNative {
                     .map_err(|_| "TOINT input is not an integer")?,
             ),
             "isnumeric" => VmValue::Integer(i64::from(string(0)?.trim().parse::<i64>().is_ok())),
-            "unicode" => VmValue::Integer(
-                string(0)?
-                    .chars()
-                    .next()
-                    .map_or(0, |character| i64::from(u32::from(character))),
-            ),
+            "unicode" => {
+                let value = u32::try_from(integer(0)?)
+                    .map_err(|_| "UNICODE argument is outside the UTF-16 code-unit range")?;
+                if value > u32::from(u16::MAX) {
+                    return Err("UNICODE argument is outside the UTF-16 code-unit range".into());
+                }
+                // Rust strings cannot contain isolated UTF-16 surrogates.  BMP
+                // scalar values otherwise have the same UTF-8 observable text.
+                let scalar = char::from_u32(value)
+                    .ok_or("UNICODE argument is an isolated UTF-16 surrogate")?;
+                let control = (value < 0x1f && value != 0x0a && value != 0x0d)
+                    || (0x7f..=0x9f).contains(&value);
+                VmValue::String(if control {
+                    String::new()
+                } else {
+                    scalar.to_string()
+                })
+            }
             "max" => VmValue::Integer(
                 args.iter()
                     .enumerate()

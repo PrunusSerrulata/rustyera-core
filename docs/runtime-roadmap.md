@@ -374,9 +374,23 @@ operation and is safe inside candidate `SAVEINFO`. BMP/ASCII behavior has a same
 Under the repository's UTF-8-only rule, non-U lengths remain UTF-8 byte counts; supplementary-plane
 U operations use Unicode scalar indices because a valid Rust UTF-8 string cannot represent an
 isolated UTF-16 surrogate. This is a tested intentional difference from .NET UTF-16 code-unit
-indexing. Remaining deterministic Built-ins (including locale-dependent `TOHALF`/`TOFULL`), the
-wider semantic graphics replay tail, changed-image staged metadata reload and the final
+indexing. Remaining deterministic Built-ins, the wider semantic graphics replay tail and the final
 machine-checked execution matrix still block Batch 10 completion.
+
+Second closure checkpoint (2026-07-17): `UNICODE` now has the reference integer-to-string
+signature and BMP/control-character behavior, replacing the reversed string-to-integer
+approximation. `TOFULL`, `TOHALF` and `MONEYSTR` are deterministic read-only Host operations backed
+by project configuration and version-1 width/format tables. Changed images now use a staged
+metadata transaction during incremental reload; the live artifact and resource graph remain
+unchanged until every response succeeds. Exact Runtime Snapshot v5 persists the selected locale and
+culture-table version and rejects mismatched restores. The persisted compatibility set is container
+9, ISA 3, HIR 8, compiler ABI 13, Native ABI 12, Host ABI 8 and VM ABI 5; VM Snapshot remains format
+4 and is rejected through the new ProgramVersion when necessary.
+
+This checkpoint still does not close Batch 10. Locale-aware casing and the complete .NET numeric
+custom-format surface, the remaining reflection/metadata Native families, semantic canvas animation
+tail, debug-console dispatch unification and final zero-unknown execution matrix remain. These must
+finish before the Batch 11 controller is described as complete.
 
 ## Batch 11: persistence, controller and final compatibility closure
 

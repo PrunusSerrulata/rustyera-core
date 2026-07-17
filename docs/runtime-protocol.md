@@ -181,10 +181,9 @@ dispatch.
 
 The VM and runtime implement generation-pinned project-delta hot reload between VM slices.
 Stable waits and source breakpoints are rebound only after a successful commit. Canvas and
-dynamic-sprite replay state is preserved. A changed image payload currently returns the stable
-`runtime.reload_image_metadata_requires_full_load` diagnostic because decoder metadata cannot be
-requested after preparing a partially committed generation; the frontend must perform a full
-project load for that case.
+dynamic-sprite replay state is preserved. New or changed image payloads use the same negotiated,
+versioned image-metadata service as initial loading. The runtime keeps the old artifact and resource
+graph authoritative until all candidate metadata has been validated, then commits them atomically.
 
 ## Implemented stage
 

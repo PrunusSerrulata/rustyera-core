@@ -21,4 +21,4 @@ pub use program::{
 pub use source::{SourceFile, SourceLocation};
 
 /// Version of the serialized HIR contract.
-pub const HIR_FORMAT_VERSION: u32 = 7;
+pub const HIR_FORMAT_VERSION: u32 = 8;

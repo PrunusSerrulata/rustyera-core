@@ -2,7 +2,7 @@
 
 This table is the Batch 10 handoff gate for candidate-save work. Every analyzer-visible built-in
 has exactly one compiler catalog entry. Native and Host imports persist the resolved contract in
-bytecode container 8; the validator rejects incoherent combinations or legacy flags which do not
+bytecode container 9; the validator rejects incoherent combinations or legacy flags which do not
 match the contract. Unknown runtime dispatch never silently succeeds: it emits
 `UnsupportedRuntimeFeature` with the import name.
 
@@ -53,8 +53,8 @@ containers.
   stopwatch timepoint, which makes identical inputs produce different XML.
 - Image decoding stays frontend-owned. Project load obtains versioned intrinsic metadata before
   commit and `SPRITEGETCOLOR` requests a pixel on demand. Hot reload preserves canvas and dynamic
-  sprite replay state for unchanged image bytes; a new or changed image returns
-  `runtime.reload_image_metadata_requires_full_load` and requires a full load.
+  sprite replay state, stages metadata for new or changed image bytes, and commits the complete
+  artifact/resource candidate only after every metadata response succeeds.
 - Resource-backed canvas animation construction not covered by the implemented replay subset,
   physical GDI drawing helpers and any other catalogued but unimplemented non-persistence Host
   operation fail with the stable `UnsupportedRuntimeFeature` import diagnostic. This is preferable

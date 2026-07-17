@@ -118,7 +118,7 @@ try {
         id = "native-tail"
         op = "run"
         entry = "ORACLE_NATIVE"
-        watch = @("RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULT:6", "RESULT:7", "RESULT:8", "RESULTS:0", "RESULTS:1", "RESULTS:2", "RESULTS:3", "RESULTS:4", "RESULTS:5")
+        watch = @("RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULT:6", "RESULT:7", "RESULT:8", "RESULTS:0", "RESULTS:1", "RESULTS:2", "RESULTS:3", "RESULTS:4", "RESULTS:5", "RESULTS:6")
     }
     Assert-True ($nativeTail.ok -and $nativeTail.result.termination -eq "completed") "native tail failed"
     Assert-True (($nativeTail.result.watches.'RESULT:0' -eq 0) -and
@@ -135,7 +135,8 @@ try {
         ($nativeTail.result.watches.'RESULTS:2' -eq 'ABC') -and
         ($nativeTail.result.watches.'RESULTS:3' -eq 'abc') -and
         ($nativeTail.result.watches.'RESULTS:4' -eq 'b/c') -and
-        ($nativeTail.result.watches.'RESULTS:5' -eq 'a,b,c,')) "native tail differs"
+        ($nativeTail.result.watches.'RESULTS:5' -eq 'a,b,c,') -and
+        ($nativeTail.result.watches.'RESULTS:6' -eq 'β')) "native tail differs"
 
     $mapRun = Invoke-Oracle @{ id = "map"; op = "run"; entry = "ORACLE_MAP"; watch = @("RESULT", "RESULTS") }
     Assert-True $mapRun.ok "map function run failed"
