@@ -70,6 +70,7 @@ pub struct BytecodeParameter {
     pub key: SymbolKey,
     pub value_type: BytecodeType,
     pub by_reference: bool,
+    pub default: Option<BytecodeConstant>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

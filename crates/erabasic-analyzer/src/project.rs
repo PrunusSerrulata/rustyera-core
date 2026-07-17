@@ -449,6 +449,38 @@ fn analyze_function(
                 "parameter default type does not match its variable",
             ));
         }
+        if let Some(default) = &default
+            && default.constant.is_none()
+            && default.value_type != SemanticType::Error
+        {
+            diagnostics.push(AnalyzerDiagnostic::at(
+                AnalyzerDiagnosticCode::InvalidArgument,
+                AnalyzerDiagnosticSeverity::Error,
+                2,
+                source.source.id,
+                &source.source.relative_path,
+                &source.text,
+                parameter.span,
+                "parameter default must be a compile-time constant",
+            ));
+        }
+        if default.is_some()
+            && symbols
+                .variables
+                .get(place.variable.0 as usize)
+                .is_some_and(|variable| variable.reference)
+        {
+            diagnostics.push(AnalyzerDiagnostic::at(
+                AnalyzerDiagnosticCode::InvalidArgument,
+                AnalyzerDiagnosticSeverity::Error,
+                2,
+                source.source.id,
+                &source.source.relative_path,
+                &source.text,
+                parameter.span,
+                "reference parameters cannot have defaults",
+            ));
+        }
         parameters.push(Parameter {
             target: place,
             default,

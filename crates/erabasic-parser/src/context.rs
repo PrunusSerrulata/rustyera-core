@@ -9,6 +9,8 @@ pub enum ArgumentStyle {
     Expressions,
     Formatted,
     Raw,
+    /// Formatted function name followed by an optional parenthesized argument list.
+    DynamicCall,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,7 +98,9 @@ impl ParserContext for DefaultParserContext {
 
     fn instruction(&self, name: &str) -> Option<InstructionSpec> {
         let upper = name.to_uppercase();
-        let style = if NO_ARG_INSTRUCTIONS.contains(&upper.as_str()) {
+        let style = if DYNAMIC_CALL_INSTRUCTIONS.contains(&upper.as_str()) {
+            ArgumentStyle::DynamicCall
+        } else if NO_ARG_INSTRUCTIONS.contains(&upper.as_str()) {
             ArgumentStyle::None
         } else if upper.starts_with("PRINT") || upper.starts_with("DATA") || upper.ends_with("FORM")
         {
@@ -122,6 +126,20 @@ impl ParserContext for DefaultParserContext {
         self.symbols.get(&name.to_uppercase()).copied()
     }
 }
+
+const DYNAMIC_CALL_INSTRUCTIONS: &[&str] = &[
+    "CALLFORM",
+    "CALLFORMF",
+    "JUMPFORM",
+    "TRYCALLFORM",
+    "TRYCALLFORMF",
+    "TRYJUMPFORM",
+    "TRYCCALLFORM",
+    "TRYCCALL",
+    "TRYCJUMP",
+    "TRYCJUMPFORM",
+    "TRYCGOTOFORM",
+];
 
 const NO_ARG_INSTRUCTIONS: &[&str] = &[
     "ELSE",

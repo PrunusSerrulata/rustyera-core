@@ -187,6 +187,9 @@ fn parse_arguments(
     if style == ArgumentStyle::Raw {
         return ParseOutput::success(vec![Argument::Raw(source.to_string())]);
     }
+    if style == ArgumentStyle::DynamicCall {
+        return parse_dynamic_call_arguments(source, base, context);
+    }
     if style == ArgumentStyle::Formatted {
         if source.starts_with("@\"") {
             let parsed = lex_with(
@@ -247,6 +250,62 @@ fn parse_arguments(
         value: Some(arguments),
         diagnostics,
     }
+}
+
+fn parse_dynamic_call_arguments(
+    source: &str,
+    base: usize,
+    context: &dyn ParserContext,
+) -> ParseOutput<Vec<Argument>> {
+    let split = dynamic_call_parenthesis(source);
+    let (target, arguments) = split.map_or((source.trim(), None), |index| {
+        let end = source.rfind(')').unwrap_or(source.len());
+        (source[..index].trim(), Some(&source[index + 1..end]))
+    });
+    let target_offset = source.find(target).unwrap_or(0);
+    let (form, lex_diagnostics) = lex_formatted(target, context.lexer_config(), context.macros());
+    let mut target_output = lower_formatted(&form);
+    target_output.diagnostics.splice(0..0, lex_diagnostics);
+    shift_formatted(&mut target_output, base + target_offset);
+    let mut diagnostics = target_output.diagnostics;
+    let mut values = target_output
+        .value
+        .map_or_else(Vec::new, |value| vec![Argument::Formatted(value)]);
+    if let Some(arguments) = arguments {
+        let argument_offset = source.find(arguments).unwrap_or(source.len());
+        let mut parsed = parse_arguments(
+            arguments,
+            base + argument_offset,
+            ArgumentStyle::Expressions,
+            context,
+        );
+        diagnostics.append(&mut parsed.diagnostics);
+        values.extend(parsed.value.unwrap_or_default());
+    }
+    ParseOutput {
+        value: Some(values),
+        diagnostics,
+    }
+}
+
+fn dynamic_call_parenthesis(source: &str) -> Option<usize> {
+    let mut braces = 0_u32;
+    let mut brackets = 0_u32;
+    let mut percent = false;
+    let mut quoted = false;
+    for (index, character) in source.char_indices() {
+        match character {
+            '"' if !percent => quoted = !quoted,
+            '%' if !quoted => percent = !percent,
+            '{' if !quoted && !percent => braces = braces.saturating_add(1),
+            '}' if !quoted && !percent => braces = braces.saturating_sub(1),
+            '[' if !quoted && !percent && braces == 0 => brackets = brackets.saturating_add(1),
+            ']' if !quoted && !percent && braces == 0 => brackets = brackets.saturating_sub(1),
+            '(' if !quoted && !percent && braces == 0 && brackets == 0 => return Some(index),
+            _ => {}
+        }
+    }
+    None
 }
 
 pub(crate) fn parse_directive(

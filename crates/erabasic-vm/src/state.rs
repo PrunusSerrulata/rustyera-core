@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use erabasic_bytecode::{
-    BytecodeArtifact, BytecodeFunction, BytecodeStorage, BytecodeType, Digest, SymbolKey,
+    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeStorage, BytecodeType, Digest,
+    SymbolKey,
 };
 use erabasic_validator::ValidatedArtifact;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,8 @@ pub(crate) struct Frame {
     pub instruction: usize,
     pub stack: Vec<VmValue>,
     pub locals: BTreeMap<SymbolKey, VariableCell>,
+    /// Dynamic statement calls discard method results without exposing them to Host code.
+    pub return_value_to_caller: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -208,6 +211,13 @@ impl Vm {
             .find(|candidate| candidate.key == function)
             .ok_or(VmError::MissingFunction(function))?;
         validate_arguments(function_definition, &arguments)?;
+        bind_persistent_arguments(
+            &mut self.memory,
+            generation,
+            function_definition,
+            artifact,
+            &arguments,
+        )?;
         let fiber_id = FiberId(self.next_fiber);
         self.next_fiber = self.next_fiber.saturating_add(1);
         let frame_id = FrameId(self.next_frame);
@@ -218,6 +228,7 @@ impl Vm {
             function_definition,
             artifact,
             arguments,
+            true,
         );
         self.fibers.insert(
             fiber_id,
@@ -755,13 +766,18 @@ pub(crate) fn make_frame(
     function: &BytecodeFunction,
     artifact: &BytecodeArtifact,
     arguments: Vec<VmValue>,
+    return_value_to_caller: bool,
 ) -> Frame {
     let mut locals: BTreeMap<_, _> = artifact
         .globals
         .iter()
         .filter(|definition| {
-            definition.storage == BytecodeStorage::FunctionLocal
-                && definition.owner == Some(function.key)
+            definition.owner == Some(function.key)
+                && (definition.storage == BytecodeStorage::FunctionLocal
+                    || function
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.key == definition.key))
         })
         .map(|definition| (definition.key, VariableCell::new(definition)))
         .collect();
@@ -784,6 +800,7 @@ pub(crate) fn make_frame(
         instruction: 0,
         stack: Vec::new(),
         locals,
+        return_value_to_caller,
     }
 }
 
@@ -810,6 +827,66 @@ pub(crate) fn validate_arguments(
         }
     }
     Ok(())
+}
+
+pub(crate) fn bind_persistent_arguments(
+    memory: &mut Memory,
+    generation: GenerationId,
+    function: &BytecodeFunction,
+    artifact: &BytecodeArtifact,
+    arguments: &[VmValue],
+) -> Result<(), VmError> {
+    for (parameter, argument) in function.parameters.iter().zip(arguments) {
+        let Some(definition) = artifact
+            .globals
+            .iter()
+            .find(|global| global.key == parameter.key)
+        else {
+            return Err(VmError::InvalidState("parameter storage is missing".into()));
+        };
+        if definition.storage != BytecodeStorage::FunctionPersistent {
+            continue;
+        }
+        memory
+            .cell_mut(generation, definition, 0)
+            .ok_or_else(|| VmError::InvalidState("persistent parameter storage is missing".into()))?
+            .write(&[], argument.clone())
+            .map_err(VmError::InvalidState)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn prepare_dynamic_arguments(
+    function: &BytecodeFunction,
+    mut arguments: Vec<VmValue>,
+) -> Result<Vec<VmValue>, VmError> {
+    if arguments.len() > function.parameters.len() {
+        return Err(VmError::InvalidArguments(format!(
+            "function {} expects at most {} arguments, found {}",
+            function.name,
+            function.parameters.len(),
+            arguments.len()
+        )));
+    }
+    while arguments.len() < function.parameters.len() {
+        arguments.push(VmValue::Integer(i64::MIN));
+    }
+    for (parameter, argument) in function.parameters.iter().zip(&mut arguments) {
+        if matches!(argument, VmValue::Integer(value) if *value == i64::MIN) {
+            let Some(default) = &parameter.default else {
+                return Err(VmError::InvalidArguments(format!(
+                    "function {} omits a required argument",
+                    function.name
+                )));
+            };
+            *argument = match default {
+                BytecodeConstant::Integer(value) => VmValue::Integer(*value),
+                BytecodeConstant::String(value) => VmValue::String(value.clone()),
+            };
+        }
+    }
+    validate_arguments(function, &arguments)?;
+    Ok(arguments)
 }
 
 pub(crate) fn find_global(

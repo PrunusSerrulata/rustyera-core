@@ -1619,6 +1619,42 @@ fn compiled_assignment_matches_reference_smoke_input() {
 }
 
 #[test]
+fn dynamic_try_resolves_before_arguments_and_form_call_invokes_target() {
+    let artifact = compile_source(
+        "@ORACLE_COMPAT\nRESULT = 0\nTRYCALLFORM ORACLE_MISSING(1 / LOCAL)\nCALLFORM ORACLE_DYNAMIC_{1}(4)\nRETURN\n@ORACLE_DYNAMIC_1(ARG)\nFLAG:0 = ARG\nRETURN\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "ORACLE_COMPAT")
+        .expect("entry")
+        .key;
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .expect("FLAG")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(4)));
+}
+
+#[test]
 fn compiled_bit_mutations_prevalidate_and_update_the_target() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nRESULT = 0\nSETBIT RESULT, 1, 3\nINVERTBIT RESULT, 1\nCLEARBIT RESULT, 3\nRETURN\n",

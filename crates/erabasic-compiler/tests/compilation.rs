@@ -77,6 +77,65 @@ fn host_operations_use_only_call_host_and_round_trip() {
 }
 
 #[test]
+fn printdata_lowers_to_lazy_skip_random_selection_and_valid_stack_control() {
+    let project = analyze(
+        "@SYSTEM_TITLE\nPRINTDATAKW\nDATAFORM first={1}\nDATALIST\nDATAFORM second={2}\nDATAFORM third={3}\nENDLIST\nENDDATA\nRETURN\n",
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
+    let artifact = report.artifact.expect("PRINTDATA should compile");
+    let code = &artifact.functions[0].code;
+    assert!(
+        code.iter()
+            .any(|instruction| instruction.opcode == Opcode::Dup as u16)
+    );
+    assert!(
+        code.iter()
+            .any(|instruction| instruction.opcode == Opcode::Pop as u16)
+    );
+    let validation = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &ValidationContext::for_artifact(&artifact),
+    );
+    assert!(validation.is_valid(), "{:#?}", validation.diagnostics);
+}
+
+#[test]
+fn dynamic_call_uses_vm_resolution_before_argument_evaluation() {
+    let project = analyze(
+        "@SYSTEM_TITLE\nLOCAL = 1\nTRYCALLFORM MISSING(1 / LOCAL:1)\nCALLFORM TARGET_{LOCAL}(4)\nRETURN\n@TARGET_1(ARG)\nRESULT = ARG\nRETURN\n",
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
+    let artifact = report.artifact.expect("dynamic calls should compile");
+    let code = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("entry function")
+        .code
+        .as_slice();
+    assert!(
+        code.iter()
+            .any(|instruction| instruction.opcode == Opcode::ResolveFunction as u16)
+    );
+    assert!(
+        code.iter()
+            .any(|instruction| instruction.opcode == Opcode::InvokeDynamic as u16)
+    );
+}
+
+#[test]
 fn input_wait_and_getkey_bindings_preserve_dynamic_stability() {
     let registry = default_host_registry();
     for name in ["TINPUT", "TONEINPUTS", "TWAIT", "FORCEWAIT"] {

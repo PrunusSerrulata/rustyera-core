@@ -286,11 +286,12 @@ fn check_structure(
         "WHILE" => Some("WHILE"),
         "DO" => Some("DO"),
         "SELECTCASE" => Some("SELECTCASE"),
-        "TRYC" => Some("TRYC"),
-        "PRINTDATA" | "PRINTDATAL" | "PRINTDATAW" => Some("PRINTDATA"),
+        "TRYC" | "TRYCCALL" | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" | "TRYCGOTO"
+        | "TRYCGOTOFORM" => Some("TRYC"),
+        "PRINTDATA" | "PRINTDATAL" | "PRINTDATAW" | "PRINTDATAK" | "PRINTDATAKL"
+        | "PRINTDATAKW" | "PRINTDATAD" | "PRINTDATADL" | "PRINTDATADW" => Some("PRINTDATA"),
         "DATALIST" => Some("DATALIST"),
-        "TRYLIST" => Some("TRYLIST"),
-        "FUNC" => Some("FUNC"),
+        "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST" => Some(name.as_str()),
         _ => None,
     };
     if let Some(opener) = opener {
@@ -307,9 +308,21 @@ fn check_structure(
         "ENDCATCH" => Some("TRYC"),
         "ENDDATA" => Some("PRINTDATA"),
         "ENDLIST" => Some("DATALIST"),
-        "ENDFUNC" => Some("FUNC"),
         _ => None,
     };
+    if name == "ENDFUNC" {
+        if !matches!(
+            blocks.pop().as_ref().map(|(name, _)| name.as_str()),
+            Some("TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST")
+        ) {
+            diagnostics.push(Diagnostic::error(
+                DiagnosticCode::UnmatchedBlock,
+                statement.span,
+                "ENDFUNC does not match an open TRY*LIST block",
+            ));
+        }
+        return;
+    }
     if let Some(expected) = expected
         && !matches!(blocks.pop(), Some((name, _)) if name == expected)
     {

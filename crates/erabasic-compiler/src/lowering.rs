@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use erabasic_ast::{AssignOp, BinaryOp, PostfixOp, UnaryOp};
 use erabasic_bytecode::{
@@ -44,6 +44,7 @@ pub(crate) fn lower_function(
 ) -> LoweredFunction {
     let mut builder = Builder::new(function, key, context);
     let structured = structured_if_flow(function);
+    let (data_blocks, data_body_lines) = collect_data_blocks(function);
     let mut line_starts = BTreeMap::new();
     let mut line_entries = BTreeMap::new();
     let mut pending_jumps = Vec::new();
@@ -56,53 +57,60 @@ pub(crate) fn lower_function(
         }
         line_entries.insert(line.id, builder.code.len());
         let before = builder.code.len();
-        match &line.kind {
-            HirStatementKind::Assignment { target, op, value } => {
-                for index in &target.indices {
-                    builder.lower_expression(index, line.location);
+        if let Some(block) = data_blocks.get(&line.id) {
+            builder.lower_data_block(block);
+        } else if data_body_lines.contains(&line.id) {
+            // The opener emits the complete selection so unselected DATA expressions
+            // are never evaluated. Body lines retain a NOP for source-map anchoring.
+        } else {
+            match &line.kind {
+                HirStatementKind::Assignment { target, op, value } => {
+                    for index in &target.indices {
+                        builder.lower_expression(index, line.location);
+                    }
+                    builder.lower_expression(value, line.location);
+                    let Some(key) = context.variable_keys.get(&target.variable).copied() else {
+                        builder.diagnostics.push(CompilerDiagnostic::at(
+                            CompilerDiagnosticCode::InvalidHir,
+                            line.location,
+                            "assignment variable has no stable symbol key",
+                        ));
+                        builder.emit(
+                            EncodedInstruction::new(Opcode::Trap, b"missing variable".to_vec()),
+                            line.location,
+                        );
+                        continue;
+                    };
+                    builder.emit(
+                        opcode::variable(
+                            Opcode::StoreVariable,
+                            key,
+                            u16::try_from(target.indices.len()).unwrap_or(u16::MAX),
+                            assign_tag(*op),
+                        ),
+                        line.location,
+                    );
                 }
-                builder.lower_expression(value, line.location);
-                let Some(key) = context.variable_keys.get(&target.variable).copied() else {
+                HirStatementKind::Instruction { target, arguments } => {
+                    builder.lower_statement(target, arguments, line.id, line.location);
+                }
+                HirStatementKind::Label { .. } => {
+                    builder.emit(
+                        EncodedInstruction::new(Opcode::Nop, Vec::new()),
+                        line.location,
+                    );
+                }
+                HirStatementKind::Error => {
                     builder.diagnostics.push(CompilerDiagnostic::at(
                         CompilerDiagnosticCode::InvalidHir,
                         line.location,
-                        "assignment variable has no stable symbol key",
+                        "error HIR statement cannot be lowered",
                     ));
                     builder.emit(
-                        EncodedInstruction::new(Opcode::Trap, b"missing variable".to_vec()),
+                        EncodedInstruction::new(Opcode::Trap, b"invalid HIR".to_vec()),
                         line.location,
                     );
-                    continue;
-                };
-                builder.emit(
-                    opcode::variable(
-                        Opcode::StoreVariable,
-                        key,
-                        u16::try_from(target.indices.len()).unwrap_or(u16::MAX),
-                        assign_tag(*op),
-                    ),
-                    line.location,
-                );
-            }
-            HirStatementKind::Instruction { target, arguments } => {
-                builder.lower_statement(target, arguments, line.id, line.location);
-            }
-            HirStatementKind::Label { .. } => {
-                builder.emit(
-                    EncodedInstruction::new(Opcode::Nop, Vec::new()),
-                    line.location,
-                );
-            }
-            HirStatementKind::Error => {
-                builder.diagnostics.push(CompilerDiagnostic::at(
-                    CompilerDiagnosticCode::InvalidHir,
-                    line.location,
-                    "error HIR statement cannot be lowered",
-                ));
-                builder.emit(
-                    EncodedInstruction::new(Opcode::Trap, b"invalid HIR".to_vec()),
-                    line.location,
-                );
+                }
             }
         }
         if builder.code.len() == before {
@@ -111,14 +119,16 @@ pub(crate) fn lower_function(
                 line.location,
             );
         }
-        add_control_flow(
-            function,
-            line.id,
-            line.location,
-            &mut builder,
-            &structured,
-            &mut pending_jumps,
-        );
+        if !data_blocks.contains_key(&line.id) && !data_body_lines.contains(&line.id) {
+            add_control_flow(
+                function,
+                line.id,
+                line.location,
+                &mut builder,
+                &structured,
+                &mut pending_jumps,
+            );
+        }
     }
     if builder.code.is_empty() {
         builder.emit(opcode::return_value(false), function.location);
@@ -205,6 +215,16 @@ pub(crate) fn lower_function(
                 key: *context.variable_keys.get(&parameter.target.variable)?,
                 value_type,
                 by_reference: variable.reference,
+                default: parameter.default.as_ref().and_then(|value| {
+                    value.constant.as_ref().map(|value| match value {
+                        erabasic_hir::ConstantValue::Integer(value) => {
+                            erabasic_bytecode::BytecodeConstant::Integer(*value)
+                        }
+                        erabasic_hir::ConstantValue::String(value) => {
+                            erabasic_bytecode::BytecodeConstant::String(value.clone())
+                        }
+                    })
+                }),
             })
         })
         .collect();
@@ -251,6 +271,89 @@ fn strip_source_locations(value: &mut serde_json::Value) {
             }
         }
         _ => {}
+    }
+}
+
+struct DataBlock<'a> {
+    opener: &'a erabasic_hir::HirStatement,
+    choices: Vec<Vec<&'a erabasic_hir::HirStatement>>,
+}
+
+fn collect_data_blocks(function: &Function) -> (BTreeMap<LineId, DataBlock<'_>>, BTreeSet<LineId>) {
+    let mut blocks = BTreeMap::new();
+    let mut body = BTreeSet::new();
+    let mut index = 0;
+    while index < function.lines.len() {
+        let line = &function.lines[index];
+        let Some(name) = instruction_name(line) else {
+            index += 1;
+            continue;
+        };
+        if name != "STRDATA" && !name.starts_with("PRINTDATA") {
+            index += 1;
+            continue;
+        }
+        let mut choices = Vec::new();
+        let mut cursor = index + 1;
+        while cursor < function.lines.len() {
+            let candidate = &function.lines[cursor];
+            body.insert(candidate.id);
+            match instruction_name(candidate) {
+                Some("ENDDATA") => {
+                    cursor += 1;
+                    break;
+                }
+                Some("DATALIST") => {
+                    let mut group = Vec::new();
+                    cursor += 1;
+                    while cursor < function.lines.len() {
+                        let member = &function.lines[cursor];
+                        body.insert(member.id);
+                        if instruction_name(member) == Some("ENDLIST") {
+                            break;
+                        }
+                        if matches!(instruction_name(member), Some("DATA" | "DATAFORM")) {
+                            group.push(member);
+                        }
+                        cursor += 1;
+                    }
+                    choices.push(group);
+                }
+                Some("DATA" | "DATAFORM") => choices.push(vec![candidate]),
+                _ => {}
+            }
+            cursor += 1;
+        }
+        blocks.insert(
+            line.id,
+            DataBlock {
+                opener: line,
+                choices,
+            },
+        );
+        index = cursor;
+    }
+    (blocks, body)
+}
+
+fn instruction_name(line: &erabasic_hir::HirStatement) -> Option<&str> {
+    match &line.kind {
+        HirStatementKind::Instruction { target, .. } => Some(target.name()),
+        _ => None,
+    }
+}
+
+fn argument_place(argument: Option<&HirArgument>) -> Option<&erabasic_hir::HirPlace> {
+    match argument? {
+        HirArgument::Place(place)
+        | HirArgument::Expression(HirExpr {
+            kind: HirExprKind::Variable { place },
+            ..
+        }) => Some(place),
+        HirArgument::Expression(_)
+        | HirArgument::Formatted(_)
+        | HirArgument::Raw(_)
+        | HirArgument::Omitted => None,
     }
 }
 
@@ -320,7 +423,7 @@ fn structured_if_flow(function: &Function) -> StructuredFlow {
             continue;
         };
         match target.name() {
-            "IF" => open.push(OpenIf {
+            "IF" | "TRYCCALL" | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" => open.push(OpenIf {
                 opener: line.id,
                 alternatives: Vec::new(),
             }),
@@ -329,12 +432,12 @@ fn structured_if_flow(function: &Function) -> StructuredFlow {
                     frame.alternatives.push((line.id, true));
                 }
             }
-            "ELSE" => {
+            "ELSE" | "CATCH" => {
                 if let Some(frame) = open.last_mut() {
                     frame.alternatives.push((line.id, false));
                 }
             }
-            "ENDIF" => {
+            "ENDIF" | "ENDCATCH" => {
                 let Some(frame) = open.pop() else {
                     continue;
                 };
@@ -390,6 +493,165 @@ impl<'a> Builder<'a> {
         self.locations.push(location);
     }
 
+    fn lower_data_block(&mut self, block: &DataBlock<'_>) {
+        let HirStatementKind::Instruction { target, arguments } = &block.opener.kind else {
+            return;
+        };
+        if block.choices.is_empty() {
+            return;
+        }
+        let name = target.name();
+        let location = block.opener.location;
+        let is_string = name == "STRDATA";
+        let mut skip_jump = None;
+        if !is_string {
+            self.emit_runtime_call("ISSKIP", &[], Some(BytecodeType::Integer), false, location);
+            self.emit(opcode::unary(2), location);
+            skip_jump = Some(self.code.len());
+            self.emit(opcode::jump(Opcode::JumpIfFalse, 0), location);
+        }
+        self.emit(
+            opcode::push_integer(i64::try_from(block.choices.len()).unwrap_or(i64::MAX)),
+            location,
+        );
+        self.emit_native_call(
+            "RAND",
+            &[BytecodeType::Integer],
+            Some(BytecodeType::Integer),
+            compiler_native_contract(false),
+            location,
+        );
+
+        if !is_string && let Some(place) = argument_place(arguments.first()) {
+            if place.indices.is_empty()
+                && let Some(key) = self.context.variable_keys.get(&place.variable).copied()
+            {
+                self.emit(EncodedInstruction::new(Opcode::Dup, Vec::new()), location);
+                self.emit(opcode::variable(Opcode::StoreVariable, key, 0, 0), location);
+            } else {
+                self.diagnostics.push(CompilerDiagnostic::at(
+                    CompilerDiagnosticCode::UnsupportedConstruct,
+                    location,
+                    "PRINTDATA selected-index destination must currently be scalar",
+                ));
+            }
+        }
+
+        let mut end_jumps = Vec::new();
+        for (index, choice) in block.choices.iter().enumerate() {
+            let false_jump = if index + 1 < block.choices.len() {
+                self.emit(EncodedInstruction::new(Opcode::Dup, Vec::new()), location);
+                self.emit(
+                    opcode::push_integer(i64::try_from(index).unwrap_or(i64::MAX)),
+                    location,
+                );
+                self.emit(opcode::binary(11), location);
+                let jump = self.code.len();
+                self.emit(opcode::jump(Opcode::JumpIfFalse, 0), location);
+                Some(jump)
+            } else {
+                None
+            };
+            self.emit(EncodedInstruction::new(Opcode::Pop, Vec::new()), location);
+            if is_string {
+                self.lower_strdata_choice(choice, arguments.first(), location);
+            } else {
+                self.lower_printdata_choice(choice, name);
+            }
+            let end = self.code.len();
+            self.emit(opcode::jump(Opcode::Jump, 0), location);
+            end_jumps.push(end);
+            if let Some(jump) = false_jump {
+                self.code[jump].payload = u32::try_from(self.code.len())
+                    .unwrap_or(u32::MAX)
+                    .to_le_bytes()
+                    .to_vec();
+            }
+        }
+        let end = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+        for jump in end_jumps {
+            self.code[jump].payload = end.to_le_bytes().to_vec();
+        }
+        if !is_string {
+            if name.ends_with('L') {
+                self.emit_runtime_call("PRINTL", &[], None, false, location);
+            } else if name.ends_with('W') {
+                self.emit_runtime_call("PRINTW", &[], None, false, location);
+            }
+        }
+        if let Some(jump) = skip_jump {
+            self.code[jump].payload = u32::try_from(self.code.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes()
+                .to_vec();
+        }
+    }
+
+    fn lower_printdata_choice(&mut self, choice: &[&erabasic_hir::HirStatement], opener: &str) {
+        for (index, line) in choice.iter().enumerate() {
+            let HirStatementKind::Instruction { arguments, .. } = &line.kind else {
+                continue;
+            };
+            if index != 0 {
+                self.emit_runtime_call("PRINTL", &[], None, false, line.location);
+            }
+            let Some(argument) = arguments.first() else {
+                continue;
+            };
+            let value_type = self.lower_argument(argument, line.location);
+            let command = if opener.contains('K') {
+                "PRINTK"
+            } else if opener.contains('D') {
+                "PRINTD"
+            } else {
+                "PRINT"
+            };
+            self.emit_runtime_call(command, &[value_type], None, false, line.location);
+        }
+    }
+
+    fn lower_strdata_choice(
+        &mut self,
+        choice: &[&erabasic_hir::HirStatement],
+        destination: Option<&HirArgument>,
+        location: SourceLocation,
+    ) {
+        let mut parts = 0_u16;
+        for (index, line) in choice.iter().enumerate() {
+            if index != 0 {
+                self.emit(opcode::push_string("\n"), line.location);
+                parts = parts.saturating_add(1);
+            }
+            if let HirStatementKind::Instruction { arguments, .. } = &line.kind
+                && let Some(argument) = arguments.first()
+            {
+                self.lower_argument(argument, line.location);
+                parts = parts.saturating_add(1);
+            }
+        }
+        if parts == 0 {
+            self.emit(opcode::push_string(""), location);
+        } else if parts > 1 {
+            self.emit(opcode::concat(parts), location);
+        }
+        let Some(place) = argument_place(destination) else {
+            self.emit(EncodedInstruction::new(Opcode::Pop, Vec::new()), location);
+            return;
+        };
+        if place.indices.is_empty()
+            && let Some(key) = self.context.variable_keys.get(&place.variable).copied()
+        {
+            self.emit(opcode::variable(Opcode::StoreVariable, key, 0, 0), location);
+        } else {
+            self.emit(EncodedInstruction::new(Opcode::Pop, Vec::new()), location);
+            self.diagnostics.push(CompilerDiagnostic::at(
+                CompilerDiagnosticCode::UnsupportedConstruct,
+                location,
+                "STRDATA destination must currently be scalar",
+            ));
+        }
+    }
+
     fn lower_statement(
         &mut self,
         target: &InstructionTarget,
@@ -410,32 +672,41 @@ impl<'a> Builder<'a> {
             );
             return;
         }
-        if matches!(
-            name,
-            "IF" | "ELSE"
-                | "ELSEIF"
-                | "ENDIF"
-                | "SIF"
-                | "WHILE"
-                | "WEND"
-                | "REPEAT"
-                | "REND"
-                | "FOR"
-                | "NEXT"
-                | "DO"
-                | "LOOP"
-                | "SELECTCASE"
-                | "CASE"
-                | "CASEELSE"
-                | "ENDSELECT"
-                | "TRYC"
-                | "CATCH"
-                | "ENDCATCH"
-                | "PRINTDATA"
-                | "STRDATA"
-                | "TRYLIST"
-                | "ENDLIST"
-        ) {
+        if name.starts_with("PRINTDATA")
+            || matches!(
+                name,
+                "IF" | "ELSE"
+                    | "ELSEIF"
+                    | "ENDIF"
+                    | "SIF"
+                    | "WHILE"
+                    | "WEND"
+                    | "REPEAT"
+                    | "REND"
+                    | "FOR"
+                    | "NEXT"
+                    | "DO"
+                    | "LOOP"
+                    | "SELECTCASE"
+                    | "CASE"
+                    | "CASEELSE"
+                    | "ENDSELECT"
+                    | "TRYC"
+                    | "CATCH"
+                    | "ENDCATCH"
+                    | "STRDATA"
+                    | "DATALIST"
+                    | "DATA"
+                    | "DATAFORM"
+                    | "ENDDATA"
+                    | "ENDLIST"
+                    | "TRYCALLLIST"
+                    | "TRYJUMPLIST"
+                    | "TRYGOTOLIST"
+                    | "FUNC"
+                    | "ENDFUNC"
+            )
+        {
             let parameter_types: Vec<_> = arguments
                 .iter()
                 .map(|argument| self.lower_argument(argument, location))
@@ -462,6 +733,22 @@ impl<'a> Builder<'a> {
                 self.lower_argument(argument, location);
             }
             self.emit(opcode::return_value(!arguments.is_empty()), location);
+            return;
+        }
+        if matches!(
+            name,
+            "CALLFORM"
+                | "CALLFORMF"
+                | "JUMPFORM"
+                | "TRYCALLFORM"
+                | "TRYCALLFORMF"
+                | "TRYJUMPFORM"
+                | "TRYCCALL"
+                | "TRYCCALLFORM"
+                | "TRYCJUMP"
+                | "TRYCJUMPFORM"
+        ) {
+            self.lower_dynamic_call(arguments, line, name, location);
             return;
         }
         if matches!(name, "CALL" | "CALLF" | "JUMP" | "TRYCALL" | "TRYJUMP") {
@@ -494,6 +781,10 @@ impl<'a> Builder<'a> {
             .and_then(|edge| edge.function);
         let Some(target) = target.and_then(|id| self.context.function_keys.get(&id).copied())
         else {
+            if name.starts_with("TRY") {
+                // Reference TRY calls do not evaluate arguments when the target is absent.
+                return;
+            }
             self.diagnostics.push(CompilerDiagnostic::at(
                 CompilerDiagnosticCode::MissingImport,
                 location,
@@ -526,20 +817,42 @@ impl<'a> Builder<'a> {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let parameter_types: Vec<_> = arguments
-            .iter()
-            .skip(1)
-            .enumerate()
-            .map(|(index, argument)| {
+        let supplied = arguments.iter().skip(1).collect::<Vec<_>>();
+        let mut parameter_types = Vec::new();
+        if let Some(function) = target_function {
+            for (index, parameter) in function.parameters.iter().enumerate() {
+                let argument = supplied.get(index).copied();
+                if matches!(argument, None | Some(HirArgument::Omitted)) {
+                    if let Some(default) = &parameter.default {
+                        parameter_types.push(self.lower_expression(default, location));
+                    } else {
+                        self.diagnostics.push(CompilerDiagnostic::at(
+                            CompilerDiagnosticCode::InvalidHir,
+                            location,
+                            format!("{name} omits required argument {}", index + 1),
+                        ));
+                        let value_type = parameter.target.value_type;
+                        match value_type {
+                            SemanticType::String => self.emit(opcode::push_string(""), location),
+                            _ => self.emit(opcode::push_integer(0), location),
+                        }
+                        parameter_types
+                            .push(bytecode_type(value_type).unwrap_or(BytecodeType::Integer));
+                    }
+                    continue;
+                }
+                let argument = argument.expect("handled missing argument above");
                 if reference_parameters.get(index) == Some(&true)
                     && let HirArgument::Expression(expression) = argument
                     && let HirExprKind::Variable { place } = &expression.kind
                 {
-                    return self.lower_argument(&HirArgument::Place(place.clone()), location);
+                    parameter_types
+                        .push(self.lower_argument(&HirArgument::Place(place.clone()), location));
+                } else {
+                    parameter_types.push(self.lower_argument(argument, location));
                 }
-                self.lower_argument(argument, location)
-            })
-            .collect();
+            }
+        }
         let result = target_function.and_then(|function| bytecode_type(function.return_type));
         let import = self.add_import(ImportKind::Function, target);
         self.emit(
@@ -551,8 +864,77 @@ impl<'a> Builder<'a> {
             ),
             location,
         );
+        if name.ends_with('F') && result.is_some() {
+            self.emit(EncodedInstruction::new(Opcode::Pop, Vec::new()), location);
+        }
         if name.contains("JUMP") {
             self.emit(opcode::return_value(result.is_some()), location);
+        }
+    }
+
+    fn lower_dynamic_call(
+        &mut self,
+        arguments: &[HirArgument],
+        line: LineId,
+        name: &str,
+        location: SourceLocation,
+    ) {
+        let Some(target) = arguments.first() else {
+            self.emit(
+                EncodedInstruction::new(Opcode::Trap, b"missing dynamic target".to_vec()),
+                location,
+            );
+            return;
+        };
+        let target_type = self.lower_argument(target, location);
+        if target_type != BytecodeType::String {
+            self.diagnostics.push(CompilerDiagnostic::at(
+                CompilerDiagnosticCode::InvalidHir,
+                location,
+                format!("{name} target is not a string"),
+            ));
+        }
+        let allow_missing = name.starts_with("TRY");
+        let has_catch = self
+            .hir_function
+            .control_flow
+            .iter()
+            .any(|edge| edge.from == line && edge.kind == ControlFlowKind::Branch);
+        let resolve = self.code.len();
+        self.emit(opcode::resolve_function(0, allow_missing), location);
+        let parameter_types = arguments
+            .iter()
+            .skip(1)
+            .map(|argument| self.lower_argument(argument, location))
+            .collect::<Vec<_>>();
+        self.emit(
+            opcode::invoke_dynamic(
+                u16::try_from(parameter_types.len()).unwrap_or(u16::MAX),
+                name.contains("JUMP"),
+            ),
+            location,
+        );
+        if allow_missing {
+            let success = self.code.len();
+            if has_catch {
+                self.emit(opcode::push_integer(1), location);
+            }
+            self.emit(opcode::jump(Opcode::Jump, 0), location);
+            let missing = self.code.len();
+            self.emit(EncodedInstruction::new(Opcode::Pop, Vec::new()), location);
+            if has_catch {
+                self.emit(opcode::push_integer(0), location);
+            }
+            let end = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+            self.code[resolve].payload = {
+                let mut payload = u32::try_from(missing)
+                    .unwrap_or(u32::MAX)
+                    .to_le_bytes()
+                    .to_vec();
+                payload.push(1);
+                payload
+            };
+            self.code[success].payload = end.to_le_bytes().to_vec();
         }
     }
 
