@@ -340,7 +340,8 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             "ORACLE_INPUT",
             "ORACLE_REFLECTION",
             "ORACLE_MAP",
-            "ORACLE_STRUCTURED"
+            "ORACLE_STRUCTURED",
+            "ORACLE_COMPAT_12"
         ]
     );
     assert_eq!(program.functions[0].lines.len(), 14);

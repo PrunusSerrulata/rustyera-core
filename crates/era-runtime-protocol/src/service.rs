@@ -208,6 +208,35 @@ pub const UPDATE_CHECK_OPERATION: &str = "update_check";
 pub const UPDATE_CHECK_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const OPEN_URL_OPERATION: &str = "open_url";
 pub const OPEN_URL_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const POINTER_STATE_OPERATION: &str = "pointer_state";
+pub const POINTER_STATE_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct PointerStateRequest {
+    /// Presentation revision whose interaction projection is being observed.
+    #[n(0)]
+    pub presentation_revision: u64,
+    #[n(1)]
+    pub environment_revision: u64,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct PointerStateResponse {
+    /// Coordinates are frontend-independent logical (CSS) pixels.
+    #[n(0)]
+    pub x: i64,
+    #[n(1)]
+    pub y: i64,
+    /// `EraBasic` value of the hovered button, or the empty string.
+    #[n(2)]
+    pub button_value: String,
+    #[n(3)]
+    pub presentation_revision: u64,
+    #[n(4)]
+    pub environment_revision: u64,
+}
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]

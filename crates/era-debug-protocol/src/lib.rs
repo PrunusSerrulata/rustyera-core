@@ -24,7 +24,7 @@ pub use execution::{
 };
 pub use message::{
     AuthorizedDebugRequest, DEBUG_PROTOCOL_VERSION, DebugCommand, DebugError, DebugErrorCode,
-    DebugMessage, DebugResponse,
+    DebugMessage, DebugResponse, ScriptOutputChunk,
 };
 pub use value::{DebugPlace, DebugValue, ValueKind};
 pub use variable::{

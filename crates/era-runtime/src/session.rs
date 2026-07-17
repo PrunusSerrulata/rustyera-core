@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{self, Write as _};
 
-use era_debug_protocol::{DebugMessage, DebugScope, GrantToken};
+use era_debug_protocol::{DebugMessage, DebugResponse, DebugScope, GrantToken, ScriptOutputChunk};
 use era_protocol::{
     Channel, ProtocolBytes, ProtocolError, ProtocolVersion, SessionEpoch, SessionId, VersionRange,
     WireLimits, decode_canonical, decode_envelope, encode_canonical, encode_envelope,
@@ -18,19 +18,20 @@ use era_runtime_protocol::{
     ImageMetadataResponse, ImagePixelRequest, ImagePixelResponse, InputIntent, InputWait,
     InteractionToken, LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment,
     LocalDateTimeRequest, LocalDateTimeResponse, OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION,
-    OpenUrlRequest, OpenUrlResponse, ProjectLoadReport, ProjectManifest, ProtocolDiagnostic,
-    RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION,
-    RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault, RuntimeFeature,
-    RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized, RuntimeStateChanged,
-    ServerHello, ServiceCapability, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult,
-    ShutdownReady, SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk,
-    StateExportChunkRequest, StateExportKind, StateExportReady, StateExportRequest,
-    StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit,
-    StateImportReady, StateTransferCancel, StateTransferDescriptor, StorageCapabilities,
-    StorageEntry, StorageNamespace, StorageOperation, StoragePrecondition, StorageRequest,
-    StorageResponse, StorageResult, SystemTextArgument, SystemTextKey, UPDATE_CHECK_OPERATION,
-    UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest, UpdateCheckResponse, VersionRejected,
-    WaitChange, WaitKind, WaitStability,
+    OpenUrlRequest, OpenUrlResponse, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION,
+    PointerStateRequest, PointerStateResponse, ProjectLoadReport, ProjectManifest,
+    ProjectionObservation, ProjectionState, ProtocolDiagnostic, RANDOM_SEED_OPERATION,
+    RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse,
+    ReloadProject, RuntimeFault, RuntimeFeature, RuntimeLimits, RuntimeMessage, RuntimePhase,
+    RuntimeResynchronized, RuntimeStateChanged, ServerHello, ServiceCapability, ServiceKind,
+    ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady, SnapshotIneligibleReason,
+    StartMode, StartRequest, StateExportChunk, StateExportChunkRequest, StateExportKind,
+    StateExportReady, StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin,
+    StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
+    StateTransferDescriptor, StorageCapabilities, StorageEntry, StorageNamespace, StorageOperation,
+    StoragePrecondition, StorageRequest, StorageResponse, StorageResult, SystemTextArgument,
+    SystemTextKey, UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest,
+    UpdateCheckResponse, VersionRejected, WaitChange, WaitKind, WaitStability,
 };
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
@@ -44,7 +45,10 @@ use erabasic_vm::{
 use serde::{Deserialize, Serialize};
 
 use crate::controller::{SystemController, SystemFlow, SystemStep};
-use crate::host::{ClockOperation, ExternalCompletion, PendingInput, PostInputAction, input_wait};
+use crate::host::{
+    ClockOperation, ExternalCompletion, PendingInput, PointerCoordinate, PostInputAction,
+    input_wait,
+};
 use crate::operation::{
     CandidateSaveContinuation, PendingOperations, PendingService, PendingStorage,
 };
@@ -184,6 +188,7 @@ struct OutboundStateTransfer {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum InboundMessage {
     Runtime(RuntimeMessage),
     Debug(DebugMessage),
@@ -233,6 +238,22 @@ pub struct RuntimeSession {
     presentation: PresentationModel,
     operations: PendingOperations,
     key_toggle_state: [u8; 256],
+    hotkey_state: Vec<i64>,
+    text_box: String,
+    flow_input_enabled: bool,
+    flow_input_default: i64,
+    flow_input_can_skip: bool,
+    flow_input_force_skip: bool,
+    flow_input_string: bool,
+    flow_input_default_string: String,
+    button_generation: u64,
+    debug_output: String,
+    debug_output_base: u64,
+    debug_output_subscribed: bool,
+    projection_environment_revision: u64,
+    client_width: u32,
+    client_height: u32,
+    line_columns: u32,
     message_skip: bool,
     skip_print: bool,
     user_defined_skip: bool,
@@ -328,6 +349,22 @@ impl RuntimeSession {
             presentation: PresentationModel::default(),
             operations: PendingOperations::default(),
             key_toggle_state: [0; 256],
+            hotkey_state: Vec::new(),
+            text_box: String::new(),
+            flow_input_enabled: false,
+            flow_input_default: 0,
+            flow_input_can_skip: false,
+            flow_input_force_skip: false,
+            flow_input_string: false,
+            flow_input_default_string: String::new(),
+            button_generation: 0,
+            debug_output: String::new(),
+            debug_output_base: 0,
+            debug_output_subscribed: false,
+            projection_environment_revision: 0,
+            client_width: 760,
+            client_height: 480,
+            line_columns: 75,
             message_skip: false,
             skip_print: false,
             user_defined_skip: false,
@@ -627,6 +664,9 @@ impl RuntimeSession {
                 self.client_audio_available = state.audio_available;
                 Ok(())
             }
+            RuntimeMessage::ProjectionObservation(observation) => {
+                self.observe_projection(message_id, observation)
+            }
             RuntimeMessage::EffectAcknowledgement(acknowledgement) => {
                 self.acknowledge_effects(message_id, acknowledgement)
             }
@@ -665,6 +705,7 @@ impl RuntimeSession {
             | RuntimeMessage::StateChanged(_)
             | RuntimeMessage::ExitRequested(_)
             | RuntimeMessage::WaitChanged(_)
+            | RuntimeMessage::ProjectionState(_)
             | RuntimeMessage::PresentationSnapshot(_)
             | RuntimeMessage::PresentationDelta(_)
             | RuntimeMessage::EffectBatch(_)
@@ -685,6 +726,55 @@ impl RuntimeSession {
                 "message direction is frontend-incompatible",
             ),
         }
+    }
+
+    fn observe_projection(
+        &mut self,
+        message_id: u64,
+        observation: ProjectionObservation,
+    ) -> Result<(), RuntimeError> {
+        if observation.environment_revision <= self.projection_environment_revision {
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "projection environment revision is not newer",
+            );
+        }
+        if observation.presentation_revision != self.presentation.revision() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "projection observation does not match the canonical presentation",
+            );
+        }
+        if observation.client_width == 0
+            || observation.client_height == 0
+            || observation.line_columns == 0
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "projection dimensions must be positive",
+            );
+        }
+        self.projection_environment_revision = observation.environment_revision;
+        self.client_width = observation.client_width;
+        self.client_height = observation.client_height;
+        self.line_columns = observation.line_columns;
+        self.text_box = observation.text_box;
+        Ok(())
+    }
+
+    fn emit_projection_state(&mut self) -> Result<(), RuntimeError> {
+        self.emit(
+            RuntimeMessage::ProjectionState(ProjectionState {
+                runtime_revision: self.revision,
+                text_box: self.text_box.clone(),
+                hotkey_state: self.hotkey_state.clone(),
+                button_generation: self.button_generation,
+            }),
+            None,
+        )
     }
 
     fn hello(&mut self, message_id: u64, hello: &ClientHello) -> Result<(), RuntimeError> {
@@ -1302,6 +1392,17 @@ impl RuntimeSession {
         self.user_defined_skip = payload.user_defined_skip;
         self.saved_skip = payload.saved_skip;
         self.force_kana_mode = payload.force_kana_mode;
+        self.hotkey_state = payload.hotkey_state;
+        self.text_box = payload.text_box;
+        self.flow_input_enabled = payload.flow_input_enabled;
+        self.flow_input_default = payload.flow_input_default;
+        self.flow_input_can_skip = payload.flow_input_can_skip;
+        self.flow_input_force_skip = payload.flow_input_force_skip;
+        self.flow_input_string = payload.flow_input_string;
+        self.flow_input_default_string = payload.flow_input_default_string;
+        self.button_generation = payload.button_generation;
+        self.debug_output = payload.debug_output;
+        self.debug_output_base = payload.debug_output_base;
         self.command_intents = remap_intents(payload.command_intents);
         self.reusable_system_intents = remap_intents(payload.reusable_system_intents);
         self.save_extensions = payload.save_extensions;
@@ -1424,13 +1525,29 @@ impl RuntimeSession {
     fn system_wait(&mut self, submission_token: InteractionToken) -> InputWait {
         InputWait {
             wait_id: self.allocate_wait(),
-            kind: WaitKind::IntegerButton,
+            kind: if self.flow_input_string {
+                WaitKind::StringValue
+            } else if self.flow_input_enabled {
+                WaitKind::IntegerValue
+            } else {
+                WaitKind::IntegerButton
+            },
             stability: WaitStability::StableInput,
             one_input: false,
             stop_message_skip: false,
             system_input: true,
-            mouse_input: false,
-            default_value: None,
+            mouse_input: self.flow_input_enabled,
+            default_value: if self.flow_input_string {
+                Some(era_runtime_protocol::ProtocolValue::String(
+                    self.flow_input_default_string.clone(),
+                ))
+            } else if self.flow_input_enabled {
+                Some(era_runtime_protocol::ProtocolValue::Integer(
+                    self.flow_input_default,
+                ))
+            } else {
+                None
+            },
             deadline_ns: None,
             display_time: false,
             timeout_message: None,
@@ -1491,7 +1608,7 @@ impl RuntimeSession {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::single_match_else, clippy::too_many_lines)]
     fn handle_host_call(
         &mut self,
         vm: &mut RuntimeVm,
@@ -1963,6 +2080,155 @@ impl RuntimeSession {
                 request.id,
                 VmHostCompletion::Ready(HostReady {
                     value: Some(VmValue::Integer(output_length)),
+                    writes,
+                }),
+            );
+        }
+        if name == "GETTEXTBOX" {
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(self.text_box.clone())),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "SETTEXTBOX" {
+            string_argument_value(&request.arguments, 0, &name)?.clone_into(&mut self.text_box);
+            commit_integer_result(vm, request.id, 1)?;
+            return self.emit_projection_state();
+        }
+        if name == "CLEARTEXTBOX" {
+            self.text_box.clear();
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_projection_state();
+        }
+        if name == "HOTKEY_STATE_INIT" {
+            let size =
+                usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
+                    RuntimeError::Internal("HOTKEY_STATE_INIT size must be non-negative".into())
+                })?;
+            self.hotkey_state = vec![0; size];
+            commit_integer_result(vm, request.id, 0)?;
+            return self.emit_projection_state();
+        }
+        if name == "HOTKEY_STATE" {
+            let index =
+                usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
+                    RuntimeError::Internal("HOTKEY_STATE index must be non-negative".into())
+                })?;
+            let value = integer_argument_value(&request.arguments, 1)?;
+            let Some(slot) = self.hotkey_state.get_mut(index) else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "HOTKEY_STATE requires an initialized in-range index",
+                    Some(request.origin.clone()),
+                );
+            };
+            *slot = value;
+            commit_integer_result(vm, request.id, 0)?;
+            return self.emit_projection_state();
+        }
+        if name == "FLOWINPUT" {
+            self.flow_input_default = integer_argument_value(&request.arguments, 0)?;
+            if request.arguments.len() > 1 {
+                self.flow_input_enabled = integer_argument_value(&request.arguments, 1)? != 0;
+            }
+            if request.arguments.len() > 2 {
+                self.flow_input_can_skip = integer_argument_value(&request.arguments, 2)? != 0;
+            }
+            if request.arguments.len() > 3 {
+                self.flow_input_force_skip = integer_argument_value(&request.arguments, 3)? != 0;
+            }
+            return commit_integer_result(vm, request.id, 0);
+        }
+        if name == "FLOWINPUTS" {
+            self.flow_input_string = integer_argument_value(&request.arguments, 0)? != 0;
+            if request.arguments.len() > 1 {
+                string_argument_value(&request.arguments, 1, &name)?
+                    .clone_into(&mut self.flow_input_default_string);
+            }
+            return commit_integer_result(vm, request.id, 0);
+        }
+        if name == "BREAKBUTTON" {
+            self.button_generation = self.button_generation.saturating_add(1);
+            self.command_intents.clear();
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_projection_state();
+        }
+        if matches!(name.as_str(), "HTML_ESCAPE" | "HTML_TOPLAINTEXT") {
+            let source = string_argument_value(&request.arguments, 0, &name)?;
+            let value = if name == "HTML_ESCAPE" {
+                erabasic_html::escape(source)
+            } else {
+                match erabasic_html::to_plain_text(source) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            "malformed HTML text",
+                            Some(request.origin.clone()),
+                        );
+                    }
+                }
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "HTML_TAGSPLIT" {
+            let source = string_argument_value(&request.arguments, 0, &name)?;
+            let string_target = request.arguments.get(1).and_then(vm_place);
+            let integer_target = request
+                .arguments
+                .get(2)
+                .and_then(vm_place)
+                .or_else(|| global_place(vm, "RESULT"));
+            let values = match erabasic_html::split_tags(source) {
+                Ok(tokens) => tokens
+                    .into_iter()
+                    .map(|token| match token {
+                        erabasic_html::Token::Text(value) | erabasic_html::Token::Tag(value) => {
+                            value
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+                Err(_) => {
+                    let writes = integer_target
+                        .into_iter()
+                        .map(|target| HostWrite {
+                            target,
+                            value: VmValue::Integer(-1),
+                        })
+                        .collect();
+                    return commit_completion(
+                        vm,
+                        request.id,
+                        VmHostCompletion::Ready(HostReady {
+                            value: None,
+                            writes,
+                        }),
+                    );
+                }
+            };
+            let mut writes = string_array_writes(vm, string_target, &values);
+            if let Some(target) = integer_target {
+                writes.push(HostWrite {
+                    target,
+                    value: VmValue::Integer(i64::try_from(values.len()).unwrap_or(i64::MAX)),
+                });
+            }
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: None,
                     writes,
                 }),
             );
@@ -2691,7 +2957,10 @@ impl RuntimeSession {
                     Some(request.origin.clone()),
                 );
             };
-            let value = match logical_line_string(pattern, 75) {
+            let value = match logical_line_string(
+                pattern,
+                usize::try_from(self.line_columns).unwrap_or(usize::MAX),
+            ) {
                 Ok(value) => value,
                 Err(message) => {
                     return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
@@ -2714,8 +2983,8 @@ impl RuntimeSession {
                 RuntimeError::Internal("layout query has no loaded project".into())
             })?;
             let value = match name.as_str() {
-                "CLIENTWIDTH" => project.viewport_width,
-                "CLIENTHEIGHT" => project.viewport_height,
+                "CLIENTWIDTH" => self.client_width,
+                "CLIENTHEIGHT" => self.client_height,
                 "PRINTCPERLINE" => project.print_c_per_line,
                 _ => project.print_c_length,
             };
@@ -2781,20 +3050,135 @@ impl RuntimeSession {
             return self.emit_presentation();
         }
         if name == "HTML_PRINT" {
-            self.presentation.append_html(
-                request
-                    .arguments
-                    .first()
-                    .map_or_else(String::new, display_value),
-            );
+            let markup = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            if erabasic_html::split_tags(&markup).is_err() {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "HTML_PRINT found an unterminated tag",
+                    Some(request.origin.clone()),
+                );
+            }
+            if request.arguments.get(1).map_or(0, integer_value_or_zero) != 0 {
+                self.presentation.append_html_inline(markup);
+            } else {
+                self.presentation.append_html(markup);
+            }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
+        if name == "HTML_PRINT_ISLAND" {
+            let markup = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            if erabasic_html::split_tags(&markup).is_err() {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "HTML_PRINT_ISLAND found an unterminated tag",
+                    Some(request.origin.clone()),
+                );
+            }
+            self.presentation.append_html_island(markup);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "HTML_PRINT_ISLAND_CLEAR" {
+            self.presentation.clear_html_island();
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if matches!(name.as_str(), "BAR" | "BARL") {
+            let value = integer_argument_value(&request.arguments, 0)?;
+            let maximum = integer_argument_value(&request.arguments, 1)?;
+            let length = integer_argument_value(&request.arguments, 2)?;
+            let replace = &vm.vm().artifact().project_data.static_data.replace;
+            let bar = match make_bar(
+                value,
+                maximum,
+                length,
+                replace.bar_char_1,
+                replace.bar_char_2,
+            ) {
+                Ok(value) => value,
+                Err(message) => {
+                    return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                }
+            };
+            self.presentation
+                .append_print_text(bar, false, name == "BARL");
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if matches!(
+            name.as_str(),
+            "DEBUGPRINT" | "DEBUGPRINTL" | "DEBUGPRINTFORM" | "DEBUGPRINTFORML"
+        ) {
+            let mut appended = String::new();
+            for value in &request.arguments {
+                appended.push_str(&display_value(value));
+            }
+            if name.ends_with('L') {
+                appended.push_str("\r\n");
+            }
+            let cursor = self
+                .debug_output_base
+                .saturating_add(u64::try_from(self.debug_output.len()).unwrap_or(u64::MAX));
+            self.debug_output.push_str(&appended);
+            if self.debug_output.len() > 1_048_576 {
+                let remove = self.debug_output.len() - 1_048_576;
+                let boundary = self
+                    .debug_output
+                    .char_indices()
+                    .find_map(|(index, _)| (index >= remove).then_some(index))
+                    .unwrap_or(remove);
+                self.debug_output.drain(..boundary);
+                self.debug_output_base = self
+                    .debug_output_base
+                    .saturating_add(u64::try_from(boundary).unwrap_or(u64::MAX));
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            if self.debug_output_subscribed {
+                self.emit_debug(
+                    DebugMessage::Response(DebugResponse::ScriptOutput(ScriptOutputChunk {
+                        cursor,
+                        next_cursor: cursor
+                            .saturating_add(u64::try_from(appended.len()).unwrap_or(u64::MAX)),
+                        text: appended,
+                        truncated: false,
+                    })),
+                    None,
+                )?;
+            }
+            return Ok(());
+        }
+        if name == "DEBUGCLEAR" {
+            self.debug_output_base = self
+                .debug_output_base
+                .saturating_add(u64::try_from(self.debug_output.len()).unwrap_or(u64::MAX));
+            self.debug_output.clear();
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
         if name == "ALIGNMENT" {
             let alignment = match request.arguments.first() {
-                Some(VmValue::Integer(1)) => LineAlignment::Center,
-                Some(VmValue::Integer(2)) => LineAlignment::Right,
-                _ => LineAlignment::Left,
+                Some(VmValue::String(value)) if value.eq_ignore_ascii_case("CENTER") => {
+                    LineAlignment::Center
+                }
+                Some(VmValue::String(value)) if value.eq_ignore_ascii_case("RIGHT") => {
+                    LineAlignment::Right
+                }
+                Some(VmValue::String(value)) if value.eq_ignore_ascii_case("LEFT") => {
+                    LineAlignment::Left
+                }
+                _ => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        "ALIGNMENT expects LEFT, CENTER, or RIGHT",
+                        Some(request.origin.clone()),
+                    );
+                }
             };
             self.presentation.set_alignment(alignment);
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
@@ -2802,6 +3186,14 @@ impl RuntimeSession {
         if name == "FONTSTYLE" {
             let bits = integer_argument_value(&request.arguments, 0)?;
             self.presentation.set_font_style(bits);
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if matches!(name.as_str(), "FONTBOLD" | "FONTITALIC" | "FONTREGULAR") {
+            match name.as_str() {
+                "FONTBOLD" => self.presentation.set_bold(true),
+                "FONTITALIC" => self.presentation.set_italic(true),
+                _ => self.presentation.clear_font_style(),
+            }
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
         if name == "SETFONT" {
@@ -2813,6 +3205,87 @@ impl RuntimeSession {
             self.presentation
                 .set_foreground(integer_argument_value(&request.arguments, 0)?);
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if matches!(name.as_str(), "SETCOLORBYNAME" | "SETBGCOLORBYNAME") {
+            let color_name = string_argument_value(&request.arguments, 0, &name)?;
+            let Some(color) = named_color(color_name) else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "unknown or transparent color name",
+                    Some(request.origin.clone()),
+                );
+            };
+            if name == "SETCOLORBYNAME" {
+                self.presentation.set_foreground(color);
+            } else {
+                self.presentation.set_background(color);
+            }
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return if name == "SETBGCOLORBYNAME" {
+                self.emit_presentation()
+            } else {
+                Ok(())
+            };
+        }
+        if name == "RESETCOLOR" {
+            self.presentation.reset_foreground();
+            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        if name == "RESETBGCOLOR" {
+            self.presentation.reset_background();
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "REDRAW" {
+            let flags = integer_argument_value(&request.arguments, 0)?;
+            self.presentation.set_redraw(flags & 1 != 0);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return if flags & 2 != 0 {
+                self.emit_presentation()
+            } else {
+                Ok(())
+            };
+        }
+        if matches!(name.as_str(), "CURRENTALIGN" | "GETFONT") {
+            let value = if name == "GETFONT" {
+                self.presentation.font()
+            } else {
+                match self.presentation.alignment() {
+                    LineAlignment::Left => "LEFT",
+                    LineAlignment::Center => "CENTER",
+                    LineAlignment::Right => "RIGHT",
+                }
+                .into()
+            };
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "CURRENTREDRAW"
+                | "GETBGCOLOR"
+                | "GETCOLOR"
+                | "GETDEFBGCOLOR"
+                | "GETDEFCOLOR"
+                | "GETFOCUSCOLOR"
+                | "GETSTYLE"
+        ) {
+            let value = match name.as_str() {
+                "CURRENTREDRAW" => i64::from(self.presentation.redraw_enabled()),
+                "GETBGCOLOR" => self.presentation.background_rgb(),
+                "GETCOLOR" => self.presentation.foreground_rgb(),
+                "GETDEFBGCOLOR" => 0,
+                "GETDEFCOLOR" => 0x00c0_c0c0,
+                "GETFOCUSCOLOR" => 0x00ff_ff00,
+                _ => self.presentation.style_bits(),
+            };
+            return commit_integer_result(vm, request.id, value);
         }
         if name == "SETBGCOLOR" {
             self.presentation
@@ -3443,7 +3916,32 @@ impl RuntimeSession {
                 },
             );
         }
-        if matches!(name.as_str(), "GETKEY" | "GETKEYTRIGGERED") {
+        if matches!(name.as_str(), "MOUSEX" | "MOUSEY" | "MOUSEB") {
+            let coordinate = match name.as_str() {
+                "MOUSEX" => PointerCoordinate::X,
+                "MOUSEY" => PointerCoordinate::Y,
+                _ => PointerCoordinate::Button,
+            };
+            let presentation_revision = self.presentation.revision();
+            let environment_revision = self.projection_environment_revision;
+            self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::PointerState {
+                    request: request.id,
+                    coordinate,
+                    presentation_revision,
+                    environment_revision,
+                },
+                ServiceKind::InputState,
+                POINTER_STATE_OPERATION,
+                POINTER_STATE_OPERATION_VERSION,
+                &PointerStateRequest {
+                    presentation_revision,
+                    environment_revision,
+                },
+            )
+        } else if matches!(name.as_str(), "GETKEY" | "GETKEYTRIGGERED") {
             let key = match request.arguments.first() {
                 Some(VmValue::Integer(value)) => match u8::try_from(*value) {
                     Ok(value) => value,
@@ -5068,12 +5566,37 @@ impl RuntimeSession {
                             update.download_url,
                         );
                     }
+                    ExternalCompletion::PointerState {
+                        coordinate,
+                        presentation_revision,
+                        environment_revision,
+                        ..
+                    } => {
+                        let state: PointerStateResponse = decode_canonical(payload.as_slice())?;
+                        if state.presentation_revision != presentation_revision
+                            || state.presentation_revision != self.presentation.revision()
+                            || state.environment_revision != environment_revision
+                            || state.environment_revision != self.projection_environment_revision
+                        {
+                            return self.fault(
+                                FaultCode::ServiceFailure,
+                                "stale pointer projection revision",
+                                None,
+                            );
+                        }
+                        Some(match coordinate {
+                            PointerCoordinate::X => VmValue::Integer(state.x),
+                            PointerCoordinate::Y => VmValue::Integer(state.y),
+                            PointerCoordinate::Button => VmValue::String(state.button_value),
+                        })
+                    }
                 };
                 let host_request = match completion {
                     ExternalCompletion::GetKey { request: id, .. }
                     | ExternalCompletion::LocalDateTime { request: id, .. }
                     | ExternalCompletion::SpritePixel { request: id }
-                    | ExternalCompletion::UpdateCheck { request: id, .. } => id,
+                    | ExternalCompletion::UpdateCheck { request: id, .. }
+                    | ExternalCompletion::PointerState { request: id, .. } => id,
                 };
                 let vm = self
                     .vm
@@ -5800,7 +6323,9 @@ impl RuntimeSession {
     fn open_system_command_wait(&mut self) -> Result<(), RuntimeError> {
         let submission = self.allocate_interaction();
         let mut wait = self.system_wait(submission);
-        wait.kind = WaitKind::IntegerValue;
+        if !self.flow_input_string {
+            wait.kind = WaitKind::IntegerValue;
+        }
         let choices = std::mem::take(&mut self.command_intents);
         self.reusable_system_intents.clone_from(&choices);
         self.open_wait(
@@ -6036,6 +6561,15 @@ impl RuntimeSession {
                 pending.wait.countdown_remaining_ms = Some(duration / 1_000_000);
             }
         }
+        let automatic_system_value = (pending.wait.system_input
+            && (self.flow_input_force_skip || (self.flow_input_can_skip && self.message_skip)))
+            .then(|| {
+                if self.flow_input_string {
+                    VmValue::String(self.flow_input_default_string.clone())
+                } else {
+                    VmValue::Integer(self.flow_input_default)
+                }
+            });
         self.presentation.set_wait(Some(pending.wait.clone()));
         self.emit(
             RuntimeMessage::WaitChanged(WaitChange::Opened(pending.wait.clone())),
@@ -6043,6 +6577,9 @@ impl RuntimeSession {
         )?;
         self.operations.activate_input(pending);
         self.emit_presentation()?;
+        if let Some(value) = automatic_system_value {
+            return self.finish_input(InputSubmission::Value(value), false);
+        }
         if pause_runtime {
             self.set_phase(RuntimePhase::WaitingInput)
         } else {
@@ -6147,6 +6684,17 @@ impl RuntimeSession {
                         user_defined_skip: self.user_defined_skip,
                         saved_skip: self.saved_skip,
                         force_kana_mode: self.force_kana_mode,
+                        hotkey_state: self.hotkey_state.clone(),
+                        text_box: self.text_box.clone(),
+                        flow_input_enabled: self.flow_input_enabled,
+                        flow_input_default: self.flow_input_default,
+                        flow_input_can_skip: self.flow_input_can_skip,
+                        flow_input_force_skip: self.flow_input_force_skip,
+                        flow_input_string: self.flow_input_string,
+                        flow_input_default_string: self.flow_input_default_string.clone(),
+                        button_generation: self.button_generation,
+                        debug_output: self.debug_output.clone(),
+                        debug_output_base: self.debug_output_base,
                         command_intents: self.command_intents.clone(),
                         reusable_system_intents: self.reusable_system_intents.clone(),
                         save_extensions: self.save_extensions.clone(),
@@ -7608,6 +8156,64 @@ fn enum_name_matches(operation: &str, candidate: &str, query: &str) -> bool {
     } else {
         candidate.contains(&query)
     }
+}
+
+fn make_bar(
+    value: i64,
+    maximum: i64,
+    length: i64,
+    full: char,
+    empty: char,
+) -> Result<String, &'static str> {
+    if maximum <= 0 {
+        return Err("BAR maximum must be positive");
+    }
+    if !(1..100).contains(&length) {
+        return Err("BAR length must be between 1 and 99");
+    }
+    let filled = (value.wrapping_mul(length) / maximum).clamp(0, length);
+    let mut result = String::from("[");
+    result.push_str(
+        &full
+            .to_string()
+            .repeat(usize::try_from(filled).unwrap_or(0)),
+    );
+    result.push_str(
+        &empty
+            .to_string()
+            .repeat(usize::try_from(length - filled).unwrap_or(0)),
+    );
+    result.push(']');
+    Ok(result)
+}
+
+/// Portable subset of System.Drawing's named-color table. CSS names cover the
+/// script-facing names used by real projects while keeping platform behavior out.
+#[allow(clippy::unreadable_literal)]
+fn named_color(name: &str) -> Option<i64> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "black" => 0x000000,
+        "white" => 0xffffff,
+        "red" => 0xff0000,
+        "green" => 0x008000,
+        "blue" => 0x0000ff,
+        "yellow" => 0xffff00,
+        "gray" | "grey" => 0x808080,
+        "silver" => 0xc0c0c0,
+        "maroon" => 0x800000,
+        "purple" => 0x800080,
+        "fuchsia" | "magenta" => 0xff00ff,
+        "lime" => 0x00ff00,
+        "olive" => 0x808000,
+        "navy" => 0x000080,
+        "teal" => 0x008080,
+        "aqua" | "cyan" => 0x00ffff,
+        "orange" => 0xffa500,
+        "pink" => 0xffc0cb,
+        "brown" => 0xa52a2a,
+        "gold" => 0xffd700,
+        _ => return None,
+    })
 }
 
 fn string_array_writes(
@@ -10087,6 +10693,47 @@ mod tests {
         assert_eq!(format_era_integer(12_345, "#,##0"), Ok("12,345".into()));
         assert_eq!(format_era_integer(-7, "D3"), Ok("-007".into()));
         assert_eq!(format_era_integer(255, "X4"), Ok("00FF".into()));
+    }
+
+    #[test]
+    fn reference_bar_and_portable_named_colors_are_deterministic() {
+        assert_eq!(make_bar(5, 10, 4, '*', '.'), Ok("[**..]".into()));
+        assert_eq!(
+            make_bar(1, 0, 4, '*', '.'),
+            Err("BAR maximum must be positive")
+        );
+        assert_eq!(
+            make_bar(1, 2, 100, '*', '.'),
+            Err("BAR length must be between 1 and 99")
+        );
+        assert_eq!(named_color("Magenta"), Some(0x00ff_00ff));
+        assert_eq!(named_color("transparent"), None);
+    }
+
+    #[test]
+    fn flow_input_configuration_shapes_system_waits() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        let ordinary = session.system_wait(InteractionToken { epoch: 0, id: 1 });
+        assert_eq!(ordinary.kind, WaitKind::IntegerButton);
+        session.flow_input_enabled = true;
+        session.flow_input_default = 7;
+        let integer = session.system_wait(InteractionToken { epoch: 0, id: 2 });
+        assert_eq!(integer.kind, WaitKind::IntegerValue);
+        assert_eq!(
+            integer.default_value,
+            Some(era_runtime_protocol::ProtocolValue::Integer(7))
+        );
+        assert!(integer.mouse_input);
+        session.flow_input_string = true;
+        session.flow_input_default_string = "fallback".into();
+        let string = session.system_wait(InteractionToken { epoch: 0, id: 3 });
+        assert_eq!(string.kind, WaitKind::StringValue);
+        assert_eq!(
+            string.default_value,
+            Some(era_runtime_protocol::ProtocolValue::String(
+                "fallback".into()
+            ))
+        );
     }
 
     #[test]

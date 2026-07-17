@@ -5,8 +5,9 @@ use era_debug_protocol::{
     DebugSourceLocation, DebugStop, DebugValue, FiberPage, FiberState, FiberSummary,
     FieldMutability, FrameSummary, GameFieldDescriptor, GameFieldPage, GameFieldValue,
     GameFieldWriteOutcome, GrantToken, OperandStackPage, OperandValue, ResolvedBreakpoint,
-    StepKind, StopReason, StopToken, ValueKind, VariableDescriptor, VariablePage,
-    VariableReference, VariableStorage, VariableValue, VariableWriteOutcome, grant_scopes,
+    ScriptOutputChunk, StepKind, StopReason, StopToken, ValueKind, VariableDescriptor,
+    VariablePage, VariableReference, VariableStorage, VariableValue, VariableWriteOutcome,
+    grant_scopes,
 };
 use era_protocol::{ProtocolBytes, SessionId, VersionRange, encode_envelope, negotiate_version};
 use erabasic_ast::{BinaryOp, Expr, ExprKind, UnaryOp};
@@ -510,6 +511,45 @@ impl RuntimeSession {
             DebugCommand::Console { stop, command } => {
                 self.debug_console(message_id, stop, command)
             }
+            DebugCommand::ReadScriptOutput { cursor, limit } => {
+                let truncated = cursor < self.debug_output_base;
+                let relative = if truncated {
+                    0
+                } else {
+                    usize::try_from(cursor.saturating_sub(self.debug_output_base))
+                        .unwrap_or(usize::MAX)
+                        .min(self.debug_output.len())
+                };
+                let relative = next_char_boundary(&self.debug_output, relative);
+                let maximum = usize::try_from(limit.min(1_048_576)).unwrap_or(1_048_576);
+                let end = previous_char_boundary(
+                    &self.debug_output,
+                    relative
+                        .saturating_add(maximum)
+                        .min(self.debug_output.len()),
+                );
+                let actual_cursor = self
+                    .debug_output_base
+                    .saturating_add(u64::try_from(relative).unwrap_or(u64::MAX));
+                self.emit_debug(
+                    DebugMessage::Response(DebugResponse::ScriptOutput(ScriptOutputChunk {
+                        cursor: actual_cursor,
+                        next_cursor: self
+                            .debug_output_base
+                            .saturating_add(u64::try_from(end).unwrap_or(u64::MAX)),
+                        text: self.debug_output[relative..end].to_owned(),
+                        truncated,
+                    })),
+                    Some(message_id),
+                )
+            }
+            DebugCommand::SubscribeScriptOutput { enabled } => {
+                self.debug_output_subscribed = enabled;
+                self.emit_debug(
+                    DebugMessage::Response(DebugResponse::Accepted),
+                    Some(message_id),
+                )
+            }
         }
     }
 
@@ -689,7 +729,7 @@ impl RuntimeSession {
     }
 
     #[allow(clippy::needless_pass_by_value)]
-    fn emit_debug(
+    pub(super) fn emit_debug(
         &mut self,
         message: DebugMessage,
         correlation_id: Option<u64>,
@@ -1105,7 +1145,7 @@ fn console_type_error<T>(expected: &str) -> Result<T, (&'static str, String)> {
     ))
 }
 
-fn all_debug_scopes() -> [DebugScope; 9] {
+fn all_debug_scopes() -> [DebugScope; 10] {
     [
         DebugScope::VariablesRead,
         DebugScope::VariablesWrite,
@@ -1116,6 +1156,7 @@ fn all_debug_scopes() -> [DebugScope; 9] {
         DebugScope::ConsoleEvaluate,
         DebugScope::ConsoleExecute,
         DebugScope::BreakpointsManage,
+        DebugScope::ScriptOutput,
     ]
 }
 
@@ -1131,6 +1172,7 @@ fn scope_bit(scope: DebugScope) -> u64 {
             DebugScope::ConsoleEvaluate => 6,
             DebugScope::ConsoleExecute => 7,
             DebugScope::BreakpointsManage => 8,
+            DebugScope::ScriptOutput => 9,
         }
 }
 
@@ -1159,7 +1201,24 @@ fn command_scope(command: &DebugCommand) -> DebugScope {
             ..
         } => DebugScope::ConsoleExecute,
         DebugCommand::UpdateBreakpoints { .. } => DebugScope::BreakpointsManage,
+        DebugCommand::ReadScriptOutput { .. } | DebugCommand::SubscribeScriptOutput { .. } => {
+            DebugScope::ScriptOutput
+        }
     }
+}
+
+fn next_char_boundary(value: &str, mut index: usize) -> usize {
+    while index < value.len() && !value.is_char_boundary(index) {
+        index += 1;
+    }
+    index
+}
+
+fn previous_char_boundary(value: &str, mut index: usize) -> usize {
+    while index > 0 && !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 #[cfg(test)]

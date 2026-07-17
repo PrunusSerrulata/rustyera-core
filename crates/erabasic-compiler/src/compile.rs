@@ -188,7 +188,10 @@ pub fn compile_project(
                 )
             })
     });
-    if !diagnostics.is_empty() {
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == crate::CompilerDiagnosticSeverity::Error)
+    {
         return CompileReport {
             artifact: None,
             patch: None,

@@ -158,3 +158,21 @@ RESULTS:2 = %"<root><item id=\"a\">one</item><item id=\"b\">two</item></root>"%
 RESULT:4 = XML_SET(RESULTS:2, "//item[@id='b']", "changed", 0, 1)
 RESULT:5 = XML_ADDATTRIBUTE(RESULTS:2, "//item[@id='a']", "kind", "first")
 RETURN
+
+@ORACLE_COMPAT_12
+#DIMS TAGS, 8
+HTML_TAGSPLIT "a<b>x</b>", TAGS, RESULT:20
+RESULTS:20 = %HTML_ESCAPE("<&>'\"")%
+RESULTS:21 = %HTML_TOPLAINTEXT("<b>A&amp;B</b><br>&#x3042;")%
+RESULT:21 = FLOWINPUT(7, 1, 1, 0)
+RESULT:22 = FLOWINPUTS(1, "fallback")
+BAR 5, 10, 4
+BARL 1, 4, 4
+SETCOLOR 66051
+RESULT:23 = GETCOLOR()
+FONTBOLD
+FONTITALIC
+RESULT:24 = GETSTYLE()
+FONTREGULAR
+RESULTS:22 = %CURRENTALIGN()%
+RETURN

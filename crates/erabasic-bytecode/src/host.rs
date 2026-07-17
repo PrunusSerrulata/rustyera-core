@@ -46,6 +46,8 @@ pub struct OperationContract {
     pub wait: OperationWaitPolicy,
     pub capability_fallback: CapabilityFallback,
     pub debug: OperationDebugPolicy,
+    /// Portability provenance used for deterministic compiler diagnostics.
+    pub portability: OperationPortability,
 }
 
 impl OperationContract {
@@ -216,6 +218,15 @@ pub enum OperationDebugPolicy {
     Pure,
     Transactional,
     Forbidden,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationPortability {
+    Portable,
+    FrontendObservation,
+    PlatformIntent,
+    ExtensionDefined,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

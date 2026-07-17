@@ -10,7 +10,7 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 8;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 9;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 52;
@@ -37,6 +37,17 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) user_defined_skip: bool,
     pub(crate) saved_skip: bool,
     pub(crate) force_kana_mode: u8,
+    pub(crate) hotkey_state: Vec<i64>,
+    pub(crate) text_box: String,
+    pub(crate) flow_input_enabled: bool,
+    pub(crate) flow_input_default: i64,
+    pub(crate) flow_input_can_skip: bool,
+    pub(crate) flow_input_force_skip: bool,
+    pub(crate) flow_input_string: bool,
+    pub(crate) flow_input_default_string: String,
+    pub(crate) button_generation: u64,
+    pub(crate) debug_output: String,
+    pub(crate) debug_output_base: u64,
     #[serde(with = "token_value_map")]
     pub(crate) command_intents: BTreeMap<InteractionToken, VmValue>,
     #[serde(with = "token_value_map")]
@@ -164,6 +175,17 @@ mod tests {
             user_defined_skip: false,
             saved_skip: false,
             force_kana_mode: 0,
+            hotkey_state: Vec::new(),
+            text_box: String::new(),
+            flow_input_enabled: false,
+            flow_input_default: 0,
+            flow_input_can_skip: false,
+            flow_input_force_skip: false,
+            flow_input_string: false,
+            flow_input_default_string: String::new(),
+            button_generation: 0,
+            debug_output: String::new(),
+            debug_output_base: 0,
             command_intents: BTreeMap::new(),
             reusable_system_intents: BTreeMap::new(),
             save_extensions: Vec::new(),
@@ -204,6 +226,17 @@ mod tests {
             user_defined_skip: false,
             saved_skip: false,
             force_kana_mode: 0,
+            hotkey_state: Vec::new(),
+            text_box: String::new(),
+            flow_input_enabled: false,
+            flow_input_default: 0,
+            flow_input_can_skip: false,
+            flow_input_force_skip: false,
+            flow_input_string: false,
+            flow_input_default_string: String::new(),
+            button_generation: 0,
+            debug_output: String::new(),
+            debug_output_base: 0,
             command_intents: BTreeMap::new(),
             reusable_system_intents: BTreeMap::new(),
             save_extensions: Vec::new(),

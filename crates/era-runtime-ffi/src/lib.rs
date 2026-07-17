@@ -5,7 +5,7 @@
 
 use std::ffi::{c_char, c_void};
 
-pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 2, minor: 1 };
+pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 0 };
 pub const ERA_RUNTIME_GET_API_SYMBOL: &str = "era_runtime_get_api";
 
 pub const ERA_DEBUG_SCOPE_VARIABLES_READ: u64 = 1 << 0;
@@ -17,7 +17,7 @@ pub const ERA_DEBUG_SCOPE_EXECUTION_CONTROL: u64 = 1 << 5;
 pub const ERA_DEBUG_SCOPE_CONSOLE_EVALUATE: u64 = 1 << 6;
 pub const ERA_DEBUG_SCOPE_CONSOLE_EXECUTE: u64 = 1 << 7;
 pub const ERA_DEBUG_SCOPE_BREAKPOINTS_MANAGE: u64 = 1 << 8;
-pub const ERA_DEBUG_SCOPE_ALL: u64 = (1 << 9) - 1;
+pub const ERA_DEBUG_SCOPE_ALL: u64 = (1 << 10) - 1;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

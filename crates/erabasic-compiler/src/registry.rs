@@ -322,6 +322,7 @@ const INPUT: &[&str] = &[
     "MOUSEX",
     "MOUSEY",
     "MOUSEB",
+    "FLOWINPUT",
     "FLOWINPUTS",
     "BREAKBUTTON",
 ];
@@ -636,6 +637,7 @@ pub(crate) fn extension_binding(name: &str) -> HostBinding {
         wait: OperationWaitPolicy::TransientExternal,
         capability_fallback: CapabilityFallback::Unsupported,
         debug: OperationDebugPolicy::Forbidden,
+        portability: erabasic_bytecode::OperationPortability::ExtensionDefined,
     };
     HostBinding {
         namespace: "rustyera.extension".into(),
@@ -722,6 +724,7 @@ fn native_contract(name: &str) -> OperationContract {
         } else {
             OperationDebugPolicy::Pure
         },
+        portability: erabasic_bytecode::OperationPortability::Portable,
     }
 }
 
@@ -777,15 +780,46 @@ fn host_contract(namespace: &str, name: &str) -> OperationContract {
             OperationWaitPolicy::Immediate,
             CapabilityFallback::ScriptResult,
         ),
-        "rustyera.input" if matches!(name, "GETKEY" | "GETKEYTRIGGERED" | "AWAIT") => (
-            OperationState::Controller,
-            TransactionPolicy::Forbidden,
-            OperationPersistence::RuntimeOnly,
-            OperationSnapshotPolicy::PendingBlocks,
-            OperationHotReloadPolicy::ActiveBlocks,
-            OperationWaitPolicy::TransientExternal,
-            CapabilityFallback::ScriptResult,
-        ),
+        "rustyera.input"
+            if matches!(
+                name,
+                "GETKEY" | "GETKEYTRIGGERED" | "MOUSEX" | "MOUSEY" | "MOUSEB" | "AWAIT"
+            ) =>
+        {
+            (
+                OperationState::Controller,
+                TransactionPolicy::Forbidden,
+                OperationPersistence::RuntimeOnly,
+                OperationSnapshotPolicy::PendingBlocks,
+                OperationHotReloadPolicy::ActiveBlocks,
+                OperationWaitPolicy::TransientExternal,
+                CapabilityFallback::ScriptResult,
+            )
+        }
+        "rustyera.input"
+            if matches!(
+                name,
+                "GETTEXTBOX"
+                    | "SETTEXTBOX"
+                    | "CLEARTEXTBOX"
+                    | "HOTKEY_STATE"
+                    | "HOTKEY_STATE_INIT"
+                    | "FLOWINPUT"
+                    | "FLOWINPUTS"
+                    | "BREAKBUTTON"
+                    | "ISACTIVE"
+            ) =>
+        {
+            (
+                OperationState::Controller,
+                TransactionPolicy::Forbidden,
+                OperationPersistence::RuntimeOnly,
+                OperationSnapshotPolicy::Included,
+                OperationHotReloadPolicy::Preserve,
+                OperationWaitPolicy::Immediate,
+                CapabilityFallback::ScriptResult,
+            )
+        }
         "rustyera.input" => (
             OperationState::Controller,
             TransactionPolicy::Forbidden,
@@ -922,5 +956,23 @@ fn host_contract(namespace: &str, name: &str) -> OperationContract {
         // The debugger deliberately rejects every Host import, including reference
         // METHOD_SAFE printing and media commands.
         debug: OperationDebugPolicy::Forbidden,
+        portability: if matches!(
+            name,
+            "GETTEXTBOX"
+                | "MOUSEX"
+                | "MOUSEY"
+                | "MOUSEB"
+                | "GETKEY"
+                | "GETKEYTRIGGERED"
+                | "CLIENTWIDTH"
+                | "CLIENTHEIGHT"
+                | "GETLINESTR"
+        ) {
+            erabasic_bytecode::OperationPortability::FrontendObservation
+        } else if matches!(namespace, "rustyera.audio" | "rustyera.network") {
+            erabasic_bytecode::OperationPortability::PlatformIntent
+        } else {
+            erabasic_bytecode::OperationPortability::Portable
+        },
     }
 }

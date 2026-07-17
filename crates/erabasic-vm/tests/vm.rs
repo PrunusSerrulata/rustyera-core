@@ -1106,6 +1106,7 @@ fn host_artifact(stability: HostSnapshotCapability) -> (BytecodeArtifact, Symbol
         },
         capability_fallback: CapabilityFallback::ScriptResult,
         debug: OperationDebugPolicy::Forbidden,
+        portability: erabasic_bytecode::OperationPortability::Portable,
     };
     artifact.host_imports.push(HostImport {
         import: runtime_import,

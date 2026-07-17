@@ -28,6 +28,8 @@ pub enum DebugScope {
     ConsoleExecute,
     #[n(8)]
     BreakpointsManage,
+    #[n(9)]
+    ScriptOutput,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

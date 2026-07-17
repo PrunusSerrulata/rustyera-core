@@ -1,6 +1,6 @@
 use era_runtime_protocol::{
-    Color, DisplayLine, DisplayRun, InputWait, LineAlignment, RunLayout, RuntimePhase, TextStyle,
-    WaitKind, WaitStability,
+    Color, DisplayLine, DisplayRun, InputWait, LineAlignment, RuntimePhase, TextStyle, WaitKind,
+    WaitStability,
 };
 use serde::Deserialize;
 
@@ -86,7 +86,6 @@ fn pinned_reference_wait_and_output_are_losslessly_representable() {
         logical_line_start: true,
         line_end: true,
         alignment: LineAlignment::Left,
-        layout_width_millipixels: None,
         runs: vec![DisplayRun::Text {
             text: observed.load.last_output,
             system_text: None,
@@ -104,13 +103,6 @@ fn pinned_reference_wait_and_output_are_losslessly_representable() {
                 strikeout: false,
                 font_family: None,
                 font_millipoints: 16_000,
-            },
-            layout: RunLayout {
-                x_millipixels: 0,
-                y_millipixels: 0,
-                width_millipixels: 0,
-                height_millipixels: 16_000,
-                depth: 0,
             },
         }],
     };

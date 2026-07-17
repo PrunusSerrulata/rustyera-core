@@ -9,15 +9,15 @@ use crate::{
     AdvanceTime, CancelExternalRequest, ClientHello, ClientStateChanged, CommandRejected,
     DeviceStateChanged, EffectAcknowledgement, EffectBatch, ExitRequested, FrontendInput,
     PresentationDelta, PresentationSnapshot, ProjectLoadReport, ProjectManifest,
-    ProtocolDiagnostic, ReloadProject, ResynchronizeRequest, RuntimeFault, RuntimePhase,
-    RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceRequest, ServiceResponse,
-    ShutdownReady, ShutdownRequest, StartRequest, StateExportChunk, StateExportChunkRequest,
-    StateExportReady, StateExportRequest, StateImportAccepted, StateImportBegin, StateImportChunk,
-    StateImportCommit, StateImportReady, StateTransferCancel, StorageRequest, StorageResponse,
-    VersionRejected, WaitChange,
+    ProjectionObservation, ProjectionState, ProtocolDiagnostic, ReloadProject,
+    ResynchronizeRequest, RuntimeFault, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement,
+    ServerHello, ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
+    StateExportChunk, StateExportChunkRequest, StateExportReady, StateExportRequest,
+    StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady,
+    StateTransferCancel, StorageRequest, StorageResponse, VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(13, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(14, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -69,6 +69,10 @@ pub enum RuntimeMessage {
     DeviceStateChanged(#[n(0)] DeviceStateChanged),
     #[n(34)]
     ClientStateChanged(#[n(0)] ClientStateChanged),
+    #[n(35)]
+    ProjectionObservation(#[n(0)] ProjectionObservation),
+    #[n(36)]
+    ProjectionState(#[n(0)] ProjectionState),
     #[n(40)]
     PresentationSnapshot(#[n(0)] PresentationSnapshot),
     #[n(41)]
@@ -143,6 +147,8 @@ impl RuntimeMessage {
             Self::WaitChanged(_) => 32,
             Self::DeviceStateChanged(_) => 33,
             Self::ClientStateChanged(_) => 34,
+            Self::ProjectionObservation(_) => 35,
+            Self::ProjectionState(_) => 36,
             Self::PresentationSnapshot(_) => 40,
             Self::PresentationDelta(_) => 41,
             Self::EffectBatch(_) => 42,

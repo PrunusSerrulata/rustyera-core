@@ -37,6 +37,19 @@ pub(crate) enum ExternalCompletion {
     UpdateCheck {
         request: HostRequestId,
     },
+    PointerState {
+        request: HostRequestId,
+        coordinate: PointerCoordinate,
+        presentation_revision: u64,
+        environment_revision: u64,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) enum PointerCoordinate {
+    X,
+    Y,
+    Button,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -187,6 +200,7 @@ mod tests {
             wait: OperationWaitPolicy::StableInput,
             capability_fallback: CapabilityFallback::ScriptResult,
             debug: OperationDebugPolicy::Forbidden,
+            portability: erabasic_bytecode::OperationPortability::Portable,
         };
         VmHostRequest {
             id: HostRequestId(1),

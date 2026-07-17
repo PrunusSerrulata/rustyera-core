@@ -7,7 +7,8 @@ use erabasic_bytecode::{
     apply_patch, decode_artifact, encode_artifact,
 };
 use erabasic_compiler::{
-    CompilerOptions, ExecutionBinding, HostBinding, compile_project, default_host_registry,
+    CompilerDiagnosticCode, CompilerDiagnosticSeverity, CompilerOptions, ExecutionBinding,
+    HostBinding, compile_project, default_host_registry,
 };
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
 use erabasic_validator::{ValidationContext, validate_bytecode};
@@ -36,6 +37,22 @@ fn analyze(text: &str) -> erabasic_analyzer::AnalyzedProject {
         report.diagnostics
     );
     report.project.expect("analysis should produce a project")
+}
+
+#[test]
+fn frontend_observation_calls_emit_nonfatal_source_notices() {
+    let report = compile_project(
+        &analyze("@SYSTEM_TITLE\nRESULT = CLIENTWIDTH()\nRETURN\n"),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.artifact.is_some());
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == CompilerDiagnosticCode::FrontendObservation
+            && diagnostic.severity == CompilerDiagnosticSeverity::Notice
+            && diagnostic.location.is_some()
+    }));
 }
 
 #[test]
@@ -583,6 +600,7 @@ fn image_style_host_binding_still_uses_the_single_call_host_opcode() {
                 wait: erabasic_bytecode::OperationWaitPolicy::Immediate,
                 capability_fallback: erabasic_bytecode::CapabilityFallback::CanonicalProjection,
                 debug: erabasic_bytecode::OperationDebugPolicy::Forbidden,
+                portability: erabasic_bytecode::OperationPortability::Portable,
             },
         },
     ));
