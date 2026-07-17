@@ -1,11 +1,13 @@
-# Runtime 全量功能审计
+# Runtime 兼容性与功能状态
 
-审计日期：2026-07-17
+本文是 runtime 全生命周期能力的持续维护清单，而非某一批次的完成报告。状态以仓库
+当前实现和固定的 `reference/emuera.em` 为依据，覆盖项目加载、标题、新游戏、系统流程、
+脚本执行、输入与计时、展示、存档、热替换、调试和退出。
 
-本审计以仓库固定的 `reference/emuera.em` 为行为基准，覆盖从项目加载、标题、新游戏、
-系统流程、脚本执行、输入与计时、展示、存档、热替换、调试到退出的完整生命周期。
-审计采用只读源码比对、真实 `reference/real-erb` 使用情况扫描、Rust workspace 验证和
-macOS Wine reference CLI smoke test；没有修改 Rust 实现、C# 参考实现或测试夹具。
+冲突裁决遵循
+[项目最高设计准则](design-principles.md)：**跨客户端/跨平台支持 > 架构纯净 > 与参考
+实现严格行为一致**。因此，下文把遗漏功能、稳定不支持和因更高优先级原则产生的有意
+差异分开记录。协议或 catalog 中存在名称并不表示该能力已经实现。
 
 ## 结论
 
@@ -17,7 +19,6 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 - `PRINT*` 被统一分派，但没有实现 K/D/N/SINGLE/C 等后缀的完整语义。
 - 调教、`EVENTCOMEND`、SHOP 自动存档存在系统流程差异。
 - 很多已进入 Host catalog 的命令最终落入通用 `UnsupportedRuntimeFeature`。
-- `docs/runtime-roadmap.md` 中“Batch 10/11 已关闭、无剩余任务”的结论与当前实现不符。
 
 主要证据集中在：
 
@@ -48,10 +49,9 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 | 调试 | 协议与主要接口存在 | DEBUGPRINT 系列、分析模式及部分高级能力缺失 |
 | 退出、重启、错误 | 协议化实现 | 参考的系统声音、窗口错误状态和日志 UI 未复刻 |
 
-## 1. 未明确写明的缺失功能
+## 1. 缺失功能
 
-以下项目此前没有被逐项列为未实现；部分只被“其他未实现 Host 操作”这一兜底说明
-笼统覆盖。
+以下项目尚未完整实现；部分曾只被“其他未实现 Host 操作”这一兜底说明笼统覆盖。
 
 ### 1.1 会阻止真实脚本运行的编译或执行缺口
 
@@ -165,7 +165,7 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 
 ## 2. 与参考实现行为不同的功能
 
-### 2.1 已确认的有意差异
+### 2.1 因最高设计准则产生的有意差异
 
 - 全部源码和文本使用 UTF-8，不支持 GBK/Shift-JIS 文件编码。
 - 文件 I/O 由前端完成，runtime 只处理提交内容和 I/O 结果。
@@ -177,7 +177,7 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 - 物理 GDI、CBG 绘制和 `GETMEMORYUSAGE` 明确不支持。
 - CLR 插件和部分动态元数据查询明确不支持。
 - Unicode 大小写转换取代进程文化相关的 .NET casing。
-- 整数格式只支持审计过的格式子集。
+- 整数格式只支持已验证的格式子集。
 - XPath 是确定性子集；DataTable ID 使用确定性递增值。
 - 存储采用前端事务、revision、atomic replace；删除菜单是 Rust 扩展。
 - 候选存档失败回滚展示和效果，而参考实现可能已经泄漏输出。
@@ -185,7 +185,7 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 
 相关稳定差异记录于 `docs/runtime-operation-contracts.md`。
 
-### 2.2 本次新确认、此前未明确列出的差异
+### 2.2 尚未解决的行为差异
 
 1. **新游戏初始化顺序不同。** 参考实现先调用 `SYSTEM_TITLE`，用户选择新游戏后才
    `ResetData` 并添加 CSV 角色 0 和默认角色。Rust 在调用 `SYSTEM_TITLE` 前已经
@@ -242,7 +242,7 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 | Rikaichan | 鼠标位置、词典、TextRenderer popup | 未实现，属于具体客户端能力 |
 | 日志和回滚显示 | 物理显示行历史、滚动、删除、临时行、最大日志 | Rust 只维护规范化逻辑行历史 |
 
-推荐边界仍然是：runtime 保存完整语义和布局意图，前端负责字体测量与 raster；但
+权威边界是：runtime 保存完整语义和布局意图，前端负责字体测量与 raster；但
 目前不少语义参数本身尚未保存，不能都归结为“前端差异”。
 
 ## 4. 非平凡文本输出功能
@@ -277,21 +277,10 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 位于 `reference/emuera.em/Emuera/UI/Game/PrintStringBuffer.cs`，Rust 的统一打印分支
 位于 `crates/era-runtime/src/session.rs`。
 
-## 验证结果与限制
+## 状态维护规则
 
-审计时执行并通过：
-
-- `cargo fmt --all -- --check`
-- `cargo test --workspace`
-- `cargo clippy --workspace --all-targets -- -D warnings`
-- `git diff --check`
-- `git diff --cached --check`
-- `tools/emuera-reference-cli/test-macos-wine.sh`
-
-只读扫描 `reference/real-erb` 确认上述高风险指令在真实游戏中存在大量使用。
-
-reference CLI 当前没有覆盖完整 runtime 系统流程、规范化展示模型、存储事务和渲染
-输出的端点。因此 Wine smoke test 只能确认 oracle 可用，不能证明这些功能与 C#
-一致；这些项目需要新增同输入的 runtime/reference 差分夹具后才能动态确认。
-
-本次审计对 `reference/emuera.em` 的修改：无。
+- 实现功能时同步更新本清单、能力协商和相应协议文档。
+- 可执行行为必须用最小 Rust 测试覆盖；兼容性声明还需同输入 reference 差分证据。
+- reference CLI 尚未覆盖完整系统流程、规范化展示、存储事务和客户端渲染，因此
+  oracle smoke test 本身不能证明这些功能一致。
+- 扫描 `reference/real-erb` 得到的命中数只用于风险排序，不代表运行时调用次数。

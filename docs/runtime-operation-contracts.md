@@ -1,10 +1,14 @@
 # Runtime operation contract table
 
-This table is the Batch 10 handoff gate for candidate-save work. Every analyzer-visible built-in
+This is the canonical execution-policy table for analyzer-visible built-ins. Every such built-in
 has exactly one compiler catalog entry. Native and Host imports persist the resolved contract in
-bytecode container 10; the validator rejects incoherent combinations or legacy flags which do not
-match the contract. Unknown runtime dispatch never silently succeeds: it emits
+the versioned bytecode container; the validator rejects incoherent combinations or legacy flags
+which do not match the contract. Unknown runtime dispatch never silently succeeds: it emits
 `UnsupportedRuntimeFeature` with the import name.
+
+Fallback choices follow the project priority order in
+[Design principles](design-principles.md). Canonical projections preserve portable semantic
+intent; they do not promise WinForms/GDI pixel equivalence.
 
 ## Contract dimensions
 

@@ -2,8 +2,13 @@
 
 Compatibility is pinned to reference commit
 `26a35dc9334bb67590b96f7b8efbefbf199e391e`. This inventory records what shaped the
-interface and the first runtime stage. A row describes the target contract, not a claim
+interface and the current runtime. A row describes the target contract, not a claim
 that every reference system state or Host operation is already implemented.
+
+Reference behavior is interpreted under the project priority order documented in
+[Design principles](design-principles.md). Portable script-visible rules remain compatibility
+targets; WinForms/GDI implementation details are represented as semantic intent or explicitly
+unsupported portable operations.
 
 | Reference area | Observed behavior | Contract representation |
 | --- | --- | --- |
@@ -13,7 +18,9 @@ that every reference system state or Host operation is already implemented.
 | `UI/Game/EmueraConsole.cs` | Console transitions among initialization, running, input wait, sleep, quit and error; UI timers race with input and stale buttons are generation-checked. | Ordered monotonic time/input messages, wait IDs, opaque epoch-scoped interaction tokens, transient QTE waits and explicit shutdown/fault states. |
 | `UI/Game/EmueraConsole.Print.cs` | Text/style/buttons, HTML, images, shapes, backgrounds, window title and log buffer are observable. | Revisioned `PresentationSnapshot`/`PresentationDelta`; frontend render objects are projections. |
 | `Statements/Instraction.Child.cs` and `Function/Creator.Method.cs` | Sound, dynamic graphics, font metrics, files, network update checks and external URLs directly use platform APIs. | Asynchronous storage/platform service messages; no VM instruction or runtime layer performs OS I/O. |
-| `Statements/Variable/VariableEvaluator.cs` | Save slots, global saves and DAT files are listed/read/written directly, with game/version compatibility checks. | Frontend storage namespaces and correlated operations; future runtime owns compatible serialization and validation. |
+| `Statements/Variable/VariableEvaluator.cs` | Save slots, global saves and DAT files are listed/read/written directly, with game/version compatibility checks. | Runtime-owned in-memory codecs, validation and transactions over correlated frontend storage namespaces. |
+| `UI/Game/PrintStringBuffer.cs` and console line types | `PRINTC`, alignment, separators, automatic buttons, HTML and physical history combine semantic output with GDI/WinForms measurement. | Runtime-owned logical lines, `ColumnCell`, `Separator`, tokens and deterministic text projection; client pixel layout is not authoritative. |
+| GDI/canvas/resource classes | Image decoding, raster mutation, font measurement and animation scheduling use Windows device objects. | Canonical resource/canvas replay and typed frontend services; physical GDI/CBG operations are explicitly unsupported where no portable semantic result exists. |
 | `Process.CalledFunction.cs` | Frames retain function identity, return address, event state, arguments and local scope. | Generation/frame-aware VM debug descriptors and source-mapped call stacks. |
 | `EmueraConsole.DebugCommand` and `UI/DebugDialog.cs` | Watches evaluate current expressions; debug commands clone/restore control state and reject flow, waits, partial and unsafe instructions. | Separate debug channel, coherent stop tokens and the reference-safe console subset. |
 
