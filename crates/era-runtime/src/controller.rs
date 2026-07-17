@@ -37,6 +37,10 @@ pub(crate) enum SystemStep {
     ShopAutosave,
     ShopShow,
     ShopAction,
+    /// A project-defined title load hook returns to the built-in title menu.
+    TitleLoadOverride,
+    /// Ordinary restore hooks completed; enter `SHOW_SHOP` without an immediate autosave.
+    PostLoadShop,
 }
 
 impl SystemFlow {

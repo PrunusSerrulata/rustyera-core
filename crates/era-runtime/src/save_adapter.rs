@@ -236,7 +236,9 @@ fn text_layout(
 ) -> Result<Text1808Layout, SaveCodecError> {
     let mut base_variables = Vec::new();
     let mut base_character_variables = Vec::new();
-    let mut extended_groups = vec![Vec::new(); 8];
+    // The first eight dictionaries are Emuera built-ins. Version 1808 appends six user-defined
+    // array dictionaries (string/integer for ranks one through three).
+    let mut extended_groups = vec![Vec::new(); 14];
     let mut extended_character_groups = vec![Vec::new(); 6];
     for definition in &artifact.globals {
         let schema = artifact
@@ -288,9 +290,15 @@ fn text_layout(
             }
         } else if let Some(index) = extended_group(&variable) {
             if character {
-                if index < extended_character_groups.len() {
+                // Reference text saves never added the later binary-only user character section.
+                if !user_defined && index < extended_character_groups.len() {
                     extended_character_groups[index].push(variable);
                 }
+            } else if user_defined && !variable.dimensions.is_empty() {
+                let user_index = 8
+                    + (variable.dimensions.len() - 1) * 2
+                    + usize::from(variable.value_type == Text1808ValueType::Integer);
+                extended_groups[user_index].push(variable);
             } else {
                 extended_groups[index].push(variable);
             }

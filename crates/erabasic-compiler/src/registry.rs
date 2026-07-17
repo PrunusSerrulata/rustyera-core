@@ -817,6 +817,15 @@ fn host_contract(namespace: &str, name: &str) -> OperationContract {
             OperationWaitPolicy::TransientExternal,
             CapabilityFallback::Unsupported,
         ),
+        "rustyera.system" if matches!(name, "SAVEGAME" | "LOADGAME") => (
+            OperationState::Controller,
+            TransactionPolicy::Forbidden,
+            OperationPersistence::RuntimeOnly,
+            OperationSnapshotPolicy::Included,
+            OperationHotReloadPolicy::Preserve,
+            OperationWaitPolicy::StableInput,
+            CapabilityFallback::NotApplicable,
+        ),
         "rustyera.system"
             if matches!(
                 name,

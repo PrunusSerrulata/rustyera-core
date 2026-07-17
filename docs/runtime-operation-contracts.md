@@ -55,15 +55,23 @@ containers.
   commit and `SPRITEGETCOLOR` requests a pixel on demand. Hot reload preserves canvas and dynamic
   sprite replay state, stages metadata for new or changed image bytes, and commits the complete
   artifact/resource candidate only after every metadata response succeeds.
-- Resource-backed canvas animation construction not covered by the implemented replay subset,
-  physical GDI drawing helpers and any other catalogued but unimplemented non-persistence Host
-  operation fail with the stable `UnsupportedRuntimeFeature` import diagnostic. This is preferable
-  to a frontend-dependent partial result and is mechanically distinct from VM faults.
+- Runtime-created canvas animation sprites, canvas-backed frames and `SETANIMETIMER` are canonical
+  resource replay state in runtime protocol 13. Physical GDI/CBG drawing helpers and any other
+  catalogued but unimplemented non-persistence Host operation fail with the stable
+  `UnsupportedRuntimeFeature` import diagnostic. This is preferable to a frontend-dependent
+  partial result and is mechanically distinct from VM faults.
 - Primitive mouse/key events remain frontend-normalized into EraBasic-shaped fields by design.
   Runtime validates the wait, token, selection and timeout but does not interpret platform events.
 - `ISDEFINED`, `ENUMMACRO*`, `GETMETH`, `GETMETHS`, `EXISTMETH`, `GETVARS` and `ERDNAME` are
   compile-time stable unsupported operations. The current artifact intentionally has no macro or
   dynamic-expression metadata section, so zero/empty results would be observably incorrect.
+- Case conversion deliberately uses Rust's deterministic Unicode mapping instead of the host
+  process's mutable .NET current culture. The audited eraTW call sites pass ASCII identifiers, for
+  which the results coincide. Locale-sensitive Turkish/Azeri casing remains a documented
+  intentional difference rather than a machine-dependent result.
+- Integer formatting implements every standard/custom pattern found in the pinned fixtures and
+  eraTW (`D`, `X`, `N`, zero/hash placeholders, grouping and the scale comma). Other .NET custom
+  sections fail with a stable format diagnostic instead of silently producing a partial string.
 
 Candidate `SAVEINFO` execution accepts `ReadOnly`, `CloneCommit`, and `BufferedEffect` operations,
 and resolves `FrozenClock` from the single sample obtained before the candidate starts. It rejects

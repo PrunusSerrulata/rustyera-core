@@ -72,10 +72,9 @@ impl AnalyzerDiagnostic {
         message: impl Into<String>,
     ) -> Self {
         let physical_line = u32::try_from(
-            text[..span.start.min(text.len())]
-                .bytes()
-                .filter(|byte| *byte == b'\n')
-                .count(),
+            text.as_bytes()[..span.start.min(text.len())]
+                .iter()
+                .fold(0usize, |count, byte| count + usize::from(*byte == b'\n')),
         )
         .unwrap_or(u32::MAX);
         Self {
@@ -113,5 +112,27 @@ impl AnalyzerDiagnostic {
             }),
             message: message.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_line_count_accepts_a_byte_offset_inside_utf8_code_point() {
+        let diagnostic = AnalyzerDiagnostic::at(
+            AnalyzerDiagnosticCode::Syntax,
+            AnalyzerDiagnosticSeverity::Error,
+            2,
+            SourceId::default(),
+            "unicode.erb",
+            "first\n素質",
+            Span::new(8, 9),
+            "test",
+        );
+        let source = diagnostic.source.expect("source location");
+        assert_eq!(source.physical_line, 1);
+        assert_eq!((source.byte_start, source.byte_end), (8, 9));
     }
 }

@@ -335,7 +335,7 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 | 字段 | 含义 |
 | --- | --- |
 | `wire_version` | 公共信封版本，当前为 `2.0`。 |
-| `channel_version` | `Runtime` channel 当前为 `12.0`；`Debug` channel 当前为 `3.0`。 |
+| `channel_version` | `Runtime` channel 当前为 `13.0`；`Debug` channel 当前为 `3.0`。 |
 | `channel` | 正常运行必须为 `Runtime`；调试使用独立 `Debug` channel。 |
 | `session` | 首次 `ClientHello` 可为空；握手成功后必须等于 `ServerHello.session`。 |
 | `session_epoch` | 首次握手可为空；之后必须等于当前时间线 epoch。新游戏、恢复或热替换提交后旧 epoch 消息失效。 |
@@ -360,7 +360,7 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `12.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `13.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
@@ -439,7 +439,9 @@ Runtime 是展示语义状态的权威持有者；前端只负责渲染投影。
 
 Snapshot 包含标题、行、背景、tooltip 策略、逻辑音频状态、当前输入等待、全局展示设置
 以及 `ResourceReplay`。后者提供 Runtime 已解析的 sprite 定义、动态 sprite 与 canvas
-command graph；前端按此重放，但仍自行解码像素并持有 renderer 对象。
+command graph，以及 `SETANIMETIMER` 选定的 `animation_timer_ms` 重绘间隔；前端按此重放
+和调度绘制，但仍自行解码像素并持有 renderer 对象，且不得用该计时器推进 Runtime 的
+逻辑时间。
 
 `DisplayRun` 支持文本、嵌套按钮、HTML、图片和形状。按钮只携带 opaque
 `InteractionToken`，前端不得读取或推导游戏值。尺寸使用整数固定单位：

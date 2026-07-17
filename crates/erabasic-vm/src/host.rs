@@ -467,6 +467,79 @@ struct CoreNative {
     name: String,
 }
 
+/// Evaluate a side-effect-free core native through the same implementation used by bytecode.
+///
+/// Debuggers use this deliberately narrow entry point instead of maintaining a second set of
+/// `EraBasic` numeric and string semantics. Natives which require implicit variables, mutate
+/// state, consume entropy, or cross the Host boundary are rejected here.
+///
+/// # Errors
+///
+/// Returns an error when the native is not in the pure whitelist, its arguments do not match the
+/// reference signature, or its ordinary evaluation reports a domain or format error.
+pub fn evaluate_pure_native(name: &str, arguments: Vec<VmValue>) -> Result<VmValue, String> {
+    let name = name.to_ascii_lowercase();
+    if !matches!(
+        name.as_str(),
+        "abs"
+            | "sign"
+            | "sqrt"
+            | "cbrt"
+            | "log"
+            | "log10"
+            | "exponent"
+            | "power"
+            | "getbit"
+            | "bitcount"
+            | "strlen"
+            | "strlenu"
+            | "toint"
+            | "isnumeric"
+            | "unicode"
+            | "convert"
+            | "color_fromrgb"
+            | "max"
+            | "min"
+            | "limit"
+            | "inrange"
+            | "tostr"
+            | "substring"
+            | "substringu"
+            | "strfind"
+            | "strfindu"
+            | "strcount"
+            | "strlens"
+            | "strlensu"
+            | "replace"
+            | "escape"
+            | "unicodetostr"
+            | "encodetouni"
+            | "unicodebyte"
+            | "charatu"
+            | "tolower"
+            | "toupper"
+    ) {
+        return Err(format!("{name} is not a pure core-native service"));
+    }
+    let request = NativeCallRequest {
+        import: RuntimeImport {
+            key: SymbolKey::default(),
+            namespace: "debug".into(),
+            name: name.clone(),
+            abi_version: 1,
+            parameters: Vec::new(),
+            result: None,
+        },
+        arguments,
+        places: Vec::new(),
+        implicit_places: BTreeMap::new(),
+    };
+    CoreNative { name }
+        .call(request)?
+        .value
+        .ok_or_else(|| "pure core-native service returned no value".into())
+}
+
 impl NativeService for CoreNative {
     #[allow(
         clippy::cast_possible_truncation,
@@ -531,7 +604,11 @@ impl NativeService for CoreNative {
                 VmValue::Integer(i64::try_from(string(0)?.len()).unwrap_or(i64::MAX))
             }
             "strlenu" | "strlensu" => {
-                VmValue::Integer(i64::try_from(string(0)?.chars().count()).unwrap_or(i64::MAX))
+                // Emuera runs on .NET, so the U variants count UTF-16 code units rather than
+                // Unicode scalar values. This remains observable for supplementary characters.
+                VmValue::Integer(
+                    i64::try_from(string(0)?.encode_utf16().count()).unwrap_or(i64::MAX),
+                )
             }
             "toint" => VmValue::Integer(parse_era_numeric(string(0)?, false)?.unwrap_or(0)),
             "isnumeric" => {

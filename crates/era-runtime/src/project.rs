@@ -964,6 +964,28 @@ mod tests {
     }
 
     #[test]
+    fn focused_eratw_system_slices_exercise_runtime_owned_save_flows() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../reference/eraTW-minimal/ERB");
+        for (relative, required) in [
+            ("TITLE.ERB", &["@SYSTEM_TITLE", "LOADGAME"][..]),
+            ("SHOP関連/SHOP.ERB", &["SAVEGAME", "LOADGAME"]),
+            ("SYSTEM.ERB", &["@EVENTLOAD"]),
+            ("ステータス表示関連/INFO.ERB", &["@SAVEINFO", "PUTFORM"]),
+        ] {
+            // This is a read-only corpus audit; functional behavior is covered by the small
+            // controller fixtures so the 80+ MiB real project is never a default test input.
+            let source = std::fs::read_to_string(root.join(relative)).expect("UTF-8 eraTW slice");
+            for needle in required {
+                assert!(
+                    source.contains(needle),
+                    "{relative} no longer contains {needle}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn project_delta_is_monotonic_normalized_and_unique() {
         let current = ProjectManifest {
             project_revision: 4,

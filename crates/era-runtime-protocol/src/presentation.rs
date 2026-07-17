@@ -320,6 +320,9 @@ pub struct SpriteFrameReplay {
     pub delay_ms: u32,
     #[n(4)]
     pub destination_size: Option<[u32; 2]>,
+    /// Runtime-created animation frames can reference a replay canvas instead of a file resource.
+    #[n(5)]
+    pub canvas_id: Option<i64>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -378,6 +381,10 @@ pub struct ResourceReplay {
     pub sprites: Vec<SpriteReplay>,
     #[n(1)]
     pub canvases: Vec<CanvasReplay>,
+    /// Canonical redraw cadence selected by SETANIMETIMER. Frontends schedule rendering from
+    /// this value but never advance game time or choose animation frames for the runtime.
+    #[n(2)]
+    pub animation_timer_ms: i32,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

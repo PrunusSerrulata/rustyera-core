@@ -155,9 +155,10 @@ fn current_text_payload_is_preserved_exactly() {
 }
 
 #[test]
-fn text_rejects_non_utf8_and_old_envelopes() {
+fn text_rejects_non_utf8_and_accepts_historical_metadata_envelopes() {
     assert!(decode(&[0xff], SaveCodecLimits::default()).is_err());
-    assert!(decode(b"1\n2\nx\n", SaveCodecLimits::default()).is_err());
+    let historical = decode(b"1\n2\nx\n", SaveCodecLimits::default()).unwrap();
+    assert_eq!(historical.metadata.description, "x");
 }
 
 #[test]
@@ -261,4 +262,42 @@ fn schema_aware_text_ignores_variables_removed_from_the_project() {
     let bytes = b"1\r\n1\r\nslot\r\n0\r\n__EMUERA_1808_STRAT__\r\nOLD_STRING:value\r\n__EMU_SEPARATOR__\r\nOLD_ARRAY\r\n1\r\n2\r\n__FINISHED\r\n__EMU_SEPARATOR__\r\n";
     let decoded = decode_text_with_layout(bytes, &layout, SaveCodecLimits::default()).unwrap();
     assert!(decoded.variables.is_empty());
+}
+
+#[test]
+fn schema_aware_text_restores_eramaker_prefix_without_an_extension_marker() {
+    let layout = Text1808Layout {
+        kind: SaveFileKind::Normal,
+        base_variables: vec![text_variable("DAY", Text1808ValueType::Integer, &[])],
+        base_character_variables: vec![text_variable("NAME", Text1808ValueType::String, &[])],
+        extended_groups: vec![vec![text_variable(
+            "SAVED",
+            Text1808ValueType::Integer,
+            &[],
+        )]],
+        extended_character_groups: Vec::new(),
+    };
+    let bytes = b"42\r\n7\r\nold slot\r\n1\r\nAlice\r\n12\r\n";
+    let decoded = decode_text_with_layout(bytes, &layout, SaveCodecLimits::default()).unwrap();
+    assert_eq!(decoded.metadata.description, "old slot");
+    assert_eq!(
+        decoded.characters[0][0].value,
+        SaveValue::String("Alice".into())
+    );
+    assert_eq!(decoded.variables[0].value, SaveValue::Integer(12));
+    assert!(decoded.variables.iter().all(|entry| entry.name != "SAVED"));
+}
+
+#[test]
+fn schema_aware_text_reads_known_historical_extension_versions() {
+    let layout = Text1808Layout {
+        kind: SaveFileKind::Normal,
+        base_variables: Vec::new(),
+        base_character_variables: Vec::new(),
+        extended_groups: Vec::new(),
+        extended_character_groups: Vec::new(),
+    };
+    let bytes = b"42\r\n7\r\nold slot\r\n0\r\n__EMUERA_1803_STRAT__\r\n";
+    let decoded = decode_text_with_layout(bytes, &layout, SaveCodecLimits::default()).unwrap();
+    assert_eq!(decoded.metadata.description, "old slot");
 }
