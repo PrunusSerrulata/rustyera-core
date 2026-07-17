@@ -4,9 +4,9 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the staged RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 12.0 and debug protocol 3.0 over common wire 2.0 are
+dynamic library. Runtime protocol 13.0 and debug protocol 3.0 over common wire 2.0 are
 development contracts: by explicit project policy they
-does not promise backward compatibility until a frontend exists.
+do not promise backward compatibility until a frontend exists.
 
 ## Authority and ownership
 
@@ -102,8 +102,8 @@ reference's unimplemented `SAVEVAR`/`LOADVAR` remain a stable unsupported operat
 snapshots are available at stable, untimed VM input waits. Their checksummed runtime wrapper binds
 the VM image to the exact artifact and normalized project/resource identity, restores canonical
 presentation and pending input state atomically, and regenerates epoch-bound wait/interaction
-identities. Runtime-owned system-menu waits remain ineligible until their controller snapshots are
-fully rebound.
+identities. Stable runtime-owned title/save/load/overwrite waits are eligible: their semantic menu
+state is persisted, while restore re-lists storage metadata and rebinds fresh revisions and tokens.
 
 Storage is negotiated as `RuntimeFeature::Storage`. `Stat` returns metadata without transferring
 contents. `List { pattern, recursive }` returns frontend-relative entries; runtime sorts any list
@@ -111,7 +111,7 @@ that is observable by EraBasic. `Missing` is create-only, `Revision` is compare-
 and a precondition mismatch is reported as a storage error rather than silently overwriting data.
 Protocol 12 additionally negotiates whether the frontend can return revisions, perform atomic
 replacement, enforce `Missing`, and delete. Candidate saves require the first three guarantees;
-menu deletion will additionally require the fourth.
+menu deletion requires the fourth and always uses the revision observed during the current listing.
 
 ## Input, QTE and presentation
 
@@ -206,15 +206,17 @@ message-skip state, backgrounds, tooltips, resource sprites, canvas replay and l
 Image metadata and pixels are typed frontend services; audio actions use an exact-outcome effect
 journal. `UPDATECHECK` uses typed network and open-URL services, while focus remains a reported
 client state queried by `ISACTIVE`. Built-in shop autosave now uses the isolated candidate
-`SAVEINFO` transaction and revision-checked storage commit; the complete slot/delete controller and
-nested SAVEGAME/LOADGAME continuations remain Batch 11 work. Protocol 12.0 separates
+`SAVEINFO` transaction and revision-checked storage commit. Runtime-owned fixed-page save/load
+menus, overwrite confirmation and nested SAVEGAME/LOADGAME cancellation continuations are stable
+input operations. Protocol 13.0 adds the canonical animation redraw interval to resource replay;
+the frontend schedules redraws but never advances authoritative game time. Protocol 12.0 separates
 external waits from debugger pauses. The independent debug channel supports creator-bounded scope
 grants, coherent stop tokens, global pause/continue/stepping, source breakpoints, fiber/frame/stack
 inspection, atomic variable writes and runtime game-field inspection. Only
 `input.message_skip` is debug-writable. Debug console execution accepts the currently implemented
 EraBasic expression subset (operator precedence, ternary expressions and a pure-method whitelist)
 and atomic scalar assignment; Host calls, flow, waits, increment/decrement and unsupported methods
-are rejected without mutation. Protocol 12.0 adds operation-versioned service capabilities,
+are rejected without mutation. Protocol 12.0 added operation-versioned service capabilities,
 resource decoder services, exact effect outcomes, tooltip state and runtime diagnostics. The
 session-fixed `available_fonts` list is used only
 for the script-observable `CHKFONT` result. Font metrics and canonical layout remain runtime-owned;

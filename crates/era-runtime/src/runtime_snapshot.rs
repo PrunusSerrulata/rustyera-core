@@ -10,7 +10,7 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 5;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 6;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 52;
@@ -36,11 +36,55 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) skip_print: bool,
     pub(crate) user_defined_skip: bool,
     pub(crate) saved_skip: bool,
+    #[serde(with = "token_value_map")]
     pub(crate) command_intents: BTreeMap<InteractionToken, VmValue>,
+    #[serde(with = "token_value_map")]
     pub(crate) reusable_system_intents: BTreeMap<InteractionToken, VmValue>,
     pub(crate) save_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
     pub(crate) system_menu: u8,
+    pub(crate) system_menu_slot: Option<u32>,
     pub(crate) load_slot_paths: Vec<String>,
+    pub(crate) occupied_slot_paths: std::collections::BTreeSet<String>,
+    pub(crate) system_menu_host_request: Option<erabasic_vm::HostRequestId>,
+    pub(crate) system_menu_page: u32,
+}
+
+/// JSON objects cannot represent structured interaction tokens as keys. The runtime snapshot
+/// encodes those internal maps as ordered key/value pairs and rejects duplicate keys on restore.
+pub(crate) mod token_value_map {
+    use std::collections::BTreeMap;
+
+    use era_runtime_protocol::InteractionToken;
+    use erabasic_vm::VmValue;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
+
+    pub(crate) fn serialize<S>(
+        values: &BTreeMap<InteractionToken, VmValue>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        values.iter().collect::<Vec<_>>().serialize(serializer)
+    }
+
+    pub(crate) fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<BTreeMap<InteractionToken, VmValue>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let pairs = Vec::<(InteractionToken, VmValue)>::deserialize(deserializer)?;
+        let mut values = BTreeMap::new();
+        for (token, value) in pairs {
+            if values.insert(token, value).is_some() {
+                return Err(D::Error::custom(
+                    "runtime snapshot contains a duplicate interaction token",
+                ));
+            }
+        }
+        Ok(values)
+    }
 }
 
 pub(crate) fn encode(payload: &RuntimeSnapshotPayload) -> Result<Vec<u8>, String> {
@@ -122,7 +166,11 @@ mod tests {
             reusable_system_intents: BTreeMap::new(),
             save_extensions: Vec::new(),
             system_menu: 0,
+            system_menu_slot: None,
             load_slot_paths: Vec::new(),
+            occupied_slot_paths: std::collections::BTreeSet::new(),
+            system_menu_host_request: None,
+            system_menu_page: 0,
         };
         let mut encoded = encode(&payload).unwrap();
         let last = encoded.last_mut().unwrap();
@@ -156,13 +204,19 @@ mod tests {
             command_intents: BTreeMap::new(),
             reusable_system_intents: BTreeMap::new(),
             save_extensions: Vec::new(),
-            system_menu: 0,
+            system_menu: 3,
+            system_menu_slot: Some(17),
             load_slot_paths: Vec::new(),
+            occupied_slot_paths: std::collections::BTreeSet::new(),
+            system_menu_host_request: None,
+            system_menu_page: 0,
         };
         let encoded = encode(&payload).unwrap();
         let decoded = decode(&encoded, encoded.len()).unwrap();
         assert_eq!(decoded.resource_graph.canvas_state(7), Some((20, 10)));
         assert_eq!(decoded.selected_locale, "ja");
         assert_eq!(decoded.culture_table_version, CULTURE_TABLE_VERSION);
+        assert_eq!(decoded.system_menu, 3);
+        assert_eq!(decoded.system_menu_slot, Some(17));
     }
 }

@@ -16,7 +16,7 @@ use erabasic_vm::{
     FiberId, FiberStatus, FrameId, GenerationId, PlaceDescriptor, VmBreakpoint,
     VmBreakpointBinding, VmBreakpointLocation, VmDebugControl, VmDebugInspect, VmDebugStop,
     VmDebugStopReason, VmDebugVariable, VmDebugVariableRef, VmDebugVariableWrite, VmError,
-    VmResolvedBreakpoint, VmRuntimePort, VmStepKind, VmStopToken, VmValue,
+    VmResolvedBreakpoint, VmRuntimePort, VmStepKind, VmStopToken, VmValue, evaluate_pure_native,
 };
 
 use super::{ActiveDebugGrant, RuntimeError, RuntimePhase, RuntimeSession};
@@ -879,9 +879,7 @@ fn parse_console_expression(
     for variable in variables {
         context.register_variable(&variable.name);
     }
-    for function in [
-        "ABS", "MAX", "MIN", "LIMIT", "STRLEN", "STRLENS", "STRLENSU", "TOINT", "TOSTR", "POWER",
-    ] {
+    for function in PURE_CONSOLE_METHODS {
         context.register_function(function);
     }
     let parsed = parse_expression(source, &context);
@@ -1045,68 +1043,53 @@ fn evaluate_console_method(
     values: &[VmValue],
 ) -> Result<VmValue, (&'static str, String)> {
     let upper = name.to_ascii_uppercase();
-    match upper.as_str() {
-        "ABS" if values.len() == 1 => Ok(VmValue::Integer(
-            console_integer(&values[0])?.wrapping_abs(),
-        )),
-        "MAX" if values.len() == 2 => Ok(VmValue::Integer(
-            console_integer(&values[0])?.max(console_integer(&values[1])?),
-        )),
-        "MIN" if values.len() == 2 => Ok(VmValue::Integer(
-            console_integer(&values[0])?.min(console_integer(&values[1])?),
-        )),
-        "LIMIT" if values.len() == 3 => {
-            let value = console_integer(&values[0])?;
-            let minimum = console_integer(&values[1])?;
-            let maximum = console_integer(&values[2])?;
-            if minimum > maximum {
-                return Err((
-                    "debug.console.execution_error",
-                    "LIMIT minimum exceeds maximum".into(),
-                ));
-            }
-            Ok(VmValue::Integer(value.clamp(minimum, maximum)))
-        }
-        "STRLEN" | "STRLENS" if values.len() == 1 => match &values[0] {
-            // RustyEra's documented encoding difference makes this byte count UTF-8.
-            VmValue::String(value) => Ok(VmValue::Integer(
-                i64::try_from(value.len()).unwrap_or(i64::MAX),
-            )),
-            _ => console_type_error("string"),
-        },
-        "STRLENSU" if values.len() == 1 => match &values[0] {
-            // .NET String.Length counts UTF-16 code units for the U variant.
-            VmValue::String(value) => Ok(VmValue::Integer(
-                i64::try_from(value.encode_utf16().count()).unwrap_or(i64::MAX),
-            )),
-            _ => console_type_error("string"),
-        },
-        "TOINT" if values.len() == 1 => match &values[0] {
-            VmValue::String(value) => Ok(VmValue::Integer(value.parse().unwrap_or_default())),
-            VmValue::Integer(value) => Ok(VmValue::Integer(*value)),
-            _ => console_type_error("scalar"),
-        },
-        "TOSTR" if values.len() == 1 => Ok(VmValue::String(match &values[0] {
-            VmValue::String(value) => value.clone(),
-            VmValue::Integer(value) => value.to_string(),
-            _ => return console_type_error("scalar"),
-        })),
-        "POWER" if values.len() == 2 => {
-            let base = console_integer(&values[0])?;
-            let exponent = u32::try_from(console_integer(&values[1])?).map_err(|_| {
-                (
-                    "debug.console.execution_error",
-                    "POWER exponent is out of range".into(),
-                )
-            })?;
-            Ok(VmValue::Integer(base.wrapping_pow(exponent)))
-        }
-        _ => Err((
+    if !PURE_CONSOLE_METHODS.contains(&upper.as_str()) {
+        return Err((
             "debug.console.unsafe_method",
             format!("{name} is not in the debugger's pure method whitelist"),
-        )),
+        ));
     }
+    evaluate_pure_native(&upper, values.to_vec())
+        .map_err(|message| ("debug.console.execution_error", message))
 }
+
+const PURE_CONSOLE_METHODS: [&str; 35] = [
+    "ABS",
+    "SIGN",
+    "SQRT",
+    "CBRT",
+    "LOG",
+    "LOG10",
+    "EXPONENT",
+    "POWER",
+    "GETBIT",
+    "BITCOUNT",
+    "STRLEN",
+    "STRLENU",
+    "TOINT",
+    "ISNUMERIC",
+    "UNICODE",
+    "CONVERT",
+    "COLOR_FROMRGB",
+    "MAX",
+    "MIN",
+    "LIMIT",
+    "INRANGE",
+    "TOSTR",
+    "SUBSTRING",
+    "SUBSTRINGU",
+    "STRFIND",
+    "STRFINDU",
+    "STRCOUNT",
+    "STRLENS",
+    "STRLENSU",
+    "REPLACE",
+    "ESCAPE",
+    "UNICODETOSTR",
+    "ENCODETOUNI",
+    "UNICODEBYTE",
+    "CHARATU",
+];
 
 fn console_integer(value: &VmValue) -> Result<i64, (&'static str, String)> {
     match value {

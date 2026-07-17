@@ -9,6 +9,7 @@ use crate::host::{ExternalCompletion, PendingInput};
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) enum CandidateSaveContinuation {
     Autosave,
+    SystemMenu { request: HostRequestId },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -31,7 +32,19 @@ pub(crate) enum PendingService {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum PendingStorage {
     ListLoadSlots,
-    ReadLoadSlot,
+    ListSaveSlots,
+    ScanMenuSlot {
+        save: bool,
+        path: String,
+        remaining: Vec<String>,
+    },
+    DeleteMenuSlot {
+        save: bool,
+        path: String,
+    },
+    ReadLoadSlot {
+        slot: u32,
+    },
     HostWrite {
         request: HostRequestId,
     },
@@ -354,7 +367,7 @@ mod tests {
     fn typed_ids_do_not_collide_and_completion_is_consuming() {
         let mut operations = PendingOperations::default();
         operations.insert_service(7, PendingService::StartEntropy);
-        operations.insert_storage(7, PendingStorage::ReadLoadSlot);
+        operations.insert_storage(7, PendingStorage::ReadLoadSlot { slot: 2 });
         assert!(matches!(
             operations.take_service(7),
             Some(PendingService::StartEntropy)
@@ -362,7 +375,7 @@ mod tests {
         assert!(operations.take_service(7).is_none());
         assert!(matches!(
             operations.take_storage(7),
-            Some(PendingStorage::ReadLoadSlot)
+            Some(PendingStorage::ReadLoadSlot { slot: 2 })
         ));
     }
 

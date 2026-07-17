@@ -4,6 +4,12 @@ use crate::{
 };
 
 const CURRENT_MARKER: &str = "__EMUERA_1808_STRAT__";
+const HISTORICAL_MARKERS: [&str; 4] = [
+    "__EMUERA_STRAT__",
+    "__EMUERA_1708_STRAT__",
+    "__EMUERA_1729_STRAT__",
+    "__EMUERA_1803_STRAT__",
+];
 const FINISHER: &str = "__FINISHED";
 const SEPARATOR: &str = "__EMU_SEPARATOR__";
 
@@ -16,7 +22,9 @@ const SEPARATOR: &str = "__EMU_SEPARATOR__";
 ///
 /// # Errors
 ///
-/// Returns an error for non-UTF-8 data, missing metadata/marker, or a limit breach.
+/// Returns an error for non-UTF-8 data, missing metadata, or a limit breach. The metadata-only
+/// path accepts pre-Emuera eramaker saves which have no extension marker; schema-aware decoding
+/// decides whether their positional payload can be restored.
 pub fn decode_text(data: &[u8], limits: SaveCodecLimits) -> Result<SaveDocument, SaveCodecError> {
     if data.len() > limits.maximum_bytes {
         return Err(SaveCodecError::LimitExceeded("maximum bytes"));
@@ -32,14 +40,6 @@ pub fn decode_text(data: &[u8], limits: SaveCodecLimits) -> Result<SaveDocument,
         .ok_or_else(|| SaveCodecError::InvalidFormat("text save lacks a description".into()))?
         .trim_end_matches('\r')
         .to_owned();
-    if !source
-        .lines()
-        .any(|line| line.trim_end_matches('\r') == CURRENT_MARKER)
-    {
-        return Err(SaveCodecError::InvalidFormat(
-            "text save lacks the Emuera 1808 marker".into(),
-        ));
-    }
     Ok(SaveDocument {
         format: SaveFormat::Text1808,
         kind: SaveFileKind::Normal,
@@ -133,22 +133,81 @@ pub fn decode_text_with_layout(
         }
     }
     let mut variables = read_base_entries(&mut reader, &layout.base_variables, limits)?;
-    reader.expect(CURRENT_MARKER)?;
+    let Some(marker) = reader.seek_extension_marker() else {
+        // EraMaker saves end after the positional prefix. Emuera restores that prefix and leaves
+        // every later variable at its project default, so the same document is useful here.
+        return finish_text_document(
+            data,
+            layout.kind,
+            unique_code,
+            version,
+            description,
+            characters,
+            variables,
+            limits,
+        );
+    };
+    let extension_version = match marker {
+        "__EMUERA_STRAT__" => 1700,
+        "__EMUERA_1708_STRAT__" => 1708,
+        "__EMUERA_1729_STRAT__" => 1729,
+        "__EMUERA_1803_STRAT__" => 1803,
+        CURRENT_MARKER => 1808,
+        _ => unreachable!("seek_extension_marker returned an unknown marker"),
+    };
+    let character_group_count = if extension_version < 1803 {
+        layout.extended_character_groups.len().min(4)
+    } else {
+        layout.extended_character_groups.len()
+    };
     for character in &mut characters {
         read_extended_groups(
             &mut reader,
-            &layout.extended_character_groups,
+            &layout.extended_character_groups[..character_group_count],
             character,
             limits,
         )?;
     }
-    read_extended_groups(&mut reader, &layout.extended_groups, &mut variables, limits)?;
+    let variable_group_count = if extension_version < 1808 {
+        layout.extended_groups.len().min(8)
+    } else {
+        layout.extended_groups.len()
+    };
+    read_extended_groups(
+        &mut reader,
+        &layout.extended_groups[..variable_group_count],
+        &mut variables,
+        limits,
+    )?;
+    finish_text_document(
+        data,
+        layout.kind,
+        unique_code,
+        version,
+        description,
+        characters,
+        variables,
+        limits,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_text_document(
+    data: &[u8],
+    kind: SaveFileKind,
+    unique_code: i64,
+    version: i64,
+    description: String,
+    characters: Vec<Vec<SaveEntry>>,
+    variables: Vec<SaveEntry>,
+    limits: SaveCodecLimits,
+) -> Result<SaveDocument, SaveCodecError> {
     if variables.len() + characters.iter().map(Vec::len).sum::<usize>() > limits.maximum_entries {
         return Err(SaveCodecError::LimitExceeded("maximum entries"));
     }
     Ok(SaveDocument {
         format: SaveFormat::Text1808,
-        kind: layout.kind,
+        kind,
         metadata: SaveMetadata {
             unique_code,
             version,
@@ -227,15 +286,13 @@ impl<'a> TextReader<'a> {
             .map_err(|_| SaveCodecError::InvalidFormat(format!("text save has invalid {field}")))
     }
 
-    fn expect(&mut self, expected: &str) -> Result<(), SaveCodecError> {
-        let actual = self.line(expected)?;
-        if actual == expected {
-            Ok(())
-        } else {
-            Err(SaveCodecError::InvalidFormat(format!(
-                "text save expected {expected}"
-            )))
-        }
+    /// Match `EraDataReader.SeekEmuStart`: obsolete writers may leave ignorable positional tail
+    /// lines before the extension marker, while pure `EraMaker` saves have no marker at all.
+    fn seek_extension_marker(&mut self) -> Option<&'a str> {
+        self.lines
+            .by_ref()
+            .map(|line| line.trim_end_matches('\r'))
+            .find(|line| *line == CURRENT_MARKER || HISTORICAL_MARKERS.contains(line))
     }
 }
 

@@ -11,6 +11,7 @@ pub(crate) struct ResourceGraph {
     images: BTreeMap<String, ResourceImage>,
     sprites: BTreeMap<String, SpriteDefinition>,
     canvases: BTreeMap<i64, CanvasSurface>,
+    animation_timer_ms: i32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -63,6 +64,7 @@ pub(crate) struct SpriteDefinition {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct SpriteFrame {
     pub(crate) image_path: String,
+    pub(crate) canvas_id: Option<i64>,
     pub(crate) source_x: i32,
     pub(crate) source_y: i32,
     pub(crate) source_width: Option<u32>,
@@ -289,6 +291,7 @@ impl ResourceGraph {
                                 .destination_width
                                 .zip(frame.destination_height)
                                 .map(|(width, height)| [width, height]),
+                            canvas_id: frame.canvas_id,
                         })
                         .collect(),
                     canvas_id: sprite.canvas_id,
@@ -322,7 +325,19 @@ impl ResourceGraph {
                         .collect(),
                 })
                 .collect(),
+            animation_timer_ms: self.animation_timer_ms,
         }
+    }
+
+    pub(crate) fn set_animation_timer(&mut self, milliseconds: i64) -> Result<(), &'static str> {
+        self.animation_timer_ms = i32::try_from(milliseconds)
+            .map_err(|_| "animation timer is outside the signed 32-bit range")?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn animation_timer(&self) -> i32 {
+        self.animation_timer_ms
     }
 
     pub(crate) fn create_canvas(
@@ -437,6 +452,80 @@ impl ResourceGraph {
         true
     }
 
+    pub(crate) fn create_animation_sprite(&mut self, name: &str, width: i64, height: i64) -> bool {
+        let key = name.to_ascii_uppercase();
+        let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height)) else {
+            return false;
+        };
+        if name.is_empty()
+            || width == 0
+            || height == 0
+            || width > 8_192
+            || height > 8_192
+            || self.sprites.contains_key(&key)
+        {
+            return false;
+        }
+        self.sprites.insert(
+            key.clone(),
+            SpriteDefinition {
+                name: key,
+                width,
+                height,
+                frames: Vec::new(),
+                dynamic: true,
+                position_x: 0,
+                position_y: 0,
+                canvas_id: None,
+                canvas_rectangle: None,
+            },
+        );
+        true
+    }
+
+    pub(crate) fn add_animation_frame(
+        &mut self,
+        name: &str,
+        canvas_id: i64,
+        rectangle: [i32; 4],
+        offset: [i32; 2],
+        delay_ms: i64,
+    ) -> bool {
+        let Some(canvas) = self.canvases.get(&canvas_id) else {
+            return false;
+        };
+        if rectangle[0] < 0
+            || rectangle[1] < 0
+            || rectangle[2] <= 0
+            || rectangle[3] <= 0
+            || i64::from(rectangle[0]) + i64::from(rectangle[2]) > i64::from(canvas.width)
+            || i64::from(rectangle[1]) + i64::from(rectangle[3]) > i64::from(canvas.height)
+            || !(1..=i64::from(i32::MAX)).contains(&delay_ms)
+        {
+            return false;
+        }
+        let Some(sprite) = self.sprites.get_mut(&name.to_ascii_uppercase()) else {
+            return false;
+        };
+        if !sprite.dynamic || sprite.canvas_id.is_some() {
+            return false;
+        }
+        sprite.frames.push(SpriteFrame {
+            image_path: String::new(),
+            canvas_id: Some(canvas_id),
+            source_x: rectangle[0],
+            source_y: rectangle[1],
+            source_width: Some(rectangle[2].cast_unsigned()),
+            source_height: Some(rectangle[3].cast_unsigned()),
+            offset_x: offset[0],
+            offset_y: offset[1],
+            delay_ms: u32::try_from(delay_ms).expect("validated animation delay"),
+            destination_width: None,
+            destination_height: None,
+        });
+        true
+    }
+
     pub(crate) fn dispose_sprite(&mut self, name: &str) -> bool {
         let key = name.to_ascii_uppercase();
         if self.sprites.get(&key).is_none_or(|sprite| !sprite.dynamic) {
@@ -455,6 +544,7 @@ impl ResourceGraph {
     /// Preserve game-created replay objects while replacing submitted static resources.
     pub(crate) fn inherit_runtime_graph(&mut self, previous: &Self) {
         self.canvases.clone_from(&previous.canvases);
+        self.animation_timer_ms = previous.animation_timer_ms;
         let mut inherited_metadata = Vec::new();
         for image in self.images.values_mut() {
             if let Some(previous_image) = previous
@@ -480,6 +570,7 @@ impl ResourceGraph {
 
     pub(crate) fn reset_runtime_graph(&mut self) {
         self.canvases.clear();
+        self.animation_timer_ms = 0;
         self.sprites.retain(|_, sprite| !sprite.dynamic);
         for sprite in self.sprites.values_mut() {
             sprite.position_x = 0;
@@ -583,6 +674,7 @@ fn parse_resource_manifest(
             .map(|(width, height)| (width.cast_unsigned(), height.cast_unsigned()));
         let frame = SpriteFrame {
             image_path,
+            canvas_id: None,
             source_x: rect.map_or(0, |value| value.0),
             source_y: rect.map_or(0, |value| value.1),
             source_width: rect.and_then(|value| u32::try_from(value.2).ok()),
@@ -723,6 +815,8 @@ mod tests {
         assert_eq!(graph.create_canvas(3, 1, 1), Ok(false));
         assert!(graph.clear_canvas(3, 0x00ff_00ff, None));
         assert!(graph.create_canvas_sprite("generated", 3, None));
+        assert!(graph.create_animation_sprite("animated", 16, 16));
+        assert!(graph.add_animation_frame("animated", 3, [0, 0, 16, 16], [2, 3], 55,));
         assert_eq!(
             graph
                 .sprite("GENERATED")
@@ -730,6 +824,8 @@ mod tests {
             Some((64, 32))
         );
         assert!(graph.move_sprite("generated", 4, 5, false));
+        assert_eq!(graph.set_animation_timer(55), Ok(()));
+        assert_eq!(graph.animation_timer(), 55);
         assert_eq!(
             graph
                 .sprite("generated")
@@ -738,8 +834,21 @@ mod tests {
         );
         let replay = graph.replay();
         assert_eq!(replay.canvases.len(), 1);
-        assert_eq!(replay.sprites[0].canvas_id, Some(3));
-        assert_eq!(graph.dispose_sprites(false), 1);
+        let animated = replay
+            .sprites
+            .iter()
+            .find(|sprite| sprite.name == "ANIMATED")
+            .unwrap();
+        assert_eq!(animated.frames[0].canvas_id, Some(3));
+        assert_eq!(animated.frames[0].delay_ms, 55);
+        assert!(
+            replay
+                .sprites
+                .iter()
+                .any(|sprite| sprite.canvas_id == Some(3))
+        );
+        assert_eq!(replay.animation_timer_ms, 55);
+        assert_eq!(graph.dispose_sprites(false), 2);
         assert!(graph.dispose_canvas(3));
     }
 }

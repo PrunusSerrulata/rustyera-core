@@ -119,7 +119,7 @@ try {
         id = "native-tail"
         op = "run"
         entry = "ORACLE_NATIVE"
-        watch = @("RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULT:6", "RESULT:7", "RESULT:8", "RESULT:9", "RESULT:10", "RESULT:11", "RESULTS:0", "RESULTS:1", "RESULTS:2", "RESULTS:3", "RESULTS:4", "RESULTS:5", "RESULTS:6", "RESULTS:7")
+        watch = @("RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULT:6", "RESULT:7", "RESULT:8", "RESULT:9", "RESULT:10", "RESULT:11", "RESULT:12", "RESULTS:0", "RESULTS:1", "RESULTS:2", "RESULTS:3", "RESULTS:4", "RESULTS:5", "RESULTS:6", "RESULTS:7")
     }
     Assert-True ($nativeTail.ok -and $nativeTail.result.termination -eq "completed") "native tail failed"
     Assert-True (($nativeTail.result.watches.'RESULT:0' -eq 0) -and
@@ -134,6 +134,7 @@ try {
         ($nativeTail.result.watches.'RESULT:9' -eq 12) -and
         ($nativeTail.result.watches.'RESULT:10' -eq 1) -and
         ($nativeTail.result.watches.'RESULT:11' -eq 66051) -and
+        ($nativeTail.result.watches.'RESULT:12' -eq 2) -and
         ($nativeTail.result.watches.'RESULTS:0' -eq 'a\+b') -and
         ($nativeTail.result.watches.'RESULTS:1' -eq 'β') -and
         ($nativeTail.result.watches.'RESULTS:2' -eq 'ABC') -and

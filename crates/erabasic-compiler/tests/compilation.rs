@@ -133,6 +133,24 @@ fn input_wait_and_getkey_bindings_preserve_dynamic_stability() {
 }
 
 #[test]
+fn runtime_owned_save_menus_are_stable_input_operations() {
+    let registry = default_host_registry();
+    for name in ["SAVEGAME", "LOADGAME"] {
+        let binding = registry.resolve(name).expect("system menu binding");
+        assert_eq!(binding.namespace, "rustyera.system");
+        assert_eq!(binding.capability, HostCapability::System);
+        assert_eq!(
+            binding.snapshot_capability,
+            HostSnapshotCapability::StableWait
+        );
+        assert_eq!(
+            binding.contract.wait,
+            erabasic_bytecode::OperationWaitPolicy::StableInput
+        );
+    }
+}
+
+#[test]
 fn skip_scope_commands_cross_the_host_boundary() {
     let project = analyze("@SYSTEM_TITLE\nNOSKIP\nENDNOSKIP\nRETURN\n");
     let report = compile_project(

@@ -1652,7 +1652,7 @@ fn getnum_resolves_the_referenced_builtin_name_table_at_runtime() {
 #[test]
 fn native_tail_matches_the_reference_oracle_fixture() {
     let artifact = compile_source(
-        "@ORACLE_NATIVE\n#DIMS PARTS, 4\n#DIMS JOINED, 4\nRESULT:0 = 0\nSETBIT RESULT:0, 1, 3\nINVERTBIT RESULT:0, 1\nCLEARBIT RESULT:0, 3\nSPLIT \"a//b/\", \"/\", PARTS, RESULT:1\nRESULT:2 = STRCOUNT(\"ababa\", \"aba\")\nRESULT:3 = GETPALAMLV(499, 5)\nRESULTS:0 = %ESCAPE(\"a+b\")%\nJOINED:0 = %\"a\"%\nJOINED:1 = %\"b\"%\nJOINED:2 = %\"c\"%\nRESULT:4 = STRLENS(\"Ab\")\nRESULT:5 = STRLENSU(\"Aé\")\nRESULT:6 = STRFINDU(\"aβc\", \"β\")\nRESULT:7 = ENCODETOUNI(\"β\")\nRESULT:8 = UNICODEBYTE(\"β\")\nRESULTS:1 = %CHARATU(\"aβ\", 1)%\nRESULTS:2 = %TOUPPER(\"Abc\")%\nRESULTS:3 = %TOLOWER(\"AbC\")%\nRESULTS:4 = %STRJOIN(JOINED, \"/\", 1, 2)%\nRESULTS:5 = %STRJOIN(JOINED)%\nRESULTS:6 = %UNICODE(946)%\nRESULT:9 = TOINT(\"12.9\")\nRESULT:10 = ISNUMERIC(\"0x10\")\nRESULT:11 = COLOR_FROMRGB(1, 2, 3)\nRESULTS:7 = %CONVERT(255, 16)%\nRETURN\n",
+        "@ORACLE_NATIVE\n#DIMS PARTS, 4\n#DIMS JOINED, 4\nRESULT:0 = 0\nSETBIT RESULT:0, 1, 3\nINVERTBIT RESULT:0, 1\nCLEARBIT RESULT:0, 3\nSPLIT \"a//b/\", \"/\", PARTS, RESULT:1\nRESULT:2 = STRCOUNT(\"ababa\", \"aba\")\nRESULT:3 = GETPALAMLV(499, 5)\nRESULTS:0 = %ESCAPE(\"a+b\")%\nJOINED:0 = %\"a\"%\nJOINED:1 = %\"b\"%\nJOINED:2 = %\"c\"%\nRESULT:4 = STRLENS(\"Ab\")\nRESULT:5 = STRLENSU(\"Aé\")\nRESULT:12 = STRLENSU(\"😀\")\nRESULT:6 = STRFINDU(\"aβc\", \"β\")\nRESULT:7 = ENCODETOUNI(\"β\")\nRESULT:8 = UNICODEBYTE(\"β\")\nRESULTS:1 = %CHARATU(\"aβ\", 1)%\nRESULTS:2 = %TOUPPER(\"Abc\")%\nRESULTS:3 = %TOLOWER(\"AbC\")%\nRESULTS:4 = %STRJOIN(JOINED, \"/\", 1, 2)%\nRESULTS:5 = %STRJOIN(JOINED)%\nRESULTS:6 = %UNICODE(946)%\nRESULT:9 = TOINT(\"12.9\")\nRESULT:10 = ISNUMERIC(\"0x10\")\nRESULT:11 = COLOR_FROMRGB(1, 2, 3)\nRESULTS:7 = %CONVERT(255, 16)%\nRETURN\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -1715,6 +1715,10 @@ fn native_tail_matches_the_reference_oracle_fixture() {
             Ok(VmValue::Integer(expected))
         );
     }
+    assert_eq!(
+        vm.read_variable(result, &[12], None),
+        Ok(VmValue::Integer(2))
+    );
     for (index, expected) in [
         (1, "β"),
         (2, "ABC"),
@@ -1732,7 +1736,7 @@ fn native_tail_matches_the_reference_oracle_fixture() {
 }
 
 #[test]
-fn unicode_u_functions_use_scalar_positions_for_utf8_runtime_strings() {
+fn unicode_u_positions_use_scalars_but_lengths_match_dotnet_utf16_units() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nRESULT:0 = STRLENSU(\"A😀\")\nRESULT:1 = STRFINDU(\"A😀B\", \"B\")\nRESULT:2 = STRLENS(\"Aé\")\nRESULTS:0 = %CHARATU(\"A😀B\", 1)%\nRETURN\n",
     );
@@ -1767,7 +1771,7 @@ fn unicode_u_functions_use_scalar_positions_for_utf8_runtime_strings() {
     );
     assert_eq!(
         vm.read_variable(result, &[0], None),
-        Ok(VmValue::Integer(2))
+        Ok(VmValue::Integer(3))
     );
     assert_eq!(
         vm.read_variable(result, &[1], None),

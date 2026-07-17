@@ -8,6 +8,7 @@ pub(crate) struct PendingInput {
     pub(crate) host_request: Option<HostRequestId>,
     pub(crate) wait: InputWait,
     pub(crate) result_name: Option<String>,
+    #[serde(with = "crate::runtime_snapshot::token_value_map")]
     pub(crate) choices: std::collections::BTreeMap<InteractionToken, VmValue>,
     pub(crate) timeout_duration_ns: Option<u64>,
     pub(crate) post_input: Option<PostInputAction>,

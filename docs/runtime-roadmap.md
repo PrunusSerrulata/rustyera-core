@@ -371,11 +371,10 @@ and `ESCAPE` paths, including the missing mutable/reference analyzer signatures.
 slice implements `STRLENS`, `STRLENSU`, `STRFINDU`, `CHARATU`, `ENCODETOUNI`, `UNICODEBYTE`,
 `TOLOWER`, `TOUPPER` and reference-array `STRJOIN`; project-derived `BARSTR` is now a read-only Host
 operation and is safe inside candidate `SAVEINFO`. BMP/ASCII behavior has a same-input C# oracle.
-Under the repository's UTF-8-only rule, non-U lengths remain UTF-8 byte counts; supplementary-plane
-U operations use Unicode scalar indices because a valid Rust UTF-8 string cannot represent an
-isolated UTF-16 surrogate. This is a tested intentional difference from .NET UTF-16 code-unit
-indexing. Remaining deterministic Built-ins, the wider semantic graphics replay tail and the final
-machine-checked execution matrix still block Batch 10 completion.
+Under the repository's UTF-8-only rule, non-U lengths remain UTF-8 byte counts. U lengths match
+.NET UTF-16 code-unit counts, while supplementary-plane U positions use Unicode scalar indices
+because a valid Rust UTF-8 string cannot represent an isolated UTF-16 surrogate. The latter is a
+tested intentional difference from .NET indexing.
 
 Second closure checkpoint (2026-07-17): `UNICODE` now has the reference integer-to-string
 signature and BMP/control-character behavior, replacing the reversed string-to-integer
@@ -415,15 +414,26 @@ section for those tables or a documented final intentional-difference decision, 
 canvas animation tail, locale-aware casing, the remaining .NET integer custom formats,
 debug-console dispatch unification and the final Host implementation matrix.
 
+### Final Batch 10 checkpoint (2026-07-17)
+
+Batch 10 is complete. The debugger pure-method whitelist now calls the same CoreNative dispatcher
+as VM execution, including the exact Era numeric parser. Runtime protocol 13 persists semantic
+canvas animation frames and the `SETANIMETIMER` redraw cadence in renderer-independent resource
+replay. The compiler inventory test gives every analyzer built-in exactly one Native, Host or
+stable-unsupported class, while [`runtime-operation-contracts.md`](runtime-operation-contracts.md)
+records the final physical-GDI, dynamic-metadata, invariant-casing and unsupported-format choices.
+The selected eraTW casing call sites are ASCII and its integer format strings are all inside the
+implemented deterministic subset.
+
 ## Batch 11: persistence, controller and final compatibility closure
 
-### Implementation checkpoint (2026-07-17)
+### Final Batch 11 checkpoint (2026-07-17)
 
-- Runtime protocol 12 negotiates revision, atomic-replace, missing-precondition and delete storage
+- Runtime protocol 13 negotiates revision, atomic-replace, missing-precondition and delete storage
   guarantees explicitly. Direct script storage commands retain reference-compatible unconditional
   overwrite behavior; candidate writes require the stronger negotiated guarantees.
 - The VM can fork an isolated memory/Native timeline without live fibers and can later commit only
-  its authoritative state while retaining the caller's stacks. Runtime Snapshot v4 and VM Snapshot
+  its authoritative state while retaining the caller's stacks. Runtime Snapshot v6 and VM Snapshot
   v4 reject older layouts after the ABI change.
 - Built-in shop autosave now performs `Stat`, chooses `Missing` or the observed `Revision`, obtains
   one Clock sample, executes a fresh bounded `SAVEINFO` fiber against cloned VM/Native/runtime and
@@ -432,40 +442,46 @@ debug-console dispatch unification and the final Host implementation matrix.
   the commit point. Once the atomic write request is emitted, shutdown cannot cancel that commit
   window. Custom `SYSTEM_AUTOSAVE` and direct `SAVEDATA` retain their reference roles.
 
-This checkpoint does not complete Batch 11. The runtime-owned save/load/overwrite/delete pages,
-nested `SAVEGAME`/`LOADGAME` continuations, title override, final post-load/autosave chain, stable
-menu snapshot rebinding and UTF-8 historical readers remain in the dependency order below.
+The runtime-owned title/save/load controller now scans and classifies slot metadata, displays fixed
+pages of twenty, includes autosave slot 99 on the final load page, confirms overwrites and performs
+revision-bound deletion when the frontend negotiated that extension. Nested `SAVEGAME` and
+`LOADGAME` preserve their suspended Host continuation; cancellation resumes it, successful save
+commits the isolated candidate before resuming it, and successful load replaces authoritative game
+state. `TITLE_LOADGAME` has reference precedence. Ordinary load runs `SYSTEM_LOADEND`, then
+`EVENTLOAD`, then enters SHOP without immediately repeating shop autosave.
 
-The candidate save transaction is now the completed prerequisite for the remaining work. The rest
-of this batch is intentionally sequential: items 1 and 2 finalize controller continuations; item 3
-snapshots those stable controller states; and items 4--7 validate and close persistence behavior.
+Exact Runtime Snapshot v6 admits stable runtime-owned title/save/load/overwrite waits. It stores
+semantic controller/menu state and the selected overwrite slot without transport tokens. Restore
+increments `SessionEpoch`, rebinds fresh waits/buttons, and re-lists slot metadata so deletion never
+reuses a stale revision. Structured interaction-key maps use an ordered pair representation inside
+the JSON payload, avoiding JSON's string-key restriction while rejecting duplicate tokens.
+Candidate transactions, QTEs, active storage/service work and mismatched bytecode generations remain
+explicit blockers.
 
-Implement the remaining work in this dependency order:
+The UTF-8 text decoder accepts the markerless EraMaker envelope and reference historical extension
+layouts 1700, 1708, 1729 and 1803 as read-only migrations. Current writes remain versioned current
+format. The pinned reference binary reader accepts only its current 1808 binary layout, so there is
+no fabricated historical binary migration path.
 
-1. Complete the title/save/load controller over `CHKDATA`: fixed pages of twenty, empty/corrupt
-   slot states, overwrite confirmation, revision-bound tokens, any-key recovery and delete actions
-   in save and load menus. Deletion remains an explicitly documented extension.
-2. Complete nested `SAVEGAME`/`LOADGAME` continuation behavior in `__CAN_SAVE__` states,
-   `TITLE_LOADGAME` precedence, and the `SYSTEM_LOADEND` -> `EVENTLOAD` -> SHOP chain with immediate
-   shop-autosave suppression. Route built-in and shop autosave through the same candidate
-   transaction using `Missing` or the observed `Revision`, never `Any`.
-3. Extend exact Runtime Snapshot eligibility to stable runtime-owned title/save/load/shop waits.
-   Serialize controller and slot metadata without transport IDs, then atomically restore and
-   rebind fresh epoch-scoped waits, buttons and revisions. Candidate saves, QTEs, storage/service
-   work and old bytecode generations remain blockers.
-4. Add reference-supported historical save readers after current-format candidate writes,
-   continuation rules and schema checks are stable. Historical input is read-only migration into
-   the current authoritative state; new writes continue to use the current versioned formats.
-5. Extend the reference CLI with current-format ordinary/global/character/text/log and save Host
-   fixtures, then run same-input semantic comparisons for metadata, corruption, conflict,
-   cancellation, continuation and autosave behavior wherever the headless reference exposes them.
-   Record endpoint gaps explicitly; Rust codec round trips remain necessary but insufficient.
-6. Run focused real-game project slices for startup, title/save/load, shop/autosave, reload,
-   snapshot recovery and long sessions. Keep unit fixtures small, and use selected real-game slices
-   rather than loading the complete 80+ MiB corpus by default.
-7. Perform the final pinned built-in audit. Every built-in must have tests and a working
-   implementation or a documented stable intentional-difference diagnostic; every public protocol,
-   persisted format and roadmap status must agree before declaring runtime compatibility closure.
+Small Rust fixtures cover corruption, paging, overwrite/delete preconditions, conflict recovery,
+nested continuation, post-load ordering, candidate rollback and stable snapshot rebinding. A
+read-only `eraTW-minimal` corpus audit pins the actual title, shop, `EVENTLOAD` and `SAVEINFO` call
+sites; runtime execution tests continue to use reduced fixtures instead of making the full real-game
+corpus a default test dependency. The audit also exposed and fixed diagnostic line counting at a
+UTF-8 byte offset that is not a character boundary.
+
+The headless C# CLI exposes parsing, evaluator/VM execution, `PUTFORM` and `SAVENOS`, but it does not
+expose an in-memory persistence transport, revision conflicts, cancellation or runtime snapshots.
+Those architecture-specific paths therefore have Rust state-machine and codec tests, not a claimed
+C# differential. Current-format scalar/native behavior continues to use the existing same-input
+oracle fixtures. Adding a reference persistence endpoint would require a new headless backend hook
+or reference-owned filesystem transaction adapter and is deliberately recorded as an oracle gap,
+not an unimplemented Rust runtime feature.
+
+With those endpoint limits and the intentional differences in
+[`runtime-operation-contracts.md`](runtime-operation-contracts.md), Batches 10 and 11 are closed.
+Future compatibility work must be opened as a new audited roadmap rather than silently reopening
+these completed batches.
 
 ## Verification required for every batch
 
@@ -478,5 +494,6 @@ change.
 
 ## Post-Completion Review
 
-After completing a batch of tasks, redistribute any tasks from that batch that remain unimplemented
-into the remaining batches according to their dependencies. No new batches may be added.
+All work assigned to Batches 10 and 11 is either implemented or closed by a tested, documented
+intentional difference/oracle limitation above. There are no tasks left to redistribute within this
+roadmap.
