@@ -292,6 +292,13 @@ fn validate_runtime_layout(
         .iter()
         .map(|function| function.key)
         .collect();
+    let reference_parameters: BTreeSet<_> = artifact
+        .functions
+        .iter()
+        .flat_map(|function| &function.parameters)
+        .filter(|parameter| parameter.by_reference)
+        .map(|parameter| parameter.key)
+        .collect();
     for global in &artifact.globals {
         let function_storage = matches!(
             global.storage,
@@ -299,11 +306,15 @@ fn validate_runtime_layout(
                 | BytecodeStorage::FunctionStatic
                 | BytecodeStorage::FunctionPersistent
         );
+        let unbound_reference = global.storage == BytecodeStorage::FunctionLocal
+            && reference_parameters.contains(&global.key);
         if function_storage != global.owner.is_some()
             || global
                 .owner
                 .is_some_and(|owner| !function_keys.contains(&owner))
-            || (global.storage != BytecodeStorage::Calculated && global.dimensions.contains(&0))
+            || (global.storage != BytecodeStorage::Calculated
+                && global.dimensions.contains(&0)
+                && !unbound_reference)
         {
             diagnostics.push(ValidationDiagnostic::project(
                 ValidationCode::InvalidOperand,
@@ -329,38 +340,7 @@ fn validate_runtime_layout(
             ));
         }
     }
-    for function in &artifact.functions {
-        let mut parameter_keys = BTreeSet::new();
-        for parameter in &function.parameters {
-            let valid = parameter_keys.insert(parameter.key)
-                && artifact.globals.iter().any(|global| {
-                    let owner_matches = global.owner == Some(function.key)
-                        || (global.storage == BytecodeStorage::FunctionPersistent
-                            && global.owner.is_some_and(|owner| {
-                                artifact.functions.iter().any(|candidate| {
-                                    candidate.key == owner
-                                        && candidate.name.eq_ignore_ascii_case(&function.name)
-                                })
-                            }));
-                    global.key == parameter.key
-                        && owner_matches
-                        && matches!(
-                            global.storage,
-                            BytecodeStorage::FunctionLocal | BytecodeStorage::FunctionPersistent
-                        )
-                        && global.value_type == parameter.value_type
-                });
-            if !valid {
-                diagnostics.push(ValidationDiagnostic::project(
-                    ValidationCode::InvalidOperand,
-                    format!(
-                        "function {} has an invalid parameter binding",
-                        function.name
-                    ),
-                ));
-            }
-        }
-    }
+    validate_function_parameters(artifact, diagnostics);
     ensure_unique(
         artifact.functions.iter().map(|function| function.key),
         "function",
@@ -380,6 +360,51 @@ fn validate_runtime_layout(
         "host import",
         diagnostics,
     );
+}
+
+fn validate_function_parameters(
+    artifact: &BytecodeArtifact,
+    diagnostics: &mut Vec<ValidationDiagnostic>,
+) {
+    for function in &artifact.functions {
+        let mut parameter_keys = BTreeSet::new();
+        for parameter in &function.parameters {
+            let valid = parameter_keys.insert(parameter.key)
+                && artifact.globals.iter().any(|global| {
+                    let owner_matches = global.owner == Some(function.key)
+                        || (global.storage == BytecodeStorage::FunctionPersistent
+                            && global.owner.is_some_and(|owner| {
+                                artifact.functions.iter().any(|candidate| {
+                                    candidate.key == owner
+                                        && candidate.name.eq_ignore_ascii_case(&function.name)
+                                })
+                            }));
+                    let type_matches = match parameter.value_type {
+                        BytecodeType::IntegerPlace => global.value_type == BytecodeType::Integer,
+                        BytecodeType::StringPlace => global.value_type == BytecodeType::String,
+                        BytecodeType::Integer | BytecodeType::String => {
+                            global.value_type == parameter.value_type
+                        }
+                    };
+                    global.key == parameter.key
+                        && owner_matches
+                        && matches!(
+                            global.storage,
+                            BytecodeStorage::FunctionLocal | BytecodeStorage::FunctionPersistent
+                        )
+                        && type_matches
+                });
+            if !valid {
+                diagnostics.push(ValidationDiagnostic::project(
+                    ValidationCode::InvalidOperand,
+                    format!(
+                        "function {} has an invalid parameter binding",
+                        function.name
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 fn validate_event_groups(

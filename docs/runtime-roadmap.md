@@ -392,6 +392,29 @@ custom-format surface, the remaining reflection/metadata Native families, semant
 tail, debug-console dispatch unification and final zero-unknown execution matrix remain. These must
 finish before the Batch 11 controller is described as complete.
 
+Third closure checkpoint (2026-07-17): analyzer-visible built-ins no longer default to an assumed
+Native implementation. The compiler now emits a stable unsupported diagnostic unless a built-in is
+in the explicit Native allowlist or is replaced by a classified Host binding; the execution-catalog
+test checks this classification for the complete analyzer inventory. Exact `TOINT`, `ISNUMERIC`,
+`CONVERT` and `COLOR_FROMRGB` behavior is implemented as pure Native code. `TOSTR`, `VARSIZE`,
+`EXISTFUNCTION`, `EXISTVAR`, `GETDOINGFUNCTION`, `ENUMFUNC*` and `ENUMVAR*` are versioned Host
+operations over the active artifact/fiber. Function enumeration excludes event handlers, matching
+is case-insensitive, and the return value is the number actually copied into the optional output
+array. Reference parameters now carry place types through HIR lowering, bytecode validation and VM
+frames, so introspection and writes follow the bound variable instead of the zero-sized declaration
+placeholder. The persisted compatibility set is container 10, ISA 3, HIR 8, compiler ABI 14,
+Native ABI 13, Host ABI 9 and VM ABI 6.
+
+The C# and Rust same-input reflection fixture covers ordinary function/variable enumeration, and
+the numeric fixture covers the four newly exact Native functions. `ISDEFINED`, `ENUMMACRO*`,
+`GETMETH`, `GETMETHS`, `EXISTMETH`, `GETVARS` and `ERDNAME` remain stable unsupported: the bytecode
+does not yet persist the preprocessor macro table or the reference dynamic-expression name tables,
+and the focused eraTW corpus contains no uses of these families. Returning zero or an empty string
+would therefore be a false compatibility claim. Batch 10 still requires either a versioned metadata
+section for those tables or a documented final intentional-difference decision, plus the semantic
+canvas animation tail, locale-aware casing, the remaining .NET integer custom formats,
+debug-console dispatch unification and the final Host implementation matrix.
+
 ## Batch 11: persistence, controller and final compatibility closure
 
 ### Implementation checkpoint (2026-07-17)

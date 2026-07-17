@@ -2,7 +2,7 @@
 
 This table is the Batch 10 handoff gate for candidate-save work. Every analyzer-visible built-in
 has exactly one compiler catalog entry. Native and Host imports persist the resolved contract in
-bytecode container 9; the validator rejects incoherent combinations or legacy flags which do not
+bytecode container 10; the validator rejects incoherent combinations or legacy flags which do not
 match the contract. Unknown runtime dispatch never silently succeeds: it emits
 `UnsupportedRuntimeFeature` with the import name.
 
@@ -61,6 +61,9 @@ containers.
   to a frontend-dependent partial result and is mechanically distinct from VM faults.
 - Primitive mouse/key events remain frontend-normalized into EraBasic-shaped fields by design.
   Runtime validates the wait, token, selection and timeout but does not interpret platform events.
+- `ISDEFINED`, `ENUMMACRO*`, `GETMETH`, `GETMETHS`, `EXISTMETH`, `GETVARS` and `ERDNAME` are
+  compile-time stable unsupported operations. The current artifact intentionally has no macro or
+  dynamic-expression metadata section, so zero/empty results would be observably incorrect.
 
 Candidate `SAVEINFO` execution accepts `ReadOnly`, `CloneCommit`, and `BufferedEffect` operations,
 and resolves `FrozenClock` from the single sample obtained before the candidate starts. It rejects

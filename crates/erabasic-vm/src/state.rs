@@ -94,6 +94,38 @@ pub struct Vm {
 }
 
 impl Vm {
+    /// Resolve the active shape of a variable name for runtime introspection.
+    /// Function-local reference variables report the dimensions of their bound
+    /// place rather than the zero-length placeholder stored in bytecode.
+    #[must_use]
+    pub fn variable_dimensions(&self, fiber: FiberId, name: &str) -> Option<Vec<u64>> {
+        let fiber = self.fibers.get(&fiber)?;
+        let frame = fiber.frames.last()?;
+        let artifact = &self.generations.get(&frame.generation)?.artifact;
+        if let Some(definition) = artifact.globals.iter().find(|definition| {
+            definition.storage == BytecodeStorage::FunctionLocal
+                && definition.owner == Some(frame.function)
+                && definition.name.eq_ignore_ascii_case(name)
+        }) {
+            let cell = frame.locals.get(&definition.key)?;
+            if let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) =
+                cell.values.first()
+            {
+                let (_, target) = self.place_definition(fiber, place).ok()?;
+                return Some(target.dimensions.clone());
+            }
+            return Some(cell.dimensions.clone());
+        }
+        artifact
+            .globals
+            .iter()
+            .find(|definition| {
+                definition.storage != BytecodeStorage::FunctionLocal
+                    && definition.name.eq_ignore_ascii_case(name)
+            })
+            .map(|definition| definition.dimensions.clone())
+    }
+
     #[must_use]
     pub fn new(artifact: ValidatedArtifact, config: VmConfig) -> Self {
         let artifact = artifact.into_inner();
@@ -454,12 +486,18 @@ impl Vm {
         let (generation, definition) = self.place_definition(fiber, place)?;
         if definition.storage == BytecodeStorage::FunctionLocal {
             let frame = find_frame(fiber, place.frame, definition.owner)?;
-            return frame
+            let cell = frame
                 .locals
                 .get(&definition.key)
-                .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?
-                .read(&place.indices)
-                .map_err(VmError::InvalidState);
+                .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
+            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) =
+                cell.values.first()
+            {
+                let mut target = bound.clone();
+                target.indices.extend_from_slice(&place.indices);
+                return self.read_place(fiber, &target);
+            }
+            return cell.read(&place.indices).map_err(VmError::InvalidState);
         }
         let character = place.character.map_or_else(
             || {
@@ -503,6 +541,20 @@ impl Vm {
             return Err(VmError::InvalidState("place is immutable".into()));
         }
         if definition.storage == BytecodeStorage::FunctionLocal {
+            let bound = find_frame(fiber, place.frame, definition.owner)?
+                .locals
+                .get(&definition.key)
+                .and_then(|cell| cell.values.first())
+                .and_then(|value| match value {
+                    VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => {
+                        Some(place.clone())
+                    }
+                    VmValue::Integer(_) | VmValue::String(_) => None,
+                });
+            if let Some(mut target) = bound {
+                target.indices.extend_from_slice(&place.indices);
+                return self.write_place_internal(fiber, &target, value, trusted_runtime);
+            }
             let frame = find_frame_mut(fiber, place.frame, definition.owner)?;
             return frame
                 .locals
@@ -714,10 +766,15 @@ pub(crate) fn make_frame(
         .map(|definition| (definition.key, VariableCell::new(definition)))
         .collect();
     for (parameter, argument) in function.parameters.iter().zip(arguments) {
-        if let Some(cell) = locals.get_mut(&parameter.key)
-            && let Some(slot) = cell.values.first_mut()
-        {
-            *slot = argument;
+        if let Some(cell) = locals.get_mut(&parameter.key) {
+            if parameter.by_reference && cell.values.is_empty() {
+                // A zero-sized REF declaration is an unbound shape marker, not
+                // zero runtime storage. The frame owns one alias slot.
+                cell.dimensions = vec![1];
+                cell.values.push(argument);
+            } else if let Some(slot) = cell.values.first_mut() {
+                *slot = argument;
+            }
         }
     }
     Frame {

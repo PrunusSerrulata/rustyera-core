@@ -114,6 +114,13 @@ impl RuntimeVm {
         &mut self.vm
     }
 
+    /// Return the active dimensions for a named global, local, or bound
+    /// reference variable in the requesting fiber.
+    #[must_use]
+    pub fn variable_dimensions(&self, fiber: FiberId, name: &str) -> Option<Vec<u64>> {
+        self.vm.variable_dimensions(fiber, name)
+    }
+
     /// Whether at least one fiber can make progress without a host completion.
     #[must_use]
     pub fn has_runnable_fibers(&self) -> bool {

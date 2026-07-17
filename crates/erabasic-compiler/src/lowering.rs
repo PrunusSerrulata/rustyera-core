@@ -192,7 +192,15 @@ pub(crate) fn lower_function(
                 .program
                 .variables
                 .get(parameter.target.variable.0 as usize)?;
-            let value_type = bytecode_type(parameter.target.value_type)?;
+            let value_type = if variable.reference {
+                match parameter.target.value_type {
+                    SemanticType::Integer => BytecodeType::IntegerPlace,
+                    SemanticType::String => BytecodeType::StringPlace,
+                    SemanticType::Void | SemanticType::Error => return None,
+                }
+            } else {
+                bytecode_type(parameter.target.value_type)?
+            };
             Some(BytecodeParameter {
                 key: *context.variable_keys.get(&parameter.target.variable)?,
                 value_type,
@@ -497,17 +505,41 @@ impl<'a> Builder<'a> {
             );
             return;
         };
-        let parameter_types: Vec<_> = arguments
-            .iter()
-            .skip(1)
-            .map(|argument| self.lower_argument(argument, location))
-            .collect();
         let target_function = self
             .context
             .program
             .functions
             .iter()
             .find(|function| self.context.function_keys.get(&function.id) == Some(&target));
+        let reference_parameters = target_function
+            .map(|function| {
+                function
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        self.context
+                            .program
+                            .variables
+                            .get(parameter.target.variable.0 as usize)
+                            .is_some_and(|variable| variable.reference)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let parameter_types: Vec<_> = arguments
+            .iter()
+            .skip(1)
+            .enumerate()
+            .map(|(index, argument)| {
+                if reference_parameters.get(index) == Some(&true)
+                    && let HirArgument::Expression(expression) = argument
+                    && let HirExprKind::Variable { place } = &expression.kind
+                {
+                    return self.lower_argument(&HirArgument::Place(place.clone()), location);
+                }
+                self.lower_argument(argument, location)
+            })
+            .collect();
         let result = target_function.and_then(|function| bytecode_type(function.return_type));
         let import = self.add_import(ImportKind::Function, target);
         self.emit(

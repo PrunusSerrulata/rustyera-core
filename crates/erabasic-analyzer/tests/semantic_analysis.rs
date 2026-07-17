@@ -333,18 +333,19 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             "ORACLE_TEST",
             "ORACLE_NATIVE",
             "ORACLE_INPUT",
+            "ORACLE_REFLECTION",
             "ORACLE_MAP",
             "ORACLE_STRUCTURED"
         ]
     );
-    assert_eq!(program.functions[0].lines.len(), 11);
+    assert_eq!(program.functions[0].lines.len(), 12);
     assert_eq!(
         program.functions[0]
             .control_flow
             .iter()
             .filter(|edge| edge.kind == erabasic_hir::ControlFlowKind::Call)
             .count(),
-        6
+        7
     );
 }
 
