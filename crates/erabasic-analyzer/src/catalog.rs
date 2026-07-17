@@ -398,7 +398,6 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     for name in [
         "BAR",
         "BARL",
-        "VARSIZE",
         "SAVEDATA",
         "LOADDATA",
         "DELDATA",
@@ -694,8 +693,6 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "FINDLASTELEMENT",
         "STRLEN",
         "STRLENU",
-        "TOINT",
-        "ISNUMERIC",
     ] {
         add(name, IntType, &[Any], 1, true);
     }
@@ -703,7 +700,6 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         add(name, IntType, &[Integer], 1, true);
     }
     for name in [
-        "TOSTR",
         "SUBSTRING",
         "SUBSTRINGU",
         "STRFORM",
@@ -718,6 +714,31 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     // the inverse-shaped operation of ENCODETOUNI; keeping the signature here
     // exact prevents lowering it as the old string-to-integer approximation.
     add("UNICODE", StrType, &[Integer], 1, false);
+    add("TOINT", IntType, &[String], 1, false);
+    add("ISNUMERIC", IntType, &[String], 1, false);
+    add("VARSIZE", IntType, &[String, Integer], 1, false);
+    add("EXISTFUNCTION", IntType, &[String, Integer], 1, false);
+    add("EXISTVAR", IntType, &[String], 1, false);
+    add("GETDOINGFUNCTION", StrType, &[], 0, false);
+    for name in [
+        "ENUMFUNCBEGINSWITH",
+        "ENUMFUNCENDSWITH",
+        "ENUMFUNCWITH",
+        "ENUMVARBEGINSWITH",
+        "ENUMVARENDSWITH",
+        "ENUMVARWITH",
+    ] {
+        add(name, IntType, &[String, MutableString], 1, false);
+    }
+    add("CONVERT", StrType, &[Integer, Integer], 2, false);
+    add(
+        "COLOR_FROMRGB",
+        IntType,
+        &[Integer, Integer, Integer],
+        3,
+        false,
+    );
+    add("TOSTR", StrType, &[Integer, String], 1, false);
     for name in ["TOFULL", "TOHALF"] {
         add(name, StrType, &[String], 1, false);
     }

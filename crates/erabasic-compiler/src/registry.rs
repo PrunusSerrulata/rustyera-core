@@ -71,11 +71,15 @@ pub fn default_host_registry() -> HostRegistry {
         .into_iter()
         .chain(builtin_function_names())
     {
-        let contract = native_contract(&name);
-        registry
-            .bindings
-            .entry(name)
-            .or_insert(ExecutionBinding::Native(contract));
+        let binding = if native_is_implemented(&name) {
+            ExecutionBinding::Native(native_contract(&name))
+        } else {
+            ExecutionBinding::Unsupported {
+                reason: "the pinned runtime has no classified implementation for this built-in"
+                    .into(),
+            }
+        };
+        registry.bindings.entry(name).or_insert(binding);
     }
 
     register_hosts(
@@ -144,6 +148,124 @@ pub fn default_host_registry() -> HostRegistry {
     );
     registry
 }
+
+fn native_is_implemented(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.starts_with("map_")
+        || name.starts_with("xml_")
+        || name.starts_with("dt_")
+        || IMPLEMENTED_NATIVE_NAMES.contains(&name.as_str())
+}
+
+const IMPLEMENTED_NATIVE_NAMES: &[&str] = &[
+    "abs",
+    "sign",
+    "sqrt",
+    "cbrt",
+    "log",
+    "log10",
+    "exponent",
+    "power",
+    "getbit",
+    "bitcount",
+    "strlen",
+    "strlenu",
+    "toint",
+    "isnumeric",
+    "unicode",
+    "convert",
+    "color_fromrgb",
+    "max",
+    "min",
+    "limit",
+    "inrange",
+    "tostr",
+    "substring",
+    "substringu",
+    "strfind",
+    "strfindu",
+    "strcount",
+    "strlens",
+    "strlensu",
+    "getpalamlv",
+    "getexplv",
+    "replace",
+    "escape",
+    "unicodetostr",
+    "encodetouni",
+    "unicodebyte",
+    "charatu",
+    "tolower",
+    "toupper",
+    "rand",
+    "randomize",
+    "initrand",
+    "dumprand",
+    "swap",
+    "swapvar",
+    "setbit",
+    "clearbit",
+    "invertbit",
+    "split",
+    "getnum",
+    "strjoin",
+    "arrayremove",
+    "arrayshift",
+    "arraysort",
+    "arraycopy",
+    "varset",
+    "cvarset",
+    "arraymsort",
+    "arraymsortex",
+    "findelement",
+    "findlastelement",
+    "regexpmatch",
+    "sumarray",
+    "sumcarray",
+    "maxarray",
+    "maxcarray",
+    "minarray",
+    "mincarray",
+    "match",
+    "cmatch",
+    "inrangearray",
+    "inrangecarray",
+    "groupmatch",
+    "nosames",
+    "allsames",
+    "charanum",
+    "getchara",
+    "getspchara",
+    "existcsv",
+    "csvname",
+    "csvcallname",
+    "csvnickname",
+    "csvmastername",
+    "csvcstr",
+    "csvbase",
+    "csvabl",
+    "csvmark",
+    "csvexp",
+    "csvrelation",
+    "csvtalent",
+    "csvcflag",
+    "csvequip",
+    "csvjuel",
+    "findchara",
+    "findlastchara",
+    "addchara",
+    "addspchara",
+    "adddefchara",
+    "addvoidchara",
+    "delchara",
+    "delallchara",
+    "swapchara",
+    "copychara",
+    "addcopychara",
+    "pickupchara",
+    "sortchara",
+    "reset_stain",
+];
 
 fn register_hosts(
     registry: &mut HostRegistry,
@@ -362,6 +484,7 @@ const TEXT: &[&str] = &[
     "PRINTCLENGTH",
     "BARSTR",
     "MONEYSTR",
+    "TOSTR",
     "TOFULL",
     "TOHALF",
     "MESSKIP",
@@ -474,6 +597,16 @@ const SYSTEM: &[&str] = &[
     "GETMEMORYUSAGE",
     "GETCONFIG",
     "GETCONFIGS",
+    "VARSIZE",
+    "EXISTFUNCTION",
+    "EXISTVAR",
+    "GETDOINGFUNCTION",
+    "ENUMFUNCBEGINSWITH",
+    "ENUMFUNCENDSWITH",
+    "ENUMFUNCWITH",
+    "ENUMVARBEGINSWITH",
+    "ENUMVARENDSWITH",
+    "ENUMVARWITH",
 ];
 
 const NETWORK: &[&str] = &["UPDATECHECK"];
@@ -581,15 +714,19 @@ fn native_contract(name: &str) -> OperationContract {
 #[allow(clippy::too_many_lines)]
 fn host_contract(namespace: &str, name: &str) -> OperationContract {
     let (state, transaction, persistence, snapshot, hot_reload, wait, fallback) = match namespace {
-        "rustyera.text" if matches!(name, "BARSTR" | "MONEYSTR" | "TOFULL" | "TOHALF") => (
-            OperationState::Controller,
-            TransactionPolicy::ReadOnly,
-            OperationPersistence::ProjectDerived,
-            OperationSnapshotPolicy::Included,
-            OperationHotReloadPolicy::Rebuild,
-            OperationWaitPolicy::Immediate,
-            CapabilityFallback::CanonicalProjection,
-        ),
+        "rustyera.text"
+            if matches!(name, "BARSTR" | "MONEYSTR" | "TOSTR" | "TOFULL" | "TOHALF") =>
+        {
+            (
+                OperationState::Controller,
+                TransactionPolicy::ReadOnly,
+                OperationPersistence::ProjectDerived,
+                OperationSnapshotPolicy::Included,
+                OperationHotReloadPolicy::Rebuild,
+                OperationWaitPolicy::Immediate,
+                CapabilityFallback::CanonicalProjection,
+            )
+        }
         "rustyera.text" => (
             OperationState::Presentation,
             TransactionPolicy::CloneCommit,
@@ -680,15 +817,48 @@ fn host_contract(namespace: &str, name: &str) -> OperationContract {
             OperationWaitPolicy::TransientExternal,
             CapabilityFallback::Unsupported,
         ),
-        "rustyera.system" if matches!(name, "GETCONFIG" | "GETCONFIGS") => (
-            OperationState::Controller,
-            TransactionPolicy::ReadOnly,
-            OperationPersistence::ProjectDerived,
-            OperationSnapshotPolicy::Included,
-            OperationHotReloadPolicy::Rebuild,
-            OperationWaitPolicy::Immediate,
-            CapabilityFallback::CanonicalProjection,
-        ),
+        "rustyera.system"
+            if matches!(
+                name,
+                "ENUMFUNCBEGINSWITH"
+                    | "ENUMFUNCENDSWITH"
+                    | "ENUMFUNCWITH"
+                    | "ENUMVARBEGINSWITH"
+                    | "ENUMVARENDSWITH"
+                    | "ENUMVARWITH"
+            ) =>
+        {
+            (
+                OperationState::Vm,
+                TransactionPolicy::CloneCommit,
+                OperationPersistence::VariableScoped,
+                OperationSnapshotPolicy::Included,
+                OperationHotReloadPolicy::Preserve,
+                OperationWaitPolicy::Immediate,
+                CapabilityFallback::NotApplicable,
+            )
+        }
+        "rustyera.system"
+            if matches!(
+                name,
+                "GETCONFIG"
+                    | "GETCONFIGS"
+                    | "VARSIZE"
+                    | "EXISTFUNCTION"
+                    | "EXISTVAR"
+                    | "GETDOINGFUNCTION"
+            ) =>
+        {
+            (
+                OperationState::Controller,
+                TransactionPolicy::ReadOnly,
+                OperationPersistence::ProjectDerived,
+                OperationSnapshotPolicy::Included,
+                OperationHotReloadPolicy::Rebuild,
+                OperationWaitPolicy::Immediate,
+                CapabilityFallback::CanonicalProjection,
+            )
+        }
         "rustyera.system" => (
             OperationState::Controller,
             TransactionPolicy::CloneCommit,

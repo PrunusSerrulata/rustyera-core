@@ -284,6 +284,18 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
         Some(ExecutionBinding::Native(_))
     ));
     assert!(matches!(
+        registry.classification("CONVERT"),
+        Some(ExecutionBinding::Native(_))
+    ));
+    assert!(matches!(
+        registry.classification("VARSIZE"),
+        Some(ExecutionBinding::Host(binding)) if binding.namespace == "rustyera.system"
+    ));
+    assert!(matches!(
+        registry.classification("GETMETH"),
+        Some(ExecutionBinding::Unsupported { .. })
+    ));
+    assert!(matches!(
         registry.classification("CALLSHARP"),
         Some(ExecutionBinding::Unsupported { .. })
     ));

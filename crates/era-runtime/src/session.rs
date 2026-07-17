@@ -1652,6 +1652,182 @@ impl RuntimeSession {
                 }),
             );
         }
+        if name == "VARSIZE" {
+            let variable = string_argument_value(&request.arguments, 0, "VARSIZE")?;
+            let dimensions = vm
+                .variable_dimensions(request.fiber, variable)
+                .ok_or_else(|| {
+                    RuntimeError::Internal(format!(
+                        "VARSIZE argument is not a variable: {variable}"
+                    ))
+                })?;
+            let dimension = request
+                .arguments
+                .get(1)
+                .map(|_| integer_argument_value(&request.arguments, 1))
+                .transpose()?
+                .unwrap_or(0);
+            let dimension = usize::try_from(dimension).map_err(|_| {
+                RuntimeError::Internal("VARSIZE dimension must be non-negative".into())
+            })?;
+            let value = dimensions.get(dimension).copied().ok_or_else(|| {
+                RuntimeError::Internal("VARSIZE dimension exceeds the variable rank".into())
+            })?;
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(i64::try_from(value).unwrap_or(i64::MAX))),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "EXISTFUNCTION" {
+            let function = string_argument_value(&request.arguments, 0, "EXISTFUNCTION")?;
+            let insensitive = request
+                .arguments
+                .get(1)
+                .map(|_| integer_argument_value(&request.arguments, 1))
+                .transpose()?
+                .unwrap_or(0)
+                != 0;
+            let found = vm.vm().artifact().functions.iter().find(|candidate| {
+                if insensitive {
+                    candidate.name.eq_ignore_ascii_case(function)
+                } else {
+                    candidate.name == function
+                }
+            });
+            let value = found.map_or(0, |function| match function.result {
+                Some(erabasic_bytecode::BytecodeType::Integer) => 2,
+                Some(erabasic_bytecode::BytecodeType::String) => 3,
+                _ => 1,
+            });
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "EXISTVAR" {
+            let variable = string_argument_value(&request.arguments, 0, "EXISTVAR")?;
+            let value = vm
+                .vm()
+                .artifact()
+                .globals
+                .iter()
+                .find(|definition| {
+                    definition.owner.is_none() && definition.name.eq_ignore_ascii_case(variable)
+                })
+                .map_or(0, |definition| {
+                    let mut flags = match definition.value_type {
+                        erabasic_bytecode::BytecodeType::Integer
+                        | erabasic_bytecode::BytecodeType::IntegerPlace => 1,
+                        erabasic_bytecode::BytecodeType::String
+                        | erabasic_bytecode::BytecodeType::StringPlace => 2,
+                    };
+                    if !definition.mutable {
+                        flags |= 4;
+                    }
+                    if definition.dimensions.len() == 2 {
+                        flags |= 8;
+                    } else if definition.dimensions.len() == 3 {
+                        flags |= 16;
+                    }
+                    flags
+                });
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if name == "GETDOINGFUNCTION" {
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(request.origin.function_name.clone())),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "ENUMFUNCBEGINSWITH"
+                | "ENUMFUNCENDSWITH"
+                | "ENUMFUNCWITH"
+                | "ENUMVARBEGINSWITH"
+                | "ENUMVARENDSWITH"
+                | "ENUMVARWITH"
+        ) {
+            let query = string_argument_value(&request.arguments, 0, &name)?;
+            let target = request.arguments.get(1).and_then(|value| match value {
+                VmValue::StringPlace(place) => Some(place.clone()),
+                _ => None,
+            });
+            let mut names = Vec::new();
+            if !query.is_empty() {
+                let event_functions: BTreeSet<_> = vm
+                    .vm()
+                    .artifact()
+                    .event_groups
+                    .iter()
+                    .flat_map(|group| {
+                        group
+                            .only
+                            .iter()
+                            .chain(&group.priority)
+                            .chain(&group.normal)
+                            .chain(&group.later)
+                    })
+                    .map(|entry| entry.function)
+                    .collect();
+                let candidates: Vec<&str> = if name.starts_with("ENUMFUNC") {
+                    vm.vm()
+                        .artifact()
+                        .functions
+                        .iter()
+                        .filter(|function| !event_functions.contains(&function.key))
+                        .map(|function| function.name.as_str())
+                        .collect()
+                } else {
+                    let mut seen = BTreeSet::new();
+                    vm.vm()
+                        .artifact()
+                        .globals
+                        .iter()
+                        .filter(|variable| {
+                            variable.owner.is_none()
+                                && seen.insert(variable.name.to_ascii_uppercase())
+                        })
+                        .map(|variable| variable.name.as_str())
+                        .collect()
+                };
+                names.extend(
+                    candidates
+                        .into_iter()
+                        .filter(|candidate| enum_name_matches(&name, candidate, query))
+                        .map(str::to_owned),
+                );
+            }
+            let writes = string_array_writes(vm, target, &names);
+            let output_length = i64::try_from(writes.len()).unwrap_or(i64::MAX);
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(output_length)),
+                    writes,
+                }),
+            );
+        }
         if name == "BARSTR" {
             let value = integer_argument_value(&request.arguments, 0)?;
             let maximum = integer_argument_value(&request.arguments, 1)?;
@@ -1698,7 +1874,7 @@ impl RuntimeSession {
                 }),
             );
         }
-        if name == "MONEYSTR" {
+        if matches!(name.as_str(), "MONEYSTR" | "TOSTR") {
             let value = integer_argument_value(&request.arguments, 0)?;
             let formatted = match request.arguments.get(1) {
                 None => value.to_string(),
@@ -1707,7 +1883,7 @@ impl RuntimeSession {
                     Err(error) => {
                         return self.fault(
                             FaultCode::VmFault,
-                            &format!("MONEYSTR format is invalid: {error}"),
+                            &format!("{name} format is invalid: {error}"),
                             Some(request.origin.clone()),
                         );
                     }
@@ -1715,11 +1891,21 @@ impl RuntimeSession {
                 Some(_) => {
                     return self.fault(
                         FaultCode::VmFault,
-                        "MONEYSTR argument 2 must be a string",
+                        &format!("{name} argument 2 must be a string"),
                         Some(request.origin.clone()),
                     );
                 }
             };
+            if name == "TOSTR" {
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady {
+                        value: Some(VmValue::String(formatted)),
+                        writes: Vec::new(),
+                    }),
+                );
+            }
             let project = self
                 .project_snapshot
                 .as_ref()
@@ -6370,6 +6556,56 @@ fn global_place_at(vm: &RuntimeVm, name: &str, index: usize) -> Option<PlaceDesc
     Some(place)
 }
 
+fn enum_name_matches(operation: &str, candidate: &str, query: &str) -> bool {
+    let candidate = candidate.to_uppercase();
+    let query = query.to_uppercase();
+    if operation.ends_with("BEGINSWITH") {
+        candidate.starts_with(&query)
+    } else if operation.ends_with("ENDSWITH") {
+        candidate.ends_with(&query)
+    } else {
+        candidate.contains(&query)
+    }
+}
+
+fn string_array_writes(
+    vm: &RuntimeVm,
+    target: Option<PlaceDescriptor>,
+    values: &[String],
+) -> Vec<HostWrite> {
+    let Some(base) = target.or_else(|| global_place_at(vm, "RESULTS", 0)) else {
+        return Vec::new();
+    };
+    let maximum = vm
+        .vm()
+        .artifact()
+        .globals
+        .iter()
+        .find(|definition| definition.key == base.variable)
+        .and_then(|definition| definition.dimensions.first())
+        .and_then(|value| usize::try_from(*value).ok())
+        .unwrap_or(0);
+    values
+        .iter()
+        .take(maximum)
+        .enumerate()
+        .map(|(index, value)| {
+            let mut target = base.clone();
+            if let Some(last) = target.indices.last_mut() {
+                *last = u64::try_from(index).unwrap_or(u64::MAX);
+            } else {
+                target
+                    .indices
+                    .push(u64::try_from(index).unwrap_or(u64::MAX));
+            }
+            HostWrite {
+                target,
+                value: VmValue::String(value.clone()),
+            }
+        })
+        .collect()
+}
+
 fn is_print(name: &str) -> bool {
     name.starts_with("PRINT") || name == "REUSELASTLINE"
 }
@@ -7515,6 +7751,95 @@ mod tests {
             }),
             _ => false,
         }));
+    }
+
+    #[test]
+    fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        submit(
+            &mut session,
+            0,
+            RuntimeMessage::ClientHello(ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "metadata-test".into(),
+                features: Vec::new(),
+                requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
+                preferred_locales: vec!["ja".into()],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        submit(
+            &mut session,
+            1,
+            RuntimeMessage::ProjectManifest(ProjectManifest {
+                project_revision: 1,
+                files: vec![SubmittedFile {
+                    relative_path: "metadata.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(
+                        "@SYSTEM_TITLE\n#DIMS VALUES, 3\n#DIMS CHOICES, 5\nCALL SIZE_OF, CHOICES\nPRINTFORML meta={VARSIZE(\"VALUES\")},{EXISTFUNCTION(\"SYSTEM_TITLE\")},{EXISTVAR(\"VALUES\")},%GETDOINGFUNCTION()%,{RESULT},%CHOICES:2%\nPRINTFORML funcs={ENUMFUNCWITH(\"SIZE\", CHOICES)},%CHOICES:0%\nPRINTFORML vars={ENUMVARWITH(\"SAVEDATA_TEXT\", CHOICES)},%CHOICES:0%\nCALL ORACLE_REFLECTION\nPRINTFORML reflection={RESULT:12},{RESULT:13},%RESULTS:8%,%RESULTS:9%\nRETURN\n@SIZE_OF(refChoices)\n#DIMS REF refChoices, 0\nrefChoices:2 = \"bound\"\nRESULT = VARSIZE(\"refChoices\")\nRETURN\n@ORACLE_REFLECTION\n#DIMS NAMES, 4\nRESULT:12 = ENUMFUNCWITH(\"ORACLE_REFLECTION\", NAMES)\nRESULTS:8 = %NAMES:0%\nRESULT:13 = ENUMVARWITH(\"SAVEDATA_TEXT\", NAMES)\nRESULTS:9 = %NAMES:0%\nRETURN\n"
+                            .into(),
+                    ),
+                    content_hash: None,
+                }],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let loaded = drain(&mut session);
+        assert!(
+            loaded.iter().any(|message| {
+                matches!(message, RuntimeMessage::ProjectLoadReport(report) if report.success)
+            }),
+            "{loaded:#?}"
+        );
+        submit(
+            &mut session,
+            2,
+            RuntimeMessage::Start(StartRequest {
+                mode: StartMode::NewGame { seed: Some(1) },
+            }),
+        );
+        for _ in 0..24 {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+        }
+        let output = drain(&mut session);
+        assert!(
+            output.iter().any(|message| match message {
+                RuntimeMessage::PresentationSnapshot(snapshot) =>
+                    snapshot.lines.iter().any(|line| {
+                        line.runs.iter().any(|run| {
+                            matches!(
+                                run,
+                                era_runtime_protocol::DisplayRun::Text { text, .. }
+                                    if text.contains("meta=3,1,0,SYSTEM_TITLE,5,bound")
+                            )
+                        })
+                    }),
+                _ => false,
+            }),
+            "{output:#?}"
+        );
+        let rendered = output
+            .iter()
+            .filter_map(|message| match message {
+                RuntimeMessage::PresentationSnapshot(snapshot) => Some(snapshot),
+                _ => None,
+            })
+            .flat_map(|snapshot| snapshot.lines.iter())
+            .flat_map(|line| line.runs.iter())
+            .filter_map(|run| match run {
+                era_runtime_protocol::DisplayRun::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert!(rendered.contains("funcs=1,SIZE_OF"), "{rendered}");
+        assert!(rendered.contains("vars=1,SAVEDATA_TEXT"), "{rendered}");
+        assert!(
+            rendered.contains("reflection=1,1,ORACLE_REFLECTION,SAVEDATA_TEXT"),
+            "{rendered}\n{output:#?}"
+        );
     }
 
     #[test]

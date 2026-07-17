@@ -215,6 +215,8 @@ impl NativeServiceRegistry {
                     | "toint"
                     | "isnumeric"
                     | "unicode"
+                    | "convert"
+                    | "color_fromrgb"
                     | "max"
                     | "min"
                     | "limit"
@@ -531,13 +533,27 @@ impl NativeService for CoreNative {
             "strlenu" | "strlensu" => {
                 VmValue::Integer(i64::try_from(string(0)?.chars().count()).unwrap_or(i64::MAX))
             }
-            "toint" => VmValue::Integer(
-                string(0)?
-                    .trim()
-                    .parse()
-                    .map_err(|_| "TOINT input is not an integer")?,
-            ),
-            "isnumeric" => VmValue::Integer(i64::from(string(0)?.trim().parse::<i64>().is_ok())),
+            "toint" => VmValue::Integer(parse_era_numeric(string(0)?, false)?.unwrap_or(0)),
+            "isnumeric" => {
+                VmValue::Integer(i64::from(parse_era_numeric(string(0)?, true)?.is_some()))
+            }
+            "convert" => {
+                let value = integer(0)?;
+                VmValue::String(match integer(1)? {
+                    2 => format!("{:b}", value.cast_unsigned()),
+                    8 => format!("{:o}", value.cast_unsigned()),
+                    10 => value.to_string(),
+                    16 => format!("{:x}", value.cast_unsigned()),
+                    _ => return Err("CONVERT base must be 2, 8, 10, or 16".into()),
+                })
+            }
+            "color_fromrgb" => {
+                let channels = [integer(0)?, integer(1)?, integer(2)?];
+                if channels.iter().any(|value| !(0..=255).contains(value)) {
+                    return Err("COLOR_FROMRGB channels must be between 0 and 255".into());
+                }
+                VmValue::Integer((channels[0] << 16) | (channels[1] << 8) | channels[2])
+            }
             "unicode" => {
                 let value = u32::try_from(integer(0)?)
                     .map_err(|_| "UNICODE argument is outside the UTF-16 code-unit range")?;
@@ -723,6 +739,133 @@ fn checked_float_to_integer(value: f64, operation: &str) -> Result<VmValue, Stri
     Ok(VmValue::Integer(value as i64))
 }
 
+/// Parse the numeric grammar used by Emuera's TOINT and ISNUMERIC methods.
+/// Unlike Rust's `FromStr`, the reference accepts binary/hex prefixes,
+/// integer exponents, and a discarded decimal fraction, but never whitespace.
+// The float conversion deliberately mirrors the reference's Math.Pow and
+// unchecked Int64 cast instead of substituting an integer exponent algorithm.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::too_many_lines
+)]
+fn parse_era_numeric(value: &str, numeric_check: bool) -> Result<Option<i64>, String> {
+    if value.is_empty() || !value.is_ascii() {
+        return Ok(None);
+    }
+    let bytes = value.as_bytes();
+    if !bytes[0].is_ascii_digit() && !matches!(bytes[0], b'+' | b'-') {
+        return Ok(None);
+    }
+    if matches!(bytes[0], b'+' | b'-') && bytes.get(1).is_none_or(|next| !next.is_ascii_digit()) {
+        return Ok(None);
+    }
+
+    let mut index = 0;
+    let mut radix = 10;
+    if bytes.starts_with(b"0x") || bytes.starts_with(b"0X") {
+        radix = 16;
+        index = 2;
+    } else if bytes.starts_with(b"0b") || bytes.starts_with(b"0B") {
+        radix = 2;
+        index = 2;
+    }
+    let digits_start = index;
+    if radix == 10
+        && bytes
+            .get(index)
+            .is_some_and(|byte| matches!(byte, b'+' | b'-'))
+    {
+        index += 1;
+    }
+    let unsigned_start = index;
+    while let Some(byte) = bytes.get(index) {
+        if byte.is_ascii_digit() {
+            if radix == 2 && !matches!(byte, b'0' | b'1') {
+                return Err("binary notation contains a digit other than 0 or 1".into());
+            }
+            index += 1;
+        } else if radix == 16 && byte.is_ascii_hexdigit() {
+            index += 1;
+        } else {
+            break;
+        }
+    }
+    if index == unsigned_start {
+        return Ok(None);
+    }
+    let significand = if radix == 10 {
+        value[digits_start..index]
+            .parse::<i64>()
+            .map_err(|_| "numeric significand exceeds signed 64-bit range")?
+    } else {
+        let raw = u64::from_str_radix(&value[unsigned_start..index], radix)
+            .map_err(|_| "numeric significand exceeds 64-bit range")?;
+        raw.cast_signed()
+    };
+
+    let mut result = significand;
+    if bytes
+        .get(index)
+        .is_some_and(|byte| matches!(byte, b'p' | b'P' | b'e' | b'E'))
+    {
+        let exponent_base = if matches!(bytes[index], b'p' | b'P') {
+            2_f64
+        } else {
+            10_f64
+        };
+        index += 1;
+        if numeric_check && bytes.get(index).is_none_or(|byte| !byte.is_ascii_digit()) {
+            return Ok(None);
+        }
+        let exponent_start = index;
+        if !numeric_check
+            && bytes
+                .get(index)
+                .is_some_and(|byte| matches!(byte, b'+' | b'-'))
+        {
+            index += 1;
+        }
+        let exponent_digits = index;
+        while let Some(byte) = bytes.get(index) {
+            let valid = if radix == 16 {
+                byte.is_ascii_hexdigit()
+            } else {
+                byte.is_ascii_digit()
+            };
+            if !valid {
+                break;
+            }
+            if radix == 2 && !matches!(byte, b'0' | b'1') {
+                return Err("binary exponent contains a digit other than 0 or 1".into());
+            }
+            index += 1;
+        }
+        if index == exponent_digits {
+            return if numeric_check {
+                Ok(None)
+            } else {
+                Err("numeric exponent has no digits".into())
+            };
+        }
+        let exponent = i32::from_str_radix(&value[exponent_start..index], radix)
+            .map_err(|_| "numeric exponent exceeds supported range")?;
+        let expanded = (significand as f64) * exponent_base.powi(exponent);
+        if !expanded.is_finite() || expanded > i64::MAX as f64 || expanded < i64::MIN as f64 {
+            return Err("numeric value exceeds signed 64-bit range".into());
+        }
+        result = expanded as i64;
+    }
+
+    if bytes.get(index) == Some(&b'.') {
+        index += 1;
+        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+    }
+    Ok((index == bytes.len()).then_some(result))
+}
+
 fn substring_utf8_bytes(value: &str, start: i64, length: Option<i64>) -> Result<String, String> {
     let start = usize::try_from(start).map_err(|_| "SUBSTRING start is negative")?;
     let start = utf8_boundary_at_or_after(value, start.min(value.len()));
@@ -881,6 +1024,17 @@ mod tests {
         assert_eq!(substring_utf8_bytes("A界B", 1, Some(1)), Ok("界".into()));
         assert_eq!(substring_utf8_bytes("A界B", 2, Some(1)), Ok("B".into()));
         assert_eq!(substring_scalars("A界B", 1, Some(1)), Ok("界".into()));
+    }
+
+    #[test]
+    fn era_numeric_parser_keeps_reference_prefix_fraction_and_whitespace_rules() {
+        assert_eq!(parse_era_numeric("12.99", false), Ok(Some(12)));
+        assert_eq!(parse_era_numeric("0x10", false), Ok(Some(16)));
+        assert_eq!(parse_era_numeric("0b101", true), Ok(Some(5)));
+        assert_eq!(parse_era_numeric("2e3", false), Ok(Some(2_000)));
+        assert_eq!(parse_era_numeric(" 12", false), Ok(None));
+        assert_eq!(parse_era_numeric("１２", true), Ok(None));
+        assert_eq!(parse_era_numeric("12x", true), Ok(None));
     }
 
     #[test]

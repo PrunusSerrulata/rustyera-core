@@ -80,6 +80,7 @@ try {
         ($project.result.functions.name -contains "ORACLE_INPUT") -and
         ($project.result.functions.name -contains "ORACLE_MAP") -and
         ($project.result.functions.name -contains "ORACLE_NATIVE") -and
+        ($project.result.functions.name -contains "ORACLE_REFLECTION") -and
         ($project.result.functions.name -contains "ORACLE_PRESENTATION") -and
         ($project.result.functions.name -contains "ORACLE_STRUCTURED")) "project function projection differs"
 
@@ -118,7 +119,7 @@ try {
         id = "native-tail"
         op = "run"
         entry = "ORACLE_NATIVE"
-        watch = @("RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULT:6", "RESULT:7", "RESULT:8", "RESULTS:0", "RESULTS:1", "RESULTS:2", "RESULTS:3", "RESULTS:4", "RESULTS:5", "RESULTS:6")
+        watch = @("RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULT:6", "RESULT:7", "RESULT:8", "RESULT:9", "RESULT:10", "RESULT:11", "RESULTS:0", "RESULTS:1", "RESULTS:2", "RESULTS:3", "RESULTS:4", "RESULTS:5", "RESULTS:6", "RESULTS:7")
     }
     Assert-True ($nativeTail.ok -and $nativeTail.result.termination -eq "completed") "native tail failed"
     Assert-True (($nativeTail.result.watches.'RESULT:0' -eq 0) -and
@@ -130,13 +131,29 @@ try {
         ($nativeTail.result.watches.'RESULT:6' -eq 1) -and
         ($nativeTail.result.watches.'RESULT:7' -eq 946) -and
         ($nativeTail.result.watches.'RESULT:8' -eq 946) -and
+        ($nativeTail.result.watches.'RESULT:9' -eq 12) -and
+        ($nativeTail.result.watches.'RESULT:10' -eq 1) -and
+        ($nativeTail.result.watches.'RESULT:11' -eq 66051) -and
         ($nativeTail.result.watches.'RESULTS:0' -eq 'a\+b') -and
         ($nativeTail.result.watches.'RESULTS:1' -eq 'β') -and
         ($nativeTail.result.watches.'RESULTS:2' -eq 'ABC') -and
         ($nativeTail.result.watches.'RESULTS:3' -eq 'abc') -and
         ($nativeTail.result.watches.'RESULTS:4' -eq 'b/c') -and
         ($nativeTail.result.watches.'RESULTS:5' -eq 'a,b,c,') -and
-        ($nativeTail.result.watches.'RESULTS:6' -eq 'β')) "native tail differs"
+        ($nativeTail.result.watches.'RESULTS:6' -eq 'β') -and
+        ($nativeTail.result.watches.'RESULTS:7' -eq 'ff')) "native tail differs"
+
+    $reflection = Invoke-Oracle @{
+        id = "reflection"
+        op = "run"
+        entry = "ORACLE_REFLECTION"
+        watch = @("RESULT:12", "RESULT:13", "RESULTS:8", "RESULTS:9")
+    }
+    Assert-True ($reflection.ok -and $reflection.result.termination -eq "completed") "reflection run failed"
+    Assert-True (($reflection.result.watches.'RESULT:12' -eq 1) -and
+        ($reflection.result.watches.'RESULT:13' -eq 1) -and
+        ($reflection.result.watches.'RESULTS:8' -eq 'ORACLE_REFLECTION') -and
+        ($reflection.result.watches.'RESULTS:9' -eq 'SAVEDATA_TEXT')) "reflection result differs"
 
     $mapRun = Invoke-Oracle @{ id = "map"; op = "run"; entry = "ORACLE_MAP"; watch = @("RESULT", "RESULTS") }
     Assert-True $mapRun.ok "map function run failed"
