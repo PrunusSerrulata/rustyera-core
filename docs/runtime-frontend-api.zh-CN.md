@@ -340,7 +340,7 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 | 字段 | 含义 |
 | --- | --- |
 | `wire_version` | 公共信封版本，当前为 `2.0`。 |
-| `channel_version` | `Runtime` channel 当前为 `15.0`；`Debug` channel 当前为 `4.0`。 |
+| `channel_version` | `Runtime` channel 当前为 `16.0`；`Debug` channel 当前为 `4.0`。 |
 | `channel` | 正常运行必须为 `Runtime`；调试使用独立 `Debug` channel。 |
 | `session` | 首次 `ClientHello` 可为空；握手成功后必须等于 `ServerHello.session`。 |
 | `session_epoch` | 首次握手可为空；之后必须等于当前时间线 epoch。新游戏、恢复或热替换提交后旧 epoch 消息失效。 |
@@ -365,7 +365,7 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `15.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `16.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
@@ -404,6 +404,23 @@ Runtime 返回 `ProjectLoadReport`（tag `11`）：原 revision、`success` 和�
 `ReloadProject`（tag `12`）提交基于当前 revision 的规范化增量。Runtime 在隔离候选
 状态中完成加载、分析、增量编译和验证，再通过 VM 多代热替换原子提交；失败保持当前
 artifact 和运行状态。没有协商 `ProjectReload` 时不得发送。
+
+Protocol 16.0 的 `ProjectAnalysisRequest`（tag `13`）是一次性分析操作。前端必须协商
+`ProjectAnalysis`，并在首次加载前的 `Negotiating` 或已加载的 `Ready` 发送完整 manifest、可选 ERB 路径
+列表和 debug mode。空列表表示分析全部 ERB；ERH 始终参与。Runtime 返回
+`ProjectAnalysisReport`（tag `14`），不编译、不创建 VM，也不替换已加载项目。
+
+协商 `KeyMacros` 后，前端以 `KeyMacroProfileSubmit`（tag `15`）提交 `macro.txt` 内容或
+I/O 错误，通过 `KeyMacroCommand`（tag `16`）选择组、保存或清除槽位，并投影
+`KeyMacroStateChanged`（tag `17`）。物理快捷键映射由前端负责，但宏内容、组和展开由
+Runtime 持有；`ActivateKeyMacro` 只把槽位内容召回规范 textbox，`CommitText` 才提交。
+若同时协商 Storage，编辑会产生 Project namespace 的 `macro.txt` 写请求。
+
+可移植扩展须在首次项目加载前通过 `ExtensionRegistrySubmit`（tag `18`）声明，并协商
+`ExternalServices`。声明包括稳定 ID、EraBasic 名称、参数/可变性、返回类型和 Host
+operation 版本。调用以 `ServiceKind::Extension` 发送；前端返回 typed value 和按参数
+序号的写回列表。Runtime 在任何写入前统一验证类型、序号和可变性。CLR `CALLSHARP`
+不会加载。
 
 ### 启动
 
@@ -553,6 +570,7 @@ Runtime 需要操作系统能力时发送 `ServiceRequest`（tag `52`）：
 | `Image / image_pixel` v1.0 | 资源 ID、内容摘要与坐标 | ARGB 像素值 |
 | `Network / update_check` v1.0 | 更新地址 | 远端版本和下载地址 |
 | `OpenUrl / open_url` v1.0 | URL | 是否已交给平台打开 |
+| `Extension / 声明的 operation/version` | `ExtensionInvocation` | `ExtensionResult`（返回值及可变参数写回） |
 
 未来的字体测量、实际布局、物理显示历史和 canvas raster 查询也必须各自定义稳定的
 operation、版本和专用 payload，并绑定 presentation/environment revision。未协商精确

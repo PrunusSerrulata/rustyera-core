@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 15.0 and debug protocol 4.0 over common wire 2.0 are
+dynamic library. Runtime protocol 16.0 and debug protocol 4.0 over common wire 2.0 are
 development contracts: by explicit project policy they
 do not promise backward compatibility until a frontend exists.
 
@@ -168,6 +168,23 @@ single-use token. A frontend maps Ctrl-Z, a gesture, or an accessibility action 
 restores its retained traditional-save checkpoint and exact SFMT state, replays accepted scalar
 inputs through normal adjudication, and exposes the resulting stable wait. Replay is transient
 and therefore blocks VM snapshot creation. Successful bytecode hot reload invalidates the trace.
+
+Protocol 16 adds one-shot project analysis, runtime-owned key macro profiles, and a
+portable Host extension registry. Analysis returns structured diagnostics without replacing
+the active project or creating a VM. Key macro edits expose canonical UTF-8 `macro.txt`
+content and persist through the ordinary frontend storage contract. Extensions are declared
+before project loading, compiled as `rustyera.extension` Host imports, and invoked through
+negotiated `ServiceKind::Extension` operations. CLR `CALLSHARP` remains unsupported.
+
+The frontend may send `ProjectAnalysisRequest` only after negotiating `ProjectAnalysis` and
+while the runtime is idle before its first load (`Negotiating`) or in `Ready`. ERH files are always analyzed; an
+empty ERB selection means all ERB files. `KeyMacroProfileSubmit`, `KeyMacroCommand`, and
+`InputIntent::ActivateKeyMacro` require `KeyMacros`. Macro activation recalls text into the
+runtime-owned textbox; ordinary `CommitText` performs expansion and submits the resulting
+pieces across successive waits. `ExtensionRegistrySubmit` requires `ExternalServices`, is
+accepted only before the first project load, and forms part of project/snapshot identity.
+Each extension service result contains one typed return value and ordinal mutable-argument
+writes; the runtime validates the entire response before committing any write.
 
 `QUIT` and restart variants publish a persistent `ExitRequested` intent. It is repeated in
 resynchronization state until the frontend completes the normal shutdown lifecycle; restart

@@ -1174,12 +1174,19 @@ pub(super) fn selected_service_capabilities(
                 (ServiceKind::Image, IMAGE_PIXEL_OPERATION) => IMAGE_PIXEL_OPERATION_VERSION,
                 (ServiceKind::Network, UPDATE_CHECK_OPERATION) => UPDATE_CHECK_OPERATION_VERSION,
                 (ServiceKind::OpenUrl, OPEN_URL_OPERATION) => OPEN_URL_OPERATION_VERSION,
+                // Extension operations are application-defined. Select the client's
+                // maximum now; a later registry declaration must bind that exact version.
+                (ServiceKind::Extension, _) => capability.versions.maximum,
                 _ => return None,
             };
             negotiate_version(capability.versions, VersionRange::exact(supported)).map(|version| {
                 ServiceCapability {
                     kind: capability.kind,
-                    operation: capability.operation.clone(),
+                    operation: if capability.kind == ServiceKind::Extension {
+                        capability.operation.to_ascii_lowercase()
+                    } else {
+                        capability.operation.clone()
+                    },
                     versions: VersionRange::exact(version),
                 }
             })
@@ -1265,6 +1272,19 @@ pub(super) fn protocol_to_vm(value: &era_runtime_protocol::ProtocolValue) -> VmV
         era_runtime_protocol::ProtocolValue::String(value) => VmValue::String(value.clone()),
         era_runtime_protocol::ProtocolValue::Boolean(value) => VmValue::Integer(i64::from(*value)),
         era_runtime_protocol::ProtocolValue::Bytes(_) => VmValue::String(String::new()),
+    }
+}
+
+pub(super) fn extension_protocol_value(
+    value: era_runtime_protocol::ProtocolValue,
+) -> Option<VmValue> {
+    match value {
+        era_runtime_protocol::ProtocolValue::Integer(value) => Some(VmValue::Integer(value)),
+        era_runtime_protocol::ProtocolValue::String(value) => Some(VmValue::String(value)),
+        era_runtime_protocol::ProtocolValue::Boolean(value) => {
+            Some(VmValue::Integer(i64::from(value)))
+        }
+        era_runtime_protocol::ProtocolValue::Bytes(_) => None,
     }
 }
 
@@ -1379,6 +1399,10 @@ pub(super) fn debugger_suspends_message(message: &RuntimeMessage) -> bool {
     matches!(
         message,
         RuntimeMessage::ProjectManifest(_)
+            | RuntimeMessage::ProjectAnalysisRequest(_)
+            | RuntimeMessage::KeyMacroProfileSubmit(_)
+            | RuntimeMessage::KeyMacroCommand(_)
+            | RuntimeMessage::ExtensionRegistrySubmit(_)
             | RuntimeMessage::Start(_)
             | RuntimeMessage::Input(_)
             | RuntimeMessage::InputUndoRequest(_)

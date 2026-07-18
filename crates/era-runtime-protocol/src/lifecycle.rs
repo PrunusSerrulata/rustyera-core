@@ -150,6 +150,10 @@ pub enum RuntimeFeature {
     Storage,
     #[n(12)]
     InputUndo,
+    #[n(13)]
+    ProjectAnalysis,
+    #[n(14)]
+    KeyMacros,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -246,6 +250,8 @@ pub enum RuntimePhase {
     Stopped,
     #[n(11)]
     Faulted,
+    #[n(12)]
+    AnalyzingProject,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

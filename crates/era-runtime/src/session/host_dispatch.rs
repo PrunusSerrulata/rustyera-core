@@ -27,6 +27,14 @@ impl RuntimeSession {
                 | erabasic_bytecode::CandidatePolicy::BufferedEffect => {}
             }
         }
+        if request
+            .import
+            .import
+            .namespace
+            .eq_ignore_ascii_case("rustyera.extension")
+        {
+            return self.issue_extension(vm, request);
+        }
         let name = request.import.import.name.to_ascii_uppercase();
         if name == "SKIPDISP" {
             self.skip_print = integer_argument_value(&request.arguments, 0)? != 0;
@@ -239,67 +247,99 @@ impl RuntimeSession {
                 .project_snapshot
                 .as_ref()
                 .ok_or_else(|| RuntimeError::Internal("GETCONFIG has no loaded project".into()))?;
-            let replace = &vm.vm().artifact().project_data.static_data.replace;
-            let value = if name == "GETCONFIG" {
-                let value = match key {
-                    "オートセーブを行なう" | "Make autosaves" => {
-                        i64::from(project.auto_save)
+            let value = if let Some(value) = project.configuration.get(key) {
+                match (name.as_str(), value.script_value()) {
+                    ("GETCONFIG", erabasic_config::ScriptConfigValue::Integer(value)) => {
+                        VmValue::Integer(value)
                     }
-                    "単位の位置" | "Currency symbol position" => {
-                        i64::from(project.money_first)
+                    ("GETCONFIGS", erabasic_config::ScriptConfigValue::String(value)) => {
+                        VmValue::String(value)
                     }
-                    "ウィンドウ幅" | "Window width" => i64::from(project.viewport_width),
-                    "PRINTCを並べる数" | "Items per line for PRINTC" => {
-                        i64::from(project.print_c_per_line)
-                    }
-                    "PRINTCの文字数" | "Number of Item characters for PRINTC" => {
-                        i64::from(project.print_c_length)
-                    }
-                    "フォントサイズ" | "Font size" => i64::from(project.font_size),
-                    "一行の高さ" | "Line height" => i64::from(project.line_height),
-                    "表示するセーブデータ数" | "Save data count per page" => {
-                        i64::from(project.save_slot_count)
-                    }
-                    "販売アイテム数" | "Max shop item storage" => {
-                        i64::from(project.maximum_shop_items)
-                    }
-                    "COM_ABLE初期値" | "COM_ABLE initial value" => {
-                        i64::from(replace.com_able_default)
-                    }
-                    "PBANDの初期値" | "PBAND initial value" => replace.pband_default,
-                    "RELATIONの初期値" | "RELATION initial value" => replace.relation_default,
-                    _ => {
+                    ("GETCONFIG", erabasic_config::ScriptConfigValue::String(_)) => {
                         return self.fault(
                             FaultCode::VmFault,
-                            &format!("GETCONFIG does not expose configuration key {key:?}"),
+                            "GETCONFIG value is a string; use GETCONFIGS",
                             Some(request.origin.clone()),
                         );
                     }
-                };
-                VmValue::Integer(value)
+                    ("GETCONFIGS", erabasic_config::ScriptConfigValue::Integer(_)) => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            "GETCONFIGS value is an integer; use GETCONFIG",
+                            Some(request.origin.clone()),
+                        );
+                    }
+                    _ => unreachable!(),
+                }
             } else {
-                let value = match key {
-                    "お金の単位" | "Currency symbol" => project.money_label.clone(),
-                    "起動時簡略表示" | "Loading message" => replace.load_label.clone(),
-                    "DRAWLINE文字" | "DRAWLINE characters" => replace.draw_line_string.clone(),
-                    "システムメニュー0" | "System menu 0" => {
-                        replace.title_menu_string_0.clone()
-                    }
-                    "システムメニュー1" | "System menu 1" => {
-                        replace.title_menu_string_1.clone()
-                    }
-                    "時間切れ表示" | "Time-up message" => replace.timeup_label.clone(),
-                    "BAR文字1" | "BAR character 1" => replace.bar_char_1.to_string(),
-                    "BAR文字2" | "BAR character 2" => replace.bar_char_2.to_string(),
-                    _ => {
-                        return self.fault(
-                            FaultCode::VmFault,
-                            &format!("GETCONFIGS does not expose configuration key {key:?}"),
-                            Some(request.origin.clone()),
-                        );
-                    }
-                };
-                VmValue::String(value)
+                // Replace.csv is project data rather than ConfigData, but the reference
+                // exposes these aliases through the same script API.
+                let replace = &vm.vm().artifact().project_data.static_data.replace;
+                if name == "GETCONFIG" {
+                    let value = match key {
+                        "オートセーブを行なう" | "Make autosaves" => {
+                            i64::from(project.auto_save)
+                        }
+                        "単位の位置" | "Currency symbol position" => {
+                            i64::from(project.money_first)
+                        }
+                        "ウィンドウ幅" | "Window width" => i64::from(project.viewport_width),
+                        "PRINTCを並べる数" | "Items per line for PRINTC" => {
+                            i64::from(project.print_c_per_line)
+                        }
+                        "PRINTCの文字数" | "Number of Item characters for PRINTC" => {
+                            i64::from(project.print_c_length)
+                        }
+                        "フォントサイズ" | "Font size" => i64::from(project.font_size),
+                        "一行の高さ" | "Line height" => i64::from(project.line_height),
+                        "表示するセーブデータ数" | "Save data count per page" => {
+                            i64::from(project.save_slot_count)
+                        }
+                        "販売アイテム数" | "Max shop item storage" => {
+                            i64::from(project.maximum_shop_items)
+                        }
+                        "COM_ABLE初期値" | "COM_ABLE initial value" => {
+                            i64::from(replace.com_able_default)
+                        }
+                        "PBANDの初期値" | "PBAND initial value" => replace.pband_default,
+                        "RELATIONの初期値" | "RELATION initial value" => {
+                            replace.relation_default
+                        }
+                        _ => {
+                            return self.fault(
+                                FaultCode::VmFault,
+                                &format!("GETCONFIG does not expose configuration key {key:?}"),
+                                Some(request.origin.clone()),
+                            );
+                        }
+                    };
+                    VmValue::Integer(value)
+                } else {
+                    let value = match key {
+                        "お金の単位" | "Currency symbol" => project.money_label.clone(),
+                        "起動時簡略表示" | "Loading message" => replace.load_label.clone(),
+                        "DRAWLINE文字" | "DRAWLINE characters" => {
+                            replace.draw_line_string.clone()
+                        }
+                        "システムメニュー0" | "System menu 0" => {
+                            replace.title_menu_string_0.clone()
+                        }
+                        "システムメニュー1" | "System menu 1" => {
+                            replace.title_menu_string_1.clone()
+                        }
+                        "時間切れ表示" | "Time-up message" => replace.timeup_label.clone(),
+                        "BAR文字1" | "BAR character 1" => replace.bar_char_1.to_string(),
+                        "BAR文字2" | "BAR character 2" => replace.bar_char_2.to_string(),
+                        _ => {
+                            return self.fault(
+                                FaultCode::VmFault,
+                                &format!("GETCONFIGS does not expose configuration key {key:?}"),
+                                Some(request.origin.clone()),
+                            );
+                        }
+                    };
+                    VmValue::String(value)
+                }
             };
             return commit_completion(
                 vm,
@@ -2529,6 +2569,79 @@ impl RuntimeSession {
                 deadline_ns: None,
             }),
             None,
+        )
+    }
+
+    fn issue_extension(
+        &mut self,
+        vm: &mut RuntimeVm,
+        request: &VmHostRequest,
+    ) -> Result<(), RuntimeError> {
+        let operation = request.import.import.name.to_ascii_lowercase();
+        let declaration = self
+            .project_snapshot
+            .as_ref()
+            .and_then(|project| project.extensions.get(&operation))
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeError::Internal(format!("extension import {operation} has no declaration"))
+            })?;
+        let mut arguments = Vec::with_capacity(request.arguments.len());
+        let mut mutable_places = Vec::with_capacity(request.arguments.len());
+        for (ordinal, argument) in request.arguments.iter().enumerate() {
+            let (value, place) = match argument {
+                VmValue::Integer(value) => {
+                    (era_runtime_protocol::ProtocolValue::Integer(*value), None)
+                }
+                VmValue::String(value) => (
+                    era_runtime_protocol::ProtocolValue::String(value.clone()),
+                    None,
+                ),
+                VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => {
+                    let value = vm
+                        .read_host_place(request.fiber, place)
+                        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+                    let value = match value {
+                        VmValue::Integer(value) => {
+                            era_runtime_protocol::ProtocolValue::Integer(value)
+                        }
+                        VmValue::String(value) => {
+                            era_runtime_protocol::ProtocolValue::String(value)
+                        }
+                        VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => {
+                            return Err(RuntimeError::Internal(
+                                "reading an extension place returned another place".into(),
+                            ));
+                        }
+                    };
+                    let declared_type = declaration
+                        .arguments
+                        .get(ordinal)
+                        .map_or(era_runtime_protocol::ExtensionValueType::Any, |argument| {
+                            argument.value_type
+                        });
+                    (value, Some((place.clone(), declared_type)))
+                }
+            };
+            arguments.push(value);
+            mutable_places.push(place);
+        }
+        let invocation = era_runtime_protocol::ExtensionInvocation {
+            extension_id: declaration.id,
+            arguments,
+        };
+        self.issue_host_service(
+            vm,
+            request,
+            ExternalCompletion::Extension {
+                request: request.id,
+                return_type: declaration.return_type,
+                mutable_places,
+            },
+            ServiceKind::Extension,
+            &declaration.operation,
+            declaration.operation_version,
+            &invocation,
         )
     }
 

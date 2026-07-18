@@ -39,11 +39,14 @@ impl RuntimeSession {
             debug_frontend_time_sample: None,
             artifact: None,
             incremental: IncrementalState::default(),
+            extension_declarations: Vec::new(),
             vm: None,
             presentation: PresentationModel::default(),
             operations: PendingOperations::default(),
             key_toggle_state: [0; 256],
             hotkey_state: Vec::new(),
+            key_macros: KeyMacros::default(),
+            queued_input: VecDeque::new(),
             text_box: String::new(),
             flow_input_enabled: false,
             flow_input_default: 0,
@@ -179,6 +182,11 @@ impl RuntimeSession {
                         self.handle_debug_message(message_id, message)?;
                     }
                 }
+                transitions += 1;
+                continue;
+            }
+            if self.phase == RuntimePhase::WaitingInput && !self.queued_input.is_empty() {
+                self.consume_queued_input()?;
                 transitions += 1;
                 continue;
             }
@@ -341,6 +349,18 @@ impl RuntimeSession {
         }
         match message {
             RuntimeMessage::ProjectManifest(manifest) => self.load_project(message_id, &manifest),
+            RuntimeMessage::ProjectAnalysisRequest(request) => {
+                self.analyze_project(message_id, &request)
+            }
+            RuntimeMessage::KeyMacroProfileSubmit(profile) => {
+                self.submit_key_macro_profile(message_id, &profile)
+            }
+            RuntimeMessage::KeyMacroCommand(command) => {
+                self.apply_key_macro_command(message_id, command)
+            }
+            RuntimeMessage::ExtensionRegistrySubmit(registry) => {
+                self.submit_extension_registry(message_id, registry)
+            }
             RuntimeMessage::Start(start) => self.start(message_id, &start),
             RuntimeMessage::Input(input) => self.complete_input(message_id, input),
             RuntimeMessage::AdvanceTime(time) if self.phase == RuntimePhase::DebugPaused => {
@@ -402,6 +422,8 @@ impl RuntimeSession {
             | RuntimeMessage::ServerHello(_)
             | RuntimeMessage::VersionRejected(_)
             | RuntimeMessage::ProjectLoadReport(_)
+            | RuntimeMessage::ProjectAnalysisReport(_)
+            | RuntimeMessage::KeyMacroStateChanged(_)
             | RuntimeMessage::StateChanged(_)
             | RuntimeMessage::ExitRequested(_)
             | RuntimeMessage::WaitChanged(_)
@@ -488,7 +510,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 15.0 is required".into(),
+                    message: "runtime protocol 16.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -510,6 +532,8 @@ impl RuntimeSession {
             RuntimeFeature::ExternalServices,
             RuntimeFeature::StateResynchronization,
             RuntimeFeature::InputUndo,
+            RuntimeFeature::ProjectAnalysis,
+            RuntimeFeature::KeyMacros,
         ];
         let features: Vec<_> = implemented
             .into_iter()
@@ -555,6 +579,213 @@ impl RuntimeSession {
         )
     }
 
+    pub(super) fn analyze_project(
+        &mut self,
+        message_id: u64,
+        request: &ProjectAnalysisRequest,
+    ) -> Result<(), RuntimeError> {
+        if !self
+            .negotiated_features
+            .contains(&RuntimeFeature::ProjectAnalysis)
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::FeatureUnavailable,
+                "project analysis was not negotiated",
+            );
+        }
+        if !matches!(
+            self.phase,
+            RuntimePhase::Negotiating | RuntimePhase::LoadingProject | RuntimePhase::Ready
+        ) {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "project analysis requires an idle runtime",
+            );
+        }
+        let return_phase = self.phase;
+        self.set_phase(RuntimePhase::AnalyzingProject)?;
+        let report = crate::project::analyze_submitted_project_with_extensions(
+            request,
+            &self.extension_declarations,
+        );
+        self.emit(
+            RuntimeMessage::ProjectAnalysisReport(report),
+            Some(message_id),
+        )?;
+        self.set_phase(return_phase)
+    }
+
+    pub(super) fn submit_key_macro_profile(
+        &mut self,
+        message_id: u64,
+        profile: &KeyMacroProfileSubmit,
+    ) -> Result<(), RuntimeError> {
+        if !self
+            .negotiated_features
+            .contains(&RuntimeFeature::KeyMacros)
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::FeatureUnavailable,
+                "key macros were not negotiated",
+            );
+        }
+        let path = era_runtime_protocol::validate_relative_path(&profile.relative_path)?;
+        if !path
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case("macro.txt"))
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "key macro profile must be named macro.txt",
+            );
+        }
+        match &profile.payload {
+            FilePayload::Utf8(text) => self.key_macros.load(text),
+            FilePayload::IoError(error) if error.kind == FrontendIoErrorKind::NotFound => {
+                self.key_macros = KeyMacros::default();
+            }
+            FilePayload::IoError(_) | FilePayload::Bytes(_) => {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "key macro profile must be UTF-8 or not-found",
+                );
+            }
+        }
+        self.emit(
+            RuntimeMessage::KeyMacroStateChanged(self.key_macros.state()),
+            Some(message_id),
+        )
+    }
+
+    pub(super) fn submit_extension_registry(
+        &mut self,
+        message_id: u64,
+        registry: ExtensionRegistrySubmit,
+    ) -> Result<(), RuntimeError> {
+        if !self
+            .negotiated_features
+            .contains(&RuntimeFeature::ExternalServices)
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::FeatureUnavailable,
+                "Host extensions require external services",
+            );
+        }
+        if !matches!(
+            self.phase,
+            RuntimePhase::Negotiating | RuntimePhase::LoadingProject | RuntimePhase::Ready
+        ) || self.project_snapshot.is_some()
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "extensions must be registered before loading a project",
+            );
+        }
+        let mut declarations = registry.declarations;
+        declarations.sort_by(|left, right| {
+            left.era_name
+                .to_ascii_uppercase()
+                .cmp(&right.era_name.to_ascii_uppercase())
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        for declaration in &mut declarations {
+            declaration.operation.make_ascii_lowercase();
+        }
+        if declarations.iter().any(|declaration| {
+            self.service_capabilities
+                .get(&(ServiceKind::Extension, declaration.operation.clone()))
+                != Some(&declaration.operation_version)
+        }) {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "each Host extension must match an exactly negotiated Extension service",
+            );
+        }
+        self.extension_declarations = declarations;
+        self.emit(
+            RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                code: "runtime.extension_registry_accepted".into(),
+                severity: DiagnosticSeverity::Information,
+                message: format!(
+                    "accepted {} portable Host extension declarations",
+                    self.extension_declarations.len()
+                ),
+                source: None,
+            }),
+            Some(message_id),
+        )
+    }
+
+    pub(super) fn apply_key_macro_command(
+        &mut self,
+        message_id: u64,
+        command: KeyMacroCommand,
+    ) -> Result<(), RuntimeError> {
+        if !self
+            .negotiated_features
+            .contains(&RuntimeFeature::KeyMacros)
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::FeatureUnavailable,
+                "key macros were not negotiated",
+            );
+        }
+        let valid = match command {
+            KeyMacroCommand::SelectGroup(group) => self.key_macros.select_group(group),
+            KeyMacroCommand::Store { group, slot, text } => {
+                self.key_macros.store(group, slot, text)
+            }
+            KeyMacroCommand::Clear { group, slot } => {
+                self.key_macros.store(group, slot, String::new())
+            }
+        };
+        if !valid {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "key macro group or slot is out of range",
+            );
+        }
+        let state = self.key_macros.state();
+        self.emit(
+            RuntimeMessage::KeyMacroStateChanged(state.clone()),
+            Some(message_id),
+        )?;
+        if self.negotiated_features.contains(&RuntimeFeature::Storage) {
+            let resume_phase = self.phase;
+            return self.issue_storage(
+                PendingStorage::KeyMacroWrite { resume_phase },
+                StorageNamespace::Project,
+                StorageOperation::Write {
+                    data: ProtocolBytes::new(state.serialized.into_bytes()),
+                    atomic_replace: self.storage_capabilities.atomic_replace,
+                    precondition: StoragePrecondition::Any,
+                },
+                "macro.txt".into(),
+            );
+        }
+        self.emit(
+            RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                code: "runtime.key_macro_not_persisted".into(),
+                severity: DiagnosticSeverity::Information,
+                message: "key macro state changed in memory; frontend storage was not negotiated"
+                    .into(),
+                source: None,
+            }),
+            Some(message_id),
+        )
+    }
+
     pub(super) fn load_project(
         &mut self,
         message_id: u64,
@@ -571,7 +802,11 @@ impl RuntimeSession {
             );
         }
         self.set_phase(RuntimePhase::LoadingProject)?;
-        let mut build = build_project(manifest, Some(&self.incremental));
+        let mut build = build_project_with_extensions(
+            manifest,
+            Some(&self.incremental),
+            &self.extension_declarations,
+        );
         self.incremental = build.incremental;
         self.artifact = build.artifact;
         self.project_snapshot = build.snapshot;
@@ -643,6 +878,10 @@ impl RuntimeSession {
             self.undo_replay = None;
             self.undo_token = None;
             if let Some(snapshot) = &self.project_snapshot {
+                self.key_macros.set_enabled(matches!(
+                    snapshot.configuration.get_code("UseKeyMacro"),
+                    Some(erabasic_config::ConfigValue::Boolean(true))
+                ));
                 self.presentation.configure_layout(
                     snapshot.viewport_width,
                     snapshot.print_c_per_line,
@@ -698,7 +937,11 @@ impl RuntimeSession {
             }
         };
         self.set_phase(RuntimePhase::Reloading)?;
-        let mut build = build_project(&manifest, Some(&self.incremental));
+        let mut build = build_project_with_extensions(
+            &manifest,
+            Some(&self.incremental),
+            &self.extension_declarations,
+        );
         if !build.report.success {
             self.emit(
                 RuntimeMessage::ProjectLoadReport(build.report),
@@ -1114,6 +1357,8 @@ impl RuntimeSession {
         self.saved_skip = payload.saved_skip;
         self.force_kana_mode = payload.force_kana_mode;
         self.hotkey_state = payload.hotkey_state;
+        self.key_macros = payload.key_macros;
+        self.queued_input.clear();
         self.text_box = payload.text_box;
         self.flow_input_enabled = payload.flow_input_enabled;
         self.flow_input_default = payload.flow_input_default;

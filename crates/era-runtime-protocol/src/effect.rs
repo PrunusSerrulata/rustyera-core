@@ -52,6 +52,10 @@ pub enum EffectKind {
     Video(#[n(0)] VideoEffect),
     #[n(3)]
     Extension(#[n(0)] String, #[n(1)] ProtocolValue),
+    /// Ask the frontend to show its configuration surface. The frontend may
+    /// decline, but it cannot mutate runtime configuration through this effect.
+    #[n(4)]
+    OpenConfiguration,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

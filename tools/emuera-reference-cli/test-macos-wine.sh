@@ -75,6 +75,10 @@ jq -nc --arg gameDir "$FIXTURE_WINDOWS_PATH" \
     '{id:"wine-load",op:"load",gameDir:$gameDir}' >>"$REQUEST_FILE"
 printf '%s\n' \
     '{"id":"wine-toneinput","op":"execute","statement":"TONEINPUTS 1000, \"DEFAULT\", 1, \"timeout\", 0, 0"}' \
+    '{"id":"wine-config-drawing","op":"eval","source":"GETCONFIGS(\"描画インターフェース\")"}' \
+    '{"id":"wine-config-font-size","op":"eval","source":"GETCONFIG(\"フォントサイズ\")"}' \
+    '{"id":"wine-config-fore-color","op":"eval","source":"GETCONFIG(\"文字色\")"}' \
+    '{"id":"wine-config-stain-list","op":"eval","source":"GETCONFIGS(\"汚れの初期値\")"}' \
     '{"id":"wine-getmillisecond","op":"eval","source":"GETMILLISECOND()"}' \
     '{"id":"wine-getsecond","op":"eval","source":"GETSECOND()"}' \
     '{"id":"wine-project","op":"analyzeProject"}' \
@@ -126,9 +130,10 @@ perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 36 and
+    length == 40 and
     map(.id) == [
         "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-toneinput",
+        "wine-config-drawing", "wine-config-font-size", "wine-config-fore-color", "wine-config-stain-list",
         "wine-getmillisecond", "wine-getsecond", "wine-project",
         "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
         "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
@@ -149,6 +154,10 @@ jq -e -s '
     (map(select(.id == "wine-execute"))[0].result.watches.RESULT == 9) and
     (map(select(.id == "wine-putform"))[0].result.watches.SAVEDATA_TEXT == "suffix") and
     (map(select(.id == "wine-savenos"))[0].result.value == 20) and
+    (map(select(.id == "wine-config-drawing"))[0].result.value == "TEXTRENDERER") and
+    (map(select(.id == "wine-config-font-size"))[0].result.value == 18) and
+    (map(select(.id == "wine-config-fore-color"))[0].result.value == 12632256) and
+    (map(select(.id == "wine-config-stain-list"))[0].result.value == "System.Collections.Generic.List`1[System.Int64]") and
     (map(select(.id == "wine-run"))[0].result.termination == "completed") and
     (map(select(.id == "wine-run"))[0].result.output | join("\n") | contains("ORACLE_OK")) and
     (map(select(.id == "wine-compat"))[0].result.termination == "completed") and

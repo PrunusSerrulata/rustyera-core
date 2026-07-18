@@ -164,6 +164,14 @@ pub enum InputIntent {
     Cancel,
     #[n(6)]
     Primitive(#[n(0)] PrimitiveInput),
+    /// Recall one runtime-owned key macro into the canonical textbox.
+    #[n(7)]
+    ActivateKeyMacro {
+        #[n(0)]
+        group: u8,
+        #[n(1)]
+        slot: u8,
+    },
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

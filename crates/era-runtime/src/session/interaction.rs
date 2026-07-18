@@ -184,6 +184,14 @@ impl RuntimeSession {
             }
             PendingService::Host(completion) => {
                 let mut writes = Vec::new();
+                let host_request = match &completion {
+                    ExternalCompletion::GetKey { request: id, .. }
+                    | ExternalCompletion::LocalDateTime { request: id, .. }
+                    | ExternalCompletion::SpritePixel { request: id }
+                    | ExternalCompletion::UpdateCheck { request: id, .. }
+                    | ExternalCompletion::PointerState { request: id, .. }
+                    | ExternalCompletion::Extension { request: id, .. } => *id,
+                };
                 let value = match completion {
                     ExternalCompletion::GetKey {
                         key_code,
@@ -298,13 +306,120 @@ impl RuntimeSession {
                             PointerCoordinate::Button => VmValue::String(state.button_value),
                         })
                     }
-                };
-                let host_request = match completion {
-                    ExternalCompletion::GetKey { request: id, .. }
-                    | ExternalCompletion::LocalDateTime { request: id, .. }
-                    | ExternalCompletion::SpritePixel { request: id }
-                    | ExternalCompletion::UpdateCheck { request: id, .. }
-                    | ExternalCompletion::PointerState { request: id, .. } => id,
+                    ExternalCompletion::Extension {
+                        return_type,
+                        mutable_places,
+                        ..
+                    } => {
+                        let result: era_runtime_protocol::ExtensionResult =
+                            decode_canonical(payload.as_slice())?;
+                        let mut seen = BTreeSet::new();
+                        for write in result.writes {
+                            let ordinal =
+                                usize::try_from(write.argument_ordinal).map_err(|_| {
+                                    RuntimeError::Internal(
+                                        "extension write ordinal is too large".into(),
+                                    )
+                                })?;
+                            if !seen.insert(ordinal) {
+                                return self.fault(
+                                    FaultCode::ServiceFailure,
+                                    "extension response contains duplicate writes",
+                                    None,
+                                );
+                            }
+                            let Some((place, declared_type)) =
+                                mutable_places.get(ordinal).and_then(Clone::clone)
+                            else {
+                                return self.fault(
+                                    FaultCode::ServiceFailure,
+                                    "extension wrote a non-mutable argument",
+                                    None,
+                                );
+                            };
+                            let Some(value) = extension_protocol_value(write.value) else {
+                                return self.fault(
+                                    FaultCode::ServiceFailure,
+                                    "extension returned opaque bytes as an EraBasic value",
+                                    None,
+                                );
+                            };
+                            if matches!(
+                                (declared_type, &value),
+                                (
+                                    era_runtime_protocol::ExtensionValueType::Integer,
+                                    VmValue::String(_)
+                                ) | (
+                                    era_runtime_protocol::ExtensionValueType::String,
+                                    VmValue::Integer(_)
+                                )
+                            ) {
+                                return self.fault(
+                                    FaultCode::ServiceFailure,
+                                    "extension write type differs from its argument",
+                                    None,
+                                );
+                            }
+                            writes.push(HostWrite {
+                                target: place,
+                                value,
+                            });
+                        }
+                        match (return_type, result.value) {
+                            (era_runtime_protocol::ExtensionValueType::Void, None) => None,
+                            (era_runtime_protocol::ExtensionValueType::Integer, Some(value)) => {
+                                let Some(value) = extension_protocol_value(value) else {
+                                    return self.fault(
+                                        FaultCode::ServiceFailure,
+                                        "extension returned opaque bytes as an EraBasic value",
+                                        None,
+                                    );
+                                };
+                                if !matches!(value, VmValue::Integer(_)) {
+                                    return self.fault(
+                                        FaultCode::ServiceFailure,
+                                        "extension return type differs",
+                                        None,
+                                    );
+                                }
+                                Some(value)
+                            }
+                            (era_runtime_protocol::ExtensionValueType::String, Some(value)) => {
+                                let Some(value) = extension_protocol_value(value) else {
+                                    return self.fault(
+                                        FaultCode::ServiceFailure,
+                                        "extension returned opaque bytes as an EraBasic value",
+                                        None,
+                                    );
+                                };
+                                if !matches!(value, VmValue::String(_)) {
+                                    return self.fault(
+                                        FaultCode::ServiceFailure,
+                                        "extension return type differs",
+                                        None,
+                                    );
+                                }
+                                Some(value)
+                            }
+                            (era_runtime_protocol::ExtensionValueType::Any, Some(value)) => {
+                                let Some(value) = extension_protocol_value(value) else {
+                                    return self.fault(
+                                        FaultCode::ServiceFailure,
+                                        "extension returned opaque bytes as an EraBasic value",
+                                        None,
+                                    );
+                                };
+                                Some(value)
+                            }
+                            _ => {
+                                return self.fault(
+                                    FaultCode::ServiceFailure,
+                                    "extension response omitted or added an invalid return value",
+                                    None,
+                                );
+                            }
+                        }
+                    }
                 };
                 let vm = self
                     .vm
@@ -405,13 +520,61 @@ impl RuntimeSession {
                 },
             );
         }
+        if let InputIntent::CommitText(command) = &input.intent
+            && command.len() > 1
+            && command.starts_with('@')
+            && !pending.wait.one_input
+        {
+            return self.handle_system_input_command(message_id, command);
+        }
         self.message_skip = input.message_skip;
+        if let InputIntent::ActivateKeyMacro { group, slot } = &input.intent {
+            if !self
+                .negotiated_features
+                .contains(&RuntimeFeature::KeyMacros)
+            {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::FeatureUnavailable,
+                    "key macros were not negotiated",
+                );
+            }
+            if input.token != pending.wait.submission_token {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::StaleRequest,
+                    "key macro activation token is stale",
+                );
+            }
+            let Some(text) = self.key_macros.recall(*group, *slot) else {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "key macro is disabled or out of range",
+                );
+            };
+            self.text_box = text.into();
+            return self.emit_projection_state();
+        }
+        let mut intent = input.intent;
+        if let InputIntent::CommitText(text) = intent {
+            let Ok(mut pieces) = preprocess_input(&text) else {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::ResourceLimit,
+                    "input macro expansion exceeds the runtime limit",
+                );
+            };
+            let (text, skip) = pieces.remove(0);
+            self.message_skip |= skip;
+            self.queued_input.extend(pieces);
+            intent = InputIntent::CommitText(text);
+        }
         let allow_long_activation = self
             .project_snapshot
             .as_ref()
             .is_some_and(|project| project.allow_long_input_by_activation);
-        let Some(submission) =
-            input_value(pending, input.token, input.intent, allow_long_activation)
+        let Some(submission) = input_value(pending, input.token, intent, allow_long_activation)
         else {
             return self.reject(
                 message_id,
@@ -420,6 +583,131 @@ impl RuntimeSession {
             );
         };
         self.finish_input(submission, false)
+    }
+
+    /// Feed the next expanded keyboard-input segment into the next wait without
+    /// accepting a new frontend event or bypassing the wait's ordinary validator.
+    pub(super) fn consume_queued_input(&mut self) -> Result<(), RuntimeError> {
+        let Some((text, skip)) = self.queued_input.pop_front() else {
+            return Ok(());
+        };
+        if text.len() > 1
+            && text.starts_with('@')
+            && self
+                .operations
+                .active_input()
+                .is_some_and(|pending| !pending.wait.one_input)
+        {
+            return self.handle_system_input_command(0, &text);
+        }
+        let pending = self
+            .operations
+            .active_input()
+            .ok_or_else(|| RuntimeError::Internal("queued input has no active wait".into()))?;
+        self.message_skip = skip;
+        let Some(submission) = input_value(
+            pending,
+            pending.wait.submission_token,
+            InputIntent::CommitText(text),
+            false,
+        ) else {
+            self.queued_input.clear();
+            return Ok(());
+        };
+        self.finish_input(submission, false)
+    }
+
+    pub(super) fn handle_system_input_command(
+        &mut self,
+        message_id: u64,
+        command: &str,
+    ) -> Result<(), RuntimeError> {
+        if self
+            .operations
+            .active_input()
+            .is_some_and(|pending| pending.wait.deadline_ns.is_some())
+        {
+            return self.emit(
+                RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    code: "runtime.system_command_during_timed_wait".into(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: "system commands cannot be entered during a timed wait".into(),
+                    source: None,
+                }),
+                Some(message_id),
+            );
+        }
+        self.presentation
+            .append_print_text(command.to_owned(), false, true);
+        self.emit_presentation()?;
+        match command[1..].trim().to_ascii_uppercase().as_str() {
+            "QUIT" | "EXIT" => {
+                let exit = ExitRequested {
+                    reason: ExitReason::Quit,
+                    force: false,
+                    runtime_revision: self.revision.saturating_add(1),
+                };
+                self.exit_requested = Some(exit);
+                self.emit(RuntimeMessage::ExitRequested(exit), Some(message_id))?;
+                self.set_phase(RuntimePhase::Stopping)
+            }
+            "REBOOT" => {
+                let exit = ExitRequested {
+                    reason: ExitReason::Restart,
+                    force: false,
+                    runtime_revision: self.revision.saturating_add(1),
+                };
+                self.exit_requested = Some(exit);
+                self.emit(RuntimeMessage::ExitRequested(exit), Some(message_id))?;
+                self.set_phase(RuntimePhase::Stopping)
+            }
+            "OUTPUT" | "OUTPUTLOG" => {
+                if !self.negotiated_features.contains(&RuntimeFeature::Storage) {
+                    return self.emit(
+                        RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                            code: "runtime.system_output_unavailable".into(),
+                            severity: DiagnosticSeverity::Warning,
+                            message: "@OUTPUT requires negotiated frontend storage".into(),
+                            source: None,
+                        }),
+                        Some(message_id),
+                    );
+                }
+                let mut data = vec![0xef, 0xbb, 0xbf];
+                data.extend_from_slice(self.presentation.log_text(false).as_bytes());
+                self.issue_storage(
+                    PendingStorage::SystemOutputLog {
+                        resume_phase: self.phase,
+                    },
+                    StorageNamespace::Log,
+                    StorageOperation::Write {
+                        data: ProtocolBytes::new(data),
+                        atomic_replace: self.storage_capabilities.atomic_replace,
+                        precondition: StoragePrecondition::Any,
+                    },
+                    "emuera.log".into(),
+                )
+            }
+            "CONFIG" => self.emit_effect(EffectKind::OpenConfiguration),
+            "DEBUG" => self.emit(
+                RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    code: "runtime.debug_command_requires_debug_channel".into(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: "@DEBUG is available only through the granted debug protocol".into(),
+                    source: None,
+                }),
+                Some(message_id),
+            ),
+            _ => self.emit(
+                RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    code: "runtime.debug_command_requires_debug_channel".into(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: "arbitrary input debug commands are available only through the granted debug protocol".into(),
+                    source: None,
+                }),
+                Some(message_id),
+            ),
+        }
     }
 
     pub(super) fn advance_time(

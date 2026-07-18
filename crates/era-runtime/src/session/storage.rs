@@ -378,6 +378,35 @@ impl RuntimeSession {
         };
         match (pending, response.result) {
             (
+                PendingStorage::KeyMacroWrite { resume_phase }
+                | PendingStorage::SystemOutputLog { resume_phase },
+                StorageResult::Written { .. },
+            ) => self.set_phase(resume_phase),
+            (PendingStorage::KeyMacroWrite { resume_phase }, StorageResult::Error { error }) => {
+                self.emit(
+                    RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        code: "runtime.key_macro_persistence_failed".into(),
+                        severity: DiagnosticSeverity::Warning,
+                        message: format!("macro.txt write failed: {error:?}"),
+                        source: None,
+                    }),
+                    Some(message_id),
+                )?;
+                self.set_phase(resume_phase)
+            }
+            (PendingStorage::SystemOutputLog { resume_phase }, StorageResult::Error { error }) => {
+                self.emit(
+                    RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        code: "runtime.system_output_failed".into(),
+                        severity: DiagnosticSeverity::Warning,
+                        message: format!("emuera.log write failed: {error:?}"),
+                        source: None,
+                    }),
+                    Some(message_id),
+                )?;
+                self.set_phase(resume_phase)
+            }
+            (
                 PendingStorage::CandidateSaveStat { slot, continuation },
                 StorageResult::Metadata(metadata),
             ) => {

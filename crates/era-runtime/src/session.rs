@@ -11,27 +11,28 @@ use era_runtime_protocol::{
     AdvanceTime, AudioEffect, AudioEffectAction, CancelExternalRequest, CellAlignment,
     ClientCapabilities, ClientHello, CommandErrorCode, CommandRejected, DiagnosticSeverity,
     EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcomeStatus, ExitReason,
-    ExitRequested, ExternalRequestKind, FaultCode, FrontendInput, FrontendIoErrorKind,
-    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
-    GetKeyStateResponse, IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION,
-    IMAGE_PIXEL_OPERATION, IMAGE_PIXEL_OPERATION_VERSION, ImageMetadataRequest,
-    ImageMetadataResponse, ImagePixelRequest, ImagePixelResponse, InputIntent, InputUndoRequest,
-    InputUndoState, InputWait, InteractionToken, LOCAL_DATE_TIME_OPERATION,
+    ExitRequested, ExtensionDeclaration, ExtensionRegistrySubmit, ExternalRequestKind, FaultCode,
+    FilePayload, FrontendInput, FrontendIoErrorKind, GET_KEY_STATE_OPERATION,
+    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse,
+    IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION, IMAGE_PIXEL_OPERATION,
+    IMAGE_PIXEL_OPERATION_VERSION, ImageMetadataRequest, ImageMetadataResponse, ImagePixelRequest,
+    ImagePixelResponse, InputIntent, InputUndoRequest, InputUndoState, InputWait, InteractionToken,
+    KeyMacroCommand, KeyMacroProfileSubmit, LOCAL_DATE_TIME_OPERATION,
     LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment, LocalDateTimeRequest, LocalDateTimeResponse,
     OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION, OpenUrlRequest, OpenUrlResponse,
     POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
-    PointerStateResponse, ProjectLoadReport, ProjectManifest, ProjectionObservation,
-    ProjectionState, ProtocolDiagnostic, RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION,
-    RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault,
-    RuntimeFeature, RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized,
-    RuntimeStateChanged, ServerHello, ServiceCapability, ServiceKind, ServiceRequest,
-    ServiceResponse, ServiceResult, ShutdownReady, SnapshotIneligibleReason, StartMode,
-    StartRequest, StateExportChunk, StateExportChunkRequest, StateExportKind, StateExportReady,
-    StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk,
-    StateImportCommit, StateImportReady, StateTransferCancel, StateTransferDescriptor,
-    StorageCapabilities, StorageEntry, StorageNamespace, StorageOperation, StoragePrecondition,
-    StorageRequest, StorageResponse, StorageResult, SystemTextArgument, SystemTextKey,
-    UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest,
+    PointerStateResponse, ProjectAnalysisRequest, ProjectLoadReport, ProjectManifest,
+    ProjectionObservation, ProjectionState, ProtocolDiagnostic, RANDOM_SEED_OPERATION,
+    RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse,
+    ReloadProject, RuntimeFault, RuntimeFeature, RuntimeLimits, RuntimeMessage, RuntimePhase,
+    RuntimeResynchronized, RuntimeStateChanged, ServerHello, ServiceCapability, ServiceKind,
+    ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady, SnapshotIneligibleReason,
+    StartMode, StartRequest, StateExportChunk, StateExportChunkRequest, StateExportKind,
+    StateExportReady, StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin,
+    StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
+    StateTransferDescriptor, StorageCapabilities, StorageEntry, StorageNamespace, StorageOperation,
+    StoragePrecondition, StorageRequest, StorageResponse, StorageResult, SystemTextArgument,
+    SystemTextKey, UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest,
     UpdateCheckResponse, VersionRejected, WaitChange, WaitKind, WaitStability,
 };
 use erabasic_compiler::IncrementalState;
@@ -50,11 +51,16 @@ use crate::host::{
     ClockOperation, ExternalCompletion, PendingInput, PointerCoordinate, PostInputAction,
     input_wait,
 };
+use crate::key_macro::{KeyMacros, preprocess_input};
 use crate::operation::{
     CandidateSaveContinuation, PendingOperations, PendingService, PendingStorage,
 };
 use crate::presentation::{PresentationModel, display_value, logical_line_string};
-use crate::project::{NormalizedProjectSnapshot, apply_project_delta, build_project};
+#[cfg(test)]
+use crate::project::build_project;
+use crate::project::{
+    NormalizedProjectSnapshot, apply_project_delta, build_project_with_extensions,
+};
 use crate::runtime_snapshot::{
     self, CULTURE_TABLE_VERSION, RUNTIME_SNAPSHOT_FORMAT_VERSION, RuntimeSnapshotPayload,
 };
@@ -250,11 +256,14 @@ pub struct RuntimeSession {
     debug_frontend_time_sample: Option<u64>,
     artifact: Option<ValidatedArtifact>,
     incremental: IncrementalState,
+    extension_declarations: Vec<ExtensionDeclaration>,
     vm: Option<RuntimeVm>,
     presentation: PresentationModel,
     operations: PendingOperations,
     key_toggle_state: [u8; 256],
     hotkey_state: Vec<i64>,
+    key_macros: KeyMacros,
+    queued_input: VecDeque<(String, bool)>,
     text_box: String,
     flow_input_enabled: bool,
     flow_input_default: i64,
