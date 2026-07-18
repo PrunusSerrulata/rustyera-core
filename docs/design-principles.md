@@ -50,9 +50,10 @@ Queries of runtime-owned style or alignment intent remain runtime operations.
 
 Frontend observations are ordered external inputs. Execution is deterministic only
 relative to the complete input and service-response trace. A pending observation is a
-transient external wait and blocks stable snapshots and hot-reload commits. In a future
-multi-client transport, exactly one negotiated authoritative projection frontend may
-answer these requests; mirrors, spectators and debuggers cannot do so.
+transient external wait and blocks stable snapshots and hot-reload commits. The current
+contract has exactly one authoritative frontend per runtime session: the session envelope,
+epoch, sequence and observation revisions identify it. Multi-client sessions and authority
+transfer are outside the supported model and require a future major protocol redesign.
 
 Frontend-environment queries may be legitimate for presentation adaptation. A font
 availability check used to select an ASCII-art fallback or a viewport query used only to

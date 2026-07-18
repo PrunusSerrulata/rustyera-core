@@ -19,7 +19,7 @@ runtime-message =
   [32, wait-change] /
   [33, any] /
   [34, any] /
-  [35, any] /
+  [35, projection-observation] /
   [36, any] /
   [37, input-undo-request] /
   [38, input-undo-state] /
@@ -77,6 +77,15 @@ wait-change = any
 input-undo-request = { 0: interaction-token }
 input-undo-state = { 0: bool, 1: uint, 2: bool, 3: uint, 4: interaction-token / null }
 interaction-token = { 0: uint, 1: uint }
+projection-length = int
+projection-size = { 0: projection-length, 1: projection-length }
+projection-transform = {
+  0: int, 1: uint, 2: int, 3: uint, 4: projection-length, 5: projection-length
+}
+projection-observation = {
+  0: uint, 1: uint, 2: projection-size, 3: uint, 4: uint, 5: tstr,
+  6: projection-transform
+}
 presentation-snapshot = any
 presentation-delta = { 0: uint, 1: uint, 2: [* any] }
 storage-request = { 0: uint, 1: uint, 2: tstr, 3: storage-operation, 4: tstr, 5: uint / null }
@@ -90,6 +99,8 @@ storage-operation =
 storage-precondition = [0] / [1] / [2, tstr]
 service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr, 5: uint / null }
 service-response = { 0: uint, 1: any }
+; Protocol 17 service payloads include ProjectionQueryContext plus typed
+; physical-history, HTML, TextExtent and CanvasPixel request/response maps.
 state-export-request = { 0: uint }
 state-export-ready = { 0: uint, 1: any }
 state-import-begin = { 0: uint, 1: uint, 2: bstr, 3: bstr / null }

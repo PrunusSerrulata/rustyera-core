@@ -85,6 +85,7 @@ try {
         ($project.result.functions.name -contains "ORACLE_NATIVE") -and
         ($project.result.functions.name -contains "ORACLE_REFLECTION") -and
         ($project.result.functions.name -contains "ORACLE_PRESENTATION") -and
+        ($project.result.functions.name -contains "ORACLE_HTML_POP") -and
         ($project.result.functions.name -contains "ORACLE_STRUCTURED")) "project function projection differs"
 
     $varSize = Invoke-Oracle @{ id = "csv-varsize"; op = "eval"; source = 'VARSIZE("ABL")' }
@@ -168,6 +169,10 @@ try {
     Assert-True $presentationRun.ok "presentation function run failed"
     Assert-True ($presentationRun.result.termination -eq "completed") "presentation function did not complete"
     Assert-True (($presentationRun.result.output -join "`n").Contains("VISIBLE")) "NOSKIP presentation output differs"
+
+    $htmlPop = Invoke-Oracle @{ id = "html-pop"; op = "run"; entry = "ORACLE_HTML_POP"; watch = @("RESULTS:30") }
+    Assert-True $htmlPop.ok "HTML_POPPRINTINGSTR function run failed"
+    Assert-True ($htmlPop.result.watches.'RESULTS:30' -eq "A&lt;&amp;<button value='42'>choose</button>") "HTML_POPPRINTINGSTR differs"
 
     $structuredRun = Invoke-Oracle @{
         id = "structured"

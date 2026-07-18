@@ -2,7 +2,7 @@ use era_protocol::{ProtocolBytes, ProtocolVersion};
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::FrontendIoError;
+use crate::{CanvasPoint, FrontendIoError, ProjectionLength};
 
 /// Filesystem semantics negotiated independently from rendering capabilities.
 /// Candidate saves require every field; ordinary script Host operations can
@@ -194,6 +194,9 @@ pub enum ServiceKind {
     /// Frontend-owned nondeterminism used only when the caller omitted a seed.
     #[n(9)]
     Entropy,
+    /// Queries of physical lines and HTML as realized by the authoritative frontend.
+    #[n(10)]
+    PresentationQuery,
 }
 
 pub const LOCAL_DATE_TIME_OPERATION: &str = "local_date_time";
@@ -210,6 +213,131 @@ pub const OPEN_URL_OPERATION: &str = "open_url";
 pub const OPEN_URL_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const POINTER_STATE_OPERATION: &str = "pointer_state";
 pub const POINTER_STATE_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const GET_DISPLAY_LINE_OPERATION: &str = "get_display_line";
+pub const GET_DISPLAY_LINE_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const HTML_GET_PRINTED_STR_OPERATION: &str = "html_get_printed_str";
+pub const HTML_GET_PRINTED_STR_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const HTML_STRING_LEN_OPERATION: &str = "html_string_len";
+pub const HTML_STRING_LEN_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const HTML_SUBSTRING_OPERATION: &str = "html_substring";
+pub const HTML_SUBSTRING_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const HTML_STRING_LINES_OPERATION: &str = "html_string_lines";
+pub const HTML_STRING_LINES_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const GGET_TEXT_SIZE_OPERATION: &str = "gget_text_size";
+pub const GGET_TEXT_SIZE_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const SAMPLE_CANVAS_PIXEL_OPERATION: &str = "sample_canvas_pixel";
+pub const SAMPLE_CANVAS_PIXEL_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+
+/// Causal identity shared by every query of realized frontend presentation.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectionQueryContext {
+    #[n(0)]
+    pub presentation_revision: u64,
+    #[n(1)]
+    pub environment_revision: u64,
+    #[n(2)]
+    pub projection_space_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectionStringIndexRequest {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub index: i64,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectionStringResponse {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct HtmlMeasureRequest {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub markup: String,
+    #[n(2)]
+    pub argument: i64,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectionIntegerResponse {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub value: i64,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct HtmlSubstringResponse {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub head: String,
+    #[n(2)]
+    pub tail: String,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct TextExtentRequest {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub text: String,
+    #[n(2)]
+    pub font_family: String,
+    #[n(3)]
+    pub font_size: i64,
+    #[n(4)]
+    pub style_bits: u8,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct TextExtentResponse {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub width: ProjectionLength,
+    #[n(2)]
+    pub height: ProjectionLength,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct CanvasPixelRequest {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub canvas_id: i64,
+    #[n(2)]
+    pub canvas_revision: u64,
+    #[n(3)]
+    pub point: CanvasPoint,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct CanvasPixelResponse {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub canvas_revision: u64,
+    #[n(2)]
+    pub argb: u32,
+}
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -219,6 +347,8 @@ pub struct PointerStateRequest {
     pub presentation_revision: u64,
     #[n(1)]
     pub environment_revision: u64,
+    #[n(2)]
+    pub projection_space_revision: u64,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -226,9 +356,9 @@ pub struct PointerStateRequest {
 pub struct PointerStateResponse {
     /// Coordinates are frontend-independent logical (CSS) pixels.
     #[n(0)]
-    pub x: i64,
+    pub x: ProjectionLength,
     #[n(1)]
-    pub y: i64,
+    pub y: ProjectionLength,
     /// `EraBasic` value of the hovered button, or the empty string.
     #[n(2)]
     pub button_value: String,
@@ -236,6 +366,8 @@ pub struct PointerStateResponse {
     pub presentation_revision: u64,
     #[n(4)]
     pub environment_revision: u64,
+    #[n(5)]
+    pub projection_space_revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

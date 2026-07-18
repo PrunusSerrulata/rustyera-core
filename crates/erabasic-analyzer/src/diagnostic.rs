@@ -37,6 +37,8 @@ pub enum AnalyzerDiagnosticCode {
     UncalledFunction,
     UnsupportedReferenceFeature,
     DeferredIndex,
+    FrontendObservationSource,
+    FrontendObservationDependency,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

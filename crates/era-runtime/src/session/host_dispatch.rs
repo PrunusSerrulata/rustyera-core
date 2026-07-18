@@ -1523,19 +1523,120 @@ impl RuntimeSession {
                 }),
             );
         }
+        if name == "HTML_POPPRINTINGSTR" {
+            let value = self.presentation.pop_printing_html();
+            commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(value)),
+                    writes: Vec::new(),
+                }),
+            )?;
+            return self.emit_presentation();
+        }
+        if matches!(name.as_str(), "GETDISPLAYLINE" | "HTML_GETPRINTEDSTR") {
+            let context = self.projection_query_context();
+            let index = request
+                .arguments
+                .first()
+                .and_then(|value| match value {
+                    VmValue::Integer(value) => Some(*value),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if index < 0 {
+                if name == "GETDISPLAYLINE" {
+                    return commit_completion(
+                        vm,
+                        request.id,
+                        VmHostCompletion::Ready(HostReady {
+                            value: Some(VmValue::String(String::new())),
+                            writes: Vec::new(),
+                        }),
+                    );
+                }
+                return self.fault(
+                    FaultCode::VmFault,
+                    "HTML_GETPRINTEDSTR line number must be non-negative",
+                    Some(request.origin.clone()),
+                );
+            }
+            let (operation, version, completion) = if name == "GETDISPLAYLINE" {
+                (
+                    GET_DISPLAY_LINE_OPERATION,
+                    GET_DISPLAY_LINE_OPERATION_VERSION,
+                    ProjectionStringOperation::DisplayLine,
+                )
+            } else {
+                (
+                    HTML_GET_PRINTED_STR_OPERATION,
+                    HTML_GET_PRINTED_STR_OPERATION_VERSION,
+                    ProjectionStringOperation::PrintedHtml,
+                )
+            };
+            return self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::ProjectionString {
+                    request: request.id,
+                    operation: completion,
+                    context,
+                },
+                ServiceKind::PresentationQuery,
+                operation,
+                version,
+                &ProjectionStringIndexRequest { context, index },
+            );
+        }
         if matches!(
             name.as_str(),
-            "GETDISPLAYLINE"
-                | "HTML_GETPRINTEDSTR"
-                | "HTML_POPPRINTINGSTR"
-                | "HTML_STRINGLEN"
-                | "HTML_SUBSTRING"
-                | "HTML_STRINGLINES"
+            "HTML_STRINGLEN" | "HTML_SUBSTRING" | "HTML_STRINGLINES"
         ) {
-            return self.fault(
-                FaultCode::UnsupportedRuntimeFeature,
-                &format!("unsupported runtime presentation query: {name}"),
-                Some(request.origin.clone()),
+            let context = self.projection_query_context();
+            let markup = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let argument = request
+                .arguments
+                .get(1)
+                .and_then(|value| match value {
+                    VmValue::Integer(value) => Some(*value),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let (operation, version) = match name.as_str() {
+                "HTML_STRINGLEN" => (HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION),
+                "HTML_SUBSTRING" => (HTML_SUBSTRING_OPERATION, HTML_SUBSTRING_OPERATION_VERSION),
+                _ => (
+                    HTML_STRING_LINES_OPERATION,
+                    HTML_STRING_LINES_OPERATION_VERSION,
+                ),
+            };
+            let completion = if name == "HTML_SUBSTRING" {
+                ExternalCompletion::HtmlSubstring {
+                    request: request.id,
+                    context,
+                }
+            } else {
+                ExternalCompletion::ProjectionInteger {
+                    request: request.id,
+                    context,
+                }
+            };
+            return self.issue_host_service(
+                vm,
+                request,
+                completion,
+                ServiceKind::PresentationQuery,
+                operation,
+                version,
+                &HtmlMeasureRequest {
+                    context,
+                    markup,
+                    argument,
+                },
             );
         }
         if matches!(
@@ -2061,6 +2162,85 @@ impl RuntimeSession {
             };
             return commit_integer_result(vm, request.id, value);
         }
+        if name == "GGETTEXTSIZE" {
+            let context = self.projection_query_context();
+            let text = request
+                .arguments
+                .first()
+                .map_or_else(String::new, display_value);
+            let font_family = request
+                .arguments
+                .get(1)
+                .map_or_else(String::new, display_value);
+            let font_size = integer_argument_value(&request.arguments, 2)?;
+            let style = request
+                .arguments
+                .get(3)
+                .and_then(|value| match value {
+                    VmValue::Integer(value) => Some(*value),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            return self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::TextExtent {
+                    request: request.id,
+                    context,
+                },
+                ServiceKind::FontMetrics,
+                GGET_TEXT_SIZE_OPERATION,
+                GGET_TEXT_SIZE_OPERATION_VERSION,
+                &TextExtentRequest {
+                    context,
+                    text,
+                    font_family,
+                    font_size,
+                    style_bits: u8::try_from(style & 0x0f).expect("masked style fits u8"),
+                },
+            );
+        }
+        if name == "GGETCOLOR" {
+            let canvas_id = integer_argument_value(&request.arguments, 0)?;
+            let x = integer_argument_value(&request.arguments, 1)?;
+            let y = integer_argument_value(&request.arguments, 2)?;
+            let observation = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.canvas_observation(canvas_id));
+            let Some((width, height, canvas_revision)) = observation else {
+                return commit_integer_result(vm, request.id, -1);
+            };
+            let (Ok(x), Ok(y)) = (i32::try_from(x), i32::try_from(y)) else {
+                return commit_integer_result(vm, request.id, -1);
+            };
+            if x < 0
+                || y < 0
+                || u32::try_from(x).map_or(true, |x| x >= width)
+                || u32::try_from(y).map_or(true, |y| y >= height)
+            {
+                return commit_integer_result(vm, request.id, -1);
+            }
+            let context = self.projection_query_context();
+            return self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::CanvasPixel {
+                    request: request.id,
+                    context,
+                    canvas_revision,
+                },
+                ServiceKind::Canvas,
+                SAMPLE_CANVAS_PIXEL_OPERATION,
+                SAMPLE_CANVAS_PIXEL_OPERATION_VERSION,
+                &CanvasPixelRequest {
+                    context,
+                    canvas_id,
+                    canvas_revision,
+                    point: CanvasPoint { x, y },
+                },
+            );
+        }
         if name == "GCLEAR" {
             let id = integer_argument_value(&request.arguments, 0)?;
             let color = integer_argument_value(&request.arguments, 1)?;
@@ -2296,7 +2476,19 @@ impl RuntimeSession {
                 "PRINTBUTTONLC" => Some(CellAlignment::Left),
                 _ => None,
             };
-            self.presentation.append_button(text, token, alignment);
+            let protocol_value = match &value {
+                VmValue::Integer(value) => era_runtime_protocol::ProtocolValue::Integer(*value),
+                VmValue::String(value) => {
+                    era_runtime_protocol::ProtocolValue::String(value.clone())
+                }
+                VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => {
+                    return Err(RuntimeError::Internal(
+                        "PRINTBUTTON value was not materialized".into(),
+                    ));
+                }
+            };
+            self.presentation
+                .append_button(text, protocol_value, token, alignment);
             self.command_intents.insert(token, value);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
@@ -2342,8 +2534,12 @@ impl RuntimeSession {
             let entries = format_shop_items(vm, project)?;
             for (text, value) in entries {
                 let token = self.allocate_interaction();
-                self.presentation
-                    .append_button(text, token, Some(CellAlignment::Left));
+                self.presentation.append_button(
+                    text,
+                    era_runtime_protocol::ProtocolValue::Integer(value),
+                    token,
+                    Some(CellAlignment::Left),
+                );
                 self.command_intents.insert(token, VmValue::Integer(value));
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
@@ -2438,6 +2634,7 @@ impl RuntimeSession {
             };
             let presentation_revision = self.presentation.revision();
             let environment_revision = self.projection_environment_revision;
+            let projection_space_revision = self.projection_space_revision;
             self.issue_host_service(
                 vm,
                 request,
@@ -2446,6 +2643,7 @@ impl RuntimeSession {
                     coordinate,
                     presentation_revision,
                     environment_revision,
+                    projection_space_revision,
                 },
                 ServiceKind::InputState,
                 POINTER_STATE_OPERATION,
@@ -2453,6 +2651,7 @@ impl RuntimeSession {
                 &PointerStateRequest {
                     presentation_revision,
                     environment_revision,
+                    projection_space_revision,
                 },
             )
         } else if matches!(name.as_str(), "GETKEY" | "GETKEYTRIGGERED") {
@@ -2570,6 +2769,14 @@ impl RuntimeSession {
             }),
             None,
         )
+    }
+
+    fn projection_query_context(&self) -> ProjectionQueryContext {
+        ProjectionQueryContext {
+            presentation_revision: self.presentation.revision(),
+            environment_revision: self.projection_environment_revision,
+            projection_space_revision: self.projection_space_revision,
+        }
     }
 
     fn issue_extension(

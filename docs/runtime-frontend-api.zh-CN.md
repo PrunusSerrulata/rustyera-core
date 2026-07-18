@@ -340,7 +340,7 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 | 字段 | 含义 |
 | --- | --- |
 | `wire_version` | 公共信封版本，当前为 `2.0`。 |
-| `channel_version` | `Runtime` channel 当前为 `16.0`；`Debug` channel 当前为 `4.0`。 |
+| `channel_version` | `Runtime` channel 当前为 `17.0`；`Debug` channel 当前为 `4.0`。 |
 | `channel` | 正常运行必须为 `Runtime`；调试使用独立 `Debug` channel。 |
 | `session` | 首次 `ClientHello` 可为空；握手成功后必须等于 `ServerHello.session`。 |
 | `session_epoch` | 首次握手可为空；之后必须等于当前时间线 epoch。新游戏、恢复或热替换提交后旧 epoch 消息失效。 |
@@ -365,7 +365,7 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `16.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `17.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
@@ -468,10 +468,14 @@ command graph，以及 `SETANIMETIMER` 选定的 `animation_timer_ms` 重绘间�
 `DisplayRun` 支持文本、嵌套按钮、HTML、图片、形状、`ColumnCell` 和 `Separator`。
 `ColumnCell` 保存 PRINTC/PRINTLC 的对齐和建议列数，`Separator` 保存 DRAWLINE 的
 分隔意图；前端可使用 grid、flex、TUI pattern 或无障碍结构投影，但不得把字体测量
-结果写回权威游戏状态。按钮只携带 opaque `InteractionToken`，前端不得读取或推导
-游戏值。尺寸使用整数固定单位：
+结果写回权威游戏状态。按钮携带 opaque `InteractionToken` 和仅供规范化 HTML
+序列化的 EraBasic 原始值；前端只能回传 token，不能用原始值绕过交互鉴权。尺寸使用
+互不混用的强类型整数单位：
 
-- `millipixels`：1/1000 pixel；
+- `LogicalLength`：Era 逻辑空间中的 1/1000 logical unit，不是设备像素；
+- `PresentationLength`：绝对逻辑长度或字体高度百分比；
+- `ProjectionLength`：权威前端的设备无关布局单位，例如 CSS pixel；
+- canvas point/rectangle：runtime canvas 的整数 texel；
 - `font_millipoints`：1/1000 point；
 - `opacity_millionths`、`volume_millionths`：百万分比。
 
@@ -480,16 +484,16 @@ command graph，以及 `SETANIMETIMER` 选定的 `animation_timer_ms` 重绘间�
 
 这里的“不得写回”只针对普通展示投影。若 EraBasic 命令本身明确查询实际 viewport、
 字体测量、物理折行、显示历史或 raster 结果，该值属于前端观测，而不是 Runtime
-规范化展示状态。目标协议会向当前 session 唯一的权威投影前端发送携带 presentation
+规范化展示状态。Protocol 17.0 会向当前 session 唯一的权威投影前端发送携带 presentation
 revision 和前端环境 revision 的 typed service request；前端必须先应用到指定 revision，
 再返回其实际投影引擎的结果。Runtime 只负责关联、版本、revision、类型和范围验证，
-不能用逻辑列宽或默认字体伪造回退值。镜像、旁观者和调试客户端不得回答此类请求。
+不能用逻辑列宽或默认字体伪造回退值。当前协议不支持多客户端或 authority transfer。
 
-Runtime protocol 14.0 以 `ProjectionObservation` 接收主前端的环境 revision、当前
-presentation revision、client size、逻辑列数和 textbox 内容，并以 `ProjectionState`
-投影 runtime 权威 textbox、hotkey state 与 button generation。`RunLayout` 和
-`layout_width_millipixels` 已从规范化 snapshot 删除。字体/raster 专用观测仍未实现，
-不得用本地近似值替代。
+`ProjectionObservation` 包含 environment、presentation、projection-space revision、
+设备无关 viewport、逻辑列数、textbox 和逻辑到投影空间的有理数 affine transform。
+物理历史、HTML 排版、字体尺寸和 canvas pixel 使用逐命令 typed service，并回显全部
+适用 revision；canvas 查询还绑定 canvas replay revision。前端可延迟响应直到指定
+replay 已应用，但不得返回其他 revision 的缓存值。
 
 一次性音频、视频和动画设备动作通过 `EffectBatch`（tag `42`）发送，与可恢复展示
 状态分离。前端必须为每个 `effect_id` 单独返回 `EffectAcknowledgement`（tag `43`）中的

@@ -376,6 +376,238 @@ fn portable_extension_service_validates_return_and_mutable_writes() {
 }
 
 #[test]
+fn html_layout_query_is_revision_bound_and_commits_after_service_response() {
+    let mut client_capabilities = capabilities();
+    client_capabilities.html = true;
+    client_capabilities.services.push(ServiceCapability {
+        kind: ServiceKind::PresentationQuery,
+        operation: HTML_STRING_LEN_OPERATION.into(),
+        versions: VersionRange::exact(HTML_STRING_LEN_OPERATION_VERSION),
+    });
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "projection-test".into(),
+            features: vec![RuntimeFeature::Html, RuntimeFeature::ExternalServices],
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: client_capabilities,
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "projection.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nRESULT = HTML_STRINGLEN(\"<b>x</b>\", 1)\nWAIT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let load_messages = drain(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::Ready, "{load_messages:#?}");
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let mut observed = Vec::new();
+    let request = (0..8)
+        .find_map(|_| {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            let messages = drain(&mut session);
+            observed.extend(messages.clone());
+            messages.into_iter().find_map(|message| match message {
+                RuntimeMessage::ServiceRequest(request)
+                    if request.operation == HTML_STRING_LEN_OPERATION =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            })
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "HTML layout service request; phase={:?} {observed:#?}",
+                session.phase()
+            )
+        });
+    let payload: HtmlMeasureRequest = decode_canonical(request.payload.as_slice()).unwrap();
+    assert_eq!(payload.markup, "<b>x</b>");
+    assert_eq!(payload.argument, 1);
+    assert!(!session.operations.is_snapshot_stable());
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::ServiceResponse(ServiceResponse {
+            request_id: request.request_id,
+            result: ServiceResult::Ready {
+                payload: ProtocolBytes::new(
+                    encode_canonical(&ProjectionIntegerResponse {
+                        context: payload.context,
+                        value: 12,
+                    })
+                    .unwrap(),
+                ),
+            },
+        }),
+    );
+    for _ in 0..4 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+        12
+    );
+}
+
+#[test]
+fn ggetcolor_rejects_negative_y_without_frontend_raster_observation() {
+    let mut client_capabilities = capabilities();
+    client_capabilities.graphics = true;
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "canvas-bounds-test".into(),
+            features: vec![RuntimeFeature::Graphics],
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: client_capabilities,
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "canvas.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nRESULT = GCREATE(1, 2, 2)\nRESULT = GGETCOLOR(1, 0, -1)\nWAIT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let load_messages = drain(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::Ready, "{load_messages:#?}");
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let mut messages = Vec::new();
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        messages.extend(drain(&mut session));
+        if session.phase() == RuntimePhase::WaitingInput {
+            break;
+        }
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    assert!(!messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ServiceRequest(request)
+            if request.operation == SAMPLE_CANVAS_PIXEL_OPERATION
+    )));
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+        -1
+    );
+}
+
+#[test]
+fn html_pop_matches_the_reference_fixture_and_writes_the_string_result() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "html-pop-oracle".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "html-pop.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nPRINTPLAIN A<&\nPRINTBUTTON \"choose\", 42\nRESULTS:30 = %HTML_POPPRINTINGSTR()%\nWAIT\nRETURN\n".into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let load_messages = drain(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::Ready, "{load_messages:#?}");
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        if session.phase() == RuntimePhase::WaitingInput {
+            break;
+        }
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    let vm = session.vm.as_ref().unwrap();
+    let values = vm
+        .read_runtime_state(&[erabasic_vm::VmRuntimeRead {
+            variable: runtime_variable_key(vm, "RESULTS").unwrap(),
+            indices: vec![30],
+            character: None,
+        }])
+        .unwrap();
+    assert_eq!(
+        values,
+        [VmValue::String(
+            "A&lt;&amp;<button value='42'>choose</button>".into()
+        )]
+    );
+}
+
+#[test]
 fn safe_at_commands_use_runtime_lifecycle_effects_and_keep_debug_separate() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     session.state = SessionState::Active;
@@ -3216,8 +3448,15 @@ fn project_resource_metadata_is_frontend_decoded_before_load_commit() {
 fn font_profile_is_session_fixed_case_insensitive_and_deterministic() {
     let mut requested = capabilities();
     requested.available_fonts = vec!["Zeta".into(), "alpha".into(), "ALPHA".into()];
+    requested.font_metrics = true;
+    requested.services.push(ServiceCapability {
+        kind: ServiceKind::FontMetrics,
+        operation: GGET_TEXT_SIZE_OPERATION.into(),
+        versions: VersionRange::exact(GGET_TEXT_SIZE_OPERATION_VERSION),
+    });
     let selected = selected_capabilities(&requested);
     assert_eq!(selected.available_fonts, vec!["alpha", "Zeta"]);
+    assert!(selected.font_metrics);
 }
 
 #[test]

@@ -12,12 +12,14 @@ mod diagnostic;
 mod expression;
 mod input;
 mod options;
+mod portability;
 mod project;
 mod symbols;
 
 pub use catalog::{
-    ArgumentConstraint, CallableSignature, ExtensionCallableKind, ExtensionRegistry,
-    InstructionSignature, builtin_function_names, builtin_instruction_names,
+    ArgumentConstraint, CallablePortability, CallableSignature, ExtensionCallableKind,
+    ExtensionRegistry, InstructionSignature, builtin_callable_portability, builtin_function_names,
+    builtin_instruction_names,
 };
 pub use diagnostic::{
     AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerDiagnosticSeverity, AnalyzerSourceLocation,

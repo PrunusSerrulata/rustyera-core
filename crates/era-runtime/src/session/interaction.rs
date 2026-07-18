@@ -190,7 +190,12 @@ impl RuntimeSession {
                     | ExternalCompletion::SpritePixel { request: id }
                     | ExternalCompletion::UpdateCheck { request: id, .. }
                     | ExternalCompletion::PointerState { request: id, .. }
-                    | ExternalCompletion::Extension { request: id, .. } => *id,
+                    | ExternalCompletion::Extension { request: id, .. }
+                    | ExternalCompletion::ProjectionString { request: id, .. }
+                    | ExternalCompletion::ProjectionInteger { request: id, .. }
+                    | ExternalCompletion::HtmlSubstring { request: id, .. }
+                    | ExternalCompletion::TextExtent { request: id, .. }
+                    | ExternalCompletion::CanvasPixel { request: id, .. } => *id,
                 };
                 let value = match completion {
                     ExternalCompletion::GetKey {
@@ -286,6 +291,7 @@ impl RuntimeSession {
                         coordinate,
                         presentation_revision,
                         environment_revision,
+                        projection_space_revision,
                         ..
                     } => {
                         let state: PointerStateResponse = decode_canonical(payload.as_slice())?;
@@ -293,6 +299,8 @@ impl RuntimeSession {
                             || state.presentation_revision != self.presentation.revision()
                             || state.environment_revision != environment_revision
                             || state.environment_revision != self.projection_environment_revision
+                            || state.projection_space_revision != projection_space_revision
+                            || state.projection_space_revision != self.projection_space_revision
                         {
                             return self.fault(
                                 FaultCode::ServiceFailure,
@@ -301,8 +309,8 @@ impl RuntimeSession {
                             );
                         }
                         Some(match coordinate {
-                            PointerCoordinate::X => VmValue::Integer(state.x),
-                            PointerCoordinate::Y => VmValue::Integer(state.y),
+                            PointerCoordinate::X => VmValue::Integer(state.x.0),
+                            PointerCoordinate::Y => VmValue::Integer(state.y.0),
                             PointerCoordinate::Button => VmValue::String(state.button_value),
                         })
                     }
@@ -420,6 +428,78 @@ impl RuntimeSession {
                             }
                         }
                     }
+                    ExternalCompletion::ProjectionString {
+                        operation, context, ..
+                    } => {
+                        let result: ProjectionStringResponse =
+                            decode_canonical(payload.as_slice())?;
+                        self.validate_projection_query_context(context, result.context)?;
+                        let _ = operation;
+                        Some(VmValue::String(result.value))
+                    }
+                    ExternalCompletion::ProjectionInteger { context, .. } => {
+                        let result: ProjectionIntegerResponse =
+                            decode_canonical(payload.as_slice())?;
+                        self.validate_projection_query_context(context, result.context)?;
+                        Some(VmValue::Integer(result.value))
+                    }
+                    ExternalCompletion::HtmlSubstring { context, .. } => {
+                        let result: HtmlSubstringResponse = decode_canonical(payload.as_slice())?;
+                        self.validate_projection_query_context(context, result.context)?;
+                        let vm = self.vm.as_ref().ok_or_else(|| {
+                            RuntimeError::Internal("HTML substring completion has no VM".into())
+                        })?;
+                        if let Some(target) = global_place_at(vm, "RESULTS", 0) {
+                            writes.push(HostWrite {
+                                target,
+                                value: VmValue::String(result.head.clone()),
+                            });
+                        }
+                        if let Some(target) = global_place_at(vm, "RESULTS", 1) {
+                            writes.push(HostWrite {
+                                target,
+                                value: VmValue::String(result.tail),
+                            });
+                        }
+                        Some(VmValue::String(result.head))
+                    }
+                    ExternalCompletion::TextExtent { context, .. } => {
+                        let result: TextExtentResponse = decode_canonical(payload.as_slice())?;
+                        self.validate_projection_query_context(context, result.context)?;
+                        if result.width.0 < 0 || result.height.0 < 0 {
+                            return self.fault(
+                                FaultCode::ServiceFailure,
+                                "font metric response contains a negative extent",
+                                None,
+                            );
+                        }
+                        let vm = self.vm.as_ref().ok_or_else(|| {
+                            RuntimeError::Internal("text extent completion has no VM".into())
+                        })?;
+                        if let Some(target) = global_place_at(vm, "RESULT", 1) {
+                            writes.push(HostWrite {
+                                target,
+                                value: VmValue::Integer(result.height.0),
+                            });
+                        }
+                        Some(VmValue::Integer(result.width.0))
+                    }
+                    ExternalCompletion::CanvasPixel {
+                        context,
+                        canvas_revision,
+                        ..
+                    } => {
+                        let result: CanvasPixelResponse = decode_canonical(payload.as_slice())?;
+                        self.validate_projection_query_context(context, result.context)?;
+                        if result.canvas_revision != canvas_revision {
+                            return self.fault(
+                                FaultCode::ServiceFailure,
+                                "stale canvas raster revision",
+                                None,
+                            );
+                        }
+                        Some(VmValue::Integer(i64::from(result.argb)))
+                    }
                 };
                 let vm = self
                     .vm
@@ -440,6 +520,25 @@ impl RuntimeSession {
         }
     }
 
+    fn validate_projection_query_context(
+        &mut self,
+        expected: ProjectionQueryContext,
+        actual: ProjectionQueryContext,
+    ) -> Result<(), RuntimeError> {
+        if actual != expected
+            || actual.presentation_revision != self.presentation.revision()
+            || actual.environment_revision != self.projection_environment_revision
+            || actual.projection_space_revision != self.projection_space_revision
+        {
+            return self.fault(
+                FaultCode::ServiceFailure,
+                "stale or mismatched projection query context",
+                None,
+            );
+        }
+        Ok(())
+    }
+
     pub(super) fn open_update_prompt(
         &mut self,
         request: erabasic_vm::HostRequestId,
@@ -452,8 +551,18 @@ impl RuntimeSession {
         );
         let no = self.allocate_interaction();
         let yes = self.allocate_interaction();
-        self.presentation.append_button("No".into(), no, None);
-        self.presentation.append_button("Yes".into(), yes, None);
+        self.presentation.append_button(
+            "No".into(),
+            era_runtime_protocol::ProtocolValue::Integer(0),
+            no,
+            None,
+        );
+        self.presentation.append_button(
+            "Yes".into(),
+            era_runtime_protocol::ProtocolValue::Integer(1),
+            yes,
+            None,
+        );
         let submission = self.allocate_interaction();
         let pending = PendingInput {
             host_request: Some(request),
@@ -1604,12 +1713,15 @@ impl RuntimeSession {
                     .and_then(Option::as_deref)
                     .unwrap_or("");
                 let token = self.allocate_interaction();
-                self.presentation
-                    .append_button(format!("{name}[{display:>3}]"), token, None);
-                self.command_intents.insert(
+                let display = i64::try_from(display).unwrap_or(i64::MAX);
+                self.presentation.append_button(
+                    format!("{name}[{display:>3}]"),
+                    era_runtime_protocol::ProtocolValue::Integer(display),
                     token,
-                    VmValue::Integer(i64::try_from(display).unwrap_or(i64::MAX)),
+                    None,
                 );
+                self.command_intents
+                    .insert(token, VmValue::Integer(display));
             }
         }
         self.controller.step = SystemStep::TrainShowUser;

@@ -33,6 +33,7 @@ intent; they do not promise WinForms/GDI pixel equivalence.
 | Ordered map, XML and DataTable mutations | Native / clone-commit | Extension-scoped | Included / preserve / immediate | Not applicable | Transactional |
 | Random generation | Native / clone-commit | Runtime-only | Included / preserve / immediate | Not applicable | Forbidden |
 | Text, HTML, logical lines, styles, buttons, backgrounds and tooltips | Presentation / clone-commit | Runtime-only | Included / preserve / immediate | Canonical projection | Forbidden |
+| Physical history, HTML layout, font metrics and canvas raster queries | External / forbidden | Runtime-only | Pending blocks / active blocks / transient external | Unsupported | Forbidden |
 | Audio/video/animation device actions | Presentation / buffered effect | Runtime-only | Excluded / preserve / immediate | Intent no-op | Forbidden |
 | Stable untimed input | Controller / forbidden | Runtime-only | Included / preserve / stable input | Script result | Forbidden |
 | Timed input, key state, image pixels, clock and network services | External / forbidden | Runtime-only | Pending blocks / active blocks / transient external | Script result or unsupported | Forbidden |
@@ -53,13 +54,11 @@ containers.
 
 ## Stable intentional differences and unsupported surface
 
-- `GETDISPLAYLINE`, `HTML_GETPRINTEDSTR`, `HTML_POPPRINTINGSTR`, `HTML_STRINGLEN`,
-  `HTML_SUBSTRING` and `HTML_STRINGLINES` currently return `UnsupportedRuntimeFeature`. Their
-  reference results depend on the WinForms physical line/history model. Under the target
-  design, commands confirmed to observe realized presentation should use a versioned
-  authoritative-frontend service and return its real result, with a portability diagnostic;
-  commands that can instead be defined over canonical markup or logical state remain runtime
-  operations. That command-by-command service split is not implemented yet.
+- Protocol 17.0 classifies `GETDISPLAYLINE`, `HTML_GETPRINTEDSTR`, `HTML_STRINGLEN`,
+  `HTML_SUBSTRING` and `HTML_STRINGLINES` as transient authoritative-frontend observations.
+  `HTML_POPPRINTINGSTR` instead clone-commits serialization and consumption of the runtime-owned
+  pending semantic buffer. `GGETTEXTSIZE` and valid in-bounds `GGETCOLOR` use the same transient
+  contract with font-metric and canvas-raster services respectively.
 - XPath supports the documented deterministic element/attribute, descendant, wildcard, numeric,
   `last()`, attribute and text predicate subset. Namespace axes, unions and arbitrary XPath
   functions return `native.xpath.unsupported` without committing a mutation.

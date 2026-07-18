@@ -20,8 +20,8 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 - `PRINT*` 的 K/D 后缀和常用专用输出已经实现，但 N/SINGLE/C 等后缀仍缺少完整语义。
 - 调教、`EVENTCOMEND`、SHOP 自动存档存在系统流程差异。
 - 很多已进入 Host catalog 的命令最终落入通用 `UnsupportedRuntimeFeature`。
-- 前端实际渲染观测尚无 typed service，且现有规范化展示类型仍携带声称由 runtime
-  产生的物理布局字段，与更新后的 runtime/前端边界矛盾。
+- Protocol 17.0 已建立前端实际渲染观测 typed service 和强类型坐标；具体应用前端仍需
+  实现这些可选能力，runtime 不提供布局或 raster 近似回退。
 
 主要证据集中在：
 
@@ -218,6 +218,10 @@ runtime 只持有并投影 `HOTKEY_STATE`。物理 ButtonWrap、文本历史、�
 - 图片解码由前端完成；runtime 使用固有尺寸和像素查询服务。
 - 物理 GDI/CBG 对象 API 和 `GETMEMORYUSAGE` 明确不支持。显式查询实际投影结果的
   命令不属于对象 API；目标设计是由权威前端返回真实观测值。
+- `GGETTEXTSIZE/GGETCOLOR` 以协商的实际前端能力为准，不因 legacy
+  `TextDrawingMode=WINAPI` 字符串拒绝一个可执行的 typed service。
+- `GGETCOLOR` 对负 X、负 Y 和上界执行对称验证并返回 `-1`；不复刻固定参考实现负 Y
+  分支因重复检查 X 而可能进入底层异常的缺陷。
 - CLR 插件和部分动态元数据查询明确不支持。
 - Unicode 大小写转换取代进程文化相关的 .NET casing。
 - 整数格式只支持已验证的格式子集。
@@ -235,44 +239,39 @@ runtime 只持有并投影 `HOTKEY_STATE`。物理 ButtonWrap、文本历史、�
 
 ### 2.2 更新后设计原则与当前实现的矛盾
 
-以下内容是当前代码和 protocol 16.0 的现状，不是未来目标设计。它们不能继续被笼统
-描述为“规范化展示的有意差异”：
+本节记录更新后原则发现的矛盾及 Protocol 17.0 的处理结果：
 
 1. **已解决：权威 snapshot 的伪物理文本布局。** Protocol 14.0 删除 `RunLayout` 和
    `DisplayLine::layout_width_millipixels`；文本、按钮、shape 仅保存语义结构。
-2. **字体度量能力存在于 Schema，但不可执行。** `ClientCapabilities::font_metrics`
-   和 `ServiceKind::FontMetrics` 已定义，runtime 协商时却固定选择 `false`，协议也没有
-   为具体测量操作定义 revision-bound typed payload。类型存在不能视为能力已实现。
+2. **已解决：字体度量能力。** `font_metrics` 仅在前端协商 `gget_text_size` typed
+   operation 时选中；请求和响应绑定 presentation、environment 与 projection-space
+   revision。`GGETTEXTSIZE` 原子返回宽度并写入高度，缺少能力时显式 unsupported。
 3. **已解决：`CLIENTWIDTH/CLIENTHEIGHT` 权威来源。** 主展示前端以
    `ProjectionObservation` 提交 revision-bound client size；runtime 验证后供查询使用。
-4. **物理历史和 HTML 投影查询仍直接 fault。** `GETDISPLAYLINE`、
-   `HTML_GETPRINTEDSTR`、`HTML_POPPRINTINGSTR`、`HTML_STRINGLEN`、
-   `HTML_SUBSTRING`、`HTML_STRINGLINES` 当前返回
-   `UnsupportedRuntimeFeature`。这曾被记录为稳定有意差异；更新后的原则要求逐命令
-   判断：可在规范化 markup/逻辑状态上定义的由 runtime 实现，确实观察物理投影的
-   通过权威前端服务返回真实值。该拆分尚未完成，因此当前状态是缺失/待设计，而不是
-   最终的稳定不支持。
+4. **已解决：物理历史和 HTML 查询拆分。** `GETDISPLAYLINE`、
+   `HTML_GETPRINTEDSTR`、`HTML_STRINGLEN`、`HTML_SUBSTRING`、`HTML_STRINGLINES`
+   使用逐命令 revision-bound 权威前端服务；`HTML_SUBSTRING` 的返回值和 `RESULTS`
+   写回原子提交。`HTML_POPPRINTINGSTR` 由 runtime 确定性序列化并消费 pending semantic
+   runs，不把打印缓冲所有权交给前端。
 5. **已解决：`GETLINESTR` 固定 75 列近似。** 该函数使用经 revision-bound
    `ProjectionObservation` 验证的主前端逻辑列数；`DRAWLINE` 继续使用 `Separator`。
-6. **canvas/text raster 查询没有统一边界。** `SPRITEGETCOLOR` 查询内容寻址的源图片
-   像素，当前 frontend image service 方向合理；而 `GGETTEXTSIZE`、`GGETCOLOR` 等
-   依赖实际字体或 raster 算法的操作仍缺少权威前端观测服务，不能由 runtime 自行
-   近似，也不能与源图片事实混为一类。
-7. **部分解决：投影因果字段。** `ProjectionObservation` 与 `pointer_state` 均绑定
-   presentation revision，环境观测使用单调 environment revision。当前单 session
-   动态库只有一个主前端；未来 C/S 多客户端仍需在连接层增加明确角色租约。
-8. **部分解决：可移植性元数据。** 字节码 operation contract 现持久化 `Portable`、
-   `FrontendObservation`、`PlatformIntent`、`ExtensionDefined`，compiler 对直接使用
-   发出 source-located Notice。跨表达式追踪到控制流、持久变量、随机种子、动态调用或
-   存档等 taint sink 的 Warning 仍待 analyzer 数据流诊断基础设施完成。
-9. **坐标单位语义仍含混。** 图片、shape 和 canvas 字段使用 `millipixels` 命名，容易
-   被理解为设备像素。脚本提供的坐标可以作为 runtime 持有的逻辑坐标保留，但协议
-   必须明确其坐标空间及前端缩放规则；由字体测量产生的设备布局不能混入其中。
+6. **已解决：source image 与 raster 边界。** `SPRITEGETCOLOR` 保持内容寻址的源图片
+   事实服务；`GGETTEXTSIZE` 使用 FontMetrics service，`GGETCOLOR` 使用绑定 canvas
+   replay revision 的 Canvas service。Runtime 在发出 canvas 查询前完成对称 X/Y 越界
+   验证；负 Y 返回 `-1`，不复刻参考实现重复检查 X 导致的异常缺陷。
+7. **单客户端范围内已解决：投影因果。** 一个 session 只有一个握手绑定的权威前端，
+   以 envelope session/epoch/sequence 和各类 revision 校验；当前不支持多客户端或
+   authority transfer，因此不加入无实际消费者的租约状态机。
+8. **已解决：可移植性数据流诊断。** analyzer catalog 是 callable portability 的
+   统一来源；直接观测发 source-located Notice，传播到控制流、持久变量、随机种子、
+   动态调用或存档 sink 时发 Warning。字节码仍持久化 operation portability contract。
+9. **已解决：坐标空间。** Protocol 17.0 区分 Era logical milliunits、字体相对长度、
+   canvas texel 和设备无关 projection units；`ProjectionObservation` 提供有理数 affine
+   transform。字体和物理布局结果只存在于外部观测，不进入规范化 snapshot。
 
-这些矛盾的推荐解决顺序是：先建立操作分类和诊断，再定义 revision-bound 前端观测
-服务，随后迁移查询命令，最后从下一版协议的规范化 snapshot 中移除 realized-layout
-字段。当前开发阶段公共协议不要求向下兼容，但变更时仍需同步升级协议版本、C Schema、
-文档和测试。
+Protocol 17.0 不向下兼容 Protocol 16.0；前端必须同步更新 Schema、坐标投影与 service
+capabilities。仓库不包含具体 GUI/TUI，因此“已解决”指 runtime 端契约、验证、VM 提交
+和缺能力行为完整，不能据此声称任一外部前端已经实现对应 renderer operation。
 
 ### 2.3 尚未解决的行为差异
 

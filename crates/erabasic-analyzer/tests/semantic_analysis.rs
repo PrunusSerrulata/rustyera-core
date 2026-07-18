@@ -22,6 +22,36 @@ fn source(path: &str, text: &str) -> ProjectSource {
 }
 
 #[test]
+fn frontend_observation_reports_source_and_control_dependency() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "projection.erb",
+                "@SYSTEM_TITLE\nIF CLIENTWIDTH() > 640\nPRINT wide\nENDIF\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == AnalyzerDiagnosticCode::FrontendObservationSource
+                && diagnostic
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| source.byte_start > 0)
+        }),
+        "{:#?}",
+        report.diagnostics
+    );
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == AnalyzerDiagnosticCode::FrontendObservationDependency
+            && diagnostic.severity == erabasic_analyzer::AnalyzerDiagnosticSeverity::Warning
+    }));
+}
+
+#[test]
 fn resolves_header_constants_variables_and_typed_expressions() {
     let report = analyze_project(
         AnalysisInput {
@@ -335,6 +365,7 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             "ORACLE_LIST_TARGET",
             "EVENTFIRST",
             "ORACLE_PRESENTATION",
+            "ORACLE_HTML_POP",
             "ORACLE_TEST",
             "ORACLE_NATIVE",
             "ORACLE_INPUT",
@@ -344,14 +375,14 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             "ORACLE_COMPAT_12"
         ]
     );
-    assert_eq!(program.functions[0].lines.len(), 14);
+    assert_eq!(program.functions[0].lines.len(), 15);
     assert_eq!(
         program.functions[0]
             .control_flow
             .iter()
             .filter(|edge| edge.kind == erabasic_hir::ControlFlowKind::Call)
             .count(),
-        9
+        10
     );
 }
 

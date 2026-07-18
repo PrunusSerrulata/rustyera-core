@@ -13,7 +13,7 @@ pub const CONTAINER_VERSION: FormatVersion = FormatVersion {
     minor: 0,
 };
 pub const ISA_VERSION: FormatVersion = FormatVersion { major: 5, minor: 0 };
-pub const COMPILER_ABI_VERSION: u32 = 17;
+pub const COMPILER_ABI_VERSION: u32 = 18;
 pub const NATIVE_ABI_VERSION: u32 = 14;
 pub const HOST_ABI_VERSION: u32 = 11;
 pub const VM_ABI_VERSION: u32 = 9;

@@ -124,19 +124,87 @@ pub enum SeparatorRole {
     Rule,
 }
 
+/// A signed distance in the runtime-owned Era presentation coordinate space.
+///
+/// One script-visible logical unit is represented by 1,000 milliunits. This is
+/// deliberately not a device pixel; the authoritative frontend applies the
+/// negotiated projection transform when rendering it.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(transparent)]
+pub struct LogicalLength(#[n(0)] pub i64);
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct LogicalRect {
+    #[n(0)]
+    pub x: LogicalLength,
+    #[n(1)]
+    pub y: LogicalLength,
+    #[n(2)]
+    pub width: LogicalLength,
+    #[n(3)]
+    pub height: LogicalLength,
+}
+
+/// A script shape length before frontend projection.
+///
+/// The reference syntax treats a value with the `px` suffix as absolute and a
+/// suffix-less value as a percentage of the configured font height. Retaining
+/// that distinction prevents the canonical model from baking in font metrics.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "unit", content = "value", rename_all = "snake_case")]
+pub enum PresentationLength {
+    #[n(0)]
+    Logical(#[n(0)] LogicalLength),
+    #[n(1)]
+    FontHeightHundredths(#[n(0)] i64),
+}
+
+/// Integer coordinates in a runtime-created raster canvas.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct CanvasPoint {
+    #[n(0)]
+    pub x: i32,
+    #[n(1)]
+    pub y: i32,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct CanvasSize {
+    #[n(0)]
+    pub width: u32,
+    #[n(1)]
+    pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct CanvasRect {
+    #[n(0)]
+    pub x: i32,
+    #[n(1)]
+    pub y: i32,
+    #[n(2)]
+    pub width: i32,
+    #[n(3)]
+    pub height: i32,
+}
+
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct MediaPlacement {
     #[n(0)]
     pub resource_id: String,
     #[n(1)]
-    pub x_millipixels: i64,
+    pub x: LogicalLength,
     #[n(2)]
-    pub y_millipixels: i64,
+    pub y: LogicalLength,
     #[n(3)]
-    pub width_millipixels: i64,
+    pub width: LogicalLength,
     #[n(4)]
-    pub height_millipixels: i64,
+    pub height: LogicalLength,
     #[n(5)]
     pub depth: i64,
     #[n(6)]
@@ -151,7 +219,7 @@ pub struct Shape {
     #[n(0)]
     pub kind: String,
     #[n(1)]
-    pub parameters: Vec<i64>,
+    pub parameters: Vec<PresentationLength>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -176,6 +244,9 @@ pub enum DisplayRun {
         title: Option<String>,
         #[n(3)]
         hover_style: Option<TextStyle>,
+        /// Original `EraBasic` value; the interaction token is not serialized as HTML.
+        #[n(4)]
+        value: crate::ProtocolValue,
     },
     #[n(2)]
     Html {
@@ -235,9 +306,9 @@ pub struct DisplayLine {
 #[cbor(map)]
 pub struct PresentationSettings {
     #[n(0)]
-    pub drawable_width_millipixels: i64,
+    pub drawable_width: LogicalLength,
     #[n(1)]
-    pub line_height_millipixels: i64,
+    pub line_height: LogicalLength,
     #[n(2)]
     pub background: Color,
     #[n(3)]
@@ -318,7 +389,7 @@ pub struct SpriteReplay {
     #[n(4)]
     pub canvas_id: Option<i64>,
     #[n(5)]
-    pub canvas_rectangle: Option<[i32; 4]>,
+    pub canvas_rectangle: Option<CanvasRect>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -329,14 +400,14 @@ pub enum CanvasReplayCommand {
         #[n(0)]
         argb: u32,
         #[n(1)]
-        rectangle: Option<[i32; 4]>,
+        rectangle: Option<CanvasRect>,
     },
     #[n(1)]
     DrawSprite {
         #[n(0)]
         name: String,
         #[n(1)]
-        destination: [i32; 4],
+        destination: CanvasRect,
     },
 }
 
@@ -346,11 +417,11 @@ pub struct CanvasReplay {
     #[n(0)]
     pub canvas_id: i64,
     #[n(1)]
-    pub width: u32,
+    pub size: CanvasSize,
     #[n(2)]
-    pub height: u32,
-    #[n(3)]
     pub commands: Vec<CanvasReplayCommand>,
+    #[n(3)]
+    pub revision: u64,
 }
 
 #[derive(Clone, Debug, Default, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

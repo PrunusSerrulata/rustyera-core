@@ -8,12 +8,18 @@ use era_protocol::{
     negotiate_version,
 };
 use era_runtime_protocol::{
-    AdvanceTime, AudioEffect, AudioEffectAction, CancelExternalRequest, CellAlignment,
-    ClientCapabilities, ClientHello, CommandErrorCode, CommandRejected, DiagnosticSeverity,
-    EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcomeStatus, ExitReason,
-    ExitRequested, ExtensionDeclaration, ExtensionRegistrySubmit, ExternalRequestKind, FaultCode,
-    FilePayload, FrontendInput, FrontendIoErrorKind, GET_KEY_STATE_OPERATION,
-    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse,
+    AdvanceTime, AudioEffect, AudioEffectAction, CancelExternalRequest, CanvasPixelRequest,
+    CanvasPixelResponse, CanvasPoint, CellAlignment, ClientCapabilities, ClientHello,
+    CommandErrorCode, CommandRejected, DiagnosticSeverity, EffectAcknowledgement, EffectBatch,
+    EffectEvent, EffectKind, EffectOutcomeStatus, ExitReason, ExitRequested, ExtensionDeclaration,
+    ExtensionRegistrySubmit, ExternalRequestKind, FaultCode, FilePayload, FrontendInput,
+    FrontendIoErrorKind, GET_DISPLAY_LINE_OPERATION, GET_DISPLAY_LINE_OPERATION_VERSION,
+    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GGET_TEXT_SIZE_OPERATION,
+    GGET_TEXT_SIZE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse,
+    HTML_GET_PRINTED_STR_OPERATION, HTML_GET_PRINTED_STR_OPERATION_VERSION,
+    HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
+    HTML_STRING_LINES_OPERATION_VERSION, HTML_SUBSTRING_OPERATION,
+    HTML_SUBSTRING_OPERATION_VERSION, HtmlMeasureRequest, HtmlSubstringResponse,
     IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION, IMAGE_PIXEL_OPERATION,
     IMAGE_PIXEL_OPERATION_VERSION, ImageMetadataRequest, ImageMetadataResponse, ImagePixelRequest,
     ImagePixelResponse, InputIntent, InputUndoRequest, InputUndoState, InputWait, InteractionToken,
@@ -22,18 +28,21 @@ use era_runtime_protocol::{
     OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION, OpenUrlRequest, OpenUrlResponse,
     POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
     PointerStateResponse, ProjectAnalysisRequest, ProjectLoadReport, ProjectManifest,
-    ProjectionObservation, ProjectionState, ProtocolDiagnostic, RANDOM_SEED_OPERATION,
-    RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse,
-    ReloadProject, RuntimeFault, RuntimeFeature, RuntimeLimits, RuntimeMessage, RuntimePhase,
-    RuntimeResynchronized, RuntimeStateChanged, ServerHello, ServiceCapability, ServiceKind,
-    ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady, SnapshotIneligibleReason,
-    StartMode, StartRequest, StateExportChunk, StateExportChunkRequest, StateExportKind,
-    StateExportReady, StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin,
-    StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
+    ProjectionIntegerResponse, ProjectionObservation, ProjectionQueryContext, ProjectionState,
+    ProjectionStringIndexRequest, ProjectionStringResponse, ProtocolDiagnostic,
+    RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION,
+    RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault, RuntimeFeature,
+    RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized, RuntimeStateChanged,
+    SAMPLE_CANVAS_PIXEL_OPERATION, SAMPLE_CANVAS_PIXEL_OPERATION_VERSION, ServerHello,
+    ServiceCapability, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady,
+    SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk, StateExportChunkRequest,
+    StateExportKind, StateExportReady, StateExportRequest, StateExportResult, StateImportAccepted,
+    StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
     StateTransferDescriptor, StorageCapabilities, StorageEntry, StorageNamespace, StorageOperation,
     StoragePrecondition, StorageRequest, StorageResponse, StorageResult, SystemTextArgument,
-    SystemTextKey, UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest,
-    UpdateCheckResponse, VersionRejected, WaitChange, WaitKind, WaitStability,
+    SystemTextKey, TextExtentRequest, TextExtentResponse, UPDATE_CHECK_OPERATION,
+    UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest, UpdateCheckResponse, VersionRejected,
+    WaitChange, WaitKind, WaitStability,
 };
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
@@ -49,7 +58,7 @@ use serde::{Deserialize, Serialize};
 use crate::controller::{SystemController, SystemFlow, SystemStep};
 use crate::host::{
     ClockOperation, ExternalCompletion, PendingInput, PointerCoordinate, PostInputAction,
-    input_wait,
+    ProjectionStringOperation, input_wait,
 };
 use crate::key_macro::{KeyMacros, preprocess_input};
 use crate::operation::{
@@ -276,6 +285,7 @@ pub struct RuntimeSession {
     debug_output_base: u64,
     debug_output_subscribed: bool,
     projection_environment_revision: u64,
+    projection_space_revision: u64,
     client_width: u32,
     client_height: u32,
     line_columns: u32,
