@@ -1027,17 +1027,23 @@ pub(super) fn input_value(
     pending: &PendingInput,
     token: InteractionToken,
     intent: InputIntent,
+    allow_long_activation: bool,
 ) -> Option<InputSubmission> {
     if let InputIntent::Activate(activated) = intent {
-        return (token == pending.wait.submission_token)
-            .then(|| {
-                pending
-                    .choices
-                    .get(&activated)
-                    .cloned()
-                    .map(InputSubmission::Value)
-            })
-            .flatten();
+        if token != pending.wait.submission_token {
+            return None;
+        }
+        let value = pending.choices.get(&activated)?;
+        if pending.wait.kind == WaitKind::PrimitiveMouseKey {
+            return Some(InputSubmission::Value(value.clone()));
+        }
+        let text = match value {
+            VmValue::Integer(value) => value.to_string(),
+            VmValue::String(value) => value.clone(),
+            VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => return None,
+        };
+        return submitted_text_value(pending, text, allow_long_activation)
+            .map(InputSubmission::Value);
     }
     if token != pending.wait.submission_token {
         return None;
@@ -1048,14 +1054,13 @@ pub(super) fn input_value(
         | (WaitKind::AnyKey, InputIntent::AnyKey(_)) => {
             Some(InputSubmission::Value(VmValue::Integer(0)))
         }
-        (WaitKind::IntegerValue, InputIntent::CommitText(value)) => value
-            .parse()
-            .ok()
-            .map(VmValue::Integer)
-            .map(InputSubmission::Value),
-        (WaitKind::StringValue, InputIntent::CommitText(value)) => {
-            Some(InputSubmission::Value(VmValue::String(value)))
-        }
+        (
+            WaitKind::IntegerValue
+            | WaitKind::StringValue
+            | WaitKind::IntegerButton
+            | WaitKind::StringButton,
+            InputIntent::CommitText(value),
+        ) => submitted_text_value(pending, value, false).map(InputSubmission::Value),
         (WaitKind::AnyValue, InputIntent::CommitText(value)) => Some(InputSubmission::Value(
             value
                 .parse()
@@ -1079,6 +1084,51 @@ pub(super) fn input_value(
                 selection,
             }))
         }
+        _ => None,
+    }
+}
+
+fn submitted_text_value(
+    pending: &PendingInput,
+    mut text: String,
+    allow_long_activation: bool,
+) -> Option<VmValue> {
+    let use_default = text.is_empty() && pending.wait.deadline_ns.is_none();
+    let value = if use_default {
+        pending.wait.default_value.as_ref().map(protocol_to_vm)
+    } else {
+        if pending.wait.one_input && !allow_long_activation {
+            text.truncate(text.chars().next().map_or(0, char::len_utf8));
+        }
+        match pending.wait.kind {
+            WaitKind::IntegerValue | WaitKind::IntegerButton => {
+                text.parse().ok().map(VmValue::Integer)
+            }
+            WaitKind::StringValue | WaitKind::StringButton => Some(VmValue::String(text)),
+            _ => None,
+        }
+    }?;
+    submission_matches_wait(pending, value)
+}
+
+fn submission_matches_wait(pending: &PendingInput, value: VmValue) -> Option<VmValue> {
+    match (&pending.wait.kind, &value) {
+        (WaitKind::IntegerValue, VmValue::Integer(_))
+        | (WaitKind::StringValue, VmValue::String(_)) => Some(value),
+        (WaitKind::IntegerButton, VmValue::Integer(candidate)) => pending
+            .choices
+            .values()
+            .any(|choice| matches!(choice, VmValue::Integer(value) if value == candidate))
+            .then_some(value),
+        (WaitKind::StringButton, VmValue::String(candidate)) => pending
+            .choices
+            .values()
+            .any(|choice| match choice {
+                VmValue::Integer(value) => value.to_string() == *candidate,
+                VmValue::String(value) => value == candidate,
+                VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => false,
+            })
+            .then_some(value),
         _ => None,
     }
 }

@@ -54,7 +54,7 @@ any JSON value.
 | `load` | `gameDir`; optional `debug` | Loads `csv/` and `erb/`, then returns a VM snapshot |
 | `eval` | `source` | Parsed expression plus its current runtime value |
 | `execute` | `statement`; optional limits and `watch` | Executes one non-control-flow instruction in the loaded VM |
-| `run` | optional `entry`, `arguments`, `inputs`, limits, `watch` | Runs an isolated function or resumes pending input |
+| `run` | optional `entry`, `arguments`, `inputs`, `uiInputs`, limits, `watch` | Runs an isolated function or resumes pending input |
 
 `lex.endWith` and each item in `lex.flags` are case-insensitive C# enum names
 from the pinned reference implementation. They default to `EoL` and `None`.
@@ -74,6 +74,12 @@ function as the root of an isolated VM run. A snapshot reports `termination` as
 `completed`, `waitingInput`, `instructionLimit`, `timeout`, `quit`, or `error`.
 If a function waits for input, provide inputs in the same request or send a
 later `run` request containing only `inputs`.
+
+For UI-sensitive input oracle cases, `uiInputs` accepts objects with `text` and
+`changedByMouse` fields. It uses the pinned UI layer's ONEINPUT normalization
+before resuming the unchanged reference VM. Ordinary tests should continue to
+use `inputs`; `uiInputs` exists only where the physical mouse distinction is
+part of the behavior under comparison.
 
 Use `run` for CALL/JUMP/BEGIN and other control flow. `execute` is deliberately
 limited to standalone instructions such as assignment and printing, because a

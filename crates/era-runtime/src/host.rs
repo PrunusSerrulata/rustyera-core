@@ -119,12 +119,13 @@ pub(crate) fn input_wait(
     } else {
         -1
     };
+    let default_index = usize::from(timed);
     let default_value = match kind {
         WaitKind::IntegerValue | WaitKind::IntegerButton => {
-            integer(arguments.get(1)).map(ProtocolValue::Integer)
+            integer(arguments.get(default_index)).map(ProtocolValue::Integer)
         }
         WaitKind::StringValue | WaitKind::StringButton => {
-            string(arguments.get(1)).map(|value| ProtocolValue::String(value.into()))
+            string(arguments.get(default_index)).map(|value| ProtocolValue::String(value.into()))
         }
         _ => None,
     };
@@ -135,7 +136,11 @@ pub(crate) fn input_wait(
     let display_time = timed_value_input && integer(arguments.get(2)).unwrap_or(1) != 0;
     let timeout_message =
         timed_value_input.then(|| string(arguments.get(3)).unwrap_or("時間切れ").to_owned());
-    let mouse_input = timed_value_input && integer(arguments.get(4)) == Some(1);
+    let mouse_input = if timed_value_input {
+        integer(arguments.get(4)) == Some(1)
+    } else {
+        integer(arguments.get(1)).is_some_and(|value| value != 0)
+    };
     Some(PendingInput {
         host_request: Some(request.id),
         wait: InputWait {
@@ -261,6 +266,32 @@ mod tests {
         );
         assert_eq!(pending.wait.timeout_message.as_deref(), Some("timeout"));
         assert_eq!(pending.result_name.as_deref(), Some("RESULTS"));
+    }
+
+    #[test]
+    fn untimed_one_input_uses_the_shared_default_mouse_and_skip_slots() {
+        let pending = input_wait(
+            &request(
+                "ONEINPUTS",
+                vec![
+                    VmValue::String("DEFAULT".into()),
+                    VmValue::Integer(1),
+                    VmValue::Integer(0),
+                ],
+            ),
+            8,
+            InteractionToken { epoch: 1, id: 4 },
+            0,
+        )
+        .expect("known input instruction");
+        assert_eq!(pending.wait.kind, WaitKind::StringValue);
+        assert!(pending.wait.one_input);
+        assert!(pending.wait.mouse_input);
+        assert_eq!(pending.wait.stability, WaitStability::StableInput);
+        assert_eq!(
+            pending.wait.default_value,
+            Some(ProtocolValue::String("DEFAULT".into()))
+        );
     }
 
     #[test]

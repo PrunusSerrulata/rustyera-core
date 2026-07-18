@@ -76,6 +76,23 @@ internal sealed class ReferenceHost : IDisposable
                 console.HeadlessResume(input?.ToString() ?? string.Empty);
             }
         }
+        if (request["uiInputs"] is JsonArray uiInputs)
+        {
+            foreach (var input in uiInputs)
+            {
+                if (console!.HeadlessState != ConsoleState.WaitInput) break;
+                var item = input!.AsObject();
+                var text = OracleService.RequiredString(item, "text");
+                var changedByMouse = item["changedByMouse"]?.GetValue<bool>() ?? false;
+                // PressEnterKey also touches WinForms-only macro and refresh state. Reproduce
+                // its authoritative OneInput normalization here, then enter the unchanged
+                // backend path used by other headless inputs.
+                if (console.HeadlessInputRequest.OneInput &&
+                    (!Config.AllowLongInputByMouse || !changedByMouse) && text.Length > 1)
+                    text = text.Remove(1);
+                console.HeadlessResume(text);
+            }
+        }
         return Snapshot(ReadWatches(request));
     }
 

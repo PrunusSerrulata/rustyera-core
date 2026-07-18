@@ -48,10 +48,15 @@ do not serialize VM stacks or pending input/service requests.
 
 The runtime implements typed waits, positive monotonic deadlines, defaults, timeout messages,
 FORCEWAIT flags, TWAIT Void classification, fresh GETKEY queries, the shared
-GETKEYTRIGGERED toggle observation and the sixth-slot message-skip shortcut. Primitive mouse/key
-input intentionally arrives as frontend-normalized EraBasic-shaped result fields; runtime still
-validates the wait, token, epoch and ordering and alone synthesizes timeouts. This keeps platform
-event interpretation outside the runtime while preserving authoritative game results.
+GETKEYTRIGGERED toggle observation and the timed and untimed message-skip shortcuts. Primitive
+mouse/key input intentionally arrives as frontend-normalized EraBasic-shaped result fields;
+runtime still validates the wait, token, epoch and ordering and alone synthesizes timeouts. This
+keeps platform event interpretation outside the runtime while preserving authoritative game
+results.
 
-One-input maximum-length validation is not yet fully enforced by the runtime. That remaining
-gap is tracked in [Runtime compatibility status](runtime-compatibility-status.zh-CN.md).
+One-input waits authoritatively normalize non-empty manual text to the first Unicode scalar.
+Untimed empty input, timeout and message-skip use the complete default. A semantic button
+`Activate` retains a multi-character value only when `AllowLongInputByMouse` is enabled; manual
+`CommitText` never receives that exception. This intentionally maps the reference UI's physical
+mouse distinction onto a portable interaction intent and avoids producing an invalid UTF-8
+surrogate for non-BMP input.

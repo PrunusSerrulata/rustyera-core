@@ -36,6 +36,7 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) use_new_random_ignored: bool,
     pub(crate) auto_save: bool,
     pub(crate) ctrl_z_enabled: bool,
+    pub(crate) allow_long_input_by_activation: bool,
     pub(crate) save_in_binary: bool,
     pub(crate) compress_save: bool,
     pub(crate) save_slot_count: u32,
@@ -65,6 +66,7 @@ struct SemanticConfig {
     use_new_random: bool,
     auto_save: bool,
     ctrl_z_enabled: bool,
+    allow_long_input_by_activation: bool,
     save_in_binary: bool,
     compress_save: bool,
     save_slot_count: u32,
@@ -87,6 +89,7 @@ impl Default for SemanticConfig {
             use_new_random: false,
             auto_save: true,
             ctrl_z_enabled: false,
+            allow_long_input_by_activation: false,
             save_in_binary: false,
             compress_save: false,
             save_slot_count: 20,
@@ -356,6 +359,7 @@ pub(crate) fn build_project(
             use_new_random_ignored: config.use_new_random,
             auto_save: config.auto_save,
             ctrl_z_enabled: config.ctrl_z_enabled,
+            allow_long_input_by_activation: config.allow_long_input_by_activation,
             save_in_binary: config.save_in_binary,
             compress_save: config.compress_save,
             save_slot_count: config.save_slot_count,
@@ -476,6 +480,7 @@ fn project_identity(
         u8::from(config.compress_save),
         u8::from(config.money_first),
         u8::from(config.ctrl_z_enabled),
+        u8::from(config.allow_long_input_by_activation),
     ]);
     hasher.update(&config.save_slot_count.to_le_bytes());
     hasher.update(&config.maximum_shop_items.to_le_bytes());
@@ -718,6 +723,10 @@ fn parse_configuration(
                 "Ctrl-Zで元に戻す機能を有効にする" | "Enable undo with ctrl-z" => {
                     config.ctrl_z_enabled = boolean;
                 }
+                "ONEINPUT系命令でマウスによる2文字以上の入力を許可する"
+                | "Allow long input by mouse for ONEINPUT" => {
+                    config.allow_long_input_by_activation = boolean;
+                }
                 "セーブデータをバイナリ形式で保存する"
                 | "Use the binary format for saving data" => config.save_in_binary = boolean,
                 "セーブデータを圧縮して保存する" | "Compress save data" => {
@@ -783,6 +792,12 @@ fn parse_json_configuration(
                 .and_then(serde_json::Value::as_bool)
             {
                 config.ctrl_z_enabled = boolean;
+            }
+            if let Some(boolean) = value
+                .get("AllowLongInputByMouse")
+                .and_then(serde_json::Value::as_bool)
+            {
+                config.allow_long_input_by_activation = boolean;
             }
             if let Some(boolean) = value
                 .get("SystemSaveInBinary")
@@ -953,7 +968,7 @@ mod tests {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
-                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nCurrency symbol:円\nCurrency symbol position:NO\nMax shop item storage:77\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nフォント名:Test\n",
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nCurrency symbol:円\nCurrency symbol position:NO\nMax shop item storage:77\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nフォント名:Test\n",
             )],
             &mut diagnostics,
         );
@@ -963,6 +978,7 @@ mod tests {
         assert!(config.use_new_random);
         assert!(!config.auto_save);
         assert!(config.ctrl_z_enabled);
+        assert!(config.allow_long_input_by_activation);
         assert!(config.save_in_binary);
         assert!(config.compress_save);
         assert_eq!(config.save_slot_count, 30);
@@ -988,11 +1004,12 @@ mod tests {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
-                r#"{"UseNewRandom":true,"UseMouse":false,"WindowWidth":1200,"FontSize":21,"LineHeight":19,"CompatiCallEvent":true,"CompatiFuncArgOptional":true,"CompatiFuncArgAutoConvert":true}"#,
+                r#"{"UseNewRandom":true,"UseMouse":false,"AllowLongInputByMouse":true,"WindowWidth":1200,"FontSize":21,"LineHeight":19,"CompatiCallEvent":true,"CompatiFuncArgOptional":true,"CompatiFuncArgAutoConvert":true}"#,
             )],
             &mut diagnostics,
         );
         assert!(config.use_new_random);
+        assert!(config.allow_long_input_by_activation);
         assert_eq!(config.font_size, 21);
         assert_eq!(config.line_height, 21);
         assert!(config.analyzer.compatible_call_event);

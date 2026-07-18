@@ -45,7 +45,7 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 | AFTERTRAIN/ABLUP/TURNEND | 主流程存在 | BEGIN 时的样式、SKIPDISP 仍有差异 |
 | SHOP | 部分完成 | 自动存档条件、EVENTSHOP 中 BEGIN 仍有差异；失败确认等待已实现 |
 | 普通脚本执行 | 部分完成 | 1.1 所列动态调用、打印数据块和阻断指令已实现；其余差异见后续各节 |
-| 输入/QTE/计时 | 主框架完成 | ONEINPUT 长度未由 runtime 校验；部分 UI 输入函数缺失 |
+| 输入/QTE/计时 | 主框架完成 | ONEINPUT 权威规范化已完成；部分 UI 输入函数缺失 |
 | 文本、HTML、图片、音频 | 语义模型部分完成 | PRINT 后缀、HTML、图片参数和样式操作缺失 |
 | 传统存档、VM snapshot | 基础完成 | 菜单和部分失败行为不同；Protocol 15.0 已实现 runtime 自有 Ctrl-Z 轨迹 |
 | 热替换 | Rust 扩展已实现 | 与参考 ReloadERB 流程并不相同 |
@@ -161,15 +161,19 @@ Protocol 15.0 还实现了协商式 `InputUndo`：runtime 在成功的手动存�
 读档 hooks。标题初始化的精确状态与调用顺序依赖 2.3 的完整标题/新游戏流程，因此该
 项作为后续依赖保留，不阻塞 1.3 的输入轨迹、RNG 和存档恢复能力。
 
-### 1.4 输入验证遗漏
+### 1.4 已补齐的输入验证遗漏
 
-`one_input` 目前只是发送给前端的展示信息。runtime 对
-`ONEINPUT/ONEINPUTS/TONEINPUT*` 提交内容没有执行单字符限制。
+本节已完成。runtime 对 `ONEINPUT/ONEINPUTS/TONEINPUT/TONEINPUTS` 以及按钮输入
+变体执行权威规范化：手动 `CommitText` 的非空内容截取第一个 Unicode scalar，整数
+输入随后按截取结果解析；空的非计时提交和 timeout/message-skip 路径使用完整默认值，
+不会把长默认值截断。`INPUT*` 的省略参数、默认值、mouse 和 canskip 槽位也已按参考
+签名统一处理。
 
-这与“Runtime 判定输入结果”的既定边界冲突：前端可以负责采集和初步约束，但
-runtime 仍应拒绝非法提交。参考实现还受 `AllowLongInputByMouse` 配置影响。
-
-PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计，不属于缺失。
+前端的 `Activate(token)` 是物理鼠标按钮输入的可移植语义对应物。只有项目配置
+`AllowLongInputByMouse`（或参考日文配置项）启用时，`Activate` 才保留多字符按钮值；
+否则使用同一单字符规范化。runtime 仍验证 wait、submission token、activation token、
+选项成员关系、epoch 和事件顺序。`PrimitiveInput` 继续由前端规范化为 EraBasic 字段，
+不进入这条文本/按钮路径。
 
 ### 1.5 初始化、配置和调试遗漏
 
@@ -188,6 +192,10 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 - 全部源码和文本使用 UTF-8，不支持 GBK/Shift-JIS 文件编码。
 - 文件 I/O 由前端完成，runtime 只处理提交内容和 I/O 结果。
 - PrimitiveInput 由前端整理为 EraBasic 结果字段。
+- ONEINPUT 的“鼠标长输入”以语义化 `Activate(token)` 表示，不依赖前端报告物理设备；
+  `CommitText` 始终走文本单字符规则。参考实现按 WinForms 的 `changedByMouse` 区分。
+- ONEINPUT 的单字符单位是 Unicode scalar；固定参考实现按 UTF-16 code unit 截断，
+  因而非 BMP 字符在参考实现中可能形成孤立 surrogate。本项目选择有效 UTF-8 文本。
 - runtime 保存规范化逻辑展示模型，不追求 Windows GDI 像素一致。
 - 图片解码由前端完成；runtime 使用固有尺寸和像素查询服务。
 - 物理 GDI/CBG 对象 API 和 `GETMEMORYUSAGE` 明确不支持。显式查询实际投影结果的
