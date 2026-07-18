@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use erabasic_ast::{BinaryOp, Directive, Expr, ExprKind, UnaryOp};
+use erabasic_ast::{BinaryOp, Directive, Expr, ExprKind, FormPart, FormattedString, UnaryOp};
 use erabasic_data::{
     Persistence, ProjectData, StorageScope, UserIndexRegistration, ValueType,
     VariableId as DataVariableId, VariableSchema,
@@ -109,9 +109,10 @@ pub(crate) fn analyze_global_declarations(
 pub(crate) fn parse_private_declaration(
     input: &DeclarationInput<'_>,
     context: &dyn ParserContext,
+    constants: &BTreeMap<String, ConstantValue>,
     options: &AnalyzerOptions,
 ) -> Result<DeclaredVariable, String> {
-    parse_dim(input, true, context, &BTreeMap::new(), options).map_err(|error| error.to_string())
+    parse_dim(input, true, context, constants, options).map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Debug)]
@@ -150,7 +151,10 @@ fn parse_dim(
     options: &AnalyzerOptions,
 ) -> Result<DeclaredVariable, DimError> {
     let is_string = input.directive.name == "DIMS";
-    let mut rest = input.directive.raw_arguments.as_str();
+    // Directive arguments are kept raw by the syntax parser. Emuera's declaration
+    // lexer still terminates them at an unescaped semicolon, including when no space
+    // separates the variable name and its comment.
+    let mut rest = strip_declaration_comment(&input.directive.raw_arguments);
     let mut is_const = false;
     let mut reference = false;
     let mut global = false;
@@ -258,7 +262,14 @@ fn parse_dim(
                 "this declaration cannot have an initializer".into(),
             ));
         }
-        for segment in split_top_level(initializer, ',') {
+        let mut segments = split_top_level(initializer, ',');
+        if segments
+            .last()
+            .is_some_and(|segment| segment.trim().is_empty())
+        {
+            segments.pop();
+        }
+        for segment in segments {
             if segment.trim().is_empty() {
                 return Err(DimError::InvalidInitializer(
                     "array initializers cannot be omitted".into(),
@@ -359,6 +370,36 @@ fn take_word(source: &str) -> Option<(&str, &str)> {
         .find(|character: char| character.is_whitespace() || matches!(character, ',' | '='))
         .unwrap_or(trimmed.len());
     (end > 0).then(|| (&trimmed[..end], &trimmed[end..]))
+}
+
+fn strip_declaration_comment(source: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut escaped_semicolon_until = 0;
+    for (index, character) in source.char_indices() {
+        if index < escaped_semicolon_until {
+            continue;
+        }
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => quote = Some(character),
+            ';' if source[index..].starts_with(";!;") => {
+                escaped_semicolon_until = index + 3;
+            }
+            ';' => return &source[..index],
+            _ => {}
+        }
+    }
+    source
 }
 
 fn split_assignment(source: &str) -> (&str, Option<&str>) {
@@ -495,10 +536,91 @@ fn evaluate_constant(
                 options,
             )
         }
+        ExprKind::Call { name, args }
+            if name.eq_ignore_ascii_case("UNICODE") && args.len() == 1 =>
+        {
+            let argument = args[0]
+                .as_ref()
+                .ok_or_else(|| DimError::Invalid("UNICODE requires an argument".into()))?;
+            let ConstantValue::Integer(value) = evaluate_constant(argument, constants, options)?
+            else {
+                return Err(DimError::Invalid(
+                    "UNICODE requires an integer argument".into(),
+                ));
+            };
+            let value = u32::try_from(value)
+                .ok()
+                .and_then(char::from_u32)
+                .ok_or_else(|| DimError::Invalid("UNICODE argument is out of range".into()))?;
+            Ok(ConstantValue::String(value.to_string()))
+        }
+        ExprKind::Formatted(formatted) => evaluate_formatted(formatted, constants, options),
         _ => Err(DimError::Invalid(
             "initializer must be a load-time constant".into(),
         )),
     }
+}
+
+fn evaluate_formatted(
+    formatted: &FormattedString,
+    constants: &BTreeMap<String, ConstantValue>,
+    options: &AnalyzerOptions,
+) -> Result<ConstantValue, DimError> {
+    let mut result = String::new();
+    for part in &formatted.parts {
+        match part {
+            FormPart::Text(value) => result.push_str(value),
+            FormPart::StringInterpolation { expression, .. } => {
+                match evaluate_constant(expression, constants, options)? {
+                    ConstantValue::String(value) => result.push_str(&value),
+                    ConstantValue::Integer(value) => result.push_str(&value.to_string()),
+                }
+            }
+            FormPart::IntegerInterpolation { expression, .. } => {
+                let ConstantValue::Integer(value) =
+                    evaluate_constant(expression, constants, options)?
+                else {
+                    return Err(DimError::Invalid(
+                        "integer interpolation requires an integer".into(),
+                    ));
+                };
+                result.push_str(&value.to_string());
+            }
+            FormPart::Conditional {
+                condition,
+                then_value,
+                else_value,
+                ..
+            } => {
+                let ConstantValue::Integer(condition) =
+                    evaluate_constant(condition, constants, options)?
+                else {
+                    return Err(DimError::Invalid(
+                        "formatted condition requires an integer".into(),
+                    ));
+                };
+                let selected = if condition != 0 {
+                    Some(then_value.as_ref())
+                } else {
+                    else_value.as_deref()
+                };
+                if let Some(selected) = selected {
+                    let ConstantValue::String(value) =
+                        evaluate_formatted(selected, constants, options)?
+                    else {
+                        unreachable!("formatted evaluation always returns a string");
+                    };
+                    result.push_str(&value);
+                }
+            }
+            FormPart::Triple { .. } => {
+                return Err(DimError::Invalid(
+                    "triple interpolation is not a load-time constant".into(),
+                ));
+            }
+        }
+    }
+    Ok(ConstantValue::String(result))
 }
 
 #[allow(clippy::too_many_lines)]

@@ -1,8 +1,23 @@
 use erabasic_ast::{Alignment, Diagnostic, Expr, ExprKind, FormPart, FormattedString, ParseOutput};
-use erabasic_lexer::{FormattedToken, FormattedTokenPart, Token, TokenKind};
+use erabasic_lexer::{FormattedToken, FormattedTokenPart, Token, TokenKind, lex_formatted};
 
+use crate::ParserContext;
 use crate::expression::ExpressionParser;
 use crate::util::{shifted, split_top_level};
+
+/// Parse FORM text and place every span at its UTF-8 byte offset in the source file.
+#[must_use]
+pub fn parse_formatted_at(
+    source: &str,
+    base: usize,
+    context: &dyn ParserContext,
+) -> ParseOutput<FormattedString> {
+    let (form, lex_diagnostics) = lex_formatted(source, context.lexer_config(), context.macros());
+    let mut output = lower_formatted(&form);
+    output.diagnostics.splice(0..0, lex_diagnostics);
+    shift_formatted(&mut output, base);
+    output
+}
 
 pub(crate) fn lower_formatted(form: &FormattedToken) -> ParseOutput<FormattedString> {
     let mut diagnostics = Vec::new();

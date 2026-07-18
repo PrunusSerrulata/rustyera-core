@@ -21,6 +21,7 @@ pub fn parse_erb(source: &str, context: &mut dyn ParserContext) -> ParseOutput<S
     parse_script(source, SourceKind::Erb, context)
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_script(
     source: &str,
     kind: SourceKind,
@@ -34,8 +35,20 @@ fn parse_script(
     let mut blocks: Vec<(String, Span)> = Vec::new();
     let mut preprocessor: Vec<PreprocessorFrame> = Vec::new();
 
-    for (offset, raw_line) in lines_with_offsets(source) {
-        let line = raw_line.trim_end_matches('\r');
+    let lines: Vec<_> = lines_with_offsets(source).collect();
+    let mut line_index = 0;
+    while line_index < lines.len() {
+        let (mut offset, raw_line) = lines[line_index];
+        line_index += 1;
+        let mut line = raw_line.trim_end_matches('\r');
+        // `read_to_string` preserves an UTF-8 BOM whereas StreamReader consumes it.
+        // Skip it only at the beginning and keep every reported span byte-accurate.
+        if offset == 0
+            && let Some(without_bom) = line.strip_prefix('\u{feff}')
+        {
+            line = without_bom;
+            offset += '\u{feff}'.len_utf8();
+        }
         let trimmed = line.trim_start_matches([' ', '\t']);
         let leading = line.len() - trimmed.len();
         let base = offset + leading;
@@ -45,6 +58,53 @@ fn parse_script(
         if preprocessor.iter().any(|frame| !frame.active) {
             continue;
         }
+
+        let mut continued = String::new();
+        if trimmed == "{" {
+            let opener = Span::new(base, base + 1);
+            let mut first_offset = None;
+            let mut closed = false;
+            while line_index < lines.len() {
+                let (part_offset, raw_part) = lines[line_index];
+                line_index += 1;
+                let part = raw_part.trim_end_matches('\r');
+                let part_trimmed = part.trim_start_matches([' ', '\t']);
+                if part_trimmed == "}" {
+                    closed = true;
+                    break;
+                }
+                if part_trimmed == "{" {
+                    diagnostics.push(Diagnostic::error(
+                        DiagnosticCode::UnexpectedToken,
+                        Span::new(part_offset, part_offset + part.len()),
+                        "nested continuation opener",
+                    ));
+                }
+                first_offset.get_or_insert(part_offset);
+                continued.push_str(part);
+                continued.push_str(context.continuation_separator());
+            }
+            if !closed {
+                diagnostics.push(Diagnostic::error(
+                    DiagnosticCode::UnexpectedToken,
+                    opener,
+                    "continuation is not closed",
+                ));
+            }
+            offset = first_offset.unwrap_or(offset);
+            line = &continued;
+        } else if trimmed == "}" {
+            diagnostics.push(Diagnostic::error(
+                DiagnosticCode::UnexpectedToken,
+                Span::new(base, base + 1),
+                "unexpected continuation terminator",
+            ));
+            continue;
+        }
+
+        let trimmed = line.trim_start_matches([' ', '\t']);
+        let leading = line.len() - trimmed.len();
+        let base = offset + leading;
         if trimmed.is_empty() || trimmed.starts_with(';') {
             continue;
         }

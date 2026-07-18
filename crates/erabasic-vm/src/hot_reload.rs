@@ -131,7 +131,7 @@ impl Vm {
 
         self.memory = migrated;
         self.generations
-            .insert(new_generation, ProgramGeneration { artifact: target });
+            .insert(new_generation, ProgramGeneration::new(target));
         self.current_generation = new_generation;
         self.next_generation = self.next_generation.saturating_add(1);
         let report = HotReloadReport {

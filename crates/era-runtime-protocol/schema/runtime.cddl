@@ -14,6 +14,7 @@ runtime-message =
   [18, extension-registry-submit] /
   [20, start-request] /
   [21, runtime-state] /
+  [22, exit-requested] /
   [30, frontend-input] /
   [31, advance-time] /
   [32, wait-change] /
@@ -45,10 +46,10 @@ runtime-message =
   [90, shutdown-request] /
   [91, shutdown-ready] /
   [92, runtime-fault] /
-  [93, any] /
-  [94, any] /
+  [93, sequence-acknowledgement] /
+  [94, resynchronize-request] /
   [95, command-rejected] /
-  [96, any] /
+  [96, runtime-resynchronized] /
   [97, protocol-diagnostic]
 
 client-hello = { 0: any, 1: tstr, 2: [* uint], 3: runtime-limits, 4: any, 5: [* tstr] }
@@ -71,6 +72,7 @@ extension-declaration = {
 extension-argument = { 0: uint, 1: bool, 2: bool }
 start-request = { 0: any }
 runtime-state = { 0: uint, 1: uint, 2: uint }
+exit-requested = { 0: uint, 1: bool, 2: uint }
 frontend-input = { 0: uint, 1: interaction-token, 2: uint, 3: any, 4: bool }
 advance-time = { 0: uint }
 wait-change = any
@@ -122,5 +124,11 @@ state-transfer-cancel = { 0: uint }
 shutdown-request = { 0: bool }
 shutdown-ready = { 0: uint, 1: uint }
 runtime-fault = { 0: uint, 1: tstr, 2: any / null }
+sequence-acknowledgement = { 0: uint }
+resynchronize-request = { 0: uint / null }
+runtime-resynchronized = {
+  0: uint, 1: uint, 2: uint, 3: presentation-snapshot, 4: exit-requested / null,
+  5: tstr, 6: input-undo-state, 7: key-macro-state
+}
 command-rejected = { 0: uint, 1: tstr, 2: bool, 3: any / null }
 protocol-diagnostic = { 0: tstr, 1: uint, 2: tstr, 3: any / null }

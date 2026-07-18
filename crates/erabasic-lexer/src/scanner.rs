@@ -106,7 +106,21 @@ impl<'a> Lexer<'a> {
                     self.read_print_v_string();
                 }
                 '@' if self.peek() == Some('"') => self.read_formatted_quoted(),
+                '\\' if self.peek() == Some('@') => {
+                    // The reference expression lexer admits a conditional FORM as
+                    // a string-valued term, notably inside `%\@ ... \@%`.
+                    let part = self.read_conditional_form();
+                    self.push(
+                        TokenKind::Formatted(FormattedToken {
+                            parts: vec![part],
+                            span: Span::new(start, self.pos),
+                        }),
+                        start,
+                        self.pos,
+                    );
+                }
                 c if is_identifier_start(c) => self.read_identifier(),
+                '[' if self.peek() == Some('[') => self.read_rename_symbol(),
                 '(' | '[' => {
                     if ch == '(' {
                         self.paren_depth += 1;
@@ -147,7 +161,7 @@ impl<'a> Lexer<'a> {
                 }
                 _ => {
                     if let Some((op, len)) = operator_at(&self.source[self.pos..]) {
-                        if op == Operator::Assign
+                        if matches!(op, Operator::Assign | Operator::StringAssign)
                             && !self.flags.contains(LexFlags::ALLOW_ASSIGNMENT)
                         {
                             self.output.diagnostics.push(Diagnostic::error(
@@ -253,6 +267,33 @@ impl<'a> Lexer<'a> {
         self.push(TokenKind::Identifier(value), start, self.pos);
     }
 
+    fn read_rename_symbol(&mut self) {
+        let start = self.pos;
+        self.pos += 2;
+        let Some(relative_end) = self.source[self.pos..].find("]]") else {
+            self.pos = self.source.len();
+            self.output.diagnostics.push(Diagnostic::error(
+                DiagnosticCode::UnexpectedToken,
+                Span::new(start, self.pos),
+                "rename symbol is missing closing ']]'",
+            ));
+            return;
+        };
+        if relative_end == 0 {
+            self.output.diagnostics.push(Diagnostic::error(
+                DiagnosticCode::UnexpectedToken,
+                Span::new(start, self.pos + 2),
+                "rename symbol cannot be empty",
+            ));
+        }
+        self.pos += relative_end + 2;
+        self.push(
+            TokenKind::Identifier(self.source[start..self.pos].to_owned()),
+            start,
+            self.pos,
+        );
+    }
+
     fn read_integer(&mut self) {
         let start = self.pos;
         let (radix, prefix_len) = if self.source[self.pos..].starts_with("0x")
@@ -304,10 +345,10 @@ impl<'a> Lexer<'a> {
                 false
             };
             let exp_start = self.pos;
-            while self.current().is_some_and(|c| c.is_ascii_digit()) {
+            while self.current().is_some_and(|c| c.is_digit(radix)) {
                 self.bump();
             }
-            let exponent = self.source[exp_start..self.pos].parse::<u32>();
+            let exponent = u32::from_str_radix(&self.source[exp_start..self.pos], radix);
             let Ok(exponent) = exponent else {
                 self.output.diagnostics.push(Diagnostic::error(
                     DiagnosticCode::InvalidInteger,
@@ -322,16 +363,29 @@ impl<'a> Lexer<'a> {
                     .checked_pow(exponent)
                     .map_or(0, |factor| value / factor);
             } else {
-                let base: i64 = if matches!(marker, 'p' | 'P') { 2 } else { 10 };
+                let base: u128 = if matches!(marker, 'p' | 'P') { 2 } else { 10 };
                 let Some(factor) = base.checked_pow(exponent) else {
                     self.integer_overflow(start);
                     return;
                 };
-                let Some(next) = value.checked_mul(factor) else {
+                let Ok(unsigned_value) = u128::try_from(value) else {
                     self.integer_overflow(start);
                     return;
                 };
-                value = next;
+                let Some(next) = unsigned_value.checked_mul(factor) else {
+                    self.integer_overflow(start);
+                    return;
+                };
+                // The pinned .NET conversion admits exactly 2^63 and converts it to
+                // the sign bit. eraTW relies on `1p63` as an i64 mask constant.
+                if next == 1_u128 << 63 {
+                    value = i64::MIN;
+                } else if let Ok(next) = i64::try_from(next) {
+                    value = next;
+                } else {
+                    self.integer_overflow(start);
+                    return;
+                }
             }
         }
         self.push(TokenKind::Integer(value), start, self.pos);
@@ -482,5 +536,20 @@ mod tests {
         assert_eq!(output.tokens.len(), 3);
         config.allow_full_width_space = true;
         assert!(lex("A　+ B", &config).diagnostics.is_empty());
+    }
+
+    #[test]
+    fn preserves_reference_sign_bit_exponent_literal() {
+        for source in ["1p63", "0x1p3f"] {
+            let output = lex(source, &LexerConfig::default());
+            assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+            assert!(matches!(
+                output.tokens.as_slice(),
+                [Token {
+                    kind: TokenKind::Integer(i64::MIN),
+                    ..
+                }]
+            ));
+        }
     }
 }

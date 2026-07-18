@@ -208,8 +208,9 @@ supported locale. Canonical system text carries both the runtime-selected text a
 with arguments, allowing accessible clients to understand its role without becoming authoritative
 for wording or game state.
 
-The runtime stores a revisioned semantic presentation snapshot and emits deltas based on
-that revision. It includes an ordered semantic history journal, text/styles/buttons, typed HTML,
+The runtime stores a revisioned semantic presentation snapshot. Protocol 19 reserves a delta
+message shape, but the current sender emits full snapshots only. The snapshot includes an ordered
+semantic history journal, text/styles/buttons, typed HTML,
 image/shape intent, exact-rational backgrounds,
 tooltip policy, parsed sprite definitions, canvas replay commands, logical audio state, title and
 the current wait. Script-defined logical media coordinates use fixed

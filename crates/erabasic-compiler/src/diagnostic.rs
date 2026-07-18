@@ -65,4 +65,17 @@ impl CompilerDiagnostic {
             message: message.into(),
         }
     }
+
+    pub(crate) fn warning_at(
+        code: CompilerDiagnosticCode,
+        location: SourceLocation,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code,
+            severity: CompilerDiagnosticSeverity::Warning,
+            location: Some(location),
+            message: message.into(),
+        }
+    }
 }

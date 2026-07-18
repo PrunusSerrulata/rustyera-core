@@ -114,8 +114,8 @@ impl Default for RuntimeOptions {
         Self {
             session_id: SessionId { high: 0, low: 1 },
             limits: RuntimeLimits {
-                maximum_envelope_bytes: 16 * 1024 * 1024,
-                maximum_payload_bytes: 15 * 1024 * 1024,
+                maximum_envelope_bytes: 128 * 1024 * 1024,
+                maximum_payload_bytes: 127 * 1024 * 1024,
                 maximum_pending_requests: 1024,
                 maximum_journal_entries: 4096,
                 maximum_drive_instructions: 100_000,

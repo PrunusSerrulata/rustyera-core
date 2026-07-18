@@ -201,15 +201,38 @@ impl Memory {
                         .shared
                         .insert(definition.key, VariableCell::new(definition));
                 }
-                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
-                    result
-                        .statics
-                        .insert(definition.key, VariableCell::new(definition));
-                }
-                BytecodeStorage::FunctionLocal | BytecodeStorage::Character => {}
+                BytecodeStorage::FunctionStatic
+                | BytecodeStorage::FunctionPersistent
+                | BytecodeStorage::FunctionLocal
+                | BytecodeStorage::Character => {}
             }
         }
         result
+    }
+
+    pub(crate) fn ensure_function_statics(
+        &mut self,
+        generation: GenerationId,
+        artifact: &BytecodeArtifact,
+        function: SymbolKey,
+    ) {
+        for definition in artifact.globals.iter().filter(|definition| {
+            matches!(
+                definition.storage,
+                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent
+            ) && definition.owner == Some(function)
+        }) {
+            if self
+                .legacy
+                .get(&generation)
+                .is_some_and(|memory| memory.statics.contains_key(&definition.key))
+            {
+                continue;
+            }
+            self.statics
+                .entry(definition.key)
+                .or_insert_with(|| VariableCell::new(definition));
+        }
     }
 
     pub fn push_character(
@@ -434,9 +457,12 @@ impl Memory {
                     }
                 }
                 BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
-                    if let Some(cell) = self.statics.get(&definition.key) {
-                        legacy.statics.insert(definition.key, cell.clone());
-                    }
+                    legacy.statics.insert(
+                        definition.key,
+                        self.statics
+                            .get(&definition.key)
+                            .map_or_else(|| VariableCell::new(definition), Clone::clone),
+                    );
                 }
                 BytecodeStorage::Character => {
                     for (index, character) in self.characters.iter().enumerate() {
@@ -465,11 +491,10 @@ impl Memory {
                     self.shared.insert(definition.key, cell);
                 }
                 BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
-                    let cell = self.statics.get(&definition.key).map_or_else(
-                        || VariableCell::new(definition),
-                        |cell| cell.migrate(definition),
-                    );
-                    self.statics.insert(definition.key, cell);
+                    if let Some(cell) = self.statics.get(&definition.key) {
+                        self.statics
+                            .insert(definition.key, cell.migrate(definition));
+                    }
                 }
                 BytecodeStorage::Character => {
                     for character in &mut self.characters {

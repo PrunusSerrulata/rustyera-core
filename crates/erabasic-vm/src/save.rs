@@ -356,34 +356,36 @@ fn overlay_shared(
     scope: EraSaveScope,
     report: &mut EraStateReport,
 ) {
+    let eligible = artifact.globals.iter().filter(|definition| {
+        matches!(
+            definition.storage,
+            BytecodeStorage::Project | BytecodeStorage::FunctionStatic
+        ) && persistence_in_scope(definition.persistence, scope)
+    });
+    let mut by_key = BTreeMap::new();
+    let mut by_name = BTreeMap::new();
+    for definition in eligible {
+        by_key.insert(definition.key, definition);
+        by_name
+            .entry(definition.name.to_ascii_uppercase())
+            .or_insert(definition);
+    }
     for (key, variable) in saved {
-        let Some(definition) = artifact
-            .globals
-            .iter()
-            .find(|definition| {
-                definition.key == *key
-                    && matches!(
-                        definition.storage,
-                        BytecodeStorage::Project | BytecodeStorage::FunctionStatic
-                    )
-                    && persistence_in_scope(definition.persistence, scope)
-            })
-            .or_else(|| {
-                artifact.globals.iter().find(|definition| {
-                    definition.name.eq_ignore_ascii_case(&variable.name)
-                        && matches!(
-                            definition.storage,
-                            BytecodeStorage::Project | BytecodeStorage::FunctionStatic
-                        )
-                        && persistence_in_scope(definition.persistence, scope)
-                })
-            })
+        let Some(definition) = by_key
+            .get(key)
+            .copied()
+            .or_else(|| by_name.get(&variable.name.to_ascii_uppercase()).copied())
         else {
             report.skipped_variables += 1;
             continue;
         };
         let cell = match definition.storage {
-            BytecodeStorage::FunctionStatic => memory.statics.get_mut(&definition.key),
+            BytecodeStorage::FunctionStatic => Some(
+                memory
+                    .statics
+                    .entry(definition.key)
+                    .or_insert_with(|| crate::VariableCell::new(definition)),
+            ),
             _ => memory.shared.get_mut(&definition.key),
         };
         let Some(cell) = cell else {
@@ -418,22 +420,23 @@ fn overlay_character(
     saved: &BTreeMap<SymbolKey, EraVariableState>,
     report: &mut EraStateReport,
 ) {
+    let eligible = artifact.globals.iter().filter(|definition| {
+        definition.storage == BytecodeStorage::Character
+            && definition.persistence != BytecodePersistence::None
+    });
+    let mut by_key = BTreeMap::new();
+    let mut by_name = BTreeMap::new();
+    for definition in eligible {
+        by_key.insert(definition.key, definition);
+        by_name
+            .entry(definition.name.to_ascii_uppercase())
+            .or_insert(definition);
+    }
     for (key, variable) in saved {
-        let Some(definition) = artifact
-            .globals
-            .iter()
-            .find(|definition| {
-                definition.key == *key
-                    && definition.storage == BytecodeStorage::Character
-                    && definition.persistence != BytecodePersistence::None
-            })
-            .or_else(|| {
-                artifact.globals.iter().find(|definition| {
-                    definition.name.eq_ignore_ascii_case(&variable.name)
-                        && definition.storage == BytecodeStorage::Character
-                        && definition.persistence != BytecodePersistence::None
-                })
-            })
+        let Some(definition) = by_key
+            .get(key)
+            .copied()
+            .or_else(|| by_name.get(&variable.name.to_ascii_uppercase()).copied())
         else {
             report.skipped_variables += 1;
             continue;

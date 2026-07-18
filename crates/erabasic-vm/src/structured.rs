@@ -211,6 +211,10 @@ impl StructuredNative {
 }
 
 impl crate::NativeService for StructuredNative {
+    fn implicit_place_names(&self) -> &'static [&'static str] {
+        &["RESULT", "RESULTS"]
+    }
+
     fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String> {
         let mut state = self
             .state

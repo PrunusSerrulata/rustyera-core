@@ -108,6 +108,139 @@ fn resolves_header_constants_variables_and_typed_expressions() {
 }
 
 #[test]
+fn rand_accepts_reference_one_or_two_argument_forms_only() {
+    let accepted = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "rand.erb",
+                "@SYSTEM_TITLE\nRESULT = RAND(5)\nRESULT = RAND(2, 5)\nRESULT = RAND(, 5)\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !accepted.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.severity,
+            erabasic_analyzer::AnalyzerDiagnosticSeverity::Error
+                | erabasic_analyzer::AnalyzerDiagnosticSeverity::Fatal
+        )),
+        "{:#?}",
+        accepted.diagnostics
+    );
+
+    let rejected = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "rand.erb",
+                "@SYSTEM_TITLE\nRESULT = RAND(1, 2, 3)\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        rejected
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == AnalyzerDiagnosticCode::InvalidArgumentCount })
+    );
+}
+
+#[test]
+fn accepts_reference_dim_comments_continuations_and_sign_bit_masks() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![
+                source(
+                    "vars.erh",
+                    "#DIM COMMENTED; no separating whitespace\n#DIM CONST SIZE = 2,; a trailing comma is accepted\n#DIM CONST HIGH_BIT = 1p63\n{\n#DIMS CONST VALUES, 2 = @\"%UNICODE(0x2660)%\",\n\"C\"\n}\n",
+                ),
+                source(
+                    "main.erb",
+                    "@SYSTEM_TITLE\n#DIM LOCAL_VALUES, SIZE\nRETURN\n",
+                ),
+            ],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.severity,
+            erabasic_analyzer::AnalyzerDiagnosticSeverity::Error
+                | erabasic_analyzer::AnalyzerDiagnosticSeverity::Fatal
+        )),
+        "{:#?}",
+        report.diagnostics
+    );
+    let project = report.project.unwrap();
+    assert!(project.data.schema.variable("COMMENTED").is_some());
+    assert_eq!(
+        project.data.schema.variable("VALUES").unwrap().dimensions,
+        [2]
+    );
+    let local = project
+        .program
+        .variables
+        .iter()
+        .find(|variable| variable.name == "LOCAL_VALUES")
+        .unwrap();
+    assert_eq!(local.dimensions, [2]);
+}
+
+#[test]
+fn plain_print_accepts_ascii_art_format_metacharacters() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "art.erb",
+                "@SYSTEM_TITLE\nPRINTDL .:{ 50% \\ // } [raw]\nDEBUGPRINTFORML value={1}\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.severity,
+            erabasic_analyzer::AnalyzerDiagnosticSeverity::Error
+                | erabasic_analyzer::AnalyzerDiagnosticSeverity::Fatal
+        )),
+        "{:#?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn character_variables_accept_implicit_and_explicit_character_indices() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "character.erb",
+                "@SYSTEM_TITLE\nCFLAG:7 = 1\nCFLAG:2:7 = 2\nCALLNAME = \"target\"\nCALLNAME:2 = \"explicit\"\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.severity,
+            erabasic_analyzer::AnalyzerDiagnosticSeverity::Error
+                | erabasic_analyzer::AnalyzerDiagnosticSeverity::Fatal
+        )),
+        "{:#?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn registers_private_variables_and_function_parameter_places() {
     let report = analyze_project(
         AnalysisInput {
@@ -508,10 +641,16 @@ fn bitmap_cache_enable_requires_the_reference_argument() {
 fn csv_name_tables_resolve_identifier_indices() {
     let project_data = load_project(
         &ProjectFiles {
-            csv: vec![FrontendFile {
-                relative_path: "ABL.csv".into(),
-                payload: CsvFilePayload::Utf8("2,later\n".into()),
-            }],
+            csv: vec![
+                FrontendFile {
+                    relative_path: "ABL.csv".into(),
+                    payload: CsvFilePayload::Utf8("2,later\n".into()),
+                },
+                FrontendFile {
+                    relative_path: "BASE.csv".into(),
+                    payload: CsvFilePayload::Utf8("0,health\n".into()),
+                },
+            ],
             erb: Vec::new(),
         },
         &CsvLoadOptions::default(),
@@ -523,7 +662,7 @@ fn csv_name_tables_resolve_identifier_indices() {
             project_data,
             sources: vec![source(
                 "named-index.erb",
-                "@SYSTEM_TITLE\nRESULT = ABL:later\nRETURN\n",
+                "@SYSTEM_TITLE\nRESULT = ABL:later\nRESULT = MAXBASE:health\nRETURN\n",
             )],
         },
         &AnalyzerOptions::analysis_mode(),
@@ -590,7 +729,7 @@ fn structured_native_signatures_require_mutable_array_outputs() {
             project_data: empty_project(),
             sources: vec![source(
                 "structured.erb",
-                "@SYSTEM_TITLE\n#DIMS KEYS, 4\nRESULTS = MAP_GETKEYS(\"m\", KEYS, 1)\nRESULT = DT_COLUMN_NAMES(\"t\", KEYS)\nRETURN\n",
+                "@SYSTEM_TITLE\n#DIMS KEYS, 4\nRESULTS '= MAP_GETKEYS(\"m\", KEYS, 1)\nRESULT = DT_COLUMN_NAMES(\"t\", KEYS)\nRETURN\n",
             )],
         },
         &AnalyzerOptions::analysis_mode(),
@@ -610,7 +749,7 @@ fn structured_native_signatures_require_mutable_array_outputs() {
             project_data: empty_project(),
             sources: vec![source(
                 "structured-invalid.erb",
-                "@SYSTEM_TITLE\nRESULTS = MAP_GETKEYS(\"m\", \"not a place\", 1)\nRETURN\n",
+                "@SYSTEM_TITLE\nRESULTS '= MAP_GETKEYS(\"m\", \"not a place\", 1)\nRETURN\n",
             )],
         },
         &AnalyzerOptions::analysis_mode(),

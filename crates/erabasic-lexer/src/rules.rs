@@ -69,6 +69,7 @@ pub(crate) fn operator_at(source: &str) -> Option<(Operator, usize)> {
         ("&=", Operator::BitAndAssign),
         ("|=", Operator::BitOrAssign),
         ("^=", Operator::BitXorAssign),
+        ("'=", Operator::StringAssign),
         ("=", Operator::Assign),
         ("<", Operator::Less),
         (">", Operator::Greater),

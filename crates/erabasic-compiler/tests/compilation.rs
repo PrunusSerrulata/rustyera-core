@@ -574,6 +574,25 @@ fn source_map_resolves_utf8_byte_locations() {
 }
 
 #[test]
+fn method_statement_stores_clock_result_in_result_variable() {
+    let artifact = compile_project(
+        &analyze("@SYSTEM_TITLE\nGETMILLISECOND\nRETURN\n"),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .expect("clock METHOD statement should compile");
+    let opcodes: Vec<_> = artifact.functions[0]
+        .code
+        .iter()
+        .map(|instruction| instruction.opcode)
+        .collect();
+    assert!(opcodes.contains(&(Opcode::CallHost as u16)));
+    assert!(opcodes.contains(&(Opcode::StoreVariable as u16)));
+}
+
+#[test]
 fn image_style_host_binding_still_uses_the_single_call_host_opcode() {
     let mut registry = default_host_registry();
     assert!(registry.register(

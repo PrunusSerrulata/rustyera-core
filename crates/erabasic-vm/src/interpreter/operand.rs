@@ -157,6 +157,20 @@ pub(super) fn binary_value(
                 ));
             }
         }),
+        (VmValue::String(value), VmValue::Integer(count))
+        | (VmValue::Integer(count), VmValue::String(value))
+            if operation == 0 =>
+        {
+            if !(0..10_000).contains(&count) {
+                return Err(StepError::new(
+                    VmFaultCode::InvalidInstruction,
+                    "string repeat count must be between 0 and 9999",
+                ));
+            }
+            Ok(VmValue::String(
+                value.repeat(usize::try_from(count).unwrap_or_default()),
+            ))
+        }
         _ => Err(StepError::new(
             VmFaultCode::TypeMismatch,
             "binary operands have different types",
@@ -194,4 +208,22 @@ pub(super) fn map_vm_error(error: VmError) -> StepError {
         _ => VmFaultCode::Bounds,
     };
     StepError::new(code, error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multiplication_repeats_a_string_in_either_operand_order() {
+        assert!(matches!(
+            binary_value(0, VmValue::String("x".into()), VmValue::Integer(3)),
+            Ok(VmValue::String(value)) if value == "xxx"
+        ));
+        assert!(matches!(
+            binary_value(0, VmValue::Integer(2), VmValue::String("ab".into())),
+            Ok(VmValue::String(value)) if value == "abab"
+        ));
+        assert!(binary_value(0, VmValue::String("x".into()), VmValue::Integer(-1)).is_err());
+    }
 }

@@ -116,6 +116,13 @@ impl NativeReady {
 }
 
 pub trait NativeService: Send {
+    /// Names of legacy pseudo-variable arrays required to evaluate this service.
+    /// Most services do not use them, so avoiding unconditional snapshots keeps
+    /// ordinary scalar natives independent of large RESULT-family arrays.
+    fn implicit_place_names(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// # Errors
     ///
     /// Returns an error when the service rejects the request or cannot produce a result.
@@ -186,7 +193,7 @@ impl NativeServiceRegistry {
                     native.import.key,
                     StructuredNative::new(name, Arc::clone(&structured)),
                 );
-            } else if matches!(name, "format_integer" | "format_string")
+            } else if matches!(name, "format_integer" | "format_string" | "times")
                 || name.starts_with("control_")
             {
                 registry.register(native.import.key, CompilerNative { name: name.into() });
@@ -259,6 +266,16 @@ impl NativeServiceRegistry {
             .get_mut(&key)
             .ok_or_else(|| format!("native service {key:?} is not registered"))?
             .call(request)
+    }
+
+    pub(crate) fn implicit_place_names(
+        &self,
+        key: SymbolKey,
+    ) -> Result<&'static [&'static str], String> {
+        self.services
+            .get(&key)
+            .map(|service| service.implicit_place_names())
+            .ok_or_else(|| format!("native service {key:?} is not registered"))
     }
 
     pub(crate) fn checkpoint(&self, key: SymbolKey) -> Result<Option<Vec<u8>>, String> {
@@ -541,6 +558,14 @@ pub fn evaluate_pure_native(name: &str, arguments: Vec<VmValue>) -> Result<VmVal
 }
 
 impl NativeService for CoreNative {
+    fn implicit_place_names(&self) -> &'static [&'static str] {
+        match self.name.as_str() {
+            "getpalamlv" => &["PALAMLV"],
+            "getexplv" => &["EXPLV"],
+            _ => &[],
+        }
+    }
+
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
@@ -1006,6 +1031,38 @@ impl NativeService for CompilerNative {
                     request.arguments.get(1),
                 )?)))
             }
+            "times" => {
+                let place = request
+                    .places
+                    .iter()
+                    .find(|place| place.argument_index == 0)
+                    .ok_or("TIMES expects an integer place")?;
+                let Some(VmValue::Integer(value)) = place.values.first() else {
+                    return Err("TIMES expects an integer place".into());
+                };
+                let Some(VmValue::Integer(numerator)) = request.arguments.get(1) else {
+                    return Err("TIMES expects an integer numerator".into());
+                };
+                let Some(VmValue::Integer(denominator)) = request.arguments.get(2) else {
+                    return Err("TIMES expects an integer denominator".into());
+                };
+                if *denominator <= 0 {
+                    return Err("TIMES denominator must be positive".into());
+                }
+                // Emuera's default rigorous path multiplies through decimal and
+                // truncates toward zero. i128 preserves that result for every i64
+                // operand and parser-produced i64 rational multiplier.
+                let result =
+                    (i128::from(*value) * i128::from(*numerator)) / i128::from(*denominator);
+                let value = i64::try_from(result).unwrap_or(i64::MIN);
+                Ok(NativeReady {
+                    value: None,
+                    writes: vec![HostWrite {
+                        target: place.target.clone(),
+                        value: VmValue::Integer(value),
+                    }],
+                })
+            }
             name if name.starts_with("control_") => Err(format!(
                 "compiler control placeholder {name} reached execution"
             )),
@@ -1027,16 +1084,27 @@ impl NativeService for RandomNative {
             .map_err(|_| "SFMT state lock is poisoned".to_owned())?;
         match self.name.as_str() {
             "rand" => {
-                let Some(VmValue::Integer(maximum)) = request.arguments.first() else {
-                    return Err("RAND expects an integer maximum".into());
+                let (minimum, maximum) = match request.arguments.as_slice() {
+                    [VmValue::Integer(maximum)] => (0, *maximum),
+                    [VmValue::Integer(minimum), VmValue::Integer(maximum)] => {
+                        // The internal expression ABI represents an omitted first
+                        // operand as i64::MIN. RAND(, max) is equivalent to RAND(max).
+                        (if *minimum == i64::MIN { 0 } else { *minimum }, *maximum)
+                    }
+                    _ => return Err("RAND expects one or two integer arguments".into()),
                 };
-                if *maximum <= 0 {
-                    return Err("RAND maximum must be positive".into());
+                let Some(width) = maximum.checked_sub(minimum) else {
+                    return Err("RAND range overflows i64".into());
+                };
+                if width <= 0 {
+                    return Err("RAND maximum must be greater than its minimum".into());
                 }
-                let value = state.next_u64() % (*maximum).cast_unsigned();
-                Ok(NativeReady::value(VmValue::Integer(
-                    i64::try_from(value).expect("RAND modulo positive i64 fits i64"),
-                )))
+                let offset = state.next_u64() % width.cast_unsigned();
+                let value = i64::try_from(offset)
+                    .expect("RAND modulo positive i64 fits i64")
+                    .checked_add(minimum)
+                    .ok_or_else(|| "RAND result overflows i64".to_owned())?;
+                Ok(NativeReady::value(VmValue::Integer(value)))
             }
             "randomize" => {
                 let seed = match request.arguments.first() {
@@ -1115,27 +1183,88 @@ mod tests {
     }
 
     #[test]
-    fn random_native_rejects_non_positive_modulus() {
+    fn random_native_implements_one_and_two_argument_ranges() {
         let mut native = RandomNative {
             name: "rand".into(),
             state: Arc::new(Mutex::new(Sfmt19937::new(1))),
         };
+        let request = |arguments| NativeCallRequest {
+            import: RuntimeImport {
+                key: SymbolKey([0; 16]),
+                namespace: "test".into(),
+                name: "rand".into(),
+                abi_version: 1,
+                parameters: vec![],
+                result: None,
+            },
+            arguments,
+            places: Vec::new(),
+            implicit_places: BTreeMap::new(),
+        };
+        let value = native
+            .call(request(vec![VmValue::Integer(8)]))
+            .unwrap()
+            .value
+            .unwrap();
+        assert!(matches!(value, VmValue::Integer(0..=7)));
+        let value = native
+            .call(request(vec![VmValue::Integer(27), VmValue::Integer(31)]))
+            .unwrap()
+            .value
+            .unwrap();
+        assert!(matches!(value, VmValue::Integer(27..=30)));
+        let value = native
+            .call(request(vec![
+                VmValue::Integer(i64::MIN),
+                VmValue::Integer(3),
+            ]))
+            .unwrap()
+            .value
+            .unwrap();
+        assert!(matches!(value, VmValue::Integer(0..=2)));
+        assert!(native.call(request(vec![VmValue::Integer(0)])).is_err());
         assert!(
             native
-                .call(NativeCallRequest {
-                    import: RuntimeImport {
-                        key: SymbolKey([0; 16]),
-                        namespace: "test".into(),
-                        name: "rand".into(),
-                        abi_version: 1,
-                        parameters: vec![],
-                        result: None,
-                    },
-                    arguments: vec![VmValue::Integer(0)],
-                    places: Vec::new(),
-                    implicit_places: BTreeMap::new(),
-                })
+                .call(request(vec![VmValue::Integer(5), VmValue::Integer(5)]))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn times_native_multiplies_rationally_and_truncates_toward_zero() {
+        let target = PlaceDescriptor::default();
+        let mut native = CompilerNative {
+            name: "times".into(),
+        };
+        let ready = native
+            .call(NativeCallRequest {
+                import: RuntimeImport {
+                    key: SymbolKey([0; 16]),
+                    namespace: "test".into(),
+                    name: "times".into(),
+                    abi_version: 1,
+                    parameters: vec![],
+                    result: None,
+                },
+                arguments: vec![
+                    VmValue::IntegerPlace(target.clone()),
+                    VmValue::Integer(3),
+                    VmValue::Integer(2),
+                ],
+                places: vec![NativePlaceView {
+                    argument_index: 0,
+                    target: target.clone(),
+                    values: vec![VmValue::Integer(-7)],
+                }],
+                implicit_places: BTreeMap::new(),
+            })
+            .expect("valid TIMES call");
+        assert_eq!(
+            ready.writes,
+            vec![HostWrite {
+                target,
+                value: VmValue::Integer(-10),
+            }]
         );
     }
 

@@ -3,7 +3,7 @@ use erabasic_bytecode::{
     HostSnapshotCapability, ImportKind, Opcode, SymbolKey, opcode,
 };
 
-use crate::state::{EventDispatch, EventDispatchEntry};
+use crate::state::{EventDispatch, EventDispatchEntry, ForLoopState};
 use crate::{
     Fiber, FiberId, FiberState, HostCallRequest, HostCallResult, HostReady, HostWaitStability,
     NativeCallRequest, NativePlaceView, NativeReady, NativeServiceRegistry, PlaceDescriptor,
@@ -302,10 +302,7 @@ impl Vm {
             .get(&frame.generation)
             .ok_or_else(|| VmError::InvalidState("frame generation was reclaimed".into()))?;
         let function = generation
-            .artifact
-            .functions
-            .iter()
-            .find(|function| function.key == frame.function)
+            .function(frame.function)
             .ok_or(VmError::MissingFunction(frame.function))?;
         let encoded = function
             .code
@@ -375,7 +372,7 @@ impl Vm {
                 let value = (opcode == Opcode::StoreVariable)
                     .then(|| pop(&mut fiber.frames.last_mut().expect("frame exists").stack))
                     .transpose()?;
-                let indices = pop_indices(
+                let mut indices = pop_indices(
                     &mut fiber.frames.last_mut().expect("frame exists").stack,
                     count,
                 )?;
@@ -388,8 +385,15 @@ impl Vm {
                 let definition = find_global(artifact, key).map_err(|error| {
                     StepError::new(VmFaultCode::MissingSymbol, error.to_string())
                 })?;
-                let character = (definition.storage == BytecodeStorage::Character)
-                    .then(|| self.memory.target_character(artifact, position.generation) as u64);
+                let character = if definition.storage == BytecodeStorage::Character {
+                    if indices.len() > definition.dimensions.len() {
+                        Some(indices.remove(0))
+                    } else {
+                        Some(self.memory.target_character(artifact, position.generation) as u64)
+                    }
+                } else {
+                    None
+                };
                 let place = PlaceDescriptor {
                     variable: key,
                     indices,
@@ -521,6 +525,180 @@ impl Vm {
                 parts.reverse();
                 stack.push(VmValue::String(parts.concat()));
             }
+            Opcode::ForStart => {
+                let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
+                let VmValue::Integer(step) = pop(stack)? else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "FOR step expects an integer",
+                    ));
+                };
+                let VmValue::Integer(end) = pop(stack)? else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "FOR end expects an integer",
+                    ));
+                };
+                let VmValue::Integer(start) = pop(stack)? else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "FOR start expects an integer",
+                    ));
+                };
+                let VmValue::IntegerPlace(counter) = pop(stack)? else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "FOR counter expects an integer place",
+                    ));
+                };
+                self.write_place(fiber, &counter, VmValue::Integer(start))
+                    .map_err(map_vm_error)?;
+                let active = (step > 0 && start < end) || (step < 0 && start > end);
+                if active {
+                    fiber
+                        .frames
+                        .last_mut()
+                        .expect("frame exists")
+                        .for_loops
+                        .push(ForLoopState { counter, end, step });
+                }
+                fiber
+                    .frames
+                    .last_mut()
+                    .expect("frame exists")
+                    .stack
+                    .push(VmValue::Integer(i64::from(active)));
+            }
+            Opcode::ForNext => {
+                let state = fiber
+                    .frames
+                    .last()
+                    .and_then(|frame| frame.for_loops.last())
+                    .cloned()
+                    .ok_or_else(|| {
+                        StepError::new(
+                            VmFaultCode::InvalidInstruction,
+                            "NEXT has no active FOR loop",
+                        )
+                    })?;
+                let VmValue::Integer(current) = self
+                    .read_place(fiber, &state.counter)
+                    .map_err(map_vm_error)?
+                else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "FOR counter storage is not integer",
+                    ));
+                };
+                let next = current.wrapping_add(state.step);
+                self.write_place(fiber, &state.counter, VmValue::Integer(next))
+                    .map_err(map_vm_error)?;
+                let active =
+                    (state.step > 0 && next < state.end) || (state.step < 0 && next > state.end);
+                let frame = fiber.frames.last_mut().expect("frame exists");
+                if !active {
+                    frame.for_loops.pop();
+                }
+                frame.stack.push(VmValue::Integer(i64::from(active)));
+            }
+            Opcode::ForBreak => {
+                fiber
+                    .frames
+                    .last_mut()
+                    .expect("frame exists")
+                    .for_loops
+                    .pop()
+                    .ok_or_else(|| {
+                        StepError::new(
+                            VmFaultCode::InvalidInstruction,
+                            "BREAK has no active FOR loop",
+                        )
+                    })?;
+            }
+            Opcode::SelectStart => {
+                let value = pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?;
+                fiber
+                    .frames
+                    .last_mut()
+                    .expect("frame exists")
+                    .select_values
+                    .push(value);
+            }
+            Opcode::SelectCompare => {
+                let operation = *position.encoded.payload.first().ok_or_else(|| {
+                    StepError::new(
+                        VmFaultCode::InvalidInstruction,
+                        "CASE comparison operation is missing",
+                    )
+                })?;
+                let selector = fiber
+                    .frames
+                    .last()
+                    .and_then(|frame| frame.select_values.last())
+                    .cloned()
+                    .ok_or_else(|| {
+                        StepError::new(
+                            VmFaultCode::InvalidInstruction,
+                            "CASE is outside SELECTCASE",
+                        )
+                    })?;
+                let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
+                let matched = if operation == 6 {
+                    let upper = pop(stack)?;
+                    let lower = pop(stack)?;
+                    let VmValue::Integer(lower_match) = binary_value(10, selector.clone(), lower)?
+                    else {
+                        unreachable!("comparison produces integer")
+                    };
+                    let VmValue::Integer(upper_match) = binary_value(8, selector, upper)? else {
+                        unreachable!("comparison produces integer")
+                    };
+                    lower_match != 0 && upper_match != 0
+                } else {
+                    let operand = pop(stack)?;
+                    let binary_operation = match operation {
+                        0 => 11,
+                        1 => 12,
+                        2 => 7,
+                        3 => 8,
+                        4 => 9,
+                        5 => 10,
+                        7 => 13,
+                        _ => {
+                            return Err(StepError::new(
+                                VmFaultCode::InvalidInstruction,
+                                "unknown CASE comparison operation",
+                            ));
+                        }
+                    };
+                    let VmValue::Integer(value) =
+                        binary_value(binary_operation, selector, operand)?
+                    else {
+                        unreachable!("comparison produces integer")
+                    };
+                    value != 0
+                };
+                fiber
+                    .frames
+                    .last_mut()
+                    .expect("frame exists")
+                    .stack
+                    .push(VmValue::Integer(i64::from(matched)));
+            }
+            Opcode::SelectEnd => {
+                fiber
+                    .frames
+                    .last_mut()
+                    .expect("frame exists")
+                    .select_values
+                    .pop()
+                    .ok_or_else(|| {
+                        StepError::new(
+                            VmFaultCode::InvalidInstruction,
+                            "ENDSELECT is outside SELECTCASE",
+                        )
+                    })?;
+            }
             Opcode::Jump | Opcode::JumpIfFalse => {
                 let target = read_u32(&position.encoded.payload, 0)? as usize;
                 let take = if opcode == Opcode::JumpIfFalse {
@@ -556,16 +734,12 @@ impl Vm {
                         "dynamic function target must be a string",
                     ));
                 };
-                let artifact = &self
+                let generation = self
                     .generations
                     .get(&position.generation)
-                    .expect("validated frame generation exists")
-                    .artifact;
-                if let Some(target) = artifact
-                    .functions
-                    .iter()
-                    .find(|function| function.name.eq_ignore_ascii_case(&name))
-                {
+                    .expect("validated frame generation exists");
+                let artifact = &generation.artifact;
+                if let Some(target) = generation.function_by_name(&name) {
                     let kind_matches = if method {
                         target.kind == BytecodeFunctionKind::Method
                     } else {
@@ -627,22 +801,29 @@ impl Vm {
                         "resolved function target must be a string",
                     ));
                 };
-                let artifact = &self
+                let generation = self
                     .generations
                     .get(&position.generation)
-                    .expect("validated frame generation exists")
-                    .artifact;
-                let target = artifact
-                    .functions
-                    .iter()
-                    .find(|function| function.name.eq_ignore_ascii_case(&name))
-                    .cloned()
-                    .ok_or_else(|| {
-                        StepError::new(VmFaultCode::MissingSymbol, "resolved function disappeared")
-                    })?;
+                    .expect("validated frame generation exists");
+                let artifact = &generation.artifact;
+                let target = generation.function_by_name(&name).cloned().ok_or_else(|| {
+                    StepError::new(VmFaultCode::MissingSymbol, "resolved function disappeared")
+                })?;
+                let mut arguments = arguments;
+                for (parameter, argument) in target.parameters.iter().zip(&mut arguments) {
+                    *argument = match (parameter.value_type, argument.clone()) {
+                        (BytecodeType::Integer, VmValue::IntegerPlace(place))
+                        | (BytecodeType::String, VmValue::StringPlace(place)) => {
+                            self.read_place(fiber, &place).map_err(map_vm_error)?
+                        }
+                        _ => argument.clone(),
+                    };
+                }
                 let arguments =
                     prepare_dynamic_arguments(&target, arguments, artifact.call_compatibility)
                         .map_err(map_vm_error)?;
+                self.memory
+                    .ensure_function_statics(position.generation, artifact, target.key);
                 bind_persistent_arguments(
                     &mut self.memory,
                     position.generation,
@@ -678,15 +859,13 @@ impl Vm {
                 let import_index = read_u32(&position.encoded.payload, 0)? as usize;
                 let argument_count = read_u16(&position.encoded.payload, 4)? as usize;
                 let new_frame = (opcode == Opcode::Call).then(|| self.allocate_frame_id());
-                let artifact = &self
+                let generation = self
                     .generations
                     .get(&position.generation)
-                    .expect("validated frame generation exists")
-                    .artifact;
-                let function = artifact
-                    .functions
-                    .iter()
-                    .find(|function| function.key == position.function)
+                    .expect("validated frame generation exists");
+                let artifact = &generation.artifact;
+                let function = generation
+                    .function(position.function)
                     .expect("validated function exists");
                 let import = function.imports.get(import_index).cloned().ok_or_else(|| {
                     StepError::new(VmFaultCode::MissingSymbol, "call import is missing")
@@ -703,17 +882,9 @@ impl Vm {
                                 "maximum call depth exceeded",
                             ));
                         }
-                        let target = artifact
-                            .functions
-                            .iter()
-                            .find(|function| function.key == import.key)
-                            .cloned()
-                            .ok_or_else(|| {
-                                StepError::new(
-                                    VmFaultCode::MissingSymbol,
-                                    "called function is missing",
-                                )
-                            })?;
+                        let target = generation.function(import.key).cloned().ok_or_else(|| {
+                            StepError::new(VmFaultCode::MissingSymbol, "called function is missing")
+                        })?;
                         if target.kind == BytecodeFunctionKind::Event
                             && !artifact.call_compatibility.allow_event_as_normal
                         {
@@ -726,6 +897,11 @@ impl Vm {
                             ));
                         }
                         validate_arguments(&target, &arguments).map_err(map_vm_error)?;
+                        self.memory.ensure_function_statics(
+                            position.generation,
+                            artifact,
+                            target.key,
+                        );
                         bind_persistent_arguments(
                             &mut self.memory,
                             position.generation,
@@ -906,8 +1082,12 @@ impl Vm {
                         } else {
                             let places = native_place_views(self, fiber, &arguments)
                                 .map_err(map_vm_error)?;
+                            let implicit_place_names = natives
+                                .implicit_place_names(import.key)
+                                .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
                             let implicit_places =
-                                native_implicit_place_views(self, fiber).map_err(map_vm_error)?;
+                                native_implicit_place_views(self, fiber, implicit_place_names)
+                                    .map_err(map_vm_error)?;
                             rollback = natives
                                 .checkpoint(import.key)
                                 .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
@@ -1028,15 +1208,12 @@ impl Vm {
                         "dynamic label target must be a string",
                     ));
                 };
-                let artifact = &self
+                let generation = self
                     .generations
                     .get(&position.generation)
-                    .expect("validated frame generation exists")
-                    .artifact;
-                let function = artifact
-                    .functions
-                    .iter()
-                    .find(|function| function.key == position.function)
+                    .expect("validated frame generation exists");
+                let function = generation
+                    .function(position.function)
                     .expect("validated function exists");
                 fiber.frames.last_mut().expect("frame exists").instruction = function
                     .labels
@@ -1060,11 +1237,11 @@ impl Vm {
                     ));
                 }
                 let frame_id = self.allocate_frame_id();
-                let artifact = &self
+                let generation = self
                     .generations
                     .get(&position.generation)
-                    .expect("validated frame generation exists")
-                    .artifact;
+                    .expect("validated frame generation exists");
+                let artifact = &generation.artifact;
                 let Some(group) = artifact
                     .event_groups
                     .iter()
@@ -1104,14 +1281,14 @@ impl Vm {
                         "maximum call depth exceeded",
                     ));
                 }
-                let target = artifact
-                    .functions
-                    .iter()
-                    .find(|function| function.key == active.function)
+                let target = generation
+                    .function(active.function)
                     .cloned()
                     .ok_or_else(|| {
                         StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
                     })?;
+                self.memory
+                    .ensure_function_statics(position.generation, artifact, target.key);
                 fiber
                     .frames
                     .last_mut()
@@ -1156,22 +1333,16 @@ impl Vm {
                     if let Some(next) = next_event {
                         let generation = caller.generation;
                         let frame_id = self.allocate_frame_id();
-                        let artifact = &self
+                        let program = self
                             .generations
                             .get(&generation)
-                            .expect("validated frame generation exists")
-                            .artifact;
-                        let target = artifact
-                            .functions
-                            .iter()
-                            .find(|function| function.key == next.function)
-                            .cloned()
-                            .ok_or_else(|| {
-                                StepError::new(
-                                    VmFaultCode::MissingSymbol,
-                                    "event function is missing",
-                                )
-                            })?;
+                            .expect("validated frame generation exists");
+                        let artifact = &program.artifact;
+                        let target = program.function(next.function).cloned().ok_or_else(|| {
+                            StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
+                        })?;
+                        self.memory
+                            .ensure_function_statics(generation, artifact, target.key);
                         fiber.frames.push(make_frame(
                             frame_id,
                             generation,
@@ -1243,13 +1414,7 @@ impl Vm {
         command: &str,
     ) -> crate::VmExecutionOrigin {
         let generation = self.generations.get(&position.generation);
-        let function = generation.and_then(|generation| {
-            generation
-                .artifact
-                .functions
-                .iter()
-                .find(|function| function.key == position.function)
-        });
+        let function = generation.and_then(|generation| generation.function(position.function));
         let source = generation.zip(function).and_then(|(generation, function)| {
             let offset = function
                 .code

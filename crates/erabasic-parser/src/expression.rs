@@ -25,6 +25,7 @@ pub fn parse_expression(source: &str, context: &dyn ParserContext) -> ParseOutpu
 pub(crate) struct ExpressionParser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    suppress_indices: bool,
     pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
@@ -33,6 +34,7 @@ impl<'a> ExpressionParser<'a> {
         Self {
             tokens,
             pos: 0,
+            suppress_indices: false,
             diagnostics: Vec::new(),
         }
     }
@@ -55,7 +57,9 @@ impl<'a> ExpressionParser<'a> {
     fn parse_bp(&mut self, min_bp: u8) -> Option<Expr> {
         let mut left = self.parse_prefix()?;
         loop {
-            if let Some(op) = self.postfix() {
+            if !self.suppress_indices
+                && let Some(op) = self.postfix()
+            {
                 let span = left.span.join(self.tokens[self.pos].span);
                 self.pos += 1;
                 left = Expr {
@@ -161,7 +165,11 @@ impl<'a> ExpressionParser<'a> {
             }
             TokenKind::Identifier(name) => Some(self.parse_identifier(name, token.span)),
             TokenKind::Symbol('(') => {
-                let inner = self.parse_bp(0)?;
+                let suppress_indices = self.suppress_indices;
+                self.suppress_indices = false;
+                let inner = self.parse_bp(0);
+                self.suppress_indices = suppress_indices;
+                let inner = inner?;
                 if !matches!(self.current_kind(), Some(TokenKind::Symbol(')'))) {
                     self.diagnostics.push(Diagnostic::error(
                         DiagnosticCode::UnexpectedToken,
@@ -203,7 +211,11 @@ impl<'a> ExpressionParser<'a> {
                     self.pos += 1;
                     continue;
                 }
-                args.push(self.parse_bp(0));
+                let suppress_indices = self.suppress_indices;
+                self.suppress_indices = false;
+                let argument = self.parse_bp(0);
+                self.suppress_indices = suppress_indices;
+                args.push(argument);
                 if matches!(self.current_kind(), Some(TokenKind::Symbol(','))) {
                     self.pos += 1;
                 } else {
@@ -223,14 +235,20 @@ impl<'a> ExpressionParser<'a> {
             };
         }
         let mut indices = Vec::new();
-        while matches!(self.current_kind(), Some(TokenKind::Symbol(':'))) {
+        while !self.suppress_indices && matches!(self.current_kind(), Some(TokenKind::Symbol(':')))
+        {
             self.pos += 1;
-            if let Some(index) = self.parse_bp(0) {
+            // `:` binds tighter than every binary operator. Suppressing another
+            // index on the root operand makes `CFLAG:TARGET:位置` left-associative,
+            // while parentheses and call arguments deliberately re-enable nested
+            // variables such as `ARRAY:(LOCAL:1)`.
+            let suppress_indices = self.suppress_indices;
+            self.suppress_indices = true;
+            let index = self.parse_bp(25);
+            self.suppress_indices = suppress_indices;
+            if let Some(index) = index {
                 indices.push(index);
             } else {
-                break;
-            }
-            if !matches!(self.current_kind(), Some(TokenKind::Symbol(':'))) {
                 break;
             }
         }

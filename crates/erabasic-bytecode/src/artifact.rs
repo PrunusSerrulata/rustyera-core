@@ -68,6 +68,9 @@ pub struct BytecodeGlobal {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BytecodeParameter {
     pub key: SymbolKey,
+    /// Constant destination subscripts from the function label. Character
+    /// variables keep the optional character selector as the leading entry.
+    pub indices: Vec<u64>,
     pub value_type: BytecodeType,
     pub by_reference: bool,
     pub default: Option<BytecodeConstant>,

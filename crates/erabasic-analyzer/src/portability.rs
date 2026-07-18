@@ -131,7 +131,8 @@ fn emit_diagnostics(
                     if is_control_closer(&name) {
                         tainted_control_depth = tainted_control_depth.saturating_sub(1);
                     }
-                    if let InstructionTarget::Builtin(name) = target
+                    if let InstructionTarget::Builtin(name)
+                    | InstructionTarget::BuiltinMethod { name, .. } = target
                         && builtin_callable_portability(name)
                             == CallablePortability::FrontendObservation
                     {

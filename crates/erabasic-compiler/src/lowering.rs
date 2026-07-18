@@ -35,6 +35,7 @@ pub(crate) use encoding::bytecode_type;
 pub(crate) struct LoweringContext<'a> {
     pub program: &'a Program,
     pub function_keys: &'a BTreeMap<FunctionId, SymbolKey>,
+    pub functions_by_id: &'a BTreeMap<FunctionId, &'a Function>,
     pub variable_keys: &'a BTreeMap<VariableId, SymbolKey>,
     pub source_indices: &'a BTreeMap<erabasic_hir::SourceId, u32>,
     pub host_registry: &'a HostRegistry,
@@ -61,9 +62,20 @@ pub(crate) fn lower_function(
     let structured = structured_if_flow(function);
     let (data_blocks, data_body_lines) = collect_data_blocks(function);
     let (try_lists, try_list_body_lines) = collect_try_lists(function);
+    let mut outgoing = BTreeMap::<LineId, Vec<_>>::new();
+    for edge in &function.control_flow {
+        outgoing.entry(edge.from).or_default().push(edge);
+    }
+    let loop_closers: BTreeMap<_, _> = function
+        .control_flow
+        .iter()
+        .filter(|edge| edge.kind == ControlFlowKind::LoopBack)
+        .filter_map(|edge| edge.to.map(|opener| (opener, edge.from)))
+        .collect();
     let mut line_starts = BTreeMap::new();
     let mut line_entries = BTreeMap::new();
     let mut pending_jumps = Vec::new();
+    let mut pending_function_end_jumps = Vec::new();
     for line in &function.lines {
         line_starts.insert(line.id, builder.code.len());
         if let Some(end) = structured.alternative_ends.get(&line.id) {
@@ -142,29 +154,140 @@ pub(crate) fn lower_function(
             && !try_lists.contains_key(&line.id)
             && !try_list_body_lines.contains(&line.id)
         {
-            add_control_flow(
-                function,
-                line.id,
-                line.location,
-                &mut builder,
-                &structured,
-                &mut pending_jumps,
-            );
+            let outgoing: &[&erabasic_hir::ControlFlowEdge] =
+                outgoing.get(&line.id).map_or(&[], Vec::as_slice);
+            let structural_name = match &line.kind {
+                HirStatementKind::Instruction { target, .. } => Some(target.name()),
+                _ => None,
+            };
+            if matches!(structural_name, Some("DO" | "SELECTCASE")) {
+                // DO is an unconditional body entry. Its analyzer branch marks
+                // the matching LOOP boundary, not a runtime condition.
+            } else if structural_name == Some("LOOP") {
+                if let Some(target) = outgoing
+                    .iter()
+                    .find(|edge| edge.kind == ControlFlowKind::LoopBack)
+                    .and_then(|edge| edge.to)
+                {
+                    let instruction = builder.code.len();
+                    builder.emit(opcode::jump(Opcode::JumpIfFalse, 0), line.location);
+                    pending_jumps.push((instruction, target, true));
+                }
+            } else if matches!(structural_name, Some("FOR" | "WHILE")) {
+                let after_closer = outgoing
+                    .iter()
+                    .find(|edge| edge.kind == ControlFlowKind::Branch)
+                    .and_then(|edge| edge.to)
+                    .and_then(|closer| function.lines.get(closer.0 as usize + 1))
+                    .map(|line| line.id);
+                let instruction = builder.code.len();
+                builder.emit(opcode::jump(Opcode::JumpIfFalse, 0), line.location);
+                if let Some(target) = after_closer {
+                    pending_jumps.push((instruction, target, true));
+                } else {
+                    pending_function_end_jumps.push(instruction);
+                }
+            } else if structural_name == Some("NEXT") {
+                if let Some(body) = outgoing
+                    .iter()
+                    .find(|edge| edge.kind == ControlFlowKind::LoopBack)
+                    .and_then(|edge| edge.to)
+                    .and_then(|opener| function.lines.get(opener.0 as usize + 1))
+                    .map(|line| line.id)
+                {
+                    let instruction = builder.code.len();
+                    builder.emit(opcode::jump(Opcode::JumpIfFalse, 0), line.location);
+                    pending_jumps.push((instruction, body, true));
+                }
+            } else if matches!(structural_name, Some("CONTINUE" | "BREAK")) {
+                let loop_edge = outgoing.iter().find(|edge| {
+                    matches!(
+                        edge.kind,
+                        ControlFlowKind::Continue | ControlFlowKind::Break
+                    )
+                });
+                let opener = loop_edge.and_then(|edge| edge.to);
+                let closer = opener.and_then(|opener| loop_closers.get(&opener).copied());
+                let opener_name = opener.and_then(|opener| {
+                    function
+                        .lines
+                        .get(opener.0 as usize)
+                        .and_then(|line| match &line.kind {
+                            HirStatementKind::Instruction { target, .. } => Some(target.name()),
+                            _ => None,
+                        })
+                });
+                if structural_name == Some("BREAK") && opener_name == Some("FOR") {
+                    builder.emit(
+                        EncodedInstruction::new(Opcode::ForBreak, Vec::new()),
+                        line.location,
+                    );
+                }
+                let target = if structural_name == Some("CONTINUE") {
+                    if opener_name == Some("WHILE") {
+                        opener
+                    } else {
+                        closer
+                    }
+                } else {
+                    closer.and_then(|closer| {
+                        function
+                            .lines
+                            .get(closer.0 as usize + 1)
+                            .map(|line| line.id)
+                    })
+                };
+                let instruction = builder.code.len();
+                builder.emit(opcode::jump(Opcode::Jump, 0), line.location);
+                if let Some(target) = target {
+                    pending_jumps.push((instruction, target, true));
+                } else {
+                    pending_function_end_jumps.push(instruction);
+                }
+            } else if outgoing
+                .iter()
+                .any(|edge| edge.kind == ControlFlowKind::Branch && edge.to.is_none())
+            {
+                let instruction = builder.code.len();
+                builder.emit(opcode::jump(Opcode::JumpIfFalse, 0), line.location);
+                pending_function_end_jumps.push(instruction);
+            } else {
+                add_control_flow(
+                    line.id,
+                    line.location,
+                    &mut builder,
+                    &structured,
+                    outgoing,
+                    &mut pending_jumps,
+                );
+            }
         }
     }
+    let function_end = builder.code.len();
     if builder.code.is_empty() {
-        builder.emit(opcode::return_value(false), function.location);
-    } else if !matches!(
-        builder
-            .code
-            .last()
-            .and_then(|instruction| Opcode::try_from(instruction.opcode).ok()),
-        Some(Opcode::Return | Opcode::Trap | Opcode::Jump)
-    ) {
-        builder.emit(
-            opcode::return_value(function.return_type != SemanticType::Void),
-            function.location,
-        );
+        if function.return_type == SemanticType::Void {
+            builder.emit(opcode::return_value(false), function.location);
+        } else {
+            builder.emit_default_method_value(function.location);
+            builder.emit(opcode::return_value(true), function.location);
+        }
+    } else if !pending_function_end_jumps.is_empty()
+        || !matches!(
+            builder
+                .code
+                .last()
+                .and_then(|instruction| Opcode::try_from(instruction.opcode).ok()),
+            Some(Opcode::Return | Opcode::Trap | Opcode::Jump)
+        )
+    {
+        if function.return_type == SemanticType::Void {
+            builder.emit(opcode::return_value(false), function.location);
+        } else {
+            // Emuera maps a method that reaches the next label without RETURNF
+            // to the type's default value (0 or the empty string).
+            builder.emit_default_method_value(function.location);
+            builder.emit(opcode::return_value(true), function.location);
+        }
     }
     for (instruction, target, use_entry) in pending_jumps {
         let locations = if use_entry {
@@ -185,7 +308,35 @@ pub(crate) fn lower_function(
             .to_le_bytes()
             .to_vec();
     }
+    for instruction in pending_function_end_jumps {
+        builder.code[instruction].payload = u32::try_from(function_end)
+            .unwrap_or(u32::MAX)
+            .to_le_bytes()
+            .to_vec();
+    }
 
+    // Source-map construction used to search and serialize the whole statement
+    // list for every emitted opcode. Large dialogue functions then became O(n²).
+    // Cache each exact statement location once; expression sub-spans retain the
+    // same deterministic function-level fallback as before.
+    let fingerprints: BTreeMap<_, _> = function
+        .lines
+        .iter()
+        .map(|line| {
+            (
+                (
+                    line.location.source,
+                    line.location.span.start,
+                    line.location.span.end,
+                ),
+                statement_fingerprint(&line.kind),
+            )
+        })
+        .collect();
+    let fallback_fingerprint = Digest::hash(
+        "rustyera.bytecode.source-statement.v1",
+        &[function.name.as_bytes()],
+    );
     let mut offset = 0u64;
     let mut source_entries = Vec::with_capacity(builder.code.len());
     for (instruction, location) in builder.code.iter().zip(&builder.locations) {
@@ -198,19 +349,10 @@ pub(crate) fn lower_function(
                 source_index: *source_index,
                 byte_start: location.span.start as u64,
                 byte_end: location.span.end as u64,
-                statement_fingerprint: function
-                    .lines
-                    .iter()
-                    .find(|line| line.location == *location)
-                    .map_or_else(
-                        || {
-                            Digest::hash(
-                                "rustyera.bytecode.source-statement.v1",
-                                &[function.name.as_bytes()],
-                            )
-                        },
-                        |line| statement_fingerprint(&line.kind),
-                    ),
+                statement_fingerprint: fingerprints
+                    .get(&(location.source, location.span.start, location.span.end))
+                    .copied()
+                    .unwrap_or(fallback_fingerprint),
                 origin_chain: Vec::new(),
             });
         }
@@ -235,6 +377,17 @@ pub(crate) fn lower_function(
             };
             Some(BytecodeParameter {
                 key: *context.variable_keys.get(&parameter.target.variable)?,
+                indices: parameter
+                    .target
+                    .indices
+                    .iter()
+                    .map(|index| match index.constant {
+                        Some(erabasic_hir::ConstantValue::Integer(value)) => {
+                            u64::try_from(value).ok()
+                        }
+                        Some(erabasic_hir::ConstantValue::String(_)) | None => None,
+                    })
+                    .collect::<Option<Vec<_>>>()?,
                 value_type,
                 by_reference: variable.reference,
                 default: parameter.default.as_ref().and_then(|value| {

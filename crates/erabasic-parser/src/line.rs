@@ -1,12 +1,12 @@
 use erabasic_ast::{
-    Argument, Diagnostic, DiagnosticCode, Directive, Expr, ExprKind, ParseOutput, Span, Statement,
-    StatementKind,
+    Argument, AssignOp, Diagnostic, DiagnosticCode, Directive, Expr, ExprKind, ParseOutput,
+    PostfixOp, Span, Statement, StatementKind, UnaryOp,
 };
 use erabasic_lexer::{LexEnd, LexFlags, Token, TokenKind, lex_formatted, lex_with};
 
 use crate::context::{ArgumentStyle, InstructionSpec, ParserContext};
 use crate::expression::ExpressionParser;
-use crate::formatted::{lower_formatted, shift_formatted};
+use crate::formatted::{lower_formatted, parse_formatted_at, shift_formatted};
 use crate::util::{
     assign_op, expr_to_variable, shift_diagnostics, shift_tokens, split_top_level,
     top_level_assignment,
@@ -33,6 +33,7 @@ pub(crate) fn parse_line_at(
     }
     if let Some(label_body) = line.strip_prefix('$') {
         let name = label_body
+            .trim_start_matches([' ', '\t'])
             .split([' ', '\t', ';'])
             .next()
             .unwrap_or_default()
@@ -59,7 +60,14 @@ pub(crate) fn parse_line_at(
     );
     let mut diagnostics = shift_diagnostics(lexed.diagnostics, line_base);
     let tokens = shift_tokens(lexed.tokens, line_base);
-    if let Some(index) = top_level_assignment(&tokens) {
+    let dedicated_instruction_grammar = tokens
+        .first()
+        .and_then(|token| match &token.kind {
+            TokenKind::Identifier(name) => context.instruction(name),
+            _ => None,
+        })
+        .is_some_and(|spec| spec.argument_style != ArgumentStyle::Expressions);
+    if !dedicated_instruction_grammar && let Some(index) = top_level_assignment(&tokens) {
         let mut left_parser = ExpressionParser::new(&tokens[..index]);
         let left = left_parser.parse();
         let op_token = &tokens[index];
@@ -67,6 +75,95 @@ pub(crate) fn parse_line_at(
         if left_parser.diagnostics.is_empty()
             && let Some(target) = left.and_then(expr_to_variable)
         {
+            if matches!(
+                op_token.kind,
+                TokenKind::Operator(erabasic_lexer::Operator::Assign)
+            ) {
+                let right_start = op_token.span.end.saturating_sub(line_base);
+                let raw_right = &line[right_start..];
+                let whitespace = raw_right.len() - raw_right.trim_start().len();
+                let right_source = &raw_right[whitespace..];
+                let right_base = line_base + right_start + whitespace;
+                let value = if right_source.is_empty() {
+                    Expr {
+                        kind: ExprKind::String(String::new()),
+                        span: Span::empty(right_base),
+                    }
+                } else {
+                    let mut parsed = parse_formatted_at(right_source, right_base, context);
+                    diagnostics.append(&mut parsed.diagnostics);
+                    Expr {
+                        kind: parsed.value.map_or(ExprKind::Error, ExprKind::Formatted),
+                        span: Span::new(right_base, line_base + line.len()),
+                    }
+                };
+                // The whole-line expression lexer cannot interpret the type-directed
+                // FORM RHS. Its diagnostics are superseded by the dedicated pass.
+                diagnostics.retain(|diagnostic| diagnostic.span.end <= op_token.span.start);
+                return ParseOutput {
+                    value: Some(Statement {
+                        span: Span::new(line_base, line_base + line.len()),
+                        kind: StatementKind::Assignment {
+                            target,
+                            op: AssignOp::Assign,
+                            value,
+                            additional_values: Vec::new(),
+                            raw_value: right_source.into(),
+                        },
+                    }),
+                    diagnostics,
+                };
+            }
+            if matches!(
+                op_token.kind,
+                TokenKind::Operator(erabasic_lexer::Operator::StringAssign)
+            ) && split_top_level(&tokens[index + 1..], ',').len() > 1
+            {
+                let right_start = op_token.span.end.saturating_sub(line_base);
+                let raw_right = &line[right_start..];
+                let whitespace = raw_right.len() - raw_right.trim_start().len();
+                let right_source = &raw_right[whitespace..];
+                let right_base = line_base + right_start + whitespace;
+                let mut values = parse_arguments(
+                    right_source,
+                    right_base,
+                    ArgumentStyle::Expressions,
+                    context,
+                );
+                diagnostics.append(&mut values.diagnostics);
+                let mut values = values
+                    .value
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|argument| match argument {
+                        Argument::Expression(value) => value,
+                        Argument::Omitted(span) => Expr {
+                            kind: ExprKind::Error,
+                            span,
+                        },
+                        _ => unreachable!("expression argument grammar returned another shape"),
+                    });
+                let value = values.next().unwrap_or(Expr {
+                    kind: ExprKind::Error,
+                    span: Span::empty(right_base),
+                });
+                return ParseOutput {
+                    value: Some(Statement {
+                        span: Span::new(line_base, line_base + line.len()),
+                        kind: StatementKind::Assignment {
+                            target,
+                            op: assign_op(match op_token.kind {
+                                TokenKind::Operator(op) => op,
+                                _ => unreachable!("assignment token is an operator"),
+                            }),
+                            value,
+                            additional_values: values.collect(),
+                            raw_value: right_source.into(),
+                        },
+                    }),
+                    diagnostics,
+                };
+            }
             let right = parse_assignment_right(
                 line,
                 line_base,
@@ -83,11 +180,38 @@ pub(crate) fn parse_line_at(
                             target,
                             op: assign_op(*op),
                             value,
+                            additional_values: Vec::new(),
+                            raw_value: assignment_right_source(line, line_base, op_token).into(),
                         },
                     }),
                     diagnostics,
                 };
             }
+        }
+    }
+
+    if !dedicated_instruction_grammar {
+        let mut parser = ExpressionParser::new(&tokens);
+        let expression = parser.parse();
+        if parser.diagnostics.is_empty()
+            && let Some((target, op)) = expression.and_then(increment_assignment)
+        {
+            return ParseOutput {
+                value: Some(Statement {
+                    span: Span::new(line_base, line_base + line.len()),
+                    kind: StatementKind::Assignment {
+                        target,
+                        op,
+                        value: Expr {
+                            kind: ExprKind::Integer(1),
+                            span: Span::new(line_base, line_base + line.len()),
+                        },
+                        additional_values: Vec::new(),
+                        raw_value: "1".into(),
+                    },
+                }),
+                diagnostics,
+            };
         }
     }
 
@@ -118,11 +242,19 @@ pub(crate) fn parse_line_at(
         name.to_ascii_uppercase().as_str(),
         "PRINT_IMG" | "PRINT_RECT" | "PRINT_SPACE"
     );
-    if uses_mixed_arguments {
+    if uses_mixed_arguments
+        || matches!(
+            spec.argument_style,
+            ArgumentStyle::Formatted
+                | ArgumentStyle::Raw
+                | ArgumentStyle::PrintV
+                | ArgumentStyle::Times
+                | ArgumentStyle::DynamicCall
+        )
+    {
         // The preliminary whole-line lex identifies the instruction name, but
-        // Era's `px` suffix is not an expression token and would be reported as
-        // an invalid exponent. The dedicated argument pass below re-lexes every
-        // expression after removing that suffix and owns argument diagnostics.
+        // non-expression grammars may contain arbitrary punctuation (and Era's
+        // `px` mixed unit). Their dedicated pass owns all tail diagnostics.
         diagnostics.retain(|diagnostic| diagnostic.span.end <= name_span.end);
     }
     let mut args_output = if uses_mixed_arguments {
@@ -142,6 +274,33 @@ pub(crate) fn parse_line_at(
         }),
         diagnostics,
     }
+}
+
+fn assignment_right_source<'a>(line: &'a str, line_base: usize, operator: &Token) -> &'a str {
+    let right_start = operator.span.end.saturating_sub(line_base);
+    line[right_start..].trim_start_matches([' ', '\t'])
+}
+
+fn increment_assignment(expression: Expr) -> Option<(erabasic_ast::VariableRef, AssignOp)> {
+    let (operand, increment) = match expression.kind {
+        ExprKind::Postfix { op, operand } => (operand, matches!(op, PostfixOp::Increment)),
+        ExprKind::Unary { op, operand }
+            if matches!(op, UnaryOp::PreIncrement | UnaryOp::PreDecrement) =>
+        {
+            (operand, matches!(op, UnaryOp::PreIncrement))
+        }
+        _ => return None,
+    };
+    expr_to_variable(*operand).map(|target| {
+        (
+            target,
+            if increment {
+                AssignOp::Add
+            } else {
+                AssignOp::Subtract
+            },
+        )
+    })
 }
 
 fn parse_mixed_arguments(
@@ -234,6 +393,15 @@ fn parse_assignment_right(
     let whitespace = raw_right.len() - raw_right.trim_start().len();
     let right_source = &raw_right[whitespace..];
     let right_base = line_base + right_start + whitespace;
+    if right_source.is_empty() {
+        // The reference's generic SET grammar uses an empty string when a bare
+        // string assignment ends immediately after `=` (for example `RESULTS =`).
+        // Semantic analysis still rejects the same spelling for integer places.
+        return Some(Expr {
+            kind: ExprKind::String(String::new()),
+            span: Span::empty(right_base),
+        });
+    }
     if right_source.starts_with('%') {
         // String assignments use FORM interpolation syntax even though '%' is
         // the modulo operator in ordinary expressions.
@@ -250,6 +418,21 @@ fn parse_assignment_right(
     }
     let mut parser = ExpressionParser::new(tokens);
     let right = parser.parse();
+    if !parser.diagnostics.is_empty() {
+        // String SET accepts unquoted FORM text (`LOCALS = HP(%NAME%)`). Try the
+        // ordinary expression grammar first so integer modulo remains unambiguous,
+        // then recover through FORM only when that grammar cannot consume the RHS.
+        let (form, lex_diagnostics) =
+            lex_formatted(right_source, context.lexer_config(), context.macros());
+        let mut output = lower_formatted(&form);
+        output.diagnostics.splice(0..0, lex_diagnostics);
+        shift_formatted(&mut output, right_base);
+        diagnostics.append(&mut output.diagnostics);
+        return output.value.map(|value| Expr {
+            kind: ExprKind::Formatted(value),
+            span: Span::new(right_base, line_base + line.len()),
+        });
+    }
     diagnostics.append(&mut parser.diagnostics);
     right
 }
@@ -277,7 +460,10 @@ fn parse_arguments(
         return ParseOutput::success(Vec::new());
     }
     if style == ArgumentStyle::Raw {
-        return ParseOutput::success(vec![Argument::Raw(source.to_string())]);
+        return ParseOutput::success(vec![Argument::Raw(raw_argument(source, context))]);
+    }
+    if style == ArgumentStyle::Times {
+        return parse_times_arguments(source, base, context);
     }
     if style == ArgumentStyle::DynamicCall {
         return parse_dynamic_call_arguments(source, base, context);
@@ -317,11 +503,16 @@ fn parse_arguments(
         };
     }
 
+    let flags = if style == ArgumentStyle::PrintV {
+        LexFlags::ANALYZE_PRINT_V
+    } else {
+        LexFlags::NONE
+    };
     let lexed = lex_with(
         source,
         context.lexer_config(),
         LexEnd::EndOfLine,
-        LexFlags::NONE,
+        flags,
         context.macros(),
     );
     let mut diagnostics = shift_diagnostics(lexed.diagnostics, base);
@@ -344,11 +535,191 @@ fn parse_arguments(
     }
 }
 
+/// Parses generic comma-separated expressions at an existing source offset.
+///
+/// Plain `=` delays this pass until semantic analysis knows whether its
+/// destination is numeric (a SET list) or string (one FORM value with commas).
+pub fn parse_expression_list_at(
+    source: &str,
+    base: usize,
+    context: &dyn ParserContext,
+) -> ParseOutput<Vec<Expr>> {
+    parse_arguments(source, base, ArgumentStyle::Expressions, context).map(|arguments| {
+        arguments
+            .into_iter()
+            .map(|argument| match argument {
+                Argument::Expression(expression) => expression,
+                Argument::Omitted(span) => Expr {
+                    kind: ExprKind::Error,
+                    span,
+                },
+                _ => unreachable!("expression grammar produced a non-expression argument"),
+            })
+            .collect()
+    })
+}
+
+fn parse_times_arguments(
+    source: &str,
+    base: usize,
+    context: &dyn ParserContext,
+) -> ParseOutput<Vec<Argument>> {
+    let segments = split_argument_text(source);
+    if segments.len() != 2 {
+        return ParseOutput {
+            value: Some(Vec::new()),
+            diagnostics: vec![Diagnostic::error(
+                DiagnosticCode::UnexpectedToken,
+                Span::new(base, base + source.len()),
+                "TIMES requires a variable and one real literal",
+            )],
+        };
+    }
+    let (place_start, place_end) = segments[0];
+    let place_source = source[place_start..place_end].trim();
+    let place_whitespace =
+        source[place_start..place_end].len() - source[place_start..place_end].trim_start().len();
+    let mut place = parse_arguments(
+        place_source,
+        base + place_start + place_whitespace,
+        ArgumentStyle::Expressions,
+        context,
+    );
+    let mut diagnostics = std::mem::take(&mut place.diagnostics);
+    let Some(mut arguments) = place.value else {
+        return ParseOutput {
+            value: None,
+            diagnostics,
+        };
+    };
+    if arguments.len() != 1 {
+        diagnostics.push(Diagnostic::error(
+            DiagnosticCode::UnexpectedToken,
+            Span::new(base + place_start, base + place_end),
+            "TIMES first argument must be one expression",
+        ));
+        return ParseOutput {
+            value: Some(arguments),
+            diagnostics,
+        };
+    }
+    let (real_start, real_end) = segments[1];
+    let real_source = source[real_start..real_end].trim();
+    let real_whitespace =
+        source[real_start..real_end].len() - source[real_start..real_end].trim_start().len();
+    let real_base = base + real_start + real_whitespace;
+    match decimal_ratio(real_source) {
+        Some((numerator, denominator)) => {
+            let span = Span::new(real_base, real_base + real_source.len());
+            arguments.push(Argument::Expression(Expr {
+                kind: ExprKind::Integer(numerator),
+                span,
+            }));
+            arguments.push(Argument::Expression(Expr {
+                kind: ExprKind::Integer(denominator),
+                span,
+            }));
+        }
+        None => diagnostics.push(Diagnostic::error(
+            DiagnosticCode::InvalidInteger,
+            Span::new(real_base, real_base + real_source.len()),
+            "TIMES second argument must be a finite real literal",
+        )),
+    }
+    ParseOutput {
+        value: Some(arguments),
+        diagnostics,
+    }
+}
+
+fn decimal_ratio(source: &str) -> Option<(i64, i64)> {
+    let (negative, unsigned) = match source.as_bytes().first() {
+        Some(b'+') => (false, &source[1..]),
+        Some(b'-') => (true, &source[1..]),
+        _ => (false, source),
+    };
+    let (mantissa, exponent) = if let Some(index) = unsigned.find(['e', 'E']) {
+        (
+            &unsigned[..index],
+            unsigned[index + 1..].parse::<i32>().ok()?,
+        )
+    } else {
+        (unsigned, 0_i32)
+    };
+    let mut digits = String::with_capacity(mantissa.len());
+    let mut fractional = 0_i32;
+    let mut seen_dot = false;
+    for character in mantissa.chars() {
+        match character {
+            '0'..='9' => {
+                digits.push(character);
+                fractional += i32::from(seen_dot);
+            }
+            '.' if !seen_dot => seen_dot = true,
+            _ => return None,
+        }
+    }
+    if digits.is_empty() {
+        return None;
+    }
+    let mut numerator = digits.parse::<i128>().ok()?;
+    if negative {
+        numerator = -numerator;
+    }
+    let scale = fractional.checked_sub(exponent)?;
+    let mut denominator = 1_i128;
+    if scale >= 0 {
+        denominator = 10_i128.checked_pow(u32::try_from(scale).ok()?)?;
+    } else {
+        numerator = numerator.checked_mul(10_i128.checked_pow(scale.unsigned_abs())?)?;
+    }
+    let divisor = i128::try_from(gcd_i128(
+        numerator.unsigned_abs(),
+        denominator.cast_unsigned(),
+    ))
+    .ok()?;
+    i64::try_from(numerator / divisor)
+        .ok()
+        .zip(i64::try_from(denominator / divisor).ok())
+}
+
+fn gcd_i128(mut left: u128, mut right: u128) -> u128 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left.max(1)
+}
+
+fn raw_argument(source: &str, context: &dyn ParserContext) -> String {
+    let mut result = String::with_capacity(source.len());
+    let mut index = 0;
+    while index < source.len() {
+        let remaining = &source[index..];
+        if remaining.starts_with(";!;")
+            || (context.lexer_config().debug_semicolon && remaining.starts_with(";#;"))
+        {
+            index += 3;
+            continue;
+        }
+        let character = remaining.chars().next().expect("index is inside source");
+        if character == ';' {
+            break;
+        }
+        result.push(character);
+        index += character.len_utf8();
+    }
+    result
+}
+
 fn parse_dynamic_call_arguments(
     source: &str,
     base: usize,
     context: &dyn ParserContext,
 ) -> ParseOutput<Vec<Argument>> {
+    // The closing parenthesis must be found before an Era comment. A commented
+    // expression may contain arbitrary unmatched parentheses of its own.
+    let owned_source = call_source_before_comment(source);
+    let source = owned_source.as_str();
     let split = dynamic_call_separator(source);
     let (target, arguments) = split.map_or((source.trim(), None), |(index, separator)| {
         let end = if separator == '(' {
@@ -382,6 +753,18 @@ fn parse_dynamic_call_arguments(
         value: Some(values),
         diagnostics,
     }
+}
+
+fn call_source_before_comment(source: &str) -> String {
+    let mut quoted = false;
+    for (index, character) in source.char_indices() {
+        match character {
+            '"' => quoted = !quoted,
+            ';' if !quoted => return source[..index].trim_end().to_owned(),
+            _ => {}
+        }
+    }
+    source.to_owned()
 }
 
 fn dynamic_call_separator(source: &str) -> Option<(usize, char)> {

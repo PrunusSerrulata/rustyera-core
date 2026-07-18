@@ -30,6 +30,8 @@ pub struct AnalyzerOptions {
     pub debug_mode: bool,
     pub allow_full_width_space: bool,
     pub debug_semicolon: bool,
+    /// Replacement inserted between physical lines in `{ ... }` continuations.
+    pub continuation_separator: String,
 }
 
 impl Default for AnalyzerOptions {
@@ -52,6 +54,7 @@ impl Default for AnalyzerOptions {
             debug_mode: false,
             allow_full_width_space: true,
             debug_semicolon: false,
+            continuation_separator: " ".into(),
         }
     }
 }

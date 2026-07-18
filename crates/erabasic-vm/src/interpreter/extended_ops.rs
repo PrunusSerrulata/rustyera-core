@@ -375,24 +375,19 @@ pub(super) fn array_copy_place(
     destination: bool,
 ) -> Result<(PlaceDescriptor, BytecodeType, Vec<u64>), VmError> {
     let generation = fiber.frames.last().expect("frame exists").generation;
-    let artifact = &vm
+    let program = vm
         .generations
         .get(&generation)
-        .ok_or_else(|| VmError::InvalidState("ARRAYCOPY generation is missing".into()))?
-        .artifact;
+        .ok_or_else(|| VmError::InvalidState("ARRAYCOPY generation is missing".into()))?;
     let (place, value_type) = match value {
         Some(VmValue::IntegerPlace(place)) => (place.clone(), BytecodeType::Integer),
         Some(VmValue::StringPlace(place)) => (place.clone(), BytecodeType::String),
         Some(VmValue::String(name)) => {
-            let definition = artifact
-                .globals
-                .iter()
-                .find(|definition| definition.name.eq_ignore_ascii_case(name))
-                .ok_or_else(|| {
-                    VmError::InvalidArguments(format!(
-                        "ARRAYCOPY {role} variable {name:?} does not exist"
-                    ))
-                })?;
+            let definition = program.global_by_name(name).ok_or_else(|| {
+                VmError::InvalidArguments(format!(
+                    "ARRAYCOPY {role} variable {name:?} does not exist"
+                ))
+            })?;
             (
                 PlaceDescriptor {
                     variable: definition.key,
@@ -407,10 +402,8 @@ pub(super) fn array_copy_place(
             )));
         }
     };
-    let definition = artifact
-        .globals
-        .iter()
-        .find(|definition| definition.key == place.variable)
+    let definition = program
+        .global(place.variable)
         .ok_or_else(|| VmError::InvalidState("ARRAYCOPY variable is missing".into()))?;
     if definition.storage == BytecodeStorage::Character {
         return Err(VmError::InvalidArguments(format!(
@@ -444,38 +437,14 @@ pub(super) fn array_snapshot_any_rank(
     let definition = vm
         .generations
         .get(&generation)
-        .and_then(|generation| {
-            generation
-                .artifact
-                .globals
-                .iter()
-                .find(|definition| definition.key == place.variable)
-        })
+        .and_then(|generation| generation.global(place.variable))
         .ok_or_else(|| VmError::InvalidState("array variable is missing".into()))?;
     if !(1..=3).contains(&definition.dimensions.len()) {
         return Err(VmError::InvalidArguments(
             "ARRAYCOPY requires a one to three dimensional array".into(),
         ));
     }
-    let dimensions = definition
-        .dimensions
-        .iter()
-        .map(|dimension| {
-            usize::try_from(*dimension)
-                .map_err(|_| VmError::InvalidState("array dimension exceeds this platform".into()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let count = dimensions
-        .iter()
-        .try_fold(1usize, |count, dimension| count.checked_mul(*dimension))
-        .ok_or_else(|| VmError::InvalidState("array element count overflows".into()))?;
-    (0..count)
-        .map(|flat| {
-            let mut element = place.clone();
-            element.indices = unflatten_indices(flat, &dimensions);
-            vm.read_place(fiber, &element)
-        })
-        .collect()
+    vm.read_place_array(fiber, place)
 }
 
 pub(super) fn commit_array_any_rank(
@@ -484,41 +453,7 @@ pub(super) fn commit_array_any_rank(
     place: &PlaceDescriptor,
     values: Vec<VmValue>,
 ) -> Result<(), VmError> {
-    let generation = fiber.frames.last().expect("frame exists").generation;
-    let definition = vm
-        .generations
-        .get(&generation)
-        .and_then(|generation| {
-            generation
-                .artifact
-                .globals
-                .iter()
-                .find(|definition| definition.key == place.variable)
-        })
-        .ok_or_else(|| VmError::InvalidState("array variable is missing".into()))?;
-    let dimensions = definition
-        .dimensions
-        .iter()
-        .map(|dimension| {
-            usize::try_from(*dimension)
-                .map_err(|_| VmError::InvalidState("array dimension exceeds this platform".into()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    for (flat, value) in values.into_iter().enumerate() {
-        let mut element = place.clone();
-        element.indices = unflatten_indices(flat, &dimensions);
-        vm.write_place(fiber, &element, value)?;
-    }
-    Ok(())
-}
-
-pub(super) fn unflatten_indices(mut flat: usize, dimensions: &[usize]) -> Vec<u64> {
-    let mut indices = vec![0; dimensions.len()];
-    for dimension in (0..dimensions.len()).rev() {
-        indices[dimension] = u64::try_from(flat % dimensions[dimension]).unwrap_or(u64::MAX);
-        flat /= dimensions[dimension];
-    }
-    indices
+    vm.write_place_array(fiber, place, values)
 }
 
 pub(super) fn execute_random_place_transaction(

@@ -5,6 +5,13 @@ use era_protocol::{
 };
 
 #[test]
+fn default_wire_limit_accepts_complete_large_game_manifests() {
+    let limits = WireLimits::default();
+    assert_eq!(limits.maximum_envelope_bytes, 128 * 1024 * 1024);
+    assert_eq!(limits.maximum_payload_bytes, 127 * 1024 * 1024);
+}
+
+#[test]
 fn envelope_round_trip_is_byte_stable() {
     let mut envelope = Envelope::new(
         Channel::Runtime,

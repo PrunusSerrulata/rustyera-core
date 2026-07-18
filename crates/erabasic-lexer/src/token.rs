@@ -3,6 +3,7 @@ use erabasic_ast::Span;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Operator {
     Assign,
+    StringAssign,
     Equal,
     NotEqual,
     Less,
