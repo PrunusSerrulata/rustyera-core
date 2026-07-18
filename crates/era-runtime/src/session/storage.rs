@@ -7,7 +7,7 @@ use super::*;
 impl RuntimeSession {
     pub(super) fn begin_candidate_save(
         &mut self,
-        vm: &mut RuntimeVm,
+        _vm: &mut RuntimeVm,
         slot: u32,
         continuation: CandidateSaveContinuation,
     ) -> Result<(), RuntimeError> {
@@ -29,15 +29,7 @@ impl RuntimeSession {
                         }),
                         None,
                     )?;
-                    self.presentation.append_system_text(
-                        localized_system_text(&self.selected_locale, SystemTextKey::AutoSaveFailed),
-                        SystemTextKey::AutoSaveFailed,
-                        Vec::new(),
-                        false,
-                    );
-                    self.controller.step = SystemStep::ShopShow;
-                    self.dispatch_system_function(vm, "SHOW_SHOP", true)
-                        .map(|_| ())
+                    self.stage_builtin_autosave_failure()
                 }
                 CandidateSaveContinuation::SystemMenu { .. } => self.finish_candidate_save_failure(
                     continuation,
@@ -64,7 +56,7 @@ impl RuntimeSession {
         let result = self.begin_candidate_save(
             &mut vm,
             slot,
-            CandidateSaveContinuation::SystemMenu { request },
+            CandidateSaveContinuation::SystemMenu { request, slot },
         );
         self.vm = Some(vm);
         result
@@ -270,6 +262,8 @@ impl RuntimeSession {
                 saved_skip: candidate_flags.3,
                 force_kana_mode: candidate_flags.4,
                 effects,
+                save_bytes: Vec::new(),
+                save_slot: None,
             },
             bytes,
         ))
@@ -324,7 +318,16 @@ impl RuntimeSession {
         }
         match continuation {
             CandidateSaveContinuation::Autosave => self.finish_builtin_autosave(true),
-            CandidateSaveContinuation::SystemMenu { request } => {
+            CandidateSaveContinuation::SystemMenu { request, .. } => {
+                if let Some(slot) = candidate.save_slot {
+                    let random = self
+                        .vm
+                        .as_ref()
+                        .ok_or_else(|| RuntimeError::Internal("candidate commit has no VM".into()))?
+                        .export_random_state()
+                        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+                    self.establish_input_undo_checkpoint(slot, candidate.save_bytes, random)?;
+                }
                 self.system_menu_host_request = None;
                 self.system_menu = SystemMenuState::Title;
                 self.load_slot_paths.clear();
@@ -918,12 +921,7 @@ impl RuntimeSession {
 
     pub(super) fn finish_builtin_autosave(&mut self, success: bool) -> Result<(), RuntimeError> {
         if !success {
-            self.presentation.append_system_text(
-                localized_system_text(&self.selected_locale, SystemTextKey::AutoSaveFailed),
-                SystemTextKey::AutoSaveFailed,
-                Vec::new(),
-                false,
-            );
+            return self.stage_builtin_autosave_failure();
         }
         let mut vm = self
             .vm
@@ -933,6 +931,39 @@ impl RuntimeSession {
         self.dispatch_system_function(&mut vm, "SHOW_SHOP", true)?;
         self.vm = Some(vm);
         self.set_phase(RuntimePhase::Running)?;
+        self.renew_debug_grant()
+    }
+
+    pub(super) fn stage_builtin_autosave_failure(&mut self) -> Result<(), RuntimeError> {
+        self.presentation.append_system_text(
+            localized_system_text(&self.selected_locale, SystemTextKey::AutoSaveFailed),
+            SystemTextKey::AutoSaveFailed,
+            Vec::new(),
+            false,
+        );
+        self.presentation.append_system_text(
+            localized_system_text(&self.selected_locale, SystemTextKey::AutoSaveSkipped),
+            SystemTextKey::AutoSaveSkipped,
+            Vec::new(),
+            false,
+        );
+        self.controller.step = SystemStep::ShopAutosaveFailureWait;
+        let submission = self.allocate_interaction();
+        let mut wait = self.system_wait(submission);
+        wait.kind = WaitKind::EnterKey;
+        wait.mouse_input = false;
+        wait.default_value = None;
+        self.open_wait(
+            PendingInput {
+                host_request: None,
+                wait,
+                result_name: None,
+                choices: BTreeMap::new(),
+                timeout_duration_ns: None,
+                post_input: None,
+            },
+            true,
+        )?;
         self.renew_debug_grant()
     }
 
@@ -1091,6 +1122,16 @@ impl RuntimeSession {
         slot: u32,
         bytes: &[u8],
     ) -> Result<(), RuntimeError> {
+        let establish_undo = self.undo_replay.is_none();
+        let random_before_load = establish_undo
+            .then(|| {
+                self.vm
+                    .as_ref()
+                    .ok_or_else(|| RuntimeError::Internal("ordinary load has no VM".into()))?
+                    .export_random_state()
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))
+            })
+            .transpose()?;
         let mut vm = self
             .vm
             .take()
@@ -1133,7 +1174,11 @@ impl RuntimeSession {
             self.spawn_next_event(&mut vm)?;
         }
         self.vm = Some(vm);
-        self.set_phase(RuntimePhase::Running)
+        self.set_phase(RuntimePhase::Running)?;
+        if let Some(random) = random_before_load {
+            self.establish_input_undo_checkpoint(slot, bytes.to_vec(), random)?;
+        }
+        Ok(())
     }
 
     pub(super) fn complete_character_load(

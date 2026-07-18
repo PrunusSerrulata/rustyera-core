@@ -7,11 +7,11 @@ use era_runtime_protocol::{
     EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcome,
     EffectOutcomeStatus, ExitReason, ExitRequested, FrontendInput, GET_KEY_STATE_OPERATION,
     GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
-    InteractionToken, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION,
-    PointerStateRequest, PointerStateResponse, PrimitiveInput, ProjectionObservation,
-    RUNTIME_PROTOCOL_VERSION, ResourceReplay, RuntimeMessage, ServiceKind, ServiceRequest,
-    StateExportChunkRequest, StateExportKind, StateImportBegin, StorageNamespace, StorageOperation,
-    StorageRequest, validate_relative_path,
+    InputUndoRequest, InputUndoState, InteractionToken, POINTER_STATE_OPERATION,
+    POINTER_STATE_OPERATION_VERSION, PointerStateRequest, PointerStateResponse, PrimitiveInput,
+    ProjectionObservation, RUNTIME_PROTOCOL_VERSION, ResourceReplay, RuntimeMessage, ServiceKind,
+    ServiceRequest, StateExportChunkRequest, StateExportKind, StateImportBegin, StorageNamespace,
+    StorageOperation, StorageRequest, validate_relative_path,
 };
 
 #[test]
@@ -33,6 +33,26 @@ fn runtime_payload_and_envelope_tags_agree() {
         RuntimeMessage::from_envelope(&envelope).expect("decode runtime message"),
         message
     );
+}
+
+#[test]
+fn input_undo_is_a_tokenized_semantic_protocol_operation() {
+    let token = InteractionToken { epoch: 7, id: 9 };
+    let request = RuntimeMessage::InputUndoRequest(InputUndoRequest { token });
+    assert_eq!(request.tag(), 37);
+    let encoded = request.encode_payload().unwrap();
+    assert_eq!(RuntimeMessage::decode_payload(37, &encoded), Ok(request));
+
+    let state = RuntimeMessage::InputUndoStateChanged(InputUndoState {
+        enabled: true,
+        available_steps: 2,
+        in_progress: false,
+        runtime_revision: 11,
+        token: Some(token),
+    });
+    assert_eq!(state.tag(), 38);
+    let encoded = state.encode_payload().unwrap();
+    assert_eq!(RuntimeMessage::decode_payload(38, &encoded), Ok(state));
 }
 
 #[test]
@@ -144,7 +164,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(14, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(15, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -183,7 +203,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(14, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(15, 0));
 }
 
 #[test]

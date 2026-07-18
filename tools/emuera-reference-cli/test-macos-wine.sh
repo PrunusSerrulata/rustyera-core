@@ -15,6 +15,7 @@ OUTPUT_FILE="${1:-$WORK_DIR/wine-smoke.ndjson}"
 REQUEST_FILE="$WORK_DIR/requests.ndjson"
 STDERR_FILE="$WORK_DIR/wine-stderr.log"
 FIXTURE_SOURCE_DIR="$SCRIPT_DIR/tests/fixture"
+SYSTEM_FIXTURE_SOURCE_DIR="$SCRIPT_DIR/tests/fixture-system"
 ORACLE_TIMEOUT_SECONDS="${EMUERA_REFERENCE_TIMEOUT_SECONDS:-30}"
 
 for command_name in dotnet wine winepath jq perl; do
@@ -26,8 +27,11 @@ done
 
 mkdir -p "$WINE_PREFIX" "$WORK_DIR" "$(dirname "$OUTPUT_FILE")"
 FIXTURE_DIR="$(mktemp -d "$WORK_DIR/fixture.XXXXXX")"
-trap 'rm -rf "$FIXTURE_DIR"' EXIT
+SYSTEM_FIXTURE_DIR="$(mktemp -d "$WORK_DIR/system-fixture.XXXXXX")"
+trap 'rm -rf "$FIXTURE_DIR" "$SYSTEM_FIXTURE_DIR"' EXIT
 cp -R "$FIXTURE_SOURCE_DIR/." "$FIXTURE_DIR"
+cp -R "$FIXTURE_SOURCE_DIR/." "$SYSTEM_FIXTURE_DIR"
+cp -R "$SYSTEM_FIXTURE_SOURCE_DIR/." "$SYSTEM_FIXTURE_DIR"
 
 export WINEPREFIX="$WINE_PREFIX"
 export WINEDEBUG=-all
@@ -38,6 +42,7 @@ if [[ ! -f "$WINE_PREFIX/system.reg" ]]; then
 fi
 
 FIXTURE_WINDOWS_PATH="$(winepath -w "$FIXTURE_DIR")"
+SYSTEM_FIXTURE_WINDOWS_PATH="$(winepath -w "$SYSTEM_FIXTURE_DIR")"
 
 # A framework-dependent build cannot locate macOS's .NET installation from
 # inside Wine, so publish the Windows runtime beside the executable.
@@ -82,6 +87,11 @@ printf '%s\n' \
     '{"id":"wine-structured","op":"run","entry":"ORACLE_STRUCTURED","watch":["RESULT:0","RESULT:1","RESULT:2","RESULT:3","RESULT:4","RESULT:5","RESULTS:0","RESULTS:1","RESULTS:2"]}' \
     '{"id":"wine-compat-12","op":"run","entry":"ORACLE_COMPAT_12","watch":["RESULT:20","RESULT:21","RESULT:22","RESULT:23","RESULT:24","RESULTS:20","RESULTS:21","RESULTS:22"]}' \
     '{"id":"wine-input","op":"run","entry":"ORACLE_INPUT","inputs":["42"],"watch":["RESULT"]}' \
+    >>"$REQUEST_FILE"
+jq -nc --arg gameDir "$SYSTEM_FIXTURE_WINDOWS_PATH" \
+    '{id:"wine-system-load",op:"load",gameDir:$gameDir}' >>"$REQUEST_FILE"
+printf '%s\n' \
+    '{"id":"wine-stopcalltrain","op":"run","watch":["RESULT:30","RESULT:31"]}' \
     '{"id":"wine-reset","op":"reset"}' \
     >>"$REQUEST_FILE"
 
@@ -94,14 +104,14 @@ perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 29 and
+    length == 31 and
     map(.id) == [
         "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-toneinput",
         "wine-getmillisecond", "wine-getsecond", "wine-project",
         "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
         "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
         "wine-putform", "wine-savenos",
-        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-reflection", "wine-map", "wine-presentation", "wine-structured", "wine-compat-12", "wine-input", "wine-reset"
+        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-reflection", "wine-map", "wine-presentation", "wine-structured", "wine-compat-12", "wine-input", "wine-system-load", "wine-stopcalltrain", "wine-reset"
     ] and
     all(.[]; .ok == true) and
     (map(select(.id == "wine-load"))[0].result.termination == "waitingInput") and
@@ -146,6 +156,9 @@ jq -e -s '
     (map(select(.id == "wine-compat-12"))[0].result.watches == {"RESULT:20":4,"RESULT:21":0,"RESULT:22":0,"RESULT:23":66051,"RESULT:24":3,"RESULTS:20":"&lt;&amp;&gt;&apos;&quot;","RESULTS:21":"A&Bあ","RESULTS:22":"LEFT"}) and
     (map(select(.id == "wine-input"))[0].result.termination == "completed") and
     (map(select(.id == "wine-input"))[0].result.watches.RESULT == 42) and
+    (map(select(.id == "wine-system-load"))[0].result.termination == "error") and
+    (map(select(.id == "wine-stopcalltrain"))[0].result.termination == "error") and
+    (map(select(.id == "wine-stopcalltrain"))[0].result.watches == {"RESULT:30":0,"RESULT:31":1}) and
     (map(select(.id == "wine-toneinput"))[0].result.termination == "waitingInput") and
     (map(select(.id == "wine-toneinput"))[0].result.inputRequest.InputType == "StrValue") and
     (map(select(.id == "wine-toneinput"))[0].result.inputRequest.OneInput == true) and

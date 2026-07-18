@@ -15,22 +15,23 @@ use era_runtime_protocol::{
     GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
     GetKeyStateResponse, IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION,
     IMAGE_PIXEL_OPERATION, IMAGE_PIXEL_OPERATION_VERSION, ImageMetadataRequest,
-    ImageMetadataResponse, ImagePixelRequest, ImagePixelResponse, InputIntent, InputWait,
-    InteractionToken, LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment,
-    LocalDateTimeRequest, LocalDateTimeResponse, OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION,
-    OpenUrlRequest, OpenUrlResponse, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION,
-    PointerStateRequest, PointerStateResponse, ProjectLoadReport, ProjectManifest,
-    ProjectionObservation, ProjectionState, ProtocolDiagnostic, RANDOM_SEED_OPERATION,
-    RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse,
-    ReloadProject, RuntimeFault, RuntimeFeature, RuntimeLimits, RuntimeMessage, RuntimePhase,
-    RuntimeResynchronized, RuntimeStateChanged, ServerHello, ServiceCapability, ServiceKind,
-    ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady, SnapshotIneligibleReason,
-    StartMode, StartRequest, StateExportChunk, StateExportChunkRequest, StateExportKind,
-    StateExportReady, StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin,
-    StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
-    StateTransferDescriptor, StorageCapabilities, StorageEntry, StorageNamespace, StorageOperation,
-    StoragePrecondition, StorageRequest, StorageResponse, StorageResult, SystemTextArgument,
-    SystemTextKey, UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest,
+    ImageMetadataResponse, ImagePixelRequest, ImagePixelResponse, InputIntent, InputUndoRequest,
+    InputUndoState, InputWait, InteractionToken, LOCAL_DATE_TIME_OPERATION,
+    LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment, LocalDateTimeRequest, LocalDateTimeResponse,
+    OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION, OpenUrlRequest, OpenUrlResponse,
+    POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
+    PointerStateResponse, ProjectLoadReport, ProjectManifest, ProjectionObservation,
+    ProjectionState, ProtocolDiagnostic, RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION,
+    RUNTIME_PROTOCOL_VERSION, RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault,
+    RuntimeFeature, RuntimeLimits, RuntimeMessage, RuntimePhase, RuntimeResynchronized,
+    RuntimeStateChanged, ServerHello, ServiceCapability, ServiceKind, ServiceRequest,
+    ServiceResponse, ServiceResult, ShutdownReady, SnapshotIneligibleReason, StartMode,
+    StartRequest, StateExportChunk, StateExportChunkRequest, StateExportKind, StateExportReady,
+    StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk,
+    StateImportCommit, StateImportReady, StateTransferCancel, StateTransferDescriptor,
+    StorageCapabilities, StorageEntry, StorageNamespace, StorageOperation, StoragePrecondition,
+    StorageRequest, StorageResponse, StorageResult, SystemTextArgument, SystemTextKey,
+    UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest,
     UpdateCheckResponse, VersionRejected, WaitChange, WaitKind, WaitStability,
 };
 use erabasic_compiler::IncrementalState;
@@ -69,6 +70,7 @@ mod interaction;
 mod storage;
 mod support;
 mod transfer;
+mod undo;
 
 // Session implementation modules intentionally share this private helper facade.
 #[allow(clippy::wildcard_imports)]
@@ -235,6 +237,7 @@ pub struct RuntimeSession {
     logical_time_ns: u64,
     frontend_time_origin: Option<(u64, u64)>,
     random_seed: Option<u64>,
+    negotiated_features: BTreeSet<RuntimeFeature>,
     inbound: VecDeque<(u64, InboundMessage)>,
     outbound: VecDeque<Vec<u8>>,
     outbound_journal: BTreeMap<u64, Vec<u8>>,
@@ -278,6 +281,9 @@ pub struct RuntimeSession {
     reusable_system_intents: BTreeMap<InteractionToken, VmValue>,
     exit_requested: Option<ExitRequested>,
     controller: SystemController,
+    undo_checkpoint: Option<UndoCheckpoint>,
+    undo_replay: Option<UndoReplay>,
+    undo_token: Option<InteractionToken>,
     project_snapshot: Option<NormalizedProjectSnapshot>,
     selected_locale: String,
     available_fonts: BTreeSet<String>,
@@ -297,6 +303,20 @@ pub struct RuntimeSession {
     pending_project_load: Option<PendingProjectLoad>,
     pending_candidate_commit: Option<PendingCandidateCommit>,
     candidate_clock: Option<LocalDateTimeResponse>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct UndoCheckpoint {
+    slot: u32,
+    save_bytes: Vec<u8>,
+    random_state: Vec<i64>,
+    inputs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct UndoReplay {
+    remaining: VecDeque<String>,
+    queued_repeats: u32,
 }
 
 struct PendingProjectLoad {
@@ -322,4 +342,6 @@ struct PendingCandidateCommit {
     saved_skip: bool,
     force_kana_mode: u8,
     effects: Vec<EffectKind>,
+    save_bytes: Vec<u8>,
+    save_slot: Option<u32>,
 }

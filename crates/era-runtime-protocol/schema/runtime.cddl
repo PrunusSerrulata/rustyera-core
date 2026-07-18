@@ -13,6 +13,10 @@ runtime-message =
   [32, wait-change] /
   [33, any] /
   [34, any] /
+  [35, any] /
+  [36, any] /
+  [37, input-undo-request] /
+  [38, input-undo-state] /
   [40, presentation-snapshot] /
   [41, presentation-delta] /
   [42, any] /
@@ -53,6 +57,9 @@ runtime-state = { 0: uint, 1: uint, 2: uint }
 frontend-input = { 0: uint, 1: uint, 2: uint, 3: any }
 advance-time = { 0: uint }
 wait-change = any
+input-undo-request = { 0: interaction-token }
+input-undo-state = { 0: bool, 1: uint, 2: bool, 3: uint, 4: interaction-token / null }
+interaction-token = { 0: uint, 1: uint }
 presentation-snapshot = any
 presentation-delta = { 0: uint, 1: uint, 2: [* any] }
 storage-request = { 0: uint, 1: uint, 2: tstr, 3: storage-operation, 4: tstr, 5: uint / null }

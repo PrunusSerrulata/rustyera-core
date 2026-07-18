@@ -36,6 +36,7 @@ function Assert-True([bool]$Condition, [string]$Message) {
 }
 
 $tempGame = $null
+$tempSystemGame = $null
 try {
     $bad = Invoke-Oracle @{ id = 1; op = "doesNotExist" }
     Assert-True (-not $bad.ok) "unknown operation should fail"
@@ -184,6 +185,16 @@ try {
     Assert-True ($inputRun.result.termination -eq "completed") "input function did not complete"
     Assert-True ($inputRun.result.watches.RESULT -eq 42) "input did not update RESULT"
 
+    $tempSystemGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-system-oracle-" + [guid]::NewGuid())
+    Copy-Item "$PSScriptRoot/fixture" $tempSystemGame -Recurse
+    Copy-Item "$PSScriptRoot/fixture-system/*" $tempSystemGame -Recurse -Force
+    $systemLoad = Invoke-Oracle @{ id = "system-load"; op = "load"; gameDir = $tempSystemGame }
+    Assert-True ($systemLoad.ok -and $systemLoad.result.termination -eq "error") "system fixture did not reproduce the reference STOPCALLTRAIN error"
+    $stopCallTrain = Invoke-Oracle @{ id = "stopcalltrain"; op = "run"; watch = @("RESULT:30", "RESULT:31") }
+    Assert-True ($stopCallTrain.ok -and $stopCallTrain.result.termination -eq "error") "STOPCALLTRAIN reference termination differs"
+    Assert-True (($stopCallTrain.result.watches.'RESULT:30' -eq 0) -and
+        ($stopCallTrain.result.watches.'RESULT:31' -eq 1)) "STOPCALLTRAIN did not discard its caller before CALLTRAINEND"
+
     $reset = Invoke-Oracle @{ id = 11; op = "reset" }
     Assert-True $reset.ok "reset failed"
     Write-Host "Emuera reference CLI smoke test passed."
@@ -196,5 +207,8 @@ finally {
     $process.Dispose()
     if ($null -ne $tempGame -and [System.IO.Directory]::Exists($tempGame)) {
         Remove-Item $tempGame -Recurse -Force
+    }
+    if ($null -ne $tempSystemGame -and [System.IO.Directory]::Exists($tempSystemGame)) {
+        Remove-Item $tempSystemGame -Recurse -Force
     }
 }

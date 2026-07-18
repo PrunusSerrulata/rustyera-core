@@ -1168,6 +1168,8 @@ pub(super) fn localized_system_text(locale: &str, key: SystemTextKey) -> String 
         ("zh-Hans", SystemTextKey::OutOfStock) => "无法购买",
         ("zh-Hans", SystemTextKey::AutoSaveFailed) => "自动保存失败",
         ("zh-Hans", SystemTextKey::AutoSaveSkipped) => "已跳过自动保存",
+        ("zh-Hans", SystemTextKey::ContinuousTrainProgress) => "＜连续执行：第 {0}/{1} 个命令＞",
+        ("zh-Hans", SystemTextKey::ContinuousTrainCommandFailed) => "无法执行命令",
         ("zh-Hans", SystemTextKey::PressAnyKey) => "请按任意键",
         ("zh-Hans", SystemTextKey::SaveSlot) => "存档",
         ("zh-Hans", SystemTextKey::Back) => "返回",
@@ -1181,6 +1183,8 @@ pub(super) fn localized_system_text(locale: &str, key: SystemTextKey) -> String 
         ("en", SystemTextKey::OutOfStock) => "This item cannot be purchased",
         ("en", SystemTextKey::AutoSaveFailed) => "Autosave failed",
         ("en", SystemTextKey::AutoSaveSkipped) => "Autosave skipped",
+        ("en", SystemTextKey::ContinuousTrainProgress) => "<Continuous command: {0}/{1}>",
+        ("en", SystemTextKey::ContinuousTrainCommandFailed) => "The command could not be executed",
         ("en", SystemTextKey::PressAnyKey) => "Press any key",
         ("en", SystemTextKey::SaveSlot) => "Save",
         ("en", SystemTextKey::Back) => "Back",
@@ -1194,6 +1198,8 @@ pub(super) fn localized_system_text(locale: &str, key: SystemTextKey) -> String 
         (_, SystemTextKey::OutOfStock) => "購入できません",
         (_, SystemTextKey::AutoSaveFailed) => "オートセーブに失敗しました",
         (_, SystemTextKey::AutoSaveSkipped) => "オートセーブをスキップしました",
+        (_, SystemTextKey::ContinuousTrainProgress) => "＜コマンド連続実行：{0}/{1}＞",
+        (_, SystemTextKey::ContinuousTrainCommandFailed) => "コマンドを実行できませんでした",
         (_, SystemTextKey::PressAnyKey) => "何かキーを押してください",
         (_, SystemTextKey::SaveSlot) => "セーブデータ",
         (_, SystemTextKey::Back) => "戻る",
@@ -1325,6 +1331,7 @@ pub(super) fn debugger_suspends_message(message: &RuntimeMessage) -> bool {
         RuntimeMessage::ProjectManifest(_)
             | RuntimeMessage::Start(_)
             | RuntimeMessage::Input(_)
+            | RuntimeMessage::InputUndoRequest(_)
             | RuntimeMessage::ServiceResponse(_)
             | RuntimeMessage::StorageResponse(_)
             | RuntimeMessage::StateExportRequest(_)

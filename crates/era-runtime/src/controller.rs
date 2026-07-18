@@ -30,11 +30,15 @@ pub(crate) enum SystemStep {
     TrainCommand,
     TrainSourceCheck,
     TrainEventComEnd,
+    TrainEventComEndWait,
+    TrainCallTrainEnd,
+    TrainBeginAfterCallTrainEnd,
     AblupShowJuel,
     AblupShowSelect,
     AblupAction,
     ShopEvent,
     ShopAutosave,
+    ShopAutosaveFailureWait,
     ShopShow,
     ShopAction,
     /// A project-defined title load hook returns to the built-in title menu.
@@ -77,14 +81,35 @@ pub(crate) struct SystemController {
     pub(crate) train_commands: Vec<i64>,
     pub(crate) continuous_commands: VecDeque<i64>,
     pub(crate) continuous_train: bool,
+    pub(crate) continuous_total: usize,
+    pub(crate) continuous_executed: usize,
+    pub(crate) event_com_end_wait_required: bool,
+    pub(crate) deferred_flow: Option<SystemFlow>,
     pending: VecDeque<DispatchEntry>,
     active: Option<(FiberId, DispatchEntry)>,
 }
 
 impl SystemController {
+    pub(crate) const fn allows_dotrain(&self) -> bool {
+        matches!(
+            self.step,
+            SystemStep::TrainEvent
+                | SystemStep::TrainShowStatus
+                | SystemStep::TrainShowUser
+                | SystemStep::TrainUserCom
+                | SystemStep::TrainEventComEnd
+        )
+    }
     pub(crate) fn clear(&mut self) {
         self.pending.clear();
         self.active = None;
+    }
+
+    pub(crate) fn clear_continuous_train(&mut self) {
+        self.continuous_commands.clear();
+        self.continuous_train = false;
+        self.continuous_total = 0;
+        self.continuous_executed = 0;
     }
 
     pub(crate) fn prepare_event(&mut self, artifact: &BytecodeArtifact, name: &str) -> bool {
@@ -266,5 +291,30 @@ mod tests {
         controller.started(FiberId(1));
         assert!(controller.completed(FiberId(1), None));
         assert_eq!(controller.next(), None);
+    }
+
+    #[test]
+    fn dotrain_is_limited_to_reference_train_phases() {
+        let mut controller = SystemController::default();
+        for step in [
+            SystemStep::TrainEvent,
+            SystemStep::TrainShowStatus,
+            SystemStep::TrainShowUser,
+            SystemStep::TrainUserCom,
+            SystemStep::TrainEventComEnd,
+        ] {
+            controller.step = step;
+            assert!(controller.allows_dotrain(), "{step:?}");
+        }
+        for step in [
+            SystemStep::TrainComAble,
+            SystemStep::TrainEventCom,
+            SystemStep::TrainCommand,
+            SystemStep::TrainSourceCheck,
+            SystemStep::TrainEventComEndWait,
+        ] {
+            controller.step = step;
+            assert!(!controller.allows_dotrain(), "{step:?}");
+        }
     }
 }

@@ -26,6 +26,7 @@ impl RuntimeSession {
             logical_time_ns: 0,
             frontend_time_origin: None,
             random_seed: None,
+            negotiated_features: BTreeSet::new(),
             inbound: VecDeque::new(),
             outbound: VecDeque::new(),
             outbound_journal: BTreeMap::new(),
@@ -69,6 +70,9 @@ impl RuntimeSession {
             reusable_system_intents: BTreeMap::new(),
             exit_requested: None,
             controller: SystemController::default(),
+            undo_checkpoint: None,
+            undo_replay: None,
+            undo_token: None,
             project_snapshot: None,
             selected_locale: "ja".into(),
             available_fonts: BTreeSet::new(),
@@ -360,6 +364,9 @@ impl RuntimeSession {
             RuntimeMessage::ProjectionObservation(observation) => {
                 self.observe_projection(message_id, observation)
             }
+            RuntimeMessage::InputUndoRequest(request) => {
+                self.request_input_undo(message_id, &request)
+            }
             RuntimeMessage::EffectAcknowledgement(acknowledgement) => {
                 self.acknowledge_effects(message_id, acknowledgement)
             }
@@ -399,6 +406,7 @@ impl RuntimeSession {
             | RuntimeMessage::ExitRequested(_)
             | RuntimeMessage::WaitChanged(_)
             | RuntimeMessage::ProjectionState(_)
+            | RuntimeMessage::InputUndoStateChanged(_)
             | RuntimeMessage::PresentationSnapshot(_)
             | RuntimeMessage::PresentationDelta(_)
             | RuntimeMessage::EffectBatch(_)
@@ -480,7 +488,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 13.0 is required".into(),
+                    message: "runtime protocol 15.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -501,11 +509,13 @@ impl RuntimeSession {
             RuntimeFeature::TimedInput,
             RuntimeFeature::ExternalServices,
             RuntimeFeature::StateResynchronization,
+            RuntimeFeature::InputUndo,
         ];
-        let features = implemented
+        let features: Vec<_> = implemented
             .into_iter()
             .filter(|feature| hello.features.contains(feature))
             .collect();
+        self.negotiated_features = features.iter().copied().collect();
         let selected_capabilities = selected_capabilities(&hello.capabilities);
         self.service_capabilities = selected_capabilities
             .services
@@ -629,6 +639,9 @@ impl RuntimeSession {
         report: ProjectLoadReport,
     ) -> Result<(), RuntimeError> {
         if report.success {
+            self.undo_checkpoint = None;
+            self.undo_replay = None;
+            self.undo_token = None;
             if let Some(snapshot) = &self.project_snapshot {
                 self.presentation.configure_layout(
                     snapshot.viewport_width,
@@ -827,6 +840,9 @@ impl RuntimeSession {
         self.epoch = SessionEpoch(new_epoch);
         self.accepted_message_ids.clear();
         self.accepted_debug_message_ids.clear();
+        self.invalidate_input_undo(Some(
+            "successful bytecode hot reload invalidated the Ctrl-Z checkpoint",
+        ))?;
         self.emit(
             RuntimeMessage::ProjectLoadReport(build.report),
             Some(message_id),
@@ -1119,6 +1135,9 @@ impl RuntimeSession {
         self.invalid_slot_paths.clear();
         self.system_menu_host_request = payload.system_menu_host_request;
         self.system_menu_page = payload.system_menu_page;
+        self.undo_checkpoint = payload.undo_checkpoint;
+        self.undo_replay = payload.undo_replay;
+        self.undo_token = None;
         if matches!(
             self.system_menu,
             SystemMenuState::LoadSlots | SystemMenuState::SaveSlots
