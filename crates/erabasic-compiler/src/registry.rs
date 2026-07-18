@@ -554,8 +554,10 @@ const GRAPHICS: &[&str] = &[
     "GSETFONT",
     "GSETPEN",
     "GGETBRUSH",
+    "GGETCOLOR",
     "GGETFONT",
     "GGETPEN",
+    "GGETTEXTSIZE",
     "SPRITECREATED",
     "SPRITEGETCOLOR",
     "SPRITEPOSX",
@@ -733,6 +735,26 @@ fn native_contract(name: &str) -> OperationContract {
 fn host_contract(namespace: &str, name: &str) -> OperationContract {
     let (state, transaction, persistence, snapshot, hot_reload, wait, fallback) = match namespace {
         "rustyera.text"
+            if matches!(
+                name,
+                "GETDISPLAYLINE"
+                    | "HTML_GETPRINTEDSTR"
+                    | "HTML_STRINGLEN"
+                    | "HTML_SUBSTRING"
+                    | "HTML_STRINGLINES"
+            ) =>
+        {
+            (
+                OperationState::External,
+                TransactionPolicy::Forbidden,
+                OperationPersistence::RuntimeOnly,
+                OperationSnapshotPolicy::PendingBlocks,
+                OperationHotReloadPolicy::ActiveBlocks,
+                OperationWaitPolicy::TransientExternal,
+                CapabilityFallback::Unsupported,
+            )
+        }
+        "rustyera.text"
             if matches!(name, "BARSTR" | "MONEYSTR" | "TOSTR" | "TOFULL" | "TOHALF") =>
         {
             (
@@ -763,15 +785,22 @@ fn host_contract(namespace: &str, name: &str) -> OperationContract {
             OperationWaitPolicy::Immediate,
             CapabilityFallback::IntentNoOp,
         ),
-        "rustyera.graphics" if matches!(name, "GLOAD" | "GSAVE" | "GCREATEFROMFILE") => (
-            OperationState::External,
-            TransactionPolicy::Forbidden,
-            OperationPersistence::ProjectDerived,
-            OperationSnapshotPolicy::PendingBlocks,
-            OperationHotReloadPolicy::ActiveBlocks,
-            OperationWaitPolicy::TransientExternal,
-            CapabilityFallback::Unsupported,
-        ),
+        "rustyera.graphics"
+            if matches!(
+                name,
+                "GLOAD" | "GSAVE" | "GCREATEFROMFILE" | "GGETTEXTSIZE" | "GGETCOLOR"
+            ) =>
+        {
+            (
+                OperationState::External,
+                TransactionPolicy::Forbidden,
+                OperationPersistence::ProjectDerived,
+                OperationSnapshotPolicy::PendingBlocks,
+                OperationHotReloadPolicy::ActiveBlocks,
+                OperationWaitPolicy::TransientExternal,
+                CapabilityFallback::Unsupported,
+            )
+        }
         "rustyera.graphics" => (
             OperationState::Presentation,
             TransactionPolicy::CloneCommit,
@@ -957,18 +986,9 @@ fn host_contract(namespace: &str, name: &str) -> OperationContract {
         // The debugger deliberately rejects every Host import, including reference
         // METHOD_SAFE printing and media commands.
         debug: OperationDebugPolicy::Forbidden,
-        portability: if matches!(
-            name,
-            "GETTEXTBOX"
-                | "MOUSEX"
-                | "MOUSEY"
-                | "MOUSEB"
-                | "GETKEY"
-                | "GETKEYTRIGGERED"
-                | "CLIENTWIDTH"
-                | "CLIENTHEIGHT"
-                | "GETLINESTR"
-        ) {
+        portability: if erabasic_analyzer::builtin_callable_portability(name)
+            == erabasic_analyzer::CallablePortability::FrontendObservation
+        {
             erabasic_bytecode::OperationPortability::FrontendObservation
         } else if matches!(namespace, "rustyera.audio" | "rustyera.network") {
             erabasic_bytecode::OperationPortability::PlatformIntent

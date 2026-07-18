@@ -1134,15 +1134,21 @@ fn submission_matches_wait(pending: &PendingInput, value: VmValue) -> Option<VmV
 }
 
 pub(super) fn selected_capabilities(client: &ClientCapabilities) -> ClientCapabilities {
+    let services = selected_service_capabilities(&client.services);
+    let font_metrics = client.font_metrics
+        && services.iter().any(|capability| {
+            capability.kind == ServiceKind::FontMetrics
+                && capability.operation == GGET_TEXT_SIZE_OPERATION
+        });
     ClientCapabilities {
         input_modalities: client.input_modalities.clone(),
         rich_text: client.rich_text,
         html: client.html,
         graphics: client.graphics,
         audio: client.audio,
-        // Video and frontend-dependent font metrics still require typed services.
+        // Video still requires a typed playback contract.
         video: false,
-        font_metrics: false,
+        font_metrics,
         column_cells: client.column_cells,
         separators: client.separators,
         available_fonts: {
@@ -1151,7 +1157,7 @@ pub(super) fn selected_capabilities(client: &ClientCapabilities) -> ClientCapabi
             fonts.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
             fonts
         },
-        services: selected_service_capabilities(&client.services),
+        services,
         storage: client.storage,
     }
 }
@@ -1174,6 +1180,27 @@ pub(super) fn selected_service_capabilities(
                 (ServiceKind::Image, IMAGE_PIXEL_OPERATION) => IMAGE_PIXEL_OPERATION_VERSION,
                 (ServiceKind::Network, UPDATE_CHECK_OPERATION) => UPDATE_CHECK_OPERATION_VERSION,
                 (ServiceKind::OpenUrl, OPEN_URL_OPERATION) => OPEN_URL_OPERATION_VERSION,
+                (ServiceKind::PresentationQuery, GET_DISPLAY_LINE_OPERATION) => {
+                    GET_DISPLAY_LINE_OPERATION_VERSION
+                }
+                (ServiceKind::PresentationQuery, HTML_GET_PRINTED_STR_OPERATION) => {
+                    HTML_GET_PRINTED_STR_OPERATION_VERSION
+                }
+                (ServiceKind::PresentationQuery, HTML_STRING_LEN_OPERATION) => {
+                    HTML_STRING_LEN_OPERATION_VERSION
+                }
+                (ServiceKind::PresentationQuery, HTML_SUBSTRING_OPERATION) => {
+                    HTML_SUBSTRING_OPERATION_VERSION
+                }
+                (ServiceKind::PresentationQuery, HTML_STRING_LINES_OPERATION) => {
+                    HTML_STRING_LINES_OPERATION_VERSION
+                }
+                (ServiceKind::FontMetrics, GGET_TEXT_SIZE_OPERATION) => {
+                    GGET_TEXT_SIZE_OPERATION_VERSION
+                }
+                (ServiceKind::Canvas, SAMPLE_CANVAS_PIXEL_OPERATION) => {
+                    SAMPLE_CANVAS_PIXEL_OPERATION_VERSION
+                }
                 // Extension operations are application-defined. Select the client's
                 // maximum now; a later registry declaration must bind that exact version.
                 (ServiceKind::Extension, _) => capability.versions.maximum,

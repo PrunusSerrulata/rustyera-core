@@ -42,12 +42,41 @@ pub(crate) enum ExternalCompletion {
         coordinate: PointerCoordinate,
         presentation_revision: u64,
         environment_revision: u64,
+        projection_space_revision: u64,
     },
     Extension {
         request: HostRequestId,
         return_type: era_runtime_protocol::ExtensionValueType,
         mutable_places: Vec<Option<(PlaceDescriptor, era_runtime_protocol::ExtensionValueType)>>,
     },
+    ProjectionString {
+        request: HostRequestId,
+        operation: ProjectionStringOperation,
+        context: era_runtime_protocol::ProjectionQueryContext,
+    },
+    ProjectionInteger {
+        request: HostRequestId,
+        context: era_runtime_protocol::ProjectionQueryContext,
+    },
+    HtmlSubstring {
+        request: HostRequestId,
+        context: era_runtime_protocol::ProjectionQueryContext,
+    },
+    TextExtent {
+        request: HostRequestId,
+        context: era_runtime_protocol::ProjectionQueryContext,
+    },
+    CanvasPixel {
+        request: HostRequestId,
+        context: era_runtime_protocol::ProjectionQueryContext,
+        canvas_revision: u64,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) enum ProjectionStringOperation {
+    DisplayLine,
+    PrintedHtml,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

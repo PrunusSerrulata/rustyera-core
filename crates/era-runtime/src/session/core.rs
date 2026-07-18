@@ -59,6 +59,7 @@ impl RuntimeSession {
             debug_output_base: 0,
             debug_output_subscribed: false,
             projection_environment_revision: 0,
+            projection_space_revision: 0,
             client_width: 760,
             client_height: 480,
             line_columns: 75,
@@ -470,9 +471,15 @@ impl RuntimeSession {
                 "projection observation does not match the canonical presentation",
             );
         }
-        if observation.client_width == 0
-            || observation.client_height == 0
+        let width = u32::try_from(observation.client_size.width.0).ok();
+        let height = u32::try_from(observation.client_size.height.0).ok();
+        if width.is_none()
+            || width == Some(0)
+            || height.is_none()
+            || height == Some(0)
             || observation.line_columns == 0
+            || !observation.transform.is_valid()
+            || observation.projection_space_revision < self.projection_space_revision
         {
             return self.reject(
                 message_id,
@@ -481,8 +488,9 @@ impl RuntimeSession {
             );
         }
         self.projection_environment_revision = observation.environment_revision;
-        self.client_width = observation.client_width;
-        self.client_height = observation.client_height;
+        self.projection_space_revision = observation.projection_space_revision;
+        self.client_width = width.expect("validated projection width");
+        self.client_height = height.expect("validated projection height");
         self.line_columns = observation.line_columns;
         self.text_box = observation.text_box;
         Ok(())
@@ -510,7 +518,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 16.0 is required".into(),
+                    message: "runtime protocol 17.0 is required".into(),
                 }),
                 Some(message_id),
             );

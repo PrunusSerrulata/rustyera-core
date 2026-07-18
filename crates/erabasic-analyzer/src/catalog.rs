@@ -32,6 +32,47 @@ pub enum ExtensionCallableKind {
     ExpressionFunction,
 }
 
+/// Portability provenance shared by semantic analysis and bytecode lowering.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallablePortability {
+    Portable,
+    FrontendObservation,
+    PlatformIntent,
+    ExtensionDefined,
+}
+
+/// Classify built-ins whose result depends on the authoritative frontend.
+/// Keeping this list in the language catalog prevents analyzer and compiler
+/// diagnostics from silently disagreeing as new compatibility calls are added.
+#[must_use]
+pub fn builtin_callable_portability(name: &str) -> CallablePortability {
+    if matches!(
+        name.to_ascii_uppercase().as_str(),
+        "CHKFONT"
+            | "GETTEXTBOX"
+            | "MOUSEX"
+            | "MOUSEY"
+            | "MOUSEB"
+            | "GETKEY"
+            | "GETKEYTRIGGERED"
+            | "CLIENTWIDTH"
+            | "CLIENTHEIGHT"
+            | "GETLINESTR"
+            | "GETDISPLAYLINE"
+            | "HTML_GETPRINTEDSTR"
+            | "HTML_STRINGLEN"
+            | "HTML_SUBSTRING"
+            | "HTML_STRINGLINES"
+            | "GGETTEXTSIZE"
+            | "GGETCOLOR"
+    ) {
+        CallablePortability::FrontendObservation
+    } else {
+        CallablePortability::Portable
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CallableSignature {
     pub name: String,
@@ -951,6 +992,14 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("CURRENTREDRAW", IntType, &[], 0, false);
     add("GETFONT", StrType, &[], 0, false);
     add("GETSTYLE", IntType, &[], 0, false);
+    add("GGETCOLOR", IntType, &[Integer, Integer, Integer], 3, false);
+    add(
+        "GGETTEXTSIZE",
+        IntType,
+        &[String, String, Integer, Integer],
+        3,
+        false,
+    );
     for name in [
         "GETBGCOLOR",
         "GETCOLOR",

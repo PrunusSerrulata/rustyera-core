@@ -3,16 +3,49 @@ use era_protocol::{
     decode_canonical, encode_canonical,
 };
 use era_runtime_protocol::{
-    AdvanceTime, AudioEffect, AudioEffectAction, CanvasReplay, CanvasReplayCommand,
-    EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcome,
-    EffectOutcomeStatus, ExitReason, ExitRequested, FrontendInput, GET_KEY_STATE_OPERATION,
-    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
-    InputUndoRequest, InputUndoState, InteractionToken, KeyMacroCommand, POINTER_STATE_OPERATION,
-    POINTER_STATE_OPERATION_VERSION, PointerStateRequest, PointerStateResponse, PrimitiveInput,
-    ProjectionObservation, RUNTIME_PROTOCOL_VERSION, ResourceReplay, RuntimeMessage, ServiceKind,
-    ServiceRequest, StateExportChunkRequest, StateExportKind, StateImportBegin, StorageNamespace,
-    StorageOperation, StorageRequest, validate_relative_path,
+    AdvanceTime, AudioEffect, AudioEffectAction, CanvasPixelRequest, CanvasReplay,
+    CanvasReplayCommand, CanvasSize, EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind,
+    EffectOutcome, EffectOutcomeStatus, ExitReason, ExitRequested, FrontendInput,
+    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
+    GetKeyStateResponse, InputIntent, InputUndoRequest, InputUndoState, InteractionToken,
+    KeyMacroCommand, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
+    PointerStateResponse, PrimitiveInput, ProjectionLength, ProjectionObservation,
+    ProjectionQueryContext, ProjectionSize, ProjectionTransform, RUNTIME_PROTOCOL_VERSION,
+    ResourceReplay, RuntimeMessage, SAMPLE_CANVAS_PIXEL_OPERATION, ServiceKind, ServiceRequest,
+    StateExportChunkRequest, StateExportKind, StateImportBegin, StorageNamespace, StorageOperation,
+    StorageRequest, TextExtentRequest, validate_relative_path,
 };
+
+#[test]
+fn projection_queries_use_typed_revision_bound_payloads() {
+    let context = ProjectionQueryContext {
+        presentation_revision: 11,
+        environment_revision: 7,
+        projection_space_revision: 3,
+    };
+    let extent = TextExtentRequest {
+        context,
+        text: "abc".into(),
+        font_family: "sans-serif".into(),
+        font_size: 19,
+        style_bits: 3,
+    };
+    assert_eq!(
+        decode_canonical::<TextExtentRequest>(&encode_canonical(&extent).unwrap()).unwrap(),
+        extent
+    );
+    let pixel = CanvasPixelRequest {
+        context,
+        canvas_id: 2,
+        canvas_revision: 5,
+        point: era_runtime_protocol::CanvasPoint { x: 4, y: 6 },
+    };
+    assert_eq!(SAMPLE_CANVAS_PIXEL_OPERATION, "sample_canvas_pixel");
+    assert_eq!(
+        decode_canonical::<CanvasPixelRequest>(&encode_canonical(&pixel).unwrap()).unwrap(),
+        pixel
+    );
+}
 
 #[test]
 fn runtime_payload_and_envelope_tags_agree() {
@@ -36,7 +69,7 @@ fn runtime_payload_and_envelope_tags_agree() {
 }
 
 #[test]
-fn protocol_16_adds_analysis_key_macros_and_extension_registration() {
+fn protocol_17_retains_analysis_key_macros_and_extension_registration() {
     let macro_command = RuntimeMessage::KeyMacroCommand(KeyMacroCommand::Store {
         group: 2,
         slot: 3,
@@ -47,7 +80,7 @@ fn protocol_16_adds_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(16, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(17, 0));
 }
 
 #[test]
@@ -75,10 +108,21 @@ fn projection_observations_and_pointer_results_bind_presentation_revisions() {
     let message = RuntimeMessage::ProjectionObservation(ProjectionObservation {
         environment_revision: 7,
         presentation_revision: 9,
-        client_width: 800,
-        client_height: 600,
+        client_size: ProjectionSize {
+            width: ProjectionLength(800),
+            height: ProjectionLength(600),
+        },
+        projection_space_revision: 3,
         line_columns: 80,
         text_box: "typed".into(),
+        transform: ProjectionTransform {
+            x_numerator: 1,
+            x_denominator: 1_000,
+            y_numerator: 1,
+            y_denominator: 1_000,
+            origin_x: ProjectionLength(0),
+            origin_y: ProjectionLength(0),
+        },
     });
     assert_eq!(message.tag(), 35);
     assert_eq!(
@@ -90,13 +134,15 @@ fn projection_observations_and_pointer_results_bind_presentation_revisions() {
     let request = PointerStateRequest {
         presentation_revision: 9,
         environment_revision: 7,
+        projection_space_revision: 3,
     };
     let response = PointerStateResponse {
-        x: 10,
-        y: 20,
+        x: ProjectionLength(10),
+        y: ProjectionLength(20),
         button_value: "3".into(),
         presentation_revision: 9,
         environment_revision: 7,
+        projection_space_revision: 3,
     };
     assert_eq!(
         decode_canonical::<PointerStateRequest>(&encode_canonical(&request).unwrap()).unwrap(),
@@ -179,7 +225,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(16, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(17, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -218,7 +264,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(16, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(17, 0));
 }
 
 #[test]
@@ -322,12 +368,15 @@ fn resource_replay_is_a_renderer_independent_protocol_value() {
         sprites: Vec::new(),
         canvases: vec![CanvasReplay {
             canvas_id: 3,
-            width: 64,
-            height: 32,
+            size: CanvasSize {
+                width: 64,
+                height: 32,
+            },
             commands: vec![CanvasReplayCommand::Clear {
                 argb: 0xff00_ff00,
                 rectangle: None,
             }],
+            revision: 1,
         }],
         animation_timer_ms: 55,
     };

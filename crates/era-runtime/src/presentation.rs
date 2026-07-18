@@ -1,8 +1,8 @@
 use era_runtime_protocol::{
     AudioState, CellAlignment, Color, DisplayLine, DisplayRun, InputWait, InteractionToken,
-    LineAlignment, MediaPlacement, PresentationSettings, PresentationSnapshot, ResourceReplay,
-    SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
-    TooltipSettings,
+    LineAlignment, LogicalLength, MediaPlacement, PresentationLength, PresentationSettings,
+    PresentationSnapshot, ProtocolValue, ResourceReplay, SeparatorRole, Shape, SystemTextArgument,
+    SystemTextKey, SystemTextRef, TextStyle, TooltipSettings,
 };
 use erabasic_vm::VmValue;
 use serde::{Deserialize, Serialize};
@@ -50,8 +50,8 @@ impl Default for PresentationModel {
             input_wait: None,
             next_line: 1,
             settings: PresentationSettings {
-                drawable_width_millipixels: 760_000,
-                line_height_millipixels: 19_000,
+                drawable_width: LogicalLength(760_000),
+                line_height: LogicalLength(19_000),
                 background: Color {
                     red: 0,
                     green: 0,
@@ -272,6 +272,25 @@ impl PresentationModel {
         self.bump();
     }
 
+    /// Serialize and consume the runtime-owned print buffer.
+    ///
+    /// Physical line wrapping is deliberately absent here: `HTML_POPPRINTINGSTR`
+    /// observes the semantic buffer before it is committed to frontend history.
+    pub(crate) fn pop_printing_html(&mut self) -> String {
+        if self.pending_runs.is_empty() {
+            return String::new();
+        }
+        let runs = std::mem::take(&mut self.pending_runs);
+        self.pending_column_cells = 0;
+        self.pending_temporary = false;
+        let mut output = String::new();
+        for run in &runs {
+            append_html_run(&mut output, run);
+        }
+        self.bump();
+        output
+    }
+
     pub(crate) fn append_html_island(&mut self, markup: String) {
         self.html_island.push(markup);
         self.bump();
@@ -286,10 +305,10 @@ impl PresentationModel {
         self.pending_runs.push(DisplayRun::Image {
             placement: MediaPlacement {
                 resource_id,
-                x_millipixels: 0,
-                y_millipixels: 0,
-                width_millipixels: 0,
-                height_millipixels: self.settings.line_height_millipixels,
+                x: LogicalLength(0),
+                y: LogicalLength(0),
+                width: LogicalLength(0),
+                height: self.settings.line_height,
                 depth: 0,
                 opacity_millionths: 1_000_000,
                 revision: self.revision.saturating_add(1),
@@ -303,7 +322,10 @@ impl PresentationModel {
         self.pending_runs.push(DisplayRun::Shape {
             shape: Shape {
                 kind: "rectangle".into(),
-                parameters,
+                parameters: parameters
+                    .into_iter()
+                    .map(PresentationLength::FontHeightHundredths)
+                    .collect(),
             },
         });
         self.bump();
@@ -435,10 +457,10 @@ impl PresentationModel {
             .retain(|item| item.resource_id != resource_id);
         self.backgrounds.push(MediaPlacement {
             resource_id,
-            x_millipixels: 0,
-            y_millipixels: 0,
-            width_millipixels: self.settings.drawable_width_millipixels,
-            height_millipixels: 0,
+            x: LogicalLength(0),
+            y: LogicalLength(0),
+            width: self.settings.drawable_width,
+            height: LogicalLength(0),
             depth,
             opacity_millionths: u32::try_from(opacity.clamp(0, 255)).unwrap_or_default()
                 * 1_000_000
@@ -531,7 +553,7 @@ impl PresentationModel {
         print_c_per_line: u32,
         print_c_length: u32,
     ) {
-        self.settings.drawable_width_millipixels = i64::from(width).saturating_mul(1_000);
+        self.settings.drawable_width = LogicalLength(i64::from(width).saturating_mul(1_000));
         self.print_c_per_line = print_c_per_line.max(1);
         self.print_c_length = print_c_length.max(1);
         self.bump();
@@ -574,10 +596,11 @@ impl PresentationModel {
     pub(crate) fn append_button(
         &mut self,
         text: String,
+        value: ProtocolValue,
         token: InteractionToken,
         column_alignment: Option<CellAlignment>,
     ) {
-        let button = self.button_run(text, token, None);
+        let button = self.button_run(text, value, token, None);
         if let Some(alignment) = column_alignment {
             self.pending_runs.push(DisplayRun::ColumnCell {
                 content: vec![button],
@@ -606,7 +629,12 @@ impl PresentationModel {
             logical_line_start: true,
             line_end: true,
             alignment: self.current_alignment,
-            runs: vec![self.button_run(text, token, system_text)],
+            runs: vec![self.button_run(
+                text,
+                ProtocolValue::String(String::new()),
+                token,
+                system_text,
+            )],
         };
         self.next_line = self.next_line.saturating_add(1);
         self.lines.push(line);
@@ -616,6 +644,7 @@ impl PresentationModel {
     fn button_run(
         &self,
         text: String,
+        value: ProtocolValue,
         token: InteractionToken,
         system_text: Option<SystemTextRef>,
     ) -> DisplayRun {
@@ -628,6 +657,7 @@ impl PresentationModel {
             token,
             title: None,
             hover_style: None,
+            value,
         }
     }
 
@@ -652,7 +682,7 @@ impl PresentationModel {
             &mut lines,
             self.project_column_cells,
             self.project_separators,
-            self.settings.line_height_millipixels,
+            self.settings.line_height.0,
             self.project_html,
             self.project_graphics,
         );
@@ -724,6 +754,89 @@ fn append_log_run(output: &mut String, run: &DisplayRun) {
             output.push(' ');
         }
         DisplayRun::Separator { pattern, .. } => output.push_str(pattern),
+    }
+}
+
+fn append_html_run(output: &mut String, run: &DisplayRun) {
+    match run {
+        DisplayRun::Text { text, style, .. } => {
+            let mut value = erabasic_html::escape(text);
+            if style.strikeout {
+                value = format!("<s>{value}</s>");
+            }
+            if style.underline {
+                value = format!("<u>{value}</u>");
+            }
+            if style.italic {
+                value = format!("<i>{value}</i>");
+            }
+            if style.bold {
+                value = format!("<b>{value}</b>");
+            }
+            output.push_str(&value);
+        }
+        DisplayRun::Button {
+            runs, value, title, ..
+        } => {
+            output.push_str("<button value='");
+            let value = match value {
+                ProtocolValue::Integer(value) => value.to_string(),
+                ProtocolValue::String(value) => value.clone(),
+                ProtocolValue::Boolean(value) => i64::from(*value).to_string(),
+                ProtocolValue::Bytes(_) => String::new(),
+            };
+            output.push_str(&erabasic_html::escape(&value));
+            if let Some(title) = title {
+                output.push_str("' title='");
+                output.push_str(&erabasic_html::escape(title));
+            }
+            output.push_str("'>");
+            for run in runs {
+                append_html_run(output, run);
+            }
+            output.push_str("</button>");
+        }
+        DisplayRun::Html { markup } => output.push_str(markup),
+        DisplayRun::Image {
+            placement,
+            alt_text,
+        } => {
+            output.push_str("<img src='");
+            output.push_str(&erabasic_html::escape(&placement.resource_id));
+            if let Some(alt) = alt_text {
+                output.push_str("' alt='");
+                output.push_str(&erabasic_html::escape(alt));
+            }
+            output.push_str("'>");
+        }
+        DisplayRun::Shape { shape } => {
+            output.push_str("<shape type='");
+            output.push_str(&erabasic_html::escape(&shape.kind));
+            output.push_str("' param='");
+            for (index, value) in shape.parameters.iter().enumerate() {
+                if index != 0 {
+                    output.push_str(", ");
+                }
+                match value {
+                    PresentationLength::Logical(LogicalLength(value)) => {
+                        output.push_str(&value.to_string());
+                        output.push_str("px");
+                    }
+                    PresentationLength::FontHeightHundredths(value) => {
+                        output.push_str(&value.to_string());
+                    }
+                }
+            }
+            output.push_str("'>");
+        }
+        DisplayRun::ColumnCell { content, .. } => {
+            for run in content {
+                append_html_run(output, run);
+            }
+        }
+        DisplayRun::Separator { pattern, .. } => {
+            output.push_str(&erabasic_html::escape(pattern));
+        }
     }
 }
 
@@ -997,12 +1110,40 @@ mod tests {
     #[test]
     fn plain_buttons_remain_on_the_current_logical_line() {
         let mut model = PresentationModel::default();
-        model.append_button("one".into(), InteractionToken { epoch: 1, id: 1 }, None);
-        model.append_button("two".into(), InteractionToken { epoch: 1, id: 2 }, None);
+        model.append_button(
+            "one".into(),
+            ProtocolValue::Integer(1),
+            InteractionToken { epoch: 1, id: 1 },
+            None,
+        );
+        model.append_button(
+            "two".into(),
+            ProtocolValue::Integer(2),
+            InteractionToken { epoch: 1, id: 2 },
+            None,
+        );
         let pending = model.snapshot();
         assert_eq!(pending.lines.len(), 1);
         assert!(!pending.lines[0].line_end);
         assert_eq!(pending.lines[0].runs.len(), 2);
+    }
+
+    #[test]
+    fn html_pop_serializes_semantic_button_values_and_consumes_pending_runs() {
+        let mut model = PresentationModel::default();
+        model.append_print_text("A<&".into(), false, false);
+        model.append_button(
+            "choose".into(),
+            ProtocolValue::Integer(42),
+            InteractionToken { epoch: 1, id: 9 },
+            None,
+        );
+        assert_eq!(
+            model.pop_printing_html(),
+            "A&lt;&amp;<button value='42'>choose</button>"
+        );
+        assert_eq!(model.pop_printing_html(), "");
+        assert!(model.last_line_is_empty());
     }
 
     #[test]

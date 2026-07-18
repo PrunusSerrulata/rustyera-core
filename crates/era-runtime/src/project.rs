@@ -380,7 +380,17 @@ fn build_project_inner_with_extensions(
             .iter()
             .map(|diagnostic| ProtocolDiagnostic {
                 code: format!("compiler.{:?}", diagnostic.code).to_ascii_lowercase(),
-                severity: DiagnosticSeverity::Error,
+                severity: match diagnostic.severity {
+                    erabasic_compiler::CompilerDiagnosticSeverity::Notice => {
+                        DiagnosticSeverity::Information
+                    }
+                    erabasic_compiler::CompilerDiagnosticSeverity::Warning => {
+                        DiagnosticSeverity::Warning
+                    }
+                    erabasic_compiler::CompilerDiagnosticSeverity::Error => {
+                        DiagnosticSeverity::Error
+                    }
+                },
                 message: diagnostic.message.clone(),
                 source: diagnostic.location.map(|location| SourceLocation {
                     relative_path: project

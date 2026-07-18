@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use era_runtime_protocol::{
-    CanvasReplay, CanvasReplayCommand, FileCategory, FilePayload, ImageMetadataResponse,
-    ProjectManifest, ResourceReplay, SpriteFrameReplay, SpriteReplay, validate_relative_path,
+    CanvasRect, CanvasReplay, CanvasReplayCommand, CanvasSize, FileCategory, FilePayload,
+    ImageMetadataResponse, ProjectManifest, ResourceReplay, SpriteFrameReplay, SpriteReplay,
+    validate_relative_path,
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,7 @@ pub(crate) struct ResourceGraph {
 struct CanvasSurface {
     width: u32,
     height: u32,
+    revision: u64,
     commands: Vec<CanvasCommand>,
 }
 
@@ -295,7 +297,7 @@ impl ResourceGraph {
                         })
                         .collect(),
                     canvas_id: sprite.canvas_id,
-                    canvas_rectangle: sprite.canvas_rectangle,
+                    canvas_rectangle: sprite.canvas_rectangle.map(canvas_rect),
                 })
                 .collect(),
             canvases: self
@@ -303,8 +305,10 @@ impl ResourceGraph {
                 .iter()
                 .map(|(canvas_id, canvas)| CanvasReplay {
                     canvas_id: *canvas_id,
-                    width: canvas.width,
-                    height: canvas.height,
+                    size: CanvasSize {
+                        width: canvas.width,
+                        height: canvas.height,
+                    },
                     commands: canvas
                         .commands
                         .iter()
@@ -312,17 +316,18 @@ impl ResourceGraph {
                             CanvasCommand::Clear { argb, rectangle } => {
                                 CanvasReplayCommand::Clear {
                                     argb: *argb,
-                                    rectangle: *rectangle,
+                                    rectangle: rectangle.map(canvas_rect),
                                 }
                             }
                             CanvasCommand::DrawSprite { name, destination } => {
                                 CanvasReplayCommand::DrawSprite {
                                     name: name.clone(),
-                                    destination: *destination,
+                                    destination: canvas_rect(*destination),
                                 }
                             }
                         })
                         .collect(),
+                    revision: canvas.revision,
                 })
                 .collect(),
             animation_timer_ms: self.animation_timer_ms,
@@ -359,6 +364,7 @@ impl ResourceGraph {
             CanvasSurface {
                 width,
                 height,
+                revision: 0,
                 commands: Vec::new(),
             },
         );
@@ -375,6 +381,12 @@ impl ResourceGraph {
             .map(|canvas| (canvas.width, canvas.height))
     }
 
+    pub(crate) fn canvas_observation(&self, id: i64) -> Option<(u32, u32, u64)> {
+        self.canvases
+            .get(&id)
+            .map(|canvas| (canvas.width, canvas.height, canvas.revision))
+    }
+
     pub(crate) fn clear_canvas(&mut self, id: i64, argb: i64, rectangle: Option<[i32; 4]>) -> bool {
         let Some(canvas) = self.canvases.get_mut(&id) else {
             return false;
@@ -385,6 +397,7 @@ impl ResourceGraph {
             argb: u32::try_from(argb & i64::from(u32::MAX)).expect("masked ARGB fits u32"),
             rectangle,
         });
+        canvas.revision = canvas.revision.saturating_add(1);
         true
     }
 
@@ -410,6 +423,7 @@ impl ResourceGraph {
             name: name.to_ascii_uppercase(),
             destination,
         });
+        canvas.revision = canvas.revision.saturating_add(1);
         true
     }
 
@@ -576,6 +590,15 @@ impl ResourceGraph {
             sprite.position_x = 0;
             sprite.position_y = 0;
         }
+    }
+}
+
+fn canvas_rect(value: [i32; 4]) -> CanvasRect {
+    CanvasRect {
+        x: value[0],
+        y: value[1],
+        width: value[2],
+        height: value[3],
     }
 }
 
@@ -834,6 +857,7 @@ mod tests {
         );
         let replay = graph.replay();
         assert_eq!(replay.canvases.len(), 1);
+        assert_eq!(replay.canvases[0].revision, 1);
         let animated = replay
             .sprites
             .iter()

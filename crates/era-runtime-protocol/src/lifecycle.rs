@@ -85,6 +85,47 @@ pub struct ClientStateChanged {
     pub screen_reader: bool,
 }
 
+/// A coordinate or extent in the authoritative frontend's device-independent
+/// layout space (for example CSS pixels). It is never stored in canonical
+/// presentation state.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(transparent)]
+pub struct ProjectionLength(#[n(0)] pub i64);
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectionSize {
+    #[n(0)]
+    pub width: ProjectionLength,
+    #[n(1)]
+    pub height: ProjectionLength,
+}
+
+/// Exact affine transform from Era logical milliunits to projection units.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectionTransform {
+    #[n(0)]
+    pub x_numerator: i64,
+    #[n(1)]
+    pub x_denominator: u64,
+    #[n(2)]
+    pub y_numerator: i64,
+    #[n(3)]
+    pub y_denominator: u64,
+    #[n(4)]
+    pub origin_x: ProjectionLength,
+    #[n(5)]
+    pub origin_y: ProjectionLength,
+}
+
+impl ProjectionTransform {
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        self.x_denominator != 0 && self.y_denominator != 0
+    }
+}
+
 /// Authoritative main-frontend observation used by script-visible layout and textbox queries.
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -94,13 +135,15 @@ pub struct ProjectionObservation {
     #[n(1)]
     pub presentation_revision: u64,
     #[n(2)]
-    pub client_width: u32,
+    pub client_size: ProjectionSize,
     #[n(3)]
-    pub client_height: u32,
+    pub projection_space_revision: u64,
     #[n(4)]
     pub line_columns: u32,
     #[n(5)]
     pub text_box: String,
+    #[n(6)]
+    pub transform: ProjectionTransform,
 }
 
 /// Runtime-owned state that the main frontend projects into platform controls.

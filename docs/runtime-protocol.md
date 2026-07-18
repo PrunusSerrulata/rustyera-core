@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 16.0 and debug protocol 4.0 over common wire 2.0 are
+dynamic library. Runtime protocol 17.0 and debug protocol 4.0 over common wire 2.0 are
 development contracts: by explicit project policy they
 do not promise backward compatibility until a frontend exists.
 
@@ -176,6 +176,12 @@ content and persist through the ordinary frontend storage contract. Extensions a
 before project loading, compiled as `rustyera.extension` Host imports, and invoked through
 negotiated `ServiceKind::Extension` operations. CLR `CALLSHARP` remains unsupported.
 
+Protocol 17 separates canonical Era logical coordinates, canvas texels and frontend projection
+units. `ProjectionObservation` declares a revisioned rational transform. Physical history, HTML
+layout, font metrics and canvas pixels use typed operation payloads which echo that causal context;
+canvas sampling additionally echoes the canvas replay revision. The runtime session has one
+authoritative frontend and does not implement multi-client authority transfer.
+
 The frontend may send `ProjectAnalysisRequest` only after negotiating `ProjectAnalysis` and
 while the runtime is idle before its first load (`Negotiating`) or in `Ready`. ERH files are always analyzed; an
 empty ERB selection means all ERB files. `KeyMacroProfileSubmit`, `KeyMacroCommand`, and
@@ -208,12 +214,12 @@ tokens runtime-owned. `Separator` preserves `DRAWLINE` as a semantic line role. 
 font-dependent padding into authoritative state; GUI clients may use grid/flex layout, TUI clients
 may repeat a pattern, and clients without these nodes receive a deterministic plain projection.
 Physical WinForms history, realized HTML layout and pixel-width queries are not canonical
-state. Protocol 14.0 obtains client dimensions and logical line columns from an accepted
-projection observation; physical display-history queries still require command-by-command review
-under the frontend-observation policy. Pixel buffers, font objects and audio devices remain
-frontend caches. Content-addressed image facts and future realized-projection observations
-return through ordered service responses, but only resource facts update the runtime's logical
-resource revision.
+state. Protocol 17.0 exposes command-specific, revision-bound services for physical history,
+HTML measurement/splitting, text extents and canvas raster samples. A pending query is a transient
+external wait and blocks snapshots and hot-reload commits. `HTML_POPPRINTINGSTR` is the exception:
+it serializes and consumes the runtime-owned pending semantic buffer. Pixel buffers, font objects
+and audio devices remain frontend caches. Content-addressed source-image facts remain distinct
+from realized canvas and presentation observations.
 
 ## Runtime and VM boundary
 
@@ -272,6 +278,6 @@ are rejected without mutation. Protocol 12.0 added operation-versioned service c
 resource decoder services, exact effect outcomes, tooltip state and runtime diagnostics. The
 session-fixed `available_fonts` list is used only for the script-observable `CHKFONT` result.
 Canonical semantic layout intent remains runtime-owned; realized device layout does not.
-Protocol 14.0 negotiates but currently disables font-metric services, so remaining renderer-dependent
-queries cannot yet obtain a frontend result. The frontend cannot change the available-font list
-after the handshake.
+Protocol 17.0 selects font metrics only when `gget_text_size` is advertised at its exact operation
+version. Physical-history, HTML-layout and canvas-pixel operations are negotiated independently.
+The frontend cannot change the available-font list after the handshake.

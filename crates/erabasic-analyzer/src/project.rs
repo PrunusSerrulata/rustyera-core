@@ -340,6 +340,7 @@ fn analyze_with_context(
     };
     program.variables = symbols.variables;
     program.functions = functions;
+    crate::portability::analyze(&program, sources, &mut diagnostics);
     diagnostics.sort_by_key(|diagnostic| {
         diagnostic.source.as_ref().map_or(
             (u32::MAX, usize::MAX, diagnostic.reference_level),
