@@ -13,9 +13,9 @@ pub const CONTAINER_VERSION: FormatVersion = FormatVersion {
     minor: 0,
 };
 pub const ISA_VERSION: FormatVersion = FormatVersion { major: 5, minor: 0 };
-pub const COMPILER_ABI_VERSION: u32 = 18;
+pub const COMPILER_ABI_VERSION: u32 = 19;
 pub const NATIVE_ABI_VERSION: u32 = 14;
-pub const HOST_ABI_VERSION: u32 = 11;
+pub const HOST_ABI_VERSION: u32 = 12;
 pub const VM_ABI_VERSION: u32 = 9;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

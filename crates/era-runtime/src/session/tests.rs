@@ -1,6 +1,8 @@
 use era_debug_protocol::{DEBUG_PROTOCOL_VERSION, DebugHello, DebugMessage, DebugScope};
 use era_protocol::{Channel, Envelope, ProtocolBytes, decode_envelope, encode_envelope};
-use era_runtime_protocol::{FileCategory, FileChange, FilePayload, ProjectManifest, SubmittedFile};
+use era_runtime_protocol::{
+    DisplayRun, FileCategory, FileChange, FilePayload, ProjectManifest, SubmittedFile,
+};
 
 use super::*;
 
@@ -567,7 +569,7 @@ fn html_pop_matches_the_reference_fixture_and_writes_the_string_result() {
                 relative_path: "html-pop.erb".into(),
                 category: FileCategory::Erb,
                 payload: FilePayload::Utf8(
-                    "@SYSTEM_TITLE\nPRINTPLAIN A<&\nPRINTBUTTON \"choose\", 42\nRESULTS:30 = %HTML_POPPRINTINGSTR()%\nWAIT\nRETURN\n".into(),
+                    "@SYSTEM_TITLE\nPRINTPLAIN A<&\nPRINTBUTTON \"choose\", 42\nRESULTS:30 = %HTML_POPPRINTINGSTR()%\nPRINT [0x10] hex [1e2] exponent\nRESULTS:31 = %HTML_POPPRINTINGSTR()%\nPRINT_IMG \"missing\", \"hover\", \"mask\", 20, 10 px, 7 px\nRESULTS:32 = %HTML_POPPRINTINGSTR()%\nPRINT_RECT 1 px, 2, 3 px, 4\nRESULTS:33 = %HTML_POPPRINTINGSTR()%\nPRINT_SPACE 5 px\nRESULTS:34 = %HTML_POPPRINTINGSTR()%\nWAIT\nRETURN\n".into(),
                 ),
                 content_hash: None,
             }],
@@ -583,7 +585,7 @@ fn html_pop_matches_the_reference_fixture_and_writes_the_string_result() {
             mode: StartMode::NewGame { seed: Some(1) },
         }),
     );
-    for _ in 0..8 {
+    for _ in 0..24 {
         session.drive(RuntimeDriveBudget::default()).unwrap();
         drain(&mut session);
         if session.phase() == RuntimePhase::WaitingInput {
@@ -592,18 +594,31 @@ fn html_pop_matches_the_reference_fixture_and_writes_the_string_result() {
     }
     assert_eq!(session.phase(), RuntimePhase::WaitingInput);
     let vm = session.vm.as_ref().unwrap();
+    let results = runtime_variable_key(vm, "RESULTS").unwrap();
     let values = vm
-        .read_runtime_state(&[erabasic_vm::VmRuntimeRead {
-            variable: runtime_variable_key(vm, "RESULTS").unwrap(),
-            indices: vec![30],
-            character: None,
-        }])
+        .read_runtime_state(
+            &(30..=34)
+                .map(|index| erabasic_vm::VmRuntimeRead {
+                    variable: results,
+                    indices: vec![index],
+                    character: None,
+                })
+                .collect::<Vec<_>>(),
+        )
         .unwrap();
     assert_eq!(
         values,
-        [VmValue::String(
-            "A&lt;&amp;<button value='42'>choose</button>".into()
-        )]
+        [
+            VmValue::String("A&lt;&amp;<button value='42'>choose</button>".into()),
+            VmValue::String(
+                "<button value='16'>[0x10] hex </button><button value='100'>[1e2] exponent</button>".into()
+            ),
+            VmValue::String(
+                "<img src='missing' srcb='hover' srcm='mask' height='10px' width='3' ypos='7px'>".into()
+            ),
+            VmValue::String("<shape type='rect' param='1px, 2, 3px, 4'>".into()),
+            VmValue::String("<shape type='space' param='5px'>".into()),
+        ]
     );
 }
 
@@ -999,7 +1014,7 @@ fn train_controller_consumes_runtime_button_intent_and_loops_after_eventcomend()
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
     drain(&mut session);
-    let source = "@SYSTEM_TITLE\nBEGIN TRAIN\n@EVENTTRAIN\nRETURN\n@SHOW_STATUS\nRETURN\n@COM_ABLE0\nRESULT = 1\nRETURN\n@SHOW_USERCOM\nRETURN\n@EVENTCOM\nRETURN\n@COM0\nFLAG:0 += 1\nRESULT = 1\nRETURN\n@SOURCE_CHECK\nRETURN\n@EVENTCOMEND\nRETURN\n";
+    let source = "@SYSTEM_TITLE\nRESETDATA\nBEGIN TRAIN\n@EVENTTRAIN\nRETURN\n@SHOW_STATUS\nRETURN\n@COM_ABLE0\nRESULT = 1\nRETURN\n@SHOW_USERCOM\nRETURN\n@EVENTCOM\nRETURN\n@COM0\nFLAG:0 += 1\nRESULT = 1\nRETURN\n@SOURCE_CHECK\nRETURN\n@EVENTCOMEND\nRETURN\n";
     submit(
         &mut session,
         1,
@@ -1123,12 +1138,23 @@ fn project_load_start_and_print_cross_the_message_boundary() {
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
             project_revision: 1,
-            files: vec![SubmittedFile {
-                relative_path: "main.erb".into(),
-                category: FileCategory::Erb,
-                payload: FilePayload::Utf8("@SYSTEM_TITLE\nPRINTL hello\nRETURN\n".into()),
-                content_hash: None,
-            }],
+            files: vec![
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(
+                        "@SYSTEM_TITLE\nPRINTFORML TITLE_CHARANUM={CHARANUM}\nPRINTL ORACLE_READY\nRETURN\n"
+                            .into(),
+                    ),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "CHARA0.CSV".into(),
+                    category: FileCategory::Csv,
+                    payload: FilePayload::Utf8("番号,0\n名前,initial\n".into()),
+                    content_hash: None,
+                },
+            ],
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("load");
@@ -1156,11 +1182,203 @@ fn project_load_start_and_print_cross_the_message_boundary() {
             snapshot.lines.iter().any(|line| {
                 line.runs.iter().any(|run| matches!(
                     run,
-                    era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("hello")
+                    era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("ORACLE_READY")
                 ))
             }),
         _ => false,
     }));
+    assert!(output.iter().any(|message| match message {
+        RuntimeMessage::PresentationSnapshot(snapshot) => snapshot.lines.iter().any(|line| {
+            line.runs.iter().any(|run| {
+                matches!(
+                    run,
+                    era_runtime_protocol::DisplayRun::Text { text, .. }
+                        if text.contains("TITLE_CHARANUM=0")
+                )
+            })
+        }),
+        _ => false,
+    }));
+}
+
+#[test]
+fn nested_begin_returns_current_frame_then_applies_the_deferred_flow() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "begin-test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "begin.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nCALL GO\nFLAG:0 = 7\nRETURN\n@GO\nFONTBOLD\nSKIPDISP 1\nBEGIN FIRST\nFLAG:0 = 99\nRETURN\n@EVENTFIRST\nPRINTL entered\nWAIT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(9) },
+        }),
+    );
+    for _ in 0..16 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        if session.operations.active_input().is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "FLAG", &[0], None).unwrap(),
+        7
+    );
+    assert!(!session.skip_print);
+    let snapshot = session.presentation.snapshot();
+    let run = snapshot
+        .lines
+        .iter()
+        .flat_map(|line| &line.runs)
+        .find(|run| matches!(run, DisplayRun::Text { text, .. } if text == "entered"))
+        .expect("EVENTFIRST output");
+    assert!(matches!(run, DisplayRun::Text { style, .. } if !style.bold));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn builtin_title_precedes_reset_data_and_initial_character_insertion() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "title-test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8("@EVENTFIRST\nWAIT\nRETURN\n".into()),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "GAMEBASE.CSV".into(),
+                    category: FileCategory::Csv,
+                    payload: FilePayload::Utf8(
+                        "バージョン,1001\nタイトル,Demo\n作者,Author\n製作年,2024\n追加情報,Info\n"
+                            .into(),
+                    ),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "CHARA0.CSV".into(),
+                    category: FileCategory::Csv,
+                    payload: FilePayload::Utf8("番号,0\n名前,Initial\n".into()),
+                    content_hash: None,
+                },
+            ],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(11) },
+        }),
+    );
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        if session.operations.active_input().is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "CHARANUM", &[], None).unwrap(),
+        0
+    );
+    assert_eq!(
+        session
+            .vm
+            .as_ref()
+            .unwrap()
+            .vm()
+            .artifact()
+            .project_data
+            .new_game_seed()
+            .initial_characters
+            .len(),
+        1
+    );
+    let snapshot = session.presentation.snapshot();
+    assert!(snapshot.lines.iter().any(|line| {
+        line.alignment == LineAlignment::Center
+            && line
+                .runs
+                .iter()
+                .any(|run| matches!(run, DisplayRun::Text { text, .. } if text == "Demo"))
+    }));
+    assert!(snapshot.lines.iter().any(|line| {
+        line.runs.iter().any(|run| {
+            matches!(run, DisplayRun::Button { runs, .. }
+            if matches!(&runs[0], DisplayRun::Text { text, .. } if text.starts_with("[0]")))
+        })
+    }));
+    let pending = session.operations.active_input().unwrap();
+    let wait_id = pending.wait.wait_id;
+    let submission_token = pending.wait.submission_token;
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id,
+            token: submission_token,
+            intent: InputIntent::CommitText("0".into()),
+            monotonic_time_ns: 0,
+            message_skip: false,
+        }),
+    );
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+    }
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "CHARANUM", &[], None).unwrap(),
+        1
+    );
 }
 
 #[test]
@@ -2383,7 +2601,7 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
     assert!(session.operations.active_input().is_some());
     let pending = session.operations.take_active_input().unwrap();
     session
-        .finish_system_input(pending, &VmValue::Integer(-1))
+        .finish_system_input(pending, &VmValue::Integer(100))
         .unwrap();
     for _ in 0..4 {
         session.drive(RuntimeDriveBudget::default()).unwrap();

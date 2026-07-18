@@ -85,6 +85,8 @@ pub(crate) struct SystemController {
     pub(crate) continuous_executed: usize,
     pub(crate) event_com_end_wait_required: bool,
     pub(crate) deferred_flow: Option<SystemFlow>,
+    /// Reference autosave is only performed when BEGIN SHOP originated in Normal.
+    pub(crate) shop_called_when_normal: bool,
     pending: VecDeque<DispatchEntry>,
     active: Option<(FiberId, DispatchEntry)>,
 }

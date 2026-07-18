@@ -148,8 +148,21 @@ impl Vm {
 
     #[must_use]
     pub fn new(artifact: ValidatedArtifact, config: VmConfig) -> Self {
+        Self::new_with_memory(artifact, config, false)
+    }
+
+    #[must_use]
+    pub(crate) fn new_for_title(artifact: ValidatedArtifact, config: VmConfig) -> Self {
+        Self::new_with_memory(artifact, config, true)
+    }
+
+    fn new_with_memory(artifact: ValidatedArtifact, config: VmConfig, title_state: bool) -> Self {
         let artifact = artifact.into_inner();
-        let memory = Memory::new_game(&artifact);
+        let memory = if title_state {
+            Memory::title(&artifact)
+        } else {
+            Memory::new_game(&artifact)
+        };
         let generation = GenerationId(1);
         Self {
             config,
@@ -332,6 +345,83 @@ impl Vm {
             }
         };
         self.apply_host_ready(&mut fiber, expected, result)?;
+        fiber.mark_progress();
+        fiber.state = FiberState::Runnable;
+        self.fibers.insert(fiber_id, fiber);
+        self.runnable.push_back(fiber_id);
+        Ok(fiber_id)
+    }
+
+    pub(crate) fn return_current_from_host(
+        &mut self,
+        request: HostRequestId,
+        value: Option<&VmValue>,
+    ) -> Result<FiberId, VmError> {
+        let fiber_id = self
+            .fibers
+            .iter()
+            .find_map(|(id, fiber)| match &fiber.state {
+                FiberState::WaitingHost(wait) if wait.request == request => Some(*id),
+                _ => None,
+            })
+            .ok_or(VmError::StaleHostRequest(request))?;
+        let mut fiber = self
+            .fibers
+            .remove(&fiber_id)
+            .ok_or_else(|| VmError::InvalidState("waiting fiber disappeared".into()))?;
+        if fiber.frames.len() <= 1 {
+            self.fibers.insert(fiber_id, fiber);
+            return Err(VmError::InvalidState(
+                "cannot return the root frame through a host completion".into(),
+            ));
+        }
+        let returned = fiber.frames.pop().expect("checked frame count");
+        let caller = fiber.frames.last_mut().expect("checked caller frame");
+        if returned.return_value_to_caller
+            && let Some(value) = value
+        {
+            caller.stack.push(value.clone());
+        }
+        let next_event = caller.event_dispatch.as_mut().and_then(|dispatch| {
+            if dispatch.active.single && value == Some(&VmValue::Integer(1)) {
+                while dispatch
+                    .pending
+                    .front()
+                    .is_some_and(|entry| entry.group == dispatch.active.group)
+                {
+                    dispatch.pending.pop_front();
+                }
+            }
+            dispatch.pending.pop_front().inspect(|next| {
+                dispatch.active = next.clone();
+            })
+        });
+        if let Some(next) = next_event {
+            let generation = caller.generation;
+            let frame_id = self.allocate_frame_id();
+            let artifact = &self
+                .generations
+                .get(&generation)
+                .ok_or_else(|| VmError::InvalidState("event generation is missing".into()))?
+                .artifact;
+            let target = artifact
+                .functions
+                .iter()
+                .find(|function| function.key == next.function)
+                .cloned()
+                .ok_or_else(|| VmError::InvalidState("event function is missing".into()))?;
+            fiber.frames.push(make_frame(
+                frame_id,
+                generation,
+                &target,
+                artifact,
+                Vec::new(),
+                false,
+                true,
+            ));
+        } else if caller.event_dispatch.is_some() {
+            caller.event_dispatch = None;
+        }
         fiber.mark_progress();
         fiber.state = FiberState::Runnable;
         self.fibers.insert(fiber_id, fiber);

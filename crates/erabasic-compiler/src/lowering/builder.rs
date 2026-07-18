@@ -427,7 +427,10 @@ impl<'a> Builder<'a> {
                     Some(erabasic_hir::ConstantValue::String(value)) => Some(value.as_str()),
                     _ => None,
                 },
-                HirArgument::Formatted(_) | HirArgument::Place(_) | HirArgument::Omitted => None,
+                HirArgument::MixedExpression { .. }
+                | HirArgument::Formatted(_)
+                | HirArgument::Place(_)
+                | HirArgument::Omitted => None,
             };
             if constant_name.is_none() {
                 self.diagnostics.push(CompilerDiagnostic::at(
@@ -463,10 +466,16 @@ impl<'a> Builder<'a> {
             self.lower_static_call(arguments, line, name, location);
             return;
         }
-        let parameter_types: Vec<_> = arguments
-            .iter()
-            .map(|argument| self.lower_argument(argument, location))
-            .collect();
+        let mut parameter_types = Vec::new();
+        for argument in arguments {
+            if let HirArgument::MixedExpression { expression, is_px } = argument {
+                parameter_types.push(self.lower_expression(expression, location));
+                self.emit(opcode::push_integer(i64::from(*is_px)), location);
+                parameter_types.push(BytecodeType::Integer);
+            } else {
+                parameter_types.push(self.lower_argument(argument, location));
+            }
+        }
         let extension = matches!(target, InstructionTarget::Extension(_));
         self.emit_runtime_call(name, &parameter_types, None, extension, location);
     }
@@ -731,6 +740,9 @@ impl<'a> Builder<'a> {
     ) -> BytecodeType {
         match argument {
             HirArgument::Expression(expression) => self.lower_expression(expression, location),
+            HirArgument::MixedExpression { expression, .. } => {
+                self.lower_expression(expression, location)
+            }
             HirArgument::Place(place) => {
                 for index in &place.indices {
                     self.lower_expression(index, location);

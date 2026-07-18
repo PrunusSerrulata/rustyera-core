@@ -18,9 +18,9 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 - `PRINTDATA*`、`STRDATA`、带下标目标、动态 label、事件调用和候选调用列表已经
   可用；这些原 1.1 阻断项不再属于已知缺口。
 - `PRINT*` 的 K/D 后缀和常用专用输出已经实现，但 N/SINGLE/C 等后缀仍缺少完整语义。
-- 调教、`EVENTCOMEND`、SHOP 自动存档存在系统流程差异。
+- 调教和 `EVENTCOMEND` 主流程已实现；SHOP 自动存档已按进入来源限定。
 - 很多已进入 Host catalog 的命令最终落入通用 `UnsupportedRuntimeFeature`。
-- Protocol 17.0 已建立前端实际渲染观测 typed service 和强类型坐标；具体应用前端仍需
+- Protocol 18.0 已建立前端实际渲染观测 typed service、强类型坐标和结构化 HTML；具体应用前端仍需
   实现这些可选能力，runtime 不提供布局或 raster 近似回退。
 
 主要证据集中在：
@@ -39,11 +39,11 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 | 握手、能力协商 | 基本完成 | 一些能力被固定关闭；部分 catalog 能力实际不可执行 |
 | 项目提交、CSV/ERH/ERB 编译 | 部分完成 | 1.1 的调用兼容配置已投影；其他非调用配置项覆盖仍不完整 |
 | 资源加载 | 架构已实现 | 图片解码前端化是有意设计；物理绘图能力大量不支持 |
-| 标题画面 | 部分完成 | 新游戏重置时机、标题内容、输入方式不同 |
-| 新游戏初始化、EVENTFIRST | 部分完成 | `SYSTEM_TITLE` 观察到的初始状态不同 |
+| 标题画面 | 主流程完成 | 内建内容、数字输入和 slot 跳页已对齐；实际绘制由前端投影 |
+| 新游戏初始化、EVENTFIRST | 主流程完成 | `SYSTEM_TITLE` 先于 ResetData 和初始角色插入 |
 | TRAIN/连续调教 | 主流程完成 | 物理列布局仍由后续展示兼容任务处理；`STOPCALLTRAIN` 的参考崩溃被有意修正 |
-| AFTERTRAIN/ABLUP/TURNEND | 主流程存在 | BEGIN 时的样式、SKIPDISP 仍有差异 |
-| SHOP | 部分完成 | 自动存档条件、EVENTSHOP 中 BEGIN 仍有差异；失败确认等待已实现 |
+| AFTERTRAIN/ABLUP/TURNEND | 主流程存在 | BEGIN 清除 SKIPDISP 并重置展示样式 |
+| SHOP | 主流程完成 | 自动存档来源和 EVENTSHOP 延迟 BEGIN 已对齐；实际菜单布局由前端投影 |
 | 普通脚本执行 | 部分完成 | 1.1 所列动态调用、打印数据块和阻断指令已实现；其余差异见后续各节 |
 | 输入/QTE/计时 | 主框架完成 | ONEINPUT 权威规范化已完成；部分 UI 输入函数缺失 |
 | 文本、HTML、图片、音频 | 语义模型部分完成 | PRINT 后缀、HTML、图片参数和样式操作缺失 |
@@ -273,33 +273,32 @@ Protocol 17.0 不向下兼容 Protocol 16.0；前端必须同步更新 Schema、
 capabilities。仓库不包含具体 GUI/TUI，因此“已解决”指 runtime 端契约、验证、VM 提交
 和缺能力行为完整，不能据此声称任一外部前端已经实现对应 renderer operation。
 
-### 2.3 尚未解决的行为差异
+### 2.3 已解决或已裁决的行为差异
 
-1. **新游戏初始化顺序不同。** 参考实现先调用 `SYSTEM_TITLE`，用户选择新游戏后才
-   `ResetData` 并添加 CSV 角色 0 和默认角色。Rust 在调用 `SYSTEM_TITLE` 前已经
-   `ResetNewGame`。因此自定义标题函数看到的角色和变量状态不同，其修改还可能在
-   选择新游戏后被保留。
-2. **内建标题画面不同。** 参考实现输出分隔线、居中标题、版本、作者、年份、详情
-   以及 `[0]/[1]` 数字菜单；Rust 只输出两个语义按钮。
-3. **BEGIN 状态清理不同。** 参考实现会清除 `skipPrint`，标题还会 `ResetStyle`；
-   Rust 只清除 `message_skip`。`SKIPDISP` 和字体、颜色、对齐状态可能跨系统流程
-   泄漏。
-4. **EVENTSHOP 内 BEGIN 不同。** 参考实现丢弃从 `EVENTSHOP` 发起的 BEGIN；Rust
-   会立即取消当前 fiber 并切换流程。
-5. **SHOP 自动存档条件不同。** 参考实现只在 SHOP 从 Normal 进入时自动存档；Rust
-   只要启用 autosave 就执行。
-6. **标题、存档和读档菜单输入不同。** 参考实现接受数字键盘输入，可直接输入其他
-   页的 slot 号跳页，`100` 返回、`99` 是自动存档。Rust 使用 opaque interaction
-   token 和前后页按钮，不接受等价的 `CommitText("42")`。
-7. **普通 PRINT 自动按钮识别不同。** 参考实现把普通文本中的 `[数字]` 转换成可
-   点击按钮，`PRINTPLAIN` 才禁止这一行为。Rust 普通 PRINT 永远不会生成按钮，只
-   支持显式 `PRINTBUTTON*`。
-8. **HTML 行为不同。** Rust 把 `HTML_PRINT` 保存为一个 opaque HTML run 并立即
-    提交一条逻辑行；参考实现解析 HTML 的按钮、图片、形状、样式和 div，并可根据
-    第二参数追加到当前 print buffer。
-9. **图片和形状参数不同。** Rust `PRINT_IMG` 只保留首个资源 ID，忽略背景图、
-    mask、宽高和 y 坐标；`PRINT_RECT` 丢失 px/% 的 MixedNum 语义；`PRINT_SPACE`
-    被普通 PRINT 分支错误地输出成数字文本。
+1. **已解决：新游戏初始化顺序。** title VM 只建立标题期变量默认值；先执行
+   `SYSTEM_TITLE`，内建菜单选择 0 后才原子执行 ResetData、加入 CSV 角色 0 和
+   `DEFAULTCHARA`，再调用 `EVENTFIRST`。自定义标题可观察到 `CHARANUM=0`。
+2. **已解决：内建标题内容。** Runtime 输出分隔线、居中的标题/版本/作者/年份/详情，
+   再输出 `[0]/[1]`。这些仍是规范化语义行，不引入参考 WinForms 像素布局。
+3. **已解决：BEGIN 清理。** BEGIN/FORCE_BEGIN 在指令执行时 ResetStyle，切换系统时
+   清除 `skipPrint`；`message_skip` 继续按其独立的 SKIPLOG/FORCEWAIT 语义管理。
+4. **已解决：EVENTSHOP 内 BEGIN。** 与参考调用栈一致，BEGIN 先返回当前 EraBasic
+   frame；EVENTSHOP 期间不立即切换，待当前系统根结束后再消费延迟 BEGIN。
+5. **已解决：SHOP 自动存档条件。** 仅从 Normal 进入 SHOP 且配置启用时执行；延迟
+   BEGIN 会跨越 EVENTSHOP/自动存档边界后再切换。
+6. **已解决：标题、存档和读档菜单输入。** wait 接受数字 `CommitText` 和 token；
+   slot 号可直接跨页，`100` 返回，load 的 `99` 指向自动存档。Token 只是跨前端鉴权，
+   不替代参考可观察的数值选择。
+7. **已解决：普通 PRINT 自动按钮。** 完整逻辑行提交时按参考分组算法识别 `[数字]`，
+   支持十进制、十六进制、二进制和指数形式，并分配 opaque token；`PRINTPLAIN*`
+   保持不可选择。
+8. **已解决到可移植语义边界：HTML。** Protocol 18.0 使用固定方言的结构化
+   `HtmlDocument`，解析样式、段落、按钮、图片、shape、div、换行等节点，按钮由
+   runtime 绑定 token；`HTML_PRINT` 第二参数可追加当前 buffer，island 独立保存。
+   字体测量、div 实际布局和 raster 仍属于第 3 节的前端投影责任。
+9. **已解决：图片和形状参数。** `PRINT_IMG` 保留普通/hover/mask 资源及宽、高、Y；
+   `PRINT_RECT` 和 `PRINT_SPACE` 使用带单位的 `PresentationLength` 保存 MixedNum，
+   不再把 space 输出为数字文本。
 12. **热替换流程不同。** Rust 使用原子 project delta 和多代 VM；参考 `ReloadERB`
     会保存当前系统状态、重新加载脚本、显示重新加载信息并等待按键。Rust 方案更
     适合当前架构，但不能称为参考行为复刻。
@@ -308,18 +307,18 @@ capabilities。仓库不包含具体 GUI/TUI，因此“已解决”指 runtime 
 
 | 功能组 | 参考实现行为或依赖 | Rust 当前状态 |
 | --- | --- | --- |
-| 文本测量与折行 | `System.Drawing.Graphics`、WinForms `TextRenderer`、实际 Font；决定物理行、宽度和折行 | 普通输出只保存意图；显式测量查询目标为前端观测服务，当前未实现 |
+| 文本测量与折行 | `System.Drawing.Graphics`、WinForms `TextRenderer`、实际 Font；决定物理行、宽度和折行 | 普通输出只保存意图；显式查询使用 revision-bound 前端观测 service，缺能力时不伪造回退 |
 | 左、中、右对齐 | 计算所有 button/run 实际像素宽度，再相对 `DrawableWidth` 平移 | 保存 `LineAlignment` 意图，由前端投影 |
-| 字体及样式 | Font family、size、bold、italic、underline、strikeout、前景和背景色 | 部分状态可保存；reset/query/快捷字体命令缺失 |
-| 按钮 | `[数字]` 自动识别、generation、hit testing、hover/focus、tooltip、鼠标点击 | 只有显式 token button；自动按钮和 BREAKBUTTON 缺失 |
-| 文本框 | 直接操作 WinForms TextBox | `GET/SET/CLEARTEXTBOX` 缺失 |
-| 鼠标和窗口 | MainPicBox 坐标、client width/height、鼠标悬停按钮、焦点、hotkey | primitive input 被有意规范化；`CLIENTWIDTH/HEIGHT` 当前错误地使用项目配置，其他查询多缺失 |
-| HTML | `<font>`、`b/i/u/s`、`p`、`nobr`、`button`、`img`、`shape`、`div`、对齐和 tooltip | opaque HTML 投影；不解析交互与布局 |
-| HTML island | 独立 overlay/island 图层 | 缺失 |
-| 静态图片 | 图片文件加载、裁切 sprite、前景/背景/mask、缩放和位置 | 元数据及资源 ID 可用；PRINT_IMG 参数不完整 |
+| 字体及样式 | Font family、size、bold、italic、underline、strikeout、前景和背景色 | 规范化状态、reset、query 和快捷样式命令已实现；实际字体由前端选择 |
+| 按钮 | `[数字]` 自动识别、generation、hit testing、hover/focus、tooltip、鼠标点击 | 自动和显式按钮均为 token 化语义；hit testing、hover/focus 由前端投影 |
+| 文本框 | 直接操作 WinForms TextBox | Runtime 保存规范化 textbox；`GET/SET/CLEARTEXTBOX` 不依赖具体控件 |
+| 鼠标和窗口 | MainPicBox 坐标、client width/height、鼠标悬停按钮、焦点、hotkey | primitive input 被有意规范化；client size 和 pointer 查询来自 revision-bound 前端观测 |
+| HTML | `<font>`、`b/i/u/s`、`p`、`nobr`、`button`、`img`、`shape`、`div`、对齐和 tooltip | 保存固定方言语义树并绑定交互；实际字体测量和 div 布局由前端完成 |
+| HTML island | 独立 overlay/island 图层 | 保存结构化 island 列表并支持清除；实际 overlay 由前端投影 |
+| 静态图片 | 图片文件加载、裁切 sprite、前景/背景/mask、缩放和位置 | 保存资源 ID、hover/mask 和 MixedNum 尺寸；解码与绘制由前端完成 |
 | 背景 | 有深度、透明度的背景 sprite 烘焙 | 保存语义背景列表 |
 | 动画 sprite | 帧、持续时间、位置、重绘计时器 | 语义 replay graph 已实现 |
-| G canvas | Bitmap 创建/加载/保存、DrawImage、mask、旋转、线、文本、填充、颜色矩阵、像素读写 | 仅部分语义 canvas replay；显式 raster 结果查询目标为前端观测，当前未实现 |
+| G canvas | Bitmap 创建/加载/保存、DrawImage、mask、旋转、线、文本、填充、颜色矩阵、像素读写 | 语义 canvas replay 与 revision-bound raster 查询已实现；具体 rasterizer 不在仓库内 |
 | GDI 对象 | Brush、Pen、Font、DashStyle 查询和修改 | 缺失或有意不支持 |
 | CBG | 背景 bitmap、按钮 sprite map、范围移除和合成 | 明确不支持 |
 | Bitmap cache | 每行是否缓存为 bitmap | 缺失 |
@@ -329,8 +328,9 @@ capabilities。仓库不包含具体 GUI/TUI，因此“已解决”指 runtime 
 
 权威边界是：runtime 保存完整语义和布局意图，前端负责字体测量与 raster。普通输出
 不会把前端投影反写进游戏状态；只有脚本显式调用投影查询命令时，前端观测值才通过
-有序服务响应进入 VM，runtime 负责校验和后续状态转移。当前这些服务尚未实现，而且
-不少语义参数本身也尚未保存，不能都归结为“前端差异”。
+有序服务响应进入 VM，runtime 负责校验和后续状态转移。这些查询服务已在 runtime
+端实现版本、revision、类型和范围校验；仓库不包含具体应用前端，因此仍不能声称已有
+renderer 实现了对应观测能力。
 
 投影依赖命令本身不必立即弃用。用于字体 fallback、响应式排版等展示适配时可以合理
 存在，但必须报告结果随前端、字体、DPI、viewport 或 renderer 变化。若结果影响剧情、
@@ -359,15 +359,15 @@ capabilities。仓库不包含具体 GUI/TUI，因此“已解决”指 runtime 
 | D 后缀 | 临时忽略 SETCOLOR，使用默认或用户颜色 | 使用规范化默认前景色，不改变其余样式 |
 | L/W 后缀 | 控制换行和等待 | 只按名称末尾粗略处理 |
 | 嵌入 `\n` | 递归切成多个显示行 | Rust 将换行保留在同一个 Text run |
-| `PRINTPLAIN*` | 不把 `[数字]` 转换成按钮 | Rust 普通 PRINT 本身也不生成按钮 |
+| `PRINTPLAIN*` | 不把 `[数字]` 转换成按钮 | 普通 PRINT 自动识别，PLAIN 保持不可选择 |
 | `PRINTDATA*` | 随机数据列表、多行输出、选择索引、K/D/L/W | 已实现，包括带下标选择目标 |
 | `STRDATA` | 随机选择并拼接字符串数据块 | 已实现，包括带下标目标 |
 | `BAR/BARL/BARSTR` | 按当前值、最大值、长度和配置字符生成进度条 | 仅 `BARSTR` 可用 |
 | `DRAWLINE` | 按可绘宽度重复 pattern | Rust 使用确定性逻辑分隔线 |
 | `GETLINESTR` | 按实际 console 可绘宽度返回重复 pattern 字符串 | Rust 固定按 75 逻辑列近似；与新前端观测原则冲突 |
 | `CUSTOMDRAWLINE/DRAWLINEFORM` | 自定义 pattern 的分隔线 | 输出规范化 Separator，不复刻 GDI 像素重复 |
-| `PRINT_RECT/SPACE` | px/% 混合尺寸形状 | RECT 部分实现，SPACE 错误 |
-| HTML div | 可形成带宽度、对齐、嵌套内容的表格式布局 | Rust opaque HTML，不生成结构化布局 |
+| `PRINT_RECT/SPACE` | px/% 混合尺寸形状 | 保存 font-relative/logical MixedNum 语义，由前端布局 |
+| HTML div | 可形成带宽度、对齐、嵌套内容的表格式布局 | 保存结构化 div 与属性；实际布局由前端完成 |
 | 临时行/REUSELASTLINE | 替换最近临时行、保留 button generation | 只实现逻辑行层面的近似 |
 | 空行 | 强制空行时插入空格，确保形成显示行 | Rust 可形成空 runs，历史行为不同 |
 

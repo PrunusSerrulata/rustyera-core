@@ -625,6 +625,30 @@ fn image_style_host_binding_still_uses_the_single_call_host_opcode() {
 }
 
 #[test]
+fn mixed_media_lengths_lower_to_deterministic_value_unit_pairs() {
+    let artifact = compile_project(
+        &analyze("@SYSTEM_TITLE\nPRINT_RECT 10px, 20, 30px, 40\nPRINT_SPACE 25px\nRETURN\n"),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .expect("mixed media program should compile");
+    let rectangle = artifact
+        .host_imports
+        .iter()
+        .find(|import| import.import.name.eq_ignore_ascii_case("print_rect"))
+        .expect("PRINT_RECT host import");
+    let space = artifact
+        .host_imports
+        .iter()
+        .find(|import| import.import.name.eq_ignore_ascii_case("print_space"))
+        .expect("PRINT_SPACE host import");
+    assert_eq!(rectangle.import.parameters.len(), 8);
+    assert_eq!(space.import.parameters.len(), 2);
+}
+
+#[test]
 fn large_project_recompiles_only_the_changed_function() {
     let script = |changed: i64| {
         let mut text = String::new();

@@ -115,7 +115,8 @@ pub fn validate_hir(program: &Program, _data: &ProjectData) -> ValidationReport<
                 HirStatementKind::Instruction { arguments, .. } => {
                     for argument in arguments {
                         match argument {
-                            erabasic_hir::HirArgument::Expression(expression) => {
+                            erabasic_hir::HirArgument::Expression(expression)
+                            | erabasic_hir::HirArgument::MixedExpression { expression, .. } => {
                                 validate_expression(
                                     expression,
                                     &function_ids,

@@ -114,7 +114,22 @@ pub(crate) fn parse_line_at(
     let spec = context.instruction(name).unwrap_or(InstructionSpec {
         argument_style: ArgumentStyle::Raw,
     });
-    let mut args_output = parse_arguments(&raw, raw_offset, spec.argument_style, context);
+    let uses_mixed_arguments = matches!(
+        name.to_ascii_uppercase().as_str(),
+        "PRINT_IMG" | "PRINT_RECT" | "PRINT_SPACE"
+    );
+    if uses_mixed_arguments {
+        // The preliminary whole-line lex identifies the instruction name, but
+        // Era's `px` suffix is not an expression token and would be reported as
+        // an invalid exponent. The dedicated argument pass below re-lexes every
+        // expression after removing that suffix and owns argument diagnostics.
+        diagnostics.retain(|diagnostic| diagnostic.span.end <= name_span.end);
+    }
+    let mut args_output = if uses_mixed_arguments {
+        parse_mixed_arguments(name, &raw, raw_offset, context)
+    } else {
+        parse_arguments(&raw, raw_offset, spec.argument_style, context)
+    };
     diagnostics.append(&mut args_output.diagnostics);
     ParseOutput {
         value: Some(Statement {
@@ -127,6 +142,83 @@ pub(crate) fn parse_line_at(
         }),
         diagnostics,
     }
+}
+
+fn parse_mixed_arguments(
+    name: &str,
+    source: &str,
+    base: usize,
+    context: &dyn ParserContext,
+) -> ParseOutput<Vec<Argument>> {
+    let mut arguments = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (index, (start, end)) in split_argument_text(source).into_iter().enumerate() {
+        let raw = source[start..end].trim();
+        let whitespace = source[start..end].len() - source[start..end].trim_start().len();
+        let argument_base = base + start + whitespace;
+        if raw.is_empty() {
+            arguments.push(Argument::Omitted(Span::empty(argument_base)));
+            continue;
+        }
+        let bytes = raw.as_bytes();
+        let has_px_suffix = bytes.len() >= 2
+            && bytes[bytes.len() - 2].eq_ignore_ascii_case(&b'p')
+            && bytes[bytes.len() - 1].eq_ignore_ascii_case(&b'x');
+        let (expression_source, is_px) = if has_px_suffix {
+            (raw[..raw.len() - 2].trim_end(), true)
+        } else {
+            (raw, false)
+        };
+        let mut parsed = parse_arguments(
+            expression_source,
+            argument_base,
+            ArgumentStyle::Expressions,
+            context,
+        );
+        diagnostics.append(&mut parsed.diagnostics);
+        let Some(argument) = parsed.value.and_then(|mut values| values.pop()) else {
+            continue;
+        };
+        match argument {
+            Argument::Expression(expression)
+                if !name.eq_ignore_ascii_case("PRINT_IMG") || index != 0 =>
+            {
+                arguments.push(Argument::MixedExpression { expression, is_px });
+            }
+            other => arguments.push(other),
+        }
+    }
+    ParseOutput {
+        value: Some(arguments),
+        diagnostics,
+    }
+}
+
+fn split_argument_text(source: &str) -> Vec<(usize, usize)> {
+    let mut result = Vec::new();
+    let mut start = 0;
+    let mut depth = 0_u32;
+    let mut quote = None;
+    for (index, character) in source.char_indices() {
+        if let Some(active) = quote {
+            if character == active {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => quote = Some(character),
+            '(' | '[' | '{' => depth = depth.saturating_add(1),
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                result.push((start, index));
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    result.push((start, source.len()));
+    result
 }
 
 fn parse_assignment_right(

@@ -155,9 +155,17 @@ pub(crate) struct Memory {
 }
 
 impl Memory {
-    pub fn new_game(artifact: &BytecodeArtifact) -> Self {
+    pub fn title(artifact: &BytecodeArtifact) -> Self {
         let mut result = Self::empty(artifact);
+        // Emuera initializes ordinary variable defaults before SYSTEM_TITLE, but
+        // ResetData and the initial CSV characters are deferred until the player
+        // actually selects "new game" from the built-in title flow.
         result.apply_runtime_defaults(artifact, &artifact.project_data.new_game_seed().defaults);
+        result
+    }
+
+    pub fn new_game(artifact: &BytecodeArtifact) -> Self {
+        let mut result = Self::title(artifact);
         for selection in &artifact.project_data.new_game_seed().initial_characters {
             match selection {
                 CharacterSelection::CsvNumber(number) => {
@@ -171,6 +179,14 @@ impl Memory {
                 }
             }
         }
+        // Calculated variables are materialized as cells so bytecode can load
+        // them normally. Initialization must therefore refresh CHARANUM just as
+        // the native character mutation service does after ADDCHARA.
+        result.set_named_integer(
+            artifact,
+            "CHARANUM",
+            i64::try_from(result.characters.len()).unwrap_or(i64::MAX),
+        );
         result
     }
 

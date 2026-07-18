@@ -150,7 +150,8 @@ pub(super) fn argument_place(argument: Option<&HirArgument>) -> Option<&erabasic
             kind: HirExprKind::Variable { place },
             ..
         }) => Some(place),
-        HirArgument::Expression(_)
+        HirArgument::MixedExpression { .. }
+        | HirArgument::Expression(_)
         | HirArgument::Formatted(_)
         | HirArgument::Raw(_)
         | HirArgument::Omitted => None,

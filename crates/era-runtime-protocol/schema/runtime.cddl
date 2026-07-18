@@ -99,7 +99,8 @@ storage-operation =
 storage-precondition = [0] / [1] / [2, tstr]
 service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr, 5: uint / null }
 service-response = { 0: uint, 1: any }
-; Protocol 17 service payloads include ProjectionQueryContext plus typed
+; Protocol 18 service payloads include parsed HTML presentation trees plus
+; ProjectionQueryContext and typed
 ; physical-history, HTML, TextExtent and CanvasPixel request/response maps.
 state-export-request = { 0: uint }
 state-export-ready = { 0: uint, 1: any }

@@ -4,8 +4,8 @@ use era_protocol::{
 };
 use era_runtime_protocol::{
     AdvanceTime, AudioEffect, AudioEffectAction, CanvasPixelRequest, CanvasReplay,
-    CanvasReplayCommand, CanvasSize, EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind,
-    EffectOutcome, EffectOutcomeStatus, ExitReason, ExitRequested, FrontendInput,
+    CanvasReplayCommand, CanvasSize, DisplayRun, EffectAcknowledgement, EffectBatch, EffectEvent,
+    EffectKind, EffectOutcome, EffectOutcomeStatus, ExitReason, ExitRequested, FrontendInput,
     GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
     GetKeyStateResponse, InputIntent, InputUndoRequest, InputUndoState, InteractionToken,
     KeyMacroCommand, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
@@ -13,8 +13,17 @@ use era_runtime_protocol::{
     ProjectionQueryContext, ProjectionSize, ProjectionTransform, RUNTIME_PROTOCOL_VERSION,
     ResourceReplay, RuntimeMessage, SAMPLE_CANVAS_PIXEL_OPERATION, ServiceKind, ServiceRequest,
     StateExportChunkRequest, StateExportKind, StateImportBegin, StorageNamespace, StorageOperation,
-    StorageRequest, TextExtentRequest, validate_relative_path,
+    StorageRequest, TextExtentRequest, parse_document, validate_relative_path,
 };
+
+#[test]
+fn protocol_18_carries_parsed_html_instead_of_opaque_markup() {
+    let run = DisplayRun::HtmlDocument {
+        document: parse_document("<div width='50'><b>text</b><br></div>").unwrap(),
+    };
+    let bytes = encode_canonical(&run).unwrap();
+    assert_eq!(decode_canonical::<DisplayRun>(&bytes), Ok(run));
+}
 
 #[test]
 fn projection_queries_use_typed_revision_bound_payloads() {
@@ -69,7 +78,7 @@ fn runtime_payload_and_envelope_tags_agree() {
 }
 
 #[test]
-fn protocol_17_retains_analysis_key_macros_and_extension_registration() {
+fn protocol_18_retains_analysis_key_macros_and_extension_registration() {
     let macro_command = RuntimeMessage::KeyMacroCommand(KeyMacroCommand::Store {
         group: 2,
         slot: 3,
@@ -80,7 +89,7 @@ fn protocol_17_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(17, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(18, 0));
 }
 
 #[test]
@@ -225,7 +234,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(17, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(18, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -264,7 +273,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(17, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(18, 0));
 }
 
 #[test]

@@ -739,6 +739,17 @@ fn analyze_instruction(
                     HirArgument::Expression(expression)
                 }
             }
+            Argument::MixedExpression { expression, is_px } => {
+                let expression = analyzer.analyze(expression);
+                if key == "PRINT_IMG" && expression.value_type == SemanticType::String {
+                    HirArgument::Expression(expression)
+                } else {
+                    HirArgument::MixedExpression {
+                        expression,
+                        is_px: *is_px,
+                    }
+                }
+            }
             Argument::Formatted(formatted) => {
                 HirArgument::Formatted(analyzer.analyze_formatted(formatted))
             }
@@ -760,7 +771,8 @@ fn analyze_instruction(
         let expression_arguments: Vec<_> = lowered
             .iter()
             .map(|argument| match argument {
-                HirArgument::Expression(expression) => Some(expression.clone()),
+                HirArgument::Expression(expression)
+                | HirArgument::MixedExpression { expression, .. } => Some(expression.clone()),
                 HirArgument::Place(place) => Some(erabasic_hir::HirExpr {
                     kind: HirExprKind::Variable {
                         place: place.clone(),
@@ -951,7 +963,9 @@ fn collect_statement_calls(statement: &Statement, calls: &mut Vec<String>) {
                 }
             }
             for argument in arguments {
-                if let Argument::Expression(expression) = argument {
+                if let Argument::Expression(expression)
+                | Argument::MixedExpression { expression, .. } = argument
+                {
                     collect_expression_calls(expression, calls);
                 }
             }
