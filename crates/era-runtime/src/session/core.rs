@@ -520,7 +520,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 19.0 is required".into(),
+                    message: "runtime protocol 20.0 is required".into(),
                 }),
                 Some(message_id),
             );

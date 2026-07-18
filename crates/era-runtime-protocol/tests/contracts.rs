@@ -9,15 +9,16 @@ use era_runtime_protocol::{
     GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
     GetKeyStateResponse, InputIntent, InputUndoRequest, InputUndoState, InteractionToken,
     KeyMacroCommand, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
-    PointerStateResponse, PrimitiveInput, ProjectionLength, ProjectionObservation,
-    ProjectionQueryContext, ProjectionSize, ProjectionTransform, RUNTIME_PROTOCOL_VERSION,
-    ResourceReplay, RuntimeMessage, SAMPLE_CANVAS_PIXEL_OPERATION, ServiceKind, ServiceRequest,
-    StateExportChunkRequest, StateExportKind, StateImportBegin, StorageNamespace, StorageOperation,
-    StorageRequest, TextExtentRequest, parse_document, validate_relative_path,
+    PointerStateResponse, PresentationDelta, PresentationOperation, PrimitiveInput,
+    ProjectionLength, ProjectionObservation, ProjectionQueryContext, ProjectionSize,
+    ProjectionTransform, RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay, RuntimeMessage,
+    SAMPLE_CANVAS_PIXEL_OPERATION, ServiceKind, ServiceRequest, StateExportChunkRequest,
+    StateExportKind, StateImportBegin, StorageNamespace, StorageOperation, StorageRequest,
+    TextExtentRequest, parse_document, validate_relative_path,
 };
 
 #[test]
-fn protocol_19_carries_parsed_html_instead_of_opaque_markup() {
+fn protocol_20_carries_parsed_html_instead_of_opaque_markup() {
     let run = DisplayRun::HtmlDocument {
         document: parse_document("<div width='50' height='10'><b>text</b><br></div>").unwrap(),
     };
@@ -94,7 +95,7 @@ fn checked_runtime_schema_covers_lifecycle_control_messages() {
 }
 
 #[test]
-fn protocol_19_retains_analysis_key_macros_and_extension_registration() {
+fn protocol_20_retains_analysis_key_macros_and_extension_registration() {
     let macro_command = RuntimeMessage::KeyMacroCommand(KeyMacroCommand::Store {
         group: 2,
         slot: 3,
@@ -105,16 +106,16 @@ fn protocol_19_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(19, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(20, 0));
 }
 
 #[test]
-fn protocol_19_publishes_semantic_history_redraw_and_textbox_layout() {
+fn protocol_20_publishes_semantic_history_redraw_and_textbox_layout() {
     use era_runtime_protocol::{
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(19, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(20, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -280,7 +281,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(19, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(20, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -319,7 +320,31 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(19, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(20, 0));
+}
+
+#[test]
+fn protocol_20_round_trips_complete_presentation_deltas() {
+    let message = RuntimeMessage::PresentationDelta(PresentationDelta {
+        base_revision: 7,
+        new_revision: 9,
+        operations: vec![
+            PresentationOperation::SetRedraw {
+                redraw: RedrawState { enabled: false },
+            },
+            PresentationOperation::SetButtonGeneration { generation: 4 },
+        ],
+    });
+    let encoded = message.encode_payload().expect("encode presentation delta");
+    assert_eq!(RuntimeMessage::decode_payload(41, &encoded), Ok(message));
+
+    let schema = include_str!("../schema/runtime.cddl");
+    for tag in 0..=13 {
+        assert!(
+            schema.contains(&format!("[{tag}")),
+            "runtime CDDL is missing presentation operation {tag}"
+        );
+    }
 }
 
 #[test]

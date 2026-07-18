@@ -801,6 +801,31 @@ pub enum PresentationOperation {
         #[n(0)]
         settings: PresentationSettings,
     },
+    #[n(9)]
+    SetTooltip {
+        #[n(0)]
+        tooltip: TooltipSettings,
+    },
+    #[n(10)]
+    SetResources {
+        #[n(0)]
+        resources: ResourceReplay,
+    },
+    #[n(11)]
+    SetHtmlIsland {
+        #[n(0)]
+        html_island: Vec<erabasic_html::HtmlDocument>,
+    },
+    #[n(12)]
+    SetRedraw {
+        #[n(0)]
+        redraw: RedrawState,
+    },
+    #[n(13)]
+    SetButtonGeneration {
+        #[n(0)]
+        generation: u64,
+    },
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

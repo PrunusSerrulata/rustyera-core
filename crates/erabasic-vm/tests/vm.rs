@@ -1087,7 +1087,7 @@ fn failed_character_mutation_rolls_back_the_complete_candidate() {
         VmEvent::FiberFaulted { fault, .. } if fault.message.contains("out of range")
     )));
     // New-game memory starts with one character. ADDVOIDCHARA committed first,
-    // while the later multi-delete failed before replacing its cloned memory.
+    // while the later multi-delete validates every index before mutating memory.
     assert_eq!(vm.export_era_state().characters.len(), 2);
 }
 
@@ -2335,11 +2335,12 @@ fn unicode_u_positions_use_scalars_but_lengths_match_dotnet_utf16_units() {
 #[test]
 fn runtime_fault_resolves_to_utf8_source_location() {
     let entry = SymbolKey::derive("test.function", b"fault");
-    let instruction =
-        erabasic_bytecode::EncodedInstruction::new(Opcode::Trap, b"intentional".to_vec());
-    let length = instruction.encoded_len();
+    let first = erabasic_bytecode::EncodedInstruction::new(Opcode::Nop, Vec::new());
+    let first_length = first.encoded_len();
+    let trap = erabasic_bytecode::EncodedInstruction::new(Opcode::Trap, b"intentional".to_vec());
+    let length = first_length + trap.encoded_len();
     let mut artifact = artifact(
-        vec![function(entry, "FAULT", vec![instruction])],
+        vec![function(entry, "FAULT", vec![first, trap])],
         Vec::new(),
     );
     let text = "@FAULT\nTRAP 中文\n";
@@ -2350,16 +2351,30 @@ fn runtime_fault_resolves_to_utf8_source_location() {
             byte_len: text.len() as u64,
             line_starts: vec![0, "@FAULT\n".len() as u64],
         }],
-        entries: vec![SourceMapEntry {
-            function: entry,
-            code_start: 0,
-            code_end: length,
-            source_index: 0,
-            byte_start: "@FAULT\n".len() as u64,
-            byte_end: text.len() as u64,
-            statement_fingerprint: Digest::hash("test.statement", &[b"fault"]),
-            origin_chain: Vec::new(),
-        }],
+        entries: vec![
+            SourceMapEntry {
+                function: entry,
+                code_start: 0,
+                code_end: length,
+                source_index: 0,
+                byte_start: "@FAULT\n".len() as u64,
+                byte_end: text.len() as u64,
+                statement_fingerprint: Digest::hash("test.statement", &[b"fault"]),
+                origin_chain: Vec::new(),
+            },
+            // A later, narrower overlapping entry must not override the serialized map's first
+            // match. The generation index is an execution cache, not a semantic reordering.
+            SourceMapEntry {
+                function: entry,
+                code_start: first_length,
+                code_end: length,
+                source_index: 0,
+                byte_start: 0,
+                byte_end: "@FAULT".len() as u64,
+                statement_fingerprint: Digest::hash("test.statement", &[b"overlap"]),
+                origin_chain: Vec::new(),
+            },
+        ],
     };
     artifact.refresh_ids().unwrap();
     let mut vm = Vm::new(validated(&artifact), VmConfig::default());

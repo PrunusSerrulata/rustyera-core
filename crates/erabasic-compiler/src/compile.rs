@@ -4,7 +4,7 @@ use erabasic_analyzer::AnalyzedProject;
 use erabasic_bytecode::{
     ArtifactManifest, BytecodeArtifact, BytecodeConstant, BytecodeEventEntry, BytecodeEventGroup,
     BytecodeGlobal, BytecodePatch, BytecodePersistence, BytecodeStorage, BytecodeType, Digest,
-    HostImport, NativeImport, SourceMap, SourceRecord, SymbolKey, create_patch,
+    HostImport, NativeImport, SourceMap, SourceRecord, SymbolKey,
 };
 use erabasic_data::{Persistence, StorageScope};
 use erabasic_hir::{
@@ -29,11 +29,36 @@ struct CachedFunction {
     host_imports: Vec<HostImport>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct IncrementalBase {
+    manifest: ArtifactManifest,
+    call_compatibility: erabasic_bytecode::BytecodeCallCompatibility,
+    project_data: erabasic_data::ProjectData,
+    globals: Vec<BytecodeGlobal>,
+    native_imports: Vec<NativeImport>,
+    host_imports: Vec<HostImport>,
+    event_groups: Vec<BytecodeEventGroup>,
+}
+
+impl IncrementalBase {
+    fn from_artifact(artifact: &BytecodeArtifact) -> Self {
+        Self {
+            manifest: artifact.manifest.clone(),
+            call_compatibility: artifact.call_compatibility,
+            project_data: artifact.project_data.clone(),
+            globals: artifact.globals.clone(),
+            native_imports: artifact.native_imports.clone(),
+            host_imports: artifact.host_imports.clone(),
+            event_groups: artifact.event_groups.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IncrementalState {
     compiler_abi: u32,
     functions: BTreeMap<SymbolKey, CachedFunction>,
-    base_artifact: Option<BytecodeArtifact>,
+    base: Option<IncrementalBase>,
 }
 
 impl IncrementalState {
@@ -43,8 +68,8 @@ impl IncrementalState {
     }
 
     #[must_use]
-    pub fn base_artifact(&self) -> Option<&BytecodeArtifact> {
-        self.base_artifact.as_ref()
+    pub fn base_artifact_id(&self) -> Option<Digest> {
+        self.base.as_ref().map(|base| base.manifest.artifact_id)
     }
 }
 
@@ -277,10 +302,10 @@ pub fn compile_project(
             stats: CompileStats::default(),
         };
     }
-    let validation = validate_bytecode(
-        artifact.clone().into_unvalidated(),
-        &ValidationContext::for_artifact(&artifact),
-    );
+    // Validation owns its input and returns the same artifact after checking it. Build the
+    // context first so large projects do not need to clone every function and source-map entry.
+    let validation_context = ValidationContext::for_artifact(&artifact);
+    let validation = validate_bytecode(artifact.into_unvalidated(), &validation_context);
     if !validation.is_valid() {
         return CompileReport {
             artifact: None,
@@ -307,8 +332,11 @@ pub fn compile_project(
             stats: CompileStats::default(),
         };
     }
-    let base = previous.and_then(|state| state.base_artifact.as_ref());
-    let patch = base.map(|base| create_patch(base, &artifact));
+    let artifact = validation
+        .value
+        .expect("a valid compiler artifact is returned by the validator")
+        .into_inner();
+    let patch = previous.and_then(|base| create_incremental_patch(base, &artifact));
     let patch_functions = patch
         .as_ref()
         .map_or(0, |patch| patch.changed_functions.len());
@@ -321,7 +349,9 @@ pub fn compile_project(
     let incremental_state = IncrementalState {
         compiler_abi: erabasic_bytecode::COMPILER_ABI_VERSION,
         functions: cached,
-        base_artifact: Some(artifact.clone()),
+        // Function bodies and source entries already live in `functions`; retain only the
+        // remaining fields needed to compare the next build instead of cloning the artifact.
+        base: Some(IncrementalBase::from_artifact(&artifact)),
     };
     CompileReport {
         artifact: Some(artifact),
@@ -330,6 +360,52 @@ pub fn compile_project(
         diagnostics,
         stats,
     }
+}
+
+fn create_incremental_patch(
+    base: &IncrementalState,
+    target: &BytecodeArtifact,
+) -> Option<BytecodePatch> {
+    let metadata = base.base.as_ref()?;
+    let target_keys = target
+        .functions
+        .iter()
+        .map(|function| function.key)
+        .collect::<std::collections::BTreeSet<_>>();
+    Some(BytecodePatch {
+        base_artifact_id: metadata.manifest.artifact_id,
+        base_execution_id: metadata.manifest.program_version.execution_id,
+        target_manifest: target.manifest.clone(),
+        call_compatibility: (metadata.call_compatibility != target.call_compatibility)
+            .then_some(target.call_compatibility),
+        project_data: (metadata.project_data != target.project_data)
+            .then(|| target.project_data.clone()),
+        globals: (metadata.globals != target.globals).then(|| target.globals.clone()),
+        native_imports: (metadata.native_imports != target.native_imports)
+            .then(|| target.native_imports.clone()),
+        host_imports: (metadata.host_imports != target.host_imports)
+            .then(|| target.host_imports.clone()),
+        changed_functions: target
+            .functions
+            .iter()
+            .filter(|function| {
+                base.functions
+                    .get(&function.key)
+                    .map(|cached| &cached.function)
+                    != Some(function)
+            })
+            .cloned()
+            .collect(),
+        removed_functions: base
+            .functions
+            .values()
+            .filter(|cached| !target_keys.contains(&cached.function.key))
+            .map(|cached| cached.function.key)
+            .collect(),
+        event_groups: (metadata.event_groups != target.event_groups)
+            .then(|| target.event_groups.clone()),
+        source_map: target.source_map.clone(),
+    })
 }
 
 fn event_groups(

@@ -80,11 +80,11 @@ runtime 现已根据 `FileCategory` 接受项目根相对路径，并只在送�
 
 ### 展示与长会话增长
 
-当前 `emit_presentation()` 只发送 `PresentationSnapshot`，没有发送已定义的
-`PresentationDelta`。Snapshot 复制全部逻辑行和自会话开始累积的全部 history operations；
-这些 operations 没有消费或裁剪路径。长时间游戏会造成重复编码和传输，并最终可能超过
-默认 payload 上限。完整 eraTW 的 UTF-8 项目清单约为 77 MiB，本轮已将 creator-owned
-默认上限提高到 127 MiB；客户端仍可在握手时协商更低的传输上限。
+该问题已在 Protocol 20 中解决：`emit_presentation()` 首次同步和重同步发送
+`PresentationSnapshot`，之后发送只包含变化行及恢复字段的 `PresentationDelta`。Runtime
+仍保留权威 history 供存档、重同步和物理历史服务使用，但不再在每次 PRINT 时复制和传输
+全部历史。完整 eraTW 的 UTF-8 项目清单约为 77 MiB，creator-owned 默认上限为 127 MiB；
+客户端仍可在握手时协商更低的传输上限。
 
 已确认仍未对齐的输出行为包括：
 

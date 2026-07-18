@@ -96,7 +96,23 @@ presentation-snapshot = {
   0: uint, 1: tstr, 2: presentation-history, 3: [* any], 4: [* any],
   5: any / null, 6: any, 7: any, 8: any, 9: [* any], 10: redraw-state
 }
-presentation-delta = { 0: uint, 1: uint, 2: [* any] }
+display-line = any
+presentation-delta = { 0: uint, 1: uint, 2: [* presentation-operation] }
+presentation-operation =
+  [0, [display-line]] /
+  [1, [uint]] /
+  [2, []] /
+  [3, [tstr]] /
+  [4, [[* any]]] /
+  [5, [[* any]]] /
+  [6, [any / null]] /
+  [7, [uint, display-line]] /
+  [8, [any]] /
+  [9, [any]] /
+  [10, [any]] /
+  [11, [[* any]]] /
+  [12, [redraw-state]] /
+  [13, [uint]]
 storage-request = { 0: uint, 1: uint, 2: tstr, 3: storage-operation, 4: tstr, 5: uint / null }
 storage-response = { 0: uint, 1: any }
 storage-operation =
@@ -108,7 +124,8 @@ storage-operation =
 storage-precondition = [0] / [1] / [2, tstr]
 service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr, 5: uint / null }
 service-response = { 0: uint, 1: any }
-; Protocol 19 service payloads include typed HTML, physical-history serialization,
+; Protocol 20 retains the typed Protocol 19 service payloads and adds complete presentation deltas.
+; These include typed HTML, physical-history serialization,
 ; canvas image decode/PNG encode, ProjectionQueryContext, HTML measurement,
 ; TextExtent and CanvasPixel request/response maps.
 state-export-request = { 0: uint }

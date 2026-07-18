@@ -1,9 +1,10 @@
 use era_runtime_protocol::{
     AudioState, CellAlignment, Color, DisplayLine, DisplayRun, InputWait, InteractionToken,
-    LineAlignment, LogicalLength, MediaPlacement, PresentationHistory,
-    PresentationHistoryOperation, PresentationLength, PresentationSettings, PresentationSnapshot,
-    ProtocolValue, RationalOpacity, RedrawState, ResourceReplay, SeparatorRole, Shape,
-    SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle, TooltipFormat, TooltipSettings,
+    LineAlignment, LogicalLength, MediaPlacement, PresentationDelta, PresentationHistory,
+    PresentationHistoryOperation, PresentationLength, PresentationOperation, PresentationSettings,
+    PresentationSnapshot, ProtocolValue, RationalOpacity, RedrawState, ResourceReplay,
+    SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
+    TooltipFormat, TooltipSettings,
 };
 use erabasic_vm::VmValue;
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,38 @@ pub(crate) struct PresentationModel {
     print_c_per_line: u32,
     print_c_length: u32,
     pending_column_cells: u32,
+    /// Frontend delivery bookkeeping is transport state, not authoritative game state.
+    #[serde(skip)]
+    delivery: PresentationDelivery,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PresentationDelivery {
+    revision: Option<u64>,
+    history_index: usize,
+    pending_line_id: Option<u64>,
+    dirty_lines: BTreeSet<u64>,
+    dirty: PresentationDirty,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
+struct PresentationDirty {
+    title: bool,
+    backgrounds: bool,
+    audio: bool,
+    input_wait: bool,
+    settings: bool,
+    tooltip: bool,
+    resources: bool,
+    html_island: bool,
+    redraw: bool,
+    force_snapshot: bool,
+}
+
+pub(crate) enum PresentationUpdate {
+    Snapshot(Box<PresentationSnapshot>),
+    Delta(PresentationDelta),
 }
 
 impl Default for PresentationModel {
@@ -111,6 +144,7 @@ impl Default for PresentationModel {
             print_c_per_line: 3,
             print_c_length: 25,
             pending_column_cells: 0,
+            delivery: PresentationDelivery::default(),
         }
     }
 }
@@ -142,6 +176,7 @@ impl PresentationModel {
         );
         self.last_committed_plain_runs.clear();
         if !bindings.is_empty() {
+            self.delivery.dirty_lines.insert(line.line_id);
             self.bump();
         }
         bindings
@@ -185,10 +220,12 @@ impl PresentationModel {
             rebind_runs(&mut line.runs, tokens);
         }
         rebind_runs(&mut self.pending_runs, tokens);
+        self.delivery.dirty.force_snapshot = true;
         self.bump();
     }
     pub(crate) fn set_title(&mut self, title: String) {
         self.title = title;
+        self.delivery.dirty.title = true;
         self.bump();
     }
 
@@ -436,11 +473,13 @@ impl PresentationModel {
 
     pub(crate) fn append_html_island(&mut self, document: erabasic_html::HtmlDocument) {
         self.html_island.push(document);
+        self.delivery.dirty.html_island = true;
         self.bump();
     }
 
     pub(crate) fn clear_html_island(&mut self) {
         self.html_island.clear();
+        self.delivery.dirty.html_island = true;
         self.bump();
     }
 
@@ -542,6 +581,7 @@ impl PresentationModel {
 
     pub(crate) fn set_background(&mut self, rgb: i64) {
         self.settings.background = rgb_color(rgb);
+        self.delivery.dirty.settings = true;
         self.bump();
     }
 
@@ -552,6 +592,7 @@ impl PresentationModel {
 
     pub(crate) fn reset_background(&mut self) {
         self.settings.background = self.default_background;
+        self.delivery.dirty.settings = true;
         self.bump();
     }
 
@@ -571,6 +612,7 @@ impl PresentationModel {
 
     pub(crate) fn set_redraw(&mut self, enabled: bool) {
         self.redraw_enabled = enabled;
+        self.delivery.dirty.redraw = true;
         self.bump();
     }
 
@@ -637,6 +679,7 @@ impl PresentationModel {
                 revision: self.revision.saturating_add(1),
             });
         }
+        self.delivery.dirty.audio = true;
         self.bump();
     }
 
@@ -649,6 +692,7 @@ impl PresentationModel {
                 state.revision = self.revision.saturating_add(1);
             }
         }
+        self.delivery.dirty.audio = true;
         self.bump();
     }
 
@@ -658,6 +702,7 @@ impl PresentationModel {
 
     pub(crate) fn set_resource_replay(&mut self, resources: ResourceReplay) {
         self.resources = resources;
+        self.delivery.dirty.resources = true;
         self.bump();
     }
 
@@ -684,6 +729,7 @@ impl PresentationModel {
         // while retaining insertion order for equal-depth portable replay.
         self.backgrounds
             .sort_by_key(|placement| std::cmp::Reverse(placement.depth));
+        self.delivery.dirty.backgrounds = true;
         self.bump();
     }
 
@@ -696,24 +742,28 @@ impl PresentationModel {
             return false;
         };
         self.backgrounds.remove(index);
+        self.delivery.dirty.backgrounds = true;
         self.bump();
         true
     }
 
     pub(crate) fn clear_backgrounds(&mut self) {
         self.backgrounds.clear();
+        self.delivery.dirty.backgrounds = true;
         self.bump();
     }
 
     pub(crate) fn set_tooltip_colors(&mut self, foreground: i64, background: i64) {
         self.tooltip.foreground = rgb_color(foreground);
         self.tooltip.background = rgb_color(background);
+        self.delivery.dirty.tooltip = true;
         self.bump();
     }
 
     pub(crate) fn set_tooltip_delay(&mut self, delay: i64) -> Result<(), &'static str> {
         self.tooltip.delay_ms =
             u32::try_from(delay).map_err(|_| "tooltip delay is out of range")?;
+        self.delivery.dirty.tooltip = true;
         self.bump();
         Ok(())
     }
@@ -721,35 +771,41 @@ impl PresentationModel {
     pub(crate) fn set_tooltip_duration(&mut self, duration: i64) -> Result<(), &'static str> {
         let duration = u32::try_from(duration).map_err(|_| "tooltip duration is out of range")?;
         self.tooltip.duration_ms = duration.min(i16::MAX.cast_unsigned().into());
+        self.delivery.dirty.tooltip = true;
         self.bump();
         Ok(())
     }
 
     pub(crate) fn set_tooltip_font(&mut self, family: String) {
         self.tooltip.font_family = (!family.is_empty()).then_some(family);
+        self.delivery.dirty.tooltip = true;
         self.bump();
     }
 
     pub(crate) fn set_tooltip_font_size(&mut self, points: i64) -> Result<(), &'static str> {
         let points = u32::try_from(points).map_err(|_| "tooltip font size is out of range")?;
         self.tooltip.font_millipoints = points.saturating_mul(1_000);
+        self.delivery.dirty.tooltip = true;
         self.bump();
         Ok(())
     }
 
     pub(crate) fn set_tooltip_custom(&mut self, enabled: bool) {
         self.tooltip.custom = enabled;
+        self.delivery.dirty.tooltip = true;
         self.bump();
     }
 
     pub(crate) fn set_tooltip_format(&mut self, format: i64) {
         self.tooltip.format = format;
         self.tooltip.normalized_format = TooltipFormat::from_raw(format);
+        self.delivery.dirty.tooltip = true;
         self.bump();
     }
 
     pub(crate) fn set_tooltip_images(&mut self, enabled: bool) {
         self.tooltip.images = enabled;
+        self.delivery.dirty.tooltip = true;
         self.bump();
     }
 
@@ -767,6 +823,7 @@ impl PresentationModel {
         self.project_html = html;
         self.project_graphics = graphics;
         self.project_audio = audio;
+        self.delivery.dirty.force_snapshot = true;
     }
 
     pub(crate) fn configure_project(
@@ -811,6 +868,7 @@ impl PresentationModel {
         self.current_style = self.default_style.clone();
         self.print_c_per_line = project.print_c_per_line.max(1);
         self.print_c_length = project.print_c_length.max(1);
+        self.delivery.dirty.settings = true;
         self.bump();
     }
 
@@ -931,7 +989,210 @@ impl PresentationModel {
 
     pub(crate) fn set_wait(&mut self, wait: Option<InputWait>) {
         self.input_wait = wait;
+        self.delivery.dirty.input_wait = true;
         self.bump();
+    }
+
+    /// Build the smallest lossless frontend update for the current canonical model.
+    ///
+    /// Full snapshots remain the synchronization boundary. Once a frontend has a
+    /// baseline, the hot PRINT path only clones and projects the lines changed since
+    /// the previous emission instead of the complete session history.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn next_update(&mut self) -> PresentationUpdate {
+        if self.delivery.revision.is_none()
+            || self.delivery.history_index > self.history_operations.len()
+            || self.delivery.dirty.force_snapshot
+        {
+            return PresentationUpdate::Snapshot(Box::new(self.snapshot_for_delivery()));
+        }
+
+        let mut delivery = std::mem::take(&mut self.delivery);
+        let base_revision = delivery
+            .revision
+            .expect("the snapshot guard establishes a delivery revision");
+        let history = self.history_operations[delivery.history_index..].to_vec();
+        let mut operations = Vec::with_capacity(history.len().saturating_add(6));
+
+        if delivery.dirty.title {
+            operations.push(PresentationOperation::SetTitle {
+                title: self.title.clone(),
+            });
+        }
+        if delivery.dirty.settings {
+            operations.push(PresentationOperation::SetSettings {
+                settings: self.settings.clone(),
+            });
+        }
+        if delivery.dirty.backgrounds {
+            operations.push(PresentationOperation::SetBackgrounds {
+                backgrounds: if self.project_graphics {
+                    self.backgrounds.clone()
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+        if delivery.dirty.audio {
+            operations.push(PresentationOperation::SetAudio {
+                audio: if self.project_audio {
+                    self.audio.clone()
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+        if delivery.dirty.input_wait {
+            operations.push(PresentationOperation::SetInputWait {
+                input_wait: self.input_wait.clone(),
+            });
+        }
+        if delivery.dirty.tooltip {
+            operations.push(PresentationOperation::SetTooltip {
+                tooltip: self.tooltip.clone(),
+            });
+        }
+        if delivery.dirty.resources {
+            operations.push(PresentationOperation::SetResources {
+                resources: if self.project_graphics {
+                    self.resources.clone()
+                } else {
+                    ResourceReplay::default()
+                },
+            });
+        }
+        if delivery.dirty.html_island {
+            operations.push(PresentationOperation::SetHtmlIsland {
+                html_island: self.html_island.clone(),
+            });
+        }
+        if delivery.dirty.redraw {
+            operations.push(PresentationOperation::SetRedraw {
+                redraw: RedrawState {
+                    enabled: self.redraw_enabled,
+                },
+            });
+        }
+
+        for operation in history {
+            match operation {
+                PresentationHistoryOperation::Append { line } => {
+                    let line_id = line.line_id;
+                    let line = if delivery.dirty_lines.remove(&line_id) {
+                        self.lines
+                            .iter()
+                            .rev()
+                            .find(|current| current.line_id == line_id)
+                            .cloned()
+                            .unwrap_or(line)
+                    } else {
+                        line
+                    };
+                    let line = self.project_line(line);
+                    if delivery.pending_line_id == Some(line_id) {
+                        operations.push(PresentationOperation::ReplaceLine { line_id, line });
+                        delivery.pending_line_id = None;
+                    } else {
+                        operations.push(PresentationOperation::AppendLine { line });
+                    }
+                }
+                PresentationHistoryOperation::ReplaceTemporary { line } => {
+                    let line_id = line.line_id;
+                    let line = if delivery.dirty_lines.remove(&line_id) {
+                        self.lines
+                            .iter()
+                            .rev()
+                            .find(|current| current.line_id == line_id)
+                            .cloned()
+                            .unwrap_or(line)
+                    } else {
+                        line
+                    };
+                    operations.push(PresentationOperation::DeleteLines { count: 1 });
+                    operations.push(PresentationOperation::AppendLine {
+                        line: self.project_line(line),
+                    });
+                    delivery.pending_line_id = None;
+                }
+                PresentationHistoryOperation::DeletePhysical { count } => {
+                    operations.push(PresentationOperation::DeleteLines { count });
+                    delivery.pending_line_id = None;
+                }
+                PresentationHistoryOperation::Clear => {
+                    operations.push(PresentationOperation::Clear);
+                    delivery.pending_line_id = None;
+                }
+                PresentationHistoryOperation::SetButtonGeneration { generation } => {
+                    operations.push(PresentationOperation::SetButtonGeneration { generation });
+                }
+            }
+        }
+
+        for line_id in std::mem::take(&mut delivery.dirty_lines) {
+            if let Some(line) = self
+                .lines
+                .iter()
+                .find(|current| current.line_id == line_id)
+                .cloned()
+            {
+                operations.push(PresentationOperation::ReplaceLine {
+                    line_id,
+                    line: self.project_line(line),
+                });
+            }
+        }
+
+        let pending_line = self.pending_line();
+        match (delivery.pending_line_id, pending_line) {
+            (Some(line_id), Some(line)) if line_id == line.line_id => {
+                operations.push(PresentationOperation::ReplaceLine {
+                    line_id,
+                    line: self.project_line(line),
+                });
+                delivery.pending_line_id = Some(line_id);
+            }
+            (Some(_), Some(line)) => {
+                operations.push(PresentationOperation::DeleteLines { count: 1 });
+                delivery.pending_line_id = Some(line.line_id);
+                operations.push(PresentationOperation::AppendLine {
+                    line: self.project_line(line),
+                });
+            }
+            (None, Some(line)) => {
+                delivery.pending_line_id = Some(line.line_id);
+                operations.push(PresentationOperation::AppendLine {
+                    line: self.project_line(line),
+                });
+            }
+            (Some(_), None) => {
+                operations.push(PresentationOperation::DeleteLines { count: 1 });
+                delivery.pending_line_id = None;
+            }
+            (None, None) => {}
+        }
+
+        delivery.revision = Some(self.revision);
+        delivery.history_index = self.history_operations.len();
+        delivery.dirty = PresentationDirty::default();
+        self.delivery = delivery;
+        PresentationUpdate::Delta(PresentationDelta {
+            base_revision,
+            new_revision: self.revision,
+            operations,
+        })
+    }
+
+    /// Produce an authoritative baseline and advance the per-session delivery cursor.
+    pub(crate) fn snapshot_for_delivery(&mut self) -> PresentationSnapshot {
+        let snapshot = self.snapshot();
+        self.delivery = PresentationDelivery {
+            revision: Some(self.revision),
+            history_index: self.history_operations.len(),
+            pending_line_id: (!self.pending_runs.is_empty()).then_some(self.next_line),
+            dirty_lines: BTreeSet::new(),
+            dirty: PresentationDirty::default(),
+        };
+        snapshot
     }
 
     pub(crate) fn snapshot(&self) -> PresentationSnapshot {
@@ -1008,6 +1269,29 @@ impl PresentationModel {
 
     fn bump(&mut self) {
         self.revision = self.revision.saturating_add(1);
+    }
+
+    fn pending_line(&self) -> Option<DisplayLine> {
+        (!self.pending_runs.is_empty()).then(|| DisplayLine {
+            line_id: self.next_line,
+            temporary: self.pending_temporary,
+            logical_line_start: true,
+            line_end: false,
+            alignment: self.current_alignment,
+            runs: self.pending_runs.clone(),
+        })
+    }
+
+    fn project_line(&self, mut line: DisplayLine) -> DisplayLine {
+        project_lines(
+            std::slice::from_mut(&mut line),
+            self.project_column_cells,
+            self.project_separators,
+            self.settings.line_height.0,
+            self.project_html,
+            self.project_graphics,
+        );
+        line
     }
 }
 
@@ -1580,6 +1864,115 @@ fn default_style() -> TextStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn apply_delta(snapshot: &mut PresentationSnapshot, delta: PresentationDelta) {
+        assert_eq!(snapshot.revision, delta.base_revision);
+        for operation in delta.operations {
+            match operation {
+                PresentationOperation::AppendLine { line } => {
+                    snapshot.history.logical_lines.push(line);
+                }
+                PresentationOperation::DeleteLines { count } => {
+                    let retained = snapshot
+                        .history
+                        .logical_lines
+                        .len()
+                        .saturating_sub(count as usize);
+                    snapshot.history.logical_lines.truncate(retained);
+                }
+                PresentationOperation::Clear => snapshot.history.logical_lines.clear(),
+                PresentationOperation::SetTitle { title } => snapshot.title = title,
+                PresentationOperation::SetBackgrounds { backgrounds } => {
+                    snapshot.backgrounds = backgrounds;
+                }
+                PresentationOperation::SetAudio { audio } => snapshot.audio = audio,
+                PresentationOperation::SetInputWait { input_wait } => {
+                    snapshot.input_wait = input_wait;
+                }
+                PresentationOperation::ReplaceLine { line_id, line } => {
+                    let target = snapshot
+                        .history
+                        .logical_lines
+                        .iter_mut()
+                        .find(|current| current.line_id == line_id)
+                        .expect("delta replaces an existing logical line");
+                    *target = line;
+                }
+                PresentationOperation::SetSettings { settings } => snapshot.settings = settings,
+                PresentationOperation::SetTooltip { tooltip } => snapshot.tooltip = tooltip,
+                PresentationOperation::SetResources { resources } => {
+                    snapshot.resources = resources;
+                }
+                PresentationOperation::SetHtmlIsland { html_island } => {
+                    snapshot.html_island = html_island;
+                }
+                PresentationOperation::SetRedraw { redraw } => snapshot.redraw = redraw,
+                PresentationOperation::SetButtonGeneration { generation } => {
+                    for line in &mut snapshot.history.logical_lines {
+                        disable_old_buttons(&mut line.runs, generation);
+                    }
+                }
+            }
+        }
+        snapshot.revision = delta.new_revision;
+    }
+
+    fn assert_visible_snapshot_eq(left: &PresentationSnapshot, right: &PresentationSnapshot) {
+        assert_eq!(left.revision, right.revision);
+        assert_eq!(left.title, right.title);
+        assert_eq!(left.history.logical_lines, right.history.logical_lines);
+        assert_eq!(left.backgrounds, right.backgrounds);
+        assert_eq!(left.audio, right.audio);
+        assert_eq!(left.input_wait, right.input_wait);
+        assert_eq!(left.settings, right.settings);
+        assert_eq!(left.tooltip, right.tooltip);
+        assert_eq!(left.resources, right.resources);
+        assert_eq!(left.html_island, right.html_island);
+        assert_eq!(left.redraw, right.redraw);
+    }
+
+    #[test]
+    fn presentation_deltas_replay_to_the_same_visible_state_as_a_snapshot() {
+        let mut model = PresentationModel::default();
+        model.set_projection(true, true, true, true, true);
+        let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+            panic!("first delivery must establish a snapshot baseline");
+        };
+
+        model.append_print_text("left".into(), false, false);
+        let PresentationUpdate::Delta(delta) = model.next_update() else {
+            panic!("pending text should use a delta after synchronization");
+        };
+        assert!(matches!(
+            delta.operations.as_slice(),
+            [PresentationOperation::AppendLine { line }] if !line.line_end
+        ));
+        apply_delta(&mut frontend, delta);
+        assert_visible_snapshot_eq(&frontend, &model.snapshot());
+
+        model.append_print_text(" right".into(), false, true);
+        model.set_title("delta title".into());
+        model.set_background(0x0011_2233);
+        model.set_redraw(false);
+        model.set_tooltip_delay(250).unwrap();
+        model.set_resource_replay(ResourceReplay::default());
+        model.add_background("background".into(), 2, 128);
+        model.set_audio("sound".into(), false, true);
+        model.append_html_island(erabasic_html::parse_document("<b>top</b>").unwrap());
+        model.set_button_generation(1);
+        let PresentationUpdate::Delta(delta) = model.next_update() else {
+            panic!("recoverable presentation fields should remain incremental");
+        };
+        apply_delta(&mut frontend, delta);
+        assert_visible_snapshot_eq(&frontend, &model.snapshot());
+
+        let restored = serde_json::to_vec(&model).unwrap();
+        let mut restored: PresentationModel = serde_json::from_slice(&restored).unwrap();
+        assert!(matches!(
+            restored.next_update(),
+            PresentationUpdate::Snapshot(_)
+        ));
+    }
 
     #[test]
     fn consecutive_column_cells_share_the_pending_logical_line() {

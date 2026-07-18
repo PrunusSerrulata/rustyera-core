@@ -340,7 +340,7 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 | 字段 | 含义 |
 | --- | --- |
 | `wire_version` | 公共信封版本，当前为 `2.0`。 |
-| `channel_version` | `Runtime` channel 当前为 `19.0`；`Debug` channel 当前为 `4.0`。 |
+| `channel_version` | `Runtime` channel 当前为 `20.0`；`Debug` channel 当前为 `4.0`。 |
 | `channel` | 正常运行必须为 `Runtime`；调试使用独立 `Debug` channel。 |
 | `session` | 首次 `ClientHello` 可为空；握手成功后必须等于 `ServerHello.session`。 |
 | `session_epoch` | 首次握手可为空；之后必须等于当前时间线 epoch。新游戏、恢复或热替换提交后旧 epoch 消息失效。 |
@@ -365,7 +365,7 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `19.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `20.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
@@ -475,9 +475,18 @@ Runtime 是展示语义状态的权威持有者；前端只负责渲染投影。
   应用 operations 并更新为 `new_revision`；
 - revision 不匹配时不要猜测或部分应用，应请求 `Resynchronize`（tag `94`）。
 
-当前 Protocol 19 runtime 实现只发送 `PresentationSnapshot`；`PresentationDelta` 是已
-保留的 wire 类型，尚未由发送路径使用。前端必须能够处理 snapshot，不能假定正常运行
-一定收到 delta。
+Protocol 20 runtime 在首次同步、恢复后首次输出、能力投影改变以及显式重同步时发送
+`PresentationSnapshot`，其余展示变化通常发送 `PresentationDelta`。delta 覆盖行追加、替换、
+删除、清屏，以及 title、background、audio、input wait、settings、tooltip、resource replay、
+top-layer HTML、redraw 和 button generation。前端必须同时实现两种消息，且不能假定正常运行
+一定只收到其中一种。
+
+`PresentationOperation` 应按消息内顺序应用：`AppendLine` 追加逻辑行，`ReplaceLine` 按
+`line_id` 替换已有行，`DeleteLines` 从尾部删除指定数量，`Clear` 清空行；`SetTitle`、
+`SetBackgrounds`、`SetAudio`、`SetInputWait`、`SetSettings`、`SetTooltip`、`SetResources`、
+`SetHtmlIsland` 和 `SetRedraw` 直接替换对应缓存字段。`SetButtonGeneration` 把所有 generation
+不等于新值的既有按钮（包括嵌套 HTML 按钮）置为 disabled。样式等只影响未来输出的内部变化
+可能产生 operations 为空但 revision 前进的合法 delta，前端仍必须接受其 `new_revision`。
 
 Snapshot 包含标题、行、背景、tooltip 策略、逻辑音频状态、当前输入等待、全局展示设置
 以及 `ResourceReplay`。后者提供 Runtime 已解析的 sprite 定义、动态 sprite 与 canvas
@@ -504,7 +513,7 @@ command graph，以及 `SETANIMETIMER` 选定的 `animation_timer_ms` 重绘间�
 
 这里的“不得写回”只针对普通展示投影。若 EraBasic 命令本身明确查询实际 viewport、
 字体测量、物理折行、显示历史或 raster 结果，该值属于前端观测，而不是 Runtime
-规范化展示状态。Protocol 19.0 会向当前 session 唯一的权威投影前端发送携带 presentation
+规范化展示状态。Protocol 20.0 会向当前 session 唯一的权威投影前端发送携带 presentation
 revision 和前端环境 revision 的 typed service request；前端必须先应用到指定 revision，
 再返回其实际投影引擎的结果。Runtime 只负责关联、版本、revision、类型和范围验证，
 不能用逻辑列宽或默认字体伪造回退值。当前协议不支持多客户端或 authority transfer。
@@ -515,12 +524,13 @@ revision 和前端环境 revision 的 typed service request；前端必须先应
 适用 revision；canvas 查询还绑定 canvas replay revision。前端可延迟响应直到指定
 replay 已应用，但不得返回其他 revision 的缓存值。
 
-Protocol 19.0 不再发送 opaque HTML 字符串：`HtmlDocument` 是固定方言的语义树，节点
+Protocol 19.0 起不再发送 opaque HTML 字符串；Protocol 20.0 保留该契约：`HtmlDocument` 是固定方言的语义树，节点
 保留 UTF-8 byte span，并包含归一化 MixedNum、box model、颜色和布局；`button` 节点携带
 runtime 分配的 token、generation 和 enabled。前端不得再次解析 attribute 字符串决定语义。`PRINT_IMG`、
 `PRINT_RECT`、`PRINT_SPACE` 的可选资源和 MixedNum 尺寸同样保存在规范化 run 中。
 前端负责把这些语义投影为本地布局，不得重新解释按钮 value 或自行生成 token。
-Protocol 19.0 与开发期 Protocol 18.0 不兼容，前端 Schema 与 C 绑定必须同步更新。
+Protocol 20.0 新增完整 delta operation 集并与开发期 Protocol 19.0 不兼容，前端 Schema
+与绑定必须同步更新。
 
 `PresentationHistory.operations` 是物理历史的唯一有序输入：前端从空历史按顺序重放
 append、delete-physical、replace-temporary、clear 和 button-generation，再按

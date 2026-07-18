@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 19.0 and debug protocol 4.0 over common wire 2.0 are
+dynamic library. Runtime protocol 20.0 and debug protocol 4.0 over common wire 2.0 are
 development contracts: by explicit project policy they
 do not promise backward compatibility until a frontend exists.
 
@@ -208,8 +208,9 @@ supported locale. Canonical system text carries both the runtime-selected text a
 with arguments, allowing accessible clients to understand its role without becoming authoritative
 for wording or game state.
 
-The runtime stores a revisioned semantic presentation snapshot. Protocol 19 reserves a delta
-message shape, but the current sender emits full snapshots only. The snapshot includes an ordered
+The runtime stores a revisioned semantic presentation model. Protocol 20 sends one full snapshot
+as the synchronization baseline, then emits ordered deltas for changed lines and recoverable
+fields; resynchronization always establishes a new full baseline. The snapshot includes an ordered
 semantic history journal, text/styles/buttons, typed HTML,
 image/shape intent, exact-rational backgrounds,
 tooltip policy, parsed sprite definitions, canvas replay commands, logical audio state, title and

@@ -458,6 +458,13 @@ fn incremental_patch_matches_a_clean_build() {
     let registry = default_host_registry();
     let first = analyze("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRESULT = 1\nRETURN\n");
     let initial = compile_project(&first, &CompilerOptions::default(), &registry, None);
+    assert_eq!(
+        initial.incremental_state.base_artifact_id(),
+        initial
+            .artifact
+            .as_ref()
+            .map(|artifact| artifact.manifest.artifact_id)
+    );
     let second = analyze("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRESULT = 2\nRETURN\n");
     let incremental = compile_project(
         &second,
