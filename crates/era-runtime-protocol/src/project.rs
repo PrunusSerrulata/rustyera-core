@@ -138,6 +138,31 @@ pub struct ProjectLoadReport {
     pub diagnostics: Vec<ProtocolDiagnostic>,
 }
 
+/// One-shot project analysis that never replaces the active runtime project.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectAnalysisRequest {
+    #[n(0)]
+    pub manifest: ProjectManifest,
+    #[n(1)]
+    pub selected_erb_paths: Vec<String>,
+    #[n(2)]
+    pub debug_mode: bool,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectAnalysisReport {
+    #[n(0)]
+    pub project_revision: u64,
+    #[n(1)]
+    pub success: bool,
+    #[n(2)]
+    pub diagnostics: Vec<ProtocolDiagnostic>,
+    #[n(3)]
+    pub analyzed_erb_paths: Vec<String>,
+}
+
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FileChange {

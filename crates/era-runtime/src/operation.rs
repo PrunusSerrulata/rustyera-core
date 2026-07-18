@@ -31,6 +31,12 @@ pub(crate) enum PendingService {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum PendingStorage {
+    KeyMacroWrite {
+        resume_phase: era_runtime_protocol::RuntimePhase,
+    },
+    SystemOutputLog {
+        resume_phase: era_runtime_protocol::RuntimePhase,
+    },
     ListLoadSlots,
     ListSaveSlots,
     ScanMenuSlot {

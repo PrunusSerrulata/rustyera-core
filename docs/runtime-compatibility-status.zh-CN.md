@@ -177,13 +177,31 @@ Protocol 15.0 还实现了协商式 `InputUndo`：runtime 在成功的手动存�
 
 ### 1.5 初始化、配置和调试遗漏
 
-- runtime 只解析部分具有运行语义的 Emuera 配置。
-- `GETCONFIG/GETCONFIGS` 只暴露一个小型白名单，其他合法参考配置会直接 fault。
-- 真实脚本使用的 `GETCONFIGS("描画インターフェース")` 当前不支持。
-- 未实现 key macro、Hotkey 文件状态、分析模式启动流程和参考插件系统。
-- `CALLSHARP` 是已明确记录的有意不支持项。
-- 调试协议已实现主要变量、栈、断点、单步和安全控制台能力，但 EraBasic 的
-  `DEBUGPRINT*` 和 `DEBUGCLEAR` 本身仍不可执行。
+本节可移植部分已补齐。`erabasic-config` 保存固定参考实现的完整配置目录、日文/英文/
+`ConfigCode` 别名、类型、默认值、颜色及列表解析；default、emuera、setting、fixed 和
+debug 的优先级不再依赖前端提交顺序。runtime 只把可移植配置用于游戏语义，窗口位置、
+绘图后端等客户端配置仅保留脚本查询值，不把它们冒充设备事实。
+
+`GETCONFIG/GETCONFIGS` 现在按目录和值类型工作，包含真实脚本所需的
+`GETCONFIGS("描画インターフェース") == "TEXTRENDERER"`，类型不匹配仍按参考行为
+fault。Replace.csv 的值由 CSV 加载结果同步进入同一查询视图，不能从 emuera.config
+越权覆盖。
+
+Protocol 16.0 增加以下能力：
+
+- one-shot 项目分析使用 analyzer analysis mode，支持选择 ERB、debug mode 和不可达
+  函数检查；只返回结构化诊断，不编译字节码、不创建 VM、也不替换活动项目。
+- key macro 由 runtime 持有 10×12 槽位，读取日文/英文 legacy `macro.txt`，输出规范化
+  UTF-8 内容并通过前端 Storage contract 持久化。键盘 `CommitText` 统一支持嵌套重复、
+  `\\n`、`\\r`、`\\e` 和跨 wait 顺序消费；活动展开禁止 VM snapshot。
+- CLR 插件不加载；新增声明式、版本化的可移植 Host extension ABI。扩展参与 analyzer
+  和 compiler，调用通过 `ServiceKind::Extension`，runtime 验证返回类型和按参数序号的
+  可变写回后原子提交。`CALLSHARP` 继续是稳定的有意不支持项。
+
+`HOTKEY_STATE/HOTKEY_STATE_INIT` 与 `DEBUGPRINT*`、`DEBUGCLEAR` 早已可执行；旧版
+1.5 将其列为缺失属于状态文档遗漏，现已更正。物理 `HOTKEY.ERB` 键位映射继续归前端，
+runtime 只持有并投影 `HOTKEY_STATE`。物理 ButtonWrap、文本历史、剪贴板和 Rikai
+仍依赖后续客户端/展示能力，不属于本节 runtime 配置查询的阻塞项。
 
 ## 2. 与参考实现行为不同的功能
 
@@ -217,7 +235,7 @@ Protocol 15.0 还实现了协商式 `InputUndo`：runtime 在成功的手动存�
 
 ### 2.2 更新后设计原则与当前实现的矛盾
 
-以下内容是当前代码和 protocol 15.0 的现状，不是未来目标设计。它们不能继续被笼统
+以下内容是当前代码和 protocol 16.0 的现状，不是未来目标设计。它们不能继续被笼统
 描述为“规范化展示的有意差异”：
 
 1. **已解决：权威 snapshot 的伪物理文本布局。** Protocol 14.0 删除 `RunLayout` 和

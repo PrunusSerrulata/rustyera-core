@@ -626,7 +626,8 @@ const SYSTEM: &[&str] = &[
 
 const NETWORK: &[&str] = &["UPDATECHECK"];
 
-pub(crate) fn extension_binding(name: &str) -> HostBinding {
+#[must_use]
+pub fn extension_binding(name: &str) -> HostBinding {
     let contract = OperationContract {
         state: OperationState::External,
         transaction: TransactionPolicy::Forbidden,

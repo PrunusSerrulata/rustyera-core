@@ -5,9 +5,9 @@ use crate::structured::{StructuredExtension, StructuredScope};
 use crate::{
     EraState, EraStateReport, FiberId, FiberState, FiberStatus, GenerationId, HostCallRequest,
     HostCallResult, HostReady, HostRequestId, HostWaitStability, HotReloadReport,
-    NativeServiceRegistry, PreparedRuntimeState, RunBudget, SnapshotEligibility, Vm, VmConfig,
-    VmDriveMode, VmError, VmHost, VmHostCompletion, VmHostRequest, VmPortDriveReport, VmPortEvent,
-    VmPortStop, VmRestorePort, VmRuntimePort, VmRuntimeRead, VmRuntimeStatePort,
+    NativeServiceRegistry, PlaceDescriptor, PreparedRuntimeState, RunBudget, SnapshotEligibility,
+    Vm, VmConfig, VmDriveMode, VmError, VmHost, VmHostCompletion, VmHostRequest, VmPortDriveReport,
+    VmPortEvent, VmPortStop, VmRestorePort, VmRuntimePort, VmRuntimeRead, VmRuntimeStatePort,
     VmRuntimeStateTransaction, VmSnapshot, VmValue, VmWaitRebind,
 };
 use std::collections::BTreeSet;
@@ -31,6 +31,23 @@ pub struct PreparedCandidateState {
 }
 
 impl RuntimeVm {
+    /// Read a place supplied to a Host extension without exposing VM storage layouts.
+    ///
+    /// # Errors
+    ///
+    /// The place must still belong to the requesting fiber and current generation.
+    pub fn read_host_place(
+        &self,
+        fiber: FiberId,
+        place: &PlaceDescriptor,
+    ) -> Result<VmValue, VmError> {
+        let fiber = self
+            .vm
+            .fibers
+            .get(&fiber)
+            .ok_or_else(|| VmError::InvalidState("Host place fiber is missing".into()))?;
+        self.vm.read_place(fiber, place)
+    }
     /// Fork authoritative memory and Native state while discarding every live
     /// fiber. Candidate SAVEINFO execution uses this isolated timeline so a
     /// failure cannot leak stack, scheduler, random or structured state.

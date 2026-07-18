@@ -9,4 +9,6 @@ mod registry;
 pub use compile::{CompileReport, CompileStats, IncrementalState, compile_project};
 pub use diagnostic::{CompilerDiagnostic, CompilerDiagnosticCode, CompilerDiagnosticSeverity};
 pub use options::{CompilerOptions, OptimizationLevel};
-pub use registry::{ExecutionBinding, HostBinding, HostRegistry, default_host_registry};
+pub use registry::{
+    ExecutionBinding, HostBinding, HostRegistry, default_host_registry, extension_binding,
+};

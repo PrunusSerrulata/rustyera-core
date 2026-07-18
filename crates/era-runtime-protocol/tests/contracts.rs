@@ -7,7 +7,7 @@ use era_runtime_protocol::{
     EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcome,
     EffectOutcomeStatus, ExitReason, ExitRequested, FrontendInput, GET_KEY_STATE_OPERATION,
     GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
-    InputUndoRequest, InputUndoState, InteractionToken, POINTER_STATE_OPERATION,
+    InputUndoRequest, InputUndoState, InteractionToken, KeyMacroCommand, POINTER_STATE_OPERATION,
     POINTER_STATE_OPERATION_VERSION, PointerStateRequest, PointerStateResponse, PrimitiveInput,
     ProjectionObservation, RUNTIME_PROTOCOL_VERSION, ResourceReplay, RuntimeMessage, ServiceKind,
     ServiceRequest, StateExportChunkRequest, StateExportKind, StateImportBegin, StorageNamespace,
@@ -33,6 +33,21 @@ fn runtime_payload_and_envelope_tags_agree() {
         RuntimeMessage::from_envelope(&envelope).expect("decode runtime message"),
         message
     );
+}
+
+#[test]
+fn protocol_16_adds_analysis_key_macros_and_extension_registration() {
+    let macro_command = RuntimeMessage::KeyMacroCommand(KeyMacroCommand::Store {
+        group: 2,
+        slot: 3,
+        text: "abc".into(),
+    });
+    assert_eq!(macro_command.tag(), 16);
+    assert_eq!(
+        RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
+        macro_command
+    );
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(16, 0));
 }
 
 #[test]
@@ -164,7 +179,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(15, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(16, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -203,7 +218,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(15, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(16, 0));
 }
 
 #[test]

@@ -1,19 +1,25 @@
 use era_runtime_protocol::{
-    DiagnosticSeverity, FileCategory, FileChange, FilePayload, ProjectLoadReport, ProjectManifest,
-    ProtocolDiagnostic, ReloadProject, SourceLocation, validate_relative_path,
+    DiagnosticSeverity, FileCategory, FileChange, FilePayload, ProjectAnalysisReport,
+    ProjectAnalysisRequest, ProjectLoadReport, ProjectManifest, ProtocolDiagnostic, ReloadProject,
+    SourceLocation, validate_relative_path,
 };
 use erabasic_analyzer::{
-    AnalysisInput, AnalyzerDiagnosticSeverity, AnalyzerOptions, ExtensionRegistry, ProjectSource,
-    SourceIoError, SourceIoErrorKind, SourcePayload, analyze_project,
+    AnalysisInput, AnalyzerDiagnosticSeverity, AnalyzerOptions, ArgumentConstraint,
+    CallableSignature, ExtensionRegistry, InstructionSignature, ProjectSource, SourceIoError,
+    SourceIoErrorKind, SourcePayload, WarningPolicy, analyze_project, builtin_function_names,
+    builtin_instruction_names,
 };
 use erabasic_compiler::{
-    CompilerOptions, IncrementalState, compile_project, default_host_registry,
+    CompilerOptions, IncrementalState, compile_project, default_host_registry, extension_binding,
 };
+use erabasic_config::{ConfigStore, ConfigValue};
 use erabasic_csv::{
     CsvDiagnosticSeverity, CsvLoadOptions, FilePayload as CsvFilePayload,
     FrontendFile as CsvFrontendFile, FrontendIoError as CsvIoError,
     FrontendIoErrorKind as CsvIoErrorKind, ProjectFiles, load_project,
 };
+use erabasic_hir::SemanticType;
+use erabasic_parser::ArgumentStyle;
 use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode};
 
 use crate::resource::ResourceGraph;
@@ -49,6 +55,10 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) line_height: u32,
     pub(crate) print_c_per_line: u32,
     pub(crate) print_c_length: u32,
+    /// Complete query-visible configuration, including client-only compatibility values.
+    pub(crate) configuration: ConfigStore,
+    pub(crate) extensions:
+        std::collections::BTreeMap<String, era_runtime_protocol::ExtensionDeclaration>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -61,6 +71,7 @@ pub(crate) struct NormalizedResourceIdentity {
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)]
 struct SemanticConfig {
+    values: ConfigStore,
     csv: CsvLoadOptions,
     analyzer: AnalyzerOptions,
     use_new_random: bool,
@@ -84,6 +95,7 @@ struct SemanticConfig {
 impl Default for SemanticConfig {
     fn default() -> Self {
         Self {
+            values: ConfigStore::default(),
             csv: CsvLoadOptions::default(),
             analyzer: AnalyzerOptions::default(),
             use_new_random: false,
@@ -109,13 +121,78 @@ impl Default for SemanticConfig {
 // Keeping the pipeline in one function makes the atomic artifact/report outcome visible;
 // conversion details live in the helpers below.
 #[allow(clippy::too_many_lines)]
+#[cfg(test)]
 pub(crate) fn build_project(
     manifest: &ProjectManifest,
     previous: Option<&IncrementalState>,
 ) -> ProjectBuild {
+    build_project_inner(manifest, previous, None)
+}
+
+pub(crate) fn build_project_with_extensions(
+    manifest: &ProjectManifest,
+    previous: Option<&IncrementalState>,
+    extensions: &[era_runtime_protocol::ExtensionDeclaration],
+) -> ProjectBuild {
+    build_project_inner_with_extensions(manifest, previous, None, false, extensions)
+}
+
+pub(crate) fn analyze_submitted_project_with_extensions(
+    request: &ProjectAnalysisRequest,
+    extensions: &[era_runtime_protocol::ExtensionDeclaration],
+) -> ProjectAnalysisReport {
+    let selected = request
+        .selected_erb_paths
+        .iter()
+        .filter_map(|path| validate_relative_path(path).ok())
+        .map(|path| path.to_ascii_lowercase())
+        .collect::<std::collections::BTreeSet<_>>();
+    let build = build_project_inner_with_extensions(
+        &request.manifest,
+        None,
+        Some(&selected),
+        request.debug_mode,
+        extensions,
+    );
+    let mut analyzed_erb_paths = request
+        .manifest
+        .files
+        .iter()
+        .filter(|file| file.category == FileCategory::Erb)
+        .filter_map(|file| validate_relative_path(&file.relative_path).ok())
+        .filter(|path| selected.is_empty() || selected.contains(&path.to_ascii_lowercase()))
+        .collect::<Vec<_>>();
+    analyzed_erb_paths.sort();
+    ProjectAnalysisReport {
+        project_revision: request.manifest.project_revision,
+        success: build.report.success,
+        diagnostics: build.report.diagnostics,
+        analyzed_erb_paths,
+    }
+}
+
+#[cfg(test)]
+fn build_project_inner(
+    manifest: &ProjectManifest,
+    previous: Option<&IncrementalState>,
+    analysis_selection: Option<&std::collections::BTreeSet<String>>,
+) -> ProjectBuild {
+    build_project_inner_with_extensions(manifest, previous, analysis_selection, false, &[])
+}
+
+#[allow(clippy::too_many_lines)]
+fn build_project_inner_with_extensions(
+    manifest: &ProjectManifest,
+    previous: Option<&IncrementalState>,
+    analysis_selection: Option<&std::collections::BTreeSet<String>>,
+    analysis_debug_mode: bool,
+    extension_declarations: &[era_runtime_protocol::ExtensionDeclaration],
+) -> ProjectBuild {
     let mut diagnostics = Vec::new();
+    let (extensions, host_registry, extension_map) =
+        prepare_extensions(extension_declarations, &mut diagnostics);
     let mut files = manifest.files.clone();
-    let config = parse_configuration(&files, &mut diagnostics);
+    let mut config = parse_configuration(&files, &mut diagnostics);
     if config.csv.sort_with_filename {
         files.sort_by_key(|file| {
             (
@@ -189,7 +266,13 @@ pub(crate) fn build_project(
                 csv_files
                     .erb
                     .push(csv_file(path.clone(), file.payload.clone()));
-                sources.push(analyzer_source(path, file.payload));
+                if file.category == FileCategory::Erh
+                    || analysis_selection.is_none_or(|selection| {
+                        selection.is_empty() || selection.contains(&path.to_ascii_lowercase())
+                    })
+                {
+                    sources.push(analyzer_source(path, file.payload));
+                }
             }
             FileCategory::Configuration => {}
             FileCategory::ResourceManifest | FileCategory::Resource => {
@@ -224,13 +307,25 @@ pub(crate) fn build_project(
     let Some(data) = csv.data else {
         return failed(manifest.project_revision, diagnostics, previous);
     };
+    sync_replace_configuration(&mut config.values, &data.static_data.replace);
+    config
+        .money_label
+        .clone_from(&data.static_data.replace.money_label);
+    config.money_first = data.static_data.replace.money_first;
+    config.maximum_shop_items = u32::try_from(data.static_data.replace.max_shop_item).unwrap_or(0);
+    let mut analyzer_options = config.analyzer.clone();
+    if analysis_selection.is_some() {
+        analyzer_options.analysis_mode = true;
+        analyzer_options.debug_mode = analysis_debug_mode;
+        analyzer_options.ignore_uncalled_functions = false;
+    }
     let analysis = analyze_project(
         AnalysisInput {
             project_data: data,
             sources,
         },
-        &config.analyzer,
-        &ExtensionRegistry::default(),
+        &analyzer_options,
+        &extensions,
     );
     diagnostics.extend(
         analysis
@@ -258,10 +353,25 @@ pub(crate) fn build_project(
     let Some(project) = analysis.project else {
         return failed(manifest.project_revision, diagnostics, previous);
     };
+    if analysis_selection.is_some() {
+        let success = !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
+        return ProjectBuild {
+            artifact: None,
+            incremental: IncrementalState::default(),
+            report: ProjectLoadReport {
+                project_revision: manifest.project_revision,
+                success,
+                diagnostics,
+            },
+            snapshot: None,
+        };
+    }
     let compile = compile_project(
         &project,
         &CompilerOptions::default(),
-        &default_host_registry(),
+        &host_registry,
         previous,
     );
     diagnostics.extend(
@@ -341,7 +451,7 @@ pub(crate) fn build_project(
     if !success {
         return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
     }
-    let project_identity = project_identity(&artifact, &config, &resources);
+    let project_identity = project_identity(&artifact, &config, &resources, &extension_map);
     ProjectBuild {
         artifact: Some(artifact),
         incremental,
@@ -372,8 +482,147 @@ pub(crate) fn build_project(
             line_height: config.line_height,
             print_c_per_line: config.print_c_per_line,
             print_c_length: config.print_c_length,
+            configuration: config.values,
+            extensions: extension_map,
         }),
     }
+}
+
+#[allow(clippy::too_many_lines)]
+fn prepare_extensions(
+    declarations: &[era_runtime_protocol::ExtensionDeclaration],
+    diagnostics: &mut Vec<ProtocolDiagnostic>,
+) -> (
+    ExtensionRegistry,
+    erabasic_compiler::HostRegistry,
+    std::collections::BTreeMap<String, era_runtime_protocol::ExtensionDeclaration>,
+) {
+    use era_runtime_protocol::{ExtensionArgumentStyle, ExtensionCallableKind, ExtensionValueType};
+    let builtins = builtin_instruction_names()
+        .into_iter()
+        .chain(builtin_function_names())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut analyzer = ExtensionRegistry::default();
+    let mut hosts = default_host_registry();
+    let mut map = std::collections::BTreeMap::new();
+    let mut ids = std::collections::BTreeSet::new();
+    for declaration in declarations {
+        let name = declaration.era_name.to_ascii_uppercase();
+        let operation = declaration.operation.to_ascii_lowercase();
+        let invalid = declaration.id.is_empty()
+            || name.is_empty()
+            || operation.is_empty()
+            || builtins.contains(&name)
+            || map.contains_key(&operation)
+            || !ids.insert(declaration.id.clone())
+            || declaration
+                .arguments
+                .iter()
+                .any(|argument| argument.value_type == ExtensionValueType::Void)
+            || declaration
+                .arguments
+                .windows(2)
+                .any(|pair| pair[0].optional && !pair[1].optional)
+            || declaration.variadic && declaration.arguments.is_empty()
+            || matches!(
+                (declaration.kind, declaration.return_type),
+                (
+                    ExtensionCallableKind::Instruction,
+                    ExtensionValueType::Integer
+                        | ExtensionValueType::String
+                        | ExtensionValueType::Any
+                ) | (
+                    ExtensionCallableKind::Function,
+                    ExtensionValueType::Void | ExtensionValueType::Any
+                )
+            )
+            || declaration.kind == ExtensionCallableKind::Function
+                && declaration.argument_style != ExtensionArgumentStyle::Normal;
+        if invalid {
+            diagnostics.push(project_diagnostic(
+                "runtime.invalid_extension_declaration",
+                DiagnosticSeverity::Error,
+                format!(
+                    "extension declaration {:?} is empty, duplicated, or conflicts with a built-in",
+                    declaration.id
+                ),
+                None,
+            ));
+            continue;
+        }
+        let constraints = declaration
+            .arguments
+            .iter()
+            .map(|argument| match (argument.mutable, argument.value_type) {
+                (true, ExtensionValueType::Integer) => ArgumentConstraint::MutableInteger,
+                (true, ExtensionValueType::String) => ArgumentConstraint::MutableString,
+                (true, ExtensionValueType::Any | ExtensionValueType::Void) => {
+                    ArgumentConstraint::MutableAny
+                }
+                (false, ExtensionValueType::Integer) => ArgumentConstraint::Integer,
+                (false, ExtensionValueType::String) => ArgumentConstraint::String,
+                (false, ExtensionValueType::Any | ExtensionValueType::Void) => {
+                    ArgumentConstraint::Any
+                }
+            })
+            .collect::<Vec<_>>();
+        let minimum_arguments = declaration
+            .arguments
+            .iter()
+            .take_while(|argument| !argument.optional)
+            .count();
+        let return_type = match declaration.return_type {
+            ExtensionValueType::Integer => SemanticType::Integer,
+            ExtensionValueType::String => SemanticType::String,
+            ExtensionValueType::Void => SemanticType::Void,
+            ExtensionValueType::Any => SemanticType::Error,
+        };
+        let registered = match declaration.kind {
+            ExtensionCallableKind::Instruction => {
+                analyzer.register_instruction(InstructionSignature {
+                    name: name.clone(),
+                    argument_style: match declaration.argument_style {
+                        ExtensionArgumentStyle::Normal => ArgumentStyle::Expressions,
+                        ExtensionArgumentStyle::Formatted => ArgumentStyle::Formatted,
+                        ExtensionArgumentStyle::Raw => ArgumentStyle::Raw,
+                    },
+                    arguments: constraints,
+                    minimum_arguments,
+                    variadic: declaration.variadic,
+                    allow_omitted: declaration
+                        .arguments
+                        .iter()
+                        .any(|argument| argument.optional),
+                })
+            }
+            ExtensionCallableKind::Function => analyzer.register_function(CallableSignature {
+                name: name.clone(),
+                return_type,
+                arguments: constraints,
+                minimum_arguments,
+                variadic: declaration.variadic,
+                allow_omitted: declaration
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.optional),
+            }),
+        };
+        if !registered {
+            diagnostics.push(project_diagnostic(
+                "runtime.duplicate_extension_name",
+                DiagnosticSeverity::Error,
+                format!("duplicate extension callable {name}"),
+                None,
+            ));
+            continue;
+        }
+        let mut binding = extension_binding(&name);
+        binding.name.clone_from(&operation);
+        binding.abi_version = u32::from(declaration.operation_version.major);
+        hosts.register(name, binding);
+        map.insert(operation, declaration.clone());
+    }
+    (analyzer, hosts, map)
 }
 
 pub(crate) fn apply_project_delta(
@@ -471,6 +720,7 @@ fn project_identity(
     artifact: &ValidatedArtifact,
     config: &SemanticConfig,
     resources: &[NormalizedResourceIdentity],
+    extensions: &std::collections::BTreeMap<String, era_runtime_protocol::ExtensionDeclaration>,
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new_derive_key("rustyera.runtime.project.v2");
     hasher.update(&artifact.artifact().manifest.artifact_id.bytes());
@@ -492,11 +742,28 @@ fn project_identity(
     hasher.update(&config.print_c_length.to_le_bytes());
     hasher.update(&(config.money_label.len() as u64).to_le_bytes());
     hasher.update(config.money_label.as_bytes());
+    // GETCONFIG exposes the complete catalog, including frontend-only preferences.
+    // Hash every canonical entry so two projects with observably different query
+    // results can never share a snapshot or hot-reload identity.
+    for (code, value) in config.values.iter() {
+        hasher.update(&(code.len() as u64).to_le_bytes());
+        hasher.update(code.as_bytes());
+        let encoded = serde_json::to_vec(value).expect("configuration value serializes");
+        hasher.update(&(encoded.len() as u64).to_le_bytes());
+        hasher.update(&encoded);
+    }
     for resource in resources {
         hasher.update(&(resource.relative_path.len() as u64).to_le_bytes());
         hasher.update(resource.relative_path.as_bytes());
         hasher.update(&[resource.category as u8]);
         hasher.update(&resource.payload_digest);
+    }
+    for (operation, declaration) in extensions {
+        hasher.update(&(operation.len() as u64).to_le_bytes());
+        hasher.update(operation.as_bytes());
+        let encoded = serde_json::to_vec(declaration).expect("extension declaration serializes");
+        hasher.update(&(encoded.len() as u64).to_le_bytes());
+        hasher.update(&encoded);
     }
     *hasher.finalize().as_bytes()
 }
@@ -577,10 +844,13 @@ fn parse_configuration(
     diagnostics: &mut Vec<ProtocolDiagnostic>,
 ) -> SemanticConfig {
     let mut config = SemanticConfig::default();
-    for file in files
+    let mut configuration_files = files
         .iter()
         .filter(|file| file.category == FileCategory::Configuration)
-    {
+        .collect::<Vec<_>>();
+    // Emuera has a semantic precedence independent of frontend submission order.
+    configuration_files.sort_by_key(|file| configuration_precedence(&file.relative_path));
+    for file in configuration_files {
         let FilePayload::Utf8(text) = &file.payload else {
             inspect_deferred_file(
                 diagnostics,
@@ -595,6 +865,13 @@ fn parse_configuration(
         if parse_json_configuration(text, &file.relative_path, &mut config, diagnostics) {
             continue;
         }
+        let fixed = is_fixed_configuration(&file.relative_path);
+        let debug_configuration = file
+            .relative_path
+            .replace('\\', "/")
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case("debug.config"));
         for (line_index, raw) in text.trim_start_matches('\u{feff}').lines().enumerate() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with(';') {
@@ -617,20 +894,36 @@ fn parse_configuration(
             };
             let name = name.trim();
             let value = value.trim();
+            let applied = if debug_configuration {
+                config.values.apply(name, value, false)
+            } else {
+                config.values.apply_regular(name, value, fixed)
+            };
+            if let Err(error) = applied {
+                diagnostics.push(project_diagnostic(
+                    match error {
+                        erabasic_config::ConfigParseError::UnknownKey => {
+                            "runtime.unknown_configuration"
+                        }
+                        erabasic_config::ConfigParseError::InvalidValue => {
+                            "runtime.invalid_configuration"
+                        }
+                    },
+                    DiagnosticSeverity::Warning,
+                    format!("configuration assignment {name:?} was not applied"),
+                    Some(SourceLocation {
+                        relative_path: file.relative_path.clone(),
+                        byte_start: 0,
+                        byte_end: 0,
+                        line: Some(line_index as u64 + 1),
+                        byte_column: None,
+                    }),
+                ));
+            }
             match name {
                 "表示するセーブデータ数" | "Save data count per page" => {
                     if let Ok(value) = value.parse::<u32>() {
                         config.save_slot_count = value.clamp(20, 80);
-                    }
-                    continue;
-                }
-                "お金の単位" | "Currency symbol" => {
-                    value.clone_into(&mut config.money_label);
-                    continue;
-                }
-                "販売アイテム数" | "Max shop item storage" => {
-                    if let Ok(value) = value.parse::<u32>() {
-                        config.maximum_shop_items = value;
                     }
                     continue;
                 }
@@ -732,7 +1025,6 @@ fn parse_configuration(
                 "セーブデータを圧縮して保存する" | "Compress save data" => {
                     config.compress_save = boolean;
                 }
-                "単位の位置" | "Currency symbol position" => config.money_first = boolean,
                 _ => {}
             }
         }
@@ -745,7 +1037,134 @@ fn parse_configuration(
             None,
         ));
     }
+    apply_catalog_semantics(&mut config);
     config
+}
+
+#[allow(clippy::too_many_lines)]
+fn apply_catalog_semantics(config: &mut SemanticConfig) {
+    let boolean = |code| match config.values.get_code(code) {
+        Some(ConfigValue::Boolean(value)) => Some(*value),
+        _ => None,
+    };
+    let integer = |code| match config.values.get_code(code) {
+        Some(ConfigValue::Integer(value)) => Some(*value),
+        _ => None,
+    };
+    let string = |code| match config.values.get_code(code) {
+        Some(ConfigValue::String(value) | ConfigValue::Enum { value, .. }) => Some(value.as_str()),
+        _ => None,
+    };
+    if let Some(value) = boolean("IgnoreCase") {
+        config.csv.ignore_case = value;
+        config.analyzer.ignore_case = value;
+    }
+    if let Some(value) = boolean("UseRenameFile") {
+        config.csv.use_rename_file = value;
+    }
+    if let Some(value) = boolean("UseReplaceFile") {
+        config.csv.use_replace_file = value;
+    }
+    if let Some(value) = boolean("SearchSubdirectory") {
+        config.csv.search_subdirectories = value;
+    }
+    if let Some(value) = boolean("SortWithFilename") {
+        config.csv.sort_with_filename = value;
+        config.analyzer.sort_with_filename = value;
+    }
+    if let Some(value) = boolean("CompatiCALLNAME") {
+        config.csv.compatible_call_name = value;
+    }
+    if let Some(value) = boolean("CompatiSPChara") {
+        config.csv.compatible_sp_character = value;
+    }
+    if let Some(value) = boolean("UseERD") {
+        config.csv.use_erd = value;
+        config.analyzer.use_erd = value;
+    }
+    if let Some(value) = boolean("SystemAllowFullSpace") {
+        config.csv.allow_full_width_space = value;
+        config.analyzer.allow_full_width_space = value;
+    }
+    if let Some(value) = string("ReplaceContinuationBR") {
+        config.csv.continuation_separator = value.trim_matches('"').into();
+    }
+
+    if let Some(value) = boolean("AllowFunctionOverloading") {
+        config.analyzer.allow_function_overloading = value;
+    }
+    if let Some(value) = boolean("WarnFunctionOverloading") {
+        config.analyzer.warn_function_overloading = value;
+    }
+    if let Some(value) = integer("DisplayWarningLevel").and_then(|value| u8::try_from(value).ok()) {
+        config.analyzer.display_warning_level = value;
+    }
+    if let Some(value) = boolean("IgnoreUncalledFunction") {
+        config.analyzer.ignore_uncalled_functions = value;
+    }
+    if let Some(value) = string("FunctionNotFoundWarning").and_then(parse_warning_policy) {
+        config.analyzer.function_not_found = value;
+    }
+    if let Some(value) = string("FunctionNotCalledWarning").and_then(parse_warning_policy) {
+        config.analyzer.function_not_called = value;
+    }
+    if let Some(value) = boolean("CompatiFuncArgAutoConvert") {
+        config.analyzer.compatible_function_argument_auto_convert = value;
+    }
+    if let Some(value) = boolean("CompatiFuncArgOptional") {
+        config.analyzer.compatible_function_argument_optional = value;
+    }
+    if let Some(value) = boolean("CompatiCallEvent") {
+        config.analyzer.compatible_call_event = value;
+    }
+    if let Some(value) = boolean("SystemSaveInBinary") {
+        config.analyzer.system_save_in_binary = value;
+        config.save_in_binary = value;
+    }
+
+    if let Some(value) = boolean("AutoSave") {
+        config.auto_save = value;
+    }
+    if let Some(value) = boolean("Ctrl_Z_Enabled") {
+        config.ctrl_z_enabled = value;
+    }
+    if let Some(value) = boolean("AllowLongInputByMouse") {
+        config.allow_long_input_by_activation = value;
+    }
+    if let Some(value) = boolean("ZipSaveData") {
+        config.compress_save = value;
+    }
+    if let Some(value) = integer("SaveDataNos").and_then(|value| u32::try_from(value).ok()) {
+        config.save_slot_count = value.clamp(20, 80);
+    }
+    if let Some(value) = integer("WindowX").and_then(|value| u32::try_from(value).ok()) {
+        config.viewport_width = value.max(128);
+    }
+    if let Some(value) = integer("WindowY").and_then(|value| u32::try_from(value).ok()) {
+        config.viewport_height = value.max(128);
+    }
+    if let Some(value) = integer("FontSize").and_then(|value| u32::try_from(value).ok()) {
+        config.font_size = value.max(8);
+    }
+    if let Some(value) = integer("LineHeight").and_then(|value| u32::try_from(value).ok()) {
+        config.line_height = value.max(config.font_size);
+    }
+    if let Some(value) = integer("PrintCPerLine").and_then(|value| u32::try_from(value).ok()) {
+        config.print_c_per_line = value.max(1);
+    }
+    if let Some(value) = integer("PrintCLength").and_then(|value| u32::try_from(value).ok()) {
+        config.print_c_length = value.max(1);
+    }
+}
+
+fn parse_warning_policy(value: &str) -> Option<WarningPolicy> {
+    match value.to_ascii_uppercase().as_str() {
+        "IGNORE" => Some(WarningPolicy::Ignore),
+        "DISPLAY" => Some(WarningPolicy::Display),
+        "ONCE" | "ONCEPERFILE" | "ONCE_PER_FILE" => Some(WarningPolicy::OncePerFile),
+        "LATER" => Some(WarningPolicy::Later),
+        _ => None,
+    }
 }
 
 fn parse_json_configuration(
@@ -766,75 +1185,6 @@ fn parse_json_configuration(
             {
                 config.use_new_random = boolean;
             }
-            if let Some(boolean) = value
-                .get("CompatiCallEvent")
-                .and_then(serde_json::Value::as_bool)
-            {
-                config.analyzer.compatible_call_event = boolean;
-            }
-            if let Some(boolean) = value
-                .get("CompatiFuncArgOptional")
-                .and_then(serde_json::Value::as_bool)
-            {
-                config.analyzer.compatible_function_argument_optional = boolean;
-            }
-            if let Some(boolean) = value
-                .get("CompatiFuncArgAutoConvert")
-                .and_then(serde_json::Value::as_bool)
-            {
-                config.analyzer.compatible_function_argument_auto_convert = boolean;
-            }
-            if let Some(boolean) = value.get("AutoSave").and_then(serde_json::Value::as_bool) {
-                config.auto_save = boolean;
-            }
-            if let Some(boolean) = value
-                .get("CtrlZEnabled")
-                .and_then(serde_json::Value::as_bool)
-            {
-                config.ctrl_z_enabled = boolean;
-            }
-            if let Some(boolean) = value
-                .get("AllowLongInputByMouse")
-                .and_then(serde_json::Value::as_bool)
-            {
-                config.allow_long_input_by_activation = boolean;
-            }
-            if let Some(boolean) = value
-                .get("SystemSaveInBinary")
-                .and_then(serde_json::Value::as_bool)
-            {
-                config.save_in_binary = boolean;
-            }
-            if let Some(boolean) = value
-                .get("ZipSaveData")
-                .and_then(serde_json::Value::as_bool)
-            {
-                config.compress_save = boolean;
-            }
-            if let Some(number) = value
-                .get("SaveDataNos")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok())
-            {
-                config.save_slot_count = number.clamp(20, 80);
-            }
-            for (key, target, minimum) in [
-                ("WindowX", &mut config.viewport_width, 128),
-                ("WindowY", &mut config.viewport_height, 128),
-                ("PrintCPerLine", &mut config.print_c_per_line, 1),
-                ("PrintCLength", &mut config.print_c_length, 1),
-                ("FontSize", &mut config.font_size, 8),
-                ("LineHeight", &mut config.line_height, 8),
-            ] {
-                if let Some(number) = value
-                    .get(key)
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|number| u32::try_from(number).ok())
-                {
-                    *target = number.max(minimum);
-                }
-            }
-            config.line_height = config.line_height.max(config.font_size);
         }
         Err(error) => diagnostics.push(project_diagnostic(
             "runtime.invalid_json_configuration",
@@ -850,6 +1200,86 @@ fn parse_json_configuration(
         )),
     }
     true
+}
+
+fn configuration_precedence(path: &str) -> (u8, String) {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    let name = normalized.rsplit('/').next().unwrap_or(&normalized);
+    let rank = match name {
+        "_default.config" | "default.config" => 0,
+        "setting.json" => 2,
+        "_fixed.config" | "fixed.config" => 3,
+        "debug.config" => 4,
+        _ => 1,
+    };
+    (rank, normalized)
+}
+
+fn is_fixed_configuration(path: &str) -> bool {
+    matches!(
+        path.replace('\\', "/")
+            .to_ascii_lowercase()
+            .rsplit('/')
+            .next(),
+        Some("_fixed.config" | "fixed.config")
+    )
+}
+
+fn sync_replace_configuration(store: &mut ConfigStore, replace: &erabasic_data::ReplaceSettings) {
+    // Replace.csv is parsed by erabasic-csv, then mirrored into the unified script
+    // query catalog. This avoids treating replace keys as emuera.config settings.
+    let values = [
+        ("MoneyLabel", replace.money_label.clone()),
+        (
+            "MoneyFirst",
+            if replace.money_first {
+                "YES".into()
+            } else {
+                "NO".into()
+            },
+        ),
+        ("LoadLabel", replace.load_label.clone()),
+        ("MaxShopItem", replace.max_shop_item.to_string()),
+        ("DrawLineString", replace.draw_line_string.clone()),
+        ("BarChar1", replace.bar_char_1.to_string()),
+        ("BarChar2", replace.bar_char_2.to_string()),
+        ("TitleMenuString0", replace.title_menu_string_0.clone()),
+        ("TitleMenuString1", replace.title_menu_string_1.clone()),
+        ("ComAbleDefault", replace.com_able_default.to_string()),
+        (
+            "StainDefault",
+            replace
+                .stain_default
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join("/"),
+        ),
+        ("TimeupLabel", replace.timeup_label.clone()),
+        (
+            "ExpLvDef",
+            replace
+                .exp_lv_default
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join("/"),
+        ),
+        (
+            "PalamLvDef",
+            replace
+                .palam_lv_default
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join("/"),
+        ),
+        ("pbandDef", replace.pband_default.to_string()),
+        ("RelationDef", replace.relation_default.to_string()),
+    ];
+    for (name, value) in values {
+        let _ = store.apply(name, &value, false);
+    }
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -948,8 +1378,11 @@ fn project_diagnostic(
 
 #[cfg(test)]
 mod tests {
+    use era_protocol::ProtocolVersion;
     use era_runtime_protocol::{
-        FileCategory, FileChange, FilePayload, ReloadProject, SubmittedFile,
+        ExtensionArgument, ExtensionArgumentStyle, ExtensionCallableKind, ExtensionDeclaration,
+        ExtensionValueType, FileCategory, FileChange, FilePayload, ProjectAnalysisRequest,
+        ReloadProject, SubmittedFile,
     };
 
     use super::*;
@@ -968,7 +1401,7 @@ mod tests {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
-                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nCurrency symbol:円\nCurrency symbol position:NO\nMax shop item storage:77\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nフォント名:Test\n",
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nフォント名:Test\n",
             )],
             &mut diagnostics,
         );
@@ -982,9 +1415,9 @@ mod tests {
         assert!(config.save_in_binary);
         assert!(config.compress_save);
         assert_eq!(config.save_slot_count, 30);
-        assert_eq!(config.money_label, "円");
-        assert!(!config.money_first);
-        assert_eq!(config.maximum_shop_items, 77);
+        assert_eq!(config.money_label, "$");
+        assert!(config.money_first);
+        assert_eq!(config.maximum_shop_items, 100);
         assert_eq!(config.font_size, 20);
         assert_eq!(config.line_height, 22);
         assert!(config.analyzer.compatible_call_event);
@@ -1000,7 +1433,7 @@ mod tests {
     }
 
     #[test]
-    fn json_configuration_applies_runtime_semantics_without_device_settings() {
+    fn setting_json_only_applies_reference_setting_fields() {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
@@ -1009,12 +1442,12 @@ mod tests {
             &mut diagnostics,
         );
         assert!(config.use_new_random);
-        assert!(config.allow_long_input_by_activation);
-        assert_eq!(config.font_size, 21);
-        assert_eq!(config.line_height, 21);
-        assert!(config.analyzer.compatible_call_event);
-        assert!(config.analyzer.compatible_function_argument_optional);
-        assert!(config.analyzer.compatible_function_argument_auto_convert);
+        assert!(!config.allow_long_input_by_activation);
+        assert_eq!(config.font_size, 18);
+        assert_eq!(config.line_height, 19);
+        assert!(!config.analyzer.compatible_call_event);
+        assert!(!config.analyzer.compatible_function_argument_optional);
+        assert!(!config.analyzer.compatible_function_argument_auto_convert);
         assert!(
             diagnostics
                 .iter()
@@ -1099,5 +1532,101 @@ mod tests {
             ],
         };
         assert!(apply_project_delta(&current, &duplicate).is_err());
+    }
+
+    #[test]
+    fn analysis_selection_checks_unreachable_code_without_loading_a_project() {
+        let manifest = ProjectManifest {
+            project_revision: 9,
+            files: vec![
+                SubmittedFile {
+                    relative_path: "good.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8("@UNUSED\nRETURN\n".into()),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "bad.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8("this is not valid at top level".into()),
+                    content_hash: None,
+                },
+            ],
+        };
+        let report = analyze_submitted_project_with_extensions(
+            &ProjectAnalysisRequest {
+                manifest,
+                selected_erb_paths: vec!["good.erb".into()],
+                debug_mode: true,
+            },
+            &[],
+        );
+        assert!(report.success, "{:?}", report.diagnostics);
+        assert_eq!(report.analyzed_erb_paths, vec!["good.erb"]);
+    }
+
+    #[test]
+    fn portable_extensions_participate_in_analysis_and_deterministic_host_lowering() {
+        let declaration = ExtensionDeclaration {
+            id: "example.echo.v1".into(),
+            era_name: "EXT_ECHO".into(),
+            kind: ExtensionCallableKind::Function,
+            arguments: vec![ExtensionArgument {
+                value_type: ExtensionValueType::String,
+                mutable: false,
+                optional: false,
+            }],
+            variadic: false,
+            return_type: ExtensionValueType::String,
+            argument_style: ExtensionArgumentStyle::Normal,
+            operation: "example.echo".into(),
+            operation_version: ProtocolVersion::new(1, 0),
+        };
+        let manifest = ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nRESULTS = EXT_ECHO(\"ok\")\nRETURN\n".into(),
+                ),
+                content_hash: None,
+            }],
+        };
+        let build = build_project_with_extensions(&manifest, None, &[declaration]);
+        assert!(build.report.success, "{:?}", build.report.diagnostics);
+        let artifact = build.artifact.unwrap();
+        assert!(artifact.artifact().host_imports.iter().any(|import| {
+            import.import.namespace == "rustyera.extension" && import.import.name == "example.echo"
+        }));
+    }
+
+    #[test]
+    fn query_visible_configuration_participates_in_project_identity() {
+        let manifest = |font_size| ProjectManifest {
+            project_revision: 1,
+            files: vec![
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "emuera.config".into(),
+                    category: FileCategory::Configuration,
+                    payload: FilePayload::Utf8(format!("Font size:{font_size}\n")),
+                    content_hash: None,
+                },
+            ],
+        };
+        let first = build_project(&manifest(18), None);
+        let second = build_project(&manifest(19), None);
+        assert!(first.report.success, "{:?}", first.report.diagnostics);
+        assert!(second.report.success, "{:?}", second.report.diagnostics);
+        assert_ne!(
+            first.snapshot.unwrap().project_identity,
+            second.snapshot.unwrap().project_identity
+        );
     }
 }

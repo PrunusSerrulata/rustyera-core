@@ -6,6 +6,7 @@
 
 mod controller;
 mod host;
+mod key_macro;
 mod operation;
 mod presentation;
 mod project;

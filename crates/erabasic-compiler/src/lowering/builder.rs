@@ -1126,7 +1126,11 @@ impl<'a> Builder<'a> {
         location: SourceLocation,
     ) {
         let classification = if extension {
-            ExecutionBinding::Host(extension_binding(name))
+            self.context
+                .host_registry
+                .classification(name)
+                .cloned()
+                .unwrap_or_else(|| ExecutionBinding::Host(extension_binding(name)))
         } else {
             self.context
                 .host_registry

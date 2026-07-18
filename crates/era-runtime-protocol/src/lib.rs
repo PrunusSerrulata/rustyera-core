@@ -4,7 +4,9 @@
 //! a frontend exists. Filesystem, clock, rendering and device work remain outside it.
 
 mod effect;
+mod extension;
 mod input;
+mod key_macro;
 mod lifecycle;
 mod message;
 mod presentation;
@@ -16,10 +18,18 @@ pub use effect::{
     AudioEffect, AudioEffectAction, EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind,
     EffectOutcome, EffectOutcomeStatus, VideoEffect,
 };
+pub use extension::{
+    ExtensionArgument, ExtensionArgumentStyle, ExtensionCallableKind, ExtensionDeclaration,
+    ExtensionInvocation, ExtensionRegistrySubmit, ExtensionResult, ExtensionValueType,
+    ExtensionWrite,
+};
 pub use input::{
     AdvanceTime, DeviceStateChanged, FrontendInput, InputDeviceKind, InputIntent, InputUndoRequest,
     InputUndoState, InputWait, InteractionToken, PrimitiveInput, WaitChange, WaitKind,
     WaitStability,
+};
+pub use key_macro::{
+    KEY_MACRO_GROUPS, KEY_MACRO_SLOTS, KeyMacroCommand, KeyMacroProfileSubmit, KeyMacroState,
 };
 pub use lifecycle::{
     ClientCapabilities, ClientHello, ClientStateChanged, CommandErrorCode, CommandRejected,
@@ -41,8 +51,9 @@ pub use presentation::{
 };
 pub use project::{
     DiagnosticSeverity, FileCategory, FileChange, FilePayload, FrontendIoError,
-    FrontendIoErrorKind, ProjectLoadReport, ProjectManifest, ProtocolDiagnostic, ReloadProject,
-    SourceLocation, SubmittedFile, validate_relative_path,
+    FrontendIoErrorKind, ProjectAnalysisReport, ProjectAnalysisRequest, ProjectLoadReport,
+    ProjectManifest, ProtocolDiagnostic, ReloadProject, SourceLocation, SubmittedFile,
+    validate_relative_path,
 };
 pub use service::{
     CancelExternalRequest, ExternalRequestKind, GET_KEY_STATE_OPERATION,

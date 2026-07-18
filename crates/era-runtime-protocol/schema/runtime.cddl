@@ -6,6 +6,12 @@ runtime-message =
   [10, project-manifest] /
   [11, project-load-report] /
   [12, reload-project] /
+  [13, project-analysis-request] /
+  [14, project-analysis-report] /
+  [15, key-macro-profile-submit] /
+  [16, key-macro-command] /
+  [17, key-macro-state] /
+  [18, extension-registry-submit] /
   [20, start-request] /
   [21, runtime-state] /
   [30, frontend-input] /
@@ -52,9 +58,20 @@ version-rejected = { 0: any, 1: tstr }
 project-manifest = { 0: uint, 1: [* any] }
 project-load-report = { 0: uint, 1: bool, 2: [* any] }
 reload-project = { 0: uint, 1: uint, 2: [* any] }
+project-analysis-request = { 0: project-manifest, 1: [* tstr], 2: bool }
+project-analysis-report = { 0: uint, 1: bool, 2: [* any], 3: [* tstr] }
+key-macro-profile-submit = { 0: tstr, 1: any }
+key-macro-command = [0, uint] / [1, { 0: uint, 1: uint, 2: tstr }] / [2, { 0: uint, 1: uint }]
+key-macro-state = { 0: bool, 1: uint, 2: [* tstr], 3: [* tstr], 4: tstr }
+extension-registry-submit = { 0: [* extension-declaration] }
+extension-declaration = {
+  0: tstr, 1: tstr, 2: uint, 3: [* extension-argument], 4: bool,
+  5: uint, 6: uint, 7: tstr, 8: any
+}
+extension-argument = { 0: uint, 1: bool, 2: bool }
 start-request = { 0: any }
 runtime-state = { 0: uint, 1: uint, 2: uint }
-frontend-input = { 0: uint, 1: uint, 2: uint, 3: any }
+frontend-input = { 0: uint, 1: interaction-token, 2: uint, 3: any, 4: bool }
 advance-time = { 0: uint }
 wait-change = any
 input-undo-request = { 0: interaction-token }
@@ -71,7 +88,7 @@ storage-operation =
   [3, storage-precondition] /
   [4]
 storage-precondition = [0] / [1] / [2, tstr]
-service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr }
+service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr, 5: uint / null }
 service-response = { 0: uint, 1: any }
 state-export-request = { 0: uint }
 state-export-ready = { 0: uint, 1: any }

@@ -1,6 +1,6 @@
 use era_runtime_protocol::{InputWait, InteractionToken, ProtocolValue, WaitKind, WaitStability};
 use erabasic_bytecode::BytecodeType;
-use erabasic_vm::{HostRequestId, VmHostRequest, VmValue};
+use erabasic_vm::{HostRequestId, PlaceDescriptor, VmHostRequest, VmValue};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -19,7 +19,7 @@ pub(crate) enum PostInputAction {
     OpenUrl { url: String, trigger_value: i64 },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum ExternalCompletion {
     GetKey {
         request: HostRequestId,
@@ -42,6 +42,11 @@ pub(crate) enum ExternalCompletion {
         coordinate: PointerCoordinate,
         presentation_revision: u64,
         environment_revision: u64,
+    },
+    Extension {
+        request: HostRequestId,
+        return_type: era_runtime_protocol::ExtensionValueType,
+        mutable_places: Vec<Option<(PlaceDescriptor, era_runtime_protocol::ExtensionValueType)>>,
     },
 }
 

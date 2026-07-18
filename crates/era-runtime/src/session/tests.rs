@@ -110,6 +110,298 @@ fn handshake_selects_only_implemented_features() {
 }
 
 #[test]
+fn key_macro_edits_emit_canonical_state_and_persist_through_frontend_storage() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::Ready;
+    session.epoch = SessionEpoch(1);
+    session.negotiated_features.insert(RuntimeFeature::Storage);
+    session
+        .negotiated_features
+        .insert(RuntimeFeature::KeyMacros);
+    session.storage_capabilities = capabilities().storage;
+    session
+        .apply_key_macro_command(
+            7,
+            KeyMacroCommand::Store {
+                group: 1,
+                slot: 2,
+                text: "abc".into(),
+            },
+        )
+        .unwrap();
+    let messages = drain(&mut session);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::KeyMacroStateChanged(state)
+            if state.entries[era_runtime_protocol::KEY_MACRO_SLOTS + 2] == "abc"
+                && state.serialized.contains("G1:マクロキーF3:abc")
+    )));
+    let request_id = messages
+        .iter()
+        .find_map(|message| match message {
+            RuntimeMessage::StorageRequest(request) if request.relative_path == "macro.txt" => {
+                Some(request.request_id)
+            }
+            _ => None,
+        })
+        .expect("macro persistence request");
+    assert_eq!(session.phase, RuntimePhase::WaitingExternal);
+    session
+        .complete_storage(
+            8,
+            StorageResponse {
+                request_id,
+                result: StorageResult::Written {
+                    revision: Some("1".into()),
+                },
+            },
+        )
+        .unwrap();
+    assert_eq!(session.phase, RuntimePhase::Ready);
+}
+
+#[test]
+fn key_macro_activation_recalls_runtime_text_without_completing_the_wait() {
+    let token = InteractionToken { epoch: 1, id: 4 };
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::WaitingInput;
+    session.epoch = SessionEpoch(1);
+    session
+        .negotiated_features
+        .insert(RuntimeFeature::KeyMacros);
+    assert!(session.key_macros.store(2, 3, "(ab)*2\\nnext".into()));
+    session.operations.activate_input(PendingInput {
+        host_request: None,
+        wait: InputWait {
+            wait_id: 9,
+            kind: WaitKind::StringValue,
+            stability: WaitStability::StableInput,
+            one_input: false,
+            stop_message_skip: false,
+            system_input: true,
+            mouse_input: false,
+            default_value: None,
+            deadline_ns: None,
+            display_time: false,
+            timeout_message: None,
+            submission_token: token,
+            countdown_remaining_ms: None,
+        },
+        result_name: Some("RESULTS".into()),
+        choices: BTreeMap::new(),
+        timeout_duration_ns: None,
+        post_input: None,
+    });
+    session
+        .complete_input(
+            7,
+            FrontendInput {
+                wait_id: 9,
+                token,
+                monotonic_time_ns: 0,
+                intent: InputIntent::ActivateKeyMacro { group: 2, slot: 3 },
+                message_skip: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(session.text_box, "(ab)*2\\nnext");
+    assert!(session.operations.active_input().is_some());
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ProjectionState(state) if state.text_box == "(ab)*2\\nnext"
+    )));
+}
+
+#[test]
+fn project_analysis_is_one_shot_and_does_not_replace_loaded_state() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::Negotiating;
+    session.epoch = SessionEpoch(1);
+    session
+        .negotiated_features
+        .insert(RuntimeFeature::ProjectAnalysis);
+    session
+        .analyze_project(
+            3,
+            &era_runtime_protocol::ProjectAnalysisRequest {
+                manifest: ProjectManifest {
+                    project_revision: 4,
+                    files: vec![SubmittedFile {
+                        relative_path: "unused.erb".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8("@UNUSED\nRETURN\n".into()),
+                        content_hash: None,
+                    }],
+                },
+                selected_erb_paths: Vec::new(),
+                debug_mode: false,
+            },
+        )
+        .unwrap();
+    assert!(session.project_snapshot.is_none());
+    assert_eq!(session.phase, RuntimePhase::Negotiating);
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ProjectAnalysisReport(report) if report.success
+    )));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn portable_extension_service_validates_return_and_mutable_writes() {
+    let operation_version = ProtocolVersion::new(1, 0);
+    let mut client_capabilities = capabilities();
+    client_capabilities.services.push(ServiceCapability {
+        kind: ServiceKind::Extension,
+        operation: "example.mutate".into(),
+        versions: VersionRange::exact(operation_version),
+    });
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "extension-test".into(),
+            features: vec![RuntimeFeature::ExternalServices],
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: client_capabilities,
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ExtensionRegistrySubmit(ExtensionRegistrySubmit {
+            declarations: vec![era_runtime_protocol::ExtensionDeclaration {
+                id: "example.mutate.v1".into(),
+                era_name: "EXT_MUTATE".into(),
+                kind: era_runtime_protocol::ExtensionCallableKind::Function,
+                arguments: vec![era_runtime_protocol::ExtensionArgument {
+                    value_type: era_runtime_protocol::ExtensionValueType::Integer,
+                    mutable: true,
+                    optional: false,
+                }],
+                variadic: false,
+                return_type: era_runtime_protocol::ExtensionValueType::Integer,
+                argument_style: era_runtime_protocol::ExtensionArgumentStyle::Normal,
+                operation: "example.mutate".into(),
+                operation_version,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "extension.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nRESULT = EXT_MUTATE(FLAG:0)\nWAIT\nRETURN\n".into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let load_messages = drain(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::Ready, "{load_messages:?}");
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let mut request = None;
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        request = drain(&mut session)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::ServiceRequest(request)
+                    if request.kind == ServiceKind::Extension =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            });
+        if request.is_some() {
+            break;
+        }
+    }
+    let request = request.expect("extension service request");
+    let invocation: era_runtime_protocol::ExtensionInvocation =
+        decode_canonical(request.payload.as_slice()).unwrap();
+    assert_eq!(invocation.extension_id, "example.mutate.v1");
+    assert_eq!(
+        invocation.arguments,
+        vec![era_runtime_protocol::ProtocolValue::Integer(0)]
+    );
+    submit(
+        &mut session,
+        4,
+        RuntimeMessage::ServiceResponse(ServiceResponse {
+            request_id: request.request_id,
+            result: ServiceResult::Ready {
+                payload: ProtocolBytes::new(
+                    encode_canonical(&era_runtime_protocol::ExtensionResult {
+                        value: Some(era_runtime_protocol::ProtocolValue::Integer(7)),
+                        writes: vec![era_runtime_protocol::ExtensionWrite {
+                            argument_ordinal: 0,
+                            value: era_runtime_protocol::ProtocolValue::Integer(5),
+                        }],
+                    })
+                    .unwrap(),
+                ),
+            },
+        }),
+    );
+    for _ in 0..4 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "RESULT", &[], None).unwrap(), 7);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 5);
+}
+
+#[test]
+fn safe_at_commands_use_runtime_lifecycle_effects_and_keep_debug_separate() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::WaitingInput;
+    session.epoch = SessionEpoch(1);
+    session.handle_system_input_command(1, "@CONFIG").unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::EffectBatch(batch)
+            if matches!(batch.effects[0].kind, EffectKind::OpenConfiguration)
+    )));
+    session.handle_system_input_command(2, "@DEBUG").unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::Diagnostic(diagnostic)
+            if diagnostic.code == "runtime.debug_command_requires_debug_channel"
+    )));
+    session.handle_system_input_command(3, "@REBOOT").unwrap();
+    assert_eq!(
+        session.exit_requested.map(|exit| exit.reason),
+        Some(ExitReason::Restart)
+    );
+    assert_eq!(session.phase, RuntimePhase::Stopping);
+}
+
+#[test]
 fn debug_channel_has_independent_sequence_and_cannot_widen_creator_policy() {
     let mut session = RuntimeSession::new(RuntimeOptions {
         debug_scope_mask: (1 << 2) | (1 << 5),

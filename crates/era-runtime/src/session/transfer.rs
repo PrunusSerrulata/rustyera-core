@@ -28,6 +28,9 @@ impl RuntimeSession {
         if request.kind == StateExportKind::VmSnapshot && self.undo_replay.is_some() {
             reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
         }
+        if request.kind == StateExportKind::VmSnapshot && !self.queued_input.is_empty() {
+            reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
+        }
         let result = if reasons.is_empty() {
             if self.outbound_transfer.is_some() {
                 return self.reject(
@@ -97,6 +100,7 @@ impl RuntimeSession {
                         saved_skip: self.saved_skip,
                         force_kana_mode: self.force_kana_mode,
                         hotkey_state: self.hotkey_state.clone(),
+                        key_macros: self.key_macros.clone(),
                         text_box: self.text_box.clone(),
                         flow_input_enabled: self.flow_input_enabled,
                         flow_input_default: self.flow_input_default,
@@ -505,6 +509,7 @@ impl RuntimeSession {
                 exit_requested: self.exit_requested,
                 selected_locale: self.selected_locale.clone(),
                 input_undo,
+                key_macros: self.key_macros.state(),
             }),
             Some(message_id),
         )?;

@@ -7,17 +7,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AdvanceTime, CancelExternalRequest, ClientHello, ClientStateChanged, CommandRejected,
-    DeviceStateChanged, EffectAcknowledgement, EffectBatch, ExitRequested, FrontendInput,
-    InputUndoRequest, InputUndoState, PresentationDelta, PresentationSnapshot, ProjectLoadReport,
-    ProjectManifest, ProjectionObservation, ProjectionState, ProtocolDiagnostic, ReloadProject,
-    ResynchronizeRequest, RuntimeFault, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement,
-    ServerHello, ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
-    StateExportChunk, StateExportChunkRequest, StateExportReady, StateExportRequest,
-    StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady,
-    StateTransferCancel, StorageRequest, StorageResponse, VersionRejected, WaitChange,
+    DeviceStateChanged, EffectAcknowledgement, EffectBatch, ExitRequested, ExtensionRegistrySubmit,
+    FrontendInput, InputUndoRequest, InputUndoState, KeyMacroCommand, KeyMacroProfileSubmit,
+    KeyMacroState, PresentationDelta, PresentationSnapshot, ProjectAnalysisReport,
+    ProjectAnalysisRequest, ProjectLoadReport, ProjectManifest, ProjectionObservation,
+    ProjectionState, ProtocolDiagnostic, ReloadProject, ResynchronizeRequest, RuntimeFault,
+    RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceRequest,
+    ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest, StateExportChunk,
+    StateExportChunkRequest, StateExportReady, StateExportRequest, StateImportAccepted,
+    StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
+    StorageRequest, StorageResponse, VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(15, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(16, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -36,6 +38,8 @@ pub struct RuntimeResynchronized {
     pub selected_locale: String,
     #[n(6)]
     pub input_undo: InputUndoState,
+    #[n(7)]
+    pub key_macros: KeyMacroState,
 }
 
 /// Stable runtime message variants. Numeric discriminants are wire IDs and must
@@ -55,6 +59,18 @@ pub enum RuntimeMessage {
     ProjectLoadReport(#[n(0)] ProjectLoadReport),
     #[n(12)]
     ReloadProject(#[n(0)] ReloadProject),
+    #[n(13)]
+    ProjectAnalysisRequest(#[n(0)] ProjectAnalysisRequest),
+    #[n(14)]
+    ProjectAnalysisReport(#[n(0)] ProjectAnalysisReport),
+    #[n(15)]
+    KeyMacroProfileSubmit(#[n(0)] KeyMacroProfileSubmit),
+    #[n(16)]
+    KeyMacroCommand(#[n(0)] KeyMacroCommand),
+    #[n(17)]
+    KeyMacroStateChanged(#[n(0)] KeyMacroState),
+    #[n(18)]
+    ExtensionRegistrySubmit(#[n(0)] ExtensionRegistrySubmit),
     #[n(20)]
     Start(#[n(0)] StartRequest),
     #[n(21)]
@@ -145,6 +161,12 @@ impl RuntimeMessage {
             Self::ProjectManifest(_) => 10,
             Self::ProjectLoadReport(_) => 11,
             Self::ReloadProject(_) => 12,
+            Self::ProjectAnalysisRequest(_) => 13,
+            Self::ProjectAnalysisReport(_) => 14,
+            Self::KeyMacroProfileSubmit(_) => 15,
+            Self::KeyMacroCommand(_) => 16,
+            Self::KeyMacroStateChanged(_) => 17,
+            Self::ExtensionRegistrySubmit(_) => 18,
             Self::Start(_) => 20,
             Self::StateChanged(_) => 21,
             Self::ExitRequested(_) => 22,
