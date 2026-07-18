@@ -37,6 +37,8 @@ function Assert-True([bool]$Condition, [string]$Message) {
 
 $tempGame = $null
 $tempSystemGame = $null
+$tempOneInputGame = $null
+$tempOneInputLongGame = $null
 try {
     $bad = Invoke-Oracle @{ id = 1; op = "doesNotExist" }
     Assert-True (-not $bad.ok) "unknown operation should fail"
@@ -185,6 +187,56 @@ try {
     Assert-True ($inputRun.result.termination -eq "completed") "input function did not complete"
     Assert-True ($inputRun.result.watches.RESULT -eq 42) "input did not update RESULT"
 
+    $tempOneInputGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-oneinput-oracle-" + [guid]::NewGuid())
+    Copy-Item "$PSScriptRoot/fixture" $tempOneInputGame -Recurse
+    Copy-Item "$PSScriptRoot/fixture-oneinput/*" $tempOneInputGame -Recurse -Force
+    $oneInputLoad = Invoke-Oracle @{ id = "oneinput-load"; op = "load"; gameDir = $tempOneInputGame }
+    Assert-True $oneInputLoad.ok "ONEINPUT fixture failed to load"
+    $oneInputText = Invoke-Oracle @{
+        id = "oneinput-text"
+        op = "run"
+        entry = "ORACLE_ONEINPUT"
+        uiInputs = @(
+            @{ text = "12" }, @{ text = "βx" }, @{ text = "34" }, @{ text = "yz" }
+        )
+        watch = @("RESULT:40", "RESULT:41", "RESULTS:40", "RESULTS:41")
+    }
+    Assert-True (($oneInputText.result.watches.'RESULT:40' -eq 1) -and
+        ($oneInputText.result.watches.'RESULT:41' -eq 3) -and
+        ($oneInputText.result.watches.'RESULTS:40' -eq "β") -and
+        ($oneInputText.result.watches.'RESULTS:41' -eq "y")) "ONEINPUT text truncation differs"
+    $oneInputMouse = Invoke-Oracle @{
+        id = "oneinput-mouse-default"
+        op = "run"
+        entry = "ORACLE_ONEINPUT_MOUSE"
+        uiInputs = @(
+            @{ text = "42"; changedByMouse = $true },
+            @{ text = "LONG"; changedByMouse = $true }
+        )
+        watch = @("RESULT:42", "RESULTS:42")
+    }
+    Assert-True (($oneInputMouse.result.watches.'RESULT:42' -eq 4) -and
+        ($oneInputMouse.result.watches.'RESULTS:42' -eq "L")) "default mouse ONEINPUT truncation differs"
+
+    $tempOneInputLongGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-oneinput-long-oracle-" + [guid]::NewGuid())
+    Copy-Item "$PSScriptRoot/fixture" $tempOneInputLongGame -Recurse
+    Copy-Item "$PSScriptRoot/fixture-oneinput/*" $tempOneInputLongGame -Recurse -Force
+    Copy-Item "$PSScriptRoot/fixture-oneinput-long/*" $tempOneInputLongGame -Recurse -Force
+    $oneInputLongLoad = Invoke-Oracle @{ id = "oneinput-long-load"; op = "load"; gameDir = $tempOneInputLongGame }
+    Assert-True $oneInputLongLoad.ok "long ONEINPUT fixture failed to load"
+    $oneInputLong = Invoke-Oracle @{
+        id = "oneinput-mouse-long"
+        op = "run"
+        entry = "ORACLE_ONEINPUT_MOUSE"
+        uiInputs = @(
+            @{ text = "42"; changedByMouse = $true },
+            @{ text = "LONG"; changedByMouse = $true }
+        )
+        watch = @("RESULT:42", "RESULTS:42")
+    }
+    Assert-True (($oneInputLong.result.watches.'RESULT:42' -eq 42) -and
+        ($oneInputLong.result.watches.'RESULTS:42' -eq "LONG")) "AllowLongInputByMouse differs"
+
     $tempSystemGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-system-oracle-" + [guid]::NewGuid())
     Copy-Item "$PSScriptRoot/fixture" $tempSystemGame -Recurse
     Copy-Item "$PSScriptRoot/fixture-system/*" $tempSystemGame -Recurse -Force
@@ -210,5 +262,11 @@ finally {
     }
     if ($null -ne $tempSystemGame -and [System.IO.Directory]::Exists($tempSystemGame)) {
         Remove-Item $tempSystemGame -Recurse -Force
+    }
+    if ($null -ne $tempOneInputGame -and [System.IO.Directory]::Exists($tempOneInputGame)) {
+        Remove-Item $tempOneInputGame -Recurse -Force
+    }
+    if ($null -ne $tempOneInputLongGame -and [System.IO.Directory]::Exists($tempOneInputLongGame)) {
+        Remove-Item $tempOneInputLongGame -Recurse -Force
     }
 }

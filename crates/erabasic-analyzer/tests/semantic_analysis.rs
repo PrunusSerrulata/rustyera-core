@@ -213,7 +213,7 @@ fn timed_input_wait_and_getkey_signatures_match_the_reference() {
             project_data: empty_project(),
             sources: vec![source(
                 "input.erb",
-                "@SYSTEM_TITLE\nTINPUT 100, 0, 1, \"timeout\", 0, 0\nTINPUTS 100, \"D\", 1, \"timeout\", 0, 0\nTONEINPUT 100, 0\nTONEINPUTS 100, \"N\"\nTWAIT 100, 0\nFORCEWAIT\nRESULT = GETKEY(65)\nRETURN\n",
+                "@SYSTEM_TITLE\nINPUT 7, 1, 0\nINPUTS \"D\", 1, 0\nONEINPUT 7, 1, 0\nONEINPUTS \"N\", 1, 0\nONEBINPUT 7, 1, 0\nONEBINPUTS \"N\", 1, 0\nTINPUT 100, 0, 1, \"timeout\", 0, 0\nTINPUTS 100, \"D\", 1, \"timeout\", 0, 0\nTONEINPUT 100, 0\nTONEINPUTS 100, \"N\"\nTWAIT 100, 0\nFORCEWAIT\nRESULT = GETKEY(65)\nRETURN\n",
             )],
         },
         &AnalyzerOptions::analysis_mode(),

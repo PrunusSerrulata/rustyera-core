@@ -404,12 +404,29 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
             true,
         );
     }
-    for name in ["RETURNF", "INPUT", "ONEINPUT", "AWAIT"] {
+    for name in ["RETURNF", "AWAIT"] {
         add(name, Expressions, &[Integer], 0, true, true);
     }
+    for name in ["INPUT", "ONEINPUT", "BINPUT", "ONEBINPUT"] {
+        add(
+            name,
+            Expressions,
+            &[Integer, Integer, Integer],
+            0,
+            false,
+            true,
+        );
+    }
     add("RETURN", Expressions, &[Integer], 0, false, true);
-    for name in ["INPUTS", "ONEINPUTS"] {
-        add(name, Expressions, &[String], 0, true, true);
+    for name in ["INPUTS", "ONEINPUTS", "BINPUTS", "ONEBINPUTS"] {
+        add(
+            name,
+            Expressions,
+            &[String, Integer, Integer],
+            0,
+            false,
+            true,
+        );
     }
     // The timed input builders in the reference implementation share a strict
     // six-slot layout. Optional trailing slots may be absent, but an interior

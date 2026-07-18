@@ -1351,21 +1351,40 @@ impl RuntimeSession {
         ) {
             if matches!(
                 pending.wait.kind,
-                WaitKind::IntegerValue | WaitKind::IntegerButton
+                WaitKind::IntegerValue
+                    | WaitKind::StringValue
+                    | WaitKind::IntegerButton
+                    | WaitKind::StringButton
             ) {
                 pending.choices = std::mem::take(&mut self.command_intents);
             }
             if pending.wait.stop_message_skip {
                 self.message_skip = false;
             }
+            let timed_value_input = matches!(
+                name.as_str(),
+                "TINPUT" | "TONEINPUT" | "TINPUTS" | "TONEINPUTS"
+            );
+            let untimed_value_input = matches!(
+                name.as_str(),
+                "INPUT"
+                    | "ONEINPUT"
+                    | "INPUTS"
+                    | "ONEINPUTS"
+                    | "BINPUT"
+                    | "ONEBINPUT"
+                    | "BINPUTS"
+                    | "ONEBINPUTS"
+            );
+            let (mouse_index, can_skip_index) = if timed_value_input { (4, 5) } else { (1, 2) };
             if self.message_skip
-                && matches!(
-                    name.as_str(),
-                    "TINPUT" | "TONEINPUT" | "TINPUTS" | "TONEINPUTS"
-                )
-                && request.arguments.len() >= 6
+                && (timed_value_input || untimed_value_input)
+                && request.arguments.get(can_skip_index).is_some()
             {
-                let mouse = matches!(request.arguments.get(4), Some(VmValue::Integer(1)));
+                let mouse = matches!(
+                    request.arguments.get(mouse_index),
+                    Some(VmValue::Integer(value)) if *value != 0
+                );
                 let target = pending.result_name.as_deref().and_then(|result| {
                     if mouse {
                         global_place_at(vm, result, 1)

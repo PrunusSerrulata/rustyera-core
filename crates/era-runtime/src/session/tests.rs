@@ -911,6 +911,102 @@ fn typed_input_updates_result_and_sixth_argument_honors_message_skip() {
 }
 
 #[test]
+fn untimed_one_input_message_skip_keeps_the_complete_default() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "test".into(),
+            features: vec![RuntimeFeature::TimedInput],
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["ja".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).expect("hello");
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "input.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nINPUT\nONEINPUTS \"LONG\", 0, 0\nPRINTFORML got=%RESULTS%\nWAIT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).expect("load");
+    let loaded = drain(&mut session);
+    assert!(
+        loaded.iter().any(
+            |message| matches!(message, RuntimeMessage::ProjectLoadReport(report) if report.success)
+        ),
+        "project load failed: {loaded:?}"
+    );
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let mut started = Vec::new();
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).expect("wait");
+        started.extend(drain(&mut session));
+        if session.operations.active_input().is_some() {
+            break;
+        }
+    }
+    let wait = session
+        .operations
+        .active_input()
+        .unwrap_or_else(|| {
+            panic!(
+                "input wait was not opened in state {:?}: {started:?}",
+                session.state
+            )
+        })
+        .wait
+        .clone();
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id: wait.wait_id,
+            token: wait.submission_token,
+            monotonic_time_ns: 10,
+            intent: InputIntent::CommitText("1".into()),
+            message_skip: true,
+        }),
+    );
+    for _ in 0..8 {
+        session
+            .drive(RuntimeDriveBudget::default())
+            .expect("resume");
+    }
+    let output = drain(&mut session);
+    assert!(output.iter().any(|message| match message {
+        RuntimeMessage::PresentationSnapshot(snapshot) =>
+            snapshot.lines.iter().any(|line| {
+                line.runs.iter().any(|run| matches!(
+                run,
+                era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("got=LONG")
+            ))
+            }),
+        _ => false,
+    }));
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn input_undo_records_only_accepted_scalar_input_after_a_checkpoint() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
@@ -2259,6 +2355,269 @@ fn frontend_monotonic_time_rebases_onto_restored_logical_time() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn one_input_normalization_is_scalar_default_and_activation_aware() {
+    let submission = InteractionToken { epoch: 3, id: 1 };
+    let long = InteractionToken { epoch: 3, id: 2 };
+    let short = InteractionToken { epoch: 3, id: 3 };
+    let mut pending = PendingInput {
+        host_request: None,
+        wait: InputWait {
+            wait_id: 1,
+            kind: WaitKind::StringValue,
+            stability: WaitStability::StableInput,
+            one_input: true,
+            stop_message_skip: false,
+            system_input: false,
+            mouse_input: true,
+            default_value: Some(era_runtime_protocol::ProtocolValue::String(
+                "DEFAULT".into(),
+            )),
+            deadline_ns: None,
+            display_time: false,
+            timeout_message: None,
+            submission_token: submission,
+            countdown_remaining_ms: None,
+        },
+        result_name: Some("RESULTS".into()),
+        choices: BTreeMap::from([
+            (long, VmValue::String("LONG".into())),
+            (short, VmValue::String("L".into())),
+        ]),
+        timeout_duration_ns: None,
+        post_input: None,
+    };
+    assert_eq!(
+        input_value(
+            &pending,
+            submission,
+            InputIntent::CommitText("βx".into()),
+            false,
+        ),
+        Some(InputSubmission::Value(VmValue::String("β".into())))
+    );
+    assert_eq!(
+        input_value(
+            &pending,
+            submission,
+            InputIntent::CommitText("😀x".into()),
+            false,
+        ),
+        Some(InputSubmission::Value(VmValue::String("😀".into())))
+    );
+    assert_eq!(
+        input_value(
+            &pending,
+            submission,
+            InputIntent::CommitText(String::new()),
+            false,
+        ),
+        Some(InputSubmission::Value(VmValue::String("DEFAULT".into())))
+    );
+    assert_eq!(
+        input_value(&pending, submission, InputIntent::Activate(long), false,),
+        Some(InputSubmission::Value(VmValue::String("L".into())))
+    );
+    assert_eq!(
+        input_value(&pending, submission, InputIntent::Activate(long), true,),
+        Some(InputSubmission::Value(VmValue::String("LONG".into())))
+    );
+
+    pending.wait.kind = WaitKind::IntegerValue;
+    pending.wait.default_value = Some(era_runtime_protocol::ProtocolValue::Integer(42));
+    pending.choices = BTreeMap::from([(long, VmValue::Integer(42)), (short, VmValue::Integer(4))]);
+    assert_eq!(
+        input_value(
+            &pending,
+            submission,
+            InputIntent::CommitText("12".into()),
+            false,
+        ),
+        Some(InputSubmission::Value(VmValue::Integer(1)))
+    );
+    pending.wait.deadline_ns = Some(1_000);
+    assert_eq!(
+        input_value(
+            &pending,
+            submission,
+            InputIntent::CommitText("34".into()),
+            false,
+        ),
+        Some(InputSubmission::Value(VmValue::Integer(3)))
+    );
+    pending.wait.kind = WaitKind::StringValue;
+    assert_eq!(
+        input_value(
+            &pending,
+            submission,
+            InputIntent::CommitText("yz".into()),
+            false,
+        ),
+        Some(InputSubmission::Value(VmValue::String("y".into())))
+    );
+    pending.wait.kind = WaitKind::IntegerValue;
+    assert!(
+        input_value(
+            &pending,
+            submission,
+            InputIntent::CommitText("-1".into()),
+            false,
+        )
+        .is_none()
+    );
+    assert_eq!(
+        input_value(&pending, submission, InputIntent::Activate(long), false,),
+        Some(InputSubmission::Value(VmValue::Integer(4)))
+    );
+
+    pending.wait.kind = WaitKind::IntegerButton;
+    assert_eq!(
+        input_value(&pending, submission, InputIntent::Activate(long), false,),
+        Some(InputSubmission::Value(VmValue::Integer(4)))
+    );
+    pending.choices.remove(&short);
+    assert!(input_value(&pending, submission, InputIntent::Activate(long), false,).is_none());
+    assert_eq!(
+        input_value(&pending, submission, InputIntent::Activate(long), true,),
+        Some(InputSubmission::Value(VmValue::Integer(42)))
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn one_input_activation_uses_the_loaded_allow_long_configuration() {
+    fn run(allow_long: bool) -> (i64, String) {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        submit(
+            &mut session,
+            0,
+            RuntimeMessage::ClientHello(ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "one-input-test".into(),
+                features: Vec::new(),
+                requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
+                preferred_locales: vec!["en".into()],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        submit(
+            &mut session,
+            1,
+            RuntimeMessage::ProjectManifest(ProjectManifest {
+                project_revision: 1,
+                files: vec![
+                    SubmittedFile {
+                        relative_path: "emuera.config".into(),
+                        category: FileCategory::Configuration,
+                        payload: FilePayload::Utf8(format!(
+                            "Allow long input by mouse for ONEINPUT:{}\n",
+                            if allow_long { "YES" } else { "NO" }
+                        )),
+                        content_hash: None,
+                    },
+                    SubmittedFile {
+                        relative_path: "input.erb".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8(
+                            "@SYSTEM_TITLE\nPRINTBUTTON \"42\", 42\nONEINPUT\nRESULT:42 = RESULT\nPRINTBUTTON \"LONG\", \"LONG\"\nONEINPUTS\nWAIT\nRETURN\n"
+                                .into(),
+                        ),
+                        content_hash: None,
+                    },
+                ],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        submit(
+            &mut session,
+            2,
+            RuntimeMessage::Start(StartRequest {
+                mode: StartMode::NewGame { seed: Some(1) },
+            }),
+        );
+        for _ in 0..16 {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            if session.operations.active_input().is_some() {
+                break;
+            }
+        }
+        let (wait_id, submission_token, activation) = {
+            let pending = session.operations.active_input().unwrap();
+            let activation = pending
+                .choices
+                .iter()
+                .find_map(|(token, value)| (*value == VmValue::Integer(42)).then_some(*token))
+                .unwrap();
+            (
+                pending.wait.wait_id,
+                pending.wait.submission_token,
+                activation,
+            )
+        };
+        submit(
+            &mut session,
+            3,
+            RuntimeMessage::Input(FrontendInput {
+                wait_id,
+                token: submission_token,
+                monotonic_time_ns: 0,
+                intent: InputIntent::Activate(activation),
+                message_skip: false,
+            }),
+        );
+        for _ in 0..16 {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            if session.operations.active_input().is_some() {
+                break;
+            }
+        }
+        let (wait_id, submission_token, activation) = {
+            let pending = session.operations.active_input().unwrap();
+            let activation = pending
+                .choices
+                .iter()
+                .find_map(|(token, value)| {
+                    (*value == VmValue::String("LONG".into())).then_some(*token)
+                })
+                .unwrap();
+            (
+                pending.wait.wait_id,
+                pending.wait.submission_token,
+                activation,
+            )
+        };
+        submit(
+            &mut session,
+            4,
+            RuntimeMessage::Input(FrontendInput {
+                wait_id,
+                token: submission_token,
+                monotonic_time_ns: 0,
+                intent: InputIntent::Activate(activation),
+                message_skip: false,
+            }),
+        );
+        for _ in 0..16 {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            if session.operations.active_input().is_some() {
+                break;
+            }
+        }
+        let vm = session.vm.as_ref().unwrap();
+        (
+            read_runtime_integer(vm, "RESULT", &[42], None).unwrap(),
+            read_runtime_string(vm, "RESULTS").unwrap(),
+        )
+    }
+
+    assert_eq!(run(false), (4, "L".into()));
+    assert_eq!(run(true), (42, "LONG".into()));
+}
+
+#[test]
 fn primitive_input_uses_runtime_selection_tokens_and_rejects_timeout_spoofing() {
     let submission = InteractionToken { epoch: 7, id: 1 };
     let selection = InteractionToken { epoch: 7, id: 2 };
@@ -2293,14 +2652,19 @@ fn primitive_input_uses_runtime_selection_tokens_and_rejects_timeout_spoofing() 
         selection_token: Some(selection),
     };
     assert_eq!(
-        input_value(&pending, submission, InputIntent::Primitive(input)),
+        input_value(&pending, submission, InputIntent::Primitive(input), false),
         Some(InputSubmission::Primitive(PrimitiveResult {
             fields: [1, 10, 20, 1, 3],
             selection: Some(VmValue::Integer(42)),
         }))
     );
     assert_eq!(
-        input_value(&pending, submission, InputIntent::Activate(selection)),
+        input_value(
+            &pending,
+            submission,
+            InputIntent::Activate(selection),
+            false,
+        ),
         Some(InputSubmission::Value(VmValue::Integer(42)))
     );
     assert!(
@@ -2308,6 +2672,7 @@ fn primitive_input_uses_runtime_selection_tokens_and_rejects_timeout_spoofing() 
             &pending,
             InteractionToken { epoch: 7, id: 99 },
             InputIntent::Activate(selection),
+            false,
         )
         .is_none()
     );
@@ -2323,6 +2688,7 @@ fn primitive_input_uses_runtime_selection_tokens_and_rejects_timeout_spoofing() 
                 result_4: 0,
                 selection_token: None,
             }),
+            false,
         )
         .is_none()
     );

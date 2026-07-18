@@ -406,7 +406,13 @@ impl RuntimeSession {
             );
         }
         self.message_skip = input.message_skip;
-        let Some(submission) = input_value(pending, input.token, input.intent) else {
+        let allow_long_activation = self
+            .project_snapshot
+            .as_ref()
+            .is_some_and(|project| project.allow_long_input_by_activation);
+        let Some(submission) =
+            input_value(pending, input.token, input.intent, allow_long_activation)
+        else {
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidValue,

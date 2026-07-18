@@ -492,7 +492,7 @@ Runtime 通过 `WaitChanged`（tag `32`）报告 wait 打开、更新或关闭�
 | `submission_token` | 文本提交、继续或 primitive 输入时必须原样带回。 |
 | `kind` | 决定 runtime 如何解释规范化输入意图。 |
 | `stability` | `Transient` 表示当前状态不适合精确 VM snapshot。 |
-| `one_input` | 参考实现的一次输入模式。 |
+| `one_input` | 一次输入模式提示；runtime 仍会权威执行单字符规范化。 |
 | `stop_message_skip` | 需要终止消息跳过状态。 |
 | `system_input` | Runtime 自身菜单输入。 |
 | `mouse_input` | 允许鼠标相关输入。 |
@@ -506,6 +506,13 @@ Runtime 通过 `WaitChanged`（tag `32`）报告 wait 打开、更新或关闭�
 `Primitive` 意图。前端负责设备/IME 编辑，runtime 负责整数、默认值和选项语义。
 ID、epoch、token 或意图不匹配会收到
 可恢复的 `CommandRejected(StaleRequest/InvalidValue)`。
+
+在 `one_input` wait 中，前端不应自行决定最终字符串。runtime 将非空
+`CommitText` 截取为第一个 Unicode scalar；空的非计时输入、timeout 和 message-skip
+使用完整默认值。`Activate(token)` 表示用户激活 runtime 发布的语义化按钮，只有项目
+启用 `AllowLongInputByMouse` 时才可保留多字符按钮值。这是参考 WinForms
+`changedByMouse` 的跨设备投影，并不要求前端上报“鼠标点击”这一物理事实。
+`Primitive` 仍由前端整理为 EraBasic 结果字段，供不透明平台输入函数使用。
 
 即使没有用户输入，前端也必须按需要提交 `AdvanceTime`（tag `31`），让 runtime 推进
 QTE/超时。Runtime 从不主动读取系统时钟。如果输入和超时发生在同一时刻，消息
