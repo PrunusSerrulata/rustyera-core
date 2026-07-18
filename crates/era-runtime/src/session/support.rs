@@ -318,6 +318,54 @@ pub(super) fn i32_argument_value(arguments: &[VmValue], index: usize) -> Result<
     })
 }
 
+pub(super) fn checked_argb(value: i64) -> Result<i64, RuntimeError> {
+    if (0..=i64::from(u32::MAX)).contains(&value) {
+        Ok(value)
+    } else {
+        Err(RuntimeError::Internal(
+            "graphics ARGB value must fit an unsigned 32-bit value".into(),
+        ))
+    }
+}
+
+pub(super) fn read_color_matrix(
+    vm: &RuntimeVm,
+    fiber: erabasic_vm::FiberId,
+    value: &VmValue,
+) -> Result<Vec<i64>, RuntimeError> {
+    let Some(mut place) = vm_place(value) else {
+        return Err(RuntimeError::Internal(
+            "graphics color matrix must be an integer array place".into(),
+        ));
+    };
+    if place.indices.len() < 2 {
+        return Err(RuntimeError::Internal(
+            "graphics color matrix must have at least two dimensions".into(),
+        ));
+    }
+    let row = place.indices.len() - 2;
+    let column = place.indices.len() - 1;
+    let base_row = place.indices[row];
+    let base_column = place.indices[column];
+    let mut matrix = Vec::with_capacity(25);
+    for y in 0..5 {
+        for x in 0..5 {
+            place.indices[row] = base_row.saturating_add(y);
+            place.indices[column] = base_column.saturating_add(x);
+            let VmValue::Integer(value) = vm
+                .read_host_place(fiber, &place)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?
+            else {
+                return Err(RuntimeError::Internal(
+                    "graphics color matrix contains a non-integer value".into(),
+                ));
+            };
+            matrix.push(value);
+        }
+    }
+    Ok(matrix)
+}
+
 pub(super) fn integer_value_or_zero(value: &VmValue) -> i64 {
     match value {
         VmValue::Integer(value) => *value,
@@ -1195,11 +1243,20 @@ pub(super) fn selected_service_capabilities(
                 (ServiceKind::PresentationQuery, HTML_STRING_LINES_OPERATION) => {
                     HTML_STRING_LINES_OPERATION_VERSION
                 }
+                (ServiceKind::PresentationQuery, SERIALIZE_PHYSICAL_HISTORY_OPERATION) => {
+                    SERIALIZE_PHYSICAL_HISTORY_OPERATION_VERSION
+                }
                 (ServiceKind::FontMetrics, GGET_TEXT_SIZE_OPERATION) => {
                     GGET_TEXT_SIZE_OPERATION_VERSION
                 }
                 (ServiceKind::Canvas, SAMPLE_CANVAS_PIXEL_OPERATION) => {
                     SAMPLE_CANVAS_PIXEL_OPERATION_VERSION
+                }
+                (ServiceKind::Canvas, DECODE_CANVAS_IMAGE_OPERATION) => {
+                    DECODE_CANVAS_IMAGE_OPERATION_VERSION
+                }
+                (ServiceKind::Canvas, ENCODE_CANVAS_PNG_OPERATION) => {
+                    ENCODE_CANVAS_PNG_OPERATION_VERSION
                 }
                 // Extension operations are application-defined. Select the client's
                 // maximum now; a later registry declaration must bind that exact version.

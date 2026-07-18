@@ -17,9 +17,9 @@ use era_runtime_protocol::{
 };
 
 #[test]
-fn protocol_18_carries_parsed_html_instead_of_opaque_markup() {
+fn protocol_19_carries_parsed_html_instead_of_opaque_markup() {
     let run = DisplayRun::HtmlDocument {
-        document: parse_document("<div width='50'><b>text</b><br></div>").unwrap(),
+        document: parse_document("<div width='50' height='10'><b>text</b><br></div>").unwrap(),
     };
     let bytes = encode_canonical(&run).unwrap();
     assert_eq!(decode_canonical::<DisplayRun>(&bytes), Ok(run));
@@ -78,7 +78,7 @@ fn runtime_payload_and_envelope_tags_agree() {
 }
 
 #[test]
-fn protocol_18_retains_analysis_key_macros_and_extension_registration() {
+fn protocol_19_retains_analysis_key_macros_and_extension_registration() {
     let macro_command = RuntimeMessage::KeyMacroCommand(KeyMacroCommand::Store {
         group: 2,
         slot: 3,
@@ -89,7 +89,37 @@ fn protocol_18_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(18, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(19, 0));
+}
+
+#[test]
+fn protocol_19_publishes_semantic_history_redraw_and_textbox_layout() {
+    use era_runtime_protocol::{
+        PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
+    };
+
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(19, 0));
+    let opacity = RationalOpacity {
+        numerator: 128,
+        denominator: 255,
+    };
+    assert_eq!(opacity.denominator, 255);
+    let history = PresentationHistory {
+        logical_lines: Vec::new(),
+        operations: Vec::new(),
+    };
+    assert!(history.logical_lines.is_empty());
+    assert!(!RedrawState { enabled: false }.enabled);
+    assert_eq!(
+        TextBoxLayout {
+            x: 10,
+            y: 20,
+            width: 30,
+        }
+        .width,
+        30
+    );
+    let _ = std::mem::size_of::<PresentationSettings>();
 }
 
 #[test]
@@ -234,7 +264,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(18, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(19, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -273,7 +303,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(18, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(19, 0));
 }
 
 #[test]

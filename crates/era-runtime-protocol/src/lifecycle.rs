@@ -158,6 +158,22 @@ pub struct ProjectionState {
     pub hotkey_state: Vec<i64>,
     #[n(3)]
     pub button_generation: u64,
+    #[n(4)]
+    pub text_box_layout: TextBoxLayout,
+}
+
+/// Runtime-owned logical `TextBox` placement. The frontend applies its
+/// projection transform and platform-specific clipping.
+#[derive(Clone, Copy, Debug, Default, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct TextBoxLayout {
+    #[n(0)]
+    pub x: i64,
+    #[n(1)]
+    pub y: i64,
+    /// Zero selects the configured default width.
+    #[n(2)]
+    pub width: i64,
 }
 
 #[derive(

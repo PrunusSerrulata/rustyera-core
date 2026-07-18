@@ -102,6 +102,7 @@ impl RuntimeSession {
                         hotkey_state: self.hotkey_state.clone(),
                         key_macros: self.key_macros.clone(),
                         text_box: self.text_box.clone(),
+                        text_box_layout: self.text_box_layout,
                         flow_input_enabled: self.flow_input_enabled,
                         flow_input_default: self.flow_input_default,
                         flow_input_can_skip: self.flow_input_can_skip,

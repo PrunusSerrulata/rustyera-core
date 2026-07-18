@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 18.0 and debug protocol 4.0 over common wire 2.0 are
+dynamic library. Runtime protocol 19.0 and debug protocol 4.0 over common wire 2.0 are
 development contracts: by explicit project policy they
 do not promise backward compatibility until a frontend exists.
 
@@ -176,13 +176,13 @@ content and persist through the ordinary frontend storage contract. Extensions a
 before project loading, compiled as `rustyera.extension` Host imports, and invoked through
 negotiated `ServiceKind::Extension` operations. CLR `CALLSHARP` remains unsupported.
 
-Protocol 18 separates canonical Era logical coordinates, canvas texels and frontend projection
+Protocol 19 separates canonical Era logical coordinates, canvas texels and frontend projection
 units. `ProjectionObservation` declares a revisioned rational transform. Physical history, HTML
 layout, font metrics and canvas pixels use typed operation payloads which echo that causal context;
 canvas sampling additionally echoes the canvas replay revision. The runtime session has one
 authoritative frontend and does not implement multi-client authority transfer.
 
-Protocol 18 also replaces opaque HTML presentation strings with a fixed-dialect semantic document
+Protocol 19 also replaces opaque HTML presentation strings with a fixed-dialect semantic document
 tree. Text and element nodes retain UTF-8 byte ranges, button nodes carry runtime-issued interaction
 tokens, and image/shape/div attributes remain available to a capable renderer. `PRINT_IMG`,
 `PRINT_RECT`, and `PRINT_SPACE` preserve their optional resources and mixed font-relative/logical
@@ -209,7 +209,8 @@ with arguments, allowing accessible clients to understand its role without becom
 for wording or game state.
 
 The runtime stores a revisioned semantic presentation snapshot and emits deltas based on
-that revision. It includes text/styles/buttons, HTML, image/shape intent, backgrounds,
+that revision. It includes an ordered semantic history journal, text/styles/buttons, typed HTML,
+image/shape intent, exact-rational backgrounds,
 tooltip policy, parsed sprite definitions, canvas replay commands, logical audio state, title and
 the current wait. Script-defined logical media coordinates use fixed
 integer units rather than floating point. Recoverable state is separate from acknowledged
@@ -221,12 +222,22 @@ tokens runtime-owned. `Separator` preserves `DRAWLINE` as a semantic line role. 
 font-dependent padding into authoritative state; GUI clients may use grid/flex layout, TUI clients
 may repeat a pattern, and clients without these nodes receive a deterministic plain projection.
 Physical WinForms history, realized HTML layout and pixel-width queries are not canonical
-state. Protocol 18.0 exposes command-specific, revision-bound services for physical history,
+state. Protocol 19.0 exposes command-specific, revision-bound services for physical history,
 HTML measurement/splitting, text extents and canvas raster samples. A pending query is a transient
 external wait and blocks snapshots and hot-reload commits. `HTML_POPPRINTINGSTR` is the exception:
-it serializes and consumes the runtime-owned pending semantic buffer. Pixel buffers, font objects
+it serializes and consumes the runtime-owned pending semantic buffer. Protocol 19 also carries
+runtime-owned redraw policy, logical TextBox placement and per-button generation/enabled state.
+REDRAW bit 2 is an acknowledged `PresentNow` effect, while snapshots remain synchronized when
+automatic paint is disabled. Pixel buffers, font objects
 and audio devices remain frontend caches. Content-addressed source-image facts remain distinct
 from realized canvas and presentation observations.
+
+Canvas replay covers pixel writes, fills, brush/pen/font/dash state, lines, text, sprite and
+canvas composition, color matrices, masks and rotation. Source-canvas commands bind the source
+revision captured at issue time. `GCREATEFROMFILE` uses Resource storage for a zero relative flag
+and Data storage otherwise; `GLOAD`/`GSAVE` use `Save/imgNNNN.png`. All paths pass the shared
+relative-path validator, image decode/PNG encode are typed Canvas services, and runtime performs
+neither filesystem I/O nor rasterization.
 
 ## Runtime and VM boundary
 
@@ -285,6 +296,6 @@ are rejected without mutation. Protocol 12.0 added operation-versioned service c
 resource decoder services, exact effect outcomes, tooltip state and runtime diagnostics. The
 session-fixed `available_fonts` list is used only for the script-observable `CHKFONT` result.
 Canonical semantic layout intent remains runtime-owned; realized device layout does not.
-Protocol 18.0 selects font metrics only when `gget_text_size` is advertised at its exact operation
+Protocol 19.0 selects font metrics only when `gget_text_size` is advertised at its exact operation
 version. Physical-history, HTML-layout and canvas-pixel operations are negotiated independently.
 The frontend cannot change the available-font list after the handshake.

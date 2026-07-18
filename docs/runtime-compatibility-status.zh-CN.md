@@ -20,7 +20,7 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 - `PRINT*` 的 K/D 后缀和常用专用输出已经实现，但 N/SINGLE/C 等后缀仍缺少完整语义。
 - 调教和 `EVENTCOMEND` 主流程已实现；SHOP 自动存档已按进入来源限定。
 - 很多已进入 Host catalog 的命令最终落入通用 `UnsupportedRuntimeFeature`。
-- Protocol 18.0 已建立前端实际渲染观测 typed service、强类型坐标和结构化 HTML；具体应用前端仍需
+- Protocol 19.0 已建立前端实际渲染观测 typed service、强类型坐标和结构化 HTML；具体应用前端仍需
   实现这些可选能力，runtime 不提供布局或 raster 近似回退。
 
 主要证据集中在：
@@ -239,7 +239,7 @@ runtime 只持有并投影 `HOTKEY_STATE`。物理 ButtonWrap、文本历史、�
 
 ### 2.2 更新后设计原则与当前实现的矛盾
 
-本节记录更新后原则发现的矛盾及 Protocol 17.0 的处理结果：
+本节记录更新后原则发现的矛盾及当前 Protocol 19.0 的处理结果：
 
 1. **已解决：权威 snapshot 的伪物理文本布局。** Protocol 14.0 删除 `RunLayout` 和
    `DisplayLine::layout_width_millipixels`；文本、按钮、shape 仅保存语义结构。
@@ -265,11 +265,11 @@ runtime 只持有并投影 `HOTKEY_STATE`。物理 ButtonWrap、文本历史、�
 8. **已解决：可移植性数据流诊断。** analyzer catalog 是 callable portability 的
    统一来源；直接观测发 source-located Notice，传播到控制流、持久变量、随机种子、
    动态调用或存档 sink 时发 Warning。字节码仍持久化 operation portability contract。
-9. **已解决：坐标空间。** Protocol 17.0 区分 Era logical milliunits、字体相对长度、
+9. **已解决：坐标空间。** Protocol 19.0 区分 Era logical milliunits、字体相对长度、
    canvas texel 和设备无关 projection units；`ProjectionObservation` 提供有理数 affine
    transform。字体和物理布局结果只存在于外部观测，不进入规范化 snapshot。
 
-Protocol 17.0 不向下兼容 Protocol 16.0；前端必须同步更新 Schema、坐标投影与 service
+Protocol 19.0 不向下兼容 Protocol 18.0；前端必须同步更新 Schema、坐标投影与 service
 capabilities。仓库不包含具体 GUI/TUI，因此“已解决”指 runtime 端契约、验证、VM 提交
 和缺能力行为完整，不能据此声称任一外部前端已经实现对应 renderer operation。
 
@@ -292,7 +292,7 @@ capabilities。仓库不包含具体 GUI/TUI，因此“已解决”指 runtime 
 7. **已解决：普通 PRINT 自动按钮。** 完整逻辑行提交时按参考分组算法识别 `[数字]`，
    支持十进制、十六进制、二进制和指数形式，并分配 opaque token；`PRINTPLAIN*`
    保持不可选择。
-8. **已解决到可移植语义边界：HTML。** Protocol 18.0 使用固定方言的结构化
+8. **已解决到可移植语义边界：HTML。** Protocol 19.0 使用固定方言的结构化
    `HtmlDocument`，解析样式、段落、按钮、图片、shape、div、换行等节点，按钮由
    runtime 绑定 token；`HTML_PRINT` 第二参数可追加当前 buffer，island 独立保存。
    字体测量、div 实际布局和 raster 仍属于第 3 节的前端投影责任。
@@ -302,29 +302,43 @@ capabilities。仓库不包含具体 GUI/TUI，因此“已解决”指 runtime 
 12. **热替换流程不同。** Rust 使用原子 project delta 和多代 VM；参考 `ReloadERB`
     会保存当前系统状态、重新加载脚本、显示重新加载信息并等待按键。Rust 方案更
     适合当前架构，但不能称为参考行为复刻。
+13. **有意修正：`GSETCOLOR` 负 Y。** 参考实现重复检查 X，负 Y 可能落入 GDI 异常；
+    Rust 与 `GGETCOLOR` 一样对称检查 X/Y，越界稳定返回 `0`，不把客户端缺陷变成脚本
+    可依赖的平台行为。
+14. **有意确定化：资源重名。** 参考并行加载可能让同名 sprite 的胜者受调度影响；
+    Rust 按规范化 manifest 路径及行号处理，第一个有效定义胜出并产生稳定 warning。
+15. **有意无操作：bitmap cache。** `BITMAP_CACHE_ENABLE` 返回参考值 `0`，但不改变
+    runtime 语义状态；是否缓存物理行由前端自行决定。
+16. **有意收紧：canvas 文件命名空间。** 参考实现允许 `GCREATEFROMFILE` 受当前进程
+    目录及绝对路径影响，并由 runtime 自行读写；Rust 将 `relative=0` 固定映射到前端
+    提交的 `Resource`，非零映射到 `Data`，`GLOAD/GSAVE` 固定使用 `Save/imgNNNN.png`。
+    绝对路径和 `..` 被拒绝，所有字节仍经版本化 Storage/Image/Canvas 消息交换。
+17. **有意固定：canvas 字体意图。** 新画布从项目配置取得有效前景、背景和字体；
+    `GSETFONT` 的成功不取决于握手客户端的本地字体列表。前端可以选择视觉 fallback，
+    但 `GGETFONT` 和 replay 继续返回脚本指定的字体名，避免更换客户端改变游戏状态。
 
 ## 3. 参考实现中与客户端实际渲染显示有关的功能
 
 | 功能组 | 参考实现行为或依赖 | Rust 当前状态 |
 | --- | --- | --- |
-| 文本测量与折行 | `System.Drawing.Graphics`、WinForms `TextRenderer`、实际 Font；决定物理行、宽度和折行 | 普通输出只保存意图；显式查询使用 revision-bound 前端观测 service，缺能力时不伪造回退 |
+| 文本测量与折行 | `System.Drawing.Graphics`、WinForms `TextRenderer`、实际 Font；决定物理行、宽度和折行 | 普通输出保存意图；`MaxLog`、`ButtonWrap`、`CompatiLinefeedAs1739` 作为投影策略发布；显式查询使用 revision-bound service |
 | 左、中、右对齐 | 计算所有 button/run 实际像素宽度，再相对 `DrawableWidth` 平移 | 保存 `LineAlignment` 意图，由前端投影 |
 | 字体及样式 | Font family、size、bold、italic、underline、strikeout、前景和背景色 | 规范化状态、reset、query 和快捷样式命令已实现；实际字体由前端选择 |
-| 按钮 | `[数字]` 自动识别、generation、hit testing、hover/focus、tooltip、鼠标点击 | 自动和显式按钮均为 token 化语义；hit testing、hover/focus 由前端投影 |
-| 文本框 | 直接操作 WinForms TextBox | Runtime 保存规范化 textbox；`GET/SET/CLEARTEXTBOX` 不依赖具体控件 |
+| 按钮 | `[数字]` 自动识别、generation、hit testing、hover/focus、tooltip、鼠标点击 | 自动、显式与 HTML 按钮均携带 token、generation、enabled；runtime 验证 token，hit testing、hover/focus 由前端投影 |
+| 文本框 | 直接操作 WinForms TextBox | Runtime 保存文本及 Era 逻辑坐标；`MOVETEXTBOX/RESUMETEXTBOX` 由前端变换/裁切，成功输入后 runtime 权威复位 |
 | 鼠标和窗口 | MainPicBox 坐标、client width/height、鼠标悬停按钮、焦点、hotkey | primitive input 被有意规范化；client size 和 pointer 查询来自 revision-bound 前端观测 |
-| HTML | `<font>`、`b/i/u/s`、`p`、`nobr`、`button`、`img`、`shape`、`div`、对齐和 tooltip | 保存固定方言语义树并绑定交互；实际字体测量和 div 布局由前端完成 |
+| HTML | `<font>`、`b/i/u/s`、`p`、`nobr`、`button`、`nonbutton`、`clearbutton`、`img`、`shape`、`div`、对齐和 tooltip | Runtime 验证固定方言，保存 typed MixedNum、box model、颜色、布局和交互；前端只排版/绘制 |
 | HTML island | 独立 overlay/island 图层 | 保存结构化 island 列表并支持清除；实际 overlay 由前端投影 |
 | 静态图片 | 图片文件加载、裁切 sprite、前景/背景/mask、缩放和位置 | 保存资源 ID、hover/mask 和 MixedNum 尺寸；解码与绘制由前端完成 |
-| 背景 | 有深度、透明度的背景 sprite 烘焙 | 保存语义背景列表 |
-| 动画 sprite | 帧、持续时间、位置、重绘计时器 | 语义 replay graph 已实现 |
-| G canvas | Bitmap 创建/加载/保存、DrawImage、mask、旋转、线、文本、填充、颜色矩阵、像素读写 | 语义 canvas replay 与 revision-bound raster 查询已实现；具体 rasterizer 不在仓库内 |
-| GDI 对象 | Brush、Pen、Font、DashStyle 查询和修改 | 缺失或有意不支持 |
+| 背景 | 有深度、透明度的背景 sprite 烘焙 | 保存允许重复、稳定按 depth 降序的列表；删除首个精确匹配，透明度为精确有理数 |
+| 动画 sprite | 帧、持续时间、位置、重绘计时器 | replay graph 已实现；timer 的禁用、10ms 下限及 `Int16.MaxValue` 上限兼容参考实现 |
+| G canvas | Bitmap 创建/加载/保存、DrawImage、mask、旋转、线、文本、填充、颜色矩阵、像素读写 | portable replay 已覆盖；文件经 Resource/Data/Save 受控命名空间及 typed image/canvas service；具体 rasterizer 不在仓库内 |
+| GDI 对象 | Brush、Pen、Font、DashStyle 查询和修改 | 保存由项目配置初始化的 portable Brush/Pen/Font/Dash 状态和命令，不创建或暴露 GDI handle；字体名作为脚本意图固定，前端可视觉替代但不能改变返回值 |
 | CBG | 背景 bitmap、按钮 sprite map、范围移除和合成 | 明确不支持 |
-| Bitmap cache | 每行是否缓存为 bitmap | 缺失 |
-| Tooltip | WinForms ToolTip 测量、绘制、字体、颜色、延时、图片 | 规范化 tooltip 配置已实现 |
-| Rikaichan | 鼠标位置、词典、TextRenderer popup | 未实现，属于具体客户端能力 |
-| 日志和回滚显示 | 物理显示行历史、滚动、删除、临时行、最大日志 | Rust 只维护规范化逻辑行历史；真实物理历史查询服务未实现 |
+| Bitmap cache | 每行是否缓存为 bitmap | `BITMAP_CACHE_ENABLE` 为兼容 no-op 并返回 0；缓存只影响客户端性能，是有意差异 |
+| Tooltip | WinForms ToolTip 测量、绘制、字体、颜色、延时、图片 | 配置已规范化；`TOOLTIP_FORMAT` 同时保留 raw 值、完整已知 `TextFormatFlags` 列表及 unknown bits |
+| Rikaichan | 鼠标位置、词典、TextRenderer popup | 有意不进入 runtime；可由只读前端插件基于投影文本实现 |
+| 日志和回滚显示 | 物理显示行历史、滚动、删除、临时行、最大日志 | Snapshot 携带有序语义 journal；物理查询与 `OUTPUTLOG` 绑定 revision，由权威前端投影 |
 
 权威边界是：runtime 保存完整语义和布局意图，前端负责字体测量与 raster。普通输出
 不会把前端投影反写进游戏状态；只有脚本显式调用投影查询命令时，前端观测值才通过

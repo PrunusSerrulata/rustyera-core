@@ -187,6 +187,20 @@ try {
         ($presentation23.result.watches.'RESULTS:33' -eq "<shape type='rect' param='1px, 2, 3px, 4'>") -and
         ($presentation23.result.watches.'RESULTS:34' -eq "<shape type='space' param='5px'>")) "presentation 2.3 output differs"
 
+    $presentation3 = Invoke-Oracle @{ id = "presentation-3"; op = "run"; entry = "ORACLE_PRESENTATION_3"; watch = @("RESULT:40", "RESULT:41", "RESULT:42", "RESULT:43", "RESULT:44", "RESULT:45", "RESULT:46", "RESULT:47", "RESULT:48", "RESULT:49", "RESULTS:40") }
+    Assert-True ($presentation3.ok -and $presentation3.result.termination -eq "completed") "presentation section 3 oracle failed"
+    Assert-True (($presentation3.result.watches.'RESULT:40' -eq 0) -and
+        ($presentation3.result.watches.'RESULT:41' -eq 1) -and
+        ($presentation3.result.watches.'RESULT:42' -eq 1) -and
+        ($presentation3.result.watches.'RESULT:43' -eq 4294901760) -and
+        ($presentation3.result.watches.'RESULT:44' -eq 1) -and
+        ($presentation3.result.watches.'RESULT:45' -eq 4278255360) -and
+        ($presentation3.result.watches.'RESULT:46' -eq 2) -and
+        ($presentation3.result.watches.'RESULT:47' -eq 1) -and
+        ($presentation3.result.watches.'RESULT:48' -eq 1) -and
+        ($presentation3.result.watches.'RESULT:49' -eq 1) -and
+        ($presentation3.result.watches.'RESULTS:40' -eq "a b")) "presentation section 3 behavior differs"
+
     $structuredRun = Invoke-Oracle @{
         id = "structured"
         op = "run"

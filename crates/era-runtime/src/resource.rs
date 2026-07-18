@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use era_runtime_protocol::{
     CanvasRect, CanvasReplay, CanvasReplayCommand, CanvasSize, FileCategory, FilePayload,
@@ -7,12 +7,40 @@ use era_runtime_protocol::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ResourceGraph {
     images: BTreeMap<String, ResourceImage>,
     sprites: BTreeMap<String, SpriteDefinition>,
     canvases: BTreeMap<i64, CanvasSurface>,
     animation_timer_ms: i32,
+    canvas_defaults: CanvasDefaults,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CanvasDefaults {
+    brush_argb: u32,
+    pen_argb: u32,
+    font_family: String,
+    font_size: i64,
+    font_style: u8,
+}
+
+impl Default for ResourceGraph {
+    fn default() -> Self {
+        Self {
+            images: BTreeMap::new(),
+            sprites: BTreeMap::new(),
+            canvases: BTreeMap::new(),
+            animation_timer_ms: 0,
+            canvas_defaults: CanvasDefaults {
+                brush_argb: 0xff00_0000,
+                pen_argb: 0xffc0_c0c0,
+                font_family: "sans-serif".into(),
+                font_size: 100,
+                font_style: 0,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,6 +49,14 @@ struct CanvasSurface {
     height: u32,
     revision: u64,
     commands: Vec<CanvasCommand>,
+    brush_argb: u32,
+    pen_argb: u32,
+    pen_width: i64,
+    dash_style: i64,
+    dash_cap: i64,
+    font_family: String,
+    font_size: i64,
+    font_style: u8,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -32,6 +68,53 @@ enum CanvasCommand {
     DrawSprite {
         name: String,
         destination: [i32; 4],
+        color_matrix: Option<Vec<i64>>,
+    },
+    SetPixel {
+        point: [i32; 2],
+        argb: u32,
+    },
+    FillRectangle {
+        rectangle: [i32; 4],
+        brush_argb: u32,
+    },
+    SetBrush {
+        argb: u32,
+    },
+    SetPen {
+        argb: u32,
+        width: i64,
+    },
+    SetDashStyle {
+        style: i64,
+        cap: i64,
+    },
+    SetFont {
+        family: String,
+        size: i64,
+        style_bits: u8,
+    },
+    DrawLine {
+        start: [i32; 2],
+        end: [i32; 2],
+    },
+    DrawText {
+        text: String,
+        point: [i32; 2],
+    },
+    DrawCanvas {
+        source_canvas_id: i64,
+        source_revision: u64,
+        source: [i32; 4],
+        destination: [i32; 4],
+        color_matrix: Option<Vec<i64>>,
+        mask_canvas_id: Option<i64>,
+        rotation_millidegrees: i64,
+        rotation_center: Option<[i32; 2]>,
+    },
+    LoadEncodedImage {
+        content_digest: Vec<u8>,
+        encoded: Vec<u8>,
     },
 }
 
@@ -40,6 +123,7 @@ struct ResourceImage {
     relative_path: String,
     digest: [u8; 32],
     metadata: Option<ImageMetadata>,
+    bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -109,6 +193,7 @@ impl ResourceGraph {
                     relative_path: path,
                     digest: *blake3::hash(bytes).as_bytes(),
                     metadata: None,
+                    bytes: bytes.to_vec(),
                 },
             );
         }
@@ -132,23 +217,30 @@ impl ResourceGraph {
         (graph, diagnostics)
     }
 
+    pub(crate) fn configure_canvas_defaults(
+        &mut self,
+        foreground_rgb: i64,
+        background_rgb: i64,
+        font_family: String,
+        font_style: u8,
+    ) {
+        self.canvas_defaults = CanvasDefaults {
+            brush_argb: opaque_rgb(background_rgb),
+            pen_argb: opaque_rgb(foreground_rgb),
+            font_family,
+            // The reference canvas fallback font is deliberately 100 pixels,
+            // independently of the normal console font size.
+            font_size: 100,
+            font_style,
+        };
+    }
+
     pub(crate) fn metadata_requests(&self) -> Vec<(String, [u8; 32])> {
-        let referenced = self
-            .sprites
+        self.images
             .values()
-            .flat_map(|sprite| &sprite.frames)
-            .map(|frame| frame.image_path.to_ascii_lowercase())
-            .collect::<BTreeSet<_>>();
-        referenced
-            .into_iter()
-            .filter_map(|key| {
-                self.images.get(&key).and_then(|image| {
-                    image
-                        .metadata
-                        .is_none()
-                        .then(|| (image.relative_path.clone(), image.digest))
-                })
-            })
+            .filter(|image| is_image_path(&image.relative_path))
+            .filter(|image| image.metadata.is_none())
+            .map(|image| (image.relative_path.clone(), image.digest))
             .collect()
     }
 
@@ -265,6 +357,9 @@ impl ResourceGraph {
         self.images.contains_key(&name.to_ascii_lowercase())
     }
 
+    // This is deliberately one exhaustive translation table so adding an
+    // internal command cannot silently omit its public replay equivalent.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn replay(&self) -> ResourceReplay {
         ResourceReplay {
             sprites: self
@@ -319,12 +414,105 @@ impl ResourceGraph {
                                     rectangle: rectangle.map(canvas_rect),
                                 }
                             }
-                            CanvasCommand::DrawSprite { name, destination } => {
-                                CanvasReplayCommand::DrawSprite {
-                                    name: name.clone(),
-                                    destination: canvas_rect(*destination),
+                            CanvasCommand::DrawSprite {
+                                name,
+                                destination,
+                                color_matrix,
+                            } => CanvasReplayCommand::DrawSprite {
+                                name: name.clone(),
+                                destination: canvas_rect(*destination),
+                                color_matrix: color_matrix.clone(),
+                            },
+                            CanvasCommand::SetPixel { point, argb } => {
+                                CanvasReplayCommand::SetPixel {
+                                    point: era_runtime_protocol::CanvasPoint {
+                                        x: point[0],
+                                        y: point[1],
+                                    },
+                                    argb: *argb,
                                 }
                             }
+                            CanvasCommand::FillRectangle {
+                                rectangle,
+                                brush_argb,
+                            } => CanvasReplayCommand::FillRectangle {
+                                rectangle: canvas_rect(*rectangle),
+                                brush_argb: *brush_argb,
+                            },
+                            CanvasCommand::SetBrush { argb } => {
+                                CanvasReplayCommand::SetBrush { argb: *argb }
+                            }
+                            CanvasCommand::SetPen { argb, width } => CanvasReplayCommand::SetPen {
+                                argb: *argb,
+                                width: *width,
+                            },
+                            CanvasCommand::SetDashStyle { style, cap } => {
+                                CanvasReplayCommand::SetDashStyle {
+                                    style: *style,
+                                    cap: *cap,
+                                }
+                            }
+                            CanvasCommand::SetFont {
+                                family,
+                                size,
+                                style_bits,
+                            } => CanvasReplayCommand::SetFont {
+                                family: family.clone(),
+                                size: *size,
+                                style_bits: *style_bits,
+                            },
+                            CanvasCommand::DrawLine { start, end } => {
+                                CanvasReplayCommand::DrawLine {
+                                    start: era_runtime_protocol::CanvasPoint {
+                                        x: start[0],
+                                        y: start[1],
+                                    },
+                                    end: era_runtime_protocol::CanvasPoint {
+                                        x: end[0],
+                                        y: end[1],
+                                    },
+                                }
+                            }
+                            CanvasCommand::DrawText { text, point } => {
+                                CanvasReplayCommand::DrawText {
+                                    text: text.clone(),
+                                    point: era_runtime_protocol::CanvasPoint {
+                                        x: point[0],
+                                        y: point[1],
+                                    },
+                                }
+                            }
+                            CanvasCommand::DrawCanvas {
+                                source_canvas_id,
+                                source_revision,
+                                source,
+                                destination,
+                                color_matrix,
+                                mask_canvas_id,
+                                rotation_millidegrees,
+                                rotation_center,
+                            } => CanvasReplayCommand::DrawCanvas {
+                                source_canvas_id: *source_canvas_id,
+                                source_revision: *source_revision,
+                                source: canvas_rect(*source),
+                                destination: canvas_rect(*destination),
+                                color_matrix: color_matrix.clone(),
+                                mask_canvas_id: *mask_canvas_id,
+                                rotation_millidegrees: *rotation_millidegrees,
+                                rotation_center: rotation_center.map(|point| {
+                                    era_runtime_protocol::CanvasPoint {
+                                        x: point[0],
+                                        y: point[1],
+                                    }
+                                }),
+                            },
+                            CanvasCommand::LoadEncodedImage {
+                                content_digest,
+                                encoded,
+                            } => CanvasReplayCommand::LoadEncodedImage {
+                                content_digest: content_digest.clone(),
+                                encoded: encoded.clone(),
+                            },
                         })
                         .collect(),
                     revision: canvas.revision,
@@ -334,10 +522,13 @@ impl ResourceGraph {
         }
     }
 
-    pub(crate) fn set_animation_timer(&mut self, milliseconds: i64) -> Result<(), &'static str> {
-        self.animation_timer_ms = i32::try_from(milliseconds)
-            .map_err(|_| "animation timer is outside the signed 32-bit range")?;
-        Ok(())
+    pub(crate) fn set_animation_timer(&mut self, milliseconds: i64) {
+        self.animation_timer_ms = if milliseconds <= 0 {
+            0
+        } else {
+            i32::try_from(milliseconds.clamp(10, i64::from(i16::MAX)))
+                .expect("clamped animation timer fits i32")
+        };
     }
 
     #[cfg(test)]
@@ -366,9 +557,92 @@ impl ResourceGraph {
                 height,
                 revision: 0,
                 commands: Vec::new(),
+                brush_argb: self.canvas_defaults.brush_argb,
+                pen_argb: self.canvas_defaults.pen_argb,
+                pen_width: 1,
+                dash_style: 0,
+                dash_cap: 0,
+                font_family: self.canvas_defaults.font_family.clone(),
+                font_size: self.canvas_defaults.font_size,
+                font_style: self.canvas_defaults.font_style,
             },
         );
         Ok(true)
+    }
+
+    pub(crate) fn create_canvas_from_resource(&mut self, id: i64, path: &str) -> bool {
+        if self.canvases.contains_key(&id) {
+            return false;
+        }
+        let Some(image) = self.images.get(&path.to_ascii_lowercase()) else {
+            return false;
+        };
+        let Some(metadata) = &image.metadata else {
+            return false;
+        };
+        if metadata.width > 8_192 || metadata.height > 8_192 {
+            return false;
+        }
+        self.canvases.insert(
+            id,
+            CanvasSurface {
+                width: metadata.width,
+                height: metadata.height,
+                revision: 1,
+                commands: vec![CanvasCommand::LoadEncodedImage {
+                    content_digest: image.digest.to_vec(),
+                    encoded: image.bytes.clone(),
+                }],
+                brush_argb: self.canvas_defaults.brush_argb,
+                pen_argb: self.canvas_defaults.pen_argb,
+                pen_width: 1,
+                dash_style: 0,
+                dash_cap: 0,
+                font_family: self.canvas_defaults.font_family.clone(),
+                font_size: self.canvas_defaults.font_size,
+                font_style: self.canvas_defaults.font_style,
+            },
+        );
+        true
+    }
+
+    pub(crate) fn create_canvas_from_encoded(
+        &mut self,
+        id: i64,
+        width: u32,
+        height: u32,
+        encoded: Vec<u8>,
+    ) -> bool {
+        if self.canvases.contains_key(&id)
+            || width == 0
+            || height == 0
+            || width > 8_192
+            || height > 8_192
+        {
+            return false;
+        }
+        let digest = blake3::hash(&encoded);
+        self.canvases.insert(
+            id,
+            CanvasSurface {
+                width,
+                height,
+                revision: 1,
+                commands: vec![CanvasCommand::LoadEncodedImage {
+                    content_digest: digest.as_bytes().to_vec(),
+                    encoded,
+                }],
+                brush_argb: self.canvas_defaults.brush_argb,
+                pen_argb: self.canvas_defaults.pen_argb,
+                pen_width: 1,
+                dash_style: 0,
+                dash_cap: 0,
+                font_family: self.canvas_defaults.font_family.clone(),
+                font_size: self.canvas_defaults.font_size,
+                font_style: self.canvas_defaults.font_style,
+            },
+        );
+        true
     }
 
     pub(crate) fn dispose_canvas(&mut self, id: i64) -> bool {
@@ -406,6 +680,7 @@ impl ResourceGraph {
         id: i64,
         name: &str,
         destination: Option<[i32; 4]>,
+        color_matrix: Option<Vec<i64>>,
     ) -> bool {
         let Some(sprite) = self.sprite(name) else {
             return false;
@@ -422,8 +697,179 @@ impl ResourceGraph {
         canvas.commands.push(CanvasCommand::DrawSprite {
             name: name.to_ascii_uppercase(),
             destination,
+            color_matrix,
         });
         canvas.revision = canvas.revision.saturating_add(1);
+        true
+    }
+
+    pub(crate) fn set_canvas_pixel(&mut self, id: i64, argb: i64, point: [i32; 2]) -> bool {
+        let Some(canvas) = self.canvases.get_mut(&id) else {
+            return false;
+        };
+        if point[0] < 0
+            || point[1] < 0
+            || point[0].unsigned_abs() >= canvas.width
+            || point[1].unsigned_abs() >= canvas.height
+        {
+            return false;
+        }
+        canvas.commands.push(CanvasCommand::SetPixel {
+            point,
+            argb: argb_bits(argb),
+        });
+        bump_canvas(canvas);
+        true
+    }
+
+    pub(crate) fn fill_canvas_rectangle(&mut self, id: i64, rectangle: [i32; 4]) -> bool {
+        let Some(canvas) = self.canvases.get_mut(&id) else {
+            return false;
+        };
+        canvas.commands.push(CanvasCommand::FillRectangle {
+            rectangle,
+            brush_argb: canvas.brush_argb,
+        });
+        bump_canvas(canvas);
+        true
+    }
+
+    pub(crate) fn set_canvas_brush(&mut self, id: i64, argb: i64) -> bool {
+        let Some(canvas) = self.canvases.get_mut(&id) else {
+            return false;
+        };
+        canvas.brush_argb = argb_bits(argb);
+        canvas.commands.push(CanvasCommand::SetBrush {
+            argb: canvas.brush_argb,
+        });
+        bump_canvas(canvas);
+        true
+    }
+
+    pub(crate) fn set_canvas_pen(&mut self, id: i64, argb: i64, width: i64) -> bool {
+        let Some(canvas) = self.canvases.get_mut(&id) else {
+            return false;
+        };
+        canvas.pen_argb = argb_bits(argb);
+        canvas.pen_width = width;
+        canvas.commands.push(CanvasCommand::SetPen {
+            argb: canvas.pen_argb,
+            width,
+        });
+        bump_canvas(canvas);
+        true
+    }
+
+    pub(crate) fn set_canvas_dash(&mut self, id: i64, style: i64, cap: i64) -> bool {
+        let Some(canvas) = self.canvases.get_mut(&id) else {
+            return false;
+        };
+        canvas.dash_style = style;
+        canvas.dash_cap = cap;
+        canvas
+            .commands
+            .push(CanvasCommand::SetDashStyle { style, cap });
+        bump_canvas(canvas);
+        true
+    }
+
+    pub(crate) fn set_canvas_font(
+        &mut self,
+        id: i64,
+        family: String,
+        size: i64,
+        style_bits: u8,
+    ) -> bool {
+        let Some(canvas) = self.canvases.get_mut(&id) else {
+            return false;
+        };
+        if family.is_empty() || size <= 0 {
+            return false;
+        }
+        canvas.font_family.clone_from(&family);
+        canvas.font_size = size;
+        canvas.font_style = style_bits;
+        canvas.commands.push(CanvasCommand::SetFont {
+            family,
+            size,
+            style_bits,
+        });
+        bump_canvas(canvas);
+        true
+    }
+
+    pub(crate) fn canvas_style(&self, id: i64) -> Option<(u32, u32, i64, &str, i64, u8)> {
+        self.canvases.get(&id).map(|canvas| {
+            (
+                canvas.brush_argb,
+                canvas.pen_argb,
+                canvas.pen_width,
+                canvas.font_family.as_str(),
+                canvas.font_size,
+                canvas.font_style,
+            )
+        })
+    }
+
+    pub(crate) fn draw_canvas_line(&mut self, id: i64, start: [i32; 2], end: [i32; 2]) -> bool {
+        let Some(canvas) = self.canvases.get_mut(&id) else {
+            return false;
+        };
+        canvas.commands.push(CanvasCommand::DrawLine { start, end });
+        bump_canvas(canvas);
+        true
+    }
+
+    pub(crate) fn draw_canvas_text(&mut self, id: i64, text: String, point: [i32; 2]) -> bool {
+        let Some(canvas) = self.canvases.get_mut(&id) else {
+            return false;
+        };
+        canvas
+            .commands
+            .push(CanvasCommand::DrawText { text, point });
+        bump_canvas(canvas);
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_canvas(
+        &mut self,
+        id: i64,
+        source_id: i64,
+        source: Option<[i32; 4]>,
+        destination: Option<[i32; 4]>,
+        color_matrix: Option<Vec<i64>>,
+        mask_canvas_id: Option<i64>,
+        rotation_millidegrees: i64,
+        rotation_center: Option<[i32; 2]>,
+    ) -> bool {
+        let Some(source_canvas) = self.canvases.get(&source_id) else {
+            return false;
+        };
+        let source_revision = source_canvas.revision;
+        let full = [
+            0,
+            0,
+            i32::try_from(source_canvas.width).unwrap_or(i32::MAX),
+            i32::try_from(source_canvas.height).unwrap_or(i32::MAX),
+        ];
+        if mask_canvas_id.is_some_and(|mask| !self.canvases.contains_key(&mask)) {
+            return false;
+        }
+        let Some(canvas) = self.canvases.get_mut(&id) else {
+            return false;
+        };
+        canvas.commands.push(CanvasCommand::DrawCanvas {
+            source_canvas_id: source_id,
+            source_revision,
+            source: source.unwrap_or(full),
+            destination: destination.unwrap_or(full),
+            color_matrix,
+            mask_canvas_id,
+            rotation_millidegrees,
+            rotation_center,
+        });
+        bump_canvas(canvas);
         true
     }
 
@@ -593,6 +1039,15 @@ impl ResourceGraph {
     }
 }
 
+fn is_image_path(path: &str) -> bool {
+    path.rsplit_once('.').is_some_and(|(_, extension)| {
+        matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "png" | "bmp" | "gif" | "jpg" | "jpeg" | "webp"
+        )
+    })
+}
+
 fn canvas_rect(value: [i32; 4]) -> CanvasRect {
     CanvasRect {
         x: value[0],
@@ -600,6 +1055,18 @@ fn canvas_rect(value: [i32; 4]) -> CanvasRect {
         width: value[2],
         height: value[3],
     }
+}
+
+fn argb_bits(value: i64) -> u32 {
+    u32::try_from(value & i64::from(u32::MAX)).expect("masked ARGB fits u32")
+}
+
+fn opaque_rgb(value: i64) -> u32 {
+    0xff00_0000 | (argb_bits(value) & 0x00ff_ffff)
+}
+
+fn bump_canvas(canvas: &mut CanvasSurface) {
+    canvas.revision = canvas.revision.saturating_add(1);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -829,6 +1296,19 @@ mod tests {
             .unwrap();
         assert_eq!(graph.sprite("face").unwrap().width, 32);
         assert_eq!(graph.sprite("run").unwrap().width, 10);
+        assert!(graph.create_canvas_from_resource(1, "resources/face.png"));
+        graph
+            .apply_metadata(
+                "resources/face.png",
+                ImageMetadataResponse {
+                    width: 8_193,
+                    height: 32,
+                    format: "png".into(),
+                    animated: false,
+                },
+            )
+            .unwrap();
+        assert!(!graph.create_canvas_from_resource(2, "resources/face.png"));
     }
 
     #[test]
@@ -847,7 +1327,7 @@ mod tests {
             Some((64, 32))
         );
         assert!(graph.move_sprite("generated", 4, 5, false));
-        assert_eq!(graph.set_animation_timer(55), Ok(()));
+        graph.set_animation_timer(55);
         assert_eq!(graph.animation_timer(), 55);
         assert_eq!(
             graph
@@ -874,5 +1354,47 @@ mod tests {
         assert_eq!(replay.animation_timer_ms, 55);
         assert_eq!(graph.dispose_sprites(false), 2);
         assert!(graph.dispose_canvas(3));
+    }
+
+    #[test]
+    fn portable_canvas_replay_captures_style_draw_and_snapshot_revisions() {
+        let mut graph = ResourceGraph::default();
+        graph.configure_canvas_defaults(0x0011_2233, 0x0044_5566, "Project Font".into(), 3);
+        graph.create_canvas(1, 20, 10).unwrap();
+        graph.create_canvas(2, 20, 10).unwrap();
+        assert_eq!(
+            graph.canvas_style(1),
+            Some((0xff44_5566, 0xff11_2233, 1, "Project Font", 100, 3))
+        );
+        assert!(graph.set_canvas_brush(1, 0xff11_2233));
+        assert!(graph.set_canvas_pen(1, 0xff44_5566, 3));
+        assert!(graph.set_canvas_dash(1, 2, 1));
+        assert!(graph.set_canvas_font(1, "portable".into(), 18, 9));
+        assert!(graph.set_canvas_pixel(1, 0xff00_ff00, [0, 0]));
+        assert!(!graph.set_canvas_pixel(1, 0, [0, -1]));
+        assert!(graph.fill_canvas_rectangle(1, [1, 2, 3, 4]));
+        assert!(graph.draw_canvas_line(1, [0, 0], [2, 3]));
+        assert!(graph.draw_canvas_text(1, "text".into(), [4, 5]));
+        assert!(graph.draw_canvas(1, 2, None, None, Some(vec![256; 25]), None, 0, None));
+        let replay = graph.replay();
+        let canvas = replay
+            .canvases
+            .iter()
+            .find(|item| item.canvas_id == 1)
+            .unwrap();
+        assert_eq!(canvas.revision, 9);
+        assert!(matches!(
+            canvas.commands.last(),
+            Some(CanvasReplayCommand::DrawCanvas {
+                source_canvas_id: 2,
+                source_revision: 0,
+                color_matrix: Some(matrix),
+                ..
+            }) if matrix.len() == 25
+        ));
+        graph.set_animation_timer(1);
+        assert_eq!(graph.animation_timer(), 10);
+        graph.set_animation_timer(-1);
+        assert_eq!(graph.animation_timer(), 0);
     }
 }

@@ -54,7 +54,7 @@ containers.
 
 ## Stable intentional differences and unsupported surface
 
-- Protocol 18.0 classifies `GETDISPLAYLINE`, `HTML_GETPRINTEDSTR`, `HTML_STRINGLEN`,
+- Protocol 19.0 classifies `GETDISPLAYLINE`, `HTML_GETPRINTEDSTR`, `HTML_STRINGLEN`,
   `HTML_SUBSTRING` and `HTML_STRINGLINES` as transient authoritative-frontend observations.
   `HTML_POPPRINTINGSTR` instead clone-commits serialization and consumption of the runtime-owned
   pending semantic buffer. `GGETTEXTSIZE` and valid in-bounds `GGETCOLOR` use the same transient

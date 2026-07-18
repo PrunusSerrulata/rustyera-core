@@ -236,11 +236,7 @@ impl RuntimeSession {
     fn reset_input_undo_presentation(&mut self) {
         self.presentation = PresentationModel::default();
         if let Some(project) = &self.project_snapshot {
-            self.presentation.configure_layout(
-                project.viewport_width,
-                project.print_c_per_line,
-                project.print_c_length,
-            );
+            self.presentation.configure_project(project);
         }
     }
 }

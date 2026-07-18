@@ -373,7 +373,8 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             "ORACLE_REFLECTION",
             "ORACLE_MAP",
             "ORACLE_STRUCTURED",
-            "ORACLE_COMPAT_12"
+            "ORACLE_COMPAT_12",
+            "ORACLE_PRESENTATION_3",
         ]
     );
     assert_eq!(program.functions[0].lines.len(), 16);
@@ -470,6 +471,35 @@ fn reference_input_signature_observations_match_rust_diagnostics() {
         assert!(
             errors.iter().any(|diagnostic| diagnostic.code == expected),
             "{line}: expected {expected:?}, got {errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn bitmap_cache_enable_requires_the_reference_argument() {
+    for (call, accepted) in [
+        ("BITMAP_CACHE_ENABLE()", false),
+        ("BITMAP_CACHE_ENABLE(1)", true),
+    ] {
+        let report = analyze_project(
+            AnalysisInput {
+                project_data: empty_project(),
+                sources: vec![source(
+                    "bitmap-cache.erb",
+                    &format!("@SYSTEM_TITLE\nRESULT = {call}\nRETURN\n"),
+                )],
+            },
+            &AnalyzerOptions::analysis_mode(),
+            &ExtensionRegistry::default(),
+        );
+        let has_argument_error = report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == AnalyzerDiagnosticCode::InvalidArgumentCount);
+        assert_eq!(
+            has_argument_error, !accepted,
+            "{call}: {:#?}",
+            report.diagnostics
         );
     }
 }

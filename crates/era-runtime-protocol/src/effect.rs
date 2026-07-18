@@ -56,6 +56,13 @@ pub enum EffectKind {
     /// decline, but it cannot mutate runtime configuration through this effect.
     #[n(4)]
     OpenConfiguration,
+    /// REDRAW bit 2 requests one immediate projection without changing the
+    /// recoverable redraw policy.
+    #[n(5)]
+    PresentNow {
+        #[n(0)]
+        presentation_revision: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

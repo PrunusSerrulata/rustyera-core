@@ -48,6 +48,7 @@ impl RuntimeSession {
             key_macros: KeyMacros::default(),
             queued_input: VecDeque::new(),
             text_box: String::new(),
+            text_box_layout: TextBoxLayout::default(),
             flow_input_enabled: false,
             flow_input_default: 0,
             flow_input_can_skip: false,
@@ -503,6 +504,7 @@ impl RuntimeSession {
                 text_box: self.text_box.clone(),
                 hotkey_state: self.hotkey_state.clone(),
                 button_generation: self.button_generation,
+                text_box_layout: self.text_box_layout,
             }),
             None,
         )
@@ -518,7 +520,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 18.0 is required".into(),
+                    message: "runtime protocol 19.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -890,10 +892,20 @@ impl RuntimeSession {
                     snapshot.configuration.get_code("UseKeyMacro"),
                     Some(erabasic_config::ConfigValue::Boolean(true))
                 ));
-                self.presentation.configure_layout(
-                    snapshot.viewport_width,
-                    snapshot.print_c_per_line,
-                    snapshot.print_c_length,
+                self.presentation.configure_project(snapshot);
+            }
+            let canvas_defaults = (
+                self.presentation.default_foreground_rgb(),
+                self.presentation.default_background_rgb(),
+                self.presentation.font(),
+                u8::try_from(self.presentation.style_bits()).unwrap_or_default(),
+            );
+            if let Some(snapshot) = &mut self.project_snapshot {
+                snapshot.resource_graph.configure_canvas_defaults(
+                    canvas_defaults.0,
+                    canvas_defaults.1,
+                    canvas_defaults.2,
+                    canvas_defaults.3,
                 );
             }
             self.sync_resource_replay();
@@ -1066,10 +1078,20 @@ impl RuntimeSession {
         self.incremental = build.incremental;
         self.project_snapshot = build.snapshot;
         if let Some(snapshot) = &self.project_snapshot {
-            self.presentation.configure_layout(
-                snapshot.viewport_width,
-                snapshot.print_c_per_line,
-                snapshot.print_c_length,
+            self.presentation.configure_project(snapshot);
+        }
+        let canvas_defaults = (
+            self.presentation.default_foreground_rgb(),
+            self.presentation.default_background_rgb(),
+            self.presentation.font(),
+            u8::try_from(self.presentation.style_bits()).unwrap_or_default(),
+        );
+        if let Some(snapshot) = &mut self.project_snapshot {
+            snapshot.resource_graph.configure_canvas_defaults(
+                canvas_defaults.0,
+                canvas_defaults.1,
+                canvas_defaults.2,
+                canvas_defaults.3,
             );
         }
         self.sync_resource_replay();
@@ -1368,6 +1390,7 @@ impl RuntimeSession {
         self.key_macros = payload.key_macros;
         self.queued_input.clear();
         self.text_box = payload.text_box;
+        self.text_box_layout = payload.text_box_layout;
         self.flow_input_enabled = payload.flow_input_enabled;
         self.flow_input_default = payload.flow_input_default;
         self.flow_input_can_skip = payload.flow_input_can_skip;

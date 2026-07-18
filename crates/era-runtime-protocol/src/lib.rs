@@ -19,7 +19,8 @@ pub use effect::{
     EffectOutcome, EffectOutcomeStatus, VideoEffect,
 };
 pub use erabasic_html::{
-    HtmlAttribute, HtmlDocument, HtmlElementKind, HtmlInteraction, HtmlNode, parse_document,
+    HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlDocument, HtmlElementKind, HtmlElementSemantic,
+    HtmlInteraction, HtmlLength, HtmlNode, parse_document,
 };
 pub use extension::{
     ExtensionArgument, ExtensionArgumentStyle, ExtensionCallableKind, ExtensionDeclaration,
@@ -43,16 +44,17 @@ pub use lifecycle::{
     ShutdownRequest, SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk,
     StateExportChunkRequest, StateExportKind, StateExportReady, StateExportRequest,
     StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit,
-    StateImportReady, StateTransferCancel, StateTransferDescriptor, VersionRejected,
+    StateImportReady, StateTransferCancel, StateTransferDescriptor, TextBoxLayout, VersionRejected,
 };
 pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage, RuntimeResynchronized};
 pub use presentation::{
     AudioState, CanvasPoint, CanvasRect, CanvasReplay, CanvasReplayCommand, CanvasSize,
     CellAlignment, Color, DisplayLine, DisplayRun, LineAlignment, LogicalLength, LogicalRect,
-    MediaPlacement, PresentationDelta, PresentationLength, PresentationOperation,
-    PresentationSettings, PresentationSnapshot, ResourceReplay, SeparatorRole, Shape,
-    SpriteFrameReplay, SpriteReplay, SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
-    TooltipSettings,
+    MediaPlacement, PresentationDelta, PresentationHistory, PresentationHistoryOperation,
+    PresentationLength, PresentationOperation, PresentationSettings, PresentationSnapshot,
+    RationalOpacity, RedrawState, ResourceReplay, SeparatorRole, Shape, SpriteFrameReplay,
+    SpriteReplay, SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle, TooltipFormat,
+    TooltipFormatFlag, TooltipSettings,
 };
 pub use project::{
     DiagnosticSeverity, FileCategory, FileChange, FilePayload, FrontendIoError,
@@ -61,12 +63,14 @@ pub use project::{
     validate_relative_path,
 };
 pub use service::{
-    CancelExternalRequest, CanvasPixelRequest, CanvasPixelResponse, ExternalRequestKind,
-    GET_DISPLAY_LINE_OPERATION, GET_DISPLAY_LINE_OPERATION_VERSION, GET_KEY_STATE_OPERATION,
-    GET_KEY_STATE_OPERATION_VERSION, GGET_TEXT_SIZE_OPERATION, GGET_TEXT_SIZE_OPERATION_VERSION,
-    GetKeyStateRequest, GetKeyStateResponse, HTML_GET_PRINTED_STR_OPERATION,
-    HTML_GET_PRINTED_STR_OPERATION_VERSION, HTML_STRING_LEN_OPERATION,
-    HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
+    CancelExternalRequest, CanvasPixelRequest, CanvasPixelResponse, DECODE_CANVAS_IMAGE_OPERATION,
+    DECODE_CANVAS_IMAGE_OPERATION_VERSION, DecodeCanvasImageRequest, DecodeCanvasImageResponse,
+    ENCODE_CANVAS_PNG_OPERATION, ENCODE_CANVAS_PNG_OPERATION_VERSION, EncodeCanvasPngRequest,
+    EncodeCanvasPngResponse, ExternalRequestKind, GET_DISPLAY_LINE_OPERATION,
+    GET_DISPLAY_LINE_OPERATION_VERSION, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
+    GGET_TEXT_SIZE_OPERATION, GGET_TEXT_SIZE_OPERATION_VERSION, GetKeyStateRequest,
+    GetKeyStateResponse, HTML_GET_PRINTED_STR_OPERATION, HTML_GET_PRINTED_STR_OPERATION_VERSION,
+    HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
     HTML_STRING_LINES_OPERATION_VERSION, HTML_SUBSTRING_OPERATION,
     HTML_SUBSTRING_OPERATION_VERSION, HtmlMeasureRequest, HtmlSubstringResponse,
     IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION, IMAGE_PIXEL_OPERATION,
@@ -77,8 +81,10 @@ pub use service::{
     PointerStateRequest, PointerStateResponse, ProjectionIntegerResponse, ProjectionQueryContext,
     ProjectionStringIndexRequest, ProjectionStringResponse, RANDOM_SEED_OPERATION,
     RANDOM_SEED_OPERATION_VERSION, RandomSeedRequest, RandomSeedResponse,
-    SAMPLE_CANVAS_PIXEL_OPERATION, SAMPLE_CANVAS_PIXEL_OPERATION_VERSION, ServiceError,
-    ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, StorageCapabilities, StorageEntry,
+    SAMPLE_CANVAS_PIXEL_OPERATION, SAMPLE_CANVAS_PIXEL_OPERATION_VERSION,
+    SERIALIZE_PHYSICAL_HISTORY_OPERATION, SERIALIZE_PHYSICAL_HISTORY_OPERATION_VERSION,
+    SerializePhysicalHistoryRequest, SerializePhysicalHistoryResponse, ServiceError, ServiceKind,
+    ServiceRequest, ServiceResponse, ServiceResult, StorageCapabilities, StorageEntry,
     StorageMetadata, StorageNamespace, StorageOperation, StoragePrecondition, StorageRequest,
     StorageResponse, StorageResult, TextExtentRequest, TextExtentResponse, UPDATE_CHECK_OPERATION,
     UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest, UpdateCheckResponse,

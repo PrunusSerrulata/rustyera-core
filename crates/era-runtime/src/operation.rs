@@ -84,6 +84,13 @@ pub(crate) enum PendingStorage {
         target: Option<erabasic_vm::PlaceDescriptor>,
         strip_character_dat: bool,
     },
+    GraphicsImageRead {
+        request: HostRequestId,
+        canvas_id: i64,
+    },
+    GraphicsImageWrite {
+        request: HostRequestId,
+    },
     CandidateSaveStat {
         slot: u32,
         continuation: CandidateSaveContinuation,
