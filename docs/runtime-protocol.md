@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 14.0 and debug protocol 4.0 over common wire 2.0 are
+dynamic library. Runtime protocol 15.0 and debug protocol 4.0 over common wire 2.0 are
 development contracts: by explicit project policy they
 do not promise backward compatibility until a frontend exists.
 
@@ -160,6 +160,14 @@ The instruction-level rules for `TINPUT`, `TONEINPUTS`, `TWAIT`, `FORCEWAIT` and
 `GETKEY` are fixed in [input-wait-compatibility.md](input-wait-compatibility.md).
 In particular, positive deadlines and fresh key-state queries are transient,
 while deadline-free Enter/value input can be stable.
+
+Protocol 15 adds the negotiated `InputUndo` feature. The runtime publishes
+`InputUndoStateChanged` (tag 38) with the available history length and an epoch-scoped,
+single-use token. A frontend maps Ctrl-Z, a gesture, or an accessibility action to
+`InputUndoRequest` (tag 37); it never submits a platform key code or save bytes. The runtime
+restores its retained traditional-save checkpoint and exact SFMT state, replays accepted scalar
+inputs through normal adjudication, and exposes the resulting stable wait. Replay is transient
+and therefore blocks VM snapshot creation. Successful bytecode hot reload invalidates the trace.
 
 `QUIT` and restart variants publish a persistent `ExitRequested` intent. It is repeated in
 resynchronization state until the frontend completes the normal shutdown lifecycle; restart

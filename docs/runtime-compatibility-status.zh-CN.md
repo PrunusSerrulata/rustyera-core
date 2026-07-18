@@ -41,13 +41,13 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 | 资源加载 | 架构已实现 | 图片解码前端化是有意设计；物理绘图能力大量不支持 |
 | 标题画面 | 部分完成 | 新游戏重置时机、标题内容、输入方式不同 |
 | 新游戏初始化、EVENTFIRST | 部分完成 | `SYSTEM_TITLE` 观察到的初始状态不同 |
-| TRAIN/连续调教 | 明显不完整 | 输出抑制、进度信息、`CALLTRAINEND`、`DOTRAIN` 限制不同 |
-| AFTERTRAIN/ABLUP/TURNEND | 主流程存在 | BEGIN 时的样式、SKIPDISP、连续调教清理不同 |
-| SHOP | 部分完成 | 自动存档条件、EVENTSHOP 中 BEGIN、失败等待不同 |
+| TRAIN/连续调教 | 主流程完成 | 物理列布局仍由后续展示兼容任务处理；`STOPCALLTRAIN` 的参考崩溃被有意修正 |
+| AFTERTRAIN/ABLUP/TURNEND | 主流程存在 | BEGIN 时的样式、SKIPDISP 仍有差异 |
+| SHOP | 部分完成 | 自动存档条件、EVENTSHOP 中 BEGIN 仍有差异；失败确认等待已实现 |
 | 普通脚本执行 | 部分完成 | 1.1 所列动态调用、打印数据块和阻断指令已实现；其余差异见后续各节 |
 | 输入/QTE/计时 | 主框架完成 | ONEINPUT 长度未由 runtime 校验；部分 UI 输入函数缺失 |
 | 文本、HTML、图片、音频 | 语义模型部分完成 | PRINT 后缀、HTML、图片参数和样式操作缺失 |
-| 传统存档、VM snapshot | 基础完成 | 菜单和失败行为不同；没有参考实现 Ctrl-Z 轨迹 |
+| 传统存档、VM snapshot | 基础完成 | 菜单和部分失败行为不同；Protocol 15.0 已实现 runtime 自有 Ctrl-Z 轨迹 |
 | 热替换 | Rust 扩展已实现 | 与参考 ReloadERB 流程并不相同 |
 | 调试 | 协议与主要接口存在 | DEBUGPRINT 系列、分析模式及部分高级能力缺失 |
 | 退出、重启、错误 | 协议化实现 | 参考的系统声音、窗口错误状态和日志 UI 未复刻 |
@@ -142,17 +142,24 @@ EraBasic button value。`DEBUGPRINT*` 始终进入有界 runtime 缓冲区，仅
 
 ### 1.3 系统流程遗漏
 
-- `EVENTCOMEND` 自动等待没有实现。参考实现会跟踪期间是否执行过 WAIT；没有则自动
-  追加一次 WAIT。Rust 当前直接返回 `SHOW_STATUS`。
-- `STOPCALLTRAIN` 不调用 `CALLTRAINEND`。
-- 从连续调教通过 BEGIN 离开时，没有执行参考实现的
-  `ClearCommands -> CALLTRAINEND`。
-- 连续调教期间未隐藏 `SHOW_STATUS`、命令表和 `SHOW_USERCOM` 输出，也没有“第 x/y
-  个命令”“无法执行命令”提示。
-- `DOTRAIN` 只检查当前 flow 是 Train，没有按参考实现限制可调用的详细阶段，也没有
-  验证命令编号小于 `TRAINNAME` 长度。
-- 自动存档失败后没有参考实现的两条错误信息和按键等待。
-- 未实现参考实现的 Ctrl-Z 输入、保存和加载重放轨迹。
+本节已完成。runtime 现在跟踪 `EVENTCOMEND` 内显式 WAIT，并在需要时自动创建稳定
+任意键等待；失败命令不会错误进入该事件。连续调教实现输出抑制、进度/失败提示、
+`STOPCALLTRAIN` 丢弃调用方后执行系统清理、自然结束及 BEGIN 离开时的
+`CALLTRAINEND` 顺序。
+`DOTRAIN` 同时校验详细系统阶段和 `TRAINNAME` 物理长度。自动存档失败会输出两条
+参考消息并等待确认后才进入 `SHOW_SHOP`。
+
+`STOPCALLTRAIN` 有一项经 oracle 确认的有意修正：固定参考实现会先丢弃后续语句并
+执行 `CALLTRAINEND`，随后因空返回地址触发 `NullReferenceException`。runtime 保留
+前两项脚本可观察副作用，但不会复制客户端后端崩溃；它会恢复 TRAIN 系统状态机并
+进入稳定输入等待。该取舍优先保证跨客户端运行和架构纯净。
+
+Protocol 15.0 还实现了协商式 `InputUndo`：runtime 在成功的手动存档/读档后保存传统
+存档基线、精确 SFMT 状态和标量输入轨迹，并通过相同输入判定路径进行 Ctrl-Z 回放。
+回放期间禁止 VM snapshot；稳定 snapshot 会保存撤销基线和轨迹。
+参考实现回放前会经过 `BeginTitle`；当前实现直接恢复 runtime 保留的基线并执行现有
+读档 hooks。标题初始化的精确状态与调用顺序依赖 2.3 的完整标题/新游戏流程，因此该
+项作为后续依赖保留，不阻塞 1.3 的输入轨迹、RNG 和存档恢复能力。
 
 ### 1.4 输入验证遗漏
 
@@ -192,12 +199,17 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
 - 存储采用前端事务、revision、atomic replace；删除菜单是 Rust 扩展。
 - 候选存档失败回滚展示和效果，而参考实现可能已经泄漏输出。
 - VM snapshot、热代际切换是 Rust 扩展。
+- `STOPCALLTRAIN` 保留参考实现的调用方丢弃和 `CALLTRAINEND` 副作用，但修复其随后
+  的空返回地址异常，并恢复 TRAIN 系统状态机。
+- Ctrl-Z 使用 runtime 保留的精确传统存档字节，不会因前端槽位随后被覆盖或删除而
+  改变；SFMT 可精确恢复，因此 `UseNewRandom=true` 也不禁用撤销。成功热替换会明确
+  清除撤销基线。前端只发送语义化 `InputUndoRequest`，不提交平台 Ctrl-Z 键事件。
 
 相关稳定差异记录于 `docs/runtime-operation-contracts.md`。
 
 ### 2.2 更新后设计原则与当前实现的矛盾
 
-以下内容是当前代码和 protocol 14.0 的现状，不是未来目标设计。它们不能继续被笼统
+以下内容是当前代码和 protocol 15.0 的现状，不是未来目标设计。它们不能继续被笼统
 描述为“规范化展示的有意差异”：
 
 1. **已解决：权威 snapshot 的伪物理文本布局。** Protocol 14.0 删除 `RunLayout` 和
@@ -251,19 +263,16 @@ PrimitiveInput 由前端规范化为 EraBasic 字段是已确认的有意设计�
    会立即取消当前 fiber 并切换流程。
 5. **SHOP 自动存档条件不同。** 参考实现只在 SHOP 从 Normal 进入时自动存档；Rust
    只要启用 autosave 就执行。
-6. **连续调教行为不同。** 包括输出抑制、进度提示、失败提示、`STOPCALLTRAIN`、
-   `CALLTRAINEND` 和离开流程时的清理。
-7. **`EVENTCOMEND` 后等待行为不同。**
-8. **标题、存档和读档菜单输入不同。** 参考实现接受数字键盘输入，可直接输入其他
+6. **标题、存档和读档菜单输入不同。** 参考实现接受数字键盘输入，可直接输入其他
    页的 slot 号跳页，`100` 返回、`99` 是自动存档。Rust 使用 opaque interaction
    token 和前后页按钮，不接受等价的 `CommitText("42")`。
-9. **普通 PRINT 自动按钮识别不同。** 参考实现把普通文本中的 `[数字]` 转换成可
+7. **普通 PRINT 自动按钮识别不同。** 参考实现把普通文本中的 `[数字]` 转换成可
    点击按钮，`PRINTPLAIN` 才禁止这一行为。Rust 普通 PRINT 永远不会生成按钮，只
    支持显式 `PRINTBUTTON*`。
-10. **HTML 行为不同。** Rust 把 `HTML_PRINT` 保存为一个 opaque HTML run 并立即
+8. **HTML 行为不同。** Rust 把 `HTML_PRINT` 保存为一个 opaque HTML run 并立即
     提交一条逻辑行；参考实现解析 HTML 的按钮、图片、形状、样式和 div，并可根据
     第二参数追加到当前 print buffer。
-11. **图片和形状参数不同。** Rust `PRINT_IMG` 只保留首个资源 ID，忽略背景图、
+9. **图片和形状参数不同。** Rust `PRINT_IMG` 只保留首个资源 ID，忽略背景图、
     mask、宽高和 y 坐标；`PRINT_RECT` 丢失 px/% 的 MixedNum 语义；`PRINT_SPACE`
     被普通 PRINT 分支错误地输出成数字文本。
 12. **热替换流程不同。** Rust 使用原子 project delta 和多代 VM；参考 `ReloadERB`

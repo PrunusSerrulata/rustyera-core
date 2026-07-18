@@ -148,6 +148,8 @@ pub enum RuntimeFeature {
     /// Versioned frontend storage messages are available.
     #[n(11)]
     Storage,
+    #[n(12)]
+    InputUndo,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

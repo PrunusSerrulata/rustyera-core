@@ -17,8 +17,9 @@ pub use effect::{
     EffectOutcome, EffectOutcomeStatus, VideoEffect,
 };
 pub use input::{
-    AdvanceTime, DeviceStateChanged, FrontendInput, InputDeviceKind, InputIntent, InputWait,
-    InteractionToken, PrimitiveInput, WaitChange, WaitKind, WaitStability,
+    AdvanceTime, DeviceStateChanged, FrontendInput, InputDeviceKind, InputIntent, InputUndoRequest,
+    InputUndoState, InputWait, InteractionToken, PrimitiveInput, WaitChange, WaitKind,
+    WaitStability,
 };
 pub use lifecycle::{
     ClientCapabilities, ClientHello, ClientStateChanged, CommandErrorCode, CommandRejected,

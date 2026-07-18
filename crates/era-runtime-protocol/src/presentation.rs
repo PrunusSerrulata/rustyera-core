@@ -33,6 +33,10 @@ pub enum SystemTextKey {
     NewGame,
     #[n(12)]
     LoadGame,
+    #[n(13)]
+    ContinuousTrainProgress,
+    #[n(14)]
+    ContinuousTrainCommandFailed,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

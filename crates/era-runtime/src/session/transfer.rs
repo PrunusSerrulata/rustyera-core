@@ -25,6 +25,9 @@ impl RuntimeSession {
         if request.kind == StateExportKind::VmSnapshot && !self.operations.is_snapshot_stable() {
             reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
         }
+        if request.kind == StateExportKind::VmSnapshot && self.undo_replay.is_some() {
+            reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
+        }
         let result = if reasons.is_empty() {
             if self.outbound_transfer.is_some() {
                 return self.reject(
@@ -121,6 +124,8 @@ impl RuntimeSession {
                         occupied_slot_paths: self.occupied_slot_paths.clone(),
                         system_menu_host_request: self.system_menu_host_request,
                         system_menu_page: self.system_menu_page,
+                        undo_checkpoint: self.undo_checkpoint.clone(),
+                        undo_replay: self.undo_replay.clone(),
                     })
                     .map_err(RuntimeError::Internal)?
                 }
@@ -490,6 +495,7 @@ impl RuntimeSession {
     }
 
     pub(super) fn resynchronize(&mut self, message_id: u64) -> Result<(), RuntimeError> {
+        let input_undo = self.input_undo_state();
         self.emit(
             RuntimeMessage::RuntimeResynchronized(RuntimeResynchronized {
                 epoch: self.epoch.0,
@@ -498,6 +504,7 @@ impl RuntimeSession {
                 presentation: self.presentation.snapshot(),
                 exit_requested: self.exit_requested,
                 selected_locale: self.selected_locale.clone(),
+                input_undo,
             }),
             Some(message_id),
         )?;

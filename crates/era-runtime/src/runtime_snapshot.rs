@@ -10,7 +10,7 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 9;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 10;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 52;
@@ -59,6 +59,8 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) occupied_slot_paths: std::collections::BTreeSet<String>,
     pub(crate) system_menu_host_request: Option<erabasic_vm::HostRequestId>,
     pub(crate) system_menu_page: u32,
+    pub(crate) undo_checkpoint: Option<super::session::UndoCheckpoint>,
+    pub(crate) undo_replay: Option<super::session::UndoReplay>,
 }
 
 /// JSON objects cannot represent structured interaction tokens as keys. The runtime snapshot
@@ -195,6 +197,8 @@ mod tests {
             occupied_slot_paths: std::collections::BTreeSet::new(),
             system_menu_host_request: None,
             system_menu_page: 0,
+            undo_checkpoint: None,
+            undo_replay: None,
         };
         let mut encoded = encode(&payload).unwrap();
         let last = encoded.last_mut().unwrap();
@@ -246,6 +250,8 @@ mod tests {
             occupied_slot_paths: std::collections::BTreeSet::new(),
             system_menu_host_request: None,
             system_menu_page: 0,
+            undo_checkpoint: None,
+            undo_replay: None,
         };
         let encoded = encode(&payload).unwrap();
         let decoded = decode(&encoded, encoded.len()).unwrap();

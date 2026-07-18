@@ -18,6 +18,30 @@ pub struct InteractionToken {
     pub id: u64,
 }
 
+/// Semantic input-history undo request. Frontends may map Ctrl-Z, gestures, or
+/// accessibility actions to this message without exposing platform key events.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct InputUndoRequest {
+    #[n(0)]
+    pub token: InteractionToken,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct InputUndoState {
+    #[n(0)]
+    pub enabled: bool,
+    #[n(1)]
+    pub available_steps: u32,
+    #[n(2)]
+    pub in_progress: bool,
+    #[n(3)]
+    pub runtime_revision: u64,
+    #[n(4)]
+    pub token: Option<InteractionToken>,
+}
+
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]

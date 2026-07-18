@@ -153,6 +153,11 @@ impl RuntimeSession {
             commit_integer_result(vm, request.id, 1)?;
             return self.emit_presentation();
         }
+        if self.controller.step == SystemStep::TrainEventComEnd
+            && matches!(name.as_str(), "WAIT" | "WAITANYKEY" | "FORCEWAIT" | "TWAIT")
+        {
+            self.controller.event_com_end_wait_required = false;
+        }
         if self.skip_print && is_runtime_print_command(&name) {
             if self.user_defined_skip && is_input_command(&name) {
                 return self.fault(
@@ -747,7 +752,19 @@ impl RuntimeSession {
                 usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
                     RuntimeError::Internal("CALLTRAIN count must be non-negative".into())
                 })?;
-            self.controller.continuous_commands.clear();
+            let capacity = vm
+                .variable_dimensions(request.fiber, "SELECTCOM")
+                .and_then(|dimensions| dimensions.first().copied())
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(0);
+            if count >= capacity {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "CALLTRAIN count must be smaller than SELECTCOM capacity",
+                    Some(request.origin.clone()),
+                );
+            }
+            self.controller.clear_continuous_train();
             for index in 0..count {
                 self.controller
                     .continuous_commands
@@ -759,27 +776,57 @@ impl RuntimeSession {
                     )?);
             }
             self.controller.continuous_train = true;
+            self.controller.continuous_total = count;
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
         if name == "STOPCALLTRAIN" {
-            self.controller.continuous_commands.clear();
-            self.controller.continuous_train = false;
-            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+            if !self.controller.continuous_train {
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady::empty()),
+                );
+            }
+            // ClearCommands invokes CALLTRAINEND without a return address in the
+            // reference engine. The STOPCALLTRAIN caller must therefore be
+            // discarded before the system controller resumes its current phase.
+            vm.cancel_fiber(request.fiber)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            self.controller.clear();
+            self.controller.clear_continuous_train();
+            self.skip_print = false;
+            if !self.dispatch_system_function(vm, "CALLTRAINEND", false)? {
+                return self.continue_system_flow(vm);
+            }
+            return Ok(());
         }
         if name == "DOTRAIN" {
             let command = integer_argument_value(&request.arguments, 0)?;
-            if command < 0 || self.controller.flow != Some(SystemFlow::Train) {
+            let allowed_step = self.controller.allows_dotrain();
+            let train_name_count = vm
+                .vm()
+                .artifact()
+                .project_data
+                .static_data
+                .name_tables
+                .get(&erabasic_data::NameTableKind::Train)
+                .map_or(0, |table| table.names.len());
+            if command < 0
+                || self.controller.flow != Some(SystemFlow::Train)
+                || !allowed_step
+                || usize::try_from(command).map_or(true, |value| value >= train_name_count)
+            {
                 return self.fault(
                     FaultCode::VmFault,
-                    "DOTRAIN is only valid with a non-negative command during TRAIN",
+                    "DOTRAIN is not valid in this TRAIN phase or its command is outside TRAINNAME",
                     Some(request.origin.clone()),
                 );
             }
             vm.cancel_fiber(request.fiber)
                 .map_err(|error| RuntimeError::Internal(error.to_string()))?;
             self.controller.clear();
-            self.controller.continuous_commands.clear();
-            self.controller.continuous_train = false;
+            self.controller.clear_continuous_train();
+            reset_after_show_user(vm)?;
             self.controller.selected_command = Some(command);
             write_runtime_integer(vm, "SELECTCOM", &[], None, command)?;
             fill_runtime_variable(vm, "NOWEX", VmValue::Integer(0), true)?;
@@ -809,6 +856,17 @@ impl RuntimeSession {
             vm.cancel_fiber(request.fiber)
                 .map_err(|error| RuntimeError::Internal(error.to_string()))?;
             self.controller.clear();
+            if self.controller.continuous_train {
+                self.controller.clear_continuous_train();
+                self.controller.deferred_flow = Some(flow);
+                self.controller.step = SystemStep::TrainBeginAfterCallTrainEnd;
+                self.skip_print = true;
+                if self.dispatch_system_function(vm, "CALLTRAINEND", false)? {
+                    return Ok(());
+                }
+                self.skip_print = false;
+                self.controller.deferred_flow = None;
+            }
             self.controller.flow = Some(flow);
             return self.begin_flow(vm, flow);
         }

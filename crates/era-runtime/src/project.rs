@@ -35,6 +35,7 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) sort_with_filename: bool,
     pub(crate) use_new_random_ignored: bool,
     pub(crate) auto_save: bool,
+    pub(crate) ctrl_z_enabled: bool,
     pub(crate) save_in_binary: bool,
     pub(crate) compress_save: bool,
     pub(crate) save_slot_count: u32,
@@ -63,6 +64,7 @@ struct SemanticConfig {
     analyzer: AnalyzerOptions,
     use_new_random: bool,
     auto_save: bool,
+    ctrl_z_enabled: bool,
     save_in_binary: bool,
     compress_save: bool,
     save_slot_count: u32,
@@ -84,6 +86,7 @@ impl Default for SemanticConfig {
             analyzer: AnalyzerOptions::default(),
             use_new_random: false,
             auto_save: true,
+            ctrl_z_enabled: false,
             save_in_binary: false,
             compress_save: false,
             save_slot_count: 20,
@@ -352,6 +355,7 @@ pub(crate) fn build_project(
             sort_with_filename: config.csv.sort_with_filename,
             use_new_random_ignored: config.use_new_random,
             auto_save: config.auto_save,
+            ctrl_z_enabled: config.ctrl_z_enabled,
             save_in_binary: config.save_in_binary,
             compress_save: config.compress_save,
             save_slot_count: config.save_slot_count,
@@ -471,6 +475,7 @@ fn project_identity(
         u8::from(config.save_in_binary),
         u8::from(config.compress_save),
         u8::from(config.money_first),
+        u8::from(config.ctrl_z_enabled),
     ]);
     hasher.update(&config.save_slot_count.to_le_bytes());
     hasher.update(&config.maximum_shop_items.to_le_bytes());
@@ -710,6 +715,9 @@ fn parse_configuration(
                     config.use_new_random = boolean;
                 }
                 "オートセーブを行なう" | "Make autosaves" => config.auto_save = boolean,
+                "Ctrl-Zで元に戻す機能を有効にする" | "Enable undo with ctrl-z" => {
+                    config.ctrl_z_enabled = boolean;
+                }
                 "セーブデータをバイナリ形式で保存する"
                 | "Use the binary format for saving data" => config.save_in_binary = boolean,
                 "セーブデータを圧縮して保存する" | "Compress save data" => {
@@ -769,6 +777,12 @@ fn parse_json_configuration(
             }
             if let Some(boolean) = value.get("AutoSave").and_then(serde_json::Value::as_bool) {
                 config.auto_save = boolean;
+            }
+            if let Some(boolean) = value
+                .get("CtrlZEnabled")
+                .and_then(serde_json::Value::as_bool)
+            {
+                config.ctrl_z_enabled = boolean;
             }
             if let Some(boolean) = value
                 .get("SystemSaveInBinary")
@@ -939,7 +953,7 @@ mod tests {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
-                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nCurrency symbol:円\nCurrency symbol position:NO\nMax shop item storage:77\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nフォント名:Test\n",
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nCurrency symbol:円\nCurrency symbol position:NO\nMax shop item storage:77\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nフォント名:Test\n",
             )],
             &mut diagnostics,
         );
@@ -948,6 +962,7 @@ mod tests {
         assert!(!config.analyzer.ignore_case);
         assert!(config.use_new_random);
         assert!(!config.auto_save);
+        assert!(config.ctrl_z_enabled);
         assert!(config.save_in_binary);
         assert!(config.compress_save);
         assert_eq!(config.save_slot_count, 30);

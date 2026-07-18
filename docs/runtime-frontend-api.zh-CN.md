@@ -340,7 +340,7 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 | 字段 | 含义 |
 | --- | --- |
 | `wire_version` | 公共信封版本，当前为 `2.0`。 |
-| `channel_version` | `Runtime` channel 当前为 `14.0`；`Debug` channel 当前为 `4.0`。 |
+| `channel_version` | `Runtime` channel 当前为 `15.0`；`Debug` channel 当前为 `4.0`。 |
 | `channel` | 正常运行必须为 `Runtime`；调试使用独立 `Debug` channel。 |
 | `session` | 首次 `ClientHello` 可为空；握手成功后必须等于 `ServerHello.session`。 |
 | `session_epoch` | 首次握手可为空；之后必须等于当前时间线 epoch。新游戏、恢复或热替换提交后旧 epoch 消息失效。 |
@@ -365,7 +365,7 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `14.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `15.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
@@ -510,6 +510,13 @@ ID、epoch、token 或意图不匹配会收到
 即使没有用户输入，前端也必须按需要提交 `AdvanceTime`（tag `31`），让 runtime 推进
 QTE/超时。Runtime 从不主动读取系统时钟。如果输入和超时发生在同一时刻，消息
 `sequence` 决定处理顺序。
+
+握手协商 `RuntimeFeature::InputUndo` 后，Runtime 会发送 `InputUndoStateChanged`
+（tag `38`），其中包含是否启用、可撤销步数、是否正在回放以及单次有效 token。
+前端可以把 Ctrl-Z、触摸手势或无障碍操作映射为 `InputUndoRequest`（tag `37`），但
+不得发送原始平台键事件、读取存档槽或自行回放输入。Runtime 验证 token/epoch，恢复
+其保留的传统存档和 RNG 状态，并重新执行输入轨迹。回放期间不能请求 VM snapshot；
+热替换成功后旧撤销状态会失效。`RuntimeResynchronized` 同样携带完整撤销状态。
 
 ## 9. 外部服务
 

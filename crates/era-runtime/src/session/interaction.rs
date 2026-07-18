@@ -124,7 +124,7 @@ impl RuntimeSession {
                 }
             };
             let time: LocalDateTimeResponse = decode_canonical(payload.as_slice())?;
-            let (candidate, bytes) = match self.prepare_candidate_save(time) {
+            let (mut candidate, bytes) = match self.prepare_candidate_save(time) {
                 Ok(value) => value,
                 Err(error) => {
                     return self.finish_candidate_save_failure(
@@ -133,6 +133,13 @@ impl RuntimeSession {
                     );
                 }
             };
+            if matches!(continuation, CandidateSaveContinuation::SystemMenu { .. }) {
+                candidate.save_bytes.clone_from(&bytes);
+                candidate.save_slot = match continuation {
+                    CandidateSaveContinuation::SystemMenu { slot, .. } => Some(slot),
+                    CandidateSaveContinuation::Autosave => None,
+                };
+            }
             self.pending_candidate_commit = Some(candidate);
             return self.issue_storage(
                 PendingStorage::CandidateSaveWrite { continuation },
@@ -485,6 +492,9 @@ impl RuntimeSession {
                 ));
             };
             return self.finish_system_input(pending, &value);
+        }
+        if let InputSubmission::Value(value) = &submission {
+            self.record_input_undo_value(value)?;
         }
         let request = pending
             .host_request
@@ -923,6 +933,16 @@ impl RuntimeSession {
                     Ok(())
                 }
             }
+            SystemStep::TrainEventComEndWait => {
+                self.controller.step = SystemStep::TrainShowStatus;
+                self.dispatch_system_function(&mut vm, "SHOW_STATUS", true)?;
+                Ok(())
+            }
+            SystemStep::ShopAutosaveFailureWait => {
+                self.controller.step = SystemStep::ShopShow;
+                self.dispatch_system_function(&mut vm, "SHOW_SHOP", true)?;
+                Ok(())
+            }
             _ => Err(RuntimeError::Internal(
                 "system flow received input outside an input step".into(),
             )),
@@ -951,8 +971,7 @@ impl RuntimeSession {
             reset_training_state(vm)?;
             self.controller.train_scan = 0;
             self.controller.train_commands.clear();
-            self.controller.continuous_commands.clear();
-            self.controller.continuous_train = false;
+            self.controller.clear_continuous_train();
         }
         self.controller.step = match flow {
             SystemFlow::Train => SystemStep::TrainEvent,
@@ -1065,6 +1084,11 @@ impl RuntimeSession {
                         return self.continue_system_flow(vm);
                     }
                 } else {
+                    if self.controller.continuous_train {
+                        // Emuera suppresses SHOW_STATUS and the command table while it
+                        // rebuilds COM_ABLE for a continuous command.
+                        self.skip_print = true;
+                    }
                     self.controller.step = SystemStep::TrainShowStatus;
                     self.dispatch_system_function(vm, "SHOW_STATUS", true)?;
                 }
@@ -1086,7 +1110,28 @@ impl RuntimeSession {
             }
             SystemStep::TrainShowUser if self.controller.continuous_train => {
                 reset_after_show_user(vm)?;
+                self.skip_print = false;
                 if let Some(command) = self.controller.continuous_commands.pop_front() {
+                    self.controller.continuous_executed =
+                        self.controller.continuous_executed.saturating_add(1);
+                    let current =
+                        i64::try_from(self.controller.continuous_executed).unwrap_or(i64::MAX);
+                    let total = i64::try_from(self.controller.continuous_total).unwrap_or(i64::MAX);
+                    let text = localized_system_text(
+                        &self.selected_locale,
+                        SystemTextKey::ContinuousTrainProgress,
+                    )
+                    .replace("{0}", &current.to_string())
+                    .replace("{1}", &total.to_string());
+                    self.presentation.append_system_text(
+                        text,
+                        SystemTextKey::ContinuousTrainProgress,
+                        vec![
+                            SystemTextArgument::Integer(current),
+                            SystemTextArgument::Integer(total),
+                        ],
+                        false,
+                    );
                     if self.controller.train_commands.contains(&command) {
                         self.controller.selected_command = Some(command);
                         write_runtime_integer(vm, "SELECTCOM", &[], None, command)?;
@@ -1096,15 +1141,21 @@ impl RuntimeSession {
                             return self.continue_system_flow(vm);
                         }
                     } else {
-                        self.controller.step = SystemStep::TrainShowStatus;
-                        self.dispatch_system_function(vm, "SHOW_STATUS", true)?;
+                        self.presentation.append_system_text(
+                            localized_system_text(
+                                &self.selected_locale,
+                                SystemTextKey::ContinuousTrainCommandFailed,
+                            ),
+                            SystemTextKey::ContinuousTrainCommandFailed,
+                            Vec::new(),
+                            false,
+                        );
+                        write_runtime_integer(vm, "RESULT", &[], None, command)?;
+                        self.controller.step = SystemStep::TrainUserCom;
+                        self.dispatch_system_function(vm, "USERCOM", true)?;
                     }
                 } else {
-                    self.controller.continuous_train = false;
-                    self.controller.step = SystemStep::TrainShowStatus;
-                    if !self.dispatch_system_function(vm, "CALLTRAINEND", false)? {
-                        self.dispatch_system_function(vm, "SHOW_STATUS", true)?;
-                    }
+                    return self.finish_continuous_train(vm);
                 }
             }
             SystemStep::TrainShowUser => {
@@ -1114,9 +1165,22 @@ impl RuntimeSession {
             SystemStep::AblupShowSelect | SystemStep::ShopShow => {
                 return self.open_system_command_wait();
             }
-            SystemStep::TrainUserCom | SystemStep::TrainEventComEnd => {
+            SystemStep::TrainUserCom => {
+                if self.controller.continuous_train
+                    && self.controller.continuous_commands.is_empty()
+                {
+                    return self.finish_continuous_train(vm);
+                }
                 self.controller.step = SystemStep::TrainShowStatus;
                 self.dispatch_system_function(vm, "SHOW_STATUS", true)?;
+            }
+            SystemStep::TrainEventComEnd => {
+                if self.controller.continuous_train
+                    && self.controller.continuous_commands.is_empty()
+                {
+                    return self.finish_continuous_train(vm);
+                }
+                return self.finish_event_com_end(vm);
             }
             SystemStep::TrainEventCom => {
                 let command = self.controller.selected_command.ok_or_else(|| {
@@ -1128,10 +1192,8 @@ impl RuntimeSession {
             SystemStep::TrainCommand => {
                 let result = read_runtime_integer(vm, "RESULT", &[], None)?;
                 if result == 0 {
-                    self.controller.step = SystemStep::TrainEventComEnd;
-                    if !self.dispatch_system_event(vm, "EVENTCOMEND")? {
-                        return self.continue_system_flow(vm);
-                    }
+                    self.controller.step = SystemStep::TrainShowStatus;
+                    self.dispatch_system_function(vm, "SHOW_STATUS", true)?;
                 } else {
                     self.controller.step = SystemStep::TrainSourceCheck;
                     self.dispatch_system_function(vm, "SOURCE_CHECK", true)?;
@@ -1140,6 +1202,7 @@ impl RuntimeSession {
             SystemStep::TrainSourceCheck => {
                 fill_runtime_variable(vm, "SOURCE", VmValue::Integer(0), true)?;
                 self.controller.step = SystemStep::TrainEventComEnd;
+                self.controller.event_com_end_wait_required = true;
                 if !self.dispatch_system_event(vm, "EVENTCOMEND")? {
                     return self.continue_system_flow(vm);
                 }
@@ -1184,7 +1247,18 @@ impl RuntimeSession {
                 self.controller.step = SystemStep::None;
                 return self.open_title_menu();
             }
-            SystemStep::None => {}
+            SystemStep::TrainCallTrainEnd => return self.finish_event_com_end(vm),
+            SystemStep::TrainBeginAfterCallTrainEnd => {
+                self.skip_print = false;
+                let flow = self.controller.deferred_flow.take().ok_or_else(|| {
+                    RuntimeError::Internal("deferred BEGIN target disappeared".into())
+                })?;
+                self.controller.flow = Some(flow);
+                return self.begin_flow(vm, flow);
+            }
+            SystemStep::TrainEventComEndWait
+            | SystemStep::ShopAutosaveFailureWait
+            | SystemStep::None => {}
         }
         Ok(())
     }
@@ -1222,28 +1296,66 @@ impl RuntimeSession {
                     .push(i64::try_from(command).unwrap_or(i64::MAX));
             }
         }
-        for (display, command) in self
-            .controller
-            .train_commands
-            .clone()
-            .into_iter()
-            .enumerate()
-        {
-            let name = usize::try_from(command)
-                .ok()
-                .and_then(|index| names.get(index))
-                .and_then(Option::as_deref)
-                .unwrap_or("");
-            let token = self.allocate_interaction();
-            self.presentation
-                .append_button(format!("{name}[{display:>3}]"), token, None);
-            self.command_intents.insert(
-                token,
-                VmValue::Integer(i64::try_from(display).unwrap_or(i64::MAX)),
-            );
+        if !self.controller.continuous_train {
+            for (display, command) in self
+                .controller
+                .train_commands
+                .clone()
+                .into_iter()
+                .enumerate()
+            {
+                let name = usize::try_from(command)
+                    .ok()
+                    .and_then(|index| names.get(index))
+                    .and_then(Option::as_deref)
+                    .unwrap_or("");
+                let token = self.allocate_interaction();
+                self.presentation
+                    .append_button(format!("{name}[{display:>3}]"), token, None);
+                self.command_intents.insert(
+                    token,
+                    VmValue::Integer(i64::try_from(display).unwrap_or(i64::MAX)),
+                );
+            }
         }
         self.controller.step = SystemStep::TrainShowUser;
         self.dispatch_system_function(vm, "SHOW_USERCOM", true)?;
+        Ok(())
+    }
+
+    fn finish_continuous_train(&mut self, vm: &mut RuntimeVm) -> Result<(), RuntimeError> {
+        self.controller.clear_continuous_train();
+        self.skip_print = false;
+        self.controller.step = SystemStep::TrainCallTrainEnd;
+        if !self.dispatch_system_function(vm, "CALLTRAINEND", false)? {
+            return self.finish_event_com_end(vm);
+        }
+        Ok(())
+    }
+
+    fn finish_event_com_end(&mut self, vm: &mut RuntimeVm) -> Result<(), RuntimeError> {
+        if self.controller.event_com_end_wait_required {
+            self.controller.event_com_end_wait_required = false;
+            self.controller.step = SystemStep::TrainEventComEndWait;
+            let submission = self.allocate_interaction();
+            let mut wait = self.system_wait(submission);
+            wait.kind = WaitKind::EnterKey;
+            wait.mouse_input = false;
+            wait.default_value = None;
+            return self.open_wait(
+                PendingInput {
+                    host_request: None,
+                    wait,
+                    result_name: None,
+                    choices: BTreeMap::new(),
+                    timeout_duration_ns: None,
+                    post_input: None,
+                },
+                true,
+            );
+        }
+        self.controller.step = SystemStep::TrainShowStatus;
+        self.dispatch_system_function(vm, "SHOW_STATUS", true)?;
         Ok(())
     }
 
@@ -1264,11 +1376,22 @@ impl RuntimeSession {
         mut pending: PendingInput,
         pause_runtime: bool,
     ) -> Result<(), RuntimeError> {
+        if self.restart_queued_input_undo()? {
+            return Ok(());
+        }
         if let Some(duration) = pending.timeout_duration_ns {
             pending.wait.deadline_ns = Some(self.logical_time_ns.saturating_add(duration));
             if pending.wait.display_time {
                 pending.wait.countdown_remaining_ms = Some(duration / 1_000_000);
             }
+        }
+        if let Some(submission) = self.replay_submission(&pending.wait) {
+            self.operations.activate_input(pending);
+            return self.finish_input(submission, false);
+        }
+        if self.undo_replay.is_none() {
+            self.undo_token = None;
+            self.emit_input_undo_state()?;
         }
         let automatic_system_value = (pending.wait.system_input
             && (self.flow_input_force_skip || (self.flow_input_can_skip && self.message_skip)))

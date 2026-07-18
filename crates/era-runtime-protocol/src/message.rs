@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AdvanceTime, CancelExternalRequest, ClientHello, ClientStateChanged, CommandRejected,
     DeviceStateChanged, EffectAcknowledgement, EffectBatch, ExitRequested, FrontendInput,
-    PresentationDelta, PresentationSnapshot, ProjectLoadReport, ProjectManifest,
-    ProjectionObservation, ProjectionState, ProtocolDiagnostic, ReloadProject,
+    InputUndoRequest, InputUndoState, PresentationDelta, PresentationSnapshot, ProjectLoadReport,
+    ProjectManifest, ProjectionObservation, ProjectionState, ProtocolDiagnostic, ReloadProject,
     ResynchronizeRequest, RuntimeFault, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement,
     ServerHello, ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
     StateExportChunk, StateExportChunkRequest, StateExportReady, StateExportRequest,
@@ -17,7 +17,7 @@ use crate::{
     StateTransferCancel, StorageRequest, StorageResponse, VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(14, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(15, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -34,6 +34,8 @@ pub struct RuntimeResynchronized {
     pub exit_requested: Option<ExitRequested>,
     #[n(5)]
     pub selected_locale: String,
+    #[n(6)]
+    pub input_undo: InputUndoState,
 }
 
 /// Stable runtime message variants. Numeric discriminants are wire IDs and must
@@ -73,6 +75,10 @@ pub enum RuntimeMessage {
     ProjectionObservation(#[n(0)] ProjectionObservation),
     #[n(36)]
     ProjectionState(#[n(0)] ProjectionState),
+    #[n(37)]
+    InputUndoRequest(#[n(0)] InputUndoRequest),
+    #[n(38)]
+    InputUndoStateChanged(#[n(0)] InputUndoState),
     #[n(40)]
     PresentationSnapshot(#[n(0)] PresentationSnapshot),
     #[n(41)]
@@ -149,6 +155,8 @@ impl RuntimeMessage {
             Self::ClientStateChanged(_) => 34,
             Self::ProjectionObservation(_) => 35,
             Self::ProjectionState(_) => 36,
+            Self::InputUndoRequest(_) => 37,
+            Self::InputUndoStateChanged(_) => 38,
             Self::PresentationSnapshot(_) => 40,
             Self::PresentationDelta(_) => 41,
             Self::EffectBatch(_) => 42,

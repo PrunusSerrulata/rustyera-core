@@ -130,6 +130,26 @@ impl RuntimeVm {
             .any(|fiber| matches!(fiber.state, FiberState::Runnable))
     }
 
+    /// Export the exact SFMT stream position used by RAND natives.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the native random state is unavailable or poisoned.
+    pub fn export_random_state(&self) -> Result<Vec<i64>, VmError> {
+        self.natives.random_values().map_err(VmError::InvalidState)
+    }
+
+    /// Restore a state previously returned by `export_random_state`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the encoded SFMT state is invalid or unavailable.
+    pub fn restore_random_state(&mut self, values: &[i64]) -> Result<(), VmError> {
+        self.natives
+            .set_random_values(values)
+            .map_err(VmError::InvalidState)
+    }
+
     /// Export only VAREXT values declared for the requested save scope.
     ///
     /// # Errors

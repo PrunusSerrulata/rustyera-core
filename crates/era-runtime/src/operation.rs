@@ -9,7 +9,7 @@ use crate::host::{ExternalCompletion, PendingInput};
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) enum CandidateSaveContinuation {
     Autosave,
-    SystemMenu { request: HostRequestId },
+    SystemMenu { request: HostRequestId, slot: u32 },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
