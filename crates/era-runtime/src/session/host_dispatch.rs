@@ -39,15 +39,10 @@ impl RuntimeSession {
         if name == "SKIPDISP" {
             self.skip_print = integer_argument_value(&request.arguments, 0)? != 0;
             self.user_defined_skip = self.skip_print;
-            let writes = self.result_write(i64::from(self.skip_print))?;
-            return commit_completion(
-                vm,
-                request.id,
-                VmHostCompletion::Ready(HostReady {
-                    value: None,
-                    writes,
-                }),
-            );
+            // Host calls execute while the caller-pumped drive loop temporarily
+            // owns the VM, so RESULT must be resolved through that VM rather than
+            // through the session's temporarily empty VM slot.
+            return commit_host_result_write(vm, request.id, i64::from(self.skip_print));
         }
         if name == "SKIPLOG" {
             self.message_skip = integer_argument_value(&request.arguments, 0)? != 0;
@@ -891,22 +886,42 @@ impl RuntimeSession {
                     Some(request.origin.clone()),
                 );
             };
+            // BEGIN resets the console style at instruction execution time, even
+            // when the actual system transition is deferred by EVENTSHOP.
+            self.presentation.reset_style();
+            if flow == SystemFlow::Shop {
+                self.controller.shop_called_when_normal =
+                    self.controller.flow == Some(SystemFlow::Normal);
+            }
+            self.controller.deferred_flow = Some(flow);
+            if vm.fiber_frame_count(request.fiber).unwrap_or(0) > 1 {
+                return commit_completion(vm, request.id, VmHostCompletion::ReturnCurrent(None));
+            }
             // The pinned fork treats BEGIN and FORCE_BEGIN as the same forced
-            // transition. The current fiber cannot resume after changing systems.
+            // transition. Returning the issuing root approximates ProcessState's
+            // Return(0), while retaining the remaining event handlers.
             vm.cancel_fiber(request.fiber)
                 .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            let was_system_handler = self.controller.completed(request.fiber, None);
+            if was_system_handler && !self.controller.is_complete() {
+                return self.spawn_next_event(vm);
+            }
+            if self.controller.flow == Some(SystemFlow::Shop)
+                && self.controller.step == SystemStep::ShopEvent
+            {
+                return self.continue_system_flow(vm);
+            }
             self.controller.clear();
             if self.controller.continuous_train {
                 self.controller.clear_continuous_train();
-                self.controller.deferred_flow = Some(flow);
                 self.controller.step = SystemStep::TrainBeginAfterCallTrainEnd;
                 self.skip_print = true;
                 if self.dispatch_system_function(vm, "CALLTRAINEND", false)? {
                     return Ok(());
                 }
                 self.skip_print = false;
-                self.controller.deferred_flow = None;
             }
+            let flow = self.controller.deferred_flow.take().unwrap_or(flow);
             self.controller.flow = Some(flow);
             return self.begin_flow(vm, flow);
         }
@@ -1524,6 +1539,13 @@ impl RuntimeSession {
             );
         }
         if name == "HTML_POPPRINTINGSTR" {
+            let count = self.presentation.pending_auto_button_values().len();
+            let tokens = (0..count)
+                .map(|_| self.allocate_interaction())
+                .collect::<Vec<_>>();
+            for (token, value) in self.presentation.bind_pending_auto_buttons(&tokens) {
+                self.command_intents.insert(token, VmValue::Integer(value));
+            }
             let value = self.presentation.pop_printing_html();
             commit_completion(
                 vm,
@@ -1669,17 +1691,24 @@ impl RuntimeSession {
                 .arguments
                 .first()
                 .map_or_else(String::new, display_value);
-            if erabasic_html::split_tags(&markup).is_err() {
-                return self.fault(
-                    FaultCode::VmFault,
-                    "HTML_PRINT found an unterminated tag",
-                    Some(request.origin.clone()),
-                );
-            }
+            let mut document = match erabasic_html::parse_document(&markup) {
+                Ok(document) => document,
+                Err(error) => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        &format!(
+                            "HTML_PRINT {:?} at UTF-8 bytes {}..{}",
+                            error.kind, error.start, error.end
+                        ),
+                        Some(request.origin.clone()),
+                    );
+                }
+            };
+            bind_html_document(self, &mut document)?;
             if request.arguments.get(1).map_or(0, integer_value_or_zero) != 0 {
-                self.presentation.append_html_inline(markup);
+                self.presentation.append_html_inline(document);
             } else {
-                self.presentation.append_html(markup);
+                self.presentation.append_html(document);
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
@@ -1689,14 +1718,21 @@ impl RuntimeSession {
                 .arguments
                 .first()
                 .map_or_else(String::new, display_value);
-            if erabasic_html::split_tags(&markup).is_err() {
-                return self.fault(
-                    FaultCode::VmFault,
-                    "HTML_PRINT_ISLAND found an unterminated tag",
-                    Some(request.origin.clone()),
-                );
-            }
-            self.presentation.append_html_island(markup);
+            let mut document = match erabasic_html::parse_document(&markup) {
+                Ok(document) => document,
+                Err(error) => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        &format!(
+                            "HTML_PRINT_ISLAND {:?} at UTF-8 bytes {}..{}",
+                            error.kind, error.start, error.end
+                        ),
+                        Some(request.origin.clone()),
+                    );
+                }
+            };
+            bind_html_document(self, &mut document)?;
+            self.presentation.append_html_island(document);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
@@ -2000,27 +2036,87 @@ impl RuntimeSession {
                 .arguments
                 .first()
                 .map_or_else(String::new, display_value);
+            let mut cursor = 1;
+            let hover = request.arguments.get(cursor).and_then(|value| match value {
+                VmValue::String(value) => Some(value.clone()).filter(|value| !value.is_empty()),
+                _ => None,
+            });
+            if request
+                .arguments
+                .get(cursor)
+                .is_some_and(|value| matches!(value, VmValue::String(_)))
+            {
+                cursor += 1;
+            }
+            let mask = request.arguments.get(cursor).and_then(|value| match value {
+                VmValue::String(value) => Some(value.clone()).filter(|value| !value.is_empty()),
+                _ => None,
+            });
+            if request
+                .arguments
+                .get(cursor)
+                .is_some_and(|value| matches!(value, VmValue::String(_)))
+            {
+                cursor += 1;
+            }
+            let lengths = mixed_lengths(&request.arguments[cursor..])?;
             let exists = self
                 .project_snapshot
                 .as_ref()
                 .and_then(|project| project.resource_graph.sprite(&resource))
                 .is_some();
             if exists {
-                self.presentation.append_image(resource, None);
+                self.presentation.append_image_with_options(
+                    resource,
+                    hover,
+                    mask,
+                    lengths.first().copied(),
+                    lengths.get(1).copied(),
+                    lengths.get(2).copied(),
+                    None,
+                );
+            } else {
+                let mut fallback = format!("<img src='{}'", erabasic_html::escape(&resource));
+                if let Some(value) = &hover {
+                    let _ = write!(fallback, " srcb='{}'", erabasic_html::escape(value));
+                }
+                if let Some(value) = &mask {
+                    let _ = write!(fallback, " srcm='{}'", erabasic_html::escape(value));
+                }
+                let line_height = self.presentation.line_height();
+                append_mixed_html_attribute(&mut fallback, "height", lengths.get(1), line_height);
+                append_mixed_html_attribute(&mut fallback, "width", lengths.first(), line_height);
+                append_mixed_html_attribute(&mut fallback, "ypos", lengths.get(2), line_height);
+                fallback.push('>');
+                self.presentation.append_image_with_options(
+                    resource,
+                    hover,
+                    mask,
+                    lengths.first().copied(),
+                    lengths.get(1).copied(),
+                    lengths.get(2).copied(),
+                    Some(fallback),
+                );
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
         if name == "PRINT_RECT" {
-            let parameters = request
-                .arguments
-                .iter()
-                .filter_map(|value| match value {
-                    VmValue::Integer(value) => Some(*value),
-                    _ => None,
-                })
-                .collect();
-            self.presentation.append_rectangle(parameters);
+            let parameters = mixed_lengths(&request.arguments)?;
+            self.presentation.append_shape("rect", parameters);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
+        if name == "PRINT_SPACE" {
+            let widths = mixed_lengths(&request.arguments)?;
+            let Some(width) = widths.into_iter().next() else {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "PRINT_SPACE requires one length",
+                    Some(request.origin.clone()),
+                );
+            };
+            self.presentation.append_space(width);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
@@ -2566,9 +2662,21 @@ impl RuntimeSession {
             } else if print_uses_default_color(&name) {
                 self.presentation
                     .append_default_color_text(text, false, print_commits_line(&name));
+            } else if name.starts_with("PRINTPLAIN") {
+                self.presentation
+                    .append_plain_print_text(text, false, print_commits_line(&name));
             } else {
                 self.presentation
                     .append_print_text(text, false, print_commits_line(&name));
+            }
+            if print_commits_line(&name) && !name.starts_with("PRINTPLAIN") {
+                let count = self.presentation.last_line_auto_button_values().len();
+                let tokens = (0..count)
+                    .map(|_| self.allocate_interaction())
+                    .collect::<Vec<_>>();
+                for (token, value) in self.presentation.bind_last_line_auto_buttons(&tokens) {
+                    self.command_intents.insert(token, VmValue::Integer(value));
+                }
             }
             if name.ends_with('W') {
                 let wait = InputWait {
@@ -2909,5 +3017,118 @@ impl RuntimeSession {
             },
         )?;
         self.issue_storage(pending, namespace, operation, relative_path)
+    }
+}
+
+fn bind_html_document(
+    session: &mut RuntimeSession,
+    document: &mut erabasic_html::HtmlDocument,
+) -> Result<(), RuntimeError> {
+    fn visit(
+        session: &mut RuntimeSession,
+        nodes: &mut [erabasic_html::HtmlNode],
+        buttons_suppressed: bool,
+    ) -> Result<(), RuntimeError> {
+        for node in nodes {
+            let erabasic_html::HtmlNode::Element {
+                kind,
+                attributes,
+                children,
+                interaction,
+                ..
+            } = node
+            else {
+                continue;
+            };
+            match kind {
+                erabasic_html::HtmlElementKind::Button if !buttons_suppressed => {
+                    let Some(value) = attributes
+                        .iter()
+                        .find(|attribute| attribute.name == "value")
+                        .map(|attribute| attribute.value.clone())
+                    else {
+                        visit(session, children, buttons_suppressed)?;
+                        continue;
+                    };
+                    let token = session.allocate_interaction();
+                    let vm_value = value
+                        .parse::<i64>()
+                        .map_or_else(|_| VmValue::String(value.clone()), VmValue::Integer);
+                    let (integer_value, string_value) = match &vm_value {
+                        VmValue::Integer(value) => (Some(*value), None),
+                        VmValue::String(value) => (None, Some(value.clone())),
+                        VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => unreachable!(),
+                    };
+                    *interaction = Some(erabasic_html::HtmlInteraction {
+                        epoch: token.epoch,
+                        id: token.id,
+                        integer_value,
+                        string_value,
+                    });
+                    session.command_intents.insert(token, vm_value);
+                }
+                erabasic_html::HtmlElementKind::ClearButton => {
+                    // clearbutton suppresses buttonization only for its subtree;
+                    // it never invalidates interactions already printed.
+                    visit(session, children, true)?;
+                    continue;
+                }
+                _ => {}
+            }
+            visit(session, children, buttons_suppressed)?;
+        }
+        Ok(())
+    }
+    visit(session, &mut document.nodes, false)
+}
+
+fn mixed_lengths(arguments: &[VmValue]) -> Result<Vec<PresentationLength>, RuntimeError> {
+    if !arguments.len().is_multiple_of(2) {
+        return Err(RuntimeError::Internal(
+            "mixed-number host arguments are not value/unit pairs".into(),
+        ));
+    }
+    arguments
+        .chunks_exact(2)
+        .map(|pair| {
+            let VmValue::Integer(value) = pair[0] else {
+                return Err(RuntimeError::Internal(
+                    "mixed-number value is not an integer".into(),
+                ));
+            };
+            let VmValue::Integer(unit) = pair[1] else {
+                return Err(RuntimeError::Internal(
+                    "mixed-number unit is not an integer".into(),
+                ));
+            };
+            let is_px = unit != 0;
+            Ok(if is_px {
+                PresentationLength::Logical(era_runtime_protocol::LogicalLength(
+                    value.saturating_mul(1_000),
+                ))
+            } else {
+                PresentationLength::FontHeightHundredths(value)
+            })
+        })
+        .collect()
+}
+
+fn append_mixed_html_attribute(
+    output: &mut String,
+    name: &str,
+    value: Option<&PresentationLength>,
+    line_height: era_runtime_protocol::LogicalLength,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    let (number, suffix) = match value {
+        PresentationLength::Logical(value) => (value.0 / 1_000, "px"),
+        PresentationLength::FontHeightHundredths(value) => {
+            (value.saturating_mul(line_height.0) / 100_000, "")
+        }
+    };
+    if number != 0 {
+        let _ = write!(output, " {name}='{number}{suffix}'");
     }
 }

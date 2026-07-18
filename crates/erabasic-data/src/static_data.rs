@@ -192,6 +192,17 @@ impl Default for GameBase {
 }
 
 impl GameBase {
+    /// Format GAMEBASE's integer version exactly like Emuera's `ScriptVersionText`.
+    #[must_use]
+    pub fn script_version_text(&self) -> String {
+        let fraction = self.version.rem_euclid(1000);
+        if fraction % 10 != 0 {
+            format!("{}.{fraction:03}", self.version / 1000)
+        } else {
+            format!("{}.{:02}", self.version / 1000, fraction / 10)
+        }
+    }
+
     #[must_use]
     pub fn unique_code_matches(&self, saved_code: i64) -> bool {
         saved_code == 0 || saved_code == self.unique_code

@@ -64,6 +64,7 @@ try {
     $load = Invoke-Oracle @{ id = 6; op = "load"; gameDir = $tempGame }
     Assert-True $load.ok "fixture game failed to load"
     Assert-True ($load.result.termination -eq "waitingInput") "fixture title did not request input"
+    Assert-True ($load.result.output -contains "TITLE_CHARANUM=0") "SYSTEM_TITLE observed initialized characters"
 
     $timedOneInput = Invoke-Oracle @{
         id = "toneinput"
@@ -173,6 +174,18 @@ try {
     $htmlPop = Invoke-Oracle @{ id = "html-pop"; op = "run"; entry = "ORACLE_HTML_POP"; watch = @("RESULTS:30") }
     Assert-True $htmlPop.ok "HTML_POPPRINTINGSTR function run failed"
     Assert-True ($htmlPop.result.watches.'RESULTS:30' -eq "A&lt;&amp;<button value='42'>choose</button>") "HTML_POPPRINTINGSTR differs"
+
+    $presentation23 = Invoke-Oracle @{
+        id = "presentation-23"
+        op = "run"
+        entry = "ORACLE_PRESENTATION_23"
+        watch = @("RESULTS:31", "RESULTS:32", "RESULTS:33", "RESULTS:34")
+    }
+    Assert-True ($presentation23.ok -and $presentation23.result.termination -eq "completed") "presentation 2.3 oracle failed"
+    Assert-True (($presentation23.result.watches.'RESULTS:31' -eq "<button value='16'>[0x10] hex </button><button value='100'>[1e2] exponent</button>") -and
+        ($presentation23.result.watches.'RESULTS:32' -eq "<img src='missing' srcb='hover' srcm='mask' height='10px' width='3' ypos='7px'>") -and
+        ($presentation23.result.watches.'RESULTS:33' -eq "<shape type='rect' param='1px, 2, 3px, 4'>") -and
+        ($presentation23.result.watches.'RESULTS:34' -eq "<shape type='space' param='5px'>")) "presentation 2.3 output differs"
 
     $structuredRun = Invoke-Oracle @{
         id = "structured"

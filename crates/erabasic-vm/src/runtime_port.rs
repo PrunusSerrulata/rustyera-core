@@ -115,6 +115,8 @@ pub struct VmHostRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VmHostCompletion {
     Ready(HostReady),
+    /// Return the current `EraBasic` frame without resuming after `CallHost`.
+    ReturnCurrent(Option<VmValue>),
     Pending {
         stability: HostWaitStability,
         rebind_payload: Vec<u8>,

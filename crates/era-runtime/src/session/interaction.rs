@@ -1014,6 +1014,21 @@ impl RuntimeSession {
                     .vm
                     .as_mut()
                     .ok_or_else(|| RuntimeError::Internal("system wait has no VM".into()))?;
+                let prepared = vm
+                    .prepare_runtime_state(VmRuntimeStateTransaction::ResetGameData)
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+                vm.commit_runtime_state(prepared)
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+                let draw_line = vm
+                    .vm()
+                    .artifact()
+                    .project_data
+                    .static_data
+                    .replace
+                    .draw_line_string
+                    .clone();
+                self.presentation.append_separator(draw_line);
+                self.presentation.append_text(String::new(), false);
                 self.controller.flow = Some(SystemFlow::First);
                 if !self
                     .controller
@@ -1092,28 +1107,81 @@ impl RuntimeSession {
                     path,
                 )
             }
-            (SystemMenuState::LoadSlots | SystemMenuState::SaveSlots, VmValue::Integer(-1)) => {
+            (SystemMenuState::LoadSlots | SystemMenuState::SaveSlots, VmValue::Integer(100)) => {
                 self.close_wait(pending.wait.wait_id)?;
                 self.resume_system_menu_host()
             }
             (
                 menu @ (SystemMenuState::LoadSlots | SystemMenuState::SaveSlots),
-                VmValue::Integer(-2 | -3),
-            ) => {
-                self.close_wait(pending.wait.wait_id)?;
-                if value == &VmValue::Integer(-2) {
-                    self.system_menu_page = self.system_menu_page.saturating_sub(1);
-                } else {
-                    self.system_menu_page = self.system_menu_page.saturating_add(1);
-                }
-                self.render_slot_menu(menu == SystemMenuState::SaveSlots)
-            }
-            (SystemMenuState::LoadSlots, VmValue::Integer(selection)) if *selection >= 2 => {
-                let index = usize::try_from(*selection - 2).unwrap_or(usize::MAX);
-                let Some(path) = self.load_slot_paths.get(index).cloned() else {
+                VmValue::Integer(selection),
+            ) if *selection >= 0 && (*selection != 99 || menu == SystemMenuState::SaveSlots) => {
+                let slot_count = self
+                    .project_snapshot
+                    .as_ref()
+                    .map_or(20, |snapshot| snapshot.save_slot_count)
+                    .max(20);
+                let Ok(slot) = u32::try_from(*selection) else {
                     self.operations.restore_active_input(pending);
                     return self.reject(0, CommandErrorCode::InvalidValue, "unknown save slot");
                 };
+                if slot >= slot_count {
+                    self.operations.restore_active_input(pending);
+                    return self.reject(0, CommandErrorCode::InvalidValue, "unknown save slot");
+                }
+                let target_page = slot / 20;
+                if target_page != self.system_menu_page {
+                    self.close_wait(pending.wait.wait_id)?;
+                    self.system_menu_page = target_page;
+                    return self.render_slot_menu(menu == SystemMenuState::SaveSlots);
+                }
+                let path = save_slot_path(slot);
+                if menu == SystemMenuState::SaveSlots {
+                    self.close_wait(pending.wait.wait_id)?;
+                    if self.occupied_slot_paths.contains(&path) {
+                        self.system_menu = SystemMenuState::ConfirmOverwrite { slot };
+                        self.presentation.append_system_text(
+                            localized_system_text(
+                                &self.selected_locale,
+                                SystemTextKey::OverwriteQuestion,
+                            ),
+                            SystemTextKey::OverwriteQuestion,
+                            vec![SystemTextArgument::Integer(i64::from(slot))],
+                            false,
+                        );
+                        let yes = self.allocate_interaction();
+                        let no = self.allocate_interaction();
+                        self.presentation.append_system_button(
+                            "Yes".into(),
+                            SystemTextKey::OverwriteQuestion,
+                            vec![SystemTextArgument::Integer(0)],
+                            yes,
+                        );
+                        self.presentation.append_system_button(
+                            "No".into(),
+                            SystemTextKey::OverwriteQuestion,
+                            vec![SystemTextArgument::Integer(1)],
+                            no,
+                        );
+                        let submission = self.allocate_interaction();
+                        let mut wait = self.system_wait(submission);
+                        wait.kind = WaitKind::IntegerValue;
+                        return self.open_wait(
+                            PendingInput {
+                                host_request: self.system_menu_host_request,
+                                wait,
+                                result_name: None,
+                                choices: BTreeMap::from([
+                                    (yes, VmValue::Integer(0)),
+                                    (no, VmValue::Integer(1)),
+                                ]),
+                                timeout_duration_ns: None,
+                                post_input: None,
+                            },
+                            true,
+                        );
+                    }
+                    return self.begin_system_menu_candidate(slot);
+                }
                 if !self.occupied_slot_paths.contains(&path) {
                     self.operations.restore_active_input(pending);
                     return self.reject(0, CommandErrorCode::InvalidValue, "save slot is empty");
@@ -1127,9 +1195,6 @@ impl RuntimeSession {
                     );
                 }
                 self.close_wait(pending.wait.wait_id)?;
-                let slot = parse_save_slot(&path).ok_or_else(|| {
-                    RuntimeError::Internal("system load menu generated an invalid slot path".into())
-                })?;
                 self.issue_storage(
                     PendingStorage::ReadLoadSlot { slot },
                     StorageNamespace::Save,
@@ -1137,59 +1202,25 @@ impl RuntimeSession {
                     path,
                 )
             }
-            (SystemMenuState::SaveSlots, VmValue::Integer(selection)) if *selection >= 2 => {
-                let index = usize::try_from(*selection - 2).unwrap_or(usize::MAX);
-                let Some(path) = self.load_slot_paths.get(index).cloned() else {
+            (SystemMenuState::LoadSlots, VmValue::Integer(99)) => {
+                let path = save_slot_path(99);
+                if !self.occupied_slot_paths.contains(&path)
+                    || self.invalid_slot_paths.contains(&path)
+                {
                     self.operations.restore_active_input(pending);
-                    return self.reject(0, CommandErrorCode::InvalidValue, "unknown save slot");
-                };
-                let slot = parse_save_slot(&path).ok_or_else(|| {
-                    RuntimeError::Internal("system save menu generated an invalid slot path".into())
-                })?;
-                self.close_wait(pending.wait.wait_id)?;
-                if self.occupied_slot_paths.contains(&path) {
-                    self.system_menu = SystemMenuState::ConfirmOverwrite { slot };
-                    self.presentation.append_system_text(
-                        localized_system_text(
-                            &self.selected_locale,
-                            SystemTextKey::OverwriteQuestion,
-                        ),
-                        SystemTextKey::OverwriteQuestion,
-                        vec![SystemTextArgument::Integer(i64::from(slot))],
-                        false,
-                    );
-                    let yes = self.allocate_interaction();
-                    let no = self.allocate_interaction();
-                    self.presentation.append_system_button(
-                        "Yes".into(),
-                        SystemTextKey::OverwriteQuestion,
-                        vec![SystemTextArgument::Integer(0)],
-                        yes,
-                    );
-                    self.presentation.append_system_button(
-                        "No".into(),
-                        SystemTextKey::OverwriteQuestion,
-                        vec![SystemTextArgument::Integer(1)],
-                        no,
-                    );
-                    let submission = self.allocate_interaction();
-                    let wait = self.system_wait(submission);
-                    return self.open_wait(
-                        PendingInput {
-                            host_request: self.system_menu_host_request,
-                            wait,
-                            result_name: None,
-                            choices: BTreeMap::from([
-                                (yes, VmValue::Integer(0)),
-                                (no, VmValue::Integer(1)),
-                            ]),
-                            timeout_duration_ns: None,
-                            post_input: None,
-                        },
-                        true,
+                    return self.reject(
+                        0,
+                        CommandErrorCode::InvalidValue,
+                        "autosave is unavailable",
                     );
                 }
-                self.begin_system_menu_candidate(slot)
+                self.close_wait(pending.wait.wait_id)?;
+                self.issue_storage(
+                    PendingStorage::ReadLoadSlot { slot: 99 },
+                    StorageNamespace::Save,
+                    StorageOperation::Read,
+                    path,
+                )
             }
             (SystemMenuState::ConfirmOverwrite { slot }, VmValue::Integer(0)) => {
                 self.close_wait(pending.wait.wait_id)?;
@@ -1342,6 +1373,12 @@ impl RuntimeSession {
                 Ok(())
             }
             SystemStep::ShopAutosaveFailureWait => {
+                if let Some(flow) = self.controller.deferred_flow.take() {
+                    self.controller.flow = Some(flow);
+                    return self.begin_flow(&mut vm, flow).map(|()| {
+                        self.vm = Some(vm);
+                    });
+                }
                 self.controller.step = SystemStep::ShopShow;
                 self.dispatch_system_function(&mut vm, "SHOW_SHOP", true)?;
                 Ok(())
@@ -1369,7 +1406,7 @@ impl RuntimeSession {
         vm: &mut RuntimeVm,
         flow: SystemFlow,
     ) -> Result<(), RuntimeError> {
-        self.message_skip = false;
+        self.skip_print = false;
         if flow == SystemFlow::Train {
             reset_training_state(vm)?;
             self.controller.train_scan = 0;
@@ -1628,6 +1665,7 @@ impl RuntimeSession {
                     .project_snapshot
                     .as_ref()
                     .is_some_and(|snapshot| snapshot.auto_save)
+                    && self.controller.shop_called_when_normal
                 {
                     self.controller.step = SystemStep::ShopAutosave;
                     if !self.dispatch_system_function(vm, "SYSTEM_AUTOSAVE", false)? {
@@ -1638,11 +1676,19 @@ impl RuntimeSession {
                         );
                     }
                 } else {
+                    if let Some(flow) = self.controller.deferred_flow.take() {
+                        self.controller.flow = Some(flow);
+                        return self.begin_flow(vm, flow);
+                    }
                     self.controller.step = SystemStep::ShopShow;
                     self.dispatch_system_function(vm, "SHOW_SHOP", true)?;
                 }
             }
             SystemStep::ShopAutosave | SystemStep::ShopAction | SystemStep::PostLoadShop => {
+                if let Some(flow) = self.controller.deferred_flow.take() {
+                    self.controller.flow = Some(flow);
+                    return self.begin_flow(vm, flow);
+                }
                 self.controller.step = SystemStep::ShopShow;
                 self.dispatch_system_function(vm, "SHOW_SHOP", true)?;
             }
@@ -1808,6 +1854,13 @@ impl RuntimeSession {
                     VmValue::Integer(self.flow_input_default)
                 }
             });
+        let count = self.presentation.pending_auto_button_values().len();
+        let tokens = (0..count)
+            .map(|_| self.allocate_interaction())
+            .collect::<Vec<_>>();
+        for (token, value) in self.presentation.bind_pending_auto_buttons(&tokens) {
+            self.command_intents.insert(token, VmValue::Integer(value));
+        }
         self.presentation.set_wait(Some(pending.wait.clone()));
         self.emit(
             RuntimeMessage::WaitChanged(WaitChange::Opened(pending.wait.clone())),

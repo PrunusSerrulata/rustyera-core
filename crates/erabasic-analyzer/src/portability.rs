@@ -288,7 +288,10 @@ fn emit_argument_notices(
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) {
     match argument {
-        HirArgument::Expression(value) => emit_expression_notices(value, sources, diagnostics),
+        HirArgument::Expression(value)
+        | HirArgument::MixedExpression {
+            expression: value, ..
+        } => emit_expression_notices(value, sources, diagnostics),
         HirArgument::Place(place) => {
             for index in &place.indices {
                 emit_expression_notices(index, sources, diagnostics);
@@ -347,7 +350,10 @@ fn argument_tainted(
     return_taint: &BTreeMap<FunctionId, bool>,
 ) -> bool {
     match argument {
-        HirArgument::Expression(value) => expression_tainted(value, variables, return_taint),
+        HirArgument::Expression(value)
+        | HirArgument::MixedExpression {
+            expression: value, ..
+        } => expression_tainted(value, variables, return_taint),
         HirArgument::Place(place) => place_tainted(place, variables, return_taint),
         HirArgument::Formatted(value) => formatted_tainted(value, variables, return_taint),
         HirArgument::Raw(_) | HirArgument::Omitted => false,

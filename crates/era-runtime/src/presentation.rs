@@ -6,7 +6,8 @@ use era_runtime_protocol::{
 };
 use erabasic_vm::VmValue;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -17,6 +18,8 @@ pub(crate) struct PresentationModel {
     title: String,
     lines: Vec<DisplayLine>,
     pending_runs: Vec<DisplayRun>,
+    pending_plain_runs: BTreeSet<usize>,
+    last_committed_plain_runs: BTreeSet<usize>,
     pending_temporary: bool,
     input_wait: Option<InputWait>,
     next_line: u64,
@@ -29,7 +32,7 @@ pub(crate) struct PresentationModel {
     current_style: TextStyle,
     current_alignment: LineAlignment,
     redraw_enabled: bool,
-    html_island: Vec<String>,
+    html_island: Vec<erabasic_html::HtmlDocument>,
     backgrounds: Vec<MediaPlacement>,
     audio: Vec<AudioState>,
     tooltip: TooltipSettings,
@@ -46,6 +49,8 @@ impl Default for PresentationModel {
             title: String::new(),
             lines: Vec::new(),
             pending_runs: Vec::new(),
+            pending_plain_runs: BTreeSet::new(),
+            last_committed_plain_runs: BTreeSet::new(),
             pending_temporary: false,
             input_wait: None,
             next_line: 1,
@@ -96,6 +101,44 @@ impl Default for PresentationModel {
 }
 
 impl PresentationModel {
+    pub(crate) fn last_line_auto_button_values(&self) -> Vec<i64> {
+        let Some(line) = self.lines.last() else {
+            return Vec::new();
+        };
+        auto_button_values(&line.runs, &self.last_committed_plain_runs)
+    }
+
+    pub(crate) fn pending_auto_button_values(&self) -> Vec<i64> {
+        auto_button_values(&self.pending_runs, &self.pending_plain_runs)
+    }
+
+    pub(crate) fn bind_last_line_auto_buttons(
+        &mut self,
+        tokens: &[InteractionToken],
+    ) -> Vec<(InteractionToken, i64)> {
+        let Some(line) = self.lines.last_mut() else {
+            return Vec::new();
+        };
+        let bindings = bind_auto_buttons(&mut line.runs, &self.last_committed_plain_runs, tokens);
+        self.last_committed_plain_runs.clear();
+        if !bindings.is_empty() {
+            self.bump();
+        }
+        bindings
+    }
+
+    pub(crate) fn bind_pending_auto_buttons(
+        &mut self,
+        tokens: &[InteractionToken],
+    ) -> Vec<(InteractionToken, i64)> {
+        let bindings = bind_auto_buttons(&mut self.pending_runs, &self.pending_plain_runs, tokens);
+        self.pending_plain_runs.clear();
+        if !bindings.is_empty() {
+            self.bump();
+        }
+        bindings
+    }
+
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
@@ -220,6 +263,17 @@ impl PresentationModel {
         }
     }
 
+    /// Append text that must remain outside automatic `[value]` button grouping.
+    pub(crate) fn append_plain_print_text(&mut self, text: String, temporary: bool, commit: bool) {
+        self.pending_temporary |= temporary;
+        self.pending_plain_runs.insert(self.pending_runs.len());
+        self.pending_runs.push(self.text_run(text));
+        self.bump();
+        if commit {
+            self.commit_line();
+        }
+    }
+
     /// D-suffixed print commands intentionally ignore SETCOLOR while preserving
     /// the remaining canonical style fields.
     pub(crate) fn append_default_color_text(
@@ -261,14 +315,72 @@ impl PresentationModel {
         self.commit_line();
     }
 
-    pub(crate) fn append_html(&mut self, markup: String) {
-        self.pending_runs.push(DisplayRun::Html { markup });
+    pub(crate) fn append_html(&mut self, document: erabasic_html::HtmlDocument) {
+        if !self.pending_runs.is_empty() {
+            self.commit_line();
+        }
+        let mut current = Vec::new();
+        for node in document.nodes {
+            match &node {
+                erabasic_html::HtmlNode::Element {
+                    kind: erabasic_html::HtmlElementKind::Break,
+                    ..
+                } => {
+                    if !current.is_empty() {
+                        self.pending_runs.push(DisplayRun::HtmlDocument {
+                            document: erabasic_html::HtmlDocument {
+                                nodes: std::mem::take(&mut current),
+                            },
+                        });
+                    }
+                    self.commit_line();
+                }
+                erabasic_html::HtmlNode::Element {
+                    kind: erabasic_html::HtmlElementKind::Paragraph,
+                    attributes,
+                    ..
+                } => {
+                    if !current.is_empty() {
+                        self.pending_runs.push(DisplayRun::HtmlDocument {
+                            document: erabasic_html::HtmlDocument {
+                                nodes: std::mem::take(&mut current),
+                            },
+                        });
+                        self.commit_line();
+                    }
+                    let previous = self.current_alignment;
+                    if let Some(align) = attributes
+                        .iter()
+                        .find(|attribute| attribute.name == "align")
+                        .map(|attribute| attribute.value.to_ascii_lowercase())
+                    {
+                        self.current_alignment = match align.as_str() {
+                            "center" => LineAlignment::Center,
+                            "right" => LineAlignment::Right,
+                            _ => LineAlignment::Left,
+                        };
+                    }
+                    self.pending_runs.push(DisplayRun::HtmlDocument {
+                        document: erabasic_html::HtmlDocument { nodes: vec![node] },
+                    });
+                    self.commit_line();
+                    self.current_alignment = previous;
+                }
+                _ => current.push(node),
+            }
+        }
+        if !current.is_empty() {
+            self.pending_runs.push(DisplayRun::HtmlDocument {
+                document: erabasic_html::HtmlDocument { nodes: current },
+            });
+            self.commit_line();
+        }
         self.bump();
-        self.commit_line();
     }
 
-    pub(crate) fn append_html_inline(&mut self, markup: String) {
-        self.pending_runs.push(DisplayRun::Html { markup });
+    pub(crate) fn append_html_inline(&mut self, document: erabasic_html::HtmlDocument) {
+        self.pending_runs
+            .push(DisplayRun::HtmlDocument { document });
         self.bump();
     }
 
@@ -285,14 +397,14 @@ impl PresentationModel {
         self.pending_temporary = false;
         let mut output = String::new();
         for run in &runs {
-            append_html_run(&mut output, run);
+            append_html_run(&mut output, run, self.settings.line_height);
         }
         self.bump();
         output
     }
 
-    pub(crate) fn append_html_island(&mut self, markup: String) {
-        self.html_island.push(markup);
+    pub(crate) fn append_html_island(&mut self, document: erabasic_html::HtmlDocument) {
+        self.html_island.push(document);
         self.bump();
     }
 
@@ -301,7 +413,22 @@ impl PresentationModel {
         self.bump();
     }
 
+    #[cfg(test)]
     pub(crate) fn append_image(&mut self, resource_id: String, alt_text: Option<String>) {
+        self.append_image_with_options(resource_id, None, None, None, None, None, alt_text);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn append_image_with_options(
+        &mut self,
+        resource_id: String,
+        hover_resource_id: Option<String>,
+        mask_resource_id: Option<String>,
+        requested_width: Option<PresentationLength>,
+        requested_height: Option<PresentationLength>,
+        requested_y: Option<PresentationLength>,
+        alt_text: Option<String>,
+    ) {
         self.pending_runs.push(DisplayRun::Image {
             placement: MediaPlacement {
                 resource_id,
@@ -312,27 +439,52 @@ impl PresentationModel {
                 depth: 0,
                 opacity_millionths: 1_000_000,
                 revision: self.revision.saturating_add(1),
+                hover_resource_id,
+                mask_resource_id,
+                requested_width,
+                requested_height,
+                requested_y,
             },
             alt_text,
         });
         self.bump();
     }
 
-    pub(crate) fn append_rectangle(&mut self, parameters: Vec<i64>) {
+    pub(crate) fn append_shape(
+        &mut self,
+        kind: impl Into<String>,
+        parameters: Vec<PresentationLength>,
+    ) {
         self.pending_runs.push(DisplayRun::Shape {
             shape: Shape {
-                kind: "rectangle".into(),
-                parameters: parameters
-                    .into_iter()
-                    .map(PresentationLength::FontHeightHundredths)
-                    .collect(),
+                kind: kind.into(),
+                parameters,
+                foreground: Some(self.current_style.foreground),
+                background: self.current_style.background,
             },
         });
         self.bump();
     }
 
+    pub(crate) fn append_space(&mut self, width: PresentationLength) {
+        self.pending_runs.push(DisplayRun::Space { width });
+        self.bump();
+    }
+
     pub(crate) fn set_alignment(&mut self, alignment: LineAlignment) {
         self.current_alignment = alignment;
+        self.bump();
+    }
+
+    pub(crate) const fn line_height(&self) -> LogicalLength {
+        self.settings.line_height
+    }
+
+    /// Reset the user-controlled console style without changing the console
+    /// background, matching EmueraConsole.ResetStyle.
+    pub(crate) fn reset_style(&mut self) {
+        self.current_style = default_style();
+        self.current_alignment = LineAlignment::Left;
         self.bump();
     }
 
@@ -466,6 +618,11 @@ impl PresentationModel {
                 * 1_000_000
                 / 255,
             revision: self.revision.saturating_add(1),
+            hover_resource_id: None,
+            mask_resource_id: None,
+            requested_width: None,
+            requested_height: None,
+            requested_y: None,
         });
         self.backgrounds.sort_by(|left, right| {
             (left.depth, &left.resource_id).cmp(&(right.depth, &right.resource_id))
@@ -560,6 +717,7 @@ impl PresentationModel {
     }
 
     fn commit_line(&mut self) {
+        self.last_committed_plain_runs = std::mem::take(&mut self.pending_plain_runs);
         let line = DisplayLine {
             line_id: self.next_line,
             temporary: self.pending_temporary,
@@ -717,6 +875,112 @@ impl PresentationModel {
     }
 }
 
+fn auto_button_groups(
+    runs: &[DisplayRun],
+    plain_runs: &BTreeSet<usize>,
+) -> Vec<(usize, usize, String)> {
+    let mut groups = Vec::new();
+    let mut index = 0;
+    while index < runs.len() {
+        if plain_runs.contains(&index) || !matches!(runs[index], DisplayRun::Text { .. }) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        let mut text = String::new();
+        while index < runs.len()
+            && !plain_runs.contains(&index)
+            && matches!(runs[index], DisplayRun::Text { .. })
+        {
+            if let DisplayRun::Text { text: value, .. } = &runs[index] {
+                text.push_str(value);
+            }
+            index += 1;
+        }
+        groups.push((start, index, text));
+    }
+    groups
+}
+
+fn auto_button_values(runs: &[DisplayRun], plain_runs: &BTreeSet<usize>) -> Vec<i64> {
+    auto_button_groups(runs, plain_runs)
+        .into_iter()
+        .flat_map(|(_, _, text)| erabasic_html::split_auto_buttons(&text))
+        .filter_map(|segment| segment.value)
+        .collect()
+}
+
+fn bind_auto_buttons(
+    runs: &mut Vec<DisplayRun>,
+    plain_runs: &BTreeSet<usize>,
+    tokens: &[InteractionToken],
+) -> Vec<(InteractionToken, i64)> {
+    let groups = auto_button_groups(runs, plain_runs);
+    let expected = groups
+        .iter()
+        .flat_map(|(_, _, text)| erabasic_html::split_auto_buttons(text))
+        .filter(|segment| segment.value.is_some())
+        .count();
+    if expected == 0 || expected != tokens.len() {
+        return Vec::new();
+    }
+    let original = std::mem::take(runs);
+    let mut token_iter = tokens.iter().copied();
+    let mut bindings = Vec::with_capacity(expected);
+    let mut cursor = 0;
+    for (start, end, text) in groups {
+        runs.extend_from_slice(&original[cursor..start]);
+        for segment in erabasic_html::split_auto_buttons(&text) {
+            let content = slice_text_runs(&original[start..end], segment.start, segment.end);
+            if let Some(value) = segment.value {
+                let token = token_iter.next().expect("validated token count");
+                runs.push(DisplayRun::Button {
+                    runs: content,
+                    token,
+                    title: None,
+                    hover_style: None,
+                    value: ProtocolValue::Integer(value),
+                });
+                bindings.push((token, value));
+            } else {
+                runs.extend(content);
+            }
+        }
+        cursor = end;
+    }
+    runs.extend_from_slice(&original[cursor..]);
+    bindings
+}
+
+fn slice_text_runs(runs: &[DisplayRun], start: usize, end: usize) -> Vec<DisplayRun> {
+    let mut result = Vec::new();
+    let mut cursor = 0;
+    for run in runs {
+        let DisplayRun::Text {
+            text,
+            style,
+            system_text,
+        } = run
+        else {
+            continue;
+        };
+        let run_start = cursor;
+        let run_end = cursor + text.len();
+        cursor = run_end;
+        let overlap_start = start.max(run_start);
+        let overlap_end = end.min(run_end);
+        if overlap_start >= overlap_end {
+            continue;
+        }
+        result.push(DisplayRun::Text {
+            text: text[overlap_start - run_start..overlap_end - run_start].to_owned(),
+            style: style.clone(),
+            system_text: system_text.clone(),
+        });
+    }
+    result
+}
+
 fn rebind_runs(runs: &mut [DisplayRun], tokens: &BTreeMap<InteractionToken, InteractionToken>) {
     for run in runs {
         match run {
@@ -727,8 +991,38 @@ fn rebind_runs(runs: &mut [DisplayRun], tokens: &BTreeMap<InteractionToken, Inte
                 rebind_runs(runs, tokens);
             }
             DisplayRun::ColumnCell { content, .. } => rebind_runs(content, tokens),
+            DisplayRun::HtmlDocument { document } => {
+                rebind_html_nodes(&mut document.nodes, tokens);
+            }
             _ => {}
         }
+    }
+}
+
+fn rebind_html_nodes(
+    nodes: &mut [erabasic_html::HtmlNode],
+    tokens: &BTreeMap<InteractionToken, InteractionToken>,
+) {
+    for node in nodes {
+        let erabasic_html::HtmlNode::Element {
+            interaction,
+            children,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        if let Some(value) = interaction {
+            let old = InteractionToken {
+                epoch: value.epoch,
+                id: value.id,
+            };
+            if let Some(new) = tokens.get(&old) {
+                value.epoch = new.epoch;
+                value.id = new.id;
+            }
+        }
+        rebind_html_nodes(children, tokens);
     }
 }
 
@@ -740,13 +1034,15 @@ fn append_log_run(output: &mut String, run: &DisplayRun) {
                 append_log_run(output, run);
             }
         }
-        DisplayRun::Html { markup } => output.push_str(markup),
+        DisplayRun::HtmlDocument { document } => {
+            output.push_str(&erabasic_html::serialize_document(document));
+        }
         DisplayRun::Image { alt_text, .. } => {
             if let Some(text) = alt_text {
                 output.push_str(text);
             }
         }
-        DisplayRun::Shape { .. } => {}
+        DisplayRun::Shape { .. } | DisplayRun::Space { .. } => {}
         DisplayRun::ColumnCell { content, .. } => {
             for run in content {
                 append_log_run(output, run);
@@ -757,7 +1053,8 @@ fn append_log_run(output: &mut String, run: &DisplayRun) {
     }
 }
 
-fn append_html_run(output: &mut String, run: &DisplayRun) {
+#[allow(clippy::too_many_lines)]
+fn append_html_run(output: &mut String, run: &DisplayRun, line_height: LogicalLength) {
     match run {
         DisplayRun::Text { text, style, .. } => {
             let mut value = erabasic_html::escape(text);
@@ -792,20 +1089,35 @@ fn append_html_run(output: &mut String, run: &DisplayRun) {
             }
             output.push_str("'>");
             for run in runs {
-                append_html_run(output, run);
+                append_html_run(output, run, line_height);
             }
             output.push_str("</button>");
         }
-        DisplayRun::Html { markup } => output.push_str(markup),
-        DisplayRun::Image {
-            placement,
-            alt_text,
-        } => {
+        DisplayRun::HtmlDocument { document } => {
+            output.push_str(&erabasic_html::serialize_document(document));
+        }
+        DisplayRun::Image { placement, .. } => {
             output.push_str("<img src='");
             output.push_str(&erabasic_html::escape(&placement.resource_id));
-            if let Some(alt) = alt_text {
-                output.push_str("' alt='");
-                output.push_str(&erabasic_html::escape(alt));
+            if let Some(resource) = &placement.hover_resource_id {
+                output.push_str("' srcb='");
+                output.push_str(&erabasic_html::escape(resource));
+            }
+            if let Some(resource) = &placement.mask_resource_id {
+                output.push_str("' srcm='");
+                output.push_str(&erabasic_html::escape(resource));
+            }
+            for (name, value) in [
+                ("height", placement.requested_height.as_ref()),
+                ("width", placement.requested_width.as_ref()),
+                ("ypos", placement.requested_y.as_ref()),
+            ] {
+                if let Some(value) = value {
+                    output.push_str("' ");
+                    output.push_str(name);
+                    output.push_str("='");
+                    append_presentation_length(output, value, line_height);
+                }
             }
             output.push_str("'>");
         }
@@ -817,26 +1129,73 @@ fn append_html_run(output: &mut String, run: &DisplayRun) {
                 if index != 0 {
                     output.push_str(", ");
                 }
-                match value {
-                    PresentationLength::Logical(LogicalLength(value)) => {
-                        output.push_str(&value.to_string());
-                        output.push_str("px");
-                    }
-                    PresentationLength::FontHeightHundredths(value) => {
-                        output.push_str(&value.to_string());
-                    }
-                }
+                append_raw_mixed_length(output, value);
             }
-            output.push_str("'>");
+            output.push('\'');
+            if shape
+                .foreground
+                .is_some_and(|color| color != default_style().foreground)
+            {
+                output.push_str(" color='");
+                append_html_color(output, shape.foreground.expect("checked foreground"));
+                output.push('\'');
+            }
+            if let Some(background) = shape.background {
+                output.push_str(" bcolor='");
+                append_html_color(output, background);
+                output.push('\'');
+            }
+            output.push('>');
         }
         DisplayRun::ColumnCell { content, .. } => {
             for run in content {
-                append_html_run(output, run);
+                append_html_run(output, run, line_height);
             }
         }
         DisplayRun::Separator { pattern, .. } => {
             output.push_str(&erabasic_html::escape(pattern));
         }
+        DisplayRun::Space { width } => {
+            output.push_str("<shape type='space' param='");
+            append_raw_mixed_length(output, width);
+            output.push_str("'>");
+        }
+    }
+}
+
+fn append_html_color(output: &mut String, color: Color) {
+    output.push('#');
+    let _ = write!(
+        output,
+        "{:02X}{:02X}{:02X}",
+        color.red, color.green, color.blue
+    );
+}
+
+fn append_presentation_length(
+    output: &mut String,
+    value: &PresentationLength,
+    line_height: LogicalLength,
+) {
+    match value {
+        PresentationLength::Logical(LogicalLength(value)) => {
+            output.push_str(&(value / 1_000).to_string());
+            output.push_str("px");
+        }
+        PresentationLength::FontHeightHundredths(value) => {
+            let pixels = value.saturating_mul(line_height.0) / 100_000;
+            output.push_str(&pixels.to_string());
+        }
+    }
+}
+
+fn append_raw_mixed_length(output: &mut String, value: &PresentationLength) {
+    match value {
+        PresentationLength::Logical(LogicalLength(value)) => {
+            output.push_str(&(value / 1_000).to_string());
+            output.push_str("px");
+        }
+        PresentationLength::FontHeightHundredths(value) => output.push_str(&value.to_string()),
     }
 }
 
@@ -878,8 +1237,11 @@ fn project_lines(
                         line_height,
                     ));
                 }
-                DisplayRun::Html { markup } if !html => {
-                    projected.push(plain_text(strip_markup(&markup), line_height));
+                DisplayRun::HtmlDocument { document } if !html => {
+                    projected.push(plain_text(
+                        strip_markup(&erabasic_html::serialize_document(&document)),
+                        line_height,
+                    ));
                 }
                 DisplayRun::Image { alt_text, .. } if !graphics => {
                     if let Some(text) = alt_text {
@@ -1069,7 +1431,7 @@ mod tests {
         model.set_font_style(1 | 8);
         model.set_alignment(LineAlignment::Center);
         model.append_print_text("styled".into(), false, true);
-        model.append_html("<b>fallback</b>".into());
+        model.append_html(erabasic_html::parse_document("<b>fallback</b>").unwrap());
         model.append_image("image.png".into(), Some("image".into()));
         model.set_audio("sound.ogg".into(), false, true);
 
@@ -1089,7 +1451,10 @@ mod tests {
         model.set_projection(true, true, true, true, true);
         let rich = model.snapshot();
         assert_eq!(rich.audio.len(), 1);
-        assert!(matches!(rich.lines[1].runs[0], DisplayRun::Html { .. }));
+        assert!(matches!(
+            rich.lines[1].runs[0],
+            DisplayRun::HtmlDocument { .. }
+        ));
         assert!(matches!(rich.lines[2].runs[0], DisplayRun::Image { .. }));
     }
 
@@ -1099,10 +1464,13 @@ mod tests {
         model.set_bold(true);
         model.set_italic(true);
         model.set_alignment(LineAlignment::Right);
-        model.append_html_island("<b>x</b>".into());
+        model.append_html_island(erabasic_html::parse_document("<b>x</b>").unwrap());
         assert_eq!(model.style_bits(), 3);
         assert_eq!(model.alignment(), LineAlignment::Right);
-        assert_eq!(model.snapshot().html_island, vec!["<b>x</b>"]);
+        assert_eq!(
+            model.snapshot().html_island,
+            vec![erabasic_html::parse_document("<b>x</b>").unwrap()]
+        );
         model.clear_html_island();
         assert!(model.snapshot().html_island.is_empty());
     }
@@ -1126,6 +1494,47 @@ mod tests {
         assert_eq!(pending.lines.len(), 1);
         assert!(!pending.lines[0].line_end);
         assert_eq!(pending.lines[0].runs.len(), 2);
+    }
+
+    #[test]
+    fn automatic_buttons_are_grouped_after_the_complete_print_buffer_is_committed() {
+        let mut model = PresentationModel::default();
+        model.append_print_text("[1] one  ".into(), false, false);
+        model.set_bold(true);
+        model.append_print_text("[2] two".into(), false, true);
+        assert_eq!(model.last_line_auto_button_values(), vec![1, 2]);
+        let tokens = [
+            InteractionToken { epoch: 4, id: 1 },
+            InteractionToken { epoch: 4, id: 2 },
+        ];
+        assert_eq!(
+            model.bind_last_line_auto_buttons(&tokens),
+            vec![(tokens[0], 1), (tokens[1], 2)]
+        );
+        assert!(
+            model.snapshot().lines[0]
+                .runs
+                .iter()
+                .all(|run| matches!(run, DisplayRun::Button { .. }))
+        );
+
+        let mut mixed = PresentationModel::default();
+        mixed.append_print_text("[1] automatic ".into(), false, false);
+        mixed.append_plain_print_text("[2] plain ".into(), false, false);
+        mixed.append_print_text("[3] automatic".into(), false, true);
+        let tokens = [
+            InteractionToken { epoch: 1, id: 3 },
+            InteractionToken { epoch: 1, id: 4 },
+        ];
+        assert_eq!(mixed.last_line_auto_button_values(), vec![1, 3]);
+        assert_eq!(
+            mixed.bind_last_line_auto_buttons(&tokens),
+            vec![(tokens[0], 1), (tokens[1], 3)]
+        );
+        assert!(matches!(
+            &mixed.snapshot().lines[0].runs[1],
+            DisplayRun::Text { text, .. } if text == "[2] plain "
+        ));
     }
 
     #[test]

@@ -73,6 +73,33 @@ fn printform_argument_becomes_formatted_ast() {
 }
 
 #[test]
+fn media_arguments_preserve_mixed_number_units() {
+    let output = parse_line(
+        "PRINT_RECT 10px, 20, 30px, 40",
+        &DefaultParserContext::default(),
+    );
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Instruction { arguments, .. } = output.value.unwrap().kind else {
+        panic!("expected instruction");
+    };
+    assert!(matches!(
+        arguments.as_slice(),
+        [
+            Argument::MixedExpression { is_px: true, .. },
+            Argument::MixedExpression { is_px: false, .. },
+            Argument::MixedExpression { is_px: true, .. },
+            Argument::MixedExpression { is_px: false, .. }
+        ]
+    ));
+
+    let utf8 = parse_line(
+        "PRINT_IMG \"画像\", \"選択\", \"マスク\", 100, 20px, 0",
+        &DefaultParserContext::default(),
+    );
+    assert!(!utf8.has_errors(), "{:#?}", utf8.diagnostics);
+}
+
+#[test]
 fn string_assignment_uses_percent_form_interpolation() {
     let output = parse_line(
         "RESULTS:0 = %MAP_GET(\"m\", \"k\")%",

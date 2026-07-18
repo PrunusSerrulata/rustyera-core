@@ -518,7 +518,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 17.0 is required".into(),
+                    message: "runtime protocol 18.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -1436,12 +1436,7 @@ impl RuntimeSession {
             .title
             .clone();
         self.presentation.set_title(title);
-        let mut vm = RuntimeVm::new_with_seed(artifact, self.options.vm_config, seed);
-        let prepared = vm
-            .prepare_runtime_state(VmRuntimeStateTransaction::ResetNewGame)
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        vm.commit_runtime_state(prepared)
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        let mut vm = RuntimeVm::new_for_title_with_seed(artifact, self.options.vm_config, seed);
         self.controller.flow = Some(SystemFlow::Title);
         let result = if self
             .controller
@@ -1467,22 +1462,53 @@ impl RuntimeSession {
         self.invalid_slot_paths.clear();
         self.system_menu_host_request = None;
         self.system_menu_page = 0;
+        let vm = self
+            .vm
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Internal("title menu has no VM".into()))?;
+        let static_data = &vm.vm().artifact().project_data.static_data;
+        let game_base = static_data.game_base.clone();
+        let replace = static_data.replace.clone();
+        self.presentation.reset_style();
+        self.presentation
+            .append_separator(replace.draw_line_string.clone());
+        self.presentation.append_text(String::new(), false);
+        self.presentation
+            .set_alignment(era_runtime_protocol::LineAlignment::Center);
+        self.presentation
+            .append_text(game_base.title.clone(), false);
+        if game_base.version != 0 {
+            self.presentation
+                .append_text(game_base.script_version_text(), false);
+        }
+        self.presentation
+            .append_text(game_base.author.clone(), false);
+        self.presentation
+            .append_text(format!("({})", game_base.year), false);
+        self.presentation.append_text(String::new(), false);
+        self.presentation.append_text(game_base.info.clone(), false);
+        self.presentation
+            .set_alignment(era_runtime_protocol::LineAlignment::Left);
+        self.presentation
+            .append_separator(replace.draw_line_string.clone());
+        self.presentation.append_text(String::new(), false);
         let start_token = self.allocate_interaction();
         let load_token = self.allocate_interaction();
         let submission_token = self.allocate_interaction();
         self.presentation.append_system_button(
-            localized_system_text(&self.selected_locale, SystemTextKey::NewGame),
+            format!("[0] {}", replace.title_menu_string_0),
             SystemTextKey::NewGame,
             Vec::new(),
             start_token,
         );
         self.presentation.append_system_button(
-            localized_system_text(&self.selected_locale, SystemTextKey::LoadGame),
+            format!("[1] {}", replace.title_menu_string_1),
             SystemTextKey::LoadGame,
             Vec::new(),
             load_token,
         );
-        let wait = self.system_wait(submission_token);
+        let mut wait = self.system_wait(submission_token);
+        wait.kind = WaitKind::IntegerValue;
         self.open_wait(
             PendingInput {
                 host_request: self.system_menu_host_request,
@@ -1555,6 +1581,21 @@ impl RuntimeSession {
             VmPortEvent::FiberCompleted(fiber, value) => {
                 if self.controller.completed(fiber, value.as_ref()) {
                     self.spawn_next_event(vm)?;
+                    if self.controller.is_complete() && self.controller.deferred_flow.is_some() {
+                        if self.controller.flow == Some(SystemFlow::Shop)
+                            && self.controller.step == SystemStep::ShopEvent
+                        {
+                            return self.continue_system_flow(vm);
+                        }
+                        let flow = self
+                            .controller
+                            .deferred_flow
+                            .take()
+                            .expect("checked deferred flow");
+                        self.controller.clear();
+                        self.controller.flow = Some(flow);
+                        return self.begin_flow(vm, flow);
+                    }
                     if self.controller.is_complete()
                         && matches!(
                             self.controller.flow,

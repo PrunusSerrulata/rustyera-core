@@ -134,6 +134,10 @@ pub enum HirStatementKind {
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum HirArgument {
     Expression(HirExpr),
+    MixedExpression {
+        expression: HirExpr,
+        is_px: bool,
+    },
     /// A mutable argument retains identity instead of being lowered to its current value.
     Place(HirPlace),
     Formatted(HirFormattedString),

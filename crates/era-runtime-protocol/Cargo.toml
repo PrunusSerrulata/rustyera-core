@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 era-protocol = { path = "../era-protocol" }
+erabasic-html = { path = "../erabasic-html" }
 minicbor.workspace = true
 serde.workspace = true
 

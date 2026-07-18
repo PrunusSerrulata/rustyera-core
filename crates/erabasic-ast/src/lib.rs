@@ -265,6 +265,12 @@ pub enum StatementKind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Argument {
     Expression(Expr),
+    /// Numeric expression with Emuera's optional `px` suffix. Semantic analysis
+    /// resolves `PRINT_IMG` string arguments before lowering this tagged form.
+    MixedExpression {
+        expression: Expr,
+        is_px: bool,
+    },
     Formatted(FormattedString),
     Raw(String),
     Omitted(Span),

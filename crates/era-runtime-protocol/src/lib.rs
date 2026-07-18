@@ -18,6 +18,9 @@ pub use effect::{
     AudioEffect, AudioEffectAction, EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind,
     EffectOutcome, EffectOutcomeStatus, VideoEffect,
 };
+pub use erabasic_html::{
+    HtmlAttribute, HtmlDocument, HtmlElementKind, HtmlInteraction, HtmlNode, parse_document,
+};
 pub use extension::{
     ExtensionArgument, ExtensionArgumentStyle, ExtensionCallableKind, ExtensionDeclaration,
     ExtensionInvocation, ExtensionRegistrySubmit, ExtensionResult, ExtensionValueType,

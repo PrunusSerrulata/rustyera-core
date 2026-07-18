@@ -122,6 +122,25 @@ impl RuntimeVm {
         }
     }
 
+    /// Construct the pre-title state used by the runtime system flow.
+    ///
+    /// Variable defaults are available to `SYSTEM_TITLE`, while `ResetData` and
+    /// initial character insertion remain deferred until the built-in new-game
+    /// selection is accepted.
+    #[must_use]
+    pub fn new_for_title_with_seed(
+        artifact: ValidatedArtifact,
+        config: VmConfig,
+        seed: u64,
+    ) -> Self {
+        let natives = NativeServiceRegistry::for_artifact_with_seed(artifact.artifact(), seed);
+        Self {
+            vm: Vm::new_for_title(artifact, config),
+            natives,
+            pending_natives: None,
+        }
+    }
+
     #[must_use]
     pub const fn vm(&self) -> &Vm {
         &self.vm
@@ -129,6 +148,11 @@ impl RuntimeVm {
 
     pub const fn vm_mut(&mut self) -> &mut Vm {
         &mut self.vm
+    }
+
+    #[must_use]
+    pub fn fiber_frame_count(&self, fiber: FiberId) -> Option<usize> {
+        self.vm.fibers.get(&fiber).map(|fiber| fiber.frames.len())
     }
 
     /// Return the active dimensions for a named global, local, or bound
@@ -375,6 +399,13 @@ impl VmRuntimePort for RuntimeVm {
             VmHostCompletion::Ready(ready) => {
                 validate_ready(&self.vm, fiber_id, fiber, wait.result, ready)?;
             }
+            VmHostCompletion::ReturnCurrent(_) => {
+                if fiber.frames.len() <= 1 {
+                    return Err(VmError::InvalidState(
+                        "cannot return the root frame through a host completion".into(),
+                    ));
+                }
+            }
             VmHostCompletion::Pending { stability, .. } => {
                 // A caller-pumped runtime necessarily unwinds every external call
                 // before it can ask the frontend for a service result. `may_suspend`
@@ -405,6 +436,9 @@ impl VmRuntimePort for RuntimeVm {
         }
         match completion.completion {
             VmHostCompletion::Ready(ready) => self.vm.resume_host(completion.request, ready),
+            VmHostCompletion::ReturnCurrent(value) => self
+                .vm
+                .return_current_from_host(completion.request, value.as_ref()),
             VmHostCompletion::Pending {
                 stability,
                 rebind_payload,

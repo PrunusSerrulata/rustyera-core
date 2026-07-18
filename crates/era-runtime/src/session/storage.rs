@@ -834,7 +834,7 @@ impl RuntimeSession {
         let start = self.system_menu_page.saturating_mul(20);
         let end = start.saturating_add(20).min(slot_count);
         self.load_slot_paths = (start..end).map(save_slot_path).collect();
-        if !save && self.system_menu_page + 1 == page_count {
+        if !save {
             self.load_slot_paths.push(save_slot_path(99));
         }
         let question = if save {
@@ -851,28 +851,26 @@ impl RuntimeSession {
         let mut choices = BTreeMap::new();
         for index in 0..self.load_slot_paths.len() {
             let path = self.load_slot_paths[index].clone();
+            let slot = parse_save_slot(&path).unwrap_or(u32::MAX);
             let occupied = self.occupied_slot_paths.contains(&path);
             let token = self.allocate_interaction();
             let label = if occupied {
                 format!(
-                    "{path}: {}",
+                    "[{slot:>2}] {}",
                     self.slot_labels
                         .get(&path)
                         .map_or("(unreadable)", String::as_str)
                 )
             } else {
-                format!("{path}: ----")
+                format!("[{slot:>2}] ----")
             };
             self.presentation.append_system_button(
                 label,
                 SystemTextKey::SaveSlot,
-                vec![SystemTextArgument::String(path)],
+                vec![SystemTextArgument::String(path.clone())],
                 token,
             );
-            choices.insert(
-                token,
-                VmValue::Integer(i64::try_from(index).unwrap_or(i64::MAX).saturating_add(2)),
-            );
+            choices.insert(token, VmValue::Integer(i64::from(slot)));
             if occupied
                 && self.storage_capabilities.delete
                 && self.storage_capabilities.revisions
@@ -902,29 +900,22 @@ impl RuntimeSession {
             Vec::new(),
             back,
         );
-        choices.insert(back, VmValue::Integer(-1));
-        if self.system_menu_page > 0 {
-            let previous = self.allocate_interaction();
+        choices.insert(back, VmValue::Integer(100));
+        for page in self.system_menu_page.saturating_add(1)..page_count {
+            let first = page.saturating_mul(20);
+            let last = first.saturating_add(19).min(slot_count.saturating_sub(1));
+            let token = self.allocate_interaction();
             self.presentation.append_system_button(
-                "<".into(),
-                SystemTextKey::Back,
-                vec![SystemTextArgument::Integer(-1)],
-                previous,
+                format!("[{first}-{last}]"),
+                SystemTextKey::SaveSlot,
+                vec![SystemTextArgument::Integer(i64::from(first))],
+                token,
             );
-            choices.insert(previous, VmValue::Integer(-2));
-        }
-        if self.system_menu_page + 1 < page_count {
-            let next = self.allocate_interaction();
-            self.presentation.append_system_button(
-                ">".into(),
-                SystemTextKey::Back,
-                vec![SystemTextArgument::Integer(1)],
-                next,
-            );
-            choices.insert(next, VmValue::Integer(-3));
+            choices.insert(token, VmValue::Integer(i64::from(first)));
         }
         let submission = self.allocate_interaction();
-        let wait = self.system_wait(submission);
+        let mut wait = self.system_wait(submission);
+        wait.kind = WaitKind::IntegerValue;
         self.open_wait(
             PendingInput {
                 host_request: self.system_menu_host_request,
@@ -956,6 +947,13 @@ impl RuntimeSession {
             .vm
             .take()
             .ok_or_else(|| RuntimeError::Internal("autosave completion has no VM".into()))?;
+        if let Some(flow) = self.controller.deferred_flow.take() {
+            self.controller.flow = Some(flow);
+            self.begin_flow(&mut vm, flow)?;
+            self.vm = Some(vm);
+            self.set_phase(RuntimePhase::Running)?;
+            return self.renew_debug_grant();
+        }
         self.controller.step = SystemStep::ShopShow;
         self.dispatch_system_function(&mut vm, "SHOW_SHOP", true)?;
         self.vm = Some(vm);

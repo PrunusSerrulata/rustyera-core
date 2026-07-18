@@ -211,6 +211,16 @@ pub struct MediaPlacement {
     pub opacity_millionths: u32,
     #[n(7)]
     pub revision: u64,
+    #[n(8)]
+    pub hover_resource_id: Option<String>,
+    #[n(9)]
+    pub mask_resource_id: Option<String>,
+    #[n(10)]
+    pub requested_width: Option<PresentationLength>,
+    #[n(11)]
+    pub requested_height: Option<PresentationLength>,
+    #[n(12)]
+    pub requested_y: Option<PresentationLength>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -220,6 +230,10 @@ pub struct Shape {
     pub kind: String,
     #[n(1)]
     pub parameters: Vec<PresentationLength>,
+    #[n(2)]
+    pub foreground: Option<Color>,
+    #[n(3)]
+    pub background: Option<Color>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -249,9 +263,9 @@ pub enum DisplayRun {
         value: crate::ProtocolValue,
     },
     #[n(2)]
-    Html {
+    HtmlDocument {
         #[n(0)]
-        markup: String,
+        document: erabasic_html::HtmlDocument,
     },
     #[n(3)]
     Image {
@@ -282,6 +296,11 @@ pub enum DisplayRun {
         pattern: String,
         #[n(1)]
         role: SeparatorRole,
+    },
+    #[n(7)]
+    Space {
+        #[n(0)]
+        width: PresentationLength,
     },
 }
 
@@ -460,7 +479,7 @@ pub struct PresentationSnapshot {
     pub resources: ResourceReplay,
     /// Independent top-layer HTML documents, in script insertion order.
     #[n(9)]
-    pub html_island: Vec<String>,
+    pub html_island: Vec<erabasic_html::HtmlDocument>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

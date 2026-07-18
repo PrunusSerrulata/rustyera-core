@@ -5,6 +5,15 @@
 
 use serde::{Deserialize, Serialize};
 
+mod button;
+mod markup;
+
+pub use button::{ButtonSegment, split_auto_buttons};
+pub use markup::{
+    HtmlAttribute, HtmlDocument, HtmlElementKind, HtmlError, HtmlErrorKind, HtmlInteraction,
+    HtmlNode, parse_document, serialize_document,
+};
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Token {
     Text(String),

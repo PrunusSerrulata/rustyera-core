@@ -366,6 +366,7 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             "EVENTFIRST",
             "ORACLE_PRESENTATION",
             "ORACLE_HTML_POP",
+            "ORACLE_PRESENTATION_23",
             "ORACLE_TEST",
             "ORACLE_NATIVE",
             "ORACLE_INPUT",
@@ -375,7 +376,7 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             "ORACLE_COMPAT_12"
         ]
     );
-    assert_eq!(program.functions[0].lines.len(), 15);
+    assert_eq!(program.functions[0].lines.len(), 16);
     assert_eq!(
         program.functions[0]
             .control_flow
