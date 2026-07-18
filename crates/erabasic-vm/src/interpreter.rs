@@ -1,6 +1,6 @@
 use erabasic_bytecode::{
-    BytecodeFunctionKind, BytecodeStorage, BytecodeType, EncodedInstruction,
-    HostSnapshotCapability, ImportKind, Opcode, SymbolKey, opcode,
+    BytecodeFunctionKind, BytecodeStorage, BytecodeType, HostSnapshotCapability, ImportKind,
+    Opcode, SymbolKey, opcode,
 };
 
 use crate::state::{EventDispatch, EventDispatchEntry, ForLoopState};
@@ -8,7 +8,7 @@ use crate::{
     Fiber, FiberId, FiberState, HostCallRequest, HostCallResult, HostReady, HostWaitStability,
     NativeCallRequest, NativePlaceView, NativeReady, NativeServiceRegistry, PlaceDescriptor,
     RunBudget, Vm, VmError, VmEvent, VmFault, VmFaultCode, VmHost, VmRunReport, VmRunStop, VmValue,
-    WaitingHost, bind_persistent_arguments, find_global, make_frame, prepare_dynamic_arguments,
+    WaitingHost, bind_persistent_arguments, make_frame, prepare_dynamic_arguments,
     validate_arguments,
 };
 
@@ -59,7 +59,60 @@ struct InstructionPosition {
     generation: crate::GenerationId,
     function: SymbolKey,
     instruction: usize,
-    encoded: EncodedInstruction,
+    encoded: DispatchInstruction,
+}
+
+const INLINE_INSTRUCTION_BYTES: usize = 24;
+
+/// Most `EraBasic` operands fit in 24 bytes. Keeping them inline avoids allocating
+/// a fresh `Vec` for every interpreted instruction while still owning the bytes
+/// across the mutable VM dispatch boundary.
+struct DispatchInstruction {
+    opcode: u16,
+    payload: DispatchPayload,
+}
+
+enum DispatchPayload {
+    Inline {
+        length: u8,
+        bytes: [u8; INLINE_INSTRUCTION_BYTES],
+    },
+    Heap(Vec<u8>),
+}
+
+impl DispatchPayload {
+    fn new(payload: &[u8]) -> Self {
+        if payload.len() <= INLINE_INSTRUCTION_BYTES {
+            let mut bytes = [0; INLINE_INSTRUCTION_BYTES];
+            bytes[..payload.len()].copy_from_slice(payload);
+            Self::Inline {
+                length: u8::try_from(payload.len()).expect("inline payload length fits in u8"),
+                bytes,
+            }
+        } else {
+            Self::Heap(payload.to_vec())
+        }
+    }
+}
+
+impl std::ops::Deref for DispatchPayload {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Inline { length, bytes } => &bytes[..usize::from(*length)],
+            Self::Heap(bytes) => bytes,
+        }
+    }
+}
+
+impl DispatchInstruction {
+    fn trap() -> Self {
+        Self {
+            opcode: Opcode::Trap as u16,
+            payload: DispatchPayload::new(&[]),
+        }
+    }
 }
 
 impl Vm {
@@ -126,19 +179,13 @@ impl Vm {
                                 generation: self.current_generation,
                                 function: SymbolKey::default(),
                                 instruction: 0,
-                                encoded: EncodedInstruction {
-                                    opcode: Opcode::Trap as u16,
-                                    payload: Vec::new(),
-                                },
+                                encoded: DispatchInstruction::trap(),
                             },
                             |frame| InstructionPosition {
                                 generation: frame.generation,
                                 function: frame.function,
                                 instruction: frame.instruction,
-                                encoded: EncodedInstruction {
-                                    opcode: Opcode::Trap as u16,
-                                    payload: Vec::new(),
-                                },
+                                encoded: DispatchInstruction::trap(),
                             },
                         );
                         let fault = self.make_fault(
@@ -256,10 +303,7 @@ impl Vm {
                                     generation: self.current_generation,
                                     function: SymbolKey::default(),
                                     instruction: 0,
-                                    encoded: EncodedInstruction {
-                                        opcode: Opcode::Trap as u16,
-                                        payload: Vec::new(),
-                                    },
+                                    encoded: DispatchInstruction::trap(),
                                 });
                         let fault = self.make_fault(
                             fiber.id,
@@ -307,13 +351,15 @@ impl Vm {
         let encoded = function
             .code
             .get(frame.instruction)
-            .cloned()
             .ok_or_else(|| VmError::InvalidState("instruction pointer left its function".into()))?;
         Ok(InstructionPosition {
             generation: frame.generation,
             function: frame.function,
             instruction: frame.instruction,
-            encoded,
+            encoded: DispatchInstruction {
+                opcode: encoded.opcode,
+                payload: DispatchPayload::new(&encoded.payload),
+            },
         })
     }
 
@@ -377,13 +423,16 @@ impl Vm {
                     count,
                 )?;
                 let frame = fiber.frames.last().expect("frame exists");
-                let artifact = &self
+                let program = self
                     .generations
                     .get(&position.generation)
-                    .expect("validated frame generation exists")
-                    .artifact;
-                let definition = find_global(artifact, key).map_err(|error| {
-                    StepError::new(VmFaultCode::MissingSymbol, error.to_string())
+                    .expect("validated frame generation exists");
+                let artifact = &program.artifact;
+                let definition = program.global(key).ok_or_else(|| {
+                    StepError::new(
+                        VmFaultCode::MissingSymbol,
+                        format!("variable {key:?} is not defined"),
+                    )
                 })?;
                 let character = if definition.storage == BytecodeStorage::Character {
                     if indices.len() > definition.dimensions.len() {
@@ -822,13 +871,15 @@ impl Vm {
                 let arguments =
                     prepare_dynamic_arguments(&target, arguments, artifact.call_compatibility)
                         .map_err(map_vm_error)?;
-                self.memory
-                    .ensure_function_statics(position.generation, artifact, target.key);
+                self.memory.ensure_function_statics(
+                    position.generation,
+                    generation.function_statics(target.key),
+                );
                 bind_persistent_arguments(
                     &mut self.memory,
                     position.generation,
                     &target,
-                    artifact,
+                    generation,
                     &arguments,
                 )
                 .map_err(map_vm_error)?;
@@ -838,7 +889,7 @@ impl Vm {
                     new_frame,
                     position.generation,
                     &target,
-                    artifact,
+                    generation.function_locals(target.key),
                     arguments,
                     false,
                     event_context,
@@ -899,14 +950,13 @@ impl Vm {
                         validate_arguments(&target, &arguments).map_err(map_vm_error)?;
                         self.memory.ensure_function_statics(
                             position.generation,
-                            artifact,
-                            target.key,
+                            generation.function_statics(target.key),
                         );
                         bind_persistent_arguments(
                             &mut self.memory,
                             position.generation,
                             &target,
-                            artifact,
+                            generation,
                             &arguments,
                         )
                         .map_err(map_vm_error)?;
@@ -914,7 +964,7 @@ impl Vm {
                             new_frame.expect("function call reserved a frame id"),
                             position.generation,
                             &target,
-                            artifact,
+                            generation.function_locals(target.key),
                             arguments,
                             target.result.is_some(),
                             fiber
@@ -1287,8 +1337,10 @@ impl Vm {
                     .ok_or_else(|| {
                         StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
                     })?;
-                self.memory
-                    .ensure_function_statics(position.generation, artifact, target.key);
+                self.memory.ensure_function_statics(
+                    position.generation,
+                    generation.function_statics(target.key),
+                );
                 fiber
                     .frames
                     .last_mut()
@@ -1298,7 +1350,7 @@ impl Vm {
                     frame_id,
                     position.generation,
                     &target,
-                    artifact,
+                    generation.function_locals(target.key),
                     Vec::new(),
                     false,
                     true,
@@ -1337,17 +1389,18 @@ impl Vm {
                             .generations
                             .get(&generation)
                             .expect("validated frame generation exists");
-                        let artifact = &program.artifact;
                         let target = program.function(next.function).cloned().ok_or_else(|| {
                             StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
                         })?;
-                        self.memory
-                            .ensure_function_statics(generation, artifact, target.key);
+                        self.memory.ensure_function_statics(
+                            generation,
+                            program.function_statics(target.key),
+                        );
                         fiber.frames.push(make_frame(
                             frame_id,
                             generation,
                             &target,
-                            artifact,
+                            program.function_locals(target.key),
                             Vec::new(),
                             false,
                             true,
@@ -1415,17 +1468,8 @@ impl Vm {
     ) -> crate::VmExecutionOrigin {
         let generation = self.generations.get(&position.generation);
         let function = generation.and_then(|generation| generation.function(position.function));
-        let source = generation.zip(function).and_then(|(generation, function)| {
-            let offset = function
-                .code
-                .iter()
-                .take(position.instruction)
-                .map(EncodedInstruction::encoded_len)
-                .sum();
-            generation
-                .artifact
-                .source_map
-                .resolve(position.function, offset)
+        let source = generation.and_then(|generation| {
+            generation.source_location(position.function, position.instruction)
         });
         crate::VmExecutionOrigin {
             generation: position.generation,

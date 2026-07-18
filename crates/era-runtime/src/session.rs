@@ -69,7 +69,9 @@ use crate::key_macro::{KeyMacros, preprocess_input};
 use crate::operation::{
     CandidateSaveContinuation, PendingOperations, PendingService, PendingStorage,
 };
-use crate::presentation::{PresentationModel, display_value, logical_line_string};
+use crate::presentation::{
+    PresentationModel, PresentationUpdate, display_value, logical_line_string,
+};
 #[cfg(test)]
 use crate::project::build_project;
 use crate::project::{

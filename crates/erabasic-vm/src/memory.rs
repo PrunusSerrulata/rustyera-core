@@ -210,18 +210,12 @@ impl Memory {
         result
     }
 
-    pub(crate) fn ensure_function_statics(
+    pub(crate) fn ensure_function_statics<'a>(
         &mut self,
         generation: GenerationId,
-        artifact: &BytecodeArtifact,
-        function: SymbolKey,
+        definitions: impl IntoIterator<Item = &'a BytecodeGlobal>,
     ) {
-        for definition in artifact.globals.iter().filter(|definition| {
-            matches!(
-                definition.storage,
-                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent
-            ) && definition.owner == Some(function)
-        }) {
+        for definition in definitions {
             if self
                 .legacy
                 .get(&generation)

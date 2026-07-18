@@ -413,10 +413,10 @@ fn build_project_inner_with_extensions(
     let Some(artifact) = compile.artifact else {
         return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
     };
-    let validation = validate_bytecode(
-        artifact.clone().into_unvalidated(),
-        &ValidationContext::for_artifact(&artifact),
-    );
+    // The validator returns ownership of successful artifacts, so avoid duplicating the complete
+    // function and source-map payload merely to keep a temporary pre-validation copy alive.
+    let validation_context = ValidationContext::for_artifact(&artifact);
+    let validation = validate_bytecode(artifact.into_unvalidated(), &validation_context);
     diagnostics.extend(validation.diagnostics.iter().map(|diagnostic| {
         project_diagnostic(
             &format!("validator.{:?}", diagnostic.code).to_ascii_lowercase(),

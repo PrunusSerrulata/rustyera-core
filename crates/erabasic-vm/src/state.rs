@@ -22,6 +22,9 @@ pub(crate) struct ProgramGeneration {
     function_name_indices: BTreeMap<String, usize>,
     global_indices: BTreeMap<SymbolKey, usize>,
     global_name_indices: BTreeMap<String, usize>,
+    function_static_indices: BTreeMap<SymbolKey, Vec<usize>>,
+    function_local_indices: BTreeMap<SymbolKey, Vec<usize>>,
+    instruction_source_indices: BTreeMap<SymbolKey, Vec<Option<usize>>>,
 }
 
 impl ProgramGeneration {
@@ -55,12 +58,70 @@ impl ProgramGeneration {
                 .entry(global.name.to_ascii_uppercase())
                 .or_insert(index);
         }
+        let mut function_static_indices = BTreeMap::<SymbolKey, Vec<usize>>::new();
+        let mut function_local_indices = BTreeMap::<SymbolKey, Vec<usize>>::new();
+        for (index, global) in artifact.globals.iter().enumerate() {
+            if matches!(
+                global.storage,
+                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent
+            ) && let Some(owner) = global.owner
+            {
+                function_static_indices
+                    .entry(owner)
+                    .or_default()
+                    .push(index);
+            } else if global.storage == BytecodeStorage::FunctionLocal
+                && let Some(owner) = global.owner
+            {
+                function_local_indices.entry(owner).or_default().push(index);
+            }
+        }
+        let instruction_offsets: BTreeMap<SymbolKey, Vec<u64>> = artifact
+            .functions
+            .iter()
+            .map(|function| {
+                let mut offset = 0_u64;
+                let offsets = function
+                    .code
+                    .iter()
+                    .map(|instruction| {
+                        let current = offset;
+                        offset = offset.saturating_add(instruction.encoded_len());
+                        current
+                    })
+                    .collect();
+                (function.key, offsets)
+            })
+            .collect();
+        // Resolve serialized source-map precedence once per generation. Filling only empty
+        // instruction slots preserves `SourceMap::resolve`'s first-matching-entry behavior even
+        // for a validated third-party artifact with overlapping entries.
+        let mut instruction_source_indices = instruction_offsets
+            .iter()
+            .map(|(function, offsets)| (*function, vec![None; offsets.len()]))
+            .collect::<BTreeMap<_, _>>();
+        for (index, entry) in artifact.source_map.entries.iter().enumerate() {
+            let Some(offsets) = instruction_offsets.get(&entry.function) else {
+                continue;
+            };
+            let Some(indices) = instruction_source_indices.get_mut(&entry.function) else {
+                continue;
+            };
+            let start = offsets.partition_point(|offset| *offset < entry.code_start);
+            let end = offsets.partition_point(|offset| *offset < entry.code_end);
+            for slot in &mut indices[start..end] {
+                slot.get_or_insert(index);
+            }
+        }
         Self {
             artifact,
             function_indices,
             function_name_indices,
             global_indices,
             global_name_indices,
+            function_static_indices,
+            function_local_indices,
+            instruction_source_indices,
         }
     }
 
@@ -86,6 +147,43 @@ impl ProgramGeneration {
         self.global_name_indices
             .get(&name.to_ascii_uppercase())
             .and_then(|index| self.artifact.globals.get(*index))
+    }
+
+    pub(crate) fn function_statics(
+        &self,
+        function: SymbolKey,
+    ) -> impl Iterator<Item = &erabasic_bytecode::BytecodeGlobal> {
+        self.function_static_indices
+            .get(&function)
+            .into_iter()
+            .flatten()
+            .filter_map(|index| self.artifact.globals.get(*index))
+    }
+
+    pub(crate) fn function_locals(
+        &self,
+        function: SymbolKey,
+    ) -> impl Iterator<Item = &erabasic_bytecode::BytecodeGlobal> {
+        self.function_local_indices
+            .get(&function)
+            .into_iter()
+            .flatten()
+            .filter_map(|index| self.artifact.globals.get(*index))
+    }
+
+    pub(crate) fn source_location(
+        &self,
+        function: SymbolKey,
+        instruction: usize,
+    ) -> Option<erabasic_bytecode::ResolvedSourceLocation> {
+        let entry = self
+            .instruction_source_indices
+            .get(&function)?
+            .get(instruction)
+            .copied()
+            .flatten()
+            .and_then(|index| self.artifact.source_map.entries.get(index))?;
+        self.artifact.source_map.resolve_entry(entry)
     }
 }
 
@@ -312,18 +410,19 @@ impl Vm {
             .generations
             .get(&generation)
             .ok_or_else(|| VmError::InvalidState("current generation is missing".into()))?;
-        let artifact = &program.artifact;
         let function_definition = program
             .function(function)
             .ok_or(VmError::MissingFunction(function))?;
         validate_arguments(function_definition, &arguments)?;
-        self.memory
-            .ensure_function_statics(generation, artifact, function_definition.key);
+        self.memory.ensure_function_statics(
+            generation,
+            program.function_statics(function_definition.key),
+        );
         bind_persistent_arguments(
             &mut self.memory,
             generation,
             function_definition,
-            artifact,
+            program,
             &arguments,
         )?;
         let fiber_id = FiberId(self.next_fiber);
@@ -334,7 +433,7 @@ impl Vm {
             frame_id,
             generation,
             function_definition,
-            artifact,
+            program.function_locals(function_definition.key),
             arguments,
             true,
             function_definition.kind == BytecodeFunctionKind::Event,
@@ -481,18 +580,17 @@ impl Vm {
                 .generations
                 .get(&generation)
                 .ok_or_else(|| VmError::InvalidState("event generation is missing".into()))?;
-            let artifact = &program.artifact;
             let target = program
                 .function(next.function)
                 .cloned()
                 .ok_or_else(|| VmError::InvalidState("event function is missing".into()))?;
             self.memory
-                .ensure_function_statics(generation, artifact, target.key);
+                .ensure_function_statics(generation, program.function_statics(target.key));
             fiber.frames.push(make_frame(
                 frame_id,
                 generation,
                 &target,
-                artifact,
+                program.function_locals(target.key),
                 Vec::new(),
                 false,
                 true,
@@ -1069,22 +1167,17 @@ fn prepare_transaction_memory(
     })
 }
 
-pub(crate) fn make_frame(
+pub(crate) fn make_frame<'a>(
     id: FrameId,
     generation: GenerationId,
     function: &BytecodeFunction,
-    artifact: &BytecodeArtifact,
+    local_definitions: impl IntoIterator<Item = &'a erabasic_bytecode::BytecodeGlobal>,
     arguments: Vec<VmValue>,
     return_value_to_caller: bool,
     event_context: bool,
 ) -> Frame {
-    let mut locals: BTreeMap<_, _> = artifact
-        .globals
-        .iter()
-        .filter(|definition| {
-            definition.owner == Some(function.key)
-                && definition.storage == BytecodeStorage::FunctionLocal
-        })
+    let mut locals: BTreeMap<_, _> = local_definitions
+        .into_iter()
         .map(|definition| (definition.key, VariableCell::new(definition)))
         .collect();
     for (parameter, argument) in function.parameters.iter().zip(arguments) {
@@ -1148,15 +1241,12 @@ pub(crate) fn bind_persistent_arguments(
     memory: &mut Memory,
     generation: GenerationId,
     function: &BytecodeFunction,
-    artifact: &BytecodeArtifact,
+    program: &ProgramGeneration,
     arguments: &[VmValue],
 ) -> Result<(), VmError> {
+    let artifact = &program.artifact;
     for (parameter, argument) in function.parameters.iter().zip(arguments) {
-        let Some(definition) = artifact
-            .globals
-            .iter()
-            .find(|global| global.key == parameter.key)
-        else {
+        let Some(definition) = program.global(parameter.key) else {
             return Err(VmError::InvalidState("parameter storage is missing".into()));
         };
         if definition.storage == BytecodeStorage::FunctionLocal {

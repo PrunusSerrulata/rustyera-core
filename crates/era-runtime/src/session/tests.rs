@@ -1291,28 +1291,27 @@ fn project_load_start_and_print_cross_the_message_boundary() {
     }
     assert_eq!(session.random_seed(), Some(1));
     let output = drain(&mut session);
-    assert!(output.iter().any(|message| match message {
-        RuntimeMessage::PresentationSnapshot(snapshot) =>
-            snapshot.history.logical_lines.iter().any(|line| {
-                line.runs.iter().any(|run| matches!(
-                    run,
-                    era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("ORACLE_READY")
-                ))
-            }),
-        _ => false,
+    assert!(output.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+    )));
+    let snapshot = session.presentation.snapshot();
+    assert!(snapshot.history.logical_lines.iter().any(|line| {
+        line.runs.iter().any(|run| {
+            matches!(
+                run,
+                era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("ORACLE_READY")
+            )
+        })
     }));
-    assert!(output.iter().any(|message| match message {
-        RuntimeMessage::PresentationSnapshot(snapshot) =>
-            snapshot.history.logical_lines.iter().any(|line| {
-                line.runs.iter().any(|run| {
-                    matches!(
-                        run,
-                        era_runtime_protocol::DisplayRun::Text { text, .. }
-                            if text.contains("TITLE_CHARANUM=0")
-                    )
-                })
-            }),
-        _ => false,
+    assert!(snapshot.history.logical_lines.iter().any(|line| {
+        line.runs.iter().any(|run| {
+            matches!(
+                run,
+                era_runtime_protocol::DisplayRun::Text { text, .. }
+                    if text.contains("TITLE_CHARANUM=0")
+            )
+        })
     }));
 }
 
@@ -1549,29 +1548,23 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
         session.drive(RuntimeDriveBudget::default()).unwrap();
     }
     let output = drain(&mut session);
+    let snapshot = session.presentation.snapshot();
     assert!(
-        output.iter().any(|message| match message {
-            RuntimeMessage::PresentationSnapshot(snapshot) =>
-                snapshot.history.logical_lines.iter().any(|line| {
-                    line.runs.iter().any(|run| {
-                        matches!(
-                            run,
-                            era_runtime_protocol::DisplayRun::Text { text, .. }
-                                if text.contains("meta=3,1,0,SYSTEM_TITLE,5,bound")
-                        )
-                    })
-                }),
-            _ => false,
+        snapshot.history.logical_lines.iter().any(|line| {
+            line.runs.iter().any(|run| {
+                matches!(
+                    run,
+                    era_runtime_protocol::DisplayRun::Text { text, .. }
+                        if text.contains("meta=3,1,0,SYSTEM_TITLE,5,bound")
+                )
+            })
         }),
         "{output:#?}"
     );
-    let rendered = output
+    let rendered = snapshot
+        .history
+        .logical_lines
         .iter()
-        .filter_map(|message| match message {
-            RuntimeMessage::PresentationSnapshot(snapshot) => Some(snapshot),
-            _ => None,
-        })
-        .flat_map(|snapshot| snapshot.history.logical_lines.iter())
         .flat_map(|line| line.runs.iter())
         .filter_map(|run| match run {
             era_runtime_protocol::DisplayRun::Text { text, .. } => Some(text.as_str()),
@@ -1635,15 +1628,8 @@ fn reference_presentation_fixture_preserves_logical_intent() {
             break;
         }
     }
-    let output = drain(&mut session);
-    let snapshot = output
-        .iter()
-        .filter_map(|message| match message {
-            RuntimeMessage::PresentationSnapshot(snapshot) => Some(snapshot),
-            _ => None,
-        })
-        .next_back()
-        .expect("presentation snapshot");
+    drain(&mut session);
+    let snapshot = session.presentation.snapshot();
 
     assert!(snapshot.history.logical_lines.iter().any(|line| {
         line.runs.iter().any(|run| {
@@ -1757,16 +1743,15 @@ fn typed_input_updates_result_and_sixth_argument_honors_message_skip() {
             .drive(RuntimeDriveBudget::default())
             .expect("resume");
     }
-    let output = drain(&mut session);
-    assert!(output.iter().any(|message| match message {
-        RuntimeMessage::PresentationSnapshot(snapshot) =>
-            snapshot.history.logical_lines.iter().any(|line| {
-                line.runs.iter().any(|run| matches!(
-                    run,
-                    era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("got=9")
-                ))
-            }),
-        _ => false,
+    drain(&mut session);
+    let snapshot = session.presentation.snapshot();
+    assert!(snapshot.history.logical_lines.iter().any(|line| {
+        line.runs.iter().any(|run| {
+            matches!(
+                run,
+                era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("got=9")
+            )
+        })
     }));
 }
 
@@ -1853,16 +1838,15 @@ fn untimed_one_input_message_skip_keeps_the_complete_default() {
             .drive(RuntimeDriveBudget::default())
             .expect("resume");
     }
-    let output = drain(&mut session);
-    assert!(output.iter().any(|message| match message {
-        RuntimeMessage::PresentationSnapshot(snapshot) =>
-            snapshot.history.logical_lines.iter().any(|line| {
-                line.runs.iter().any(|run| matches!(
+    drain(&mut session);
+    let snapshot = session.presentation.snapshot();
+    assert!(snapshot.history.logical_lines.iter().any(|line| {
+        line.runs.iter().any(|run| {
+            matches!(
                 run,
                 era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("got=LONG")
-            ))
-            }),
-        _ => false,
+            )
+        })
     }));
 }
 
@@ -2353,14 +2337,12 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
     for _ in 0..5 {
         restored.drive(RuntimeDriveBudget::default()).unwrap();
     }
-    let output = drain(&mut restored);
-    let display = output
+    drain(&mut restored);
+    let snapshot = restored.presentation.snapshot();
+    let display = snapshot
+        .history
+        .logical_lines
         .iter()
-        .filter_map(|message| match message {
-            RuntimeMessage::PresentationSnapshot(snapshot) => Some(snapshot),
-            _ => None,
-        })
-        .flat_map(|snapshot| &snapshot.history.logical_lines)
         .flat_map(|line| &line.runs)
         .filter_map(|run| match run {
             era_runtime_protocol::DisplayRun::Text { text, .. } => Some(text.as_str()),

@@ -50,6 +50,16 @@ impl SourceMap {
                 && entry.code_start <= code_offset
                 && code_offset < entry.code_end
         })?;
+        self.resolve_entry(entry)
+    }
+
+    /// Resolve an entry selected by a caller-maintained source-map index.
+    ///
+    /// The serialized map intentionally stays index-free and deterministic. Runtime
+    /// consumers that resolve locations frequently can build an ephemeral index and
+    /// reuse this projection without scanning every function's entries.
+    #[must_use]
+    pub fn resolve_entry(&self, entry: &SourceMapEntry) -> Option<ResolvedSourceLocation> {
         let source = self.sources.get(entry.source_index as usize)?;
         let line_index = source
             .line_starts
@@ -64,5 +74,38 @@ impl SourceMap {
             line: u64::try_from(line_index).ok()? + 1,
             byte_column: entry.byte_start.checked_sub(line_start)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indexed_resolution_matches_the_serialized_linear_lookup() {
+        let function = SymbolKey::derive("source-map-test", b"function");
+        let entry = SourceMapEntry {
+            function,
+            code_start: 4,
+            code_end: 8,
+            source_index: 0,
+            byte_start: 5,
+            byte_end: 7,
+            statement_fingerprint: Digest::default(),
+            origin_chain: Vec::new(),
+        };
+        let map = SourceMap {
+            sources: vec![SourceRecord {
+                relative_path: "utf8.erb".into(),
+                content_hash: Digest::hash("source-map-test", &["界\nabc".as_bytes()]),
+                byte_len: 7,
+                line_starts: vec![0, 4],
+            }],
+            entries: vec![entry.clone()],
+        };
+        assert_eq!(map.resolve_entry(&entry), map.resolve(function, 5));
+        let location = map.resolve_entry(&entry).expect("valid indexed entry");
+        assert_eq!(location.line, 2);
+        assert_eq!(location.byte_column, 1);
     }
 }

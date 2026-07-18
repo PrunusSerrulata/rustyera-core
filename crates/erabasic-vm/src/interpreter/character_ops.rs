@@ -191,31 +191,60 @@ pub(super) fn execute_character_mutation(
     operation: &str,
     arguments: &[VmValue],
 ) -> Result<(), VmError> {
-    let artifact = vm.artifact().clone();
-    let mut memory = vm.memory.clone();
+    let generation = vm.current_generation;
+    let artifact = &vm
+        .generations
+        .get(&generation)
+        .ok_or_else(|| VmError::InvalidState("character mutation generation is missing".into()))?
+        .artifact;
+    if matches!(operation, "pickupchara" | "sortchara") {
+        // These operations can fail while deriving a reordered character set and
+        // remapping TARGET/ASSI/MASTER. Keep their uncommon transactional copy;
+        // ordinary ADD/DEL paths validate first and mutate in place below.
+        let mut memory = vm.memory.clone();
+        if operation == "pickupchara" {
+            pickup_characters(artifact, &mut memory, arguments)?;
+        } else {
+            sort_characters(generation, artifact, &mut memory, arguments)?;
+        }
+        let character_count = i64::try_from(memory.characters.len()).unwrap_or(i64::MAX);
+        write_named_integer(artifact, &mut memory, "CHARANUM", character_count)?;
+        vm.memory = memory;
+        return Ok(());
+    }
+
+    // Validate the calculated destination before any in-place edit, preserving
+    // the previous all-or-nothing error behavior without cloning all VM memory.
+    validate_named_integer_slot(artifact, &vm.memory, "CHARANUM")?;
+    let memory = &mut vm.memory;
     match operation {
         "addchara" | "addspchara" => {
             let requested_sp = operation == "addspchara";
-            for argument in arguments {
-                let VmValue::Integer(number) = argument else {
-                    return Err(VmError::InvalidArguments(
-                        "ADDCHARA arguments must be integers".into(),
-                    ));
-                };
-                let template = artifact
-                    .project_data
-                    .static_data
-                    .characters
-                    .iter()
-                    .find(|template| {
-                        template.no == *number && template.is_sp_character == requested_sp
-                    })
-                    .ok_or_else(|| {
-                        VmError::InvalidArguments(format!(
-                            "character template {number} does not exist"
-                        ))
-                    })?;
-                memory.push_character(&artifact, Some(template));
+            let templates = arguments
+                .iter()
+                .map(|argument| {
+                    let VmValue::Integer(number) = argument else {
+                        return Err(VmError::InvalidArguments(
+                            "ADDCHARA arguments must be integers".into(),
+                        ));
+                    };
+                    artifact
+                        .project_data
+                        .static_data
+                        .characters
+                        .iter()
+                        .find(|template| {
+                            template.no == *number && template.is_sp_character == requested_sp
+                        })
+                        .ok_or_else(|| {
+                            VmError::InvalidArguments(format!(
+                                "character template {number} does not exist"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            for template in templates {
+                memory.push_character(artifact, Some(template));
             }
         }
         "adddefchara" => {
@@ -242,10 +271,10 @@ pub(super) fn execute_character_mutation(
                     .characters
                     .iter()
                     .find(|template| template.csv_no == csv_number);
-                memory.push_character(&artifact, template);
+                memory.push_character(artifact, template);
             }
         }
-        "addvoidchara" => memory.push_character(&artifact, None),
+        "addvoidchara" => memory.push_character(artifact, None),
         "delchara" => {
             let mut indices = arguments
                 .iter()
@@ -290,6 +319,8 @@ pub(super) fn execute_character_mutation(
             }
         }
         "addcopychara" => {
+            let original_len = memory.characters.len();
+            let mut additions = Vec::with_capacity(arguments.len());
             for argument in arguments {
                 let VmValue::Integer(index) = argument else {
                     return Err(VmError::InvalidArguments(
@@ -299,13 +330,19 @@ pub(super) fn execute_character_mutation(
                 let index = usize::try_from(*index).map_err(|_| {
                     VmError::InvalidArguments("ADDCOPYCHARA index is negative".into())
                 })?;
-                let character = memory.characters.get(index).cloned().ok_or_else(|| {
+                let character = if index < original_len {
+                    memory.characters.get(index)
+                } else {
+                    additions.get(index - original_len)
+                }
+                .cloned()
+                .ok_or_else(|| {
                     VmError::InvalidArguments("ADDCOPYCHARA index is out of range".into())
                 })?;
-                memory.characters.push(character);
+                additions.push(character);
             }
+            memory.characters.extend(additions);
         }
-        "pickupchara" => pickup_characters(&artifact, &mut memory, arguments)?,
         "reset_stain" => {
             let character = usize::try_from(integer_argument(arguments, 0)?)
                 .map_err(|_| VmError::InvalidArguments("RESET_STAIN index is negative".into()))?;
@@ -320,7 +357,7 @@ pub(super) fn execute_character_mutation(
                 .find(|definition| definition.name.eq_ignore_ascii_case("STAIN"))
                 .ok_or_else(|| VmError::InvalidState("STAIN variable is missing".into()))?;
             let cell = memory
-                .cell_mut(vm.current_generation, definition, character)
+                .cell_mut(generation, definition, character)
                 .ok_or_else(|| VmError::InvalidState("STAIN storage is unavailable".into()))?;
             for (index, destination) in cell.values.iter_mut().enumerate() {
                 *destination = VmValue::Integer(
@@ -335,7 +372,6 @@ pub(super) fn execute_character_mutation(
                 );
             }
         }
-        "sortchara" => sort_characters(vm.current_generation, &artifact, &mut memory, arguments)?,
         _ => {
             return Err(VmError::InvalidArguments(
                 "unknown character mutation".into(),
@@ -344,10 +380,9 @@ pub(super) fn execute_character_mutation(
     }
     // CHARANUM is exposed as a calculated variable by the language frontend, but
     // the VM stores calculated cells so normal bytecode loads stay inexpensive.
-    // Refresh it in the same candidate memory image to keep the mutation atomic.
+    // Refresh it after the validated in-place mutation.
     let character_count = i64::try_from(memory.characters.len()).unwrap_or(i64::MAX);
-    write_named_integer(&artifact, &mut memory, "CHARANUM", character_count)?;
-    vm.memory = memory;
+    write_named_integer(artifact, memory, "CHARANUM", character_count)?;
     Ok(())
 }
 
@@ -542,5 +577,23 @@ pub(super) fn write_named_integer(
         .and_then(|cell| cell.values.first_mut())
         .ok_or_else(|| VmError::InvalidState(format!("{name} storage is unavailable")))?;
     *slot = VmValue::Integer(value);
+    Ok(())
+}
+
+fn validate_named_integer_slot(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    memory: &crate::Memory,
+    name: &str,
+) -> Result<(), VmError> {
+    let definition = artifact
+        .globals
+        .iter()
+        .find(|definition| definition.name.eq_ignore_ascii_case(name))
+        .ok_or_else(|| VmError::InvalidState(format!("{name} is not defined")))?;
+    memory
+        .shared
+        .get(&definition.key)
+        .and_then(|cell| cell.values.first())
+        .ok_or_else(|| VmError::InvalidState(format!("{name} storage is unavailable")))?;
     Ok(())
 }

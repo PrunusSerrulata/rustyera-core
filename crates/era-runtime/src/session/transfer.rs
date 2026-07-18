@@ -501,12 +501,13 @@ impl RuntimeSession {
 
     pub(super) fn resynchronize(&mut self, message_id: u64) -> Result<(), RuntimeError> {
         let input_undo = self.input_undo_state();
+        let presentation = self.presentation.snapshot_for_delivery();
         self.emit(
             RuntimeMessage::RuntimeResynchronized(RuntimeResynchronized {
                 epoch: self.epoch.0,
                 phase: self.phase,
                 runtime_revision: self.revision,
-                presentation: self.presentation.snapshot(),
+                presentation,
                 exit_requested: self.exit_requested,
                 selected_locale: self.selected_locale.clone(),
                 input_undo,
@@ -526,10 +527,13 @@ impl RuntimeSession {
     }
 
     pub(super) fn emit_presentation(&mut self) -> Result<(), RuntimeError> {
-        self.emit(
-            RuntimeMessage::PresentationSnapshot(self.presentation.snapshot()),
-            None,
-        )
+        let message = match self.presentation.next_update() {
+            PresentationUpdate::Snapshot(snapshot) => {
+                RuntimeMessage::PresentationSnapshot(*snapshot)
+            }
+            PresentationUpdate::Delta(delta) => RuntimeMessage::PresentationDelta(delta),
+        };
+        self.emit(message, None)
     }
 
     pub(super) fn sync_resource_replay(&mut self) {
