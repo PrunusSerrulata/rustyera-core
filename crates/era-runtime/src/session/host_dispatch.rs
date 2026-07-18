@@ -143,15 +143,11 @@ impl RuntimeSession {
         }
         if name == "SETANIMETIMER" {
             let milliseconds = integer_argument_value(&request.arguments, 0)?;
-            let result = self
-                .project_snapshot
+            self.project_snapshot
                 .as_mut()
                 .ok_or_else(|| RuntimeError::Internal("SETANIMETIMER has no project".into()))?
                 .resource_graph
                 .set_animation_timer(milliseconds);
-            if let Err(message) = result {
-                return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
-            }
             self.sync_resource_replay();
             commit_integer_result(vm, request.id, 1)?;
             return self.emit_presentation();
@@ -541,6 +537,24 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_projection_state();
         }
+        if matches!(name.as_str(), "MOVETEXTBOX" | "RESUMETEXTBOX") {
+            self.text_box_layout = if name == "MOVETEXTBOX" {
+                TextBoxLayout {
+                    x: integer_argument_value(&request.arguments, 0)?,
+                    y: integer_argument_value(&request.arguments, 1)?,
+                    width: integer_argument_value(&request.arguments, 2)?,
+                }
+            } else {
+                TextBoxLayout::default()
+            };
+            commit_integer_result(vm, request.id, 1)?;
+            return self.emit_projection_state();
+        }
+        if name == "BITMAP_CACHE_ENABLE" {
+            // Reference compatibility no-op: bitmap line caching is only a
+            // renderer performance hint and cannot affect portable semantics.
+            return commit_integer_result(vm, request.id, 0);
+        }
         if name == "HOTKEY_STATE_INIT" {
             let size =
                 usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
@@ -590,6 +604,8 @@ impl RuntimeSession {
         }
         if name == "BREAKBUTTON" {
             self.button_generation = self.button_generation.saturating_add(1);
+            self.presentation
+                .set_button_generation(self.button_generation);
             self.command_intents.clear();
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_projection_state();
@@ -1381,21 +1397,23 @@ impl RuntimeSession {
                 .unwrap_or("emuera.log");
             let path = safe_relative_path(filename)?;
             let hide_info = matches!(request.arguments.get(1), Some(VmValue::Integer(1)));
-            let mut data = vec![0xef, 0xbb, 0xbf];
-            data.extend_from_slice(self.presentation.log_text(hide_info).as_bytes());
-            return self.issue_host_storage(
+            let context = self.projection_query_context();
+            return self.issue_host_service(
                 vm,
                 request,
-                PendingStorage::HostFunctionWrite {
+                ExternalCompletion::SerializePhysicalHistory {
                     request: request.id,
+                    context,
+                    relative_path: path,
                 },
-                StorageNamespace::Log,
-                StorageOperation::Write {
-                    data: ProtocolBytes::new(data),
-                    atomic_replace: true,
-                    precondition: StoragePrecondition::Any,
+                ServiceKind::PresentationQuery,
+                SERIALIZE_PHYSICAL_HISTORY_OPERATION,
+                SERIALIZE_PHYSICAL_HISTORY_OPERATION_VERSION,
+                &SerializePhysicalHistoryRequest {
+                    context,
+                    title: self.presentation.snapshot().title,
+                    hide_information: hide_info,
                 },
-                path,
             );
         }
         if let Some(mut pending) = input_wait(
@@ -1891,8 +1909,11 @@ impl RuntimeSession {
             let flags = integer_argument_value(&request.arguments, 0)?;
             self.presentation.set_redraw(flags & 1 != 0);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            self.emit_presentation()?;
             return if flags & 2 != 0 {
-                self.emit_presentation()
+                self.emit_effect(EffectKind::PresentNow {
+                    presentation_revision: self.presentation.revision(),
+                })
             } else {
                 Ok(())
             };
@@ -1931,9 +1952,9 @@ impl RuntimeSession {
                 "CURRENTREDRAW" => i64::from(self.presentation.redraw_enabled()),
                 "GETBGCOLOR" => self.presentation.background_rgb(),
                 "GETCOLOR" => self.presentation.foreground_rgb(),
-                "GETDEFBGCOLOR" => 0,
-                "GETDEFCOLOR" => 0x00c0_c0c0,
-                "GETFOCUSCOLOR" => 0x00ff_ff00,
+                "GETDEFBGCOLOR" => self.presentation.default_background_rgb(),
+                "GETDEFCOLOR" => self.presentation.default_foreground_rgb(),
+                "GETFOCUSCOLOR" => self.presentation.focus_rgb(),
                 _ => self.presentation.style_bits(),
             };
             return commit_integer_result(vm, request.id, value);
@@ -1967,7 +1988,13 @@ impl RuntimeSession {
                 .arguments
                 .first()
                 .map_or_else(String::new, display_value);
-            self.presentation.remove_background(&resource);
+            if !self.presentation.remove_background(&resource) {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "REMOVEBGIMAGE did not find the requested background",
+                    Some(request.origin.clone()),
+                );
+            }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
@@ -2218,6 +2245,86 @@ impl RuntimeSession {
             });
             return self.complete_graphics_result(vm, request.id, i64::from(changed));
         }
+        if name == "GCREATEFROMFILE" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let path = safe_relative_path(string_argument_value(&request.arguments, 1, &name)?)?;
+            let relative = request
+                .arguments
+                .get(2)
+                .is_some_and(|value| integer_value_or_zero(value) != 0);
+            if !relative {
+                let created = self.project_snapshot.as_mut().is_some_and(|project| {
+                    project
+                        .resource_graph
+                        .create_canvas_from_resource(id, &path)
+                });
+                return self.complete_graphics_result(vm, request.id, i64::from(created));
+            }
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::GraphicsImageRead {
+                    request: request.id,
+                    canvas_id: id,
+                },
+                StorageNamespace::Data,
+                StorageOperation::Read,
+                path,
+            );
+        }
+        if name == "GLOAD" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let file_no = integer_argument_value(&request.arguments, 1)?;
+            if !(0..=i64::from(i32::MAX)).contains(&file_no)
+                || self
+                    .project_snapshot
+                    .as_ref()
+                    .and_then(|project| project.resource_graph.canvas_state(id))
+                    .is_some()
+            {
+                return commit_integer_result(vm, request.id, 0);
+            }
+            return self.issue_host_storage(
+                vm,
+                request,
+                PendingStorage::GraphicsImageRead {
+                    request: request.id,
+                    canvas_id: id,
+                },
+                StorageNamespace::Save,
+                StorageOperation::Read,
+                format!("img{file_no:04}.png"),
+            );
+        }
+        if name == "GSAVE" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let file_no = integer_argument_value(&request.arguments, 1)?;
+            let observation = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.canvas_observation(id));
+            let Some((_, _, canvas_revision)) = observation else {
+                return commit_integer_result(vm, request.id, 0);
+            };
+            if !(0..=i64::from(i32::MAX)).contains(&file_no) {
+                return commit_integer_result(vm, request.id, 0);
+            }
+            return self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::EncodeCanvasPng {
+                    request: request.id,
+                    relative_path: format!("img{file_no:04}.png"),
+                },
+                ServiceKind::Canvas,
+                ENCODE_CANVAS_PNG_OPERATION,
+                ENCODE_CANVAS_PNG_OPERATION_VERSION,
+                &EncodeCanvasPngRequest {
+                    canvas_id: id,
+                    canvas_revision,
+                },
+            );
+        }
         if name == "GCREATE" {
             let id = integer_argument_value(&request.arguments, 0)?;
             let width = integer_argument_value(&request.arguments, 1)?;
@@ -2257,6 +2364,93 @@ impl RuntimeSession {
                 _ => 0,
             };
             return commit_integer_result(vm, request.id, value);
+        }
+        if matches!(
+            name.as_str(),
+            "GGETBRUSH" | "GGETPEN" | "GGETPENWIDTH" | "GGETFONTSIZE" | "GGETFONTSTYLE"
+        ) {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let value = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.canvas_style(id))
+                .map_or(
+                    0,
+                    |(brush, pen, width, _, font_size, font_style)| match name.as_str() {
+                        "GGETBRUSH" => i64::from(brush),
+                        "GGETPEN" => i64::from(pen),
+                        "GGETPENWIDTH" => width,
+                        "GGETFONTSIZE" => font_size,
+                        _ => i64::from(font_style),
+                    },
+                );
+            return commit_integer_result(vm, request.id, value);
+        }
+        if name == "GGETFONT" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let value = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.canvas_style(id))
+                .map_or_else(String::new, |(_, _, _, family, _, _)| family.to_owned());
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::String(value)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "GSETBRUSH" | "GSETPEN" | "GDASHSTYLE" | "GSETFONT"
+        ) {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let changed = match name.as_str() {
+                "GSETBRUSH" => {
+                    let color = checked_argb(integer_argument_value(&request.arguments, 1)?)?;
+                    self.project_snapshot
+                        .as_mut()
+                        .is_some_and(|project| project.resource_graph.set_canvas_brush(id, color))
+                }
+                "GSETPEN" => {
+                    let color = checked_argb(integer_argument_value(&request.arguments, 1)?)?;
+                    let width = integer_argument_value(&request.arguments, 2)?;
+                    self.project_snapshot.as_mut().is_some_and(|project| {
+                        project.resource_graph.set_canvas_pen(id, color, width)
+                    })
+                }
+                "GDASHSTYLE" => {
+                    let style = integer_argument_value(&request.arguments, 1)?;
+                    let offset = integer_argument_value(&request.arguments, 2)?;
+                    self.project_snapshot.as_mut().is_some_and(|project| {
+                        project.resource_graph.set_canvas_dash(id, style, offset)
+                    })
+                }
+                "GSETFONT" => {
+                    let family = string_argument_value(&request.arguments, 1, &name)?.to_owned();
+                    let size = integer_argument_value(&request.arguments, 2)?;
+                    let style = request
+                        .arguments
+                        .get(3)
+                        .and_then(|value| match value {
+                            VmValue::Integer(value) => Some(*value),
+                            _ => None,
+                        })
+                        .unwrap_or_default();
+                    self.project_snapshot.as_mut().is_some_and(|project| {
+                        project.resource_graph.set_canvas_font(
+                            id,
+                            family,
+                            size,
+                            u8::try_from(style & 0x0f).expect("masked font style fits u8"),
+                        )
+                    })
+                }
+                _ => unreachable!(),
+            };
+            return self.complete_graphics_result(vm, request.id, i64::from(changed));
         }
         if name == "GGETTEXTSIZE" {
             let context = self.projection_query_context();
@@ -2356,6 +2550,225 @@ impl RuntimeSession {
                 .is_some_and(|project| project.resource_graph.clear_canvas(id, color, rectangle));
             return self.complete_graphics_result(vm, request.id, i64::from(changed));
         }
+        if name == "GSETCOLOR" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let color = checked_argb(integer_argument_value(&request.arguments, 1)?)?;
+            let point = [
+                i32_argument_value(&request.arguments, 2)?,
+                i32_argument_value(&request.arguments, 3)?,
+            ];
+            let changed = self
+                .project_snapshot
+                .as_mut()
+                .is_some_and(|project| project.resource_graph.set_canvas_pixel(id, color, point));
+            return self.complete_graphics_result(vm, request.id, i64::from(changed));
+        }
+        if name == "GFILLRECTANGLE" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let rectangle = [
+                i32_argument_value(&request.arguments, 1)?,
+                i32_argument_value(&request.arguments, 2)?,
+                i32_argument_value(&request.arguments, 3)?,
+                i32_argument_value(&request.arguments, 4)?,
+            ];
+            let changed = self
+                .project_snapshot
+                .as_mut()
+                .is_some_and(|project| project.resource_graph.fill_canvas_rectangle(id, rectangle));
+            return self.complete_graphics_result(vm, request.id, i64::from(changed));
+        }
+        if name == "GDRAWLINE" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let start = [
+                i32_argument_value(&request.arguments, 1)?,
+                i32_argument_value(&request.arguments, 2)?,
+            ];
+            let end = [
+                i32_argument_value(&request.arguments, 3)?,
+                i32_argument_value(&request.arguments, 4)?,
+            ];
+            let changed = self
+                .project_snapshot
+                .as_mut()
+                .is_some_and(|project| project.resource_graph.draw_canvas_line(id, start, end));
+            return self.complete_graphics_result(vm, request.id, i64::from(changed));
+        }
+        if name == "GDRAWTEXT" {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let text = string_argument_value(&request.arguments, 1, &name)?.to_owned();
+            let point = if request.arguments.len() == 4 {
+                [
+                    i32_argument_value(&request.arguments, 2)?,
+                    i32_argument_value(&request.arguments, 3)?,
+                ]
+            } else {
+                [0, 0]
+            };
+            let style = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.canvas_style(id));
+            if style.is_none() {
+                return commit_integer_result(vm, request.id, 0);
+            }
+            let (font_family, font_size, style_bits) = self
+                .project_snapshot
+                .as_ref()
+                .and_then(|project| project.resource_graph.canvas_style(id))
+                .map_or_else(
+                    || {
+                        (
+                            self.presentation.font(),
+                            100,
+                            u8::try_from(self.presentation.style_bits()).unwrap_or_default(),
+                        )
+                    },
+                    |(_, _, _, family, size, style)| {
+                        if family.is_empty() {
+                            (
+                                self.presentation.font(),
+                                100,
+                                u8::try_from(self.presentation.style_bits()).unwrap_or_default(),
+                            )
+                        } else {
+                            (family.to_owned(), size, style)
+                        }
+                    },
+                );
+            self.sync_resource_replay();
+            let context = self.projection_query_context();
+            return self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::DrawTextExtent {
+                    request: request.id,
+                    context,
+                    canvas_id: id,
+                    text: text.clone(),
+                    point,
+                },
+                ServiceKind::FontMetrics,
+                GGET_TEXT_SIZE_OPERATION,
+                GGET_TEXT_SIZE_OPERATION_VERSION,
+                &TextExtentRequest {
+                    context,
+                    text: string_argument_value(&request.arguments, 1, &name)?.to_owned(),
+                    font_family,
+                    font_size,
+                    style_bits,
+                },
+            );
+        }
+        if matches!(
+            name.as_str(),
+            "GDRAWG" | "GDRAWGWITHMASK" | "GDRAWGWITHROTATE"
+        ) {
+            let id = integer_argument_value(&request.arguments, 0)?;
+            let source_id = integer_argument_value(&request.arguments, 1)?;
+            let (source, destination, mask, rotation, rotation_center) = match name.as_str() {
+                "GDRAWG" => (
+                    Some([
+                        i32_argument_value(&request.arguments, 6)?,
+                        i32_argument_value(&request.arguments, 7)?,
+                        i32_argument_value(&request.arguments, 8)?,
+                        i32_argument_value(&request.arguments, 9)?,
+                    ]),
+                    Some([
+                        i32_argument_value(&request.arguments, 2)?,
+                        i32_argument_value(&request.arguments, 3)?,
+                        i32_argument_value(&request.arguments, 4)?,
+                        i32_argument_value(&request.arguments, 5)?,
+                    ]),
+                    None,
+                    0,
+                    None,
+                ),
+                "GDRAWGWITHMASK" => {
+                    let source_size = self
+                        .project_snapshot
+                        .as_ref()
+                        .and_then(|project| project.resource_graph.canvas_state(source_id));
+                    let Some((width, height)) = source_size else {
+                        return commit_integer_result(vm, request.id, 0);
+                    };
+                    let mask_id = integer_argument_value(&request.arguments, 2)?;
+                    let destination_id = id;
+                    let destination_point = [
+                        i32_argument_value(&request.arguments, 3)?,
+                        i32_argument_value(&request.arguments, 4)?,
+                    ];
+                    let graph = self
+                        .project_snapshot
+                        .as_ref()
+                        .map(|project| &project.resource_graph);
+                    let mask_matches = graph
+                        .and_then(|graph| graph.canvas_state(mask_id))
+                        .is_some_and(|size| size == (width, height));
+                    let destination_fits = graph
+                        .and_then(|graph| graph.canvas_state(destination_id))
+                        .is_some_and(|(destination_width, destination_height)| {
+                            i64::from(destination_point[0]) + i64::from(width)
+                                <= i64::from(destination_width)
+                                && i64::from(destination_point[1]) + i64::from(height)
+                                    <= i64::from(destination_height)
+                        });
+                    if !mask_matches || !destination_fits {
+                        return commit_integer_result(vm, request.id, 0);
+                    }
+                    let rectangle = [
+                        destination_point[0],
+                        destination_point[1],
+                        i32::try_from(width).unwrap_or(i32::MAX),
+                        i32::try_from(height).unwrap_or(i32::MAX),
+                    ];
+                    (None, Some(rectangle), Some(mask_id), 0, None)
+                }
+                _ => {
+                    let angle = integer_argument_value(&request.arguments, 2)?;
+                    let source_size = self
+                        .project_snapshot
+                        .as_ref()
+                        .and_then(|project| project.resource_graph.canvas_state(source_id));
+                    let Some((source_width, source_height)) = source_size else {
+                        return commit_integer_result(vm, request.id, 0);
+                    };
+                    let center = if request.arguments.len() == 5 {
+                        [
+                            i32_argument_value(&request.arguments, 3)?,
+                            i32_argument_value(&request.arguments, 4)?,
+                        ]
+                    } else {
+                        [
+                            i32::try_from(source_width / 2).unwrap_or(i32::MAX),
+                            i32::try_from(source_height / 2).unwrap_or(i32::MAX),
+                        ]
+                    };
+                    (None, None, None, angle.saturating_mul(1_000), Some(center))
+                }
+            };
+            let color_matrix = if name == "GDRAWG" {
+                request
+                    .arguments
+                    .get(10)
+                    .map(|value| read_color_matrix(vm, request.fiber, value))
+                    .transpose()?
+            } else {
+                None
+            };
+            let changed = self.project_snapshot.as_mut().is_some_and(|project| {
+                project.resource_graph.draw_canvas(
+                    id,
+                    source_id,
+                    source,
+                    destination,
+                    color_matrix,
+                    mask,
+                    rotation,
+                    rotation_center,
+                )
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(changed));
+        }
         if name == "GDRAWSPRITE" {
             let id = integer_argument_value(&request.arguments, 0)?;
             let sprite = request
@@ -2383,8 +2796,15 @@ impl RuntimeSession {
                     i32_argument_value(&request.arguments, 5)?,
                 ]),
             };
+            let color_matrix = request
+                .arguments
+                .get(6)
+                .map(|value| read_color_matrix(vm, request.fiber, value))
+                .transpose()?;
             let changed = self.project_snapshot.as_mut().is_some_and(|project| {
-                project.resource_graph.draw_sprite(id, &sprite, destination)
+                project
+                    .resource_graph
+                    .draw_sprite(id, &sprite, destination, color_matrix)
             });
             return self.complete_graphics_result(vm, request.id, i64::from(changed));
         }
@@ -3064,6 +3484,8 @@ fn bind_html_document(
                         id: token.id,
                         integer_value,
                         string_value,
+                        generation: session.button_generation,
+                        enabled: true,
                     });
                     session.command_intents.insert(token, vm_value);
                 }

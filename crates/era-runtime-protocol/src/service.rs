@@ -227,6 +227,13 @@ pub const GGET_TEXT_SIZE_OPERATION: &str = "gget_text_size";
 pub const GGET_TEXT_SIZE_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const SAMPLE_CANVAS_PIXEL_OPERATION: &str = "sample_canvas_pixel";
 pub const SAMPLE_CANVAS_PIXEL_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const DECODE_CANVAS_IMAGE_OPERATION: &str = "decode_canvas_image";
+pub const DECODE_CANVAS_IMAGE_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const ENCODE_CANVAS_PNG_OPERATION: &str = "encode_canvas_png";
+pub const ENCODE_CANVAS_PNG_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const SERIALIZE_PHYSICAL_HISTORY_OPERATION: &str = "serialize_physical_history";
+pub const SERIALIZE_PHYSICAL_HISTORY_OPERATION_VERSION: ProtocolVersion =
+    ProtocolVersion::new(1, 0);
 
 /// Causal identity shared by every query of realized frontend presentation.
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -337,6 +344,58 @@ pub struct CanvasPixelResponse {
     pub canvas_revision: u64,
     #[n(2)]
     pub argb: u32,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct DecodeCanvasImageRequest {
+    #[n(0)]
+    pub encoded: ProtocolBytes,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct DecodeCanvasImageResponse {
+    #[n(0)]
+    pub width: u32,
+    #[n(1)]
+    pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct EncodeCanvasPngRequest {
+    #[n(0)]
+    pub canvas_id: i64,
+    #[n(1)]
+    pub canvas_revision: u64,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct EncodeCanvasPngResponse {
+    #[n(0)]
+    pub encoded: ProtocolBytes,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct SerializePhysicalHistoryRequest {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub title: String,
+    #[n(2)]
+    pub hide_information: bool,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct SerializePhysicalHistoryResponse {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub utf8: String,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

@@ -544,6 +544,120 @@ fn ggetcolor_rejects_negative_y_without_frontend_raster_observation() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn portable_graphics_and_textbox_compatibility_paths_are_runtime_owned() {
+    let mut client_capabilities = capabilities();
+    client_capabilities.graphics = true;
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "portable-presentation-test".into(),
+            features: vec![RuntimeFeature::Graphics],
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: client_capabilities,
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "portable.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nRESULT = GCREATE(1, 2, 2)\nRESULT = GSETCOLOR(1, 4294967295, 0, -1)\nRESULT:1 = BITMAP_CACHE_ENABLE(1)\nRESULTS:40 = %HTML_TOPLAINTEXT(\"a&nbsp;b\")%\nRESULT:41 = GCREATE(7, 2, 2)\nRESULT:42 = GSETBRUSH(7, 4294901760)\nRESULT:43 = GGETBRUSH(7)\nRESULT:44 = GSETPEN(7, 4278255360, 2)\nRESULT:45 = GGETPEN(7)\nRESULT:46 = GGETPENWIDTH(7)\nRESULT:47 = GFILLRECTANGLE(7, 0, 0, 2, 2)\nRESULT:48 = GDRAWLINE(7, 0, 0, 1, 1)\nRESULT:49 = GDISPOSE(7)\nRESULT:2 = MOVETEXTBOX(10, 20, 30)\nWAIT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let mut messages = Vec::new();
+    for _ in 0..32 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        messages.extend(drain(&mut session));
+        if session.phase() == RuntimePhase::WaitingInput {
+            break;
+        }
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+        0
+    );
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[1], None).unwrap(),
+        0
+    );
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[2], None).unwrap(),
+        1
+    );
+    let vm = session.vm.as_ref().unwrap();
+    let results = runtime_variable_key(vm, "RESULTS").unwrap();
+    assert_eq!(
+        vm.vm().read_variable(results, &[40], None),
+        Ok(VmValue::String("a b".into()))
+    );
+    let expected_graphics = [
+        (41, 1),
+        (42, 1),
+        (43, 4_294_901_760),
+        (44, 1),
+        (45, 4_278_255_360),
+        (46, 2),
+        (47, 1),
+        (48, 1),
+        (49, 1),
+    ];
+    for (index, expected) in expected_graphics {
+        assert_eq!(
+            read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[index], None).unwrap(),
+            expected,
+            "section 3 oracle differs at RESULT:{index}"
+        );
+    }
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ProjectionState(state)
+            if state.text_box_layout == TextBoxLayout { x: 10, y: 20, width: 30 }
+    )));
+
+    let pending = session.operations.active_input().unwrap();
+    let wait_id = pending.wait.wait_id;
+    let token = pending.wait.submission_token;
+    session
+        .complete_input(
+            0,
+            FrontendInput {
+                wait_id,
+                token,
+                monotonic_time_ns: 1,
+                intent: InputIntent::Continue,
+                message_skip: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(session.text_box_layout, TextBoxLayout::default());
+}
+
+#[test]
 fn html_pop_matches_the_reference_fixture_and_writes_the_string_result() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(
@@ -1179,7 +1293,7 @@ fn project_load_start_and_print_cross_the_message_boundary() {
     let output = drain(&mut session);
     assert!(output.iter().any(|message| match message {
         RuntimeMessage::PresentationSnapshot(snapshot) =>
-            snapshot.lines.iter().any(|line| {
+            snapshot.history.logical_lines.iter().any(|line| {
                 line.runs.iter().any(|run| matches!(
                     run,
                     era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("ORACLE_READY")
@@ -1188,15 +1302,16 @@ fn project_load_start_and_print_cross_the_message_boundary() {
         _ => false,
     }));
     assert!(output.iter().any(|message| match message {
-        RuntimeMessage::PresentationSnapshot(snapshot) => snapshot.lines.iter().any(|line| {
-            line.runs.iter().any(|run| {
-                matches!(
-                    run,
-                    era_runtime_protocol::DisplayRun::Text { text, .. }
-                        if text.contains("TITLE_CHARANUM=0")
-                )
-            })
-        }),
+        RuntimeMessage::PresentationSnapshot(snapshot) =>
+            snapshot.history.logical_lines.iter().any(|line| {
+                line.runs.iter().any(|run| {
+                    matches!(
+                        run,
+                        era_runtime_protocol::DisplayRun::Text { text, .. }
+                            if text.contains("TITLE_CHARANUM=0")
+                    )
+                })
+            }),
         _ => false,
     }));
 }
@@ -1256,7 +1371,8 @@ fn nested_begin_returns_current_frame_then_applies_the_deferred_flow() {
     assert!(!session.skip_print);
     let snapshot = session.presentation.snapshot();
     let run = snapshot
-        .lines
+        .history
+        .logical_lines
         .iter()
         .flat_map(|line| &line.runs)
         .find(|run| matches!(run, DisplayRun::Text { text, .. } if text == "entered"))
@@ -1345,14 +1461,14 @@ fn builtin_title_precedes_reset_data_and_initial_character_insertion() {
         1
     );
     let snapshot = session.presentation.snapshot();
-    assert!(snapshot.lines.iter().any(|line| {
+    assert!(snapshot.history.logical_lines.iter().any(|line| {
         line.alignment == LineAlignment::Center
             && line
                 .runs
                 .iter()
                 .any(|run| matches!(run, DisplayRun::Text { text, .. } if text == "Demo"))
     }));
-    assert!(snapshot.lines.iter().any(|line| {
+    assert!(snapshot.history.logical_lines.iter().any(|line| {
         line.runs.iter().any(|run| {
             matches!(run, DisplayRun::Button { runs, .. }
             if matches!(&runs[0], DisplayRun::Text { text, .. } if text.starts_with("[0]")))
@@ -1435,15 +1551,16 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
     let output = drain(&mut session);
     assert!(
         output.iter().any(|message| match message {
-            RuntimeMessage::PresentationSnapshot(snapshot) => snapshot.lines.iter().any(|line| {
-                line.runs.iter().any(|run| {
-                    matches!(
-                        run,
-                        era_runtime_protocol::DisplayRun::Text { text, .. }
-                            if text.contains("meta=3,1,0,SYSTEM_TITLE,5,bound")
-                    )
-                })
-            }),
+            RuntimeMessage::PresentationSnapshot(snapshot) =>
+                snapshot.history.logical_lines.iter().any(|line| {
+                    line.runs.iter().any(|run| {
+                        matches!(
+                            run,
+                            era_runtime_protocol::DisplayRun::Text { text, .. }
+                                if text.contains("meta=3,1,0,SYSTEM_TITLE,5,bound")
+                        )
+                    })
+                }),
             _ => false,
         }),
         "{output:#?}"
@@ -1454,7 +1571,7 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
             RuntimeMessage::PresentationSnapshot(snapshot) => Some(snapshot),
             _ => None,
         })
-        .flat_map(|snapshot| snapshot.lines.iter())
+        .flat_map(|snapshot| snapshot.history.logical_lines.iter())
         .flat_map(|line| line.runs.iter())
         .filter_map(|run| match run {
             era_runtime_protocol::DisplayRun::Text { text, .. } => Some(text.as_str()),
@@ -1528,7 +1645,7 @@ fn reference_presentation_fixture_preserves_logical_intent() {
         .next_back()
         .expect("presentation snapshot");
 
-    assert!(snapshot.lines.iter().any(|line| {
+    assert!(snapshot.history.logical_lines.iter().any(|line| {
         line.runs.iter().any(|run| {
             matches!(
                 run,
@@ -1542,19 +1659,20 @@ fn reference_presentation_fixture_preserves_logical_intent() {
     }));
     assert_eq!(
         snapshot
-            .lines
+            .history
+            .logical_lines
             .iter()
             .flat_map(|line| &line.runs)
             .filter(|run| matches!(run, era_runtime_protocol::DisplayRun::ColumnCell { .. }))
             .count(),
         2
     );
-    assert!(snapshot.lines.iter().any(|line| {
+    assert!(snapshot.history.logical_lines.iter().any(|line| {
         line.runs
             .iter()
             .any(|run| matches!(run, era_runtime_protocol::DisplayRun::Separator { .. }))
     }));
-    assert!(snapshot.lines.iter().any(|line| {
+    assert!(snapshot.history.logical_lines.iter().any(|line| {
         line.runs.iter().any(|run| {
             matches!(
                 run,
@@ -1642,7 +1760,7 @@ fn typed_input_updates_result_and_sixth_argument_honors_message_skip() {
     let output = drain(&mut session);
     assert!(output.iter().any(|message| match message {
         RuntimeMessage::PresentationSnapshot(snapshot) =>
-            snapshot.lines.iter().any(|line| {
+            snapshot.history.logical_lines.iter().any(|line| {
                 line.runs.iter().any(|run| matches!(
                     run,
                     era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("got=9")
@@ -1738,7 +1856,7 @@ fn untimed_one_input_message_skip_keeps_the_complete_default() {
     let output = drain(&mut session);
     assert!(output.iter().any(|message| match message {
         RuntimeMessage::PresentationSnapshot(snapshot) =>
-            snapshot.lines.iter().any(|line| {
+            snapshot.history.logical_lines.iter().any(|line| {
                 line.runs.iter().any(|run| matches!(
                 run,
                 era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("got=LONG")
@@ -1900,7 +2018,8 @@ fn autosave_failure_prints_both_reference_messages_and_waits_before_shop() {
     let keys = session
         .presentation
         .snapshot()
-        .lines
+        .history
+        .logical_lines
         .into_iter()
         .flat_map(|line| line.runs)
         .filter_map(|run| match run {
@@ -2053,7 +2172,8 @@ fn continuous_train_reports_progress_and_routes_unavailable_commands_to_usercom(
     let keys = session
         .presentation
         .snapshot()
-        .lines
+        .history
+        .logical_lines
         .into_iter()
         .flat_map(|line| line.runs)
         .filter_map(|run| match run {
@@ -2240,7 +2360,7 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
             RuntimeMessage::PresentationSnapshot(snapshot) => Some(snapshot),
             _ => None,
         })
-        .flat_map(|snapshot| &snapshot.lines)
+        .flat_map(|snapshot| &snapshot.history.logical_lines)
         .flat_map(|line| &line.runs)
         .filter_map(|run| match run {
             era_runtime_protocol::DisplayRun::Text { text, .. } => Some(text.as_str()),
@@ -2408,17 +2528,25 @@ fn empty_storage_listing_opens_a_fixed_runtime_tokenized_page() {
             .keys()
             .all(|token| token.epoch == session.epoch.0)
     );
-    assert!(session.presentation.snapshot().lines.iter().any(|line| {
-        line.runs.iter().any(|run| {
-            matches!(
-                run,
-                era_runtime_protocol::DisplayRun::Text {
-                    system_text: Some(reference),
-                    ..
-                } if reference.key == SystemTextKey::LoadQuestion
-            )
-        })
-    }));
+    assert!(
+        session
+            .presentation
+            .snapshot()
+            .history
+            .logical_lines
+            .iter()
+            .any(|line| {
+                line.runs.iter().any(|run| {
+                    matches!(
+                        run,
+                        era_runtime_protocol::DisplayRun::Text {
+                            system_text: Some(reference),
+                            ..
+                        } if reference.key == SystemTextKey::LoadQuestion
+                    )
+                })
+            })
+    );
 }
 
 #[test]

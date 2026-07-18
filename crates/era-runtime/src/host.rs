@@ -66,10 +66,31 @@ pub(crate) enum ExternalCompletion {
         request: HostRequestId,
         context: era_runtime_protocol::ProjectionQueryContext,
     },
+    DrawTextExtent {
+        request: HostRequestId,
+        context: era_runtime_protocol::ProjectionQueryContext,
+        canvas_id: i64,
+        text: String,
+        point: [i32; 2],
+    },
     CanvasPixel {
         request: HostRequestId,
         context: era_runtime_protocol::ProjectionQueryContext,
         canvas_revision: u64,
+    },
+    DecodeCanvasImage {
+        request: HostRequestId,
+        canvas_id: i64,
+        encoded: Vec<u8>,
+    },
+    EncodeCanvasPng {
+        request: HostRequestId,
+        relative_path: String,
+    },
+    SerializePhysicalHistory {
+        request: HostRequestId,
+        context: era_runtime_protocol::ProjectionQueryContext,
+        relative_path: String,
     },
 }
 

@@ -1,8 +1,9 @@
 use era_runtime_protocol::{
     AudioState, CellAlignment, Color, DisplayLine, DisplayRun, InputWait, InteractionToken,
-    LineAlignment, LogicalLength, MediaPlacement, PresentationLength, PresentationSettings,
-    PresentationSnapshot, ProtocolValue, ResourceReplay, SeparatorRole, Shape, SystemTextArgument,
-    SystemTextKey, SystemTextRef, TextStyle, TooltipSettings,
+    LineAlignment, LogicalLength, MediaPlacement, PresentationHistory,
+    PresentationHistoryOperation, PresentationLength, PresentationSettings, PresentationSnapshot,
+    ProtocolValue, RationalOpacity, RedrawState, ResourceReplay, SeparatorRole, Shape,
+    SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle, TooltipFormat, TooltipSettings,
 };
 use erabasic_vm::VmValue;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ pub(crate) struct PresentationModel {
     revision: u64,
     title: String,
     lines: Vec<DisplayLine>,
+    history_operations: Vec<PresentationHistoryOperation>,
     pending_runs: Vec<DisplayRun>,
     pending_plain_runs: BTreeSet<usize>,
     last_committed_plain_runs: BTreeSet<usize>,
@@ -30,8 +32,12 @@ pub(crate) struct PresentationModel {
     project_graphics: bool,
     project_audio: bool,
     current_style: TextStyle,
+    default_style: TextStyle,
+    default_background: Color,
     current_alignment: LineAlignment,
     redraw_enabled: bool,
+    button_generation: u64,
+    replace_next_temporary: bool,
     html_island: Vec<erabasic_html::HtmlDocument>,
     backgrounds: Vec<MediaPlacement>,
     audio: Vec<AudioState>,
@@ -48,6 +54,7 @@ impl Default for PresentationModel {
             revision: 0,
             title: String::new(),
             lines: Vec::new(),
+            history_operations: Vec::new(),
             pending_runs: Vec::new(),
             pending_plain_runs: BTreeSet::new(),
             last_committed_plain_runs: BTreeSet::new(),
@@ -69,6 +76,9 @@ impl Default for PresentationModel {
                     blue: 0,
                     alpha: 255,
                 },
+                maximum_physical_lines: 5_000,
+                prevent_button_wrap: false,
+                legacy_nonbutton_wrap: false,
             },
             project_column_cells: true,
             project_separators: true,
@@ -76,8 +86,12 @@ impl Default for PresentationModel {
             project_graphics: false,
             project_audio: false,
             current_style: default_style(),
+            default_style: default_style(),
+            default_background: rgb_color(0),
             current_alignment: LineAlignment::Left,
             redraw_enabled: true,
+            button_generation: 0,
+            replace_next_temporary: false,
             html_island: Vec::new(),
             backgrounds: Vec::new(),
             audio: Vec::new(),
@@ -91,6 +105,7 @@ impl Default for PresentationModel {
                 custom: false,
                 format: 0,
                 images: false,
+                normalized_format: TooltipFormat::default(),
             },
             resources: ResourceReplay::default(),
             print_c_per_line: 3,
@@ -119,7 +134,12 @@ impl PresentationModel {
         let Some(line) = self.lines.last_mut() else {
             return Vec::new();
         };
-        let bindings = bind_auto_buttons(&mut line.runs, &self.last_committed_plain_runs, tokens);
+        let bindings = bind_auto_buttons(
+            &mut line.runs,
+            &self.last_committed_plain_runs,
+            tokens,
+            self.button_generation,
+        );
         self.last_committed_plain_runs.clear();
         if !bindings.is_empty() {
             self.bump();
@@ -131,7 +151,12 @@ impl PresentationModel {
         &mut self,
         tokens: &[InteractionToken],
     ) -> Vec<(InteractionToken, i64)> {
-        let bindings = bind_auto_buttons(&mut self.pending_runs, &self.pending_plain_runs, tokens);
+        let bindings = bind_auto_buttons(
+            &mut self.pending_runs,
+            &self.pending_plain_runs,
+            tokens,
+            self.button_generation,
+        );
         self.pending_plain_runs.clear();
         if !bindings.is_empty() {
             self.bump();
@@ -210,6 +235,7 @@ impl PresentationModel {
     /// Delete canonical logical lines, including an uncommitted current line first.
     /// This models the small console-editing subset used by reference system flows.
     pub(crate) fn delete_last_lines(&mut self, mut count: usize) {
+        let physical_count = u32::try_from(count).unwrap_or(u32::MAX);
         if count != 0 && !self.pending_runs.is_empty() {
             self.pending_runs.clear();
             self.pending_temporary = false;
@@ -218,6 +244,10 @@ impl PresentationModel {
         }
         let keep = self.lines.len().saturating_sub(count);
         self.lines.truncate(keep);
+        self.history_operations
+            .push(PresentationHistoryOperation::DeletePhysical {
+                count: physical_count,
+            });
         self.bump();
     }
 
@@ -233,6 +263,7 @@ impl PresentationModel {
         } else if self.lines.last().is_some_and(|line| line.temporary) {
             self.lines.pop();
         }
+        self.replace_next_temporary = true;
         self.append_print_text(text, true, true);
     }
 
@@ -283,7 +314,7 @@ impl PresentationModel {
         commit: bool,
     ) {
         let foreground = self.current_style.foreground;
-        self.current_style.foreground = default_style().foreground;
+        self.current_style.foreground = self.default_style.foreground;
         self.append_print_text(text, temporary, commit);
         self.current_style.foreground = foreground;
     }
@@ -437,7 +468,10 @@ impl PresentationModel {
                 width: LogicalLength(0),
                 height: self.settings.line_height,
                 depth: 0,
-                opacity_millionths: 1_000_000,
+                opacity: RationalOpacity {
+                    numerator: 1,
+                    denominator: 1,
+                },
                 revision: self.revision.saturating_add(1),
                 hover_resource_id,
                 mask_resource_id,
@@ -512,12 +546,12 @@ impl PresentationModel {
     }
 
     pub(crate) fn reset_foreground(&mut self) {
-        self.current_style.foreground = default_style().foreground;
+        self.current_style.foreground = self.default_style.foreground;
         self.bump();
     }
 
     pub(crate) fn reset_background(&mut self) {
-        self.settings.background = rgb_color(0);
+        self.settings.background = self.default_background;
         self.bump();
     }
 
@@ -540,6 +574,17 @@ impl PresentationModel {
         self.bump();
     }
 
+    pub(crate) fn set_button_generation(&mut self, generation: u64) {
+        self.button_generation = generation;
+        for line in &mut self.lines {
+            disable_old_buttons(&mut line.runs, generation);
+        }
+        disable_old_buttons(&mut self.pending_runs, generation);
+        self.history_operations
+            .push(PresentationHistoryOperation::SetButtonGeneration { generation });
+        self.bump();
+    }
+
     pub(crate) fn redraw_enabled(&self) -> bool {
         self.redraw_enabled
     }
@@ -554,6 +599,18 @@ impl PresentationModel {
 
     pub(crate) fn background_rgb(&self) -> i64 {
         color_rgb(self.settings.background)
+    }
+
+    pub(crate) fn default_foreground_rgb(&self) -> i64 {
+        color_rgb(self.default_style.foreground)
+    }
+
+    pub(crate) fn default_background_rgb(&self) -> i64 {
+        color_rgb(self.default_background)
+    }
+
+    pub(crate) fn focus_rgb(&self) -> i64 {
+        color_rgb(self.settings.button_focus_foreground)
     }
 
     pub(crate) fn font(&self) -> String {
@@ -605,8 +662,6 @@ impl PresentationModel {
     }
 
     pub(crate) fn add_background(&mut self, resource_id: String, depth: i64, opacity: i64) {
-        self.backgrounds
-            .retain(|item| item.resource_id != resource_id);
         self.backgrounds.push(MediaPlacement {
             resource_id,
             x: LogicalLength(0),
@@ -614,9 +669,10 @@ impl PresentationModel {
             width: self.settings.drawable_width,
             height: LogicalLength(0),
             depth,
-            opacity_millionths: u32::try_from(opacity.clamp(0, 255)).unwrap_or_default()
-                * 1_000_000
-                / 255,
+            opacity: RationalOpacity {
+                numerator: opacity,
+                denominator: 255,
+            },
             revision: self.revision.saturating_add(1),
             hover_resource_id: None,
             mask_resource_id: None,
@@ -624,16 +680,24 @@ impl PresentationModel {
             requested_height: None,
             requested_y: None,
         });
-        self.backgrounds.sort_by(|left, right| {
-            (left.depth, &left.resource_id).cmp(&(right.depth, &right.resource_id))
-        });
+        // Stable descending sort matches List.Sort's intended depth layering
+        // while retaining insertion order for equal-depth portable replay.
+        self.backgrounds
+            .sort_by_key(|placement| std::cmp::Reverse(placement.depth));
         self.bump();
     }
 
-    pub(crate) fn remove_background(&mut self, resource_id: &str) {
-        self.backgrounds
-            .retain(|item| item.resource_id != resource_id);
+    pub(crate) fn remove_background(&mut self, resource_id: &str) -> bool {
+        let Some(index) = self
+            .backgrounds
+            .iter()
+            .position(|item| item.resource_id == resource_id)
+        else {
+            return false;
+        };
+        self.backgrounds.remove(index);
         self.bump();
+        true
     }
 
     pub(crate) fn clear_backgrounds(&mut self) {
@@ -680,6 +744,7 @@ impl PresentationModel {
 
     pub(crate) fn set_tooltip_format(&mut self, format: i64) {
         self.tooltip.format = format;
+        self.tooltip.normalized_format = TooltipFormat::from_raw(format);
         self.bump();
     }
 
@@ -704,15 +769,48 @@ impl PresentationModel {
         self.project_audio = audio;
     }
 
-    pub(crate) fn configure_layout(
+    pub(crate) fn configure_project(
         &mut self,
-        width: u32,
-        print_c_per_line: u32,
-        print_c_length: u32,
+        project: &crate::project::NormalizedProjectSnapshot,
     ) {
-        self.settings.drawable_width = LogicalLength(i64::from(width).saturating_mul(1_000));
-        self.print_c_per_line = print_c_per_line.max(1);
-        self.print_c_length = print_c_length.max(1);
+        use erabasic_config::ConfigValue;
+
+        let integer = |code| match project.configuration.get_code(code) {
+            Some(ConfigValue::Integer(value)) => Some(*value),
+            _ => None,
+        };
+        let boolean = |code| match project.configuration.get_code(code) {
+            Some(ConfigValue::Boolean(value)) => Some(*value),
+            _ => None,
+        };
+        let color = |code| match project.configuration.get_code(code) {
+            Some(ConfigValue::Color(value)) => Some(*value),
+            _ => None,
+        };
+        let font = match project.configuration.get_code("FontName") {
+            Some(ConfigValue::String(value)) => Some(value.clone()),
+            _ => None,
+        };
+        self.settings.drawable_width =
+            LogicalLength(i64::from(project.viewport_width).saturating_mul(1_000));
+        self.settings.line_height =
+            LogicalLength(i64::from(project.line_height).saturating_mul(1_000));
+        self.settings.maximum_physical_lines = integer("MaxLog")
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(5_000);
+        self.settings.prevent_button_wrap = boolean("ButtonWrap").unwrap_or(false);
+        self.settings.legacy_nonbutton_wrap = boolean("CompatiLinefeedAs1739").unwrap_or(false);
+        self.default_style.font_family = font;
+        self.default_style.font_millipoints = project.font_size.saturating_mul(1_000);
+        self.default_style.foreground =
+            rgb_color(i64::from(color("ForeColor").unwrap_or(0x00c0_c0c0)));
+        self.default_background = rgb_color(i64::from(color("BackColor").unwrap_or(0)));
+        self.settings.background = self.default_background;
+        self.settings.button_focus_foreground =
+            rgb_color(i64::from(color("FocusColor").unwrap_or(0x00ff_ff00)));
+        self.current_style = self.default_style.clone();
+        self.print_c_per_line = project.print_c_per_line.max(1);
+        self.print_c_length = project.print_c_length.max(1);
         self.bump();
     }
 
@@ -729,7 +827,15 @@ impl PresentationModel {
         self.pending_temporary = false;
         self.pending_column_cells = 0;
         self.next_line = self.next_line.saturating_add(1);
-        self.lines.push(line);
+        self.lines.push(line.clone());
+        if self.replace_next_temporary {
+            self.history_operations
+                .push(PresentationHistoryOperation::ReplaceTemporary { line });
+            self.replace_next_temporary = false;
+        } else {
+            self.history_operations
+                .push(PresentationHistoryOperation::Append { line });
+        }
         self.bump();
     }
 
@@ -795,7 +901,9 @@ impl PresentationModel {
             )],
         };
         self.next_line = self.next_line.saturating_add(1);
-        self.lines.push(line);
+        self.lines.push(line.clone());
+        self.history_operations
+            .push(PresentationHistoryOperation::Append { line });
         self.bump();
     }
 
@@ -816,6 +924,8 @@ impl PresentationModel {
             title: None,
             hover_style: None,
             value,
+            generation: self.button_generation,
+            enabled: true,
         }
     }
 
@@ -844,10 +954,33 @@ impl PresentationModel {
             self.project_html,
             self.project_graphics,
         );
+        let mut history_operations = self.history_operations.clone();
+        for operation in &mut history_operations {
+            let line = match operation {
+                PresentationHistoryOperation::Append { line }
+                | PresentationHistoryOperation::ReplaceTemporary { line } => Some(line),
+                PresentationHistoryOperation::DeletePhysical { .. }
+                | PresentationHistoryOperation::Clear
+                | PresentationHistoryOperation::SetButtonGeneration { .. } => None,
+            };
+            if let Some(line) = line {
+                project_lines(
+                    std::slice::from_mut(line),
+                    self.project_column_cells,
+                    self.project_separators,
+                    self.settings.line_height.0,
+                    self.project_html,
+                    self.project_graphics,
+                );
+            }
+        }
         PresentationSnapshot {
             revision: self.revision,
             title: self.title.clone(),
-            lines,
+            history: PresentationHistory {
+                logical_lines: lines,
+                operations: history_operations,
+            },
             backgrounds: if self.project_graphics {
                 self.backgrounds.clone()
             } else {
@@ -867,6 +1000,9 @@ impl PresentationModel {
                 ResourceReplay::default()
             },
             html_island: self.html_island.clone(),
+            redraw: RedrawState {
+                enabled: self.redraw_enabled,
+            },
         }
     }
 
@@ -914,6 +1050,7 @@ fn bind_auto_buttons(
     runs: &mut Vec<DisplayRun>,
     plain_runs: &BTreeSet<usize>,
     tokens: &[InteractionToken],
+    generation: u64,
 ) -> Vec<(InteractionToken, i64)> {
     let groups = auto_button_groups(runs, plain_runs);
     let expected = groups
@@ -940,6 +1077,8 @@ fn bind_auto_buttons(
                     title: None,
                     hover_style: None,
                     value: ProtocolValue::Integer(value),
+                    generation,
+                    enabled: true,
                 });
                 bindings.push((token, value));
             } else {
@@ -996,6 +1135,46 @@ fn rebind_runs(runs: &mut [DisplayRun], tokens: &BTreeMap<InteractionToken, Inte
             }
             _ => {}
         }
+    }
+}
+
+fn disable_old_buttons(runs: &mut [DisplayRun], generation: u64) {
+    for run in runs {
+        match run {
+            DisplayRun::Button {
+                runs,
+                generation: button_generation,
+                enabled,
+                ..
+            } => {
+                *enabled &= *button_generation == generation;
+                disable_old_buttons(runs, generation);
+            }
+            DisplayRun::ColumnCell { content, .. } => {
+                disable_old_buttons(content, generation);
+            }
+            DisplayRun::HtmlDocument { document } => {
+                disable_old_html_buttons(&mut document.nodes, generation);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn disable_old_html_buttons(nodes: &mut [erabasic_html::HtmlNode], generation: u64) {
+    for node in nodes {
+        let erabasic_html::HtmlNode::Element {
+            interaction,
+            children,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        if let Some(interaction) = interaction {
+            interaction.enabled &= interaction.generation == generation;
+        }
+        disable_old_html_buttons(children, generation);
     }
 }
 
@@ -1220,40 +1399,89 @@ fn project_lines(
     graphics: bool,
 ) {
     for line in lines {
-        let mut projected = Vec::new();
-        for run in std::mem::take(&mut line.runs) {
-            match run {
-                DisplayRun::ColumnCell { content, .. } if !cells => {
+        line.runs = project_runs(
+            std::mem::take(&mut line.runs),
+            cells,
+            separators,
+            line_height,
+            html,
+            graphics,
+        );
+    }
+}
+
+#[allow(clippy::fn_params_excessive_bools)]
+fn project_runs(
+    runs: Vec<DisplayRun>,
+    cells: bool,
+    separators: bool,
+    line_height: i64,
+    html: bool,
+    graphics: bool,
+) -> Vec<DisplayRun> {
+    let mut projected = Vec::new();
+    for run in runs {
+        match run {
+            DisplayRun::Button {
+                runs,
+                token,
+                title,
+                hover_style,
+                value,
+                generation,
+                enabled,
+            } => projected.push(DisplayRun::Button {
+                runs: project_runs(runs, cells, separators, line_height, html, graphics),
+                token,
+                title,
+                hover_style,
+                value,
+                generation,
+                enabled,
+            }),
+            DisplayRun::ColumnCell {
+                content,
+                alignment,
+                preferred_columns,
+            } => {
+                let content = project_runs(content, cells, separators, line_height, html, graphics);
+                if cells {
+                    projected.push(DisplayRun::ColumnCell {
+                        content,
+                        alignment,
+                        preferred_columns,
+                    });
+                } else {
                     if !projected.is_empty() {
                         projected.push(plain_text(" ".into(), line_height));
                     }
                     projected.extend(content);
                 }
-                DisplayRun::Separator { pattern, .. } if !separators => {
-                    // A fixed 75-column projection is deterministic and independent of viewport.
-                    let pattern = if pattern.is_empty() { "-" } else { &pattern };
-                    projected.push(plain_text(
-                        pattern.repeat(75).chars().take(75).collect(),
-                        line_height,
-                    ));
-                }
-                DisplayRun::HtmlDocument { document } if !html => {
-                    projected.push(plain_text(
-                        strip_markup(&erabasic_html::serialize_document(&document)),
-                        line_height,
-                    ));
-                }
-                DisplayRun::Image { alt_text, .. } if !graphics => {
-                    if let Some(text) = alt_text {
-                        projected.push(plain_text(text, line_height));
-                    }
-                }
-                DisplayRun::Shape { .. } if !graphics => {}
-                other => projected.push(other),
             }
+            DisplayRun::Separator { pattern, .. } if !separators => {
+                // A fixed 75-column projection is deterministic and independent of viewport.
+                let pattern = if pattern.is_empty() { "-" } else { &pattern };
+                projected.push(plain_text(
+                    pattern.repeat(75).chars().take(75).collect(),
+                    line_height,
+                ));
+            }
+            DisplayRun::HtmlDocument { document } if !html => {
+                projected.push(plain_text(
+                    strip_markup(&erabasic_html::serialize_document(&document)),
+                    line_height,
+                ));
+            }
+            DisplayRun::Image { alt_text, .. } if !graphics => {
+                if let Some(text) = alt_text {
+                    projected.push(plain_text(text, line_height));
+                }
+            }
+            DisplayRun::Shape { .. } if !graphics => {}
+            other => projected.push(other),
         }
-        line.runs = projected;
     }
+    projected
 }
 
 fn strip_markup(markup: &str) -> String {
@@ -1359,15 +1587,15 @@ mod tests {
         model.append_column_cell("A".into(), CellAlignment::Right);
         model.append_column_cell("B".into(), CellAlignment::Left);
         let pending = model.snapshot();
-        assert_eq!(pending.lines.len(), 1);
-        assert!(!pending.lines[0].line_end);
-        assert_eq!(pending.lines[0].runs.len(), 2);
+        assert_eq!(pending.history.logical_lines.len(), 1);
+        assert!(!pending.history.logical_lines[0].line_end);
+        assert_eq!(pending.history.logical_lines[0].runs.len(), 2);
 
         model.append_print_text("done".into(), false, true);
         let committed = model.snapshot();
-        assert_eq!(committed.lines.len(), 1);
-        assert!(committed.lines[0].line_end);
-        assert_eq!(committed.lines[0].runs.len(), 3);
+        assert_eq!(committed.history.logical_lines.len(), 1);
+        assert!(committed.history.logical_lines[0].line_end);
+        assert_eq!(committed.history.logical_lines[0].runs.len(), 3);
     }
 
     #[test]
@@ -1377,11 +1605,24 @@ mod tests {
         model.append_column_cell("A".into(), CellAlignment::Right);
         model.append_column_cell("B".into(), CellAlignment::Right);
         let snapshot = model.snapshot();
-        assert_eq!(snapshot.lines[0].runs.len(), 3);
+        assert_eq!(snapshot.history.logical_lines[0].runs.len(), 3);
         assert!(matches!(
-            &snapshot.lines[0].runs[1],
+            &snapshot.history.logical_lines[0].runs[1],
             DisplayRun::Text { text, .. } if text == " "
         ));
+
+        model.append_print_text(String::new(), false, true);
+        let committed = model.snapshot();
+        let Some(PresentationHistoryOperation::Append { line }) =
+            committed.history.operations.last()
+        else {
+            panic!("committed cell line must append to physical history");
+        };
+        assert!(
+            line.runs
+                .iter()
+                .all(|run| !matches!(run, DisplayRun::ColumnCell { .. }))
+        );
     }
 
     #[test]
@@ -1390,9 +1631,9 @@ mod tests {
         model.append_print_text("prefix".into(), false, false);
         model.append_separator("=".into());
         let snapshot = model.snapshot();
-        assert_eq!(snapshot.lines.len(), 2);
+        assert_eq!(snapshot.history.logical_lines.len(), 2);
         assert!(matches!(
-            &snapshot.lines[1].runs[0],
+            &snapshot.history.logical_lines[1].runs[0],
             DisplayRun::Separator { pattern, .. } if pattern == "="
         ));
     }
@@ -1406,10 +1647,10 @@ mod tests {
         assert!(model.last_line_is_empty());
         model.replace_last_temporary("invalid".into());
         let snapshot = model.snapshot();
-        assert_eq!(snapshot.lines.len(), 2);
-        assert!(snapshot.lines[1].temporary);
+        assert_eq!(snapshot.history.logical_lines.len(), 2);
+        assert!(snapshot.history.logical_lines[1].temporary);
         assert!(matches!(
-            &snapshot.lines[1].runs[0],
+            &snapshot.history.logical_lines[1].runs[0],
             DisplayRun::Text { text, .. } if text == "invalid"
         ));
     }
@@ -1437,14 +1678,17 @@ mod tests {
 
         let fallback = model.snapshot();
         assert!(fallback.audio.is_empty());
-        assert_eq!(fallback.lines[0].alignment, LineAlignment::Center);
-        let DisplayRun::Text { style, .. } = &fallback.lines[0].runs[0] else {
+        assert_eq!(
+            fallback.history.logical_lines[0].alignment,
+            LineAlignment::Center
+        );
+        let DisplayRun::Text { style, .. } = &fallback.history.logical_lines[0].runs[0] else {
             panic!("first run must be text");
         };
         assert!(style.bold);
         assert!(style.underline);
         assert!(matches!(
-            &fallback.lines[1].runs[0],
+            &fallback.history.logical_lines[1].runs[0],
             DisplayRun::Text { text, .. } if text == "fallback"
         ));
 
@@ -1452,10 +1696,13 @@ mod tests {
         let rich = model.snapshot();
         assert_eq!(rich.audio.len(), 1);
         assert!(matches!(
-            rich.lines[1].runs[0],
+            rich.history.logical_lines[1].runs[0],
             DisplayRun::HtmlDocument { .. }
         ));
-        assert!(matches!(rich.lines[2].runs[0], DisplayRun::Image { .. }));
+        assert!(matches!(
+            rich.history.logical_lines[2].runs[0],
+            DisplayRun::Image { .. }
+        ));
     }
 
     #[test]
@@ -1491,9 +1738,9 @@ mod tests {
             None,
         );
         let pending = model.snapshot();
-        assert_eq!(pending.lines.len(), 1);
-        assert!(!pending.lines[0].line_end);
-        assert_eq!(pending.lines[0].runs.len(), 2);
+        assert_eq!(pending.history.logical_lines.len(), 1);
+        assert!(!pending.history.logical_lines[0].line_end);
+        assert_eq!(pending.history.logical_lines[0].runs.len(), 2);
     }
 
     #[test]
@@ -1512,7 +1759,7 @@ mod tests {
             vec![(tokens[0], 1), (tokens[1], 2)]
         );
         assert!(
-            model.snapshot().lines[0]
+            model.snapshot().history.logical_lines[0]
                 .runs
                 .iter()
                 .all(|run| matches!(run, DisplayRun::Button { .. }))
@@ -1532,7 +1779,7 @@ mod tests {
             vec![(tokens[0], 1), (tokens[1], 3)]
         );
         assert!(matches!(
-            &mixed.snapshot().lines[0].runs[1],
+            &mixed.snapshot().history.logical_lines[0].runs[1],
             DisplayRun::Text { text, .. } if text == "[2] plain "
         ));
     }
@@ -1566,7 +1813,53 @@ mod tests {
         let snapshot = model.snapshot();
         assert_eq!(snapshot.backgrounds.len(), 1);
         assert_eq!(snapshot.backgrounds[0].depth, 2);
+        assert_eq!(snapshot.backgrounds[0].opacity.numerator, 128);
+        assert_eq!(snapshot.backgrounds[0].opacity.denominator, 255);
         assert_eq!(snapshot.tooltip.delay_ms, 250);
         assert_eq!(snapshot.tooltip.duration_ms, i16::MAX as u32);
+    }
+
+    #[test]
+    fn history_buttons_redraw_and_duplicate_backgrounds_remain_semantic() {
+        let mut model = PresentationModel::default();
+        model.set_projection(true, true, true, true, true);
+        model.append_button(
+            "old".into(),
+            ProtocolValue::Integer(1),
+            InteractionToken { epoch: 1, id: 1 },
+            None,
+        );
+        model.append_text(String::new(), false);
+        model.set_button_generation(1);
+        model.add_background("SAME".into(), 1, 1);
+        model.add_background("SAME".into(), 3, 2);
+        model.set_tooltip_format(2 | 16 | (1_i64 << 40));
+        model.set_redraw(false);
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.backgrounds.len(), 2);
+        assert_eq!(snapshot.backgrounds[0].depth, 3);
+        assert!(!snapshot.redraw.enabled);
+        assert_eq!(
+            snapshot.tooltip.normalized_format.flags,
+            vec![
+                era_runtime_protocol::TooltipFormatFlag::Right,
+                era_runtime_protocol::TooltipFormatFlag::WordBreak,
+            ]
+        );
+        assert_eq!(snapshot.tooltip.normalized_format.unknown_bits, 1_u64 << 40);
+        assert!(snapshot.history.operations.iter().any(|operation| matches!(
+            operation,
+            PresentationHistoryOperation::SetButtonGeneration { generation: 1 }
+        )));
+        assert!(matches!(
+            &snapshot.history.logical_lines[0].runs[0],
+            DisplayRun::Button {
+                enabled: false,
+                generation: 0,
+                ..
+            }
+        ));
+        assert!(model.remove_background("SAME"));
+        assert_eq!(model.snapshot().backgrounds.len(), 1);
     }
 }

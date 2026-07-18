@@ -167,6 +167,20 @@ impl RuntimeSession {
             commit_host_result_write(vm, *request, result)?;
             return self.set_phase(RuntimePhase::Running);
         }
+        if let PendingService::Host(
+            ExternalCompletion::DecodeCanvasImage { request, .. }
+            | ExternalCompletion::EncodeCanvasPng { request, .. }
+            | ExternalCompletion::SerializePhysicalHistory { request, .. },
+        ) = &pending
+            && matches!(&response.result, ServiceResult::Error { .. })
+        {
+            let vm = self
+                .vm
+                .as_mut()
+                .ok_or_else(|| RuntimeError::Internal("graphics service has no VM".into()))?;
+            commit_integer_result(vm, *request, 0)?;
+            return self.set_phase(RuntimePhase::Running);
+        }
         let payload = match response.result {
             ServiceResult::Ready { payload } => payload,
             ServiceResult::Error { error } => {
@@ -195,7 +209,11 @@ impl RuntimeSession {
                     | ExternalCompletion::ProjectionInteger { request: id, .. }
                     | ExternalCompletion::HtmlSubstring { request: id, .. }
                     | ExternalCompletion::TextExtent { request: id, .. }
-                    | ExternalCompletion::CanvasPixel { request: id, .. } => *id,
+                    | ExternalCompletion::DrawTextExtent { request: id, .. }
+                    | ExternalCompletion::CanvasPixel { request: id, .. }
+                    | ExternalCompletion::DecodeCanvasImage { request: id, .. }
+                    | ExternalCompletion::EncodeCanvasPng { request: id, .. }
+                    | ExternalCompletion::SerializePhysicalHistory { request: id, .. } => *id,
                 };
                 let value = match completion {
                     ExternalCompletion::GetKey {
@@ -484,6 +502,48 @@ impl RuntimeSession {
                         }
                         Some(VmValue::Integer(result.width.0))
                     }
+                    ExternalCompletion::DrawTextExtent {
+                        context,
+                        canvas_id,
+                        text,
+                        point,
+                        ..
+                    } => {
+                        let result: TextExtentResponse = decode_canonical(payload.as_slice())?;
+                        self.validate_projection_query_context(context, result.context)?;
+                        if result.width.0 < 0 || result.height.0 < 0 {
+                            return self.fault(
+                                FaultCode::ServiceFailure,
+                                "font metric response contains a negative extent",
+                                None,
+                            );
+                        }
+                        let changed = self.project_snapshot.as_mut().is_some_and(|project| {
+                            project
+                                .resource_graph
+                                .draw_canvas_text(canvas_id, text, point)
+                        });
+                        if !changed {
+                            return self.fault(
+                                FaultCode::ServiceFailure,
+                                "canvas changed while text measurement was pending",
+                                None,
+                            );
+                        }
+                        self.sync_resource_replay();
+                        let vm = self.vm.as_ref().ok_or_else(|| {
+                            RuntimeError::Internal("draw-text completion has no VM".into())
+                        })?;
+                        for (index, value) in [(1, result.width.0), (2, result.height.0)] {
+                            if let Some(target) = global_place_at(vm, "RESULT", index) {
+                                writes.push(HostWrite {
+                                    target,
+                                    value: VmValue::Integer(value),
+                                });
+                            }
+                        }
+                        Some(VmValue::Integer(1))
+                    }
                     ExternalCompletion::CanvasPixel {
                         context,
                         canvas_revision,
@@ -499,6 +559,63 @@ impl RuntimeSession {
                             );
                         }
                         Some(VmValue::Integer(i64::from(result.argb)))
+                    }
+                    ExternalCompletion::DecodeCanvasImage {
+                        canvas_id, encoded, ..
+                    } => {
+                        let result: DecodeCanvasImageResponse =
+                            decode_canonical(payload.as_slice())?;
+                        let created = self.project_snapshot.as_mut().is_some_and(|project| {
+                            project.resource_graph.create_canvas_from_encoded(
+                                canvas_id,
+                                result.width,
+                                result.height,
+                                encoded,
+                            )
+                        });
+                        self.sync_resource_replay();
+                        Some(VmValue::Integer(i64::from(created)))
+                    }
+                    ExternalCompletion::EncodeCanvasPng {
+                        request,
+                        relative_path,
+                    } => {
+                        let result: EncodeCanvasPngResponse = decode_canonical(payload.as_slice())?;
+                        if result.encoded.as_slice().is_empty() {
+                            Some(VmValue::Integer(0))
+                        } else {
+                            return self.issue_storage(
+                                PendingStorage::GraphicsImageWrite { request },
+                                StorageNamespace::Save,
+                                StorageOperation::Write {
+                                    data: result.encoded,
+                                    atomic_replace: true,
+                                    precondition: StoragePrecondition::Any,
+                                },
+                                relative_path,
+                            );
+                        }
+                    }
+                    ExternalCompletion::SerializePhysicalHistory {
+                        request,
+                        context,
+                        relative_path,
+                    } => {
+                        let result: SerializePhysicalHistoryResponse =
+                            decode_canonical(payload.as_slice())?;
+                        self.validate_projection_query_context(context, result.context)?;
+                        let mut data = vec![0xef, 0xbb, 0xbf];
+                        data.extend_from_slice(result.utf8.as_bytes());
+                        return self.issue_storage(
+                            PendingStorage::HostFunctionWrite { request },
+                            StorageNamespace::Log,
+                            StorageOperation::Write {
+                                data: ProtocolBytes::new(data),
+                                atomic_replace: true,
+                                precondition: StoragePrecondition::Any,
+                            },
+                            relative_path,
+                        );
                     }
                 };
                 let vm = self
@@ -888,13 +1005,17 @@ impl RuntimeSession {
             .operations
             .take_active_input()
             .ok_or_else(|| RuntimeError::Internal("input wait disappeared".into()))?;
+        // The reference TextBox restores its configured position only after a
+        // value was accepted, never after a rejected frontend event.
+        self.text_box_layout = TextBoxLayout::default();
         if pending.wait.system_input {
             let InputSubmission::Value(value) = submission else {
                 return Err(RuntimeError::Internal(
                     "system input cannot accept primitive fields".into(),
                 ));
             };
-            return self.finish_system_input(pending, &value);
+            self.finish_system_input(pending, &value)?;
+            return self.emit_projection_state();
         }
         if let InputSubmission::Value(value) = &submission {
             self.record_input_undo_value(value)?;
@@ -995,7 +1116,7 @@ impl RuntimeSession {
                 &OpenUrlRequest { url },
             )?;
         }
-        Ok(())
+        self.emit_projection_state()
     }
 
     #[allow(clippy::too_many_lines)]

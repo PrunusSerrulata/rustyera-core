@@ -10,8 +10,9 @@ mod markup;
 
 pub use button::{ButtonSegment, split_auto_buttons};
 pub use markup::{
-    HtmlAttribute, HtmlDocument, HtmlElementKind, HtmlError, HtmlErrorKind, HtmlInteraction,
-    HtmlNode, parse_document, serialize_document,
+    HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlDocument, HtmlElementKind, HtmlElementSemantic,
+    HtmlError, HtmlErrorKind, HtmlInteraction, HtmlLength, HtmlNode, parse_document,
+    serialize_document,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -99,7 +100,8 @@ fn unescape_into(source: &str, output: &mut String) -> Result<(), Error> {
             "lt" => output.push('<'),
             "quot" => output.push('"'),
             "apos" | "#39" => output.push('\''),
-            "nbsp" => output.push('\u{a0}'),
+            // The pinned reference normalizes nbsp to an ASCII space, not U+00A0.
+            "nbsp" => output.push(' '),
             value if value.starts_with("#x") || value.starts_with("#X") => {
                 let value =
                     u32::from_str_radix(&value[2..], 16).map_err(|_| Error::InvalidEntity)?;
@@ -152,5 +154,7 @@ mod tests {
             to_plain_text("<b>A&amp;B</b><br>&#x3042;").unwrap(),
             "A&Bあ"
         );
+        assert_eq!(to_plain_text("a&nbsp;b").unwrap(), "a b");
+        assert_eq!(to_plain_text("&#xD800;"), Err(Error::InvalidEntity));
     }
 }

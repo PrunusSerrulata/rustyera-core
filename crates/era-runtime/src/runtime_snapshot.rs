@@ -10,7 +10,7 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 12;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 13;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 52;
@@ -40,6 +40,7 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) hotkey_state: Vec<i64>,
     pub(crate) key_macros: crate::key_macro::KeyMacros,
     pub(crate) text_box: String,
+    pub(crate) text_box_layout: era_runtime_protocol::TextBoxLayout,
     pub(crate) flow_input_enabled: bool,
     pub(crate) flow_input_default: i64,
     pub(crate) flow_input_can_skip: bool,
@@ -181,6 +182,7 @@ mod tests {
             hotkey_state: Vec::new(),
             key_macros: crate::key_macro::KeyMacros::default(),
             text_box: String::new(),
+            text_box_layout: era_runtime_protocol::TextBoxLayout::default(),
             flow_input_enabled: false,
             flow_input_default: 0,
             flow_input_can_skip: false,
@@ -235,6 +237,7 @@ mod tests {
             hotkey_state: Vec::new(),
             key_macros: crate::key_macro::KeyMacros::default(),
             text_box: String::new(),
+            text_box_layout: era_runtime_protocol::TextBoxLayout::default(),
             flow_input_enabled: false,
             flow_input_default: 0,
             flow_input_can_skip: false,

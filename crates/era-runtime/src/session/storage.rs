@@ -447,11 +447,14 @@ impl RuntimeSession {
                 &format!("candidate write failed: {error:?}"),
             ),
             (PendingStorage::HostFunctionWrite { request }, StorageResult::Written { .. })
-            | (PendingStorage::HostStat { request }, StorageResult::Metadata(_)) => {
+            | (PendingStorage::HostStat { request }, StorageResult::Metadata(_))
+            | (PendingStorage::GraphicsImageWrite { request }, StorageResult::Written { .. }) => {
                 self.resume_storage_host_value(request, VmValue::Integer(1), Vec::new())
             }
             (PendingStorage::HostFunctionWrite { request }, StorageResult::Error { .. })
-            | (PendingStorage::HostStat { request }, StorageResult::Error { .. }) => {
+            | (PendingStorage::HostStat { request }, StorageResult::Error { .. })
+            | (PendingStorage::GraphicsImageRead { request, .. }, StorageResult::Error { .. })
+            | (PendingStorage::GraphicsImageWrite { request }, StorageResult::Error { .. }) => {
                 self.resume_storage_host_value(request, VmValue::Integer(0), Vec::new())
             }
             (PendingStorage::HostReadText { request }, StorageResult::Read { data, .. }) => {
@@ -462,6 +465,45 @@ impl RuntimeSession {
             }
             (PendingStorage::HostReadText { request }, StorageResult::Error { .. }) => {
                 self.resume_storage_host_value(request, VmValue::String(String::new()), Vec::new())
+            }
+            (
+                PendingStorage::GraphicsImageRead { request, canvas_id },
+                StorageResult::Read { data, .. },
+            ) => {
+                if self.service_capabilities.get(&(
+                    ServiceKind::Canvas,
+                    DECODE_CANVAS_IMAGE_OPERATION.to_owned(),
+                )) != Some(&DECODE_CANVAS_IMAGE_OPERATION_VERSION)
+                {
+                    return self.resume_storage_host_value(
+                        request,
+                        VmValue::Integer(0),
+                        Vec::new(),
+                    );
+                }
+                let encoded = data.as_slice().to_vec();
+                let request_id = self.allocate_request()?;
+                self.operations.insert_service(
+                    request_id,
+                    PendingService::Host(ExternalCompletion::DecodeCanvasImage {
+                        request,
+                        canvas_id,
+                        encoded: encoded.clone(),
+                    }),
+                );
+                self.emit(
+                    RuntimeMessage::ServiceRequest(ServiceRequest {
+                        request_id,
+                        kind: ServiceKind::Canvas,
+                        operation: DECODE_CANVAS_IMAGE_OPERATION.into(),
+                        operation_version: DECODE_CANVAS_IMAGE_OPERATION_VERSION,
+                        payload: ProtocolBytes::new(encode_canonical(&DecodeCanvasImageRequest {
+                            encoded: ProtocolBytes::new(encoded),
+                        })?),
+                        deadline_ns: None,
+                    }),
+                    None,
+                )
             }
             (
                 PendingStorage::HostListFiles {
@@ -706,6 +748,8 @@ impl RuntimeSession {
                         | PendingStorage::HostReadText { .. }
                         | PendingStorage::HostStat { .. }
                         | PendingStorage::HostListFiles { .. }
+                        | PendingStorage::GraphicsImageRead { .. }
+                        | PendingStorage::GraphicsImageWrite { .. }
                 ) {
                     return self.fault(
                         FaultCode::ServiceFailure,

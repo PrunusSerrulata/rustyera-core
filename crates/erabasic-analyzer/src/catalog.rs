@@ -1199,6 +1199,87 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     );
     add("DT_TOXML", StrType, &[String, MutableString], 1, false);
     add("DT_FROMXML", IntType, &[String, String, String], 3, false);
+    add("GCREATE", IntType, &[Integer, Integer, Integer], 3, false);
+    add(
+        "GCREATEFROMFILE",
+        IntType,
+        &[Integer, String, Integer],
+        2,
+        false,
+    );
+    for name in ["GLOAD", "GSAVE", "GSETBRUSH"] {
+        add(name, IntType, &[Integer, Integer], 2, false);
+    }
+    for name in [
+        "GCREATED",
+        "GDISPOSE",
+        "GWIDTH",
+        "GHEIGHT",
+        "GGETBRUSH",
+        "GGETPEN",
+        "GGETPENWIDTH",
+        "GGETFONTSIZE",
+        "GGETFONTSTYLE",
+    ] {
+        add(name, IntType, &[Integer], 1, false);
+    }
+    add("GGETFONT", StrType, &[Integer], 1, false);
+    add(
+        "GSETCOLOR",
+        IntType,
+        &[Integer, Integer, Integer, Integer],
+        4,
+        false,
+    );
+    add("GSETPEN", IntType, &[Integer, Integer, Integer], 3, false);
+    add(
+        "GDASHSTYLE",
+        IntType,
+        &[Integer, Integer, Integer],
+        3,
+        false,
+    );
+    add(
+        "GSETFONT",
+        IntType,
+        &[Integer, String, Integer, Integer],
+        3,
+        false,
+    );
+    add("GFILLRECTANGLE", IntType, &[Integer; 5], 5, false);
+    add("GDRAWLINE", IntType, &[Integer; 5], 5, false);
+    add(
+        "GDRAWTEXT",
+        IntType,
+        &[Integer, String, Integer, Integer],
+        2,
+        false,
+    );
+    add("GGETCOLOR", IntType, &[Integer, Integer, Integer], 3, false);
+    add("GDRAWGWITHMASK", IntType, &[Integer; 5], 5, false);
+    add("GDRAWGWITHROTATE", IntType, &[Integer; 5], 3, false);
+    add(
+        "GDRAWG",
+        IntType,
+        &[
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            ReferenceAny,
+        ],
+        10,
+        false,
+    );
+    add("MOVETEXTBOX", IntType, &[Integer; 3], 3, false);
+    add("RESUMETEXTBOX", IntType, &[Integer; 3], 3, false);
+    add("BITMAP_CACHE_ENABLE", IntType, &[Integer], 1, false);
     result
         .get_mut("STRJOIN")
         .expect("STRJOIN signature was inserted")
@@ -1215,6 +1296,8 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "ARRAYMSORT",
         "ARRAYMSORTEX",
         "BITMAP_CACHE_ENABLE",
+        "MOVETEXTBOX",
+        "RESUMETEXTBOX",
         "CBGCLEAR",
         "CBGCLEARBUTTON",
         "CBGREMOVEBMAP",
@@ -1278,6 +1361,7 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "GDRAWLINE",
         "GDRAWSPRITE",
         "GDRAWTEXT",
+        "GFILLRECTANGLE",
         "GETBGCOLOR",
         "GETCHARA",
         "GETCOLOR",
@@ -1303,7 +1387,13 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "GSETCOLOR",
         "GSETFONT",
         "GSETPEN",
+        "GDASHSTYLE",
         "GWIDTH",
+        "GGETFONTSIZE",
+        "GGETFONTSTYLE",
+        "GGETPENWIDTH",
+        "GGETBRUSH",
+        "GGETPEN",
         "HOTKEY_STATE",
         "HOTKEY_STATE_INIT",
         "HTML_STRINGLEN",
@@ -1428,9 +1518,7 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "GETTEXTBOX",
         "GETTIMES",
         "GETVARS",
-        "GGETBRUSH",
         "GGETFONT",
-        "GGETPEN",
         "HTML_ESCAPE",
         "HTML_GETPRINTEDSTR",
         "HTML_POPPRINTINGSTR",

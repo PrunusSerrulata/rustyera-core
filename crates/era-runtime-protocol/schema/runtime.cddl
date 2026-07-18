@@ -20,7 +20,7 @@ runtime-message =
   [33, any] /
   [34, any] /
   [35, projection-observation] /
-  [36, any] /
+  [36, projection-state] /
   [37, input-undo-request] /
   [38, input-undo-state] /
   [40, presentation-snapshot] /
@@ -86,7 +86,14 @@ projection-observation = {
   0: uint, 1: uint, 2: projection-size, 3: uint, 4: uint, 5: tstr,
   6: projection-transform
 }
-presentation-snapshot = any
+text-box-layout = { 0: int, 1: int, 2: int }
+projection-state = { 0: uint, 1: tstr, 2: [* int], 3: uint, 4: text-box-layout }
+presentation-history = { 0: [* any], 1: [* any] }
+redraw-state = { 0: bool }
+presentation-snapshot = {
+  0: uint, 1: tstr, 2: presentation-history, 3: [* any], 4: [* any],
+  5: any / null, 6: any, 7: any, 8: any, 9: [* any], 10: redraw-state
+}
 presentation-delta = { 0: uint, 1: uint, 2: [* any] }
 storage-request = { 0: uint, 1: uint, 2: tstr, 3: storage-operation, 4: tstr, 5: uint / null }
 storage-response = { 0: uint, 1: any }
@@ -99,9 +106,9 @@ storage-operation =
 storage-precondition = [0] / [1] / [2, tstr]
 service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr, 5: uint / null }
 service-response = { 0: uint, 1: any }
-; Protocol 18 service payloads include parsed HTML presentation trees plus
-; ProjectionQueryContext and typed
-; physical-history, HTML, TextExtent and CanvasPixel request/response maps.
+; Protocol 19 service payloads include typed HTML, physical-history serialization,
+; canvas image decode/PNG encode, ProjectionQueryContext, HTML measurement,
+; TextExtent and CanvasPixel request/response maps.
 state-export-request = { 0: uint }
 state-export-ready = { 0: uint, 1: any }
 state-import-begin = { 0: uint, 1: uint, 2: bstr, 3: bstr / null }
