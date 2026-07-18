@@ -366,8 +366,17 @@ fn validate_function_parameters(
     artifact: &BytecodeArtifact,
     diagnostics: &mut Vec<ValidationDiagnostic>,
 ) {
+    let globals: BTreeMap<_, _> = artifact
+        .globals
+        .iter()
+        .map(|global| (global.key, global))
+        .collect();
+    let functions: BTreeMap<_, _> = artifact
+        .functions
+        .iter()
+        .map(|function| (function.key, function))
+        .collect();
     for function in &artifact.functions {
-        let mut parameter_keys = BTreeSet::new();
         for parameter in &function.parameters {
             let default_valid = match (&parameter.default, parameter.value_type) {
                 (None, _) => true,
@@ -377,15 +386,20 @@ fn validate_function_parameters(
                 }
                 _ => false,
             };
-            let valid = parameter_keys.insert(parameter.key)
-                && default_valid
-                && artifact.globals.iter().any(|global| {
-                    let owner_matches = global.owner == Some(function.key)
+            let valid = default_valid
+                && globals.get(&parameter.key).is_some_and(|global| {
+                    let function_storage = matches!(
+                        global.storage,
+                        BytecodeStorage::FunctionLocal
+                            | BytecodeStorage::FunctionStatic
+                            | BytecodeStorage::FunctionPersistent
+                    );
+                    let owner_matches = !function_storage
+                        || global.owner == Some(function.key)
                         || (global.storage == BytecodeStorage::FunctionPersistent
                             && global.owner.is_some_and(|owner| {
-                                artifact.functions.iter().any(|candidate| {
-                                    candidate.key == owner
-                                        && candidate.name.eq_ignore_ascii_case(&function.name)
+                                functions.get(&owner).is_some_and(|candidate| {
+                                    candidate.name.eq_ignore_ascii_case(&function.name)
                                 })
                             }));
                     let type_matches = match parameter.value_type {
@@ -395,12 +409,13 @@ fn validate_function_parameters(
                             global.value_type == parameter.value_type
                         }
                     };
+                    let maximum_indices = global.dimensions.len()
+                        + usize::from(global.storage == BytecodeStorage::Character);
                     global.key == parameter.key
                         && owner_matches
-                        && matches!(
-                            global.storage,
-                            BytecodeStorage::FunctionLocal | BytecodeStorage::FunctionPersistent
-                        )
+                        && global.mutable
+                        && global.storage != BytecodeStorage::Calculated
+                        && parameter.indices.len() <= maximum_indices
                         && type_matches
                 });
             if !valid {
@@ -658,7 +673,9 @@ fn apply_instruction(
             .collect()
     };
     match opcode_value {
-        Opcode::Nop | Opcode::Yield => expect_payload(&instruction.payload, 0)?,
+        Opcode::Nop | Opcode::Yield | Opcode::ForBreak | Opcode::SelectEnd => {
+            expect_payload(&instruction.payload, 0)?;
+        }
         Opcode::PushInteger => {
             expect_payload(&instruction.payload, 8)?;
             stack.push(BytecodeType::Integer);
@@ -683,7 +700,9 @@ fn apply_instruction(
                 ValidationCode::MissingReference,
                 "variable operand does not resolve".into(),
             ))?;
-            if indices > global.dimensions.len() {
+            let maximum_indices =
+                global.dimensions.len() + usize::from(global.storage == BytecodeStorage::Character);
+            if indices > maximum_indices {
                 return Err((
                     ValidationCode::InvalidOperand,
                     "variable index count exceeds its schema".into(),
@@ -759,23 +778,35 @@ fn apply_instruction(
                 ValidationCode::StackMismatch,
                 "binary operation underflows the stack".into(),
             ))?;
-            if left != right || !matches!(left, BytecodeType::Integer | BytecodeType::String) {
+            let string_repeat = instruction.payload[0] == 0
+                && matches!(
+                    (left, right),
+                    (BytecodeType::String, BytecodeType::Integer)
+                        | (BytecodeType::Integer, BytecodeType::String)
+                );
+            if !string_repeat
+                && (left != right || !matches!(left, BytecodeType::Integer | BytecodeType::String))
+            {
                 return Err((
                     ValidationCode::TypeMismatch,
                     "binary operands have incompatible types".into(),
                 ));
             }
-            if left == BytecodeType::String && !matches!(instruction.payload[0], 3 | 7..=12) {
+            if !string_repeat
+                && left == BytecodeType::String
+                && !matches!(instruction.payload[0], 3 | 7..=12)
+            {
                 return Err((
                     ValidationCode::TypeMismatch,
                     "binary operation is not defined for strings".into(),
                 ));
             }
-            let result = if left == BytecodeType::String && instruction.payload[0] == 3 {
-                BytecodeType::String
-            } else {
-                BytecodeType::Integer
-            };
+            let result =
+                if string_repeat || (left == BytecodeType::String && instruction.payload[0] == 3) {
+                    BytecodeType::String
+                } else {
+                    BytecodeType::Integer
+                };
             stack.push(result);
         }
         Opcode::ToString => {
@@ -837,6 +868,42 @@ fn apply_instruction(
             expect_payload(&instruction.payload, 4)?;
             pop_type(stack, BytecodeType::Integer)?;
             return Ok(vec![read_u32(&instruction.payload, 0)? as usize, index + 1]);
+        }
+        Opcode::ForStart => {
+            expect_payload(&instruction.payload, 0)?;
+            pop_type(stack, BytecodeType::Integer)?;
+            pop_type(stack, BytecodeType::Integer)?;
+            pop_type(stack, BytecodeType::Integer)?;
+            pop_type(stack, BytecodeType::IntegerPlace)?;
+            stack.push(BytecodeType::Integer);
+        }
+        Opcode::ForNext => {
+            expect_payload(&instruction.payload, 0)?;
+            stack.push(BytecodeType::Integer);
+        }
+        Opcode::SelectStart => {
+            expect_payload(&instruction.payload, 0)?;
+            stack.pop().ok_or((
+                ValidationCode::StackMismatch,
+                "SELECTCASE underflows the stack".into(),
+            ))?;
+        }
+        Opcode::SelectCompare => {
+            expect_payload(&instruction.payload, 1)?;
+            let operands = if instruction.payload[0] == 6 { 2 } else { 1 };
+            if instruction.payload[0] > 7 {
+                return Err((
+                    ValidationCode::InvalidOperand,
+                    "SELECTCASE comparison has an unknown operation".into(),
+                ));
+            }
+            for _ in 0..operands {
+                stack.pop().ok_or((
+                    ValidationCode::StackMismatch,
+                    "CASE comparison underflows the stack".into(),
+                ))?;
+            }
+            stack.push(BytecodeType::Integer);
         }
         Opcode::ResolveFunction => {
             expect_payload(&instruction.payload, 6)?;

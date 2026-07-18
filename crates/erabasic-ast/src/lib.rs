@@ -137,6 +137,8 @@ pub enum BinaryOp {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AssignOp {
     Assign,
+    /// String-expression assignment (`'=`), distinct from FORM-style `=`.
+    StringAssign,
     Add,
     Subtract,
     Multiply,
@@ -254,6 +256,12 @@ pub enum StatementKind {
         target: VariableRef,
         op: AssignOp,
         value: Expr,
+        /// Additional comma-separated values. Semantic analysis treats these as
+        /// consecutive array stores only for expression-based assignments.
+        additional_values: Vec<Expr>,
+        /// Exact logical RHS text, needed because string `=` uses FORM syntax
+        /// after the target's semantic type is known.
+        raw_value: String,
     },
     GotoLabel {
         name: String,

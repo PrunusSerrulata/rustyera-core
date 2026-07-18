@@ -261,11 +261,14 @@ fn build_project_inner_with_extensions(
             continue;
         }
         match file.category {
-            FileCategory::Csv => csv_files.csv.push(csv_file(path, file.payload)),
+            FileCategory::Csv => csv_files
+                .csv
+                .push(csv_file(category_relative_path(&path, "CSV"), file.payload)),
             FileCategory::Erh | FileCategory::Erb => {
-                csv_files
-                    .erb
-                    .push(csv_file(path.clone(), file.payload.clone()));
+                csv_files.erb.push(csv_file(
+                    category_relative_path(&path, "ERB"),
+                    file.payload.clone(),
+                ));
                 if file.category == FileCategory::Erh
                     || analysis_selection.is_none_or(|selection| {
                         selection.is_empty() || selection.contains(&path.to_ascii_lowercase())
@@ -495,6 +498,17 @@ fn build_project_inner_with_extensions(
             configuration: config.values,
             extensions: extension_map,
         }),
+    }
+}
+
+fn category_relative_path(path: &str, category: &str) -> String {
+    let Some((first, remaining)) = path.split_once('/') else {
+        return path.to_owned();
+    };
+    if first.eq_ignore_ascii_case(category) && !remaining.is_empty() {
+        remaining.to_owned()
+    } else {
+        path.to_owned()
     }
 }
 
@@ -1097,7 +1111,9 @@ fn apply_catalog_semantics(config: &mut SemanticConfig) {
         config.analyzer.allow_full_width_space = value;
     }
     if let Some(value) = string("ReplaceContinuationBR") {
-        config.csv.continuation_separator = value.trim_matches('"').into();
+        let value = value.trim_matches('"').to_owned();
+        config.csv.continuation_separator.clone_from(&value);
+        config.analyzer.continuation_separator = value;
     }
 
     if let Some(value) = boolean("AllowFunctionOverloading") {
@@ -1474,9 +1490,27 @@ mod tests {
     }
 
     #[test]
+    fn category_root_prefix_is_removed_only_at_internal_loader_boundary() {
+        assert_eq!(
+            category_relative_path("CSV/_Rename.csv", "CSV"),
+            "_Rename.csv"
+        );
+        assert_eq!(
+            category_relative_path("csv/sub/data.csv", "CSV"),
+            "sub/data.csv"
+        );
+        assert_eq!(category_relative_path("ERB/main.erb", "ERB"), "main.erb");
+        assert_eq!(
+            category_relative_path("scripts/main.erb", "ERB"),
+            "scripts/main.erb"
+        );
+        assert_eq!(category_relative_path("CSV.csv", "CSV"), "CSV.csv");
+    }
+
+    #[test]
     fn focused_eratw_system_slices_exercise_runtime_owned_save_flows() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../reference/eraTW-minimal/ERB");
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../reference/eraTW/ERB");
         for (relative, required) in [
             ("TITLE.ERB", &["@SYSTEM_TITLE", "LOADGAME"][..]),
             ("SHOP関連/SHOP.ERB", &["SAVEGAME", "LOADGAME"]),
@@ -1598,7 +1632,7 @@ mod tests {
                 relative_path: "main.erb".into(),
                 category: FileCategory::Erb,
                 payload: FilePayload::Utf8(
-                    "@SYSTEM_TITLE\nRESULTS = EXT_ECHO(\"ok\")\nRETURN\n".into(),
+                    "@SYSTEM_TITLE\nRESULTS '= EXT_ECHO(\"ok\")\nRETURN\n".into(),
                 ),
                 content_hash: None,
             }],
@@ -1606,9 +1640,14 @@ mod tests {
         let build = build_project_with_extensions(&manifest, None, &[declaration]);
         assert!(build.report.success, "{:?}", build.report.diagnostics);
         let artifact = build.artifact.unwrap();
-        assert!(artifact.artifact().host_imports.iter().any(|import| {
-            import.import.namespace == "rustyera.extension" && import.import.name == "example.echo"
-        }));
+        assert!(
+            artifact.artifact().host_imports.iter().any(|import| {
+                import.import.namespace == "rustyera.extension"
+                    && import.import.name == "example.echo"
+            }),
+            "{:#?}",
+            artifact.artifact().host_imports
+        );
     }
 
     #[test]

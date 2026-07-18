@@ -101,6 +101,12 @@ pub fn compile_project(
     let compiler_options = Digest::hash("rustyera.compiler.options.v1", &[&options_bytes]);
     let function_keys = function_keys(&project.program.functions, &project.program.sources);
     let variable_keys = variable_keys(&project.program.variables, &function_keys);
+    let functions_by_id = project
+        .program
+        .functions
+        .iter()
+        .map(|function| (function.id, function))
+        .collect();
     let source_indices = project
         .program
         .sources
@@ -111,6 +117,7 @@ pub fn compile_project(
     let context = LoweringContext {
         program: &project.program,
         function_keys: &function_keys,
+        functions_by_id: &functions_by_id,
         variable_keys: &variable_keys,
         source_indices: &source_indices,
         host_registry,
@@ -121,6 +128,12 @@ pub fn compile_project(
         options.optimization,
     ))
     .expect("compiler dependencies are serializable");
+    // Hash the project-wide block once. Feeding it into BLAKE3 for every function
+    // made cold compilation O(function count × static-data size) on large games.
+    let shared_dependencies = Digest::hash(
+        "rustyera.compiler.shared-dependencies.v1",
+        &[&shared_dependencies],
+    );
     let mut cached = BTreeMap::new();
     let previous_functions = previous
         .filter(|state| state.compiler_abi == erabasic_bytecode::COMPILER_ABI_VERSION)
@@ -130,8 +143,8 @@ pub fn compile_project(
         let key = function_keys[&function.id];
         let function_bytes = serde_json::to_vec(function).expect("HIR function is serializable");
         let cache_key = Digest::hash(
-            "rustyera.compiler.function.v1",
-            &[&function_bytes, &shared_dependencies, &compiler_options.0],
+            "rustyera.compiler.function.v2",
+            &[&function_bytes, &shared_dependencies.0, &compiler_options.0],
         );
         if let Some(entry) = previous_functions
             .and_then(|functions| functions.get(&key))
@@ -277,7 +290,18 @@ pub fn compile_project(
                 .diagnostics
                 .into_iter()
                 .map(|diagnostic| {
-                    CompilerDiagnostic::new(CompilerDiagnosticCode::Validation, diagnostic.message)
+                    let context = match (diagnostic.function, diagnostic.instruction) {
+                        (Some(function), Some(instruction)) => {
+                            format!("function {function}, instruction {instruction}: ")
+                        }
+                        (Some(function), None) => format!("function {function}: "),
+                        (None, Some(instruction)) => format!("instruction {instruction}: "),
+                        (None, None) => String::new(),
+                    };
+                    CompilerDiagnostic::new(
+                        CompilerDiagnosticCode::Validation,
+                        format!("{context}{}", diagnostic.message),
+                    )
                 })
                 .collect(),
             stats: CompileStats::default(),

@@ -57,7 +57,7 @@ pub(crate) fn bytecode_type(value: SemanticType) -> Option<BytecodeType> {
 
 pub(super) fn assign_tag(operation: AssignOp) -> u8 {
     match operation {
-        AssignOp::Assign => 0,
+        AssignOp::Assign | AssignOp::StringAssign => 0,
         AssignOp::Add => 1,
         AssignOp::Subtract => 2,
         AssignOp::Multiply => 3,

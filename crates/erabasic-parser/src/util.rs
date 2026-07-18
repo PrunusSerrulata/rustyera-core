@@ -65,6 +65,7 @@ pub(crate) fn assign_op(operator: Operator) -> AssignOp {
 pub(crate) fn assign_op_opt(operator: Operator) -> Option<AssignOp> {
     Some(match operator {
         Operator::Assign => AssignOp::Assign,
+        Operator::StringAssign => AssignOp::StringAssign,
         Operator::AddAssign => AssignOp::Add,
         Operator::SubtractAssign => AssignOp::Subtract,
         Operator::MultiplyAssign => AssignOp::Multiply,

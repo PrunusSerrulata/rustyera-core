@@ -61,8 +61,8 @@ Runtime 不回调前端，也不执行文件 I/O、窗口绘制、操作系统�
 ABI 当前版本为 `3.0`：
 
 ```c
-#define ERA_RUNTIME_ABI_MAJOR 2u
-#define ERA_RUNTIME_ABI_MINOR 1u
+#define ERA_RUNTIME_ABI_MAJOR 3u
+#define ERA_RUNTIME_ABI_MINOR 0u
 ```
 
 动态库只要求导出一个固定符号：
@@ -354,7 +354,7 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 `RuntimeMessage::encode_payload`/`from_envelope`，或在其他语言中严格实现相同的
 canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
-默认限制为：完整信封 16 MiB、payload 15 MiB、1024 个待处理请求、4096 条 journal、
+默认限制为：完整信封 128 MiB、payload 127 MiB、1024 个待处理请求、4096 条 journal、
 单次最多 100000 条 VM 指令。握手结果取前端请求与 runtime 上限的较小值。
 
 ## 6. 生命周期消息
@@ -445,6 +445,22 @@ Runtime 使用 `StateChanged`（tag `21`）报告 `Negotiating`、`LoadingProjec
 `Starting`、`Running`、`WaitingInput`、`WaitingExternal`、`DebugPaused`、`Reloading`、`Stopping`、`Stopped` 或
 `Faulted`；`revision` 在每次 phase 变化时递增，消息同时报告当前 epoch。
 
+脚本执行 `QUIT` 或重启指令时，Runtime 发送持久化的 `ExitRequested`（tag `22`），携带
+原因、是否强制以及 runtime revision。前端不得自行重置 VM；它应完成正常 shutdown，
+重启请求则在收到 `ShutdownReady` 后创建全新 session。该退出意图会保留在
+`RuntimeResynchronized` 中，直到会话关闭。
+
+### 输出序列确认
+
+前端处理完 Runtime 发出的连续消息后，必须发送 `Acknowledge`（tag `93`），其中
+`through_sequence` 是已经完整处理的最大 outbound sequence。确认是累计前缀，可以按批
+发送；不能越过尚未处理或尚未持久化的消息。`session_poll` 只移除待取队列中的副本，
+不会清理可重同步 journal。若不发送确认，journal 达到协商的
+`maximum_journal_entries`（默认 4096）后，后续输出会以资源限制失败。
+
+这里的 sequence 确认与 `EffectAcknowledgement` 不同：前者管理可靠消息 journal，后者
+报告每个一次性设备效果的实际完成、失败或取消结果，两者都必须执行。
+
 ### 关闭
 
 前端发送 `ShutdownRequest`（tag `90`），其中 `graceful` 表示调用方意图。Runtime
@@ -458,6 +474,10 @@ Runtime 是展示语义状态的权威持有者；前端只负责渲染投影。
 - `PresentationDelta`（tag `41`）要求前端当前 revision 等于 `base_revision`，然后按顺序
   应用 operations 并更新为 `new_revision`；
 - revision 不匹配时不要猜测或部分应用，应请求 `Resynchronize`（tag `94`）。
+
+当前 Protocol 19 runtime 实现只发送 `PresentationSnapshot`；`PresentationDelta` 是已
+保留的 wire 类型，尚未由发送路径使用。前端必须能够处理 snapshot，不能假定正常运行
+一定收到 delta。
 
 Snapshot 包含标题、行、背景、tooltip 策略、逻辑音频状态、当前输入等待、全局展示设置
 以及 `ResourceReplay`。后者提供 Runtime 已解析的 sprite 定义、动态 sprite 与 canvas
@@ -594,11 +614,21 @@ Runtime 需要操作系统能力时发送 `ServiceRequest`（tag `52`）：
 | `Image / image_pixel` v1.0 | 资源 ID、内容摘要与坐标 | ARGB 像素值 |
 | `Network / update_check` v1.0 | 更新地址 | 远端版本和下载地址 |
 | `OpenUrl / open_url` v1.0 | URL | 是否已交给平台打开 |
+| `PresentationQuery / get_display_line` v1.0 | revision context 与逻辑行索引 | 同 context 的实际投影字符串 |
+| `PresentationQuery / html_get_printed_str` v1.0 | revision context 与索引 | 同 context 的实际 HTML 历史字符串 |
+| `PresentationQuery / html_string_len` v1.0 | revision context、markup 与参数 | 同 context 的实际布局长度 |
+| `PresentationQuery / html_substring` v1.0 | revision context、markup 与参数 | 同 context 的 head/tail |
+| `PresentationQuery / html_string_lines` v1.0 | revision context、markup 与参数 | 同 context 的实际行数 |
+| `PresentationQuery / serialize_physical_history` v1.0 | revision context、标题与隐藏信息标志 | 同 context 的 UTF-8 物理历史 |
+| `FontMetrics / gget_text_size` v1.0 | revision context、文本、字体、字号与 style bits | 同 context 的投影宽高 |
+| `Canvas / sample_canvas_pixel` v1.0 | revision context、canvas/revision 与坐标 | 同 context/revision 的 ARGB |
+| `Canvas / decode_canvas_image` v1.0 | 编码图片 bytes | 解码后的宽高 |
+| `Canvas / encode_canvas_png` v1.0 | canvas ID 与 replay revision | PNG bytes |
 | `Extension / 声明的 operation/version` | `ExtensionInvocation` | `ExtensionResult`（返回值及可变参数写回） |
 
-未来的字体测量、实际布局、物理显示历史和 canvas raster 查询也必须各自定义稳定的
-operation、版本和专用 payload，并绑定 presentation/environment revision。未协商精确
-operation 时必须返回不支持，不能使用 `Ready` 返回近似值。此类请求属于瞬态等待，
+字体测量、实际布局、物理显示历史和 canvas raster 查询已经使用各自稳定的 operation、
+版本和专用 payload，并按适用范围绑定 presentation/environment/canvas revision。未协商
+精确 operation 时必须返回不支持，不能使用 `Ready` 返回近似值。此类请求属于瞬态等待，
 未完成时阻止稳定 VM snapshot 和热替换提交；成功响应应进入可重放的外部输入轨迹，
 但物理布局本身不进入 Runtime 的规范化展示 snapshot。
 

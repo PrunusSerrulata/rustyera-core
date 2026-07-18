@@ -98,6 +98,12 @@ pub struct HirStatement {
 #[serde(tag = "kind", content = "name", rename_all = "snake_case")]
 pub enum InstructionTarget {
     Builtin(String),
+    /// An expression function invoked with Emuera's METHOD statement syntax.
+    /// Its return value is written to RESULT or RESULTS rather than discarded.
+    BuiltinMethod {
+        name: String,
+        return_type: SemanticType,
+    },
     Extension(String),
     Unresolved(String),
 }
@@ -106,7 +112,10 @@ impl InstructionTarget {
     #[must_use]
     pub fn name(&self) -> &str {
         match self {
-            Self::Builtin(name) | Self::Extension(name) | Self::Unresolved(name) => name,
+            Self::Builtin(name)
+            | Self::BuiltinMethod { name, .. }
+            | Self::Extension(name)
+            | Self::Unresolved(name) => name,
         }
     }
 }

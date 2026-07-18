@@ -193,7 +193,7 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         Any, Formatted, Integer, MutableAny, MutableInteger, MutableReferenceOrString,
         MutableString, ReferenceOrString, String,
     };
-    use ArgumentStyle::{Expressions, Formatted as FormStyle, None as NoArgs, Raw};
+    use ArgumentStyle::{Expressions, Formatted as FormStyle, None as NoArgs, PrintV, Raw, Times};
 
     let mut result = BTreeMap::new();
     let mut add =
@@ -240,13 +240,18 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     ] {
         add(name, NoArgs, &[], 0, false, false);
     }
+    // Function methods may appear as METHOD statements; the official game uses
+    // this no-argument clock method and observes its value through RESULT.
+    add("GETMILLISECOND", NoArgs, &[], 0, false, false);
+    // A bare CURRENTREDRAW is a stringlessly discarded METHOD expression.
+    add("CURRENTREDRAW", NoArgs, &[], 0, false, false);
     for name in ["PRINTCPERLINE", "SAVENOS"] {
         // Statement forms write through their argument; expression functions with
         // the same spelling are registered independently below.
         add(name, Expressions, &[MutableInteger], 1, false, false);
     }
     add("ASSERT", Expressions, &[Integer], 1, false, false);
-    add("THROW", Expressions, &[String], 1, false, false);
+    add("THROW", FormStyle, &[Formatted], 0, false, true);
     add("FORCEKANA", Expressions, &[Integer], 1, false, false);
     add("UPCHECK", NoArgs, &[], 0, false, false);
     add("CUPCHECK", Expressions, &[Integer], 1, false, false);
@@ -271,38 +276,57 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     for name in ["PRINT_ITEM", "PRINT_SHOPITEM"] {
         add(name, NoArgs, &[], 0, false, false);
     }
+    for name in ["DEBUGPRINT", "DEBUGPRINTL"] {
+        add(name, Raw, &[ArgumentConstraint::Raw], 0, false, true);
+    }
+    for name in ["DEBUGPRINTFORM", "DEBUGPRINTFORML"] {
+        add(name, FormStyle, &[Formatted], 0, false, true);
+    }
     for name in [
         "PRINT",
         "PRINTL",
         "PRINTW",
+        "PRINTPLAIN",
+        "PRINTSINGLE",
+        "DATA",
+    ] {
+        add(name, Raw, &[ArgumentConstraint::Raw], 0, false, true);
+    }
+    for name in [
         "PRINTFORM",
         "PRINTFORML",
         "PRINTFORMW",
-        "PRINTFORMS",
-        "PRINTFORMSL",
-        "PRINTFORMSW",
-        "PRINTPLAIN",
         "PRINTPLAINFORM",
-        "PRINTSINGLE",
         "PRINTSINGLEFORM",
         "RETURNFORM",
-        "DATA",
         "DATAFORM",
-        "DATALIST",
         "PUTFORM",
+        "REUSELASTLINE",
     ] {
         add(name, FormStyle, &[Formatted], 0, false, true);
     }
+    add("DATALIST", NoArgs, &[], 0, false, false);
     for name in ["PRINTV", "PRINTVL", "PRINTVW"] {
-        add(name, Expressions, &[Any], 1, true, false);
+        add(name, PrintV, &[Any], 1, true, false);
     }
-    for name in ["PRINTS", "PRINTSL", "PRINTSW"] {
-        add(name, Expressions, &[String], 1, true, false);
+    for name in [
+        "PRINTS",
+        "PRINTSL",
+        "PRINTSW",
+        "PRINTFORMS",
+        "PRINTFORMSL",
+        "PRINTFORMSW",
+    ] {
+        add(name, Expressions, &[String], 1, false, false);
     }
-    for name in ["IF", "ELSEIF", "SIF", "WHILE", "REPEAT", "SELECTCASE"] {
+    for name in ["IF", "ELSEIF", "SIF", "WHILE", "REPEAT"] {
         add(name, Expressions, &[Integer], 1, false, false);
     }
-    add("CASE", Expressions, &[Any], 1, true, false);
+    add("SELECTCASE", Expressions, &[Any], 1, false, false);
+    // CASE is not a comma-separated expression list: the reference also accepts
+    // `IS <operator> value` and `lower TO upper`. Keep the selector source raw so
+    // the compiler's structured SELECTCASE lowering can interpret it as a unit.
+    add("CASE", Raw, &[Any], 1, false, false);
     add(
         "FOR",
         Expressions,
@@ -311,19 +335,26 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         false,
         true,
     );
-    for name in ["SET", "SETVAR"] {
-        add(name, Expressions, &[MutableAny, Any], 2, false, false);
-    }
-    for name in ["TIMES", "POWER"] {
-        add(
-            name,
-            Expressions,
-            &[MutableInteger, Integer],
-            2,
-            true,
-            false,
-        );
-    }
+    // The assignment spelling `ARRAY = a, b, c` is parsed as SET with one
+    // mutable destination followed by consecutive values.
+    add("SET", Expressions, &[MutableAny, Any], 2, true, false);
+    add("SETVAR", Expressions, &[MutableAny, Any], 2, false, false);
+    add(
+        "TIMES",
+        Times,
+        &[MutableInteger, Integer, Integer],
+        3,
+        false,
+        false,
+    );
+    add(
+        "POWER",
+        Expressions,
+        &[MutableInteger, Integer],
+        2,
+        true,
+        false,
+    );
     for name in ["SWAP", "SWAPVAR"] {
         add(
             name,
@@ -418,7 +449,7 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "GOTOFORM",
         "TRYGOTOFORM",
     ] {
-        add(name, Expressions, &[Any], 1, true, true);
+        add(name, ArgumentStyle::DynamicCall, &[Any], 1, true, true);
     }
     add("CALLEVENT", Raw, &[], 1, false, false);
     for name in [
@@ -445,9 +476,8 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
             true,
         );
     }
-    for name in ["RETURNF", "AWAIT"] {
-        add(name, Expressions, &[Integer], 0, true, true);
-    }
+    add("RETURNF", Expressions, &[Any], 0, true, true);
+    add("AWAIT", Expressions, &[Integer], 0, true, true);
     for name in ["INPUT", "ONEINPUT", "BINPUT", "ONEBINPUT"] {
         add(
             name,
@@ -458,7 +488,9 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
             true,
         );
     }
-    add("RETURN", Expressions, &[Integer], 0, false, true);
+    // RETURN stores every supplied value in RESULT and therefore accepts an
+    // arbitrary-length integer list (FunctionArgType.INT_ANY in Emuera).
+    add("RETURN", Expressions, &[Integer], 0, true, true);
     for name in ["INPUTS", "ONEINPUTS", "BINPUTS", "ONEBINPUTS"] {
         add(
             name,
@@ -529,7 +561,6 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "FONTBOLD",
         "FONTITALIC",
         "FONTREGULAR",
-        "ALIGNMENT",
         "REDRAW",
         "DOTRAIN",
         "DO",
@@ -540,8 +571,21 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     ] {
         add(name, Expressions, &[Any], 0, true, true);
     }
+    // Emuera's STR argument accepts the unquoted alignment keywords used by
+    // existing games. Preserve that token as raw string data instead of trying
+    // to resolve CENTER/LEFT/RIGHT as EraBasic identifiers.
+    add(
+        "ALIGNMENT",
+        Raw,
+        &[ArgumentConstraint::Raw],
+        1,
+        false,
+        false,
+    );
+    // SETFONT uses STR_EXPRESSION_NULLABLE: an empty invocation resets the font.
+    add("SETFONT", Expressions, &[String], 0, false, true);
     add("PRINTDATA", Expressions, &[MutableInteger], 0, false, true);
-    add("STRDATA", Expressions, &[MutableString], 1, false, false);
+    add("STRDATA", Expressions, &[MutableString], 0, false, false);
     // Raw is used only for host/plugin statements whose grammar is intentionally
     // opaque to the core analyzer.
     add("CALLSHARP", Raw, &[], 0, false, true);
@@ -709,10 +753,14 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "PRINTSINGLED",
     ];
     for name in PRINT_FAMILY {
-        result.insert(
-            (*name).to_owned(),
-            instruction(name, FormStyle, &[Formatted], 0, false, true),
-        );
+        let signature = if name.contains("FORMS") {
+            instruction(name, Expressions, &[String], 1, false, false)
+        } else if name.contains("FORM") {
+            instruction(name, FormStyle, &[Formatted], 0, false, true)
+        } else {
+            instruction(name, Raw, &[ArgumentConstraint::Raw], 0, false, true)
+        };
+        result.insert((*name).to_owned(), signature);
     }
     const PRINT_VALUE_FAMILY: &[&str] = &[
         "PRINTVD",
@@ -813,8 +861,16 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     ] {
         add(name, IntType, &[Any], 1, true);
     }
-    for name in ["RAND", "MAX", "MIN", "LIMIT", "POWER", "INRANGE"] {
+    add("RAND", IntType, &[Integer, Integer], 1, false);
+    for name in ["MAX", "MIN", "LIMIT", "POWER", "INRANGE"] {
         add(name, IntType, &[Integer], 1, true);
+    }
+    add("GETMILLISECOND", IntType, &[], 0, false);
+    add("GETTIME", IntType, &[], 0, false);
+    // FunctionIdentifier exposes these as formatted METHOD statements. Their
+    // integer result follows the same RESULT convention as other methods.
+    for name in ["STRLENFORM", "STRLENFORMU"] {
+        add(name, IntType, &[String], 1, false);
     }
     for name in [
         "SUBSTRING",
@@ -1284,6 +1340,16 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         .get_mut("STRJOIN")
         .expect("STRJOIN signature was inserted")
         .allow_omitted = true;
+    result
+        .get_mut("RAND")
+        .expect("RAND signature was inserted")
+        .allow_omitted = true;
+    for name in ["FINDELEMENT", "FINDLASTELEMENT"] {
+        result
+            .get_mut(name)
+            .expect("find-element signature was inserted")
+            .allow_omitted = true;
+    }
     for name in ["DT_SELECT", "DT_ROW_ADD", "DT_ROW_SET", "DT_CELL_SET"] {
         result
             .get_mut(name)

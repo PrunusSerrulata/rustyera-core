@@ -18,6 +18,75 @@ use crate::{PreparedRuntimeState, VmRuntimeRead, VmRuntimeStatePort, VmRuntimeSt
 #[derive(Clone, Debug)]
 pub(crate) struct ProgramGeneration {
     pub artifact: BytecodeArtifact,
+    function_indices: BTreeMap<SymbolKey, usize>,
+    function_name_indices: BTreeMap<String, usize>,
+    global_indices: BTreeMap<SymbolKey, usize>,
+    global_name_indices: BTreeMap<String, usize>,
+}
+
+impl ProgramGeneration {
+    pub(crate) fn new(artifact: BytecodeArtifact) -> Self {
+        // Era projects commonly contain tens of thousands of functions. Resolving the
+        // active function with a linear scan for every instruction makes otherwise
+        // lightweight EraBasic execution quadratic in the project size.
+        let function_indices = artifact
+            .functions
+            .iter()
+            .enumerate()
+            .map(|(index, function)| (function.key, index))
+            .collect();
+        let mut function_name_indices = BTreeMap::new();
+        for (index, function) in artifact.functions.iter().enumerate() {
+            // Dynamic lookup follows the artifact order when duplicate declarations
+            // are permitted by the selected compatibility mode.
+            function_name_indices
+                .entry(function.name.to_ascii_uppercase())
+                .or_insert(index);
+        }
+        let global_indices = artifact
+            .globals
+            .iter()
+            .enumerate()
+            .map(|(index, global)| (global.key, index))
+            .collect();
+        let mut global_name_indices = BTreeMap::new();
+        for (index, global) in artifact.globals.iter().enumerate() {
+            global_name_indices
+                .entry(global.name.to_ascii_uppercase())
+                .or_insert(index);
+        }
+        Self {
+            artifact,
+            function_indices,
+            function_name_indices,
+            global_indices,
+            global_name_indices,
+        }
+    }
+
+    pub(crate) fn function(&self, key: SymbolKey) -> Option<&BytecodeFunction> {
+        self.function_indices
+            .get(&key)
+            .and_then(|index| self.artifact.functions.get(*index))
+    }
+
+    pub(crate) fn function_by_name(&self, name: &str) -> Option<&BytecodeFunction> {
+        self.function_name_indices
+            .get(&name.to_ascii_uppercase())
+            .and_then(|index| self.artifact.functions.get(*index))
+    }
+
+    pub(crate) fn global(&self, key: SymbolKey) -> Option<&erabasic_bytecode::BytecodeGlobal> {
+        self.global_indices
+            .get(&key)
+            .and_then(|index| self.artifact.globals.get(*index))
+    }
+
+    pub(crate) fn global_by_name(&self, name: &str) -> Option<&erabasic_bytecode::BytecodeGlobal> {
+        self.global_name_indices
+            .get(&name.to_ascii_uppercase())
+            .and_then(|index| self.artifact.globals.get(*index))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -27,6 +96,8 @@ pub(crate) struct Frame {
     pub function: SymbolKey,
     pub instruction: usize,
     pub stack: Vec<VmValue>,
+    pub for_loops: Vec<ForLoopState>,
+    pub select_values: Vec<VmValue>,
     pub locals: BTreeMap<SymbolKey, VariableCell>,
     /// Dynamic statement calls discard method results without exposing them to Host code.
     pub return_value_to_caller: bool,
@@ -34,6 +105,13 @@ pub(crate) struct Frame {
     pub event_context: bool,
     /// Nested CALLEVENT handlers are sequenced in the initiating caller frame.
     pub event_dispatch: Option<EventDispatch>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ForLoopState {
+    pub counter: PlaceDescriptor,
+    pub end: i64,
+    pub step: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -166,7 +244,7 @@ impl Vm {
         let generation = GenerationId(1);
         Self {
             config,
-            generations: BTreeMap::from([(generation, ProgramGeneration { artifact })]),
+            generations: BTreeMap::from([(generation, ProgramGeneration::new(artifact))]),
             current_generation: generation,
             memory,
             fibers: BTreeMap::new(),
@@ -230,17 +308,17 @@ impl Vm {
             return Err(VmError::ResourceLimit("fiber count"));
         }
         let generation = self.current_generation;
-        let artifact = &self
+        let program = self
             .generations
             .get(&generation)
-            .ok_or_else(|| VmError::InvalidState("current generation is missing".into()))?
-            .artifact;
-        let function_definition = artifact
-            .functions
-            .iter()
-            .find(|candidate| candidate.key == function)
+            .ok_or_else(|| VmError::InvalidState("current generation is missing".into()))?;
+        let artifact = &program.artifact;
+        let function_definition = program
+            .function(function)
             .ok_or(VmError::MissingFunction(function))?;
         validate_arguments(function_definition, &arguments)?;
+        self.memory
+            .ensure_function_statics(generation, artifact, function_definition.key);
         bind_persistent_arguments(
             &mut self.memory,
             generation,
@@ -399,17 +477,17 @@ impl Vm {
         if let Some(next) = next_event {
             let generation = caller.generation;
             let frame_id = self.allocate_frame_id();
-            let artifact = &self
+            let program = self
                 .generations
                 .get(&generation)
-                .ok_or_else(|| VmError::InvalidState("event generation is missing".into()))?
-                .artifact;
-            let target = artifact
-                .functions
-                .iter()
-                .find(|function| function.key == next.function)
+                .ok_or_else(|| VmError::InvalidState("event generation is missing".into()))?;
+            let artifact = &program.artifact;
+            let target = program
+                .function(next.function)
                 .cloned()
                 .ok_or_else(|| VmError::InvalidState("event function is missing".into()))?;
+            self.memory
+                .ensure_function_statics(generation, artifact, target.key);
             fiber.frames.push(make_frame(
                 frame_id,
                 generation,
@@ -618,19 +696,65 @@ impl Vm {
             }
             return cell.read(&place.indices).map_err(VmError::InvalidState);
         }
-        let character = place.character.map_or_else(
-            || {
-                self.generations.get(&generation).map_or(0, |program| {
-                    self.memory.target_character(&program.artifact, generation)
-                })
-            },
-            |value| usize::try_from(value).unwrap_or(usize::MAX),
-        );
+        let character = if definition.storage == BytecodeStorage::Character {
+            place.character.map_or_else(
+                || {
+                    self.generations.get(&generation).map_or(0, |program| {
+                        self.memory.target_character(&program.artifact, generation)
+                    })
+                },
+                |value| usize::try_from(value).unwrap_or(usize::MAX),
+            )
+        } else {
+            0
+        };
         self.memory
             .cell(generation, definition, character)
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
             .read(&place.indices)
             .map_err(VmError::InvalidState)
+    }
+
+    pub(crate) fn read_place_array(
+        &self,
+        fiber: &Fiber,
+        place: &PlaceDescriptor,
+    ) -> Result<Vec<VmValue>, VmError> {
+        if !place.indices.is_empty() {
+            return Err(VmError::InvalidArguments(
+                "array place must be unindexed".into(),
+            ));
+        }
+        let (generation, definition) = self.place_definition(fiber, place)?;
+        if definition.storage == BytecodeStorage::FunctionLocal {
+            let frame = find_frame(fiber, place.frame, definition.owner)?;
+            let cell = frame
+                .locals
+                .get(&definition.key)
+                .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
+            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) =
+                cell.values.first()
+            {
+                return self.read_place_array(fiber, bound);
+            }
+            return Ok(cell.values.clone());
+        }
+        let character = if definition.storage == BytecodeStorage::Character {
+            place.character.map_or_else(
+                || {
+                    self.generations.get(&generation).map_or(0, |program| {
+                        self.memory.target_character(&program.artifact, generation)
+                    })
+                },
+                |value| usize::try_from(value).unwrap_or(usize::MAX),
+            )
+        } else {
+            0
+        };
+        self.memory
+            .cell(generation, definition, character)
+            .map(|cell| cell.values.clone())
+            .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))
     }
 
     pub(crate) fn write_place(
@@ -640,6 +764,61 @@ impl Vm {
         value: VmValue,
     ) -> Result<(), VmError> {
         self.write_place_internal(fiber, place, value, false)
+    }
+
+    pub(crate) fn write_place_array(
+        &mut self,
+        fiber: &mut Fiber,
+        place: &PlaceDescriptor,
+        values: Vec<VmValue>,
+    ) -> Result<(), VmError> {
+        if !place.indices.is_empty() {
+            return Err(VmError::InvalidArguments(
+                "array place must be unindexed".into(),
+            ));
+        }
+        let (generation, definition) = self.place_definition(fiber, place)?;
+        let definition = definition.clone();
+        if !definition.mutable {
+            return Err(VmError::InvalidState("place is immutable".into()));
+        }
+        if definition.storage == BytecodeStorage::FunctionLocal {
+            let bound = find_frame(fiber, place.frame, definition.owner)?
+                .locals
+                .get(&definition.key)
+                .and_then(|cell| cell.values.first())
+                .and_then(|value| match value {
+                    VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => {
+                        Some(place.clone())
+                    }
+                    VmValue::Integer(_) | VmValue::String(_) => None,
+                });
+            if let Some(bound) = bound {
+                return self.write_place_array(fiber, &bound, values);
+            }
+            let cell = find_frame_mut(fiber, place.frame, definition.owner)?
+                .locals
+                .get_mut(&definition.key)
+                .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
+            return replace_cell_values(cell, values);
+        }
+        let character = if definition.storage == BytecodeStorage::Character {
+            place.character.map_or_else(
+                || {
+                    self.generations.get(&generation).map_or(0, |program| {
+                        self.memory.target_character(&program.artifact, generation)
+                    })
+                },
+                |value| usize::try_from(value).unwrap_or(usize::MAX),
+            )
+        } else {
+            0
+        };
+        let cell = self
+            .memory
+            .cell_mut(generation, &definition, character)
+            .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?;
+        replace_cell_values(cell, values)
     }
 
     fn write_place_internal(
@@ -682,14 +861,18 @@ impl Vm {
                 .write(&place.indices, value)
                 .map_err(VmError::InvalidState);
         }
-        let character = place.character.map_or_else(
-            || {
-                self.generations.get(&generation).map_or(0, |program| {
-                    self.memory.target_character(&program.artifact, generation)
-                })
-            },
-            |index| usize::try_from(index).unwrap_or(usize::MAX),
-        );
+        let character = if definition.storage == BytecodeStorage::Character {
+            place.character.map_or_else(
+                || {
+                    self.generations.get(&generation).map_or(0, |program| {
+                        self.memory.target_character(&program.artifact, generation)
+                    })
+                },
+                |index| usize::try_from(index).unwrap_or(usize::MAX),
+            )
+        } else {
+            0
+        };
         self.memory
             .cell_mut(generation, &definition, character)
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
@@ -713,13 +896,31 @@ impl Vm {
             })
             .or_else(|| fiber.frames.last().map(|frame| frame.generation))
             .ok_or_else(|| VmError::InvalidState("place fiber has no frames".into()))?;
-        let artifact = &self
+        let program = self
             .generations
             .get(&generation)
-            .ok_or_else(|| VmError::InvalidState("place generation was reclaimed".into()))?
-            .artifact;
-        Ok((generation, find_global(artifact, place.variable)?))
+            .ok_or_else(|| VmError::InvalidState("place generation was reclaimed".into()))?;
+        Ok((
+            generation,
+            program.global(place.variable).ok_or_else(|| {
+                VmError::InvalidState(format!("variable {:?} is not defined", place.variable))
+            })?,
+        ))
     }
+}
+
+fn replace_cell_values(cell: &mut VariableCell, values: Vec<VmValue>) -> Result<(), VmError> {
+    if values.len() != cell.values.len()
+        || values
+            .iter()
+            .any(|value| value.value_type() != cell.value_type)
+    {
+        return Err(VmError::InvalidArguments(
+            "array replacement differs from its storage shape or type".into(),
+        ));
+    }
+    cell.values = values;
+    Ok(())
 }
 
 impl VmRuntimeStatePort for Vm {
@@ -882,23 +1083,24 @@ pub(crate) fn make_frame(
         .iter()
         .filter(|definition| {
             definition.owner == Some(function.key)
-                && (definition.storage == BytecodeStorage::FunctionLocal
-                    || function
-                        .parameters
-                        .iter()
-                        .any(|parameter| parameter.key == definition.key))
+                && definition.storage == BytecodeStorage::FunctionLocal
         })
         .map(|definition| (definition.key, VariableCell::new(definition)))
         .collect();
     for (parameter, argument) in function.parameters.iter().zip(arguments) {
         if let Some(cell) = locals.get_mut(&parameter.key) {
-            if parameter.by_reference && cell.values.is_empty() {
-                // A zero-sized REF declaration is an unbound shape marker, not
-                // zero runtime storage. The frame owns one alias slot.
+            if parameter.by_reference {
+                // REF declarations describe the target shape, but their frame
+                // storage always contains one opaque alias. This also covers a
+                // scalar `#DIM REF value`: its declaration has shape `[1]`, so
+                // treating only zero-sized REF arrays specially would attempt
+                // to write an IntegerPlace into an Integer cell.
+                cell.value_type = parameter.value_type;
                 cell.dimensions = vec![1];
-                cell.values.push(argument);
-            } else if let Some(slot) = cell.values.first_mut() {
-                *slot = argument;
+                cell.values = vec![argument];
+            } else {
+                cell.write(&parameter.indices, argument)
+                    .expect("validated parameter destination fits its local storage");
             }
         }
     }
@@ -908,6 +1110,8 @@ pub(crate) fn make_frame(
         function: function.key,
         instruction: 0,
         stack: Vec::new(),
+        for_loops: Vec::new(),
+        select_values: Vec::new(),
         locals,
         return_value_to_caller,
         event_context,
@@ -955,13 +1159,30 @@ pub(crate) fn bind_persistent_arguments(
         else {
             return Err(VmError::InvalidState("parameter storage is missing".into()));
         };
-        if definition.storage != BytecodeStorage::FunctionPersistent {
+        if definition.storage == BytecodeStorage::FunctionLocal {
             continue;
         }
+        let (character, indices) = if definition.storage == BytecodeStorage::Character
+            && parameter.indices.len() > definition.dimensions.len()
+        {
+            (
+                usize::try_from(parameter.indices[0]).unwrap_or(usize::MAX),
+                &parameter.indices[1..],
+            )
+        } else {
+            (
+                if definition.storage == BytecodeStorage::Character {
+                    memory.target_character(artifact, generation)
+                } else {
+                    0
+                },
+                parameter.indices.as_slice(),
+            )
+        };
         memory
-            .cell_mut(generation, definition, 0)
-            .ok_or_else(|| VmError::InvalidState("persistent parameter storage is missing".into()))?
-            .write(&[], argument.clone())
+            .cell_mut(generation, definition, character)
+            .ok_or_else(|| VmError::InvalidState("parameter storage is missing".into()))?
+            .write(indices, argument.clone())
             .map_err(VmError::InvalidState)?;
     }
     Ok(())

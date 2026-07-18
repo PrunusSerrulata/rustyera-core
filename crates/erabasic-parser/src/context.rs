@@ -9,6 +9,10 @@ pub enum ArgumentStyle {
     Expressions,
     Formatted,
     Raw,
+    /// PRINTV family: apostrophe starts a raw string operand ending at comma.
+    PrintV,
+    /// `TIMES <place>, <real literal>` has a dedicated non-integer second operand.
+    Times,
     /// Formatted function name followed by an optional parenthesized argument list.
     DynamicCall,
 }
@@ -37,6 +41,14 @@ pub trait ParserContext {
     }
     fn preprocessor_symbol(&self, _name: &str) -> Option<i64> {
         None
+    }
+    /// Text inserted between physical lines inside Emuera's `{ ... }` continuation.
+    ///
+    /// The pinned default comes from `ReplaceContinuationBR`. Runtime project loading
+    /// overrides it when a game supplies a different portable configuration value.
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn continuation_separator(&self) -> &str {
+        " "
     }
 }
 
@@ -102,9 +114,17 @@ impl ParserContext for DefaultParserContext {
             ArgumentStyle::DynamicCall
         } else if NO_ARG_INSTRUCTIONS.contains(&upper.as_str()) {
             ArgumentStyle::None
-        } else if upper.starts_with("PRINT") || upper.starts_with("DATA") || upper.ends_with("FORM")
-        {
+        } else if is_formatted_instruction(&upper) {
             ArgumentStyle::Formatted
+        } else if matches!(upper.as_str(), "PRINTV" | "PRINTVL" | "PRINTVW") {
+            ArgumentStyle::PrintV
+        } else if upper == "TIMES" {
+            ArgumentStyle::Times
+        } else if matches!(upper.as_str(), "CASE" | "ALIGNMENT") || is_raw_print_instruction(&upper)
+        {
+            // CASE owns the reference-only `IS <expr>` and `<expr> TO <expr>`
+            // selector grammar. Preserve it losslessly for semantic lowering.
+            ArgumentStyle::Raw
         } else {
             ArgumentStyle::Expressions
         };
@@ -127,7 +147,34 @@ impl ParserContext for DefaultParserContext {
     }
 }
 
+fn is_formatted_instruction(name: &str) -> bool {
+    (name.contains("FORM") && !name.contains("FORMS"))
+        || matches!(
+            name,
+            "PUTFORM" | "DRAWLINEFORM" | "RETURNFORM" | "REUSELASTLINE" | "THROW"
+        )
+}
+
+fn is_raw_print_instruction(name: &str) -> bool {
+    (name.starts_with("PRINT")
+        && !name.starts_with("PRINTS")
+        && !name.starts_with("PRINTV")
+        && !name.contains("FORMS"))
+        || matches!(
+            name,
+            "PRINTSINGLE" | "PRINTSINGLEK" | "PRINTSINGLED" | "DATA"
+        )
+}
+
 const DYNAMIC_CALL_INSTRUCTIONS: &[&str] = &[
+    "CALL",
+    "CALLF",
+    "JUMP",
+    "BEGIN",
+    "TRYCALL",
+    "TRYJUMP",
+    "GOTO",
+    "TRYGOTO",
     "CALLFORM",
     "CALLFORMF",
     "JUMPFORM",
@@ -154,6 +201,7 @@ const NO_ARG_INSTRUCTIONS: &[&str] = &[
     "ENDCATCH",
     "ENDFUNC",
     "ENDLIST",
+    "DATALIST",
     "BREAK",
     "CONTINUE",
     "RESTART",

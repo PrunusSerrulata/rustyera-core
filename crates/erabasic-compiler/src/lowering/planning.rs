@@ -171,11 +171,11 @@ pub(super) fn formatted_constant(value: &HirFormattedString) -> Option<String> {
 }
 
 pub(super) fn add_control_flow(
-    function: &Function,
     line: LineId,
     location: SourceLocation,
     builder: &mut Builder<'_>,
     structured: &StructuredFlow,
+    outgoing: &[&erabasic_hir::ControlFlowEdge],
     pending: &mut Vec<(usize, LineId, bool)>,
 ) {
     if let Some(target) = structured.false_targets.get(&line) {
@@ -192,11 +192,6 @@ pub(super) fn add_control_flow(
         pending.push((instruction, *target, true));
         return;
     }
-    let outgoing: Vec<_> = function
-        .control_flow
-        .iter()
-        .filter(|edge| edge.from == line)
-        .collect();
     if !structured.alternative_ends.contains_key(&line)
         && let Some(branch) = outgoing
             .iter()
@@ -239,11 +234,30 @@ struct OpenIf {
 pub(super) fn structured_if_flow(function: &Function) -> StructuredFlow {
     let mut result = StructuredFlow::default();
     let mut open = Vec::<OpenIf>::new();
+    let mut select_open = Vec::<(LineId, Vec<LineId>)>::new();
     for line in &function.lines {
         let HirStatementKind::Instruction { target, .. } = &line.kind else {
             continue;
         };
         match target.name() {
+            "SELECTCASE" => select_open.push((line.id, Vec::new())),
+            "CASE" | "CASEELSE" => {
+                if let Some((_, cases)) = select_open.last_mut() {
+                    cases.push(line.id);
+                }
+            }
+            "ENDSELECT" => {
+                let Some((_, cases)) = select_open.pop() else {
+                    continue;
+                };
+                for pair in cases.windows(2) {
+                    result.false_targets.insert(pair[0], pair[1]);
+                    result.alternative_ends.insert(pair[1], line.id);
+                }
+                if let Some(last) = cases.last() {
+                    result.false_targets.insert(*last, line.id);
+                }
+            }
             "IF" | "TRYCCALL" | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" | "TRYCGOTO"
             | "TRYCGOTOFORM" => open.push(OpenIf {
                 opener: line.id,

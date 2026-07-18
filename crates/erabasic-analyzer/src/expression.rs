@@ -4,6 +4,7 @@ use erabasic_hir::{
     CallTarget, ConstantValue, FunctionId, HirCallArgument, HirExpr, HirExprKind, HirFormPart,
     HirFormattedString, HirPlace, SemanticType, SourceId, SourceLocation,
 };
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::{
@@ -27,22 +28,24 @@ pub(crate) struct ExpressionAnalyzer<'a> {
 #[derive(Default)]
 pub(crate) struct IndexResolver {
     tables: BTreeMap<(String, usize), BTreeMap<String, i64>>,
+    rename: BTreeMap<String, i64>,
 }
 
 impl IndexResolver {
     pub fn new(project: &ProjectData) -> Self {
         let mut result = Self::default();
         for (kind, table) in &project.static_data.name_tables {
-            let variable = data_variable_for_kind(*kind);
             let dimension = dimension_for_kind(*kind);
-            result.tables.insert(
-                (variable.to_owned(), dimension),
-                table
-                    .lookup
-                    .iter()
-                    .map(|(name, index)| (name.clone(), i64::from(*index)))
-                    .collect(),
-            );
+            let lookup: BTreeMap<_, _> = table
+                .lookup
+                .iter()
+                .map(|(name, index)| (name.clone(), i64::from(*index)))
+                .collect();
+            for variable in data_variables_for_kind(*kind) {
+                result
+                    .tables
+                    .insert(((*variable).to_owned(), dimension), lookup.clone());
+            }
         }
         for (name, table) in &project.static_data.deferred_indices.resolved {
             let (variable, dimension) = name
@@ -68,6 +71,12 @@ impl IndexResolver {
                     .collect(),
             );
         }
+        result.rename = project
+            .static_data
+            .rename
+            .iter()
+            .filter_map(|(name, value)| value.parse().ok().map(|value| (name.clone(), value)))
+            .collect();
         result
     }
 
@@ -76,6 +85,15 @@ impl IndexResolver {
             .get(&(variable.to_ascii_uppercase(), dimension))
             .and_then(|table| table.get(name))
             .copied()
+    }
+
+    pub(crate) fn resolve_rename(&self, name: &str) -> Option<i64> {
+        self.rename.get(name).copied()
+    }
+
+    fn has_table(&self, variable: &str, dimension: usize) -> bool {
+        self.tables
+            .contains_key(&(variable.to_ascii_uppercase(), dimension))
     }
 }
 
@@ -197,12 +215,30 @@ impl ExpressionAnalyzer<'_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn analyze_identifier(
         &mut self,
         name: &str,
         indices: &[Expr],
         location: SourceLocation,
     ) -> HirExpr {
+        if name.eq_ignore_ascii_case("RAND") {
+            // RAND predates expression-function syntax and remains exposed as a
+            // pseudo variable (`RAND:max`) by Emuera. Lower both spellings to the
+            // same native call so the zero-length schema placeholder is never read.
+            let arguments = indices.iter().cloned().map(Some).collect::<Vec<_>>();
+            return self.analyze_call(name, &arguments, location);
+        }
+        if indices.is_empty()
+            && let Some(value) = self.index_resolver.resolve_rename(name)
+        {
+            return HirExpr {
+                kind: HirExprKind::Integer { value },
+                value_type: SemanticType::Integer,
+                constant: Some(ConstantValue::Integer(value)),
+                location,
+            };
+        }
         let Some(variable) = self.symbols.resolve_variable(self.function, name) else {
             if self.catalog.functions.contains_key(&self.key(name)) {
                 return self.analyze_call(name, &[], location);
@@ -214,12 +250,21 @@ impl ExpressionAnalyzer<'_> {
             );
             return self.error_expression(location);
         };
+        let maximum_indices = variable.dimensions.len()
+            + usize::from(variable.storage == erabasic_data::StorageScope::Character);
+        let indices = normalize_colon_indices(indices, maximum_indices);
+        let explicit_character = variable.storage == erabasic_data::StorageScope::Character
+            && indices.len() > variable.dimensions.len();
         let indices: Vec<_> = indices
             .iter()
             .enumerate()
             .map(|(dimension, index)| {
+                let data_dimension = dimension.saturating_sub(usize::from(explicit_character));
                 if let ExprKind::Identifier(index_name) = &index.kind
-                    && let Some(value) = self.index_resolver.resolve(name, dimension, index_name)
+                    && (!explicit_character || dimension > 0)
+                    && let Some(value) =
+                        self.index_resolver
+                            .resolve(name, data_dimension, index_name)
                 {
                     return HirExpr {
                         kind: HirExprKind::Integer { value },
@@ -228,20 +273,50 @@ impl ExpressionAnalyzer<'_> {
                         location: SourceLocation::new(self.source, index.span),
                     };
                 }
-                self.analyze(index)
+                let index_location = SourceLocation::new(self.source, index.span);
+                let index = self.analyze(index);
+                if index.value_type == SemanticType::String
+                    && self.index_resolver.has_table(name, data_dimension)
+                {
+                    // Emuera resolves a runtime string index through the same
+                    // CSV name table exposed by GETNUM. Represent that lookup
+                    // explicitly so bytecode indices remain integer-typed.
+                    let array = HirPlace {
+                        variable: variable.id,
+                        indices: Vec::new(),
+                        value_type: variable.value_type,
+                        mutable: variable.mutable,
+                        location,
+                    };
+                    return HirExpr {
+                        kind: HirExprKind::Call {
+                            target: CallTarget::Builtin {
+                                name: "GETNUM".into(),
+                            },
+                            arguments: vec![
+                                HirCallArgument::Place(array),
+                                HirCallArgument::Value(index),
+                            ],
+                        },
+                        value_type: SemanticType::Integer,
+                        constant: None,
+                        location: index_location,
+                    };
+                }
+                index
             })
             .collect();
         for index in &indices {
             self.expect_type(index, SemanticType::Integer, "array index");
         }
-        if indices.len() > variable.dimensions.len() {
+        if indices.len() > maximum_indices {
             self.diagnostic(
                 AnalyzerDiagnosticCode::InvalidDimension,
                 location,
                 format!(
                     "{} accepts at most {} indices, but {} were provided",
                     variable.name,
-                    variable.dimensions.len(),
+                    maximum_indices,
                     indices.len()
                 ),
             );
@@ -441,6 +516,12 @@ impl ExpressionAnalyzer<'_> {
         let string_add = op == BinaryOp::Add
             && left.value_type == SemanticType::String
             && right.value_type == SemanticType::String;
+        let string_repeat = op == BinaryOp::Multiply
+            && matches!(
+                (left.value_type, right.value_type),
+                (SemanticType::String, SemanticType::Integer)
+                    | (SemanticType::Integer, SemanticType::String)
+            );
         if comparison {
             if left.value_type != right.value_type
                 && !left.value_type.eq(&SemanticType::Error)
@@ -452,13 +533,13 @@ impl ExpressionAnalyzer<'_> {
                     "comparison operands must have the same type",
                 );
             }
-        } else if !string_add {
+        } else if !string_add && !string_repeat {
             self.expect_type(&left, SemanticType::Integer, "binary left operand");
             self.expect_type(&right, SemanticType::Integer, "binary right operand");
         }
         let value_type = if comparison {
             SemanticType::Integer
-        } else if string_add {
+        } else if string_add || string_repeat {
             SemanticType::String
         } else if left.value_type == SemanticType::Error || right.value_type == SemanticType::Error
         {
@@ -695,40 +776,77 @@ impl ExpressionAnalyzer<'_> {
     }
 }
 
+fn normalize_colon_indices(indices: &[Expr], maximum: usize) -> Cow<'_, [Expr]> {
+    if maximum == 0 || indices.len() <= maximum {
+        return Cow::Borrowed(indices);
+    }
+    // Syntax parsing cannot know whether `TMP:ARG:0` describes a two-dimensional
+    // TMP or a one-dimensional TMP indexed by ARG:0. Once the declaration is
+    // resolved, fold the excess colon tail into the final permitted index. This
+    // mirrors the reference's variable-token-aware expression parser without
+    // leaking semantic variable shapes into the public parser context.
+    let nested_start = maximum - 1;
+    let mut normalized = indices[..nested_start].to_vec();
+    let mut nested = indices[nested_start].clone();
+    let extra = indices[nested_start + 1..].to_vec();
+    let end = extra.last().map_or(nested.span, |value| value.span);
+    nested.kind = match nested.kind {
+        ExprKind::Identifier(name) => ExprKind::Variable {
+            name,
+            indices: extra,
+        },
+        ExprKind::Variable {
+            name,
+            indices: mut existing,
+        } => {
+            existing.extend(extra);
+            ExprKind::Variable {
+                name,
+                indices: existing,
+            }
+        }
+        _ => return Cow::Borrowed(indices),
+    };
+    nested.span = nested.span.join(end);
+    normalized.push(nested);
+    Cow::Owned(normalized)
+}
+
 fn value_call_argument(value: Option<HirExpr>) -> HirCallArgument {
     value.map_or(HirCallArgument::Omitted, HirCallArgument::Value)
 }
 
-fn data_variable_for_kind(kind: NameTableKind) -> &'static str {
+fn data_variables_for_kind(kind: NameTableKind) -> &'static [&'static str] {
     match kind {
-        NameTableKind::Abl => "ABL",
-        NameTableKind::Exp => "EXP",
-        NameTableKind::Talent => "TALENT",
-        NameTableKind::Palam => "PALAM",
-        NameTableKind::Train => "TRAIN",
-        NameTableKind::Mark => "MARK",
-        NameTableKind::Item => "ITEM",
-        NameTableKind::Base => "BASE",
-        NameTableKind::Source => "SOURCE",
-        NameTableKind::Ex => "EX",
-        NameTableKind::Str => "STR",
-        NameTableKind::Equip => "EQUIP",
-        NameTableKind::Tequip => "TEQUIP",
-        NameTableKind::Flag => "FLAG",
-        NameTableKind::Tflag => "TFLAG",
-        NameTableKind::Cflag => "CFLAG",
-        NameTableKind::Tcvar => "TCVAR",
-        NameTableKind::Cstr => "CSTR",
-        NameTableKind::Stain => "STAIN",
-        NameTableKind::Cdflag1 | NameTableKind::Cdflag2 => "CDFLAG",
-        NameTableKind::Strname => "STRNAME",
-        NameTableKind::Tstr => "TSTR",
-        NameTableKind::Savestr => "SAVESTR",
-        NameTableKind::Global => "GLOBAL",
-        NameTableKind::Globals => "GLOBALS",
-        NameTableKind::Day => "DAY",
-        NameTableKind::Time => "TIME",
-        NameTableKind::Money => "MONEY",
+        NameTableKind::Abl => &["ABL"],
+        NameTableKind::Exp => &["EXP"],
+        NameTableKind::Talent => &["TALENT"],
+        NameTableKind::Palam => &["PALAM", "UP", "DOWN", "JUEL", "GOTJUEL", "CUP", "CDOWN"],
+        NameTableKind::Train => &["TRAIN"],
+        NameTableKind::Mark => &["MARK"],
+        // ITEM.csv names are shared by every item-indexed built-in variable.
+        NameTableKind::Item => &["ITEM", "ITEMSALES", "ITEMPRICE", "ITEMNAME"],
+        NameTableKind::Base => &["BASE", "MAXBASE", "LOSEBASE", "DOWNBASE"],
+        NameTableKind::Source => &["SOURCE"],
+        NameTableKind::Ex => &["EX", "NOWEX"],
+        NameTableKind::Str => &["STR"],
+        NameTableKind::Equip => &["EQUIP"],
+        NameTableKind::Tequip => &["TEQUIP"],
+        NameTableKind::Flag => &["FLAG"],
+        NameTableKind::Tflag => &["TFLAG"],
+        NameTableKind::Cflag => &["CFLAG"],
+        NameTableKind::Tcvar => &["TCVAR"],
+        NameTableKind::Cstr => &["CSTR"],
+        NameTableKind::Stain => &["STAIN"],
+        NameTableKind::Cdflag1 | NameTableKind::Cdflag2 => &["CDFLAG"],
+        NameTableKind::Strname => &["STRNAME"],
+        NameTableKind::Tstr => &["TSTR"],
+        NameTableKind::Savestr => &["SAVESTR"],
+        NameTableKind::Global => &["GLOBAL"],
+        NameTableKind::Globals => &["GLOBALS"],
+        NameTableKind::Day => &["DAY"],
+        NameTableKind::Time => &["TIME"],
+        NameTableKind::Money => &["MONEY"],
     }
 }
 
@@ -753,6 +871,14 @@ fn fold_binary(
             BinaryOp::GreaterEqual => Some(ConstantValue::Integer(i64::from(left >= right))),
             _ => None,
         },
+        (ConstantValue::String(value), ConstantValue::Integer(count))
+        | (ConstantValue::Integer(count), ConstantValue::String(value))
+            if op == BinaryOp::Multiply && (0..10_000).contains(count) =>
+        {
+            Some(ConstantValue::String(
+                value.repeat(usize::try_from(*count).ok()?),
+            ))
+        }
         (ConstantValue::Integer(left), ConstantValue::Integer(right)) => {
             Some(ConstantValue::Integer(match op {
                 BinaryOp::Multiply => left.wrapping_mul(*right),

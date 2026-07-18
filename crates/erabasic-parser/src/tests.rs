@@ -34,6 +34,242 @@ fn parses_assignment_line() {
 }
 
 #[test]
+fn bare_assignment_rhs_is_an_empty_string() {
+    let output = parse_line("RESULTS =", &DefaultParserContext::default());
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert!(matches!(
+        output.value.unwrap().kind,
+        StatementKind::Assignment {
+            value: erabasic_ast::Expr {
+                kind: ExprKind::String(ref value),
+                ..
+            },
+            ..
+        } if value.is_empty()
+    ));
+}
+
+#[test]
+fn string_assignment_recovers_unquoted_form_text() {
+    let output = parse_line(
+        "LOCALS = HP(%CALLNAME:MASTER%)",
+        &DefaultParserContext::default(),
+    );
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert!(matches!(
+        output.value.unwrap().kind,
+        StatementKind::Assignment {
+            value: erabasic_ast::Expr {
+                kind: ExprKind::Formatted(_),
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn apostrophe_equals_uses_string_expression_assignment() {
+    let output = parse_line(
+        "RESULTS '= REPLACE(ARGS, \"x\", \"y\")",
+        &DefaultParserContext::default(),
+    );
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert!(matches!(
+        output.value.unwrap().kind,
+        StatementKind::Assignment {
+            op: AssignOp::StringAssign,
+            value: erabasic_ast::Expr {
+                kind: ExprKind::Call { .. },
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn times_parses_real_literal_as_an_exact_ratio() {
+    let output = parse_line("TIMES LOCAL:1, 1.25", &DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Instruction { arguments, .. } = output.value.unwrap().kind else {
+        panic!("expected TIMES instruction");
+    };
+    assert_eq!(arguments.len(), 3);
+    assert!(matches!(
+        arguments.get(1),
+        Some(Argument::Expression(erabasic_ast::Expr {
+            kind: ExprKind::Integer(5),
+            ..
+        }))
+    ));
+    assert!(matches!(
+        arguments.get(2),
+        Some(Argument::Expression(erabasic_ast::Expr {
+            kind: ExprKind::Integer(4),
+            ..
+        }))
+    ));
+}
+
+#[test]
+fn printv_apostrophe_operands_are_raw_strings() {
+    let output = parse_line(
+        "PRINTV 'LV,ABL:親密,'(,ABL:親密,')",
+        &DefaultParserContext::default(),
+    );
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Instruction { arguments, .. } = output.value.unwrap().kind else {
+        panic!("expected PRINTV");
+    };
+    assert!(matches!(
+        arguments.first(),
+        Some(Argument::Expression(erabasic_ast::Expr {
+            kind: ExprKind::String(value),
+            ..
+        })) if value == "LV"
+    ));
+}
+
+#[test]
+fn plain_assignment_defers_form_text_lexing_to_semantic_analysis() {
+    let output = parse_line("LOCALS = 東方　カード", &DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Assignment { raw_value, .. } = output.value.unwrap().kind else {
+        panic!("expected assignment");
+    };
+    assert_eq!(raw_value, "東方　カード");
+}
+
+#[test]
+fn case_preserves_comparison_and_range_selector_grammar() {
+    for (source, expected) in [
+        ("CASE IS < 20", "IS < 20"),
+        ("CASE 20 TO 60", "20 TO 60"),
+        ("CASE 8, 9", "8, 9"),
+    ] {
+        let output = parse_line(source, &DefaultParserContext::default());
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        let StatementKind::Instruction { arguments, .. } = output.value.unwrap().kind else {
+            panic!("CASE instruction expected");
+        };
+        assert_eq!(arguments, vec![Argument::Raw(expected.into())]);
+    }
+}
+
+#[test]
+fn numeric_assignment_list_is_deferred_until_the_target_type_is_known() {
+    let output = parse_line("LOCAL = 5, 6, 7", &DefaultParserContext::default());
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let StatementKind::Assignment {
+        additional_values,
+        raw_value,
+        ..
+    } = output.value.unwrap().kind
+    else {
+        panic!("assignment expected");
+    };
+    assert!(additional_values.is_empty());
+    assert_eq!(raw_value, "5, 6, 7");
+}
+
+#[test]
+fn plain_assignment_with_commas_stays_raw_until_target_type_is_known() {
+    let output = parse_line("LOCALS = a,　b", &DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Assignment {
+        additional_values,
+        raw_value,
+        ..
+    } = output.value.unwrap().kind
+    else {
+        panic!("expected assignment");
+    };
+    assert!(additional_values.is_empty());
+    assert_eq!(raw_value, "a,　b");
+}
+
+#[test]
+fn parses_rename_symbol_as_one_expression_term() {
+    let output = parse_line("RESULT = [[霊夢]]", &DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let expressions = parse_expression_list_at("[[霊夢]]", 0, &DefaultParserContext::default());
+    assert!(!expressions.has_errors(), "{:#?}", expressions.diagnostics);
+    assert!(matches!(
+        expressions.value.unwrap().as_slice(),
+        [erabasic_ast::Expr {
+            kind: ExprKind::Identifier(name),
+            ..
+        }] if name == "[[霊夢]]"
+    ));
+}
+
+#[test]
+fn string_variable_can_be_named_minus() {
+    let mut context = DefaultParserContext::default();
+    assert!(context.register_variable("MINUS"));
+    let output = parse_line("MINUS = -", &context);
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    assert!(matches!(
+        output.value.unwrap().kind,
+        StatementKind::Assignment { .. }
+    ));
+}
+
+#[test]
+fn parses_each_character_variable_index_at_the_outer_level() {
+    let output = parse_line(
+        "CFLAG:TARGET:現在位置 '= TCVAR:MASTER:(LOCAL:1)",
+        &DefaultParserContext::default(),
+    );
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let StatementKind::Assignment { target, value, .. } = output.value.unwrap().kind else {
+        panic!("assignment expected");
+    };
+    assert_eq!(target.indices.len(), 2);
+    let ExprKind::Variable { indices, .. } = value.kind else {
+        panic!("variable value expected");
+    };
+    assert_eq!(indices.len(), 2);
+    assert!(matches!(indices[1].kind, ExprKind::Group(_)));
+}
+
+#[test]
+fn lowers_standalone_increment_and_decrement_to_assignments() {
+    let increment = parse_line("LOCAL:1 ++", &DefaultParserContext::default());
+    assert!(
+        increment.diagnostics.is_empty(),
+        "{:?}",
+        increment.diagnostics
+    );
+    let StatementKind::Assignment {
+        target,
+        op: AssignOp::Add,
+        value,
+        ..
+    } = increment.value.unwrap().kind
+    else {
+        panic!("increment assignment expected");
+    };
+    assert_eq!(target.indices.len(), 1);
+    assert!(matches!(value.kind, ExprKind::Integer(1)));
+
+    let decrement = parse_line("--CNT_CHARA", &DefaultParserContext::default());
+    assert!(
+        decrement.diagnostics.is_empty(),
+        "{:?}",
+        decrement.diagnostics
+    );
+    assert!(matches!(
+        decrement.value.unwrap().kind,
+        StatementKind::Assignment {
+            op: AssignOp::Subtract,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn parses_erb_function_and_checks_blocks() {
     let source = "@TEST, ARG=1\nIF ARG\nPRINTFORM value={ARG}\nENDIF\n";
     let output = parse_erb(source, &mut DefaultParserContext::default());
@@ -70,6 +306,49 @@ fn printform_argument_becomes_formatted_ast() {
         panic!("expected instruction")
     };
     assert!(matches!(arguments.first(), Some(Argument::Formatted(_))));
+}
+
+#[test]
+fn plain_print_preserves_format_metacharacters_as_raw_text() {
+    let output = parse_line(
+        "PRINTDL ascii :{ 50% }; comment-like text",
+        &DefaultParserContext::default(),
+    );
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Instruction { arguments, .. } = output.value.unwrap().kind else {
+        panic!("expected instruction");
+    };
+    assert!(matches!(arguments.as_slice(), [Argument::Raw(value)] if value == "ascii :{ 50% }"));
+}
+
+#[test]
+fn plain_print_ascii_art_is_not_misparsed_as_assignment() {
+    let output = parse_line(
+        "PRINTDL 　　　　　　　　　-=ﾆ====-　　ﾆ=-",
+        &DefaultParserContext::default(),
+    );
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Instruction {
+        name, arguments, ..
+    } = output.value.unwrap().kind
+    else {
+        panic!("expected instruction");
+    };
+    assert_eq!(name, "PRINTDL");
+    assert!(matches!(arguments.as_slice(), [Argument::Raw(_)]));
+}
+
+#[test]
+fn joins_braced_physical_lines_and_consumes_utf8_bom() {
+    let source = "\u{feff}; header\n{\n#DIMS CONST SUITS, 2 = \"A\",\n  \"B\"\n}\n";
+    let output = parse_erh(source, &mut DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let script = output.value.unwrap();
+    assert_eq!(script.declarations.len(), 1);
+    assert_eq!(
+        script.declarations[0].raw_arguments,
+        "CONST SUITS, 2 = \"A\",   \"B\" "
+    );
 }
 
 #[test]

@@ -78,6 +78,22 @@ fn runtime_payload_and_envelope_tags_agree() {
 }
 
 #[test]
+fn checked_runtime_schema_covers_lifecycle_control_messages() {
+    let schema = include_str!("../schema/runtime.cddl");
+    for expected in [
+        "[22, exit-requested]",
+        "[93, sequence-acknowledgement]",
+        "[94, resynchronize-request]",
+        "[96, runtime-resynchronized]",
+    ] {
+        assert!(
+            schema.contains(expected),
+            "runtime CDDL is missing {expected}"
+        );
+    }
+}
+
+#[test]
 fn protocol_19_retains_analysis_key_macros_and_extension_registration() {
     let macro_command = RuntimeMessage::KeyMacroCommand(KeyMacroCommand::Store {
         group: 2,

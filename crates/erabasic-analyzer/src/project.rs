@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use erabasic_ast::{
     Argument, Diagnostic, Expr, ExprKind, Function as AstFunction, ParseOutput, Script, Severity,
-    SourceKind, Statement, StatementKind, VariableRef,
+    SourceKind, Span, Statement, StatementKind, VariableRef,
 };
 use erabasic_csv::{CsvDiagnosticSeverity, CsvLoadOptions, resolve_deferred_indices};
 use erabasic_data::ProjectData;
 use erabasic_hir::{
-    EventAttributes, Function, FunctionId, FunctionKind, HirArgument, HirExprKind, HirStatement,
-    HirStatementKind, InstructionTarget, LabelId, LineId, Parameter, Program, SemanticType,
-    SourceFile, SourceId, SourceLocation,
+    ConstantValue, EventAttributes, Function, FunctionId, FunctionKind, HirArgument, HirExpr,
+    HirExprKind, HirStatement, HirStatementKind, InstructionTarget, LabelId, LineId, Parameter,
+    Program, SemanticType, SourceFile, SourceId, SourceLocation,
 };
 use erabasic_parser::{parse_erb, parse_erh};
 use serde::{Deserialize, Serialize};
@@ -215,7 +215,7 @@ fn analyze_with_context(
     }
 
     let index_resolver = IndexResolver::new(&project_data);
-    let mut symbols = Symbols::new(&project_data.schema, &declaration_output.variables, options);
+    let mut symbols = Symbols::new(&project_data, &declaration_output.variables, options);
     let mut definitions = Vec::new();
     for (source_index, source) in sources.iter().enumerate() {
         if source.source.kind != SourceKind::Erb {
@@ -246,15 +246,34 @@ fn analyze_with_context(
                     ),
                 ));
             }
+            let previous = symbols.function(&function.name).cloned();
             match symbols.register_function(&function.name, kind, return_type) {
-                Ok(id) => definitions.push(FunctionDefinition {
-                    source_index,
-                    function_index,
-                    id,
-                    kind,
-                    return_type,
-                    definition_order: u32::try_from(definitions.len()).unwrap_or(u32::MAX),
-                }),
+                Ok(id) => {
+                    if previous.is_some()
+                        && kind != FunctionKind::Event
+                        && (options.warn_function_overloading || options.analysis_mode)
+                    {
+                        diagnostics.push(AnalyzerDiagnostic::at(
+                            AnalyzerDiagnosticCode::DuplicateSymbol,
+                            AnalyzerDiagnosticSeverity::Warning,
+                            1,
+                            source.source.id,
+                            &source.source.relative_path,
+                            &source.text,
+                            function.span,
+                            format!("function {} is already declared", function.name),
+                        ));
+                    }
+                    definitions.push(FunctionDefinition {
+                        source_index,
+                        function_index,
+                        id,
+                        kind,
+                        return_type,
+                        shadowed: previous.is_some() && kind != FunctionKind::Event,
+                        definition_order: u32::try_from(definitions.len()).unwrap_or(u32::MAX),
+                    });
+                }
                 Err(_) => diagnostics.push(at_function(
                     source,
                     function,
@@ -280,9 +299,12 @@ fn analyze_with_context(
             options,
             &mut diagnostics,
         );
+        // A same-name normal function after the first one can never be selected
+        // by Emuera's non-event dictionary. Keep its identity for deterministic
+        // source ordering, but do not lower an unreachable replacement body.
         let should_analyze = options.analysis_mode
-            || !options.ignore_uncalled_functions
-            || reachable.contains(&definition.id);
+            || (!definition.shadowed
+                && (!options.ignore_uncalled_functions || reachable.contains(&definition.id)));
         let hir = if should_analyze {
             analyze_function(
                 definition.id,
@@ -368,6 +390,7 @@ struct FunctionDefinition {
     id: FunctionId,
     kind: FunctionKind,
     return_type: SemanticType,
+    shadowed: bool,
     definition_order: u32,
 }
 
@@ -382,7 +405,7 @@ fn analyze_function(
     function: &AstFunction,
     symbols: &Symbols,
     catalog: &Catalog,
-    _context: &AnalysisParserContext,
+    context: &AnalysisParserContext,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
@@ -426,20 +449,47 @@ fn analyze_function(
             ));
             continue;
         };
-        let default = parameter.default.as_ref().map(|expression| {
-            ExpressionAnalyzer {
-                symbols,
-                catalog,
-                options,
-                function: id,
-                source: source.source.id,
-                path: &source.source.relative_path,
-                text: &source.text,
-                diagnostics,
-                index_resolver,
-            }
-            .analyze(expression)
-        });
+        let variable = symbols.variables.get(place.variable.0 as usize);
+        let reference = variable.is_some_and(|variable| variable.reference);
+        let can_default = matches!(target.name.to_ascii_uppercase().as_str(), "ARG" | "ARGS")
+            || variable
+                .is_some_and(|variable| variable.scope == erabasic_hir::VariableScope::Function);
+        let default = parameter
+            .default
+            .as_ref()
+            .map(|expression| {
+                ExpressionAnalyzer {
+                    symbols,
+                    catalog,
+                    options,
+                    function: id,
+                    source: source.source.id,
+                    path: &source.source.relative_path,
+                    text: &source.text,
+                    diagnostics,
+                    index_resolver,
+                }
+                .analyze(expression)
+            })
+            .or_else(|| {
+                (!reference && can_default).then(|| {
+                    let constant = match place.value_type {
+                        SemanticType::String => ConstantValue::String(String::new()),
+                        _ => ConstantValue::Integer(0),
+                    };
+                    HirExpr {
+                        kind: match &constant {
+                            ConstantValue::Integer(value) => HirExprKind::Integer { value: *value },
+                            ConstantValue::String(value) => HirExprKind::String {
+                                value: value.clone(),
+                            },
+                        },
+                        value_type: place.value_type,
+                        constant: Some(constant),
+                        location: SourceLocation::new(source.source.id, parameter.span),
+                    }
+                })
+            });
         if let Some(default) = &default
             && default.value_type != place.value_type
             && default.value_type != SemanticType::Error
@@ -470,12 +520,7 @@ fn analyze_function(
                 "parameter default must be a compile-time constant",
             ));
         }
-        if default.is_some()
-            && symbols
-                .variables
-                .get(place.variable.0 as usize)
-                .is_some_and(|variable| variable.reference)
-        {
+        if parameter.default.is_some() && reference {
             diagnostics.push(AnalyzerDiagnostic::at(
                 AnalyzerDiagnosticCode::InvalidArgument,
                 AnalyzerDiagnosticSeverity::Error,
@@ -505,6 +550,7 @@ fn analyze_function(
             statement,
             symbols,
             catalog,
+            context,
             index_resolver,
             options,
             diagnostics,
@@ -542,13 +588,34 @@ fn analyze_statement(
     statement: &Statement,
     symbols: &Symbols,
     catalog: &Catalog,
+    context: &AnalysisParserContext,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) -> HirStatement {
-    let location = SourceLocation::new(source.source.id, statement.span);
+    let location_span = match &statement.kind {
+        StatementKind::Instruction { arguments, .. } if matches!(arguments.first(), Some(Argument::Raw(value)) if !value.is_empty()) =>
+        {
+            let Argument::Raw(value) = &arguments[0] else {
+                unreachable!("guard requires a raw argument")
+            };
+            source.text[statement.span.start..statement.span.end]
+                .find(value)
+                .map_or(statement.span, |offset| {
+                    Span::new(statement.span.start + offset, statement.span.end)
+                })
+        }
+        _ => statement.span,
+    };
+    let location = SourceLocation::new(source.source.id, location_span);
     let kind = match &statement.kind {
-        StatementKind::Assignment { target, op, value } => {
+        StatementKind::Assignment {
+            target,
+            op,
+            value,
+            additional_values,
+            raw_value,
+        } => {
             let target_expression = Expr {
                 kind: ExprKind::Variable {
                     name: target.name.clone(),
@@ -556,7 +623,7 @@ fn analyze_statement(
                 },
                 span: target.span,
             };
-            let mut analyzer = ExpressionAnalyzer {
+            let analyzed_target = ExpressionAnalyzer {
                 symbols,
                 catalog,
                 options,
@@ -566,9 +633,8 @@ fn analyze_statement(
                 text: &source.text,
                 diagnostics,
                 index_resolver,
-            };
-            let analyzed_target = analyzer.analyze(&target_expression);
-            let analyzed_value = analyzer.analyze(value);
+            }
+            .analyze(&target_expression);
             let HirExprKind::Variable { place } = analyzed_target.kind else {
                 return HirStatement {
                     id: line_id,
@@ -576,6 +642,104 @@ fn analyze_statement(
                     location,
                 };
             };
+            let form_assignment =
+                place.value_type == SemanticType::String && *op == erabasic_ast::AssignOp::Assign;
+            let mut reparsed_values = Vec::new();
+            let mut reparse_had_errors = false;
+            let value = if form_assignment {
+                let mut parsed =
+                    erabasic_parser::parse_formatted_at(raw_value, value.span.start, context);
+                for diagnostic in parsed.diagnostics.drain(..) {
+                    diagnostics.push(map_parser_diagnostic(
+                        source.source.id,
+                        &source.source.relative_path,
+                        &source.text,
+                        &diagnostic,
+                    ));
+                }
+                parsed.value.map_or_else(
+                    || Expr {
+                        kind: ExprKind::Error,
+                        span: value.span,
+                    },
+                    |formatted| Expr {
+                        kind: ExprKind::Formatted(formatted),
+                        span: value.span,
+                    },
+                )
+            } else if *op == erabasic_ast::AssignOp::Assign {
+                let mut parsed =
+                    erabasic_parser::parse_expression_list_at(raw_value, value.span.start, context);
+                reparse_had_errors = parsed.has_errors();
+                for diagnostic in parsed.diagnostics.drain(..) {
+                    diagnostics.push(map_parser_diagnostic(
+                        source.source.id,
+                        &source.source.relative_path,
+                        &source.text,
+                        &diagnostic,
+                    ));
+                }
+                reparsed_values = parsed.value.unwrap_or_default();
+                reparsed_values.first().cloned().unwrap_or(Expr {
+                    kind: ExprKind::Error,
+                    span: value.span,
+                })
+            } else {
+                value.clone()
+            };
+            let default_omitted = |expression: &Expr| {
+                if !reparse_had_errors && matches!(expression.kind, ExprKind::Error) {
+                    Expr {
+                        kind: match place.value_type {
+                            SemanticType::String => ExprKind::String(String::new()),
+                            SemanticType::Integer | SemanticType::Void | SemanticType::Error => {
+                                ExprKind::Integer(0)
+                            }
+                        },
+                        span: expression.span,
+                    }
+                } else {
+                    expression.clone()
+                }
+            };
+            let value = default_omitted(&value);
+            let mut values = vec![
+                ExpressionAnalyzer {
+                    symbols,
+                    catalog,
+                    options,
+                    function,
+                    source: source.source.id,
+                    path: &source.source.relative_path,
+                    text: &source.text,
+                    diagnostics,
+                    index_resolver,
+                }
+                .analyze(&value),
+            ];
+            if !form_assignment {
+                let additional = if *op == erabasic_ast::AssignOp::Assign {
+                    reparsed_values.iter().skip(1).collect::<Vec<_>>()
+                } else {
+                    additional_values.iter().collect::<Vec<_>>()
+                };
+                for additional in additional {
+                    values.push(
+                        ExpressionAnalyzer {
+                            symbols,
+                            catalog,
+                            options,
+                            function,
+                            source: source.source.id,
+                            path: &source.source.relative_path,
+                            text: &source.text,
+                            diagnostics,
+                            index_resolver,
+                        }
+                        .analyze(&default_omitted(additional)),
+                    );
+                }
+            }
             if !place.mutable {
                 diagnostics.push(AnalyzerDiagnostic::at(
                     AnalyzerDiagnosticCode::InvalidAssignment,
@@ -588,24 +752,35 @@ fn analyze_statement(
                     "assignment target is immutable",
                 ));
             }
-            if place.value_type != analyzed_value.value_type
-                && analyzed_value.value_type != SemanticType::Error
-            {
-                diagnostics.push(AnalyzerDiagnostic::at(
-                    AnalyzerDiagnosticCode::TypeMismatch,
-                    AnalyzerDiagnosticSeverity::Error,
-                    2,
-                    source.source.id,
-                    &source.source.relative_path,
-                    &source.text,
-                    value.span,
-                    "assignment value type does not match its target",
-                ));
+            for analyzed_value in &values {
+                if place.value_type != analyzed_value.value_type
+                    && analyzed_value.value_type != SemanticType::Error
+                {
+                    diagnostics.push(AnalyzerDiagnostic::at(
+                        AnalyzerDiagnosticCode::TypeMismatch,
+                        AnalyzerDiagnosticSeverity::Error,
+                        2,
+                        source.source.id,
+                        &source.source.relative_path,
+                        &source.text,
+                        analyzed_value.location.span,
+                        "assignment value type does not match its target",
+                    ));
+                }
             }
-            HirStatementKind::Assignment {
-                target: place,
-                op: *op,
-                value: analyzed_value,
+            if values.len() > 1 {
+                let mut arguments = vec![HirArgument::Place(place)];
+                arguments.extend(values.into_iter().map(HirArgument::Expression));
+                HirStatementKind::Instruction {
+                    target: InstructionTarget::Builtin("SET".into()),
+                    arguments,
+                }
+            } else {
+                HirStatementKind::Assignment {
+                    target: place,
+                    op: *op,
+                    value: values.pop().expect("an assignment always has one value"),
+                }
             }
         }
         StatementKind::Instruction {
@@ -621,6 +796,7 @@ fn analyze_statement(
             raw_arguments,
             symbols,
             catalog,
+            context,
             index_resolver,
             options,
             diagnostics,
@@ -653,13 +829,18 @@ fn analyze_instruction(
     raw_arguments: &str,
     symbols: &Symbols,
     catalog: &Catalog,
+    context: &AnalysisParserContext,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) -> HirStatementKind {
     let key = key(name, options.ignore_case);
     let signature = catalog.instructions.get(&key);
-    if signature.is_none() {
+    let method_signature = signature
+        .is_none()
+        .then(|| catalog.functions.get(&key))
+        .flatten();
+    if signature.is_none() && method_signature.is_none() {
         diagnostics.push(AnalyzerDiagnostic::at(
             AnalyzerDiagnosticCode::UnknownInstruction,
             AnalyzerDiagnosticSeverity::Error,
@@ -675,6 +856,23 @@ fn analyze_instruction(
         key.as_str(),
         "CALL" | "CALLF" | "JUMP" | "BEGIN" | "TRYCALL" | "TRYJUMP" | "GOTO" | "TRYGOTO"
     );
+    if key == "CASE" {
+        return HirStatementKind::Instruction {
+            target: InstructionTarget::Builtin(key),
+            arguments: analyze_case_arguments(
+                function,
+                source,
+                statement,
+                raw_arguments,
+                symbols,
+                catalog,
+                context,
+                index_resolver,
+                options,
+                diagnostics,
+            ),
+        };
+    }
     let mut analyzer = ExpressionAnalyzer {
         symbols,
         catalog,
@@ -689,14 +887,10 @@ fn analyze_instruction(
     let mut lowered = Vec::new();
     for (index, argument) in arguments.iter().enumerate() {
         if static_target && index == 0 {
-            lowered.push(HirArgument::Raw(
-                raw_arguments
-                    .split(',')
-                    .next()
-                    .unwrap_or_default()
-                    .trim()
-                    .to_owned(),
-            ));
+            lowered.push(HirArgument::Raw(resolve_static_target(
+                raw_arguments,
+                index_resolver,
+            )));
             continue;
         }
         lowered.push(match argument {
@@ -709,7 +903,7 @@ fn analyze_instruction(
                     continue;
                 }
                 let expression = analyzer.analyze(expression);
-                let mutable = signature
+                let constraint = signature
                     .and_then(|signature| {
                         signature.arguments.get(index).or_else(|| {
                             signature
@@ -718,17 +912,27 @@ fn analyze_instruction(
                                 .flatten()
                         })
                     })
-                    .is_some_and(|constraint| {
-                        matches!(
-                            constraint,
-                            crate::ArgumentConstraint::MutableInteger
-                                | crate::ArgumentConstraint::MutableString
-                                | crate::ArgumentConstraint::MutableAny
-                                | crate::ArgumentConstraint::ReferenceAny
-                                | crate::ArgumentConstraint::ReferenceOrString
-                                | crate::ArgumentConstraint::MutableReferenceOrString
-                        )
+                    .or_else(|| {
+                        method_signature.and_then(|signature| {
+                            signature.arguments.get(index).or_else(|| {
+                                signature
+                                    .variadic
+                                    .then(|| signature.arguments.last())
+                                    .flatten()
+                            })
+                        })
                     });
+                let mutable = constraint.is_some_and(|constraint| {
+                    matches!(
+                        constraint,
+                        crate::ArgumentConstraint::MutableInteger
+                            | crate::ArgumentConstraint::MutableString
+                            | crate::ArgumentConstraint::MutableAny
+                            | crate::ArgumentConstraint::ReferenceAny
+                            | crate::ArgumentConstraint::ReferenceOrString
+                            | crate::ArgumentConstraint::MutableReferenceOrString
+                    )
+                });
                 if mutable {
                     if let HirExprKind::Variable { place } = expression.kind {
                         HirArgument::Place(place)
@@ -758,14 +962,15 @@ fn analyze_instruction(
         });
     }
     if static_target && lowered.is_empty() && !raw_arguments.trim().is_empty() {
-        lowered.push(HirArgument::Raw(
-            raw_arguments
-                .split(',')
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .to_owned(),
-        ));
+        lowered.push(HirArgument::Raw(resolve_static_target(
+            raw_arguments,
+            index_resolver,
+        )));
+    }
+    if key == "SIF" && matches!(lowered.last(), Some(HirArgument::Omitted)) {
+        // A few reference-compatible scripts retain a dangling comma after an
+        // SIF condition. The statement builder consumes only its first term.
+        lowered.pop();
     }
     if let Some(signature) = signature {
         let expression_arguments: Vec<_> = lowered
@@ -788,6 +993,7 @@ fn analyze_instruction(
             signature.argument_style,
             erabasic_parser::ArgumentStyle::Formatted
                 | erabasic_parser::ArgumentStyle::Raw
+                | erabasic_parser::ArgumentStyle::Times
                 | erabasic_parser::ArgumentStyle::DynamicCall
         ) && !static_target
         {
@@ -814,8 +1020,56 @@ fn analyze_instruction(
                 ),
             ));
         }
+    } else if let Some(signature) = method_signature {
+        let expression_arguments: Vec<_> = lowered
+            .iter()
+            .map(|argument| match argument {
+                HirArgument::Expression(expression)
+                | HirArgument::MixedExpression { expression, .. } => Some(expression.clone()),
+                HirArgument::Place(place) => Some(erabasic_hir::HirExpr {
+                    kind: HirExprKind::Variable {
+                        place: place.clone(),
+                    },
+                    value_type: place.value_type,
+                    constant: None,
+                    location: place.location,
+                }),
+                HirArgument::Omitted | HirArgument::Formatted(_) | HirArgument::Raw(_) => None,
+            })
+            .collect();
+        if key.contains("FORM") && !key.contains("FORMS") {
+            if lowered.len() < signature.minimum_arguments {
+                diagnostics.push(AnalyzerDiagnostic::at(
+                    AnalyzerDiagnosticCode::InvalidArgumentCount,
+                    AnalyzerDiagnosticSeverity::Error,
+                    2,
+                    source.source.id,
+                    &source.source.relative_path,
+                    &source.text,
+                    statement.span,
+                    format!(
+                        "{} requires at least {} arguments",
+                        key, signature.minimum_arguments
+                    ),
+                ));
+            }
+        } else {
+            analyzer.check_arguments(
+                &expression_arguments,
+                &signature.arguments,
+                signature.minimum_arguments,
+                signature.variadic,
+                signature.allow_omitted,
+                SourceLocation::new(source.source.id, statement.span),
+            );
+        }
     }
-    let target = if signature.is_none() {
+    let target = if let Some(method_signature) = method_signature {
+        InstructionTarget::BuiltinMethod {
+            name: key,
+            return_type: method_signature.return_type,
+        }
+    } else if signature.is_none() {
         InstructionTarget::Unresolved(key)
     } else if catalog.extension_instructions.contains(&key) {
         InstructionTarget::Extension(key)
@@ -826,6 +1080,225 @@ fn analyze_instruction(
         target,
         arguments: lowered,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn analyze_case_arguments(
+    function: FunctionId,
+    source: &ParsedProjectSource,
+    statement: &Statement,
+    raw: &str,
+    symbols: &Symbols,
+    catalog: &Catalog,
+    context: &AnalysisParserContext,
+    index_resolver: &IndexResolver,
+    options: &AnalyzerOptions,
+    diagnostics: &mut Vec<AnalyzerDiagnostic>,
+) -> Vec<HirArgument> {
+    let raw = strip_case_comment(raw);
+    let statement_text = &source.text[statement.span.start..statement.span.end];
+    let raw_base = statement
+        .span
+        .start
+        .saturating_add(statement_text.find(raw).unwrap_or(0));
+    let mut lowered = Vec::new();
+    for (segment_offset, segment) in split_case_segments(raw) {
+        let leading = segment.len().saturating_sub(segment.trim_start().len());
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        let base = raw_base + segment_offset + leading;
+        let (tag, operands) = if let Some(rest) = strip_ascii_keyword(segment, "IS") {
+            let rest = rest.trim_start();
+            let (tag, expression) = [
+                (">=", "ge"),
+                ("<=", "le"),
+                ("!=", "ne"),
+                ("==", "eq"),
+                (">", "gt"),
+                ("<", "lt"),
+                ("=", "eq"),
+                ("&", "and"),
+            ]
+            .into_iter()
+            .find_map(|(operator, tag)| {
+                rest.strip_prefix(operator)
+                    .map(|expression| (tag, expression.trim_start()))
+            })
+            .unwrap_or(("eq", rest));
+            (tag, vec![expression])
+        } else if let Some(to) = find_case_to(segment) {
+            ("range", vec![&segment[..to], &segment[to + 2..]])
+        } else {
+            ("eq", vec![segment])
+        };
+        lowered.push(HirArgument::Raw(tag.into()));
+        for operand in operands {
+            let operand_leading = operand.len().saturating_sub(operand.trim_start().len());
+            let operand = operand.trim();
+            let operand_offset = segment.find(operand).unwrap_or(0);
+            let mut parsed = erabasic_parser::parse_expression_list_at(
+                operand,
+                base + operand_offset + operand_leading,
+                context,
+            );
+            for diagnostic in parsed.diagnostics.drain(..) {
+                diagnostics.push(map_parser_diagnostic(
+                    source.source.id,
+                    &source.source.relative_path,
+                    &source.text,
+                    &diagnostic,
+                ));
+            }
+            let expression = parsed
+                .value
+                .and_then(|mut values| (!values.is_empty()).then(|| values.remove(0)));
+            let Some(expression) = expression else {
+                continue;
+            };
+            lowered.push(HirArgument::Expression(
+                ExpressionAnalyzer {
+                    symbols,
+                    catalog,
+                    options,
+                    function,
+                    source: source.source.id,
+                    path: &source.source.relative_path,
+                    text: &source.text,
+                    diagnostics,
+                    index_resolver,
+                }
+                .analyze(&expression),
+            ));
+        }
+    }
+    lowered
+}
+
+fn split_case_segments(source: &str) -> Vec<(usize, &str)> {
+    let mut result = Vec::new();
+    let mut start = 0;
+    let mut depth = 0_u32;
+    let mut quoted = false;
+    for (index, character) in source.char_indices() {
+        match character {
+            '"' if !is_era_escaped(source, index) => quoted = !quoted,
+            '(' | '[' | '{' if !quoted => depth = depth.saturating_add(1),
+            ')' | ']' | '}' if !quoted => depth = depth.saturating_sub(1),
+            ',' if !quoted && depth == 0 => {
+                result.push((start, &source[start..index]));
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    result.push((start, &source[start..]));
+    result
+}
+
+fn strip_case_comment(source: &str) -> &str {
+    let mut quoted = false;
+    for (index, character) in source.char_indices() {
+        match character {
+            '"' if !is_era_escaped(source, index) => quoted = !quoted,
+            ';' if !quoted => return &source[..index],
+            _ => {}
+        }
+    }
+    source
+}
+
+fn strip_ascii_keyword<'a>(source: &'a str, keyword: &str) -> Option<&'a str> {
+    source
+        .get(..keyword.len())
+        .filter(|prefix| prefix.eq_ignore_ascii_case(keyword))
+        .and_then(|_| source.get(keyword.len()..))
+        .filter(|rest| {
+            rest.starts_with(char::is_whitespace) || rest.starts_with(['>', '<', '=', '!', '&'])
+        })
+}
+
+fn find_case_to(source: &str) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut depth = 0_u32;
+    let mut quoted = false;
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        match bytes[index] {
+            b'"' if !is_era_escaped(source, index) => quoted = !quoted,
+            b'(' | b'[' | b'{' if !quoted => depth = depth.saturating_add(1),
+            b')' | b']' | b'}' if !quoted => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if !quoted
+            && depth == 0
+            && bytes[index].eq_ignore_ascii_case(&b't')
+            && bytes[index + 1].eq_ignore_ascii_case(&b'o')
+            && index > 0
+            && index + 2 < bytes.len()
+            && bytes[index - 1].is_ascii_whitespace()
+            && bytes[index + 2].is_ascii_whitespace()
+        {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn is_era_escaped(source: &str, index: usize) -> bool {
+    source.as_bytes()[..index]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count()
+        % 2
+        == 1
+}
+
+fn resolve_static_target(raw: &str, index_resolver: &IndexResolver) -> String {
+    let mut brackets = 0_u32;
+    let mut quoted = false;
+    let end = raw
+        .char_indices()
+        .find_map(|(index, character)| match character {
+            '"' => {
+                quoted = !quoted;
+                None
+            }
+            '[' if !quoted => {
+                brackets = brackets.saturating_add(1);
+                None
+            }
+            ']' if !quoted => {
+                brackets = brackets.saturating_sub(1);
+                None
+            }
+            ',' | '(' if !quoted && brackets == 0 => Some(index),
+            _ => None,
+        })
+        .unwrap_or(raw.len());
+    let target = raw[..end].trim().trim_matches('"');
+    let mut result = String::with_capacity(target.len());
+    let mut rest = target;
+    while let Some(start) = rest.find("[[") {
+        result.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("]]") else {
+            result.push_str(&rest[start..]);
+            return result;
+        };
+        let name = &after[..end];
+        if let Some(value) = index_resolver.resolve_rename(name) {
+            result.push_str(&value.to_string());
+        } else {
+            result.push_str(&rest[start..start + 2 + end + 2]);
+        }
+        rest = &after[end + 2..];
+    }
+    result.push_str(rest);
+    result
 }
 
 fn source_file(id: SourceId, relative_path: String, kind: SourceKind, text: &str) -> SourceFile {
@@ -854,6 +1327,7 @@ fn register_private_variables(
     options: &AnalyzerOptions,
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) {
+    let constants = symbols.constant_values();
     for directive in function
         .attributes
         .iter()
@@ -865,7 +1339,7 @@ fn register_private_variables(
             text: &source.text,
             directive,
         };
-        match parse_private_declaration(&input, context, options) {
+        match parse_private_declaration(&input, context, &constants, options) {
             Ok(declaration) => {
                 if symbols.register_private(function_id, &declaration).is_err() {
                     diagnostics.push(AnalyzerDiagnostic::at(

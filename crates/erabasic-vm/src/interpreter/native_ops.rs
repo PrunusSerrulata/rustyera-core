@@ -55,9 +55,11 @@ pub(super) fn native_place_views(
 pub(super) fn native_implicit_place_views(
     vm: &Vm,
     fiber: &Fiber,
+    names: &[&str],
 ) -> Result<std::collections::BTreeMap<String, NativePlaceView>, VmError> {
-    ["RESULT", "RESULTS", "PALAMLV", "EXPLV"]
-        .into_iter()
+    names
+        .iter()
+        .copied()
         .filter_map(|name| {
             global_unindexed_place(vm, fiber, name)
                 .ok()
@@ -278,8 +280,8 @@ pub(super) fn execute_getnum(
         "PALAM" => Some(erabasic_data::NameTableKind::Palam),
         "TRAIN" => Some(erabasic_data::NameTableKind::Train),
         "MARK" => Some(erabasic_data::NameTableKind::Mark),
-        "ITEM" => Some(erabasic_data::NameTableKind::Item),
-        "BASE" => Some(erabasic_data::NameTableKind::Base),
+        "ITEM" | "ITEMSALES" | "ITEMPRICE" | "ITEMNAME" => Some(erabasic_data::NameTableKind::Item),
+        "BASE" | "MAXBASE" | "LOSEBASE" | "DOWNBASE" => Some(erabasic_data::NameTableKind::Base),
         "SOURCE" => Some(erabasic_data::NameTableKind::Source),
         "EX" => Some(erabasic_data::NameTableKind::Ex),
         "STR" => Some(erabasic_data::NameTableKind::Str),
@@ -373,30 +375,19 @@ pub(super) fn array_snapshot(
     place: &PlaceDescriptor,
 ) -> Result<Vec<VmValue>, VmError> {
     let generation = fiber.frames.last().expect("frame exists").generation;
-    let artifact = &vm
+    let program = vm
         .generations
         .get(&generation)
-        .ok_or_else(|| VmError::InvalidState("array generation is missing".into()))?
-        .artifact;
-    let definition = artifact
-        .globals
-        .iter()
-        .find(|definition| definition.key == place.variable)
+        .ok_or_else(|| VmError::InvalidState("array generation is missing".into()))?;
+    let definition = program
+        .global(place.variable)
         .ok_or_else(|| VmError::InvalidState("array variable is missing".into()))?;
     if definition.dimensions.len() != 1 || !place.indices.is_empty() {
         return Err(VmError::InvalidArguments(
             "array operation requires an unindexed one-dimensional variable".into(),
         ));
     }
-    let length = usize::try_from(definition.dimensions[0])
-        .map_err(|_| VmError::InvalidState("array length exceeds this platform".into()))?;
-    (0..length)
-        .map(|index| {
-            let mut element = place.clone();
-            element.indices = vec![index as u64];
-            vm.read_place(fiber, &element)
-        })
-        .collect()
+    vm.read_place_array(fiber, place)
 }
 
 pub(super) fn commit_array(
@@ -405,14 +396,7 @@ pub(super) fn commit_array(
     place: &PlaceDescriptor,
     values: Vec<VmValue>,
 ) -> Result<(), VmError> {
-    // Every element was read successfully before this commit, so all addresses
-    // and types have already been validated.
-    for (index, value) in values.into_iter().enumerate() {
-        let mut element = place.clone();
-        element.indices = vec![index as u64];
-        vm.write_place(fiber, &element, value)?;
-    }
-    Ok(())
+    vm.write_place_array(fiber, place, values)
 }
 
 pub(super) fn execute_array_mutation(
@@ -745,7 +729,9 @@ pub(super) fn execute_array_query(
     }
 
     let place = array_place(arguments)?;
-    let character_range = operation.contains("carray");
+    // CMATCH ranges over one selected field across characters, just like the
+    // CARRAY family. Its first place is therefore intentionally indexed.
+    let character_range = operation == "cmatch" || operation.contains("carray");
     let values = if character_range {
         character_series(vm, fiber, place)?
     } else {

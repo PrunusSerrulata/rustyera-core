@@ -149,7 +149,12 @@ fn compile_source_with_data(
 }
 
 fn run_compiled_result(artifact: &BytecodeArtifact) -> VmValue {
-    let entry = artifact.functions[0].key;
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
     let result = artifact
         .globals
         .iter()
@@ -173,6 +178,137 @@ fn run_compiled_result(artifact: &BytecodeArtifact) -> VmValue {
         report.events
     );
     vm.read_variable(result, &[0], None).unwrap()
+}
+
+#[test]
+fn scalar_ref_parameters_store_aliases_and_mutate_the_callers_arrays() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n#DIM VALUES, 3\nVALUES:1 = 3\nCALL MUTATE_REF(VALUES)\nRETURN\n@MUTATE_REF(NUMBERS)\n#DIM REF NUMBERS\nNUMBERS:1 = 7\nRETURN\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let values = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "VALUES")
+        .expect("VALUES")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(values, &[1], None),
+        Ok(VmValue::Integer(7))
+    );
+}
+
+#[test]
+fn dynamic_calls_bind_variable_arguments_as_refs_or_values_from_the_target_signature() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n#DIM VALUES, 3\nVALUES:1 = 3\nCALLFORM MUTATE_{1}(VALUES)\nCALLFORM READ_{1}(VALUES:1)\nRETURN\n@MUTATE_1(NUMBERS)\n#DIM REF NUMBERS\nNUMBERS:1 = 7\nRETURN\n@READ_1(VALUE)\n#DIM VALUE\nRESULT:1 = VALUE\nRETURN\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let values = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "VALUES")
+        .expect("VALUES")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(values, &[1], None),
+        Ok(VmValue::Integer(7))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[1], None),
+        Ok(VmValue::Integer(7))
+    );
+}
+
+#[test]
+fn while_false_branch_skips_past_wend_and_finite_loops_terminate() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n#DIM ITERATIONS\nWHILE ITERATIONS < 3\nITERATIONS ++\nWEND\nWHILE 0\nITERATIONS = 99\nWEND\nRETURN ITERATIONS\n",
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(3));
+}
+
+#[test]
+fn bare_return_preserves_the_legacy_result_array() {
+    let artifact = compile_source("@SYSTEM_TITLE\nRESULT = 99\nRETURN\n");
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(99));
+}
+
+#[test]
+fn logical_operators_short_circuit_their_right_operand() {
+    for (expression, expected) in [
+        ("1 || VALUES:1", 1),
+        ("0 && VALUES:1", 0),
+        ("0 !& VALUES:1", 1),
+        ("1 !| VALUES:1", 0),
+        ("1 && 7", 1),
+        ("0 || 7", 1),
+        ("1 !& 0", 1),
+        ("0 !| 0", 1),
+    ] {
+        let artifact = compile_source(&format!(
+            "@SYSTEM_TITLE\n#DIM VALUES, 1\nRETURN {expression}\n"
+        ));
+        assert_eq!(
+            run_compiled_result(&artifact),
+            VmValue::Integer(expected),
+            "{expression}"
+        );
+    }
+}
+
+#[test]
+fn rand_pseudo_variable_uses_the_random_native_instead_of_schema_storage() {
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN RAND:1\n");
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(0));
 }
 
 #[test]
@@ -442,12 +578,12 @@ fn array_shift_and_remove_commit_after_validating_the_whole_array() {
 #[test]
 fn findelement_uses_the_verified_regex_subset() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULTS:0 = \"ab\"\nRESULTS:1 = \"abc\"\nRESULTS:2 = \"zz\"\nRESULT = FINDELEMENT(RESULTS, \"^ab$\", 0, 3, 1)\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULTS:1 '= \"abc\"\nRESULTS:2 '= \"zz\"\nRESULT = FINDELEMENT(RESULTS, \"^ab$\", 0, 3, 1)\nRETURN\n",
     );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(0));
 
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULTS:0 = \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"a(?=b)\", 0, 1, 0)\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"a(?=b)\", 0, 1, 0)\nRETURN\n",
     );
     let entry = artifact.functions[0].key;
     let mut natives = NativeServiceRegistry::for_artifact(&artifact);
@@ -594,7 +730,7 @@ fn arraymsort_reorders_complete_rows_before_committing() {
 #[test]
 fn arraymsortex_resolves_target_names_at_runtime() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nTFLAG:0 = 30\nTFLAG:1 = 10\nTFLAG:2 = 20\nRESULTS:0 = \"TFLAG\"\nRESULTS:1 = \"\"\nRESULT:9 = ARRAYMSORTEX(FLAG, RESULTS, 1, -1)\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nTFLAG:0 = 30\nTFLAG:1 = 10\nTFLAG:2 = 20\nRESULTS:0 '= \"TFLAG\"\nRESULTS:1 '= \"\"\nRESULT:9 = ARRAYMSORTEX(FLAG, RESULTS, 1, -1)\nRETURN\n",
     );
     let entry = artifact.functions[0].key;
     let tflag = artifact
@@ -634,7 +770,7 @@ fn arraymsortex_resolves_target_names_at_runtime() {
 #[test]
 fn arraymsortex_rolls_back_when_a_later_dynamic_target_is_invalid() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nTFLAG:0 = 30\nTFLAG:1 = 10\nTFLAG:2 = 20\nRESULTS:0 = \"TFLAG\"\nRESULTS:1 = \"MISSING\"\nRESULT:9 = ARRAYMSORTEX(FLAG, RESULTS, 1, -1)\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nTFLAG:0 = 30\nTFLAG:1 = 10\nTFLAG:2 = 20\nRESULTS:0 '= \"TFLAG\"\nRESULTS:1 '= \"MISSING\"\nRESULT:9 = ARRAYMSORTEX(FLAG, RESULTS, 1, -1)\nRETURN\n",
     );
     let entry = artifact.functions[0].key;
     let tflag = artifact
@@ -796,6 +932,58 @@ fn cvarset_prevalidates_and_fills_the_character_range() {
 }
 
 #[test]
+fn script_can_address_character_storage_explicitly_or_through_target() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nCFLAG:0:1 = 3\nCFLAG:1:1 = 4\nTARGET = 1\nRESULT:0 = CFLAG:1\nRESULT:1 = CFLAG:0:1\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let cflag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "CFLAG")
+        .unwrap()
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(cflag, &[1], Some(0)),
+        Ok(VmValue::Integer(3))
+    );
+    assert_eq!(
+        vm.read_variable(cflag, &[1], Some(1)),
+        Ok(VmValue::Integer(4))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(4))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[1], None),
+        Ok(VmValue::Integer(3))
+    );
+}
+
+#[test]
 fn cvarset_invalid_range_does_not_write_any_character() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nADDVOIDCHARA\nTARGET = 0\nCFLAG:1 = 3\nTARGET = 1\nCFLAG:1 = 4\nCVARSET CFLAG, 1, 7, 0, 3\nRETURN\n",
@@ -872,6 +1060,14 @@ fn sortchara_reorders_characters_and_remaps_target() {
         ]
     );
     assert_eq!(vm.read_variable(target, &[], None), Ok(VmValue::Integer(1)));
+}
+
+#[test]
+fn cmatch_counts_an_indexed_character_field_across_the_requested_range() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nADDVOIDCHARA\nADDVOIDCHARA\nTARGET = 0\nCFLAG:5 = 9\nTARGET = 1\nCFLAG:5 = 4\nTARGET = 2\nCFLAG:5 = 9\nRETURN CMATCH(CFLAG:5, 9, 0, 3)\n",
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(2));
 }
 
 #[test]

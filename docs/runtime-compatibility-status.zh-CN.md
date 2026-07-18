@@ -364,7 +364,7 @@ renderer 实现了对应观测能力。
 | `ALIGNMENT RIGHT/CENTER` | 按实际物理宽度右对齐或居中 | 只保存意图；这是允许的跨平台投影 |
 | `PRINTC` | Shift-JIS 字节宽度补齐，并用 GDI 测量修正；右对齐 | 只对 4 个精确命令生成 ColumnCell |
 | `PRINTLC` | 左对齐并补齐到列宽 | 同上 |
-| `PRINTBUTTONC/LC` | 带值按钮和列布局 | 有语义按钮，但无参考补齐和测量 |
+| `PRINTBUTTONC/LC` | 带值按钮和列布局 | 使用带 token 的 ColumnCell；物理补齐和测量由前端投影 |
 | 表格式布局 | `PrintCPerLine` 自动换行；TRAIN、SHOP、PALAM 等内建输出依赖它 | TRAIN 当前输出普通 button，不是 ColumnCell；连续调教也错误输出 |
 | `PRINTSINGLE*` | 立即 flush 为单独物理行 | Rust 不提交行，因为名字不以 L/W 结尾 |
 | `PRINTN` | 保持 lineEnd=false，同时进入输入等待 | Rust 既不等待，也没有正确的物理行拼接 |
@@ -376,9 +376,9 @@ renderer 实现了对应观测能力。
 | `PRINTPLAIN*` | 不把 `[数字]` 转换成按钮 | 普通 PRINT 自动识别，PLAIN 保持不可选择 |
 | `PRINTDATA*` | 随机数据列表、多行输出、选择索引、K/D/L/W | 已实现，包括带下标选择目标 |
 | `STRDATA` | 随机选择并拼接字符串数据块 | 已实现，包括带下标目标 |
-| `BAR/BARL/BARSTR` | 按当前值、最大值、长度和配置字符生成进度条 | 仅 `BARSTR` 可用 |
+| `BAR/BARL/BARSTR` | 按当前值、最大值、长度和配置字符生成进度条 | 三者均已进入稳定执行路径；BARL 提交逻辑行 |
 | `DRAWLINE` | 按可绘宽度重复 pattern | Rust 使用确定性逻辑分隔线 |
-| `GETLINESTR` | 按实际 console 可绘宽度返回重复 pattern 字符串 | Rust 固定按 75 逻辑列近似；与新前端观测原则冲突 |
+| `GETLINESTR` | 按实际 console 可绘宽度返回重复 pattern 字符串 | 使用前端最近提交的 `ProjectionObservation.line_columns`，不是 WinForms/GDI 像素宽度 |
 | `CUSTOMDRAWLINE/DRAWLINEFORM` | 自定义 pattern 的分隔线 | 输出规范化 Separator，不复刻 GDI 像素重复 |
 | `PRINT_RECT/SPACE` | px/% 混合尺寸形状 | 保存 font-relative/logical MixedNum 语义，由前端布局 |
 | HTML div | 可形成带宽度、对齐、嵌套内容的表格式布局 | 保存结构化 div 与属性；实际布局由前端完成 |
@@ -388,7 +388,7 @@ renderer 实现了对应观测能力。
 参考 PRINT 分派位于
 `reference/emuera.em/Emuera/Runtime/Script/Statements/Instraction.Child.cs`，自动按钮识别
 位于 `reference/emuera.em/Emuera/UI/Game/PrintStringBuffer.cs`，Rust 的统一打印分支
-位于 `crates/era-runtime/src/session.rs`。
+位于 `crates/era-runtime/src/session/host_dispatch.rs` 与 `crates/era-runtime/src/presentation.rs`。
 
 ## 状态维护规则
 

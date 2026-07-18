@@ -10,7 +10,7 @@ use crate::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 6;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 7;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SnapshotBlocker {
@@ -262,7 +262,7 @@ impl Vm {
         let generation = snapshot.current_generation;
         Ok(Self {
             config,
-            generations: BTreeMap::from([(generation, ProgramGeneration { artifact })]),
+            generations: BTreeMap::from([(generation, ProgramGeneration::new(artifact))]),
             current_generation: generation,
             memory: snapshot.memory,
             fibers: snapshot.fibers,
@@ -393,13 +393,21 @@ fn validate_snapshot(
             erabasic_bytecode::BytecodeStorage::FunctionLocal
             | erabasic_bytecode::BytecodeStorage::Character => continue,
         };
-        if cell.is_none() {
+        if cell.is_none()
+            && !matches!(
+                definition.storage,
+                erabasic_bytecode::BytecodeStorage::FunctionStatic
+                    | erabasic_bytecode::BytecodeStorage::FunctionPersistent
+            )
+        {
             return Err(VmError::Snapshot(format!(
                 "snapshot variable {} differs from the artifact layout",
                 definition.name
             )));
         }
-        validate_cell(cell.expect("cell was checked"), definition)?;
+        if let Some(cell) = cell {
+            validate_cell(cell, definition)?;
+        }
     }
     for character in &snapshot.memory.characters {
         for definition in artifact.globals.iter().filter(|definition| {

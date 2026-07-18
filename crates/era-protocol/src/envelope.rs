@@ -12,8 +12,10 @@ pub struct WireLimits {
 impl Default for WireLimits {
     fn default() -> Self {
         Self {
-            maximum_envelope_bytes: 16 * 1024 * 1024,
-            maximum_payload_bytes: 15 * 1024 * 1024,
+            // A complete eraTW source manifest is about 77 MiB. The creator-owned
+            // runtime cap must accommodate it even though a client may negotiate less.
+            maximum_envelope_bytes: 128 * 1024 * 1024,
+            maximum_payload_bytes: 127 * 1024 * 1024,
         }
     }
 }

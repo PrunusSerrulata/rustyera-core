@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use erabasic_data::{ProjectSchema, StorageScope, ValueType, VariableSchema};
+use erabasic_data::{ProjectData, StorageScope, ValueType, VariableSchema};
 use erabasic_hir::{
     ConstantValue, FunctionId, FunctionKind, SemanticType, SourceLocation, Variable, VariableId,
     VariableScope,
@@ -23,12 +23,13 @@ pub(crate) struct Symbols {
     local_templates: Vec<VariableSchema>,
     functions: Vec<FunctionSymbol>,
     functions_by_name: BTreeMap<String, usize>,
+    allow_function_overloading: bool,
     ignore_case: bool,
 }
 
 impl Symbols {
     pub fn new(
-        schema: &ProjectSchema,
+        project: &ProjectData,
         declarations: &BTreeMap<String, DeclaredVariable>,
         options: &AnalyzerOptions,
     ) -> Self {
@@ -40,16 +41,35 @@ impl Symbols {
             local_templates: Vec::new(),
             functions: Vec::new(),
             functions_by_name: BTreeMap::new(),
+            allow_function_overloading: options.allow_function_overloading,
             ignore_case: options.ignore_case,
         };
-        for variable in schema.variables.values() {
+        for variable in project.schema.variables.values() {
             if variable.storage == StorageScope::Local {
                 result.local_templates.push(variable.clone());
                 continue;
             }
             let initial_values = declarations
                 .get(&result.key(variable.id.name()))
-                .map_or_else(Vec::new, |declaration| declaration.initial_values.clone());
+                .map(|declaration| declaration.initial_values.clone())
+                .or_else(|| {
+                    project
+                        .static_data
+                        .name_tables
+                        .iter()
+                        .find(|(kind, _)| {
+                            kind.variable_name()
+                                .eq_ignore_ascii_case(variable.id.name())
+                        })
+                        .map(|(_, table)| {
+                            table
+                                .names
+                                .iter()
+                                .map(|name| ConstantValue::String(name.clone().unwrap_or_default()))
+                                .collect()
+                        })
+                })
+                .unwrap_or_default();
             let location = declarations
                 .get(&result.key(variable.id.name()))
                 .map(|declaration| declaration.location);
@@ -78,7 +98,12 @@ impl Symbols {
             .get(&key)
             .and_then(|index| self.functions.get(*index))
         {
-            if kind == FunctionKind::Event && existing.kind == FunctionKind::Event {
+            if (kind == FunctionKind::Event && existing.kind == FunctionKind::Event)
+                || self.allow_function_overloading
+            {
+                // Emuera retains every definition but resolves an ordinary call
+                // through the first sorted definition. Do not replace the name
+                // map when compatibility permits same-name normal functions.
                 let id =
                     FunctionId(u32::try_from(self.functions.len()).expect("too many functions"));
                 self.functions.push(FunctionSymbol {
@@ -157,6 +182,20 @@ impl Symbols {
             .get(&(function, key.clone()))
             .or_else(|| self.globals.get(&key))?;
         self.variables.get(id.0 as usize)
+    }
+
+    pub fn constant_values(&self) -> BTreeMap<String, ConstantValue> {
+        self.variables
+            .iter()
+            .filter(|variable| variable.storage == StorageScope::Constant)
+            .filter_map(|variable| {
+                variable
+                    .initial_values
+                    .first()
+                    .cloned()
+                    .map(|value| (self.key(&variable.name), value))
+            })
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -53,6 +53,18 @@ pub(crate) fn build_control_flow(
         };
         let name = target.name();
         match name {
+            "SIF" => {
+                // SIF conditionally skips exactly one following logical line.
+                // Keep its ordinary fallthrough edge and add the false edge to
+                // the line after that statement.
+                edges.push(ControlFlowEdge {
+                    kind: ControlFlowKind::Branch,
+                    from: line.id,
+                    to: lines.get(line.id.0 as usize + 2).map(|target| target.id),
+                    function: None,
+                    label: None,
+                });
+            }
             "IF" | "SELECTCASE" | "REPEAT" | "FOR" | "WHILE" | "DO" | "TRYC" | "TRYCCALL"
             | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" | "TRYCGOTO" | "TRYCGOTOFORM"
             | "NOSKIP" | "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST" => {

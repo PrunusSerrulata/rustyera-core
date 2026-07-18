@@ -110,7 +110,7 @@ impl Lexer<'_> {
         }
     }
 
-    fn read_conditional_form(&mut self) -> FormattedTokenPart {
+    pub(super) fn read_conditional_form(&mut self) -> FormattedTokenPart {
         let start = self.pos;
         self.pos += 2;
         let condition = self.lex_nested(LexEnd::Question);
@@ -207,5 +207,18 @@ mod tests {
             panic!("expected form")
         };
         assert_eq!(form.parts.len(), 6);
+    }
+
+    #[test]
+    fn lexes_conditional_form_as_an_expression_term() {
+        let output = lex("\\@ FLAG ? yes # no \\@", &LexerConfig::default());
+        assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+        assert!(matches!(
+            output.tokens.as_slice(),
+            [crate::Token {
+                kind: TokenKind::Formatted(_),
+                ..
+            }]
+        ));
     }
 }

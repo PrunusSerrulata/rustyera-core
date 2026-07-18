@@ -14,6 +14,7 @@ pub(crate) struct AnalysisParserContext {
     functions: BTreeSet<String>,
     ignore_case: bool,
     debug_mode: bool,
+    continuation_separator: String,
 }
 
 impl AnalysisParserContext {
@@ -30,6 +31,29 @@ impl AnalysisParserContext {
                 name.to_owned()
             }
         };
+        let mut instructions: BTreeMap<_, _> = catalog
+            .instructions
+            .iter()
+            .map(|(name, signature)| {
+                (
+                    normalize(name),
+                    InstructionSpec {
+                        argument_style: signature.argument_style,
+                    },
+                )
+            })
+            .collect();
+        for name in catalog.functions.keys() {
+            instructions
+                .entry(normalize(name))
+                .or_insert(InstructionSpec {
+                    argument_style: if name.contains("FORM") && !name.contains("FORMS") {
+                        erabasic_parser::ArgumentStyle::Formatted
+                    } else {
+                        erabasic_parser::ArgumentStyle::Expressions
+                    },
+                });
+        }
         Self {
             lexer: LexerConfig {
                 allow_full_width_space: options.allow_full_width_space,
@@ -37,18 +61,7 @@ impl AnalysisParserContext {
                 ..LexerConfig::default()
             },
             macros: MacroTable::new(),
-            instructions: catalog
-                .instructions
-                .iter()
-                .map(|(name, signature)| {
-                    (
-                        normalize(name),
-                        InstructionSpec {
-                            argument_style: signature.argument_style,
-                        },
-                    )
-                })
-                .collect(),
+            instructions,
             variables: schema
                 .variables
                 .keys()
@@ -57,6 +70,7 @@ impl AnalysisParserContext {
             functions: functions.into_iter().map(|name| normalize(&name)).collect(),
             ignore_case: options.ignore_case,
             debug_mode: options.debug_mode,
+            continuation_separator: options.continuation_separator.clone(),
         }
     }
 
@@ -103,5 +117,9 @@ impl ParserContext for AnalysisParserContext {
             "__DEBUG__" => Some(i64::from(self.debug_mode)),
             _ => None,
         }
+    }
+
+    fn continuation_separator(&self) -> &str {
+        &self.continuation_separator
     }
 }

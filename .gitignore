@@ -17,3 +17,6 @@ Cargo.lock
 /tools/**/obj
 /.wine-prefix/
 /.wine-tmp/
+
+# Local, reproducible audit harnesses and their generated oracle output.
+/.audit/
