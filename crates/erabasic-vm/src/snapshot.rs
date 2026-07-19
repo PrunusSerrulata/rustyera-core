@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::io::{Read, Write};
+use std::sync::Arc;
 
 use erabasic_bytecode::{Digest, ProgramVersion};
 use erabasic_validator::ValidatedArtifact;
+use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -10,7 +13,8 @@ use crate::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 7;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 8;
+const SNAPSHOT_HEADER_BYTES: usize = 60;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SnapshotBlocker {
@@ -65,12 +69,22 @@ impl VmSnapshot {
     ///
     /// Returns an error if the snapshot payload cannot be serialized.
     pub fn encode(&self) -> Result<Vec<u8>, VmError> {
-        let payload =
-            serde_json::to_vec(self).map_err(|error| VmError::Snapshot(error.to_string()))?;
-        let mut bytes = Vec::with_capacity(8 + 4 + 8 + 32 + payload.len());
+        // Snapshots are created only at explicit stable waits. Prefer the smallest
+        // portable representation over encoder throughput for this infrequent path.
+        let encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+        let mut writer = CountingWriter::new(encoder);
+        serde_json::to_writer(&mut writer, self)
+            .map_err(|error| VmError::Snapshot(error.to_string()))?;
+        let uncompressed_len = writer.bytes;
+        let payload = writer
+            .into_inner()
+            .finish()
+            .map_err(|error| VmError::Snapshot(error.to_string()))?;
+        let mut bytes = Vec::with_capacity(SNAPSHOT_HEADER_BYTES + payload.len());
         bytes.extend_from_slice(&SNAPSHOT_MAGIC);
         bytes.extend_from_slice(&SNAPSHOT_FORMAT_VERSION.to_le_bytes());
         bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&uncompressed_len.to_le_bytes());
         bytes.extend_from_slice(blake3::hash(&payload).as_bytes());
         bytes.extend_from_slice(&payload);
         Ok(bytes)
@@ -88,7 +102,7 @@ impl VmSnapshot {
                 "snapshot exceeds the configured limit".into(),
             ));
         }
-        if bytes.len() < 52 || bytes[..8] != SNAPSHOT_MAGIC {
+        if bytes.len() < SNAPSHOT_HEADER_BYTES || bytes[..8] != SNAPSHOT_MAGIC {
             return Err(VmError::Snapshot("invalid snapshot header".into()));
         }
         let version = u32::from_le_bytes(
@@ -108,21 +122,93 @@ impl VmSnapshot {
         );
         let length = usize::try_from(length)
             .map_err(|_| VmError::Snapshot("snapshot length exceeds this platform".into()))?;
-        if bytes.len() != 52usize.saturating_add(length) {
+        let uncompressed_length = u64::from_le_bytes(
+            bytes[20..28]
+                .try_into()
+                .map_err(|_| VmError::Snapshot("truncated snapshot raw length".into()))?,
+        );
+        let uncompressed_length = usize::try_from(uncompressed_length)
+            .map_err(|_| VmError::Snapshot("snapshot raw length exceeds this platform".into()))?;
+        if uncompressed_length > maximum_bytes {
+            return Err(VmError::Snapshot(
+                "snapshot expands beyond the configured limit".into(),
+            ));
+        }
+        if bytes.len() != SNAPSHOT_HEADER_BYTES.saturating_add(length) {
             return Err(VmError::Snapshot("snapshot length is inconsistent".into()));
         }
-        let payload = &bytes[52..];
-        if blake3::hash(payload).as_bytes() != &bytes[20..52] {
+        let payload = &bytes[SNAPSHOT_HEADER_BYTES..];
+        if blake3::hash(payload).as_bytes() != &bytes[28..SNAPSHOT_HEADER_BYTES] {
             return Err(VmError::Snapshot("snapshot checksum differs".into()));
         }
-        let snapshot: Self = serde_json::from_slice(payload)
+        // Trust neither the claimed raw length nor the compressed stream: cap
+        // decompression one byte past the declared length so malformed payloads
+        // cannot turn snapshot restore into an unbounded allocation path.
+        let decompression_limit = (uncompressed_length as u64).saturating_add(1);
+        let mut reader = CountingReader::new(ZlibDecoder::new(payload).take(decompression_limit));
+        let snapshot: Self = serde_json::from_reader(&mut reader)
             .map_err(|error| VmError::Snapshot(error.to_string()))?;
+        if reader.bytes != uncompressed_length as u64 {
+            return Err(VmError::Snapshot(
+                "snapshot raw length is inconsistent".into(),
+            ));
+        }
         if snapshot.format_version != SNAPSHOT_FORMAT_VERSION {
             return Err(VmError::Snapshot(
                 "snapshot payload version differs from its container".into(),
             ));
         }
         Ok(snapshot)
+    }
+}
+
+struct CountingWriter<W> {
+    inner: W,
+    bytes: u64,
+}
+
+impl<W> CountingWriter<W> {
+    const fn new(inner: W) -> Self {
+        Self { inner, bytes: 0 }
+    }
+
+    fn into_inner(self) -> W {
+        self.inner
+    }
+}
+
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(buffer)?;
+        self.bytes = self
+            .bytes
+            .saturating_add(u64::try_from(written).unwrap_or(u64::MAX));
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+struct CountingReader<R> {
+    inner: R,
+    bytes: u64,
+}
+
+impl<R> CountingReader<R> {
+    const fn new(inner: R) -> Self {
+        Self { inner, bytes: 0 }
+    }
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buffer)?;
+        self.bytes = self
+            .bytes
+            .saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+        Ok(read)
     }
 }
 
@@ -262,7 +348,7 @@ impl Vm {
         let generation = snapshot.current_generation;
         Ok(Self {
             config,
-            generations: BTreeMap::from([(generation, ProgramGeneration::new(artifact))]),
+            generations: BTreeMap::from([(generation, Arc::new(ProgramGeneration::new(artifact)))]),
             current_generation: generation,
             memory: snapshot.memory,
             fibers: snapshot.fibers,
@@ -449,11 +535,8 @@ fn validate_cell(
         .unwrap_or(0);
     if cell.value_type != definition.value_type
         || cell.dimensions != definition.dimensions
-        || cell.values.len() != expected_length
-        || cell
-            .values
-            .iter()
-            .any(|value| value.value_type() != definition.value_type)
+        || cell.len() != expected_length
+        || !cell.storage_is_valid()
     {
         return Err(VmError::Snapshot(format!(
             "snapshot variable {} has invalid storage",

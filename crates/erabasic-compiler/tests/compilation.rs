@@ -8,7 +8,7 @@ use erabasic_bytecode::{
 };
 use erabasic_compiler::{
     CompilerDiagnosticCode, CompilerDiagnosticSeverity, CompilerOptions, ExecutionBinding,
-    HostBinding, compile_project, default_host_registry,
+    HostBinding, compile_project, compile_project_with_artifact, default_host_registry,
 };
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
 use erabasic_validator::{ValidationContext, validate_bytecode};
@@ -494,6 +494,51 @@ fn incremental_patch_matches_a_clean_build() {
 }
 
 #[test]
+fn compact_incremental_cache_reuses_the_exact_active_artifact() {
+    let registry = default_host_registry();
+    let first = analyze("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRESULT = 1\nRETURN\n");
+    let initial =
+        compile_project_with_artifact(&first, &CompilerOptions::default(), &registry, None, None);
+    let initial_artifact = initial.artifact.as_ref().unwrap();
+    let second = analyze("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRESULT = 2\nRETURN\n");
+    let incremental = compile_project_with_artifact(
+        &second,
+        &CompilerOptions::default(),
+        &registry,
+        Some(&initial.incremental_state),
+        Some(initial_artifact),
+    );
+
+    assert!(incremental.diagnostics.is_empty());
+    assert_eq!(incremental.stats.compiled_functions, 1);
+    assert_eq!(incremental.stats.reused_functions, 1);
+    let patched = apply_patch(initial_artifact, incremental.patch.as_ref().unwrap()).unwrap();
+    assert_eq!(Some(&patched), incremental.artifact.as_ref());
+}
+
+#[test]
+fn compact_incremental_cache_without_its_artifact_falls_back_to_a_complete_patch() {
+    let registry = default_host_registry();
+    let first = analyze("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRESULT = 1\nRETURN\n");
+    let initial =
+        compile_project_with_artifact(&first, &CompilerOptions::default(), &registry, None, None);
+    let second = analyze("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRESULT = 2\nRETURN\n");
+    let incremental = compile_project(
+        &second,
+        &CompilerOptions::default(),
+        &registry,
+        Some(&initial.incremental_state),
+    );
+
+    assert!(incremental.diagnostics.is_empty());
+    assert_eq!(incremental.stats.compiled_functions, 2);
+    let patch = incremental.patch.as_ref().unwrap();
+    assert_eq!(patch.changed_functions.len(), 2);
+    let patched = apply_patch(initial.artifact.as_ref().unwrap(), patch).unwrap();
+    assert_eq!(Some(&patched), incremental.artifact.as_ref());
+}
+
+#[test]
 fn source_only_changes_keep_the_execution_identity() {
     let registry = default_host_registry();
     let first = compile_project(
@@ -521,13 +566,13 @@ fn source_only_changes_keep_the_execution_identity() {
         .source_map
         .entries
         .iter()
-        .map(|entry| entry.statement_fingerprint)
+        .filter_map(|entry| first.source_map.statement_fingerprint(entry))
         .collect::<std::collections::BTreeSet<_>>();
     let second_fingerprints = second
         .source_map
         .entries
         .iter()
-        .map(|entry| entry.statement_fingerprint)
+        .filter_map(|entry| second.source_map.statement_fingerprint(entry))
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(first_fingerprints, second_fingerprints);
 }

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 
 use erabasic_bytecode::{
     BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeFunctionKind, BytecodeStorage,
@@ -298,7 +299,7 @@ impl Fiber {
 #[derive(Clone)]
 pub struct Vm {
     pub(crate) config: VmConfig,
-    pub(crate) generations: BTreeMap<GenerationId, ProgramGeneration>,
+    pub(crate) generations: BTreeMap<GenerationId, Arc<ProgramGeneration>>,
     pub(crate) current_generation: GenerationId,
     pub(crate) memory: Memory,
     pub(crate) fibers: BTreeMap<FiberId, Fiber>,
@@ -327,10 +328,8 @@ impl Vm {
                 && definition.name.eq_ignore_ascii_case(name)
         }) {
             let cell = frame.locals.get(&definition.key)?;
-            if let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) =
-                cell.values.first()
-            {
-                let (_, target) = self.place_definition(fiber, place).ok()?;
+            if let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = cell.first() {
+                let (_, target) = self.place_definition(fiber, &place).ok()?;
                 return Some(target.dimensions.clone());
             }
             return Some(cell.dimensions.clone());
@@ -365,7 +364,7 @@ impl Vm {
         let generation = GenerationId(1);
         Self {
             config,
-            generations: BTreeMap::from([(generation, ProgramGeneration::new(artifact))]),
+            generations: BTreeMap::from([(generation, Arc::new(ProgramGeneration::new(artifact)))]),
             current_generation: generation,
             memory,
             fibers: BTreeMap::new(),
@@ -808,10 +807,8 @@ impl Vm {
                 .locals
                 .get(&definition.key)
                 .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
-            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) =
-                cell.values.first()
-            {
-                let mut target = bound.clone();
+            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) = cell.first() {
+                let mut target = *bound;
                 target.indices.extend_from_slice(&place.indices);
                 return self.read_place(fiber, &target);
             }
@@ -853,12 +850,10 @@ impl Vm {
                 .locals
                 .get(&definition.key)
                 .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
-            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) =
-                cell.values.first()
-            {
-                return self.read_place_array(fiber, bound);
+            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) = cell.first() {
+                return self.read_place_array(fiber, &bound);
             }
-            return Ok(cell.values.clone());
+            return Ok(cell.to_values());
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
@@ -874,7 +869,7 @@ impl Vm {
         };
         self.memory
             .cell(generation, definition, character)
-            .map(|cell| cell.values.clone())
+            .map(VariableCell::to_values)
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))
     }
 
@@ -907,11 +902,9 @@ impl Vm {
             let bound = find_frame(fiber, place.frame, definition.owner)?
                 .locals
                 .get(&definition.key)
-                .and_then(|cell| cell.values.first())
+                .and_then(VariableCell::first)
                 .and_then(|value| match value {
-                    VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => {
-                        Some(place.clone())
-                    }
+                    VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => Some(*place),
                     VmValue::Integer(_) | VmValue::String(_) => None,
                 });
             if let Some(bound) = bound {
@@ -963,11 +956,9 @@ impl Vm {
             let bound = find_frame(fiber, place.frame, definition.owner)?
                 .locals
                 .get(&definition.key)
-                .and_then(|cell| cell.values.first())
+                .and_then(VariableCell::first)
                 .and_then(|value| match value {
-                    VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => {
-                        Some(place.clone())
-                    }
+                    VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => Some(*place),
                     VmValue::Integer(_) | VmValue::String(_) => None,
                 });
             if let Some(mut target) = bound {
@@ -1031,17 +1022,8 @@ impl Vm {
 }
 
 fn replace_cell_values(cell: &mut VariableCell, values: Vec<VmValue>) -> Result<(), VmError> {
-    if values.len() != cell.values.len()
-        || values
-            .iter()
-            .any(|value| value.value_type() != cell.value_type)
-    {
-        return Err(VmError::InvalidArguments(
-            "array replacement differs from its storage shape or type".into(),
-        ));
-    }
-    cell.values = values;
-    Ok(())
+    cell.replace_values(values)
+        .map_err(VmError::InvalidArguments)
 }
 
 impl VmRuntimeStatePort for Vm {
@@ -1112,7 +1094,8 @@ impl VmRuntimeStatePort for Vm {
                         .ok_or_else(|| {
                             VmError::InvalidState("variable storage is unavailable".into())
                         })?;
-                    cell.values.fill(fill.value.clone());
+                    cell.fill(fill.value.clone())
+                        .map_err(VmError::InvalidArguments)?;
                 }
             }
             for write in writes {
@@ -1213,9 +1196,8 @@ pub(crate) fn make_frame<'a>(
                 // scalar `#DIM REF value`: its declaration has shape `[1]`, so
                 // treating only zero-sized REF arrays specially would attempt
                 // to write an IntegerPlace into an Integer cell.
-                cell.value_type = parameter.value_type;
-                cell.dimensions = vec![1];
-                cell.values = vec![argument];
+                cell.replace_shape(parameter.value_type, vec![1], vec![argument])
+                    .expect("validated reference argument matches its parameter");
             } else {
                 cell.write(&parameter.indices, argument)
                     .expect("validated parameter destination fits its local storage");

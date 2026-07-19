@@ -1323,10 +1323,10 @@ fn protocol_value_in_generation(value: VmValue, generation: u64) -> DebugValue {
         VmValue::Integer(value) => DebugValue::Integer(value),
         VmValue::String(value) => DebugValue::String(value),
         VmValue::IntegerPlace(place) => {
-            DebugValue::Place(protocol_place(place, ValueKind::Integer, generation))
+            DebugValue::Place(protocol_place(*place, ValueKind::Integer, generation))
         }
         VmValue::StringPlace(place) => {
-            DebugValue::Place(protocol_place(place, ValueKind::String, generation))
+            DebugValue::Place(protocol_place(*place, ValueKind::String, generation))
         }
     }
 }

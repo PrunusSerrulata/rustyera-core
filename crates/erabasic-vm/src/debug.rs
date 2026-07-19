@@ -352,7 +352,7 @@ impl Vm {
                             .entries
                             .iter()
                             .filter(|entry| {
-                                entry.statement_fingerprint == anchor
+                                artifact.source_map.statement_fingerprint(entry) == Some(anchor)
                                     && previous_function
                                         .is_none_or(|function| entry.function == function)
                             })
@@ -362,7 +362,7 @@ impl Vm {
                         None
                     };
                     if let Some(entry) = entry {
-                        fingerprint = Some(entry.statement_fingerprint);
+                        fingerprint = artifact.source_map.statement_fingerprint(entry);
                         anchor_function = Some(entry.function);
                         let instruction = artifact
                             .functions

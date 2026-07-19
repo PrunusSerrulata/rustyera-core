@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use erabasic_bytecode::{BytecodeArtifact, BytecodePatch, BytecodeStorage, Digest, apply_patch};
 use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode};
@@ -101,8 +102,8 @@ impl Vm {
         self.pending_reload = None;
     }
 
-    /// Commit only between interpreter slices. All migration work is performed on
-    /// clones first, so an incompatibility or resource-limit error is atomic.
+    /// Commit only between interpreter slices. Every fallible compatibility and
+    /// resource check completes before ownership of the prepared artifact moves.
     ///
     /// # Errors
     ///
@@ -122,28 +123,40 @@ impl Vm {
         if self.generations.len() >= self.config.maximum_retained_generations {
             return Err(VmError::ResourceLimit("retained program generations"));
         }
-        let target = plan.target.artifact().clone();
+        let added_variables = plan.added_variables;
+        let removed_variables = plan.removed_variables;
+        let resized_variables = plan.resized_variables;
         let old_generation = self.current_generation;
-        let old_artifact = self.artifact().clone();
+        let old_program = self
+            .generations
+            .get(&old_generation)
+            .cloned()
+            .ok_or_else(|| VmError::HotReload("the current generation was reclaimed".into()))?;
+        let plan = self
+            .pending_reload
+            .take()
+            .ok_or_else(|| VmError::HotReload("no hot-reload plan is pending".into()))?;
+        let target = plan.target.into_inner();
         let new_generation = GenerationId(self.next_generation);
-        let mut migrated = self.memory.clone();
-        migrated.migrate(old_generation, &old_artifact, &target);
 
-        self.memory = migrated;
+        // Memory migration has no recoverable failure after `plan_migration`
+        // validates type/storage compatibility. Mutating in place avoids holding
+        // a complete second game state during large-project hot reload.
+        self.memory
+            .migrate(old_generation, &old_program.artifact, &target);
         self.generations
-            .insert(new_generation, ProgramGeneration::new(target));
+            .insert(new_generation, Arc::new(ProgramGeneration::new(target)));
         self.current_generation = new_generation;
         self.next_generation = self.next_generation.saturating_add(1);
         let report = HotReloadReport {
             old_generation,
             new_generation,
             retained_generations: self.generations.len(),
-            added_variables: plan.added_variables,
-            removed_variables: plan.removed_variables,
-            resized_variables: plan.resized_variables,
+            added_variables,
+            removed_variables,
+            resized_variables,
         };
         self.debug_rebind_breakpoints();
-        self.pending_reload = None;
         self.reclaim_generations();
         Ok(HotReloadReport {
             retained_generations: self.generations.len(),

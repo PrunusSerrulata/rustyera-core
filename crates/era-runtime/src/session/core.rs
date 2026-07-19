@@ -820,11 +820,18 @@ impl RuntimeSession {
             );
         }
         self.set_phase(RuntimePhase::LoadingProject)?;
+        let previous_artifact = self
+            .vm
+            .as_ref()
+            .map(|vm| vm.vm().artifact())
+            .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
         let mut build = build_project_with_extensions(
             manifest,
             Some(&self.incremental),
+            previous_artifact,
             &self.extension_declarations,
         );
+        build.incremental.compact();
         self.incremental = build.incremental;
         self.artifact = build.artifact;
         self.project_snapshot = build.snapshot;
@@ -965,9 +972,15 @@ impl RuntimeSession {
             }
         };
         self.set_phase(RuntimePhase::Reloading)?;
+        let previous_artifact = self
+            .vm
+            .as_ref()
+            .map(|vm| vm.vm().artifact())
+            .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
         let mut build = build_project_with_extensions(
             &manifest,
             Some(&self.incremental),
+            previous_artifact,
             &self.extension_declarations,
         );
         if !build.report.success {
@@ -1083,6 +1096,7 @@ impl RuntimeSession {
         }
 
         self.artifact = Some(target);
+        build.incremental.compact();
         self.incremental = build.incremental;
         self.project_snapshot = build.snapshot;
         if let Some(snapshot) = &self.project_snapshot {

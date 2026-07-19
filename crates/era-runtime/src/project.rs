@@ -9,8 +9,10 @@ use erabasic_analyzer::{
     SourceIoErrorKind, SourcePayload, WarningPolicy, analyze_project, builtin_function_names,
     builtin_instruction_names,
 };
+use erabasic_bytecode::BytecodeArtifact;
 use erabasic_compiler::{
-    CompilerOptions, IncrementalState, compile_project, default_host_registry, extension_binding,
+    CompilerOptions, IncrementalState, compile_project_with_artifact, default_host_registry,
+    extension_binding,
 };
 use erabasic_config::{ConfigStore, ConfigValue};
 use erabasic_csv::{
@@ -132,9 +134,17 @@ pub(crate) fn build_project(
 pub(crate) fn build_project_with_extensions(
     manifest: &ProjectManifest,
     previous: Option<&IncrementalState>,
+    previous_artifact: Option<&BytecodeArtifact>,
     extensions: &[era_runtime_protocol::ExtensionDeclaration],
 ) -> ProjectBuild {
-    build_project_inner_with_extensions(manifest, previous, None, false, extensions)
+    build_project_inner_with_extensions(
+        manifest,
+        previous,
+        previous_artifact,
+        None,
+        false,
+        extensions,
+    )
 }
 
 pub(crate) fn analyze_submitted_project_with_extensions(
@@ -149,6 +159,7 @@ pub(crate) fn analyze_submitted_project_with_extensions(
         .collect::<std::collections::BTreeSet<_>>();
     let build = build_project_inner_with_extensions(
         &request.manifest,
+        None,
         None,
         Some(&selected),
         request.debug_mode,
@@ -177,13 +188,14 @@ fn build_project_inner(
     previous: Option<&IncrementalState>,
     analysis_selection: Option<&std::collections::BTreeSet<String>>,
 ) -> ProjectBuild {
-    build_project_inner_with_extensions(manifest, previous, analysis_selection, false, &[])
+    build_project_inner_with_extensions(manifest, previous, None, analysis_selection, false, &[])
 }
 
 #[allow(clippy::too_many_lines)]
 fn build_project_inner_with_extensions(
     manifest: &ProjectManifest,
     previous: Option<&IncrementalState>,
+    previous_artifact: Option<&BytecodeArtifact>,
     analysis_selection: Option<&std::collections::BTreeSet<String>>,
     analysis_debug_mode: bool,
     extension_declarations: &[era_runtime_protocol::ExtensionDeclaration],
@@ -371,11 +383,12 @@ fn build_project_inner_with_extensions(
             snapshot: None,
         };
     }
-    let compile = compile_project(
+    let compile = compile_project_with_artifact(
         &project,
         &CompilerOptions::default(),
         &host_registry,
         previous,
+        previous_artifact,
     );
     diagnostics.extend(
         compile
@@ -1639,7 +1652,7 @@ mod tests {
                 content_hash: None,
             }],
         };
-        let build = build_project_with_extensions(&manifest, None, &[declaration]);
+        let build = build_project_with_extensions(&manifest, None, None, &[declaration]);
         assert!(build.report.success, "{:?}", build.report.diagnostics);
         let artifact = build.artifact.unwrap();
         assert!(
@@ -1679,5 +1692,36 @@ mod tests {
             first.snapshot.unwrap().project_identity,
             second.snapshot.unwrap().project_identity
         );
+    }
+
+    #[test]
+    fn runtime_project_build_retains_a_compact_serializable_incremental_cache() {
+        use std::fmt::Write as _;
+
+        let mut source = String::new();
+        for index in 0..128 {
+            write!(source, "@FUNCTION_{index}\nRESULT = {index}\nRETURN\n").unwrap();
+        }
+        let build = build_project(
+            &ProjectManifest {
+                project_revision: 1,
+                files: vec![SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(source),
+                    content_hash: None,
+                }],
+            },
+            None,
+        );
+        assert!(build.report.success, "{:?}", build.report.diagnostics);
+        let encoded = serde_json::to_vec(&build.incremental).unwrap();
+        let decoded: IncrementalState = serde_json::from_slice(&encoded).unwrap();
+
+        assert_eq!(decoded, build.incremental);
+        assert_eq!(decoded.cached_function_count(), 128);
+        let encoded = String::from_utf8(encoded).unwrap();
+        assert!(!encoded.contains("\"opcode\""));
+        assert!(!encoded.contains("\"project_data\""));
     }
 }

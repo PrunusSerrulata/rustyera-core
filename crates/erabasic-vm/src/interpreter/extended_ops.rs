@@ -71,7 +71,7 @@ pub(super) fn execute_regex_match(
         }
         4 => {
             let group_count = match &arguments[2] {
-                VmValue::IntegerPlace(place) => place.clone(),
+                VmValue::IntegerPlace(place) => place.as_ref().clone(),
                 _ => {
                     return Err(VmError::InvalidArguments(
                         "REGEXPMATCH group-count output must be an integer place".into(),
@@ -79,7 +79,7 @@ pub(super) fn execute_regex_match(
                 }
             };
             let values = match &arguments[3] {
-                VmValue::StringPlace(place) => place.clone(),
+                VmValue::StringPlace(place) => place.as_ref().clone(),
                 _ => {
                     return Err(VmError::InvalidArguments(
                         "REGEXPMATCH capture output must be a string-array place".into(),
@@ -380,8 +380,8 @@ pub(super) fn array_copy_place(
         .get(&generation)
         .ok_or_else(|| VmError::InvalidState("ARRAYCOPY generation is missing".into()))?;
     let (place, value_type) = match value {
-        Some(VmValue::IntegerPlace(place)) => (place.clone(), BytecodeType::Integer),
-        Some(VmValue::StringPlace(place)) => (place.clone(), BytecodeType::String),
+        Some(VmValue::IntegerPlace(place)) => (place.as_ref().clone(), BytecodeType::Integer),
+        Some(VmValue::StringPlace(place)) => (place.as_ref().clone(), BytecodeType::String),
         Some(VmValue::String(name)) => {
             let definition = program.global_by_name(name).ok_or_else(|| {
                 VmError::InvalidArguments(format!(
@@ -479,27 +479,23 @@ pub(super) fn execute_random_place_transaction(
             .cell(generation, definition, 0)
             .ok_or_else(|| "RANDDATA storage is unavailable".to_owned())?;
         let values = cell
-            .values
-            .iter()
-            .map(|value| match value {
-                VmValue::Integer(value) => Ok(*value),
-                _ => Err("RANDDATA contains a non-integer value".to_owned()),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            .integers()
+            .ok_or_else(|| "RANDDATA contains a non-integer value".to_owned())?;
         // Native state is only replaced after the entire array and index validate.
-        natives.set_random_values(&values)
+        natives.set_random_values(values)
     } else {
         let values = natives.random_values()?;
         let cell = memory
             .cell_mut(generation, definition, 0)
             .ok_or_else(|| "RANDDATA storage is unavailable".to_owned())?;
-        if cell.values.len() != values.len() {
+        let targets = cell
+            .integers_mut()
+            .ok_or_else(|| "RANDDATA contains a non-integer value".to_owned())?;
+        if targets.len() != values.len() {
             return Err("RANDDATA storage changed during DUMPRAND".into());
         }
         // Every target slot was validated above, so this commit cannot partially fail.
-        for (target, value) in cell.values.iter_mut().zip(values) {
-            *target = VmValue::Integer(value);
-        }
+        targets.copy_from_slice(&values);
         Ok(())
     }
 }
