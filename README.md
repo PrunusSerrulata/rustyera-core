@@ -36,6 +36,12 @@ The workspace currently contains these implemented components:
 | `era-runtime-ffi` | Safe C ABI function-table and checked header declarations. |
 | `era-runtime-capi` | Dynamic-library implementation of the C ABI; this is the only crate that audits raw pointers and uses `unsafe`. |
 
+The repository also includes `frontends/era-tui`, a Python 3.12/Textual application
+frontend managed by `uv`. It dynamically loads `era-runtime-capi`, pumps canonical CBOR
+runtime and debug envelopes on a dedicated worker thread, renders the normalized text model,
+and owns project scanning, storage, dialogs, keyboard/mouse collection, and terminal-specific
+projection services. It intentionally does not advertise image, video, audio, or HTML rendering.
+
 The currently implemented data flows are:
 
 ```text
@@ -86,9 +92,10 @@ separate from executable artifact validation. The C# reference CLI can invoke Em
 and VM for oracle purposes. The Rust VM and runtime are separate implementations;
 an unlisted reference runtime operation must not be inferred to be supported.
 
-RustyEra does not implement a concrete application frontend: no GUI, TUI, game
-launcher, filesystem scanner, renderer, audio system, or input loop belongs in
-this repository. Here, “application frontend” means the host/UI layer and is
+RustyEra now includes one optional concrete application frontend, the portable Textual TUI in
+`frontends/era-tui`. It is kept outside the Rust workspace and communicates only through the
+public C ABI; the Rust runtime crates still contain no GUI, terminal, filesystem scanner, audio
+system, or platform input loop. Here, “application frontend” means this host/UI layer and is
 distinct from the implemented EraBasic *language* front end.
 
 ## Bytecode contract
