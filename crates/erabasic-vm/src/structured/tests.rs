@@ -138,11 +138,22 @@ fn extension_scopes_clear_and_import_without_touching_other_scopes() {
 
     state.clear_for_transaction(
         &declarations,
-        &crate::VmRuntimeStateTransaction::ResetGameData,
+        &crate::VmRuntimeStateTransaction::ResetNewGame,
     );
     assert!(state.maps["save"].entries.is_empty());
     assert!(!state.maps["global"].entries.is_empty());
     assert!(!state.maps["static"].entries.is_empty());
+
+    state
+        .maps
+        .get_mut("save")
+        .unwrap()
+        .set("key".into(), "save".into());
+    state.clear_for_transaction(
+        &declarations,
+        &crate::VmRuntimeStateTransaction::ResetGameData,
+    );
+    assert!(state.maps["save"].entries.is_empty());
 
     state.clear_for_transaction(
         &declarations,

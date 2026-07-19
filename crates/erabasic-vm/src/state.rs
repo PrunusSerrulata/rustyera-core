@@ -28,6 +28,7 @@ pub(crate) struct ProgramGeneration {
 }
 
 impl ProgramGeneration {
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn new(artifact: BytecodeArtifact) -> Self {
         // Era projects commonly contain tens of thousands of functions. Resolving the
         // active function with a linear scan for every instruction makes otherwise
@@ -60,16 +61,38 @@ impl ProgramGeneration {
         }
         let mut function_static_indices = BTreeMap::<SymbolKey, Vec<usize>>::new();
         let mut function_local_indices = BTreeMap::<SymbolKey, Vec<usize>>::new();
+        let mut function_names_by_key = BTreeMap::<SymbolKey, String>::new();
+        let mut function_keys_by_name = BTreeMap::<String, Vec<SymbolKey>>::new();
+        for function in &artifact.functions {
+            let normalized = function.name.to_ascii_uppercase();
+            function_names_by_key.insert(function.key, normalized.clone());
+            function_keys_by_name
+                .entry(normalized)
+                .or_default()
+                .push(function.key);
+        }
         for (index, global) in artifact.globals.iter().enumerate() {
-            if matches!(
-                global.storage,
-                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent
-            ) && let Some(owner) = global.owner
+            if global.storage == BytecodeStorage::FunctionStatic
+                && let Some(owner) = global.owner
             {
                 function_static_indices
                     .entry(owner)
                     .or_default()
                     .push(index);
+            } else if global.storage == BytecodeStorage::FunctionPersistent
+                && let Some(owner) = global.owner
+                && let Some(owner_name) = function_names_by_key.get(&owner)
+                && let Some(function_keys) = function_keys_by_name.get(owner_name)
+            {
+                // LOCAL/LOCALS/ARG/ARGS persist per normalized Era function name.
+                // Duplicate event handlers therefore share these cells even though a
+                // serialized global can name only one function key as its owner.
+                for function in function_keys {
+                    function_static_indices
+                        .entry(*function)
+                        .or_default()
+                        .push(index);
+                }
             } else if global.storage == BytecodeStorage::FunctionLocal
                 && let Some(owner) = global.owner
             {
@@ -1138,7 +1161,9 @@ fn prepare_transaction_memory(
     transaction: &VmRuntimeStateTransaction,
 ) -> Result<Memory, VmError> {
     Ok(match transaction {
-        VmRuntimeStateTransaction::ResetNewGame => Memory::new_game(artifact),
+        VmRuntimeStateTransaction::ResetNewGame => {
+            crate::save::prepare_new_game_memory(artifact, current)
+        }
         VmRuntimeStateTransaction::ResetGameData => {
             crate::save::prepare_reset_game_memory(artifact, current)
         }

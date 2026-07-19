@@ -257,8 +257,8 @@ impl StructuredState {
         transaction: &crate::VmRuntimeStateTransaction,
     ) {
         match transaction {
-            crate::VmRuntimeStateTransaction::ResetNewGame => *self = Self::default(),
-            crate::VmRuntimeStateTransaction::ResetGameData
+            crate::VmRuntimeStateTransaction::ResetNewGame
+            | crate::VmRuntimeStateTransaction::ResetGameData
             | crate::VmRuntimeStateTransaction::RestoreOrdinary(_) => {
                 self.clear_declared(
                     &extensions.save_maps,

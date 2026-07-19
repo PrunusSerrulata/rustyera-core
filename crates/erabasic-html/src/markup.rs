@@ -352,9 +352,34 @@ pub fn parse_document(source: &str) -> Result<HtmlDocument, HtmlError> {
             let Some(kind) = HtmlElementKind::parse(name) else {
                 return Err(error(HtmlErrorKind::UnknownTag, cursor, end));
             };
-            let Some(open) = stack.pop() else {
+            let Some(mut open) = stack.pop() else {
                 return Err(error(HtmlErrorKind::UnexpectedClosingTag, cursor, end));
             };
+            if kind == HtmlElementKind::Paragraph
+                && open.kind == HtmlElementKind::NoBreak
+                && stack
+                    .last()
+                    .is_some_and(|parent| parent.kind == HtmlElementKind::Paragraph)
+            {
+                // Emuera tracks <p> and <nobr> as independent line flags and explicitly
+                // permits their trailing closers to be omitted. Real games consequently
+                // close </p> while <nobr> is still active; normalize that form by closing
+                // the inner no-break region at the paragraph boundary.
+                let node = HtmlNode::Element {
+                    kind: open.kind,
+                    attributes: open.attributes,
+                    children: open.children,
+                    interaction: None,
+                    start: open.start as u64,
+                    end: cursor as u64,
+                    semantic: open.semantic,
+                };
+                push_node(&mut roots, &mut stack, node);
+                let Some(parent) = stack.pop() else {
+                    return Err(error(HtmlErrorKind::MismatchedClosingTag, cursor, end));
+                };
+                open = parent;
+            }
             if open.kind != kind {
                 return Err(error(HtmlErrorKind::MismatchedClosingTag, cursor, end));
             }
@@ -956,6 +981,13 @@ mod tests {
         assert_eq!(
             serialize_document(&omitted),
             "<p align='center'><nobr>a&gt;b</nobr></p>"
+        );
+        let paragraph_closed_before_nobr =
+            parse_document("<p align='right'><nobr><img src='clock' height='500' ypos='4'></p>")
+                .unwrap();
+        assert_eq!(
+            serialize_document(&paragraph_closed_before_nobr),
+            "<p align='right'><nobr><img src='clock' height='500' ypos='4'></nobr></p>"
         );
         let quoted = parse_document("<button value='a>b'>x</button>").unwrap();
         assert_eq!(

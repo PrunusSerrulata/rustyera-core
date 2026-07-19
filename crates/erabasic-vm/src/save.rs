@@ -260,7 +260,28 @@ pub(crate) fn prepare_reset_game_memory(
     artifact: &erabasic_bytecode::BytecodeArtifact,
     current: &Memory,
 ) -> Memory {
+    // RESETDATA clears every character. Initial CSV characters are inserted by
+    // Emuera's surrounding title flow (or explicitly by the script), not by the
+    // instruction itself.
+    let mut memory = Memory::title(artifact);
+    memory.initialize_function_statics(artifact);
+    let globals = exported_shared(artifact, current, EraSaveScope::Global);
+    overlay_shared(
+        artifact,
+        &mut memory,
+        &globals,
+        EraSaveScope::Global,
+        &mut EraStateReport::default(),
+    );
+    memory
+}
+
+pub(crate) fn prepare_new_game_memory(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    current: &Memory,
+) -> Memory {
     let mut memory = Memory::new_game(artifact);
+    memory.initialize_function_statics(artifact);
     let globals = exported_shared(artifact, current, EraSaveScope::Global);
     overlay_shared(
         artifact,

@@ -229,6 +229,18 @@ impl Memory {
         }
     }
 
+    pub(crate) fn initialize_function_statics(&mut self, artifact: &BytecodeArtifact) {
+        for definition in &artifact.globals {
+            if matches!(
+                definition.storage,
+                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent
+            ) {
+                self.statics
+                    .insert(definition.key, VariableCell::new(definition));
+            }
+        }
+    }
+
     pub fn push_character(
         &mut self,
         artifact: &BytecodeArtifact,

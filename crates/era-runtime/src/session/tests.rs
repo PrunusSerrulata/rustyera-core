@@ -1128,7 +1128,9 @@ fn train_controller_consumes_runtime_button_intent_and_loops_after_eventcomend()
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
     drain(&mut session);
-    let source = "@SYSTEM_TITLE\nRESETDATA\nBEGIN TRAIN\n@EVENTTRAIN\nRETURN\n@SHOW_STATUS\nRETURN\n@COM_ABLE0\nRESULT = 1\nRETURN\n@SHOW_USERCOM\nRETURN\n@EVENTCOM\nRETURN\n@COM0\nFLAG:0 += 1\nRESULT = 1\nRETURN\n@SOURCE_CHECK\nRETURN\n@EVENTCOMEND\nRETURN\n";
+    // RESETDATA removes every character in the reference runtime, so a standalone
+    // SYSTEM_TITLE fixture must explicitly create the character used by training.
+    let source = "@SYSTEM_TITLE\nRESETDATA\nADDVOIDCHARA\nBEGIN TRAIN\n@EVENTTRAIN\nRETURN\n@SHOW_STATUS\nRETURN\n@COM_ABLE0\nRESULT = 1\nRETURN\n@SHOW_USERCOM\nRETURN\n@EVENTCOM\nRETURN\n@COM0\nFLAG:0 += 1\nRESULT = 1\nRETURN\n@SOURCE_CHECK\nRETURN\n@EVENTCOMEND\nRETURN\n";
     submit(
         &mut session,
         1,
