@@ -1257,7 +1257,7 @@ fn project_load_start_and_print_cross_the_message_boundary() {
                     relative_path: "main.erb".into(),
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\nPRINTFORML TITLE_CHARANUM={CHARANUM}\nPRINTL ORACLE_READY\nRETURN\n"
+                        "@SYSTEM_TITLE\nSKIPDISP 1\nSKIPDISP 0\nPRINTFORML TITLE_CHARANUM={CHARANUM}\nPRINTL ORACLE_READY\nRETURN\n"
                             .into(),
                     ),
                     content_hash: None,
@@ -1286,11 +1286,28 @@ fn project_load_start_and_print_cross_the_message_boundary() {
             mode: StartMode::NewGame { seed: Some(1) },
         }),
     );
-    for _ in 0..4 {
-        session.drive(RuntimeDriveBudget::default()).expect("run");
-    }
+    let initial = session
+        .drive(RuntimeDriveBudget {
+            maximum_vm_instructions: 100_000,
+            maximum_runtime_transitions: 2,
+        })
+        .expect("start");
+    assert_eq!(initial.runtime_transitions, 2);
+    let mut output = drain(&mut session);
+    let yielded = session
+        .drive(RuntimeDriveBudget {
+            maximum_vm_instructions: 100_000,
+            maximum_runtime_transitions: 1,
+        })
+        .expect("bounded ready host call");
+    assert_eq!(yielded.state, RuntimeDriveState::MoreWork);
+    let report = session.drive(RuntimeDriveBudget::default()).expect("run");
+    assert!(
+        report.runtime_transitions >= 3,
+        "ready host calls should be batched in one bounded runtime drive: {report:?}"
+    );
     assert_eq!(session.random_seed(), Some(1));
-    let output = drain(&mut session);
+    output.extend(drain(&mut session));
     assert!(output.iter().any(|message| matches!(
         message,
         RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)

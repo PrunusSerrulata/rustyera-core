@@ -211,6 +211,7 @@ impl RuntimeSession {
                 );
                 instructions = instructions.saturating_add(report.instructions);
                 let stop = report.stop;
+                let made_progress = report.instructions != 0 || !report.events.is_empty();
                 for event in report.events {
                     self.handle_vm_event(&mut vm, event)?;
                 }
@@ -220,11 +221,18 @@ impl RuntimeSession {
                 {
                     self.set_phase(RuntimePhase::WaitingInput)?;
                 }
+                let has_runnable_fibers = vm.has_runnable_fibers();
                 self.vm = Some(vm);
                 transitions += 1;
+                // A synchronous host call temporarily makes its fiber idle, but handling the
+                // returned event immediately makes it runnable again. Keep servicing such calls
+                // inside this bounded drive so PRINT-heavy scripts do not require one FFI round
+                // trip per display fragment. External waits, input, faults, and debug stops still
+                // leave no runnable fiber or change phase and therefore cross the caller boundary.
                 if self.phase != RuntimePhase::Running
-                    || stop != VmPortStop::BudgetExhausted
-                    || report.instructions == 0
+                    || stop == VmPortStop::DebugStopped
+                    || !made_progress
+                    || !has_runnable_fibers
                 {
                     break;
                 }
@@ -240,7 +248,7 @@ impl RuntimeSession {
             RuntimeDriveState::OutputReady
         } else if !self.inbound.is_empty()
             || (self.phase == RuntimePhase::Running
-                && instructions >= budget.maximum_vm_instructions)
+                && self.vm.as_ref().is_some_and(RuntimeVm::has_runnable_fibers))
         {
             RuntimeDriveState::MoreWork
         } else {
