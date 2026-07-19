@@ -11,7 +11,7 @@ use erabasic_hir::{
     ConstantValue, Function, FunctionId, FunctionKind, SemanticType, Variable, VariableId,
     VariableScope,
 };
-use erabasic_validator::{ValidationContext, validate_bytecode, validate_hir};
+use erabasic_validator::{ValidationContext, validate_compiler_output, validate_hir};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,11 @@ struct CachedFunction {
     source_entries: Vec<erabasic_bytecode::SourceMapEntry>,
     native_imports: Vec<NativeImport>,
     host_imports: Vec<HostImport>,
+}
+
+enum FunctionBuild {
+    Cached(CachedFunction),
+    Lowered(LoweredFunction),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -159,40 +164,42 @@ pub fn compile_project(
         "rustyera.compiler.shared-dependencies.v1",
         &[&shared_dependencies],
     );
-    let mut cached = BTreeMap::new();
     let previous_functions = previous
         .filter(|state| state.compiler_abi == erabasic_bytecode::COMPILER_ABI_VERSION)
         .map(|state| &state.functions);
-    let mut dirty = Vec::new();
-    for function in &project.program.functions {
-        let key = function_keys[&function.id];
-        let function_bytes = serde_json::to_vec(function).expect("HIR function is serializable");
-        let cache_key = Digest::hash(
-            "rustyera.compiler.function.v2",
-            &[&function_bytes, &shared_dependencies.0, &compiler_options.0],
-        );
-        if let Some(entry) = previous_functions
-            .and_then(|functions| functions.get(&key))
-            .filter(|entry| entry.cache_key == cache_key)
-        {
-            cached.insert(key, entry.clone());
-        } else {
-            dirty.push((function, key, cache_key));
-        }
-    }
-
-    let compile_dirty = || {
-        dirty
+    let compile_functions = || {
+        project
+            .program
+            .functions
             .par_iter()
-            .map(|(function, key, cache_key)| lower_function(function, *key, *cache_key, &context))
+            .map(|function| {
+                let key = function_keys[&function.id];
+                let function_bytes =
+                    serde_json::to_vec(function).expect("HIR function is serializable");
+                let cache_key = Digest::hash(
+                    "rustyera.compiler.function.v2",
+                    &[&function_bytes, &shared_dependencies.0, &compiler_options.0],
+                );
+                if let Some(entry) = previous_functions
+                    .and_then(|functions| functions.get(&key))
+                    .filter(|entry| entry.cache_key == cache_key)
+                {
+                    FunctionBuild::Cached(entry.clone())
+                } else {
+                    FunctionBuild::Lowered(lower_function(function, key, cache_key, &context))
+                }
+            })
             .collect::<Vec<_>>()
     };
-    let lowered = if let Some(jobs) = options.jobs {
+    // Cache hashing and lowering are both function-local. Running them in one
+    // indexed parallel iterator preserves deterministic input order while
+    // avoiding a serial hashing pass before worker threads can start lowering.
+    let function_builds = if let Some(jobs) = options.jobs {
         match rayon::ThreadPoolBuilder::new()
             .num_threads(jobs.max(1))
             .build()
         {
-            Ok(pool) => pool.install(compile_dirty),
+            Ok(pool) => pool.install(compile_functions),
             Err(error) => {
                 return CompileReport {
                     artifact: None,
@@ -207,12 +214,20 @@ pub fn compile_project(
             }
         }
     } else {
-        compile_dirty()
+        compile_functions()
     };
+    let mut cached = BTreeMap::new();
+    let mut lowered_count = 0usize;
     let mut diagnostics = Vec::new();
-    for result in lowered {
-        diagnostics.extend(result.diagnostics.clone());
-        let entry = cached_function(result);
+    for result in function_builds {
+        let entry = match result {
+            FunctionBuild::Cached(entry) => entry,
+            FunctionBuild::Lowered(result) => {
+                lowered_count += 1;
+                diagnostics.extend(result.diagnostics.clone());
+                cached_function(result)
+            }
+        };
         cached.insert(entry.function.key, entry);
     }
     diagnostics.sort_by_key(|diagnostic| {
@@ -237,8 +252,8 @@ pub fn compile_project(
             diagnostics,
             stats: CompileStats {
                 total_functions: project.program.functions.len(),
-                compiled_functions: dirty.len(),
-                reused_functions: project.program.functions.len() - dirty.len(),
+                compiled_functions: lowered_count,
+                reused_functions: project.program.functions.len() - lowered_count,
                 patch_functions: 0,
             },
         };
@@ -256,7 +271,7 @@ pub fn compile_project(
         }
         source_entries.extend(entry.source_entries.clone());
     }
-    let mut artifact = BytecodeArtifact {
+    let artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(compiler_options),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility {
             allow_event_as_normal: project.program.call_compatibility.allow_event_as_normal,
@@ -290,22 +305,11 @@ pub fn compile_project(
             entries: source_entries,
         },
     };
-    if let Err(error) = artifact.refresh_ids() {
-        return CompileReport {
-            artifact: None,
-            patch: None,
-            incremental_state: previous.cloned().unwrap_or_default(),
-            diagnostics: vec![CompilerDiagnostic::new(
-                CompilerDiagnosticCode::Encoding,
-                error.to_string(),
-            )],
-            stats: CompileStats::default(),
-        };
-    }
-    // Validation owns its input and returns the same artifact after checking it. Build the
-    // context first so large projects do not need to clone every function and source-map entry.
+    // Compiler output has no identity to verify yet. Validate its structure in
+    // place, then serialize the complete artifact only once to assign final IDs.
+    // Untrusted decoded artifacts continue to use the validator's identity-checking path.
     let validation_context = ValidationContext::for_artifact(&artifact);
-    let validation = validate_bytecode(artifact.into_unvalidated(), &validation_context);
+    let validation = validate_compiler_output(artifact, &validation_context);
     if !validation.is_valid() {
         return CompileReport {
             artifact: None,
@@ -332,18 +336,30 @@ pub fn compile_project(
             stats: CompileStats::default(),
         };
     }
-    let artifact = validation
+    let mut artifact = validation
         .value
         .expect("a valid compiler artifact is returned by the validator")
         .into_inner();
+    if let Err(error) = artifact.refresh_ids() {
+        return CompileReport {
+            artifact: None,
+            patch: None,
+            incremental_state: previous.cloned().unwrap_or_default(),
+            diagnostics: vec![CompilerDiagnostic::new(
+                CompilerDiagnosticCode::Encoding,
+                error.to_string(),
+            )],
+            stats: CompileStats::default(),
+        };
+    }
     let patch = previous.and_then(|base| create_incremental_patch(base, &artifact));
     let patch_functions = patch
         .as_ref()
         .map_or(0, |patch| patch.changed_functions.len());
     let stats = CompileStats {
         total_functions: project.program.functions.len(),
-        compiled_functions: dirty.len(),
-        reused_functions: project.program.functions.len() - dirty.len(),
+        compiled_functions: lowered_count,
+        reused_functions: project.program.functions.len() - lowered_count,
         patch_functions,
     };
     let incremental_state = IncrementalState {

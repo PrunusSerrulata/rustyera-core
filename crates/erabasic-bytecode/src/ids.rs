@@ -66,12 +66,14 @@ impl Serialize for SymbolKey {
     where
         S: serde::Serializer,
     {
-        let mut encoded = String::with_capacity(32);
-        for byte in self.0 {
-            use std::fmt::Write as _;
-            write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut encoded = [0u8; 32];
+        for (index, byte) in self.0.into_iter().enumerate() {
+            encoded[index * 2] = HEX[usize::from(byte >> 4)];
+            encoded[index * 2 + 1] = HEX[usize::from(byte & 0x0f)];
         }
-        serializer.serialize_str(&encoded)
+        let encoded = std::str::from_utf8(&encoded).expect("hex digits are valid UTF-8");
+        serializer.serialize_str(encoded)
     }
 }
 

@@ -6,7 +6,9 @@ use erabasic_bytecode::{
     opcode,
 };
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
-use erabasic_validator::{ValidationCode, ValidationContext, validate_bytecode};
+use erabasic_validator::{
+    ValidationCode, ValidationContext, validate_bytecode, validate_compiler_output,
+};
 
 fn project_data() -> erabasic_data::ProjectData {
     load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
@@ -93,6 +95,49 @@ fn rejects_unknown_opcodes() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == ValidationCode::UnknownOpcode)
+    );
+}
+
+#[test]
+fn compiler_output_validation_defers_identity_checks_only() {
+    let function_key = SymbolKey::derive("test.function", b"compiler-output");
+    let artifact = BytecodeArtifact {
+        manifest: ArtifactManifest::new(Digest::default()),
+        call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        project_data: project_data(),
+        globals: Vec::new(),
+        native_imports: Vec::new(),
+        host_imports: Vec::new(),
+        functions: vec![BytecodeFunction {
+            key: function_key,
+            name: "VALID".into(),
+            kind: erabasic_bytecode::BytecodeFunctionKind::Normal,
+            parameters: Vec::new(),
+            result: None,
+            labels: Vec::new(),
+            imports: Vec::new(),
+            code: vec![opcode::return_value(false)],
+            max_stack: 0,
+        }],
+        event_groups: Vec::new(),
+        source_map: SourceMap::default(),
+    };
+    let context = ValidationContext::for_artifact(&artifact);
+
+    let compiler_report = validate_compiler_output(artifact.clone(), &context);
+    assert!(
+        compiler_report.is_valid(),
+        "{:#?}",
+        compiler_report.diagnostics
+    );
+
+    let untrusted_report = validate_bytecode(artifact.into_unvalidated(), &context);
+    assert!(untrusted_report.value.is_none());
+    assert!(
+        untrusted_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == ValidationCode::InvalidOperand)
     );
 }
 

@@ -20,7 +20,7 @@ use erabasic_csv::{
 };
 use erabasic_hir::SemanticType;
 use erabasic_parser::ArgumentStyle;
-use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode};
+use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_compiler_output};
 
 use crate::resource::ResourceGraph;
 
@@ -413,10 +413,12 @@ fn build_project_inner_with_extensions(
     let Some(artifact) = compile.artifact else {
         return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
     };
-    // The validator returns ownership of successful artifacts, so avoid duplicating the complete
-    // function and source-map payload merely to keep a temporary pre-validation copy alive.
+    // The compiler already assigned identities after validating this in-process
+    // artifact. Re-run structural checks at the runtime boundary, but do not
+    // serialize the entire artifact again solely to verify compiler-owned IDs.
+    // Decoded or externally supplied bytecode still uses `validate_bytecode`.
     let validation_context = ValidationContext::for_artifact(&artifact);
-    let validation = validate_bytecode(artifact.into_unvalidated(), &validation_context);
+    let validation = validate_compiler_output(artifact, &validation_context);
     diagnostics.extend(validation.diagnostics.iter().map(|diagnostic| {
         project_diagnostic(
             &format!("validator.{:?}", diagnostic.code).to_ascii_lowercase(),
