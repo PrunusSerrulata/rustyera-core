@@ -38,10 +38,51 @@ Rust 二进制自身的构建时间不计入结果。测试没有清空操作系
 12.356 秒，compiler 此前为 10.703 秒。剩余冷启动成本主要是完整 artifact 的确定性身份计算、
 结构验证和实际系统流程；CSV 已不是可见瓶颈。
 
-连续两次对完整 eraTW 执行无增量缓存编译，均得到 artifact ID
-`73cf11e2547b3c0bcd94d32fe46767e683525c49bbd2d93a99c115aec931b530` 和 execution ID
-`0cc8ed4231c1b7ed84001841fcf5e1c7c2dc4740bf1bf62ace20e4b4bc2ff47a`，证明本轮并行化没有
-使完整游戏产物依赖 worker 调度顺序。
+当前字节码容器与 compiler ABI 升版后，连续两次对完整 eraTW 执行无增量缓存编译，均得到
+artifact ID `4698eb3c309f7ef75b1491f94c1a9b0a12fdc5b869960ead7d613d35ca4aec64`
+和 execution ID `82726325774c7caa4b9f74a3bc34012134ba72a8dd5e40994dc3292bf64fdad7`，
+证明源码映射压缩和并行编译仍不依赖 worker 调度顺序。版本升迁会按设计改变产物 ID，旧容器
+和旧 VM snapshot 不会被静默当作当前格式恢复。
+
+## 内存与 snapshot 优化
+
+使用同一 release 构建和同一条完整 eraTW 游戏路径测得：
+
+| 指标 | 优化前 | 当前 | 变化 |
+|---|---:|---:|---:|
+| `heap -s` live malloc bytes | 2,910,947,728 | 1,875,191,264 | -1,035,756,464（-35.6%） |
+| 等待输入时 RSS（相邻版本） | 约 5.67 GB | 约 3.99–4.58 GB | 至少约 -1.09 GB |
+| 完整运行峰值 RSS | 约 6.03–6.43 GB | 5.56 GB | 至少约 -0.47 GB |
+| 源码映射条目 | 5,355,958 | 4,295,566 | -19.8% |
+| `SourceMapEntry`（64-bit） | 112 bytes | 64 bytes | -42.9% |
+| `VmValue`（64-bit） | 96 bytes | 24 bytes | -75.0% |
+
+RSS 会包含 macOS malloc 保留但当前不再使用的页，且完整运行的峰值仍可能由编译阶段主导，
+所以 live heap 是观察常驻对象变化的更稳定指标。当前完整 eraTW 的项目加载约 6.5 秒，测试
+前端到达日 1 菜单约 13.35 秒，仍远低于 30 秒进阶目标，说明紧凑存储没有用明显启动回退换取
+内存下降。
+
+真实 eraTW 在标题选择的稳定脚本输入点导出的 runtime/VM snapshot 为 133,468 bytes；同一
+payload 的未压缩 JSON 长度为 434,246 bytes（不含 60-byte 容器头），压缩后体积约为原来的
+30.7%。该快照已通过 C ABI、前端分块传输和恢复测试，恢复后仍停在相同的稳定整数输入等待。
+日 1 runtime 自有系统菜单当前返回 `SnapshotStateUnavailable`，因此没有把该不合资格状态
+伪装成日 1 snapshot 样本；这属于既有 snapshot 资格/系统流程问题，而非编码器或恢复失败。
+
+本轮采用的内存策略如下：
+
+- 将相邻且源码 origin 完全相同的指令映射合并为半开 code range，并用确定性去重表保存
+  statement fingerprint；普通条目不再内联 32-byte digest，也不为空 origin chain 常驻 `Vec`。
+- runtime 增量编译状态只保存函数 cache key 和精确 artifact 身份；未变化函数从 runtime 已经
+  持有的相同 artifact 物化，不再常驻第二份完整函数、导入表和源码映射。
+- VM 的不可变 program generation 通过 `Arc` 在隔离候选之间共享，避免仅为试运行候选深复制
+  数百万条指令和索引；热替换提交会移动已验证 artifact，并在所有可恢复检查结束后原地迁移
+  memory，不再同时保留完整旧/新 artifact 克隆和第二份完整游戏状态。
+- dense variable cell 按声明类型分别保存 `Vec<i64>`、`Vec<String>` 或 place descriptor；只有
+  操作数栈、Host/调试接口和传统存档边界才构造公共 `VmValue`。角色变量、全局数组、局部变量
+  和引用参数仍走原有 shape/type 检查。
+- VM snapshot 8 和 runtime snapshot 14 使用流式、确定性的 zlib best-compression 容器，记录
+  压缩/展开长度并校验压缩 payload 的 BLAKE3。恢复时同时限制输入和最大展开长度，防止伪造
+  长度导致无界解压；格式版本不符时继续拒绝恢复。
 
 ## 已实施优化
 

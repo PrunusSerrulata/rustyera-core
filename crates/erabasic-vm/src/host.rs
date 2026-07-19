@@ -1247,7 +1247,7 @@ mod tests {
                     result: None,
                 },
                 arguments: vec![
-                    VmValue::IntegerPlace(target.clone()),
+                    VmValue::IntegerPlace(Box::new(target.clone())),
                     VmValue::Integer(3),
                     VmValue::Integer(2),
                 ],

@@ -202,7 +202,7 @@ pub(super) fn execute_split_transaction(
         ));
     };
     let output = match arguments.get(2) {
-        Some(VmValue::StringPlace(place)) => place.clone(),
+        Some(VmValue::StringPlace(place)) => place.as_ref().clone(),
         _ => {
             return Err(VmError::InvalidArguments(
                 "SPLIT output is not a string-array place".into(),
@@ -210,7 +210,7 @@ pub(super) fn execute_split_transaction(
         }
     };
     let count = match arguments.get(3) {
-        Some(VmValue::IntegerPlace(place)) => place.clone(),
+        Some(VmValue::IntegerPlace(place)) => place.as_ref().clone(),
         None => global_unindexed_place(vm, fiber, "RESULT")?,
         _ => {
             return Err(VmError::InvalidArguments(
@@ -603,7 +603,7 @@ pub(super) fn execute_variable_fill(
         .map(|character| PlaceDescriptor {
             indices: indices.clone(),
             character: Some(u64::try_from(character).unwrap_or(u64::MAX)),
-            ..place.clone()
+            ..place.as_ref().clone()
         })
         .collect::<Vec<_>>();
     for destination in &destinations {

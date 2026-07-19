@@ -4,7 +4,7 @@ use erabasic_ast::{AssignOp, BinaryOp, PostfixOp, UnaryOp};
 use erabasic_bytecode::{
     BytecodeFunction, BytecodeFunctionKind, BytecodeLabel, BytecodeParameter, BytecodeType, Digest,
     EncodedInstruction, FunctionImport, HostImport, ImportKind, NATIVE_ABI_VERSION, NativeImport,
-    Opcode, RuntimeImport, SourceMapEntry, SymbolKey, opcode,
+    Opcode, RuntimeImport, SymbolKey, opcode,
 };
 use erabasic_hir::{
     CallTarget, ControlFlowKind, Function, FunctionId, FunctionKind, HirArgument, HirCallArgument,
@@ -44,10 +44,25 @@ pub(crate) struct LoweringContext<'a> {
 pub(crate) struct LoweredFunction {
     pub cache_key: Digest,
     pub function: BytecodeFunction,
-    pub source_entries: Vec<SourceMapEntry>,
+    pub source_entries: Vec<LoweredSourceMapEntry>,
     pub native_imports: Vec<NativeImport>,
     pub host_imports: Vec<HostImport>,
     pub diagnostics: Vec<CompilerDiagnostic>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct LoweredSourceMapEntry {
+    pub function: SymbolKey,
+    pub code_start: u64,
+    pub code_end: u64,
+    pub source_index: u32,
+    pub byte_start: u64,
+    pub byte_end: u64,
+    pub statement_fingerprint: Digest,
+    // Match the compact serialized record; macro origins are rare, while every
+    // ordinary statement benefits from the thin optional pointer.
+    #[allow(clippy::box_collection)]
+    pub origin_chain: Option<Box<Vec<(u32, u64, u64)>>>,
 }
 
 #[must_use]
@@ -338,11 +353,11 @@ pub(crate) fn lower_function(
         &[function.name.as_bytes()],
     );
     let mut offset = 0u64;
-    let mut source_entries = Vec::with_capacity(builder.code.len());
+    let mut source_entries = Vec::<LoweredSourceMapEntry>::with_capacity(builder.code.len());
     for (instruction, location) in builder.code.iter().zip(&builder.locations) {
         let end = offset + instruction.encoded_len();
         if let Some(source_index) = context.source_indices.get(&location.source) {
-            source_entries.push(SourceMapEntry {
+            let entry = LoweredSourceMapEntry {
                 function: key,
                 code_start: offset,
                 code_end: end,
@@ -353,11 +368,19 @@ pub(crate) fn lower_function(
                     .get(&(location.source, location.span.start, location.span.end))
                     .copied()
                     .unwrap_or(fallback_fingerprint),
-                origin_chain: Vec::new(),
-            });
+                origin_chain: None,
+            };
+            // One statement commonly lowers to several adjacent opcodes. A source
+            // range describes all bytes in the half-open code interval, so merging
+            // identical adjacent origins preserves every lookup while avoiding one
+            // 112-byte metadata record per opcode in large projects.
+            append_source_entry(&mut source_entries, entry);
         }
         offset = end;
     }
+    // Coalescing can remove many entries after reserving for the opcode count.
+    // Release that excess before all lowered functions coexist in the compiler.
+    source_entries.shrink_to_fit();
     let parameters = function
         .parameters
         .iter()
@@ -437,5 +460,50 @@ pub(crate) fn lower_function(
         native_imports: builder.native_imports.into_values().collect(),
         host_imports: builder.host_imports.into_values().collect(),
         diagnostics: builder.diagnostics,
+    }
+}
+
+fn append_source_entry(entries: &mut Vec<LoweredSourceMapEntry>, entry: LoweredSourceMapEntry) {
+    if let Some(previous) = entries.last_mut()
+        && previous.code_end == entry.code_start
+        && previous.function == entry.function
+        && previous.source_index == entry.source_index
+        && previous.byte_start == entry.byte_start
+        && previous.byte_end == entry.byte_end
+        && previous.statement_fingerprint == entry.statement_fingerprint
+        && previous.origin_chain == entry.origin_chain
+    {
+        previous.code_end = entry.code_end;
+    } else {
+        entries.push(entry);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adjacent_identical_source_origins_share_one_code_range() {
+        let function = SymbolKey::derive("compiler-source-map-test", b"function");
+        let fingerprint = Digest::hash("compiler-source-map-test", &[b"statement"]);
+        let entry = |code_start, code_end, byte_start| LoweredSourceMapEntry {
+            function,
+            code_start,
+            code_end,
+            source_index: 2,
+            byte_start,
+            byte_end: byte_start + 4,
+            statement_fingerprint: fingerprint,
+            origin_chain: None,
+        };
+        let mut entries = Vec::new();
+        append_source_entry(&mut entries, entry(0, 6, 10));
+        append_source_entry(&mut entries, entry(6, 14, 10));
+        append_source_entry(&mut entries, entry(14, 20, 30));
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!((entries[0].code_start, entries[0].code_end), (0, 14));
+        assert_eq!((entries[1].code_start, entries[1].code_end), (14, 20));
     }
 }

@@ -4,7 +4,7 @@ use erabasic_analyzer::AnalyzedProject;
 use erabasic_bytecode::{
     ArtifactManifest, BytecodeArtifact, BytecodeConstant, BytecodeEventEntry, BytecodeEventGroup,
     BytecodeGlobal, BytecodePatch, BytecodePersistence, BytecodeStorage, BytecodeType, Digest,
-    HostImport, NativeImport, SourceMap, SourceRecord, SymbolKey,
+    HostImport, ImportKind, NativeImport, SourceMap, SourceMapEntry, SourceRecord, SymbolKey,
 };
 use erabasic_data::{Persistence, StorageScope};
 use erabasic_hir::{
@@ -17,26 +17,42 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CompilerDiagnostic, CompilerDiagnosticCode, CompilerOptions, HostRegistry,
-    lowering::{LoweredFunction, LoweringContext, bytecode_type, lower_function},
+    lowering::{
+        LoweredFunction, LoweredSourceMapEntry, LoweringContext, bytecode_type, lower_function,
+    },
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct CachedFunction {
     cache_key: Digest,
-    function: erabasic_bytecode::BytecodeFunction,
-    source_entries: Vec<erabasic_bytecode::SourceMapEntry>,
+    function_key: SymbolKey,
+    function: Option<erabasic_bytecode::BytecodeFunction>,
+    source_entries: Vec<LoweredSourceMapEntry>,
     native_imports: Vec<NativeImport>,
     host_imports: Vec<HostImport>,
 }
 
 enum FunctionBuild {
-    Cached(CachedFunction),
+    Cached(MaterializedFunction),
     Lowered(LoweredFunction),
+}
+
+struct MaterializedFunction {
+    cache_key: Digest,
+    function: erabasic_bytecode::BytecodeFunction,
+    source_entries: Vec<LoweredSourceMapEntry>,
+    native_imports: Vec<NativeImport>,
+    host_imports: Vec<HostImport>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct IncrementalBase {
     manifest: ArtifactManifest,
+    metadata: Option<Box<IncrementalMetadata>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct IncrementalMetadata {
     call_compatibility: erabasic_bytecode::BytecodeCallCompatibility,
     project_data: erabasic_data::ProjectData,
     globals: Vec<BytecodeGlobal>,
@@ -46,15 +62,19 @@ struct IncrementalBase {
 }
 
 impl IncrementalBase {
-    fn from_artifact(artifact: &BytecodeArtifact) -> Self {
+    fn from_artifact(artifact: &BytecodeArtifact, include_metadata: bool) -> Self {
         Self {
             manifest: artifact.manifest.clone(),
-            call_compatibility: artifact.call_compatibility,
-            project_data: artifact.project_data.clone(),
-            globals: artifact.globals.clone(),
-            native_imports: artifact.native_imports.clone(),
-            host_imports: artifact.host_imports.clone(),
-            event_groups: artifact.event_groups.clone(),
+            metadata: include_metadata.then(|| {
+                Box::new(IncrementalMetadata {
+                    call_compatibility: artifact.call_compatibility,
+                    project_data: artifact.project_data.clone(),
+                    globals: artifact.globals.clone(),
+                    native_imports: artifact.native_imports.clone(),
+                    host_imports: artifact.host_imports.clone(),
+                    event_groups: artifact.event_groups.clone(),
+                })
+            }),
         }
     }
 }
@@ -75,6 +95,23 @@ impl IncrementalState {
     #[must_use]
     pub fn base_artifact_id(&self) -> Option<Digest> {
         self.base.as_ref().map(|base| base.manifest.artifact_id)
+    }
+
+    /// Discard function payloads that already exist in the active artifact.
+    ///
+    /// Runtime callers retain that artifact independently and can supply it to
+    /// [`compile_project_with_artifact`] on the next reload. Keeping only cache
+    /// keys avoids a second resident copy of all code and source-map records.
+    pub fn compact(&mut self) {
+        for cached in self.functions.values_mut() {
+            cached.function = None;
+            cached.source_entries.clear();
+            cached.native_imports.clear();
+            cached.host_imports.clear();
+        }
+        if let Some(base) = &mut self.base {
+            base.metadata = None;
+        }
     }
 }
 
@@ -108,6 +145,41 @@ pub fn compile_project(
     options: &CompilerOptions,
     host_registry: &HostRegistry,
     previous: Option<&IncrementalState>,
+) -> CompileReport {
+    compile_project_inner(project, options, host_registry, previous, None, false)
+}
+
+/// Compile with an exact previous artifact backing a compact incremental cache.
+///
+/// Runtime owners use this entry point because they already retain the executable
+/// artifact. The returned cache is compact and therefore must again be paired with
+/// its exact artifact on the next incremental build.
+#[must_use]
+pub fn compile_project_with_artifact(
+    project: &AnalyzedProject,
+    options: &CompilerOptions,
+    host_registry: &HostRegistry,
+    previous: Option<&IncrementalState>,
+    previous_artifact: Option<&BytecodeArtifact>,
+) -> CompileReport {
+    compile_project_inner(
+        project,
+        options,
+        host_registry,
+        previous,
+        previous_artifact,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn compile_project_inner(
+    project: &AnalyzedProject,
+    options: &CompilerOptions,
+    host_registry: &HostRegistry,
+    previous: Option<&IncrementalState>,
+    previous_artifact: Option<&BytecodeArtifact>,
+    compact_cache: bool,
 ) -> CompileReport {
     let hir_report = validate_hir(&project.program, &project.data);
     if !hir_report.is_valid() {
@@ -167,6 +239,10 @@ pub fn compile_project(
     let previous_functions = previous
         .filter(|state| state.compiler_abi == erabasic_bytecode::COMPILER_ABI_VERSION)
         .map(|state| &state.functions);
+    let previous_artifact = previous_artifact.filter(|artifact| {
+        previous.and_then(IncrementalState::base_artifact_id) == Some(artifact.manifest.artifact_id)
+    });
+    let previous_artifact_index = previous_artifact.map(PreviousArtifactIndex::new);
     let compile_functions = || {
         project
             .program
@@ -183,8 +259,11 @@ pub fn compile_project(
                 if let Some(entry) = previous_functions
                     .and_then(|functions| functions.get(&key))
                     .filter(|entry| entry.cache_key == cache_key)
+                    .and_then(|entry| {
+                        materialize_cached_function(entry, previous_artifact_index.as_ref())
+                    })
                 {
-                    FunctionBuild::Cached(entry.clone())
+                    FunctionBuild::Cached(entry)
                 } else {
                     FunctionBuild::Lowered(lower_function(function, key, cache_key, &context))
                 }
@@ -216,7 +295,7 @@ pub fn compile_project(
     } else {
         compile_functions()
     };
-    let mut cached = BTreeMap::new();
+    let mut materialized = Vec::with_capacity(function_builds.len());
     let mut lowered_count = 0usize;
     let mut diagnostics = Vec::new();
     for result in function_builds {
@@ -225,10 +304,10 @@ pub fn compile_project(
             FunctionBuild::Lowered(result) => {
                 lowered_count += 1;
                 diagnostics.extend(result.diagnostics.clone());
-                cached_function(result)
+                materialized_function(result)
             }
         };
-        cached.insert(entry.function.key, entry);
+        materialized.push(entry);
     }
     diagnostics.sort_by_key(|diagnostic| {
         diagnostic
@@ -261,16 +340,62 @@ pub fn compile_project(
 
     let mut native_imports = BTreeMap::new();
     let mut host_imports = BTreeMap::new();
-    let mut source_entries = Vec::new();
-    for entry in cached.values() {
-        for import in &entry.native_imports {
-            native_imports.insert(import.import.key, import.clone());
+    let source_entry_count = materialized
+        .iter()
+        .map(|entry| entry.source_entries.len())
+        .sum();
+    let mut lowered_source_entries = Vec::with_capacity(source_entry_count);
+    let mut functions = Vec::with_capacity(materialized.len());
+    let mut cached = BTreeMap::new();
+    materialized.sort_by_key(|entry| entry.function.key);
+    for entry in materialized {
+        let key = entry.function.key;
+        let cached_entry = if compact_cache {
+            compact_cached_function(&entry)
+        } else {
+            cached_function(&entry)
+        };
+        for import in entry.native_imports {
+            native_imports.insert(import.import.key, import);
         }
-        for import in &entry.host_imports {
-            host_imports.insert(import.import.key, import.clone());
+        for import in entry.host_imports {
+            host_imports.insert(import.import.key, import);
         }
-        source_entries.extend(entry.source_entries.clone());
+        lowered_source_entries.extend(entry.source_entries);
+        functions.push(entry.function);
+        cached.insert(key, cached_entry);
     }
+    let mut fingerprint_order = lowered_source_entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (entry.statement_fingerprint, index))
+        .collect::<Vec<_>>();
+    fingerprint_order.sort_unstable();
+    let mut statement_fingerprints = Vec::new();
+    let mut fingerprint_indices = vec![0_u32; lowered_source_entries.len()];
+    for (fingerprint, entry_index) in fingerprint_order {
+        let fingerprint_index = if statement_fingerprints.last() == Some(&fingerprint) {
+            statement_fingerprints.len().saturating_sub(1)
+        } else {
+            statement_fingerprints.push(fingerprint);
+            statement_fingerprints.len().saturating_sub(1)
+        };
+        fingerprint_indices[entry_index] = u32::try_from(fingerprint_index).unwrap_or(u32::MAX);
+    }
+    let source_entries = lowered_source_entries
+        .into_iter()
+        .zip(fingerprint_indices)
+        .map(|(entry, statement_fingerprint)| SourceMapEntry {
+            function: entry.function,
+            code_start: entry.code_start,
+            code_end: entry.code_end,
+            byte_start: entry.byte_start,
+            byte_end: entry.byte_end,
+            statement_fingerprint,
+            origin_chain: entry.origin_chain,
+            source_index: entry.source_index,
+        })
+        .collect();
     let artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(compiler_options),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility {
@@ -285,10 +410,7 @@ pub fn compile_project(
         globals: globals(&project.program.variables, &variable_keys, &function_keys),
         native_imports: native_imports.into_values().collect(),
         host_imports: host_imports.into_values().collect(),
-        functions: cached
-            .values()
-            .map(|entry| entry.function.clone())
-            .collect(),
+        functions,
         event_groups: event_groups(&project.program.functions, &function_keys),
         source_map: SourceMap {
             sources: project
@@ -302,6 +424,7 @@ pub fn compile_project(
                     line_starts: source.line_starts.clone(),
                 })
                 .collect(),
+            statement_fingerprints,
             entries: source_entries,
         },
     };
@@ -352,7 +475,8 @@ pub fn compile_project(
             stats: CompileStats::default(),
         };
     }
-    let patch = previous.and_then(|base| create_incremental_patch(base, &artifact));
+    let patch =
+        previous.and_then(|base| create_incremental_patch(base, previous_artifact, &artifact));
     let patch_functions = patch
         .as_ref()
         .map_or(0, |patch| patch.changed_functions.len());
@@ -367,7 +491,7 @@ pub fn compile_project(
         functions: cached,
         // Function bodies and source entries already live in `functions`; retain only the
         // remaining fields needed to compare the next build instead of cloning the artifact.
-        base: Some(IncrementalBase::from_artifact(&artifact)),
+        base: Some(IncrementalBase::from_artifact(&artifact, !compact_cache)),
     };
     CompileReport {
         artifact: Some(artifact),
@@ -380,9 +504,13 @@ pub fn compile_project(
 
 fn create_incremental_patch(
     base: &IncrementalState,
+    base_artifact: Option<&BytecodeArtifact>,
     target: &BytecodeArtifact,
 ) -> Option<BytecodePatch> {
     let metadata = base.base.as_ref()?;
+    let exact_base = base_artifact
+        .filter(|artifact| artifact.manifest.artifact_id == metadata.manifest.artifact_id);
+    let compact_metadata = metadata.metadata.as_deref();
     let target_keys = target
         .functions
         .iter()
@@ -392,14 +520,30 @@ fn create_incremental_patch(
         base_artifact_id: metadata.manifest.artifact_id,
         base_execution_id: metadata.manifest.program_version.execution_id,
         target_manifest: target.manifest.clone(),
-        call_compatibility: (metadata.call_compatibility != target.call_compatibility)
+        call_compatibility: exact_base
+            .map(|artifact| artifact.call_compatibility)
+            .or_else(|| compact_metadata.map(|metadata| metadata.call_compatibility))
+            .is_none_or(|base| base != target.call_compatibility)
             .then_some(target.call_compatibility),
-        project_data: (metadata.project_data != target.project_data)
+        project_data: exact_base
+            .map(|artifact| &artifact.project_data)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.project_data))
+            .is_none_or(|base| base != &target.project_data)
             .then(|| target.project_data.clone()),
-        globals: (metadata.globals != target.globals).then(|| target.globals.clone()),
-        native_imports: (metadata.native_imports != target.native_imports)
+        globals: exact_base
+            .map(|artifact| &artifact.globals)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.globals))
+            .is_none_or(|base| base != &target.globals)
+            .then(|| target.globals.clone()),
+        native_imports: exact_base
+            .map(|artifact| &artifact.native_imports)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.native_imports))
+            .is_none_or(|base| base != &target.native_imports)
             .then(|| target.native_imports.clone()),
-        host_imports: (metadata.host_imports != target.host_imports)
+        host_imports: exact_base
+            .map(|artifact| &artifact.host_imports)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.host_imports))
+            .is_none_or(|base| base != &target.host_imports)
             .then(|| target.host_imports.clone()),
         changed_functions: target
             .functions
@@ -407,7 +551,7 @@ fn create_incremental_patch(
             .filter(|function| {
                 base.functions
                     .get(&function.key)
-                    .map(|cached| &cached.function)
+                    .and_then(|cached| cached_function_body(cached, base_artifact))
                     != Some(function)
             })
             .cloned()
@@ -415,10 +559,13 @@ fn create_incremental_patch(
         removed_functions: base
             .functions
             .values()
-            .filter(|cached| !target_keys.contains(&cached.function.key))
-            .map(|cached| cached.function.key)
+            .filter(|cached| !target_keys.contains(&cached.function_key))
+            .map(|cached| cached.function_key)
             .collect(),
-        event_groups: (metadata.event_groups != target.event_groups)
+        event_groups: exact_base
+            .map(|artifact| &artifact.event_groups)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.event_groups))
+            .is_none_or(|base| base != &target.event_groups)
             .then(|| target.event_groups.clone()),
         source_map: target.source_map.clone(),
     })
@@ -475,14 +622,168 @@ fn event_groups(
         .collect()
 }
 
-fn cached_function(result: LoweredFunction) -> CachedFunction {
-    CachedFunction {
+fn materialized_function(result: LoweredFunction) -> MaterializedFunction {
+    MaterializedFunction {
         cache_key: result.cache_key,
         function: result.function,
         source_entries: result.source_entries,
         native_imports: result.native_imports,
         host_imports: result.host_imports,
     }
+}
+
+fn cached_function(result: &MaterializedFunction) -> CachedFunction {
+    CachedFunction {
+        cache_key: result.cache_key,
+        function_key: result.function.key,
+        function: Some(result.function.clone()),
+        source_entries: result.source_entries.clone(),
+        native_imports: result.native_imports.clone(),
+        host_imports: result.host_imports.clone(),
+    }
+}
+
+fn compact_cached_function(result: &MaterializedFunction) -> CachedFunction {
+    CachedFunction {
+        cache_key: result.cache_key,
+        function_key: result.function.key,
+        function: None,
+        source_entries: Vec::new(),
+        native_imports: Vec::new(),
+        host_imports: Vec::new(),
+    }
+}
+
+fn cached_function_body<'a>(
+    cached: &'a CachedFunction,
+    artifact: Option<&'a BytecodeArtifact>,
+) -> Option<&'a erabasic_bytecode::BytecodeFunction> {
+    cached.function.as_ref().or_else(|| {
+        artifact?
+            .functions
+            .iter()
+            .find(|function| function.key == cached.function_key)
+    })
+}
+
+struct PreviousArtifactIndex<'a> {
+    artifact: &'a BytecodeArtifact,
+    functions: BTreeMap<SymbolKey, usize>,
+    source_ranges: BTreeMap<SymbolKey, std::ops::Range<usize>>,
+    native_imports: BTreeMap<SymbolKey, usize>,
+    host_imports: BTreeMap<SymbolKey, usize>,
+}
+
+impl<'a> PreviousArtifactIndex<'a> {
+    fn new(artifact: &'a BytecodeArtifact) -> Self {
+        let functions = artifact
+            .functions
+            .iter()
+            .enumerate()
+            .map(|(index, function)| (function.key, index))
+            .collect();
+        let mut source_ranges = BTreeMap::<SymbolKey, std::ops::Range<usize>>::new();
+        for (index, entry) in artifact.source_map.entries.iter().enumerate() {
+            source_ranges
+                .entry(entry.function)
+                .and_modify(|range| range.end = index + 1)
+                .or_insert(index..index + 1);
+        }
+        let native_imports = artifact
+            .native_imports
+            .iter()
+            .enumerate()
+            .map(|(index, import)| (import.import.key, index))
+            .collect();
+        let host_imports = artifact
+            .host_imports
+            .iter()
+            .enumerate()
+            .map(|(index, import)| (import.import.key, index))
+            .collect();
+        Self {
+            artifact,
+            functions,
+            source_ranges,
+            native_imports,
+            host_imports,
+        }
+    }
+}
+
+fn materialize_cached_function(
+    cached: &CachedFunction,
+    previous: Option<&PreviousArtifactIndex<'_>>,
+) -> Option<MaterializedFunction> {
+    if let Some(function) = &cached.function {
+        return Some(MaterializedFunction {
+            cache_key: cached.cache_key,
+            function: function.clone(),
+            source_entries: cached.source_entries.clone(),
+            native_imports: cached.native_imports.clone(),
+            host_imports: cached.host_imports.clone(),
+        });
+    }
+    let previous = previous?;
+    let function = previous
+        .artifact
+        .functions
+        .get(*previous.functions.get(&cached.function_key)?)?
+        .clone();
+    let source_entries = previous
+        .source_ranges
+        .get(&cached.function_key)
+        .map_or_else(
+            || Some(Vec::new()),
+            |range| {
+                previous.artifact.source_map.entries[range.clone()]
+                    .iter()
+                    .map(|entry| {
+                        Some(LoweredSourceMapEntry {
+                            function: entry.function,
+                            code_start: entry.code_start,
+                            code_end: entry.code_end,
+                            source_index: entry.source_index,
+                            byte_start: entry.byte_start,
+                            byte_end: entry.byte_end,
+                            statement_fingerprint: previous
+                                .artifact
+                                .source_map
+                                .statement_fingerprint(entry)?,
+                            origin_chain: entry.origin_chain.clone(),
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()
+            },
+        )?;
+    let mut native_imports = Vec::new();
+    let mut host_imports = Vec::new();
+    for import in &function.imports {
+        match import.kind {
+            ImportKind::Native => native_imports.push(
+                previous
+                    .artifact
+                    .native_imports
+                    .get(*previous.native_imports.get(&import.key)?)?
+                    .clone(),
+            ),
+            ImportKind::Host => host_imports.push(
+                previous
+                    .artifact
+                    .host_imports
+                    .get(*previous.host_imports.get(&import.key)?)?
+                    .clone(),
+            ),
+            ImportKind::Function => {}
+        }
+    }
+    Some(MaterializedFunction {
+        cache_key: cached.cache_key,
+        function,
+        source_entries,
+        native_imports,
+        host_imports,
+    })
 }
 
 fn function_keys(

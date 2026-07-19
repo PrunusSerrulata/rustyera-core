@@ -453,8 +453,8 @@ impl Vm {
                 };
                 if opcode == Opcode::MakePlace {
                     let value = match definition.value_type {
-                        BytecodeType::Integer => VmValue::IntegerPlace(place),
-                        BytecodeType::String => VmValue::StringPlace(place),
+                        BytecodeType::Integer => VmValue::IntegerPlace(Box::new(place)),
+                        BytecodeType::String => VmValue::StringPlace(Box::new(place)),
                         BytecodeType::IntegerPlace | BytecodeType::StringPlace => {
                             return Err(StepError::new(
                                 VmFaultCode::InvalidInstruction,
@@ -609,7 +609,11 @@ impl Vm {
                         .last_mut()
                         .expect("frame exists")
                         .for_loops
-                        .push(ForLoopState { counter, end, step });
+                        .push(ForLoopState {
+                            counter: *counter,
+                            end,
+                            step,
+                        });
                 }
                 fiber
                     .frames

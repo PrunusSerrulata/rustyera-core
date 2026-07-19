@@ -68,8 +68,8 @@ pub(super) fn execute_character_query(
             .iter()
             .find(|definition| definition.name.eq_ignore_ascii_case("CFLAG"));
         for (index, character) in vm.memory.characters.iter().enumerate() {
-            let value = character.get(&no.key).and_then(|cell| cell.values.first());
-            if value != Some(&VmValue::Integer(number)) {
+            let value = character.get(&no.key).and_then(crate::VariableCell::first);
+            if value != Some(VmValue::Integer(number)) {
                 continue;
             }
             if operation == "getchara" && arguments.get(1).is_none() {
@@ -77,8 +77,8 @@ pub(super) fn execute_character_query(
             }
             let is_sp = cflag
                 .and_then(|definition| character.get(&definition.key))
-                .and_then(|cell| cell.values.first())
-                .is_some_and(|value| matches!(value, VmValue::Integer(value) if *value != 0));
+                .and_then(crate::VariableCell::first)
+                .is_some_and(|value| matches!(value, VmValue::Integer(value) if value != 0));
             if is_sp == requested_sp {
                 return Ok(VmValue::Integer(i64::try_from(index).unwrap_or(i64::MAX)));
             }
@@ -359,17 +359,18 @@ pub(super) fn execute_character_mutation(
             let cell = memory
                 .cell_mut(generation, definition, character)
                 .ok_or_else(|| VmError::InvalidState("STAIN storage is unavailable".into()))?;
-            for (index, destination) in cell.values.iter_mut().enumerate() {
-                *destination = VmValue::Integer(
-                    artifact
-                        .project_data
-                        .static_data
-                        .replace
-                        .stain_default
-                        .get(index)
-                        .copied()
-                        .unwrap_or(0),
-                );
+            let destinations = cell.integers_mut().ok_or_else(|| {
+                VmError::InvalidState("STAIN storage is not an integer array".into())
+            })?;
+            for (index, destination) in destinations.iter_mut().enumerate() {
+                *destination = artifact
+                    .project_data
+                    .static_data
+                    .replace
+                    .stain_default
+                    .get(index)
+                    .copied()
+                    .unwrap_or(0);
             }
         }
         _ => {
@@ -554,8 +555,8 @@ pub(super) fn read_named_integer(
         .globals
         .iter()
         .find(|definition| definition.name.eq_ignore_ascii_case(name))?;
-    match memory.shared.get(&definition.key)?.values.first()? {
-        VmValue::Integer(value) => Some(*value),
+    match memory.shared.get(&definition.key)?.first()? {
+        VmValue::Integer(value) => Some(value),
         _ => None,
     }
 }
@@ -571,13 +572,12 @@ pub(super) fn write_named_integer(
         .iter()
         .find(|definition| definition.name.eq_ignore_ascii_case(name))
         .ok_or_else(|| VmError::InvalidState(format!("{name} is not defined")))?;
-    let slot = memory
+    let cell = memory
         .shared
         .get_mut(&definition.key)
-        .and_then(|cell| cell.values.first_mut())
         .ok_or_else(|| VmError::InvalidState(format!("{name} storage is unavailable")))?;
-    *slot = VmValue::Integer(value);
-    Ok(())
+    cell.set(0, VmValue::Integer(value))
+        .map_err(VmError::InvalidState)
 }
 
 fn validate_named_integer_slot(
@@ -593,7 +593,7 @@ fn validate_named_integer_slot(
     memory
         .shared
         .get(&definition.key)
-        .and_then(|cell| cell.values.first())
+        .and_then(crate::VariableCell::first)
         .ok_or_else(|| VmError::InvalidState(format!("{name} storage is unavailable")))?;
     Ok(())
 }

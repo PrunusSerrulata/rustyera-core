@@ -6,24 +6,151 @@ use erabasic_bytecode::{
 use erabasic_data::{CharacterSelection, CharacterTemplate, RuntimeDefaults};
 use serde::{Deserialize, Serialize};
 
-use crate::{GenerationId, VmValue};
+use crate::{GenerationId, PlaceDescriptor, VmValue};
+
+/// Dense variable storage is specialized by `EraBasic` value type.
+///
+/// Most game memory consists of large integer arrays, especially character
+/// variables. Keeping every element in the public `VmValue` enum would retain
+/// the enum's largest payload and waste two thirds of each integer allocation.
+/// The VM converts at its boundary instead, preserving the public value model
+/// and snapshot semantics while storing dense arrays in their native layout.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+enum VariableValues {
+    Integers(Vec<i64>),
+    Strings(Vec<String>),
+    IntegerPlaces(Vec<PlaceDescriptor>),
+    StringPlaces(Vec<PlaceDescriptor>),
+}
+
+impl VariableValues {
+    fn with_default(value_type: BytecodeType, length: usize) -> Self {
+        match value_type {
+            BytecodeType::Integer => Self::Integers(vec![0; length]),
+            BytecodeType::String => Self::Strings(vec![String::new(); length]),
+            BytecodeType::IntegerPlace => {
+                Self::IntegerPlaces(vec![PlaceDescriptor::default(); length])
+            }
+            BytecodeType::StringPlace => {
+                Self::StringPlaces(vec![PlaceDescriptor::default(); length])
+            }
+        }
+    }
+
+    const fn value_type(&self) -> BytecodeType {
+        match self {
+            Self::Integers(_) => BytecodeType::Integer,
+            Self::Strings(_) => BytecodeType::String,
+            Self::IntegerPlaces(_) => BytecodeType::IntegerPlace,
+            Self::StringPlaces(_) => BytecodeType::StringPlace,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Integers(values) => values.len(),
+            Self::Strings(values) => values.len(),
+            Self::IntegerPlaces(values) | Self::StringPlaces(values) => values.len(),
+        }
+    }
+
+    fn get(&self, index: usize) -> Option<VmValue> {
+        match self {
+            Self::Integers(values) => values.get(index).copied().map(VmValue::Integer),
+            Self::Strings(values) => values.get(index).cloned().map(VmValue::String),
+            Self::IntegerPlaces(values) => values
+                .get(index)
+                .cloned()
+                .map(Box::new)
+                .map(VmValue::IntegerPlace),
+            Self::StringPlaces(values) => values
+                .get(index)
+                .cloned()
+                .map(Box::new)
+                .map(VmValue::StringPlace),
+        }
+    }
+
+    fn set(&mut self, index: usize, value: VmValue) -> Result<(), String> {
+        match (self, value) {
+            (Self::Integers(values), VmValue::Integer(value)) => set_slot(values, index, value),
+            (Self::Strings(values), VmValue::String(value)) => set_slot(values, index, value),
+            (Self::IntegerPlaces(values), VmValue::IntegerPlace(value))
+            | (Self::StringPlaces(values), VmValue::StringPlace(value)) => {
+                set_slot(values, index, *value)
+            }
+            (values, value) => Err(format!(
+                "variable expects {:?}, found {:?}",
+                values.value_type(),
+                value.value_type()
+            )),
+        }
+    }
+
+    fn fill(&mut self, value: VmValue) -> Result<(), String> {
+        match (self, value) {
+            (Self::Integers(values), VmValue::Integer(value)) => values.fill(value),
+            (Self::Strings(values), VmValue::String(value)) => values.fill(value),
+            (Self::IntegerPlaces(values), VmValue::IntegerPlace(value))
+            | (Self::StringPlaces(values), VmValue::StringPlace(value)) => values.fill(*value),
+            (values, value) => {
+                return Err(format!(
+                    "variable expects {:?}, found {:?}",
+                    values.value_type(),
+                    value.value_type()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn to_vm_values(&self) -> Vec<VmValue> {
+        match self {
+            Self::Integers(values) => values.iter().copied().map(VmValue::Integer).collect(),
+            Self::Strings(values) => values.iter().cloned().map(VmValue::String).collect(),
+            Self::IntegerPlaces(values) => values
+                .iter()
+                .cloned()
+                .map(Box::new)
+                .map(VmValue::IntegerPlace)
+                .collect(),
+            Self::StringPlaces(values) => values
+                .iter()
+                .cloned()
+                .map(Box::new)
+                .map(VmValue::StringPlace)
+                .collect(),
+        }
+    }
+}
+
+fn set_slot<T>(values: &mut [T], index: usize, value: T) -> Result<(), String> {
+    let slot = values
+        .get_mut(index)
+        .ok_or_else(|| "variable offset is outside its storage".to_owned())?;
+    *slot = value;
+    Ok(())
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct VariableCell {
     pub value_type: BytecodeType,
     pub dimensions: Vec<u64>,
-    pub values: Vec<VmValue>,
+    values: VariableValues,
 }
 
 impl VariableCell {
     pub fn new(definition: &BytecodeGlobal) -> Self {
         let length = element_count(&definition.dimensions).unwrap_or(0);
-        let mut values = vec![VmValue::default_for(definition.value_type); length];
-        for (slot, value) in values.iter_mut().zip(&definition.initial_values) {
-            *slot = match value {
+        let mut values = VariableValues::with_default(definition.value_type, length);
+        for (index, value) in definition.initial_values.iter().enumerate() {
+            let value = match value {
                 BytecodeConstant::Integer(value) => VmValue::Integer(*value),
                 BytecodeConstant::String(value) => VmValue::String(value.clone()),
             };
+            values
+                .set(index, value)
+                .expect("validated global initial value matches its declaration");
         }
         Self {
             value_type: definition.value_type,
@@ -36,30 +163,87 @@ impl VariableCell {
         let offset = flatten(&self.dimensions, indices)?;
         self.values
             .get(offset)
-            .cloned()
             .ok_or_else(|| "variable offset is outside its storage".into())
     }
 
     pub fn write(&mut self, indices: &[u64], value: VmValue) -> Result<(), String> {
-        if value.value_type() != self.value_type {
-            return Err(format!(
-                "variable expects {:?}, found {:?}",
-                self.value_type,
-                value.value_type()
-            ));
-        }
         let offset = flatten(&self.dimensions, indices)?;
-        let slot = self
-            .values
-            .get_mut(offset)
-            .ok_or_else(|| "variable offset is outside its storage".to_owned())?;
-        *slot = value;
+        self.values.set(offset, value)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub(crate) fn first(&self) -> Option<VmValue> {
+        self.values.get(0)
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<VmValue> {
+        self.values.get(index)
+    }
+
+    pub(crate) fn set(&mut self, index: usize, value: VmValue) -> Result<(), String> {
+        self.values.set(index, value)
+    }
+
+    pub(crate) fn fill(&mut self, value: VmValue) -> Result<(), String> {
+        self.values.fill(value)
+    }
+
+    pub(crate) fn to_values(&self) -> Vec<VmValue> {
+        self.values.to_vm_values()
+    }
+
+    pub(crate) fn integers(&self) -> Option<&[i64]> {
+        match &self.values {
+            VariableValues::Integers(values) => Some(values),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn integers_mut(&mut self) -> Option<&mut [i64]> {
+        match &mut self.values {
+            VariableValues::Integers(values) => Some(values),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn replace_values(&mut self, values: Vec<VmValue>) -> Result<(), String> {
+        if values.len() != self.len()
+            || values
+                .iter()
+                .any(|value| value.value_type() != self.value_type)
+        {
+            return Err("array replacement differs from its storage shape or type".into());
+        }
+        let mut replacement = VariableValues::with_default(self.value_type, values.len());
+        for (index, value) in values.into_iter().enumerate() {
+            replacement.set(index, value)?;
+        }
+        self.values = replacement;
         Ok(())
+    }
+
+    pub(crate) fn replace_shape(
+        &mut self,
+        value_type: BytecodeType,
+        dimensions: Vec<u64>,
+        values: Vec<VmValue>,
+    ) -> Result<(), String> {
+        self.value_type = value_type;
+        self.dimensions = dimensions;
+        self.values = VariableValues::with_default(value_type, values.len());
+        self.replace_values(values)
+    }
+
+    pub(crate) fn storage_is_valid(&self) -> bool {
+        self.values.value_type() == self.value_type
     }
 
     pub fn migrate(&self, definition: &BytecodeGlobal) -> Self {
         let mut target = Self::new(definition);
-        let target_len = target.values.len();
+        let target_len = target.len();
         for target_offset in 0..target_len {
             let coordinates = unflatten(&target.dimensions, target_offset);
             if coordinates
@@ -68,9 +252,11 @@ impl VariableCell {
                 .all(|(index, length)| index < length)
                 && coordinates.len() == self.dimensions.len()
                 && let Ok(source_offset) = flatten(&self.dimensions, &coordinates)
-                && let Some(value) = self.values.get(source_offset)
+                && let Some(value) = self.get(source_offset)
             {
-                target.values[target_offset] = value.clone();
+                target
+                    .set(target_offset, value)
+                    .expect("migration only copies identical variable types");
             }
         }
         target
@@ -91,8 +277,8 @@ impl VariableCell {
             if value.value_type() != self.value_type {
                 return Err("saved variable value type does not match its schema".into());
             }
-            if let Some(slot) = self.values.get_mut(target_offset) {
-                *slot = value.clone();
+            if target_offset < self.len() {
+                self.set(target_offset, value.clone())?;
             }
         }
         Ok(())
@@ -293,18 +479,16 @@ impl Memory {
     fn set_named_integer(&mut self, artifact: &BytecodeArtifact, name: &str, value: i64) {
         if let Some(definition) = find_definition(artifact, name)
             && let Some(cell) = self.shared.get_mut(&definition.key)
-            && let Some(slot) = cell.values.first_mut()
         {
-            *slot = VmValue::Integer(value);
+            let _ = cell.set(0, VmValue::Integer(value));
         }
     }
 
     fn set_named_string(&mut self, artifact: &BytecodeArtifact, name: &str, value: &str) {
         if let Some(definition) = find_definition(artifact, name)
             && let Some(cell) = self.shared.get_mut(&definition.key)
-            && let Some(slot) = cell.values.first_mut()
         {
-            *slot = VmValue::String(value.into());
+            let _ = cell.set(0, VmValue::String(value.into()));
         }
     }
 
@@ -312,8 +496,8 @@ impl Memory {
         if let Some(definition) = find_definition(artifact, name)
             && let Some(cell) = self.shared.get_mut(&definition.key)
         {
-            for (slot, value) in cell.values.iter_mut().zip(values) {
-                *slot = VmValue::Integer(*value);
+            for (index, value) in values.iter().copied().take(cell.len()).enumerate() {
+                let _ = cell.set(index, VmValue::Integer(value));
             }
         }
     }
@@ -327,8 +511,8 @@ impl Memory {
         if let Some(definition) = find_definition(artifact, name)
             && let Some(cell) = self.shared.get_mut(&definition.key)
         {
-            for (slot, value) in cell.values.iter_mut().zip(values) {
-                *slot = VmValue::String(value.clone().unwrap_or_default());
+            for (index, value) in values.iter().take(cell.len()).enumerate() {
+                let _ = cell.set(index, VmValue::String(value.clone().unwrap_or_default()));
             }
         }
     }
@@ -342,8 +526,8 @@ impl Memory {
             .get(&generation)
             .and_then(|memory| memory.shared.get(&definition.key))
             .or_else(|| self.shared.get(&definition.key));
-        match cell.and_then(|cell| cell.values.first()) {
-            Some(VmValue::Integer(value)) => usize::try_from(*value).unwrap_or(0),
+        match cell.and_then(VariableCell::first) {
+            Some(VmValue::Integer(value)) => usize::try_from(value).unwrap_or(0),
             _ => 0,
         }
     }
@@ -547,11 +731,9 @@ fn initialize_character(
         ("MASTERNAME", VmValue::String(template.master_name.clone())),
     ] {
         if let Some(definition) = find_definition(artifact, name)
-            && let Some(slot) = cells
-                .get_mut(&definition.key)
-                .and_then(|cell| cell.values.first_mut())
+            && let Some(cell) = cells.get_mut(&definition.key)
         {
-            *slot = value;
+            let _ = cell.set(0, value);
         }
     }
     for (name, values) in [
@@ -570,8 +752,8 @@ fn initialize_character(
             && let Some(cell) = cells.get_mut(&definition.key)
         {
             for (index, value) in values {
-                if let Some(slot) = cell.values.get_mut(*index) {
-                    *slot = VmValue::Integer(*value);
+                if *index < cell.len() {
+                    let _ = cell.set(*index, VmValue::Integer(*value));
                 }
             }
         }
@@ -580,9 +762,72 @@ fn initialize_character(
         && let Some(cell) = cells.get_mut(&definition.key)
     {
         for (index, value) in &template.cstr {
-            if let Some(slot) = cell.values.get_mut(*index) {
-                *slot = VmValue::String(value.clone());
+            if *index < cell.len() {
+                let _ = cell.set(*index, VmValue::String(value.clone()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use erabasic_bytecode::{BytecodePersistence, BytecodeStorage};
+
+    use super::*;
+
+    fn global(value_type: BytecodeType, dimensions: Vec<u64>) -> BytecodeGlobal {
+        BytecodeGlobal {
+            key: SymbolKey::derive("memory.test", format!("{value_type:?}").as_bytes()),
+            name: "VALUE".into(),
+            value_type,
+            dimensions,
+            mutable: true,
+            storage: BytecodeStorage::Project,
+            persistence: BytecodePersistence::GameSave,
+            initial_values: Vec::new(),
+            owner: None,
+        }
+    }
+
+    #[test]
+    fn dense_integer_cell_preserves_public_vm_value_behavior() {
+        let mut cell = VariableCell::new(&global(BytecodeType::Integer, vec![4]));
+        cell.write(&[2], VmValue::Integer(41)).unwrap();
+        cell.set(3, VmValue::Integer(42)).unwrap();
+
+        assert_eq!(cell.read(&[2]).unwrap(), VmValue::Integer(41));
+        assert_eq!(
+            cell.to_values(),
+            vec![
+                VmValue::Integer(0),
+                VmValue::Integer(0),
+                VmValue::Integer(41),
+                VmValue::Integer(42),
+            ]
+        );
+        assert!(cell.set(0, VmValue::String("wrong".into())).is_err());
+        assert_eq!(cell.read(&[0]).unwrap(), VmValue::Integer(0));
+    }
+
+    #[test]
+    fn dense_place_cell_boxes_only_values_crossing_the_vm_boundary() {
+        let mut cell = VariableCell::new(&global(BytecodeType::IntegerPlace, vec![1]));
+        let place = PlaceDescriptor {
+            variable: SymbolKey::derive("memory.test", b"target"),
+            indices: vec![2, 3],
+            ..PlaceDescriptor::default()
+        };
+        cell.set(0, VmValue::IntegerPlace(Box::new(place.clone())))
+            .unwrap();
+
+        assert_eq!(cell.first(), Some(VmValue::IntegerPlace(Box::new(place))));
+        assert!(cell.storage_is_valid());
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn public_vm_value_stays_small_enough_for_transient_stacks() {
+        assert_eq!(std::mem::size_of::<VmValue>(), 24);
+        assert_eq!(std::mem::size_of::<i64>(), 8);
     }
 }

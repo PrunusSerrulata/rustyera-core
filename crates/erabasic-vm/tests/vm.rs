@@ -1433,7 +1433,12 @@ impl VmHost for PendingHost {
 
 #[test]
 fn stable_wait_snapshot_round_trips_and_requires_exact_artifact() {
-    let (artifact, entry) = host_artifact(HostSnapshotCapability::StableWait);
+    let (mut artifact, entry) = host_artifact(HostSnapshotCapability::StableWait);
+    artifact.globals.push(global(
+        SymbolKey::derive("test.snapshot", b"dense-zero-array"),
+        vec![16_384],
+    ));
+    artifact.refresh_ids().unwrap();
     let mut vm = Vm::new(validated(&artifact), VmConfig::default());
     vm.spawn_entry(entry, Vec::new()).unwrap();
     let mut host = PendingHost {
@@ -1447,8 +1452,13 @@ fn stable_wait_snapshot_round_trips_and_requires_exact_artifact() {
         SnapshotEligibility::Eligible
     );
     let snapshot = vm.snapshot(&natives).unwrap();
+    let uncompressed = serde_json::to_vec(&snapshot).unwrap();
     let bytes = snapshot.encode().unwrap();
-    let decoded = VmSnapshot::decode(&bytes, bytes.len()).unwrap();
+    assert!(bytes.len() < uncompressed.len() / 4);
+    let mut understated = bytes.clone();
+    understated[20..28].copy_from_slice(&((uncompressed.len() as u64) - 1).to_le_bytes());
+    assert!(VmSnapshot::decode(&understated, uncompressed.len()).is_err());
+    let decoded = VmSnapshot::decode(&bytes, uncompressed.len()).unwrap();
     let mut restore_host = PendingHost {
         stability: HostWaitStability::StableInput,
         rebound: Vec::new(),
@@ -2412,6 +2422,10 @@ fn runtime_fault_resolves_to_utf8_source_location() {
             byte_len: text.len() as u64,
             line_starts: vec![0, "@FAULT\n".len() as u64],
         }],
+        statement_fingerprints: vec![
+            Digest::hash("test.statement", &[b"fault"]),
+            Digest::hash("test.statement", &[b"overlap"]),
+        ],
         entries: vec![
             SourceMapEntry {
                 function: entry,
@@ -2420,8 +2434,8 @@ fn runtime_fault_resolves_to_utf8_source_location() {
                 source_index: 0,
                 byte_start: "@FAULT\n".len() as u64,
                 byte_end: text.len() as u64,
-                statement_fingerprint: Digest::hash("test.statement", &[b"fault"]),
-                origin_chain: Vec::new(),
+                statement_fingerprint: 0,
+                origin_chain: None,
             },
             // A later, narrower overlapping entry must not override the serialized map's first
             // match. The generation index is an execution cache, not a semantic reordering.
@@ -2432,8 +2446,8 @@ fn runtime_fault_resolves_to_utf8_source_location() {
                 source_index: 0,
                 byte_start: 0,
                 byte_end: "@FAULT".len() as u64,
-                statement_fingerprint: Digest::hash("test.statement", &[b"overlap"]),
-                origin_chain: Vec::new(),
+                statement_fingerprint: 1,
+                origin_chain: None,
             },
         ],
     };

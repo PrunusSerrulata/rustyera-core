@@ -366,7 +366,7 @@ fn saved_variable(
         dimensions: cell.dimensions.clone(),
         persistence: definition.persistence,
         storage: definition.storage,
-        values: cell.values.clone(),
+        values: cell.to_values(),
     }
 }
 

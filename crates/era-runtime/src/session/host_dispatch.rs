@@ -458,7 +458,7 @@ impl RuntimeSession {
         ) {
             let query = string_argument_value(&request.arguments, 0, &name)?;
             let target = request.arguments.get(1).and_then(|value| match value {
-                VmValue::StringPlace(place) => Some(place.clone()),
+                VmValue::StringPlace(place) => Some(place.as_ref().clone()),
                 _ => None,
             });
             let mut names = Vec::new();
@@ -1345,7 +1345,7 @@ impl RuntimeSession {
             let recursive =
                 matches!(request.arguments.get(2), Some(VmValue::Integer(value)) if *value != 0);
             let target = request.arguments.get(3).and_then(|value| match value {
-                VmValue::StringPlace(place) => Some(place.clone()),
+                VmValue::StringPlace(place) => Some(place.as_ref().clone()),
                 _ => None,
             });
             return self.issue_host_storage(
@@ -3355,7 +3355,7 @@ impl RuntimeSession {
                         .map_or(era_runtime_protocol::ExtensionValueType::Any, |argument| {
                             argument.value_type
                         });
-                    (value, Some((place.clone(), declared_type)))
+                    (value, Some((place.as_ref().clone(), declared_type)))
                 }
             };
             arguments.push(value);

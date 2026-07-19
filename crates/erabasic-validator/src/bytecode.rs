@@ -538,7 +538,12 @@ fn validate_source_map(artifact: &BytecodeArtifact, diagnostics: &mut Vec<Valida
                 .get(entry.source_index as usize)
                 .is_some_and(|source| {
                     entry.byte_start <= entry.byte_end && entry.byte_end <= source.byte_len
-                });
+                })
+            && artifact
+                .source_map
+                .statement_fingerprints
+                .get(entry.statement_fingerprint as usize)
+                .is_some();
         if !valid {
             diagnostics.push(ValidationDiagnostic::project(
                 ValidationCode::InvalidSourceMap,

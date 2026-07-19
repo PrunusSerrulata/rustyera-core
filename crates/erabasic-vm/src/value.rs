@@ -9,8 +9,8 @@ use crate::{FiberId, FrameId};
 pub enum VmValue {
     Integer(i64),
     String(String),
-    IntegerPlace(PlaceDescriptor),
-    StringPlace(PlaceDescriptor),
+    IntegerPlace(Box<PlaceDescriptor>),
+    StringPlace(Box<PlaceDescriptor>),
 }
 
 impl VmValue {
@@ -29,8 +29,8 @@ impl VmValue {
         match value_type {
             BytecodeType::Integer => Self::Integer(0),
             BytecodeType::String => Self::String(String::new()),
-            BytecodeType::IntegerPlace => Self::IntegerPlace(PlaceDescriptor::default()),
-            BytecodeType::StringPlace => Self::StringPlace(PlaceDescriptor::default()),
+            BytecodeType::IntegerPlace => Self::IntegerPlace(Box::default()),
+            BytecodeType::StringPlace => Self::StringPlace(Box::default()),
         }
     }
 }

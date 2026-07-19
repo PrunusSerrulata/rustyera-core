@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 
 use era_runtime_protocol::InteractionToken;
 use erabasic_bytecode::Digest;
 use erabasic_vm::VmValue;
+use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use serde::{Deserialize, Serialize};
 
 use crate::controller::SystemController;
@@ -10,10 +12,10 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 13;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 14;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
-const HEADER_BYTES: usize = 52;
+const HEADER_BYTES: usize = 60;
 
 #[derive(Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
@@ -104,11 +106,21 @@ pub(crate) mod token_value_map {
 }
 
 pub(crate) fn encode(payload: &RuntimeSnapshotPayload) -> Result<Vec<u8>, String> {
-    let payload = serde_json::to_vec(payload).map_err(|error| error.to_string())?;
+    // Runtime snapshots are explicit, infrequent operations at stable waits, so
+    // favor transfer/storage size over compression throughput.
+    let encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+    let mut writer = CountingWriter::new(encoder);
+    serde_json::to_writer(&mut writer, payload).map_err(|error| error.to_string())?;
+    let uncompressed_len = writer.bytes;
+    let payload = writer
+        .into_inner()
+        .finish()
+        .map_err(|error| error.to_string())?;
     let mut output = Vec::with_capacity(HEADER_BYTES + payload.len());
     output.extend_from_slice(&MAGIC);
     output.extend_from_slice(&RUNTIME_SNAPSHOT_FORMAT_VERSION.to_le_bytes());
     output.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    output.extend_from_slice(&uncompressed_len.to_le_bytes());
     output.extend_from_slice(blake3::hash(&payload).as_bytes());
     output.extend_from_slice(&payload);
     Ok(output)
@@ -136,19 +148,86 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<RuntimeSnapsh
     );
     let length =
         usize::try_from(length).map_err(|_| "runtime snapshot length exceeds this platform")?;
+    let uncompressed_length = u64::from_le_bytes(
+        bytes[20..28]
+            .try_into()
+            .map_err(|_| "truncated runtime snapshot raw length")?,
+    );
+    let uncompressed_length = usize::try_from(uncompressed_length)
+        .map_err(|_| "runtime snapshot raw length exceeds this platform")?;
+    if uncompressed_length > maximum_bytes {
+        return Err("runtime snapshot expands beyond the configured limit".into());
+    }
     if bytes.len() != HEADER_BYTES.saturating_add(length) {
         return Err("runtime snapshot length is inconsistent".into());
     }
     let payload = &bytes[HEADER_BYTES..];
-    if blake3::hash(payload).as_bytes() != &bytes[20..HEADER_BYTES] {
+    if blake3::hash(payload).as_bytes() != &bytes[28..HEADER_BYTES] {
         return Err("runtime snapshot checksum differs".into());
     }
+    // Limit expansion independently from the untrusted length header. Reading
+    // one byte past the declaration lets the length check reject extra output.
+    let decompression_limit = (uncompressed_length as u64).saturating_add(1);
+    let mut reader = CountingReader::new(ZlibDecoder::new(payload).take(decompression_limit));
     let decoded: RuntimeSnapshotPayload =
-        serde_json::from_slice(payload).map_err(|error| error.to_string())?;
+        serde_json::from_reader(&mut reader).map_err(|error| error.to_string())?;
+    if reader.bytes != uncompressed_length as u64 {
+        return Err("runtime snapshot raw length is inconsistent".into());
+    }
     if decoded.format_version != RUNTIME_SNAPSHOT_FORMAT_VERSION {
         return Err("runtime snapshot payload version differs from its container".into());
     }
     Ok(decoded)
+}
+
+struct CountingWriter<W> {
+    inner: W,
+    bytes: u64,
+}
+
+impl<W> CountingWriter<W> {
+    const fn new(inner: W) -> Self {
+        Self { inner, bytes: 0 }
+    }
+
+    fn into_inner(self) -> W {
+        self.inner
+    }
+}
+
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(buffer)?;
+        self.bytes = self
+            .bytes
+            .saturating_add(u64::try_from(written).unwrap_or(u64::MAX));
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+struct CountingReader<R> {
+    inner: R,
+    bytes: u64,
+}
+
+impl<R> CountingReader<R> {
+    const fn new(inner: R) -> Self {
+        Self { inner, bytes: 0 }
+    }
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buffer)?;
+        self.bytes = self
+            .bytes
+            .saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+        Ok(read)
+    }
 }
 
 #[cfg(test)]
@@ -259,8 +338,13 @@ mod tests {
             undo_checkpoint: None,
             undo_replay: None,
         };
+        let uncompressed = serde_json::to_vec(&payload).unwrap();
         let encoded = encode(&payload).unwrap();
-        let decoded = decode(&encoded, encoded.len()).unwrap();
+        assert!(encoded.len() < uncompressed.len());
+        let mut understated = encoded.clone();
+        understated[20..28].copy_from_slice(&((uncompressed.len() as u64) - 1).to_le_bytes());
+        assert!(decode(&understated, uncompressed.len()).is_err());
+        let decoded = decode(&encoded, uncompressed.len()).unwrap();
         assert_eq!(decoded.resource_graph.canvas_state(7), Some((20, 10)));
         assert_eq!(decoded.selected_locale, "ja");
         assert_eq!(decoded.culture_table_version, CULTURE_TABLE_VERSION);

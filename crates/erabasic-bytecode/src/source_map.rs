@@ -15,19 +15,26 @@ pub struct SourceMapEntry {
     pub function: SymbolKey,
     pub code_start: u64,
     pub code_end: u64,
-    pub source_index: u32,
     pub byte_start: u64,
     pub byte_end: u64,
     /// Stable typed-statement identity used to relocate debugger breakpoints
     /// when edits only move an otherwise unchanged statement.
-    pub statement_fingerprint: Digest,
+    pub statement_fingerprint: u32,
     /// Parent origins are stored outermost first for future macro expansion/inlining.
-    pub origin_chain: Vec<(u32, u64, u64)>,
+    /// Macro/inlining origins are uncommon and absent from ordinary Era source.
+    /// Boxing only the non-empty case keeps the hot source-map record compact.
+    // `Box<Vec<_>>` is intentional: its thin pointer makes the overwhelmingly
+    // common `None` record eight bytes smaller than `Box<[_]>` on 64-bit targets.
+    #[allow(clippy::box_collection)]
+    pub origin_chain: Option<Box<Vec<(u32, u64, u64)>>>,
+    pub source_index: u32,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceMap {
     pub sources: Vec<SourceRecord>,
+    /// Sorted unique statement identities referenced by compact entry indices.
+    pub statement_fingerprints: Vec<Digest>,
     pub entries: Vec<SourceMapEntry>,
 }
 
@@ -75,6 +82,13 @@ impl SourceMap {
             byte_column: entry.byte_start.checked_sub(line_start)?,
         })
     }
+
+    #[must_use]
+    pub fn statement_fingerprint(&self, entry: &SourceMapEntry) -> Option<Digest> {
+        self.statement_fingerprints
+            .get(entry.statement_fingerprint as usize)
+            .copied()
+    }
 }
 
 #[cfg(test)]
@@ -91,8 +105,8 @@ mod tests {
             source_index: 0,
             byte_start: 5,
             byte_end: 7,
-            statement_fingerprint: Digest::default(),
-            origin_chain: Vec::new(),
+            statement_fingerprint: 0,
+            origin_chain: None,
         };
         let map = SourceMap {
             sources: vec![SourceRecord {
@@ -101,6 +115,7 @@ mod tests {
                 byte_len: 7,
                 line_starts: vec![0, 4],
             }],
+            statement_fingerprints: vec![Digest::default()],
             entries: vec![entry.clone()],
         };
         assert_eq!(map.resolve_entry(&entry), map.resolve(function, 5));

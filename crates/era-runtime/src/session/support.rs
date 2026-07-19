@@ -304,7 +304,7 @@ pub(super) fn integer_argument_value(
 
 pub(super) fn vm_place(value: &VmValue) -> Option<PlaceDescriptor> {
     match value {
-        VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => Some(place.clone()),
+        VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => Some(place.as_ref().clone()),
         VmValue::Integer(_) | VmValue::String(_) => None,
     }
 }
