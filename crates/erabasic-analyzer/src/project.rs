@@ -12,6 +12,7 @@ use erabasic_hir::{
     Program, SemanticType, SourceFile, SourceId, SourceLocation,
 };
 use erabasic_parser::{parse_erb, parse_erh};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -70,12 +71,40 @@ pub fn analyze_project(
         std::iter::empty(),
         options,
     );
-    let mut parsed = Vec::new();
+    let mut indexed = indexed;
+    let first_erb = indexed.partition_point(|source| source.kind == SourceKind::Erh);
+    let erb_sources = indexed.split_off(first_erb);
+    let mut parsed = Vec::with_capacity(indexed.len() + erb_sources.len());
     for source in indexed {
-        let output = match source.kind {
-            SourceKind::Erh => parse_erh(&source.text, &mut context),
-            SourceKind::Erb => parse_erb(&source.text, &mut context),
-        };
+        let output = parse_erh(&source.text, &mut context);
+        append_parser_diagnostics(
+            &mut diagnostics,
+            source.id,
+            &source.path,
+            &source.text,
+            &output,
+        );
+        if let Some(script) = output.value {
+            let source_file = source_file(source.id, source.path, source.kind, &source.text);
+            parsed.push(ParsedProjectSource {
+                source: source_file,
+                text: source.text,
+                script,
+            });
+        }
+    }
+    // ERH parsing above establishes the shared macro and variable environment.
+    // ERB parsing never mutates it, so each worker receives a cheap copy-on-write
+    // context and indexed collection preserves the source/diagnostic order.
+    let erb_outputs = erb_sources
+        .into_par_iter()
+        .map(|source| {
+            let mut local_context = context.clone();
+            let output = parse_erb(&source.text, &mut local_context);
+            (source, output)
+        })
+        .collect::<Vec<_>>();
+    for (source, output) in erb_outputs {
         append_parser_diagnostics(
             &mut diagnostics,
             source.id,
@@ -1327,12 +1356,20 @@ fn register_private_variables(
     options: &AnalyzerOptions,
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) {
-    let constants = symbols.constant_values();
-    for directive in function
+    let private_directives: Vec<_> = function
         .attributes
         .iter()
         .filter(|directive| matches!(directive.name.as_str(), "DIM" | "DIMS"))
-    {
+        .collect();
+    if private_directives.is_empty() {
+        return;
+    }
+
+    // Building the constant lookup clones every constant name and value. Most
+    // functions have no private declarations, so defer that work until the
+    // declaration parser can actually consume it.
+    let constants = symbols.constant_values();
+    for directive in private_directives {
         let input = DeclarationInput {
             source: source.source.id,
             path: &source.source.relative_path,

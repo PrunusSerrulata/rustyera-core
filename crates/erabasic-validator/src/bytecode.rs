@@ -94,11 +94,38 @@ pub fn validate_bytecode(
     artifact: UnvalidatedArtifact,
     context: &ValidationContext,
 ) -> ValidationReport<ValidatedArtifact> {
-    let mut artifact = artifact.into_inner();
+    validate_artifact(artifact.into_inner(), context, true)
+}
+
+/// Validate an in-process compiler artifact without recomputing its IDs.
+///
+/// The compiler uses this before assigning IDs and the runtime may use it again
+/// while accepting that same compiler-owned value. Serialized, externally
+/// supplied, or otherwise untrusted artifacts must use [`validate_bytecode`],
+/// which recomputes and checks both content identities.
+#[must_use]
+pub fn validate_compiler_output(
+    mut artifact: BytecodeArtifact,
+    context: &ValidationContext,
+) -> ValidationReport<ValidatedArtifact> {
+    // Identity generation canonicalizes the artifact too. Do that ordering step
+    // here so structural validation observes exactly the artifact that will be
+    // hashed after validation succeeds.
+    artifact.canonicalize();
+    validate_artifact(artifact, context, false)
+}
+
+fn validate_artifact(
+    mut artifact: BytecodeArtifact,
+    context: &ValidationContext,
+    validate_identity: bool,
+) -> ValidationReport<ValidatedArtifact> {
     let mut diagnostics = Vec::new();
     validate_versions(&artifact, context, &mut diagnostics);
     validate_limits(&artifact, context, &mut diagnostics);
-    validate_identities(&mut artifact, &mut diagnostics);
+    if validate_identity {
+        validate_identities(&mut artifact, &mut diagnostics);
+    }
     validate_symbols(&artifact, context, &mut diagnostics);
     validate_source_map(&artifact, &mut diagnostics);
     validate_functions(&artifact, context, &mut diagnostics);

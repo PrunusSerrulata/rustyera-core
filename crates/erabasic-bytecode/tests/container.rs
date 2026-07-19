@@ -1,6 +1,6 @@
 use erabasic_bytecode::{
     ArtifactManifest, BytecodeArtifact, DecodeError, DecodeLimits, Digest, PatchError, SourceMap,
-    SourceRecord, apply_patch, create_patch, decode_artifact, encode_artifact,
+    SourceRecord, SymbolKey, apply_patch, create_patch, decode_artifact, encode_artifact,
 };
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
 
@@ -47,6 +47,17 @@ fn patch_rejects_a_source_different_base_with_the_same_execution_id() {
         apply_patch(&source_different, &patch),
         Err(PatchError::BaseMismatch)
     );
+}
+
+#[test]
+fn symbol_keys_keep_the_canonical_lowercase_hex_json_shape() {
+    let key = SymbolKey([
+        0x00, 0x01, 0x0f, 0x10, 0x2a, 0x3b, 0x4c, 0x5d, 0x6e, 0x7f, 0x80, 0x91, 0xa2, 0xb3, 0xc4,
+        0xff,
+    ]);
+    let encoded = serde_json::to_string(&key).expect("symbol key should serialize");
+    assert_eq!(encoded, "\"00010f102a3b4c5d6e7f8091a2b3c4ff\"");
+    assert_eq!(serde_json::from_str::<SymbolKey>(&encoded).unwrap(), key);
 }
 
 #[test]

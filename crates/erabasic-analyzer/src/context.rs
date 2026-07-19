@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use erabasic_data::ProjectSchema;
 use erabasic_lexer::{LexerConfig, MacroTable};
@@ -6,12 +9,13 @@ use erabasic_parser::{InstructionSpec, ParserContext};
 
 use crate::{catalog::Catalog, options::AnalyzerOptions};
 
+#[derive(Clone)]
 pub(crate) struct AnalysisParserContext {
     lexer: LexerConfig,
-    macros: MacroTable,
-    instructions: BTreeMap<String, InstructionSpec>,
-    variables: BTreeSet<String>,
-    functions: BTreeSet<String>,
+    macros: Arc<MacroTable>,
+    instructions: Arc<BTreeMap<String, InstructionSpec>>,
+    variables: Arc<BTreeSet<String>>,
+    functions: Arc<BTreeSet<String>>,
     ignore_case: bool,
     debug_mode: bool,
     continuation_separator: String,
@@ -60,14 +64,16 @@ impl AnalysisParserContext {
                 debug_semicolon: options.debug_semicolon,
                 ..LexerConfig::default()
             },
-            macros: MacroTable::new(),
-            instructions,
-            variables: schema
-                .variables
-                .keys()
-                .map(|name| normalize(name))
-                .collect(),
-            functions: functions.into_iter().map(|name| normalize(&name)).collect(),
+            macros: Arc::new(MacroTable::new()),
+            instructions: Arc::new(instructions),
+            variables: Arc::new(
+                schema
+                    .variables
+                    .keys()
+                    .map(|name| normalize(name))
+                    .collect(),
+            ),
+            functions: Arc::new(functions.into_iter().map(|name| normalize(&name)).collect()),
             ignore_case: options.ignore_case,
             debug_mode: options.debug_mode,
             continuation_separator: options.continuation_separator.clone(),
@@ -93,7 +99,7 @@ impl ParserContext for AnalysisParserContext {
     }
 
     fn macros_mut(&mut self) -> &mut MacroTable {
-        &mut self.macros
+        Arc::make_mut(&mut self.macros)
     }
 
     fn instruction(&self, name: &str) -> Option<InstructionSpec> {
@@ -109,7 +115,8 @@ impl ParserContext for AnalysisParserContext {
     }
 
     fn register_variable(&mut self, name: &str) -> bool {
-        self.variables.insert(self.key(name))
+        let key = self.key(name);
+        Arc::make_mut(&mut self.variables).insert(key)
     }
 
     fn preprocessor_symbol(&self, name: &str) -> Option<i64> {
