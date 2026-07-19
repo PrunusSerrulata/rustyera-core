@@ -108,7 +108,7 @@ QTE 计时、Storage、VM snapshot、热重载、调试和退出，不协商图�
 | 前端形态 | 当前结论 |
 | --- | --- |
 | Python Textual TUI + C ABI + 小型兼容脚本 | 已实测项目加载、标题等待、热重载、snapshot 跨 session 恢复和调试协议 |
-| Python Textual TUI + C ABI + 完整 eraTW | 已实测约 10 秒内完成冷加载并进入首个稳定可输入等待；未在本轮重新跑到第 1 日菜单 |
+| Python Textual TUI + C ABI + 完整 eraTW | 已按基线 20 个输入实测到达第 1 日 SAVE/LOAD/UPDATE 菜单，并通过前端 Storage 写出自动存档 |
 | Rust TUI + 完整 eraTW 基线路径 | 已实测可玩到第 1 日主菜单，并跨 session 保存/恢复 |
 | C/C++ TUI + 动态库 | C ABI/协议契约已同步；Python `ctypes` 调用已放行，尚无 C/C++ 应用前端测试 |
 | 不渲染图片/音频，但读取图片 metadata | 架构可行 |
@@ -160,6 +160,7 @@ QTE 计时、Storage、VM snapshot、热重载、调试和退出，不协商图�
 | Rust 加载/运行同一 eraTW | 完成 | 2,434 文件、0 error/fatal；完成新游戏、6,070,273 字节自动存档、跳过 UPDATE，并到达第 1 日 SAVE/LOAD/UPDATE 主菜单 |
 | Rust 跨 session 传统存档恢复 | 完成 | 新 session 重新加载完整工程，`StateImportReady` 后执行 `EVENTLOAD`，恢复到同一稳定系统主菜单，无 fault |
 | Rust 有序退出 | 完成 | 恢复后的稳定等待提交 graceful shutdown，最终 phase 为 `Stopped`，`ShutdownReady` 报告 1 个等待操作已取消 |
+| Python Textual TUI + C ABI 到第 1 日菜单 | 完成 | 修复可选等待清除解码后，从全新 Storage 开始完成 20 个基线输入，在 wait 5524 到达 SAVE/LOAD/UPDATE 菜单并写出 6,070,269 字节 `save99.sav` |
 
 初始审计曾执行并通过 `cargo fmt --all -- --check`、`cargo test --workspace`、
 `cargo clippy --workspace --all-targets -- -D warnings` 和 macOS/Wine reference smoke test；
@@ -196,6 +197,22 @@ UPDATE 后在 SAVE/LOAD/UPDATE 主菜单稳定等待。恢复审计把该字节�
 协议资源耗尽或未处理 service；恢复所需 `Clock/local_date_time` 由审计 TUI 明确协商并响应。
 随后 graceful shutdown 产生 `Stopping`、`Stopped` 和 `ShutdownReady`，最终 runtime phase 为
 `Stopped`。
+
+### Python Textual TUI 完整工程复验
+
+2026-07-19 使用 `frontends/era-tui` 的真实 `RuntimeWorker`、`ctypes` C ABI、canonical CBOR
+协议和全新前端 Storage 目录，按上述 Rust 审计完全相同的 20 个输入重新运行完整 eraTW。
+首次提交标题选项后暴露出 `SetInputWait(None)` 的 wire 解码遗漏：minicbor 会省略为 `None`
+的枚举 tuple 字段，前端却无条件读取第一个字段。修复为正确接受零字段清除操作后，运行依次
+完成口上选择、START、自定义角色、经典地图、博丽神社、默认私室、新游戏初始化和自动
+存档，跳过 UPDATE 后在系统输入 wait 5524 显示含 SAVE、LOAD、UPDATE 的第 1 日菜单。
+
+该次运行写出 6,070,269 字节 `save99.sav` 和 1,317 字节 `global.sav`，没有 Runtime fault、
+unsupported Host、协议资源耗尽或 Storage 错误。完整 C ABI/Textual 投影路径耗时约 260 秒，
+明显高于本文既有的 Runtime 内部 release 基线；这不阻断可玩性结论，但属于独立的前端/C ABI
+性能课题，不能用内部 11 秒基线替代。前端现把每次 VM 驱动预算限制为 10,000 条指令以保持
+caller-pumped 响应性，并在 poll 批次内合并可恢复展示状态的重复行更新；两项都不改变脚本
+指令顺序、输入判定或最终规范化展示状态。
 
 用于复现这些长运行的本地源码和生成日志位于 `.audit/runtime-playability/`。根 `.gitignore`
 忽略整个 `.audit/`，因此工具、完整游戏路径、Wine 输出和存档不会进入版本控制。
