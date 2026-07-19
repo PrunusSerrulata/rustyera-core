@@ -1136,7 +1136,7 @@ impl RuntimeSession {
                     .as_mut()
                     .ok_or_else(|| RuntimeError::Internal("system wait has no VM".into()))?;
                 let prepared = vm
-                    .prepare_runtime_state(VmRuntimeStateTransaction::ResetGameData)
+                    .prepare_runtime_state(VmRuntimeStateTransaction::ResetNewGame)
                     .map_err(|error| RuntimeError::Internal(error.to_string()))?;
                 vm.commit_runtime_state(prepared)
                     .map_err(|error| RuntimeError::Internal(error.to_string()))?;

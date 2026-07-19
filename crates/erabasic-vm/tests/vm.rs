@@ -19,8 +19,8 @@ use erabasic_vm::{
     EraSaveScope, FiberStatus, HostCallRequest, HostCallResult, HostReady, HostRebindRequest,
     HostWaitStability, NativeServiceRegistry, RunBudget, RuntimeVm, SnapshotBlocker,
     SnapshotEligibility, Vm, VmBreakpoint, VmBreakpointLocation, VmConfig, VmDebugControl,
-    VmDebugInspect, VmDebugVariableWrite, VmEvent, VmFaultCode, VmHost, VmRuntimeStatePort,
-    VmRuntimeStateTransaction, VmSnapshot, VmStepKind, VmValue,
+    VmDebugInspect, VmDebugVariableWrite, VmEvent, VmFaultCode, VmHost, VmRuntimePort,
+    VmRuntimeStatePort, VmRuntimeStateTransaction, VmSnapshot, VmStepKind, VmValue,
 };
 
 fn project_data() -> erabasic_data::ProjectData {
@@ -1143,6 +1143,67 @@ fn character_csv_queries_use_loaded_templates_and_character_lookup() {
             VmValue::Integer(1),
         ]
     );
+}
+
+#[test]
+fn resetdata_clears_initial_characters_before_script_insertion() {
+    let loaded = load_project(
+        &ProjectFiles {
+            csv: vec![FrontendFile {
+                relative_path: "Chara/CHARA0.CSV".into(),
+                payload: CsvFilePayload::Utf8("NO,0\nNAME,Master\n".into()),
+            }],
+            erb: Vec::new(),
+        },
+        &CsvLoadOptions {
+            search_subdirectories: true,
+            ..CsvLoadOptions::default()
+        },
+    )
+    .data
+    .expect("character CSV should load");
+    let artifact = compile_source_with_data("@SYSTEM_TITLE\nRETURN\n", loaded);
+    let mut vm = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    assert_eq!(vm.export_era_state().characters.len(), 1);
+
+    let prepared = vm
+        .prepare_runtime_state(VmRuntimeStateTransaction::ResetGameData)
+        .unwrap();
+    vm.commit_runtime_state(prepared).unwrap();
+
+    assert!(vm.export_era_state().characters.is_empty());
+}
+
+#[test]
+fn duplicate_event_handlers_share_persistent_era_locals() {
+    let artifact =
+        compile_source("@EVENTTRAIN\nVARSET LOCAL\nRETURN\n@EVENTTRAIN\nLOCAL:0 = 1\nRETURN\n");
+    let entries = artifact
+        .functions
+        .iter()
+        .filter(|function| function.name.eq_ignore_ascii_case("EVENTTRAIN"))
+        .map(|function| function.key)
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 2);
+
+    for entry in entries {
+        let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        vm.spawn_entry(entry, Vec::new()).unwrap();
+        let report = vm.run_slice(
+            &mut ReadyHost::default(),
+            &mut natives,
+            RunBudget::default(),
+        );
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{:#?}",
+            report.events
+        );
+    }
 }
 
 #[test]
