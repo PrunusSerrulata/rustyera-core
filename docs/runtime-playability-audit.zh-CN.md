@@ -95,30 +95,35 @@ runtime 现已根据 `FileCategory` 接受项目根相对路径，并只在送�
 
 `BAR`、`BARL` 和 `BARSTR` 均已有执行路径；旧状态文档中“仅 BARSTR 可用”的说明过期。
 
-## 纯 TUI 前端可行性
+## 纯 TUI 前端可行性与当前实现
 
-Rust TUI 可以直接依赖 `era-runtime`，以 `RuntimeSession::new`、`submit_envelope`、
-`drive`、`poll_envelope` 构造 caller-pumped 循环。它可以支持文本、样式、列单元格、
-分隔线、按钮 token、键盘输入、QTE、存储、存档、恢复和退出，而不播放图片或音频。
+仓库现包含 `frontends/era-tui`：它使用 Python Textual 构造真实 TUI，通过 `ctypes`
+动态加载 `era-runtime-capi`，不直接依赖 `era-runtime` 或共享 Rust 内部对象。独立 worker
+串行执行 `session_submit`、`session_drive` 和 `session_poll`；Textual 事件循环只交换前端
+命令和展示事件。它支持文本、颜色、对齐、列单元格、分隔线、按钮 token、键盘输入、
+QTE 计时、Storage、VM snapshot、热重载、调试和退出，不协商图片、HTML、音频或视频。
 
 当前可行性分级：
 
 | 前端形态 | 当前结论 |
 | --- | --- |
-| Rust TUI + 小型兼容脚本 | 可以构造原型 |
+| Python Textual TUI + C ABI + 小型兼容脚本 | 已实测项目加载、标题等待、热重载、snapshot 跨 session 恢复和调试协议 |
+| Python Textual TUI + C ABI + 完整 eraTW | 已实测约 10 秒内完成冷加载并进入首个稳定可输入等待；未在本轮重新跑到第 1 日菜单 |
 | Rust TUI + 完整 eraTW 基线路径 | 已实测可玩到第 1 日主菜单，并跨 session 保存/恢复 |
-| C/C++ TUI + 动态库 | C ABI/协议契约已同步；尚无实际 C/C++ 应用前端放行测试 |
+| C/C++ TUI + 动态库 | C ABI/协议契约已同步；Python `ctypes` 调用已放行，尚无 C/C++ 应用前端测试 |
 | 不渲染图片/音频，但读取图片 metadata | 架构可行 |
-| 完全不处理图片文件 | 含 sprite manifest 的项目会因缺少 `image_metadata` 服务加载失败 |
+| 当前 Textual TUI 完全不处理图片文件 | 不提交 resource manifest/图片，文本流程可继续；依赖 sprite/image 可观察值的脚本会看到能力缺失 |
 
-纯 TUI 还必须：
+当前 Textual TUI 已做到：
 
-- 为每条 runtime outbound sequence 发送 `Acknowledge`，否则默认 4096 条 journal 后耗尽；
-- 确认每一个需要确认的一次性 effect；
+- 在完整 poll 批次后以最终 `SessionEpoch` 累计确认 runtime outbound sequence，避免热重载
+  同批次的旧/新 epoch 交界产生 stale ACK；
+- 对无法播放的一次性 effect 明确返回失败结果，不伪造成功；
 - 提交 projection observation 和单调逻辑时间；
-- 实现 storage、clock、GETKEY 以及游戏实际调用的 projection service；
-- 推荐协商 `html=true` 并把 typed HTML AST 投影为终端文本/按钮。若协商 `html=false`，
-  当前 plain projection 会剥离 HTML 标签，也会丢失 HTML button 的交互 token。
+- 实现原子、带 revision/precondition 的跨平台用户数据 Storage，以及 clock、entropy、
+  GETKEY、`get_display_line`、`serialize_physical_history` 和终端 cell 字体测量；
+- 明确协商 `html=false`、`graphics=false`、`audio=false` 和 `video=false`。普通 HTML 文本可
+  降级，但 HTML button token、图片和音视频不在该前端支持范围内。
 
 ## 完整 eraTW 差分执行门槛
 
