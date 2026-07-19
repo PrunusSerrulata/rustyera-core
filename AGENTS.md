@@ -158,6 +158,8 @@ lint；运行对应平台的参考实现脚本确认 oracle 可用；最后使�
 C# 输出。每次开发任务都必须完成与本次改动相关的步骤，不能用平台 smoke test
 代替真正的差分比较。
 
+例外：如果确定对rust和C# reference cli未做任何改动，可以跳过rust的测试部分。
+
 ### Windows
 
 在 Windows 上运行：
