@@ -47,18 +47,6 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
 
 ## 当前实现状态与范围
 
-当前已实现的是 AST、lexer、parser、项目数据契约、CSV 加载器、类型化 HIR、
-项目级语义分析器、字节码、编译器、验证器、VM、用于人工检查的 REPL、
-caller-pumped runtime 和 C ABI 动态库。这里的 AST 是语法 AST；`ParserContext`
-提供语法解析所需的注册表上下文，项目级符号解析和类型检查由 analyzer 完成。
-
-当前 runtime 已实现握手、内存项目加载与编译、新游戏启动、受限 VM 驱动、文本与
-输入等待、时钟/按键/熵服务、当前格式传统存档、稳定等待 VM snapshot、增量热替换、
-部分系统流程、独立调试通道与 VM 调试端口，以及 Map、可变 XML、固定 XPath 子集、
-参考形状 DataTable XSD/XML Native、VAREXT、资源图、canvas replay、规范化展示状态、
-typed image/audio/update/open-URL 边界、候选 `SAVEINFO` 事务、runtime 自有存档菜单、
-独立调试通道和持久化 operation contract。
-
 当前尚未实现或仅部分实现的范围包括若干数据列表/动态调用/专用输出指令、部分完整
 系统流程、客户端物理文本历史与 WinForms/GDI/CBG 相关能力，以及兼容性状态文档中
 列出的 Host 调用。不得仅因协议中存在类型、参考 CLI 存在端点或源码中存在占位分支，
@@ -120,8 +108,7 @@ WinForms/GDI 的实现细节引入 runtime。
 
 - Rust 使用当前 workspace 的 edition、格式和 lint 约定。
 - 源码中的实现思路、兼容性原因和非显然算法应使用英文注释说明。
-- 优先复用成熟库，但上下文相关 lexer/parser 行为无法由库准确表达时，应选择
-  清晰、可测试的手写实现。
+- 优先复用成熟库以降低工作量。
 - 当 runtime 难以精确复刻参考实现中某条指令的行为时，应先检查该指令在真实游戏
   脚本中的实际使用方式，并从脚本开发者的角度推断其意图。对于与具体界面和排版
   强相关的行为，应优先围绕该意图设计 Runtime 持有的规范化展示语义和前端投影，
