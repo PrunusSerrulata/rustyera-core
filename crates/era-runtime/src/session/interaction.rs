@@ -1891,6 +1891,10 @@ impl RuntimeSession {
                     .insert(token, VmValue::Integer(display));
             }
         }
+        // The reference system flushes the partial SHOW_STATUS/COM_ABLE row before
+        // entering SHOW_USERCOM. In eraTW this separates the final PALAM entry from
+        // the following Look section without requiring a script-specific newline.
+        self.presentation.flush_pending_line();
         self.controller.step = SystemStep::TrainShowUser;
         self.dispatch_system_function(vm, "SHOW_USERCOM", true)?;
         Ok(())
@@ -1982,6 +1986,10 @@ impl RuntimeSession {
         for (token, value) in self.presentation.bind_pending_auto_buttons(&tokens) {
             self.command_intents.insert(token, VmValue::Integer(value));
         }
+        // Emuera flushes its print buffer whenever script execution yields for input.
+        // Keeping that boundary canonical prevents output after a resumed INPUT from
+        // being appended to the menu line that opened the wait.
+        self.presentation.flush_pending_line();
         self.presentation.set_wait(Some(pending.wait.clone()));
         self.emit(
             RuntimeMessage::WaitChanged(WaitChange::Opened(pending.wait.clone())),

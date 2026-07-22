@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import queue
 import os
+import queue
 import sys
 import time
 import traceback
@@ -32,7 +32,9 @@ def _traced_pump(client: RuntimeClient) -> bool:
 RuntimeClient.pump = _traced_pump
 
 
-def _traced_handle_runtime(client: RuntimeClient, tag: int, value: object, correlation_id: int | None) -> None:
+def _traced_handle_runtime(
+    client: RuntimeClient, tag: int, value: object, correlation_id: int | None
+) -> None:
     if tag == 92:
         print(f"RAW_FAULT={value!r}")
     _original_handle_runtime(client, tag, value, correlation_id)
@@ -47,14 +49,26 @@ def plain_tail(model: PresentationModel, count: int = 20) -> str:
     )
 
 
+def display_rows(model: PresentationModel, count: int = 300) -> list[str]:
+    rows: list[str] = []
+    for line in model.lines[-count:]:
+        rows.extend("".join(segment.text for segment in line.segments).split("\n"))
+    return rows
+
+
 def main() -> int:
     project = project_path()
     library = runtime_library()
     default_answers = "0,1,1,1,1,1,1,1,1,1,1,1,1,0,9999,0,2,1999,0,100,1"
-    answers = [int(value) for value in os.environ.get("ERA_AUDIT_ANSWERS", default_answers).split(",")]
+    answers = [
+        int(value)
+        for value in os.environ.get("ERA_AUDIT_ANSWERS", default_answers).split(",")
+    ]
     fallback_answer = os.environ.get("ERA_AUDIT_FALLBACK_ANSWER")
     snapshot_path = os.environ.get("ERA_AUDIT_SNAPSHOT_PATH")
     snapshot_every_wait = os.environ.get("ERA_AUDIT_SNAPSHOT_EVERY_WAIT") == "1"
+    layout_check = os.environ.get("ERA_AUDIT_LAYOUT_CHECK") == "1"
+    layout_stage: str | None = None
     snapshot_requested = False
     snapshot_attempts = 0
     snapshot_attempt_wait: tuple[dict[int, object], str] | None = None
@@ -68,10 +82,35 @@ def main() -> int:
     last_progress = started
     worker.start()
 
-    def advance_wait(wait: dict[int, object], tail: str, *, snapshot_attempted: bool = False) -> int | None:
-        nonlocal answer_index, snapshot_requested, snapshot_attempt_wait
+    def advance_wait(
+        wait: dict[int, object], tail: str, *, snapshot_attempted: bool = False
+    ) -> int | None:
+        nonlocal answer_index, snapshot_requested, snapshot_attempt_wait, layout_stage
         if wait[1] == 0:
             worker.send("submit_text", "")
+        elif layout_check and layout_stage == "day_one":
+            look_rows = [row for row in display_rows(model) if "[Look]" in row]
+            if not look_rows:
+                print("DAY1_LAYOUT_ERROR no Look row after entering day one")
+                return 1
+            print("DAY1_LOOK_ROW_OK")
+            layout_stage = "map"
+            worker.send("submit_text", "400")
+        elif layout_check and layout_stage in ("map", "map_toggled"):
+            c_rows = [
+                row for row in display_rows(model) if "[C] - 移動先表示切替" in row
+            ]
+            if not c_rows or not c_rows[-1].rstrip().endswith("[C] - 移動先表示切替"):
+                print(f"MAP_LAYOUT_ERROR rows={c_rows[-3:]!r}")
+                return 1
+            if layout_stage == "map":
+                print("MAP_C_ROW_OK before_toggle=1")
+                layout_stage = "map_toggled"
+                worker.send("submit_text", "C")
+            else:
+                print("MAP_C_ROW_OK after_toggle=1")
+                print("TUI_LAYOUT_OK")
+                return 0
         elif answer_index < len(answers):
             answer = answers[answer_index]
             answer_index += 1
@@ -82,7 +121,10 @@ def main() -> int:
                 f"DAY1_MILESTONE wait={wait[0]} answers={answer_index} "
                 f"elapsed={time.monotonic() - started:.2f}s lines={len(model.lines)}"
             )
-            if snapshot_path and not snapshot_attempted:
+            if layout_check:
+                layout_stage = "day_one"
+                worker.send("submit_text", "100")
+            elif snapshot_path and not snapshot_attempted:
                 worker.send("export_snapshot", snapshot_path)
                 snapshot_requested = True
                 snapshot_attempt_wait = (wait, tail)

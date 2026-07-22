@@ -1130,7 +1130,7 @@ fn train_controller_consumes_runtime_button_intent_and_loops_after_eventcomend()
     drain(&mut session);
     // RESETDATA removes every character in the reference runtime, so a standalone
     // SYSTEM_TITLE fixture must explicitly create the character used by training.
-    let source = "@SYSTEM_TITLE\nRESETDATA\nADDVOIDCHARA\nBEGIN TRAIN\n@EVENTTRAIN\nRETURN\n@SHOW_STATUS\nRETURN\n@COM_ABLE0\nRESULT = 1\nRETURN\n@SHOW_USERCOM\nRETURN\n@EVENTCOM\nRETURN\n@COM0\nFLAG:0 += 1\nRESULT = 1\nRETURN\n@SOURCE_CHECK\nRETURN\n@EVENTCOMEND\nRETURN\n";
+    let source = "@SYSTEM_TITLE\nRESETDATA\nADDVOIDCHARA\nBEGIN TRAIN\n@EVENTTRAIN\nRETURN\n@SHOW_STATUS\nPRINT 抑鬱\nRETURN\n@COM_ABLE0\nRESULT = 1\nRETURN\n@SHOW_USERCOM\nPRINT ▼[－][Look]----------\nRETURN\n@EVENTCOM\nRETURN\n@COM0\nFLAG:0 += 1\nRESULT = 1\nRETURN\n@SOURCE_CHECK\nRETURN\n@EVENTCOMEND\nRETURN\n";
     submit(
         &mut session,
         1,
@@ -1171,6 +1171,36 @@ fn train_controller_consumes_runtime_button_intent_and_loops_after_eventcomend()
         .operations
         .active_input()
         .expect("training command wait");
+    let snapshot = session.presentation.snapshot();
+    let flattened_lines = snapshot
+        .history
+        .logical_lines
+        .iter()
+        .map(|line| {
+            fn text(runs: &[DisplayRun], output: &mut String) {
+                for run in runs {
+                    match run {
+                        DisplayRun::Text { text, .. } => output.push_str(text),
+                        DisplayRun::Button { runs, .. }
+                        | DisplayRun::ColumnCell { content: runs, .. } => text(runs, output),
+                        _ => {}
+                    }
+                }
+            }
+            let mut output = String::new();
+            text(&line.runs, &mut output);
+            output
+        })
+        .collect::<Vec<_>>();
+    let status_line = flattened_lines
+        .iter()
+        .position(|line| line.contains("抑鬱"))
+        .expect("SHOW_STATUS output");
+    let look_line = flattened_lines
+        .iter()
+        .position(|line| line.contains("[Look]"))
+        .expect("SHOW_USERCOM output");
+    assert!(status_line < look_line, "{flattened_lines:#?}");
     let token = *pending.choices.keys().next().expect("PRINTBUTTON token");
     let wait_id = pending.wait.wait_id;
     let submission_token = pending.wait.submission_token;
@@ -2081,6 +2111,16 @@ fn restart_redraws_string_and_integer_button_menus_in_the_current_function() {
             .expect("C button");
         (pending.wait.wait_id, pending.wait.submission_token, button)
     };
+    assert!(
+        session
+            .presentation
+            .snapshot()
+            .history
+            .logical_lines
+            .last()
+            .is_some_and(|line| line.line_end),
+        "INPUTS must flush the button row before opening its wait"
+    );
     submit(
         &mut session,
         3,
@@ -2119,6 +2159,16 @@ fn restart_redraws_string_and_integer_button_menus_in_the_current_function() {
             .expect("move return button");
         (pending.wait.wait_id, pending.wait.submission_token, button)
     };
+    assert!(
+        session
+            .presentation
+            .snapshot()
+            .history
+            .logical_lines
+            .last()
+            .is_some_and(|line| line.line_end),
+        "restarted INPUTS must not reuse the previous menu row"
+    );
     submit(
         &mut session,
         4,
