@@ -14,23 +14,53 @@ from audit_paths import REPOSITORY_ROOT, project_path, runtime_library
 ROOT = REPOSITORY_ROOT
 sys.path.insert(0, str(ROOT / "frontends" / "era-tui" / "src"))
 
+from rustyera_tui.abi import RuntimeAbi  # noqa: E402
 from rustyera_tui.presentation import PresentationModel  # noqa: E402
 from rustyera_tui.project import StorageBackend  # noqa: E402
 from rustyera_tui.runtime import RuntimeClient, RuntimeWorker  # noqa: E402
 
 _original_pump = RuntimeClient.pump
 _original_handle_runtime = RuntimeClient._handle_runtime
+_original_drive = RuntimeAbi.drive
+_wake_profile_active = False
+_wake_profile_origin = 0.0
+_profile_wake_drives = os.environ.get("ERA_AUDIT_PROFILE_WAKE") == "1"
 
 
 def _traced_pump(client: RuntimeClient) -> bool:
+    started = time.perf_counter()
     try:
-        return _original_pump(client)
+        result = _original_pump(client)
     except Exception:  # noqa: BLE001 - local audit instrumentation
         traceback.print_exc()
         raise
+    elapsed = time.perf_counter() - started
+    if _profile_wake_drives and _wake_profile_active and elapsed >= 0.01:
+        print(
+            f"WAKE_PUMP elapsed={time.monotonic() - _wake_profile_origin:.6f}s "
+            f"pump_ms={elapsed * 1000:.3f}"
+        )
+    return result
 
 
 RuntimeClient.pump = _traced_pump
+
+
+def _traced_drive(abi: RuntimeAbi, maximum_instructions: int = 100_000):
+    started = time.perf_counter()
+    result = _original_drive(abi, maximum_instructions)
+    elapsed = time.perf_counter() - started
+    if _profile_wake_drives and _wake_profile_active and elapsed >= 0.01:
+        print(
+            f"WAKE_DRIVE elapsed={time.monotonic() - _wake_profile_origin:.6f}s "
+            f"drive_ms={elapsed * 1000:.3f} instructions={result.vm_instructions} "
+            f"transitions={result.runtime_transitions} envelopes={result.queued_envelopes} "
+            f"state={result.state}"
+        )
+    return result
+
+
+RuntimeAbi.drive = _traced_drive
 
 
 def _traced_handle_runtime(
@@ -72,9 +102,12 @@ def main() -> int:
     layout_stage: str | None = None
     item_check = os.environ.get("ERA_AUDIT_ITEM_CHECK") == "1"
     maximum_day_one_seconds = os.environ.get("ERA_AUDIT_MAX_DAY1_SECONDS")
+    maximum_wake_seconds = os.environ.get("ERA_AUDIT_MAX_WAKE_SECONDS")
+    wake_check = os.environ.get("ERA_AUDIT_WAKE_CHECK") == "1" or maximum_wake_seconds is not None
     wait_for_cache = os.environ.get("ERA_AUDIT_WAIT_FOR_CACHE") == "1"
     item_stage: str | None = None
     day_one_reached = False
+    wake_started: float | None = None
     snapshot_requested = False
     snapshot_attempts = 0
     snapshot_attempt_wait: tuple[dict[int, object], str] | None = None
@@ -92,9 +125,28 @@ def main() -> int:
         wait: dict[int, object], tail: str, *, snapshot_attempted: bool = False
     ) -> int | None:
         nonlocal answer_index, snapshot_requested, snapshot_attempt_wait, layout_stage, item_stage
-        nonlocal day_one_reached
+        nonlocal day_one_reached, wake_started
+        global _wake_profile_active, _wake_profile_origin
         if wait[1] == 0:
             worker.send("submit_text", "")
+        elif wake_check and wake_started is not None:
+            rows = display_rows(model)
+            if not any("[Look]" in row for row in rows):
+                print(f"WAKE_TO_HOME_ERROR missing_home_menu tail={rows[-30:]!r}")
+                return 1
+            elapsed = time.monotonic() - wake_started
+            _wake_profile_active = False
+            print(
+                f"WAKE_TO_HOME_MILESTONE wait={wait[0]} kind={wait[1]} "
+                f"system={wait[5]} elapsed={elapsed:.3f}s"
+            )
+            if maximum_wake_seconds is not None and elapsed > float(maximum_wake_seconds):
+                print(
+                    "WAKE_TO_HOME_PERFORMANCE_ERROR "
+                    f"elapsed={elapsed:.3f}s limit={float(maximum_wake_seconds):.3f}s"
+                )
+                return 5
+            return 0
         elif layout_check and layout_stage == "day_one":
             look_rows = [row for row in display_rows(model) if "[Look]" in row]
             if not look_rows:
@@ -164,6 +216,11 @@ def main() -> int:
                 return 5
             if layout_check:
                 layout_stage = "day_one"
+                worker.send("submit_text", "100")
+            elif wake_check:
+                wake_started = time.monotonic()
+                _wake_profile_origin = wake_started
+                _wake_profile_active = True
                 worker.send("submit_text", "100")
             elif item_check:
                 item_stage = "command_menu"
@@ -297,6 +354,8 @@ def main() -> int:
         print(plain_tail(model))
         return 3
     finally:
+        global _wake_profile_active
+        _wake_profile_active = False
         worker.stop()
         worker.join(timeout=5)
 

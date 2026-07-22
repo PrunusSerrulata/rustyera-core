@@ -260,54 +260,73 @@ pub(super) fn execute_getnum(
         ));
     };
     let generation = fiber.frames.last().expect("frame exists").generation;
-    let artifact = &vm
+    let program = vm
         .generations
         .get(&generation)
-        .ok_or_else(|| VmError::InvalidState("GETNUM generation is missing".into()))?
-        .artifact;
-    let name = artifact
-        .globals
-        .iter()
-        .find(|definition| definition.key == place.variable)
-        .map(|definition| definition.name.to_ascii_uppercase())
+        .ok_or_else(|| VmError::InvalidState("GETNUM generation is missing".into()))?;
+    let name = program
+        .global(place.variable)
+        .map(|definition| definition.name.as_str())
         .ok_or_else(|| {
             VmError::InvalidArguments("GETNUM variable is not project-visible".into())
         })?;
-    let kind = match name.as_str() {
-        "ABL" => Some(erabasic_data::NameTableKind::Abl),
-        "EXP" => Some(erabasic_data::NameTableKind::Exp),
-        "TALENT" => Some(erabasic_data::NameTableKind::Talent),
-        "PALAM" => Some(erabasic_data::NameTableKind::Palam),
-        "TRAIN" => Some(erabasic_data::NameTableKind::Train),
-        "MARK" => Some(erabasic_data::NameTableKind::Mark),
-        "ITEM" | "ITEMSALES" | "ITEMPRICE" | "ITEMNAME" => Some(erabasic_data::NameTableKind::Item),
-        "BASE" | "MAXBASE" | "LOSEBASE" | "DOWNBASE" => Some(erabasic_data::NameTableKind::Base),
-        "SOURCE" => Some(erabasic_data::NameTableKind::Source),
-        "EX" => Some(erabasic_data::NameTableKind::Ex),
-        "STR" => Some(erabasic_data::NameTableKind::Str),
-        "EQUIP" => Some(erabasic_data::NameTableKind::Equip),
-        "TEQUIP" => Some(erabasic_data::NameTableKind::Tequip),
-        "FLAG" => Some(erabasic_data::NameTableKind::Flag),
-        "TFLAG" => Some(erabasic_data::NameTableKind::Tflag),
-        "CFLAG" => Some(erabasic_data::NameTableKind::Cflag),
-        "TCVAR" => Some(erabasic_data::NameTableKind::Tcvar),
-        "CSTR" => Some(erabasic_data::NameTableKind::Cstr),
-        "STAIN" => Some(erabasic_data::NameTableKind::Stain),
-        "STRNAME" => Some(erabasic_data::NameTableKind::Strname),
-        "TSTR" => Some(erabasic_data::NameTableKind::Tstr),
-        "SAVESTR" => Some(erabasic_data::NameTableKind::Savestr),
-        "GLOBAL" => Some(erabasic_data::NameTableKind::Global),
-        "GLOBALS" => Some(erabasic_data::NameTableKind::Globals),
-        "DAY" => Some(erabasic_data::NameTableKind::Day),
-        "TIME" => Some(erabasic_data::NameTableKind::Time),
-        "MONEY" => Some(erabasic_data::NameTableKind::Money),
-        _ => None,
-    };
+    let kind = name_table_kind(name);
     let value = kind
-        .and_then(|kind| artifact.project_data.static_data.name_tables.get(&kind))
+        .and_then(|kind| {
+            program
+                .artifact
+                .project_data
+                .static_data
+                .name_tables
+                .get(&kind)
+        })
         .and_then(|table| table.lookup.get(key))
         .map_or(-1, |index| i64::from(*index));
     Ok(VmValue::Integer(value))
+}
+
+fn name_table_kind(name: &str) -> Option<erabasic_data::NameTableKind> {
+    fn exact(name: &str) -> Option<erabasic_data::NameTableKind> {
+        match name {
+            "ABL" => Some(erabasic_data::NameTableKind::Abl),
+            "EXP" => Some(erabasic_data::NameTableKind::Exp),
+            "TALENT" => Some(erabasic_data::NameTableKind::Talent),
+            "PALAM" => Some(erabasic_data::NameTableKind::Palam),
+            "TRAIN" => Some(erabasic_data::NameTableKind::Train),
+            "MARK" => Some(erabasic_data::NameTableKind::Mark),
+            "ITEM" | "ITEMSALES" | "ITEMPRICE" | "ITEMNAME" => {
+                Some(erabasic_data::NameTableKind::Item)
+            }
+            "BASE" | "MAXBASE" | "LOSEBASE" | "DOWNBASE" => {
+                Some(erabasic_data::NameTableKind::Base)
+            }
+            "SOURCE" => Some(erabasic_data::NameTableKind::Source),
+            "EX" => Some(erabasic_data::NameTableKind::Ex),
+            "STR" => Some(erabasic_data::NameTableKind::Str),
+            "EQUIP" => Some(erabasic_data::NameTableKind::Equip),
+            "TEQUIP" => Some(erabasic_data::NameTableKind::Tequip),
+            "FLAG" => Some(erabasic_data::NameTableKind::Flag),
+            "TFLAG" => Some(erabasic_data::NameTableKind::Tflag),
+            "CFLAG" => Some(erabasic_data::NameTableKind::Cflag),
+            "TCVAR" => Some(erabasic_data::NameTableKind::Tcvar),
+            "CSTR" => Some(erabasic_data::NameTableKind::Cstr),
+            "STAIN" => Some(erabasic_data::NameTableKind::Stain),
+            "STRNAME" => Some(erabasic_data::NameTableKind::Strname),
+            "TSTR" => Some(erabasic_data::NameTableKind::Tstr),
+            "SAVESTR" => Some(erabasic_data::NameTableKind::Savestr),
+            "GLOBAL" => Some(erabasic_data::NameTableKind::Global),
+            "GLOBALS" => Some(erabasic_data::NameTableKind::Globals),
+            "DAY" => Some(erabasic_data::NameTableKind::Day),
+            "TIME" => Some(erabasic_data::NameTableKind::Time),
+            "MONEY" => Some(erabasic_data::NameTableKind::Money),
+            _ => None,
+        }
+    }
+
+    exact(name).or_else(|| {
+        let normalized = name.to_ascii_uppercase();
+        (normalized != name).then(|| exact(&normalized)).flatten()
+    })
 }
 
 pub(super) fn execute_strjoin(
@@ -524,13 +543,7 @@ pub(super) fn execute_variable_fill(
     let definition = vm
         .generations
         .get(&generation)
-        .and_then(|generation| {
-            generation
-                .artifact
-                .globals
-                .iter()
-                .find(|definition| definition.key == place.variable)
-        })
+        .and_then(|generation| generation.global(place.variable))
         .cloned()
         .ok_or_else(|| VmError::InvalidState("VARSET variable is missing".into()))?;
     if !definition.mutable {
@@ -555,17 +568,16 @@ pub(super) fn execute_variable_fill(
             let _ = vm.read_place(fiber, &place)?;
             return vm.write_place(fiber, &place, value);
         }
-        let mut values = array_snapshot(vm, fiber, &place)?;
+        let length = vm.place_array_len(fiber, &place)?;
         let mut start = optional_nonnegative(arguments, 2, 0, "VARSET start")?;
-        let mut end = optional_nonnegative(arguments, 3, values.len(), "VARSET end")?;
+        let mut end = optional_nonnegative(arguments, 3, length, "VARSET end")?;
         if start > end {
             std::mem::swap(&mut start, &mut end);
         }
-        if end > values.len() {
+        if end > length {
             return Err(VmError::InvalidArguments("VARSET range is invalid".into()));
         }
-        values[start..end].fill(value);
-        return commit_array(vm, fiber, &place, values);
+        return vm.fill_place_array_range(fiber, &place, start, end, value);
     }
 
     if definition.storage != BytecodeStorage::Character || definition.dimensions.len() > 1 {
@@ -634,7 +646,7 @@ pub(super) fn optional_nonnegative(
 }
 
 pub(super) fn execute_find_element(
-    vm: &Vm,
+    vm: &mut Vm,
     fiber: &Fiber,
     last: bool,
     arguments: &[VmValue],
@@ -660,12 +672,23 @@ pub(super) fn execute_find_element(
         ));
     }
     let exact = !matches!(integer_argument(arguments, 4), Ok(0) | Err(_));
-    let matched = |value: &VmValue| -> Result<bool, VmError> {
+    // FINDELEMENT treats the string needle as one regular expression for the
+    // whole query. Compile it lazily so an empty range keeps its historical
+    // no-op behavior, but do not rebuild the same automaton for every element.
+    let mut compiled_regex = None;
+    let mut matched = |value: &VmValue| -> Result<bool, VmError> {
         match (value, needle) {
             (VmValue::Integer(value), VmValue::Integer(needle)) => Ok(value == needle),
             (VmValue::String(value), VmValue::String(needle)) => {
-                let regex =
-                    crate::regex_compat::compile(needle).map_err(VmError::InvalidArguments)?;
+                if compiled_regex.is_none() {
+                    compiled_regex = Some(
+                        vm.compile_regex(needle)
+                            .map_err(VmError::InvalidArguments)?,
+                    );
+                }
+                let regex = compiled_regex
+                    .as_ref()
+                    .expect("the regex was initialized immediately above");
                 Ok(regex
                     .find(value)
                     .is_some_and(|matched| !exact || matched.as_str().len() == value.len()))

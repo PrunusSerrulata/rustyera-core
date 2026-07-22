@@ -9,20 +9,30 @@ use erabasic_validator::ValidatedArtifact;
 use serde::{Deserialize, Serialize};
 
 use crate::debug::DebugState;
+use crate::regex_compat::RegexCache;
 use crate::{
     FiberId, FiberStatus, FrameId, GenerationId, HostReady, HostRequestId, HostWaitStability,
     Memory, PlaceDescriptor, VariableCell, VmConfig, VmError, VmExecutionOrigin, VmFault, VmValue,
     hot_reload::HotReloadPlan,
 };
-use crate::{PreparedRuntimeState, VmRuntimeRead, VmRuntimeStatePort, VmRuntimeStateTransaction};
+use crate::{
+    PreparedRuntimeState, VmRuntimeFill, VmRuntimeRead, VmRuntimeStatePort,
+    VmRuntimeStateTransaction,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ProgramGeneration {
     pub artifact: Arc<BytecodeArtifact>,
     function_indices: HashMap<SymbolKey, usize>,
-    function_name_indices: BTreeMap<String, usize>,
-    global_indices: BTreeMap<SymbolKey, usize>,
-    global_name_indices: BTreeMap<String, usize>,
+    function_name_indices: HashMap<String, usize>,
+    // This map is lookup-only; authoritative globals remain canonically ordered
+    // in the artifact, so hash iteration can never affect serialized output.
+    global_indices: HashMap<SymbolKey, usize>,
+    global_name_indices: HashMap<String, usize>,
+    target_global_index: Option<usize>,
+    native_import_indices: HashMap<SymbolKey, usize>,
+    host_import_indices: HashMap<SymbolKey, usize>,
+    normalized_native_names: Vec<Arc<str>>,
     function_static_indices: BTreeMap<SymbolKey, Vec<usize>>,
     function_local_indices: BTreeMap<SymbolKey, Vec<usize>>,
     instruction_source_indices: BTreeMap<SymbolKey, Vec<Option<usize>>>,
@@ -40,7 +50,7 @@ impl ProgramGeneration {
             .enumerate()
             .map(|(index, function)| (function.key, index))
             .collect();
-        let mut function_name_indices = BTreeMap::new();
+        let mut function_name_indices = HashMap::new();
         for (index, function) in artifact.functions.iter().enumerate() {
             // Dynamic lookup follows the artifact order when duplicate declarations
             // are permitted by the selected compatibility mode.
@@ -54,10 +64,28 @@ impl ProgramGeneration {
             .enumerate()
             .map(|(index, global)| (global.key, index))
             .collect();
-        let mut global_name_indices = BTreeMap::new();
+        let mut global_name_indices = HashMap::new();
         for (index, global) in artifact.globals.iter().enumerate() {
             global_name_indices
                 .entry(global.name.to_ascii_uppercase())
+                .or_insert(index);
+        }
+        let target_global_index = global_name_indices.get("TARGET").copied();
+        let mut native_import_indices = HashMap::new();
+        for (index, import) in artifact.native_imports.iter().enumerate() {
+            native_import_indices
+                .entry(import.import.key)
+                .or_insert(index);
+        }
+        let normalized_native_names = artifact
+            .native_imports
+            .iter()
+            .map(|import| Arc::<str>::from(import.import.name.to_ascii_lowercase()))
+            .collect();
+        let mut host_import_indices = HashMap::new();
+        for (index, import) in artifact.host_imports.iter().enumerate() {
+            host_import_indices
+                .entry(import.import.key)
                 .or_insert(index);
         }
         let mut function_static_indices = BTreeMap::<SymbolKey, Vec<usize>>::new();
@@ -143,6 +171,10 @@ impl ProgramGeneration {
             function_name_indices,
             global_indices,
             global_name_indices,
+            target_global_index,
+            native_import_indices,
+            host_import_indices,
+            normalized_native_names,
             function_static_indices,
             function_local_indices,
             instruction_source_indices,
@@ -150,27 +182,48 @@ impl ProgramGeneration {
     }
 
     pub(crate) fn function(&self, key: SymbolKey) -> Option<&BytecodeFunction> {
-        self.function_indices
-            .get(&key)
+        self.function_index(key)
             .and_then(|index| self.artifact.functions.get(*index))
     }
 
+    pub(crate) fn function_index(&self, key: SymbolKey) -> Option<&usize> {
+        self.function_indices.get(&key)
+    }
+
     pub(crate) fn function_by_name(&self, name: &str) -> Option<&BytecodeFunction> {
-        self.function_name_indices
-            .get(&name.to_ascii_uppercase())
+        case_insensitive_index(&self.function_name_indices, name)
             .and_then(|index| self.artifact.functions.get(*index))
     }
 
     pub(crate) fn global(&self, key: SymbolKey) -> Option<&erabasic_bytecode::BytecodeGlobal> {
-        self.global_indices
-            .get(&key)
+        self.global_index(key)
             .and_then(|index| self.artifact.globals.get(*index))
     }
 
+    pub(crate) fn global_index(&self, key: SymbolKey) -> Option<&usize> {
+        self.global_indices.get(&key)
+    }
+
     pub(crate) fn global_by_name(&self, name: &str) -> Option<&erabasic_bytecode::BytecodeGlobal> {
-        self.global_name_indices
-            .get(&name.to_ascii_uppercase())
+        case_insensitive_index(&self.global_name_indices, name)
             .and_then(|index| self.artifact.globals.get(*index))
+    }
+
+    pub(crate) fn target_global(&self) -> Option<&erabasic_bytecode::BytecodeGlobal> {
+        self.target_global_index
+            .and_then(|index| self.artifact.globals.get(index))
+    }
+
+    pub(crate) fn native_import_index(&self, key: SymbolKey) -> Option<usize> {
+        self.native_import_indices.get(&key).copied()
+    }
+
+    pub(crate) fn host_import_index(&self, key: SymbolKey) -> Option<usize> {
+        self.host_import_indices.get(&key).copied()
+    }
+
+    pub(crate) fn normalized_native_name(&self, index: usize) -> Option<Arc<str>> {
+        self.normalized_native_names.get(index).cloned()
     }
 
     pub(crate) fn function_statics(
@@ -208,6 +261,31 @@ impl ProgramGeneration {
             .flatten()
             .and_then(|index| self.artifact.source_map.entries.get(index))?;
         self.artifact.source_map.resolve_entry(entry)
+    }
+}
+
+fn case_insensitive_index<'a>(
+    indices: &'a HashMap<String, usize>,
+    name: &str,
+) -> Option<&'a usize> {
+    if name.bytes().any(|byte| byte.is_ascii_lowercase()) {
+        indices.get(&name.to_ascii_uppercase())
+    } else {
+        indices.get(name)
+    }
+}
+
+#[cfg(test)]
+mod program_index_tests {
+    use super::*;
+
+    #[test]
+    fn name_index_preserves_ascii_case_insensitive_lookup() {
+        let indices = HashMap::from([("MIXED_NAME".to_owned(), 7)]);
+        assert_eq!(case_insensitive_index(&indices, "MIXED_NAME"), Some(&7));
+        assert_eq!(case_insensitive_index(&indices, "mixed_name"), Some(&7));
+        assert_eq!(case_insensitive_index(&indices, "Mixed_Name"), Some(&7));
+        assert_eq!(case_insensitive_index(&indices, "missing"), None);
     }
 }
 
@@ -311,6 +389,7 @@ pub struct Vm {
     pub(crate) next_generation: u64,
     pub(crate) pending_reload: Option<HotReloadPlan>,
     pub(crate) debug: DebugState,
+    pub(crate) regex_cache: RegexCache,
 }
 
 impl Vm {
@@ -376,7 +455,12 @@ impl Vm {
             next_generation: 2,
             pending_reload: None,
             debug: DebugState::default(),
+            regex_cache: RegexCache::default(),
         }
+    }
+
+    pub(crate) fn compile_regex(&mut self, pattern: &str) -> Result<regex::Regex, String> {
+        self.regex_cache.get_or_compile(pattern)
     }
 
     #[must_use]
@@ -396,6 +480,13 @@ impl Vm {
             .get(&self.current_generation)
             .expect("the current generation is always retained")
             .artifact
+    }
+
+    pub(crate) fn target_character_for_generation(&self, generation: GenerationId) -> usize {
+        self.generations.get(&generation).map_or(0, |program| {
+            self.memory
+                .target_character_from_definition(program.target_global(), generation)
+        })
     }
 
     /// Resolve a current-generation global by its `EraBasic` case-insensitive name.
@@ -446,6 +537,7 @@ impl Vm {
         validate_arguments(function_definition, &arguments)?;
         self.memory.ensure_function_statics(
             generation,
+            function_definition.key,
             program.function_statics(function_definition.key),
         );
         bind_persistent_arguments(
@@ -612,14 +704,16 @@ impl Vm {
                 .ok_or_else(|| VmError::InvalidState("event generation is missing".into()))?;
             let target = program
                 .function(next.function)
-                .cloned()
                 .ok_or_else(|| VmError::InvalidState("event function is missing".into()))?;
-            self.memory
-                .ensure_function_statics(generation, program.function_statics(target.key));
+            self.memory.ensure_function_statics(
+                generation,
+                target.key,
+                program.function_statics(target.key),
+            );
             fiber.frames.push(make_frame(
                 frame_id,
                 generation,
-                &target,
+                target,
                 program.function_locals(target.key),
                 Vec::new(),
                 false,
@@ -679,18 +773,20 @@ impl Vm {
         indices: &[u64],
         character: Option<u64>,
     ) -> Result<VmValue, VmError> {
-        let artifact = self.artifact();
-        let definition = find_global(artifact, variable)?;
+        let program = self
+            .generations
+            .get(&self.current_generation)
+            .ok_or_else(|| VmError::InvalidState("current generation is missing".into()))?;
+        let definition = program.global(variable).ok_or_else(|| {
+            VmError::InvalidState(format!("variable {variable:?} is not defined"))
+        })?;
         if definition.storage == BytecodeStorage::FunctionLocal {
             return Err(VmError::InvalidState(
                 "frame-local variables require a place descriptor".into(),
             ));
         }
         let character = character.map_or_else(
-            || {
-                self.memory
-                    .target_character(artifact, self.current_generation)
-            },
+            || self.target_character_for_generation(self.current_generation),
             |value| usize::try_from(value).unwrap_or(usize::MAX),
         );
         self.memory
@@ -714,12 +810,19 @@ impl Vm {
         value: VmValue,
     ) -> Result<(), VmError> {
         let generation = self.current_generation;
-        let definition = find_global(self.artifact(), variable)?.clone();
+        let definition = self
+            .generations
+            .get(&generation)
+            .and_then(|program| program.global(variable))
+            .cloned()
+            .ok_or_else(|| {
+                VmError::InvalidState(format!("variable {variable:?} is not defined"))
+            })?;
         if !definition.mutable {
             return Err(VmError::InvalidState("variable is immutable".into()));
         }
         let character = character.map_or_else(
-            || self.memory.target_character(self.artifact(), generation),
+            || self.target_character_for_generation(generation),
             |value| usize::try_from(value).unwrap_or(usize::MAX),
         );
         self.memory
@@ -727,6 +830,98 @@ impl Vm {
             .ok_or_else(|| VmError::InvalidState("variable storage is unavailable".into()))?
             .write(indices, value)
             .map_err(VmError::InvalidState)
+    }
+
+    /// Validate and fill a batch of runtime-owned variables without cloning VM memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns before the first mutation if any variable, character destination, or
+    /// value type is invalid.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if validated variable storage changes during the commit phase. The
+    /// exclusive VM borrow prevents such a change through the public API.
+    pub fn fill_runtime_variables(&mut self, fills: &[VmRuntimeFill]) -> Result<(), VmError> {
+        struct FillPlan {
+            global_index: usize,
+            characters: Vec<usize>,
+            value: VmValue,
+        }
+
+        let generation = self.current_generation;
+        let program = self
+            .generations
+            .get(&generation)
+            .ok_or_else(|| VmError::InvalidState("current generation is missing".into()))?;
+        let target_key = program.target_global().map(|definition| definition.key);
+        let mut target_character = self.target_character_for_generation(generation);
+        let mut plans = Vec::with_capacity(fills.len());
+        for fill in fills {
+            let global_index = *program.global_index(fill.variable).ok_or_else(|| {
+                VmError::InvalidState(format!("variable {:?} is not defined", fill.variable))
+            })?;
+            let definition = &program.artifact.globals[global_index];
+            if !definition.mutable || definition.storage == BytecodeStorage::FunctionLocal {
+                return Err(VmError::InvalidState(
+                    "runtime state transaction cannot fill this variable".into(),
+                ));
+            }
+            if definition.value_type != fill.value.value_type() {
+                return Err(VmError::InvalidArguments(
+                    "runtime fill value type differs from its variable".into(),
+                ));
+            }
+            let characters = if definition.storage == BytecodeStorage::Character {
+                if fill.all_characters {
+                    (0..self.memory.characters.len()).collect()
+                } else {
+                    vec![target_character]
+                }
+            } else {
+                vec![0]
+            };
+            for character in &characters {
+                let cell = self
+                    .memory
+                    .cell(generation, definition, *character)
+                    .ok_or_else(|| {
+                        VmError::InvalidState("variable storage is unavailable".into())
+                    })?;
+                if cell.value_type != fill.value.value_type() {
+                    return Err(VmError::InvalidArguments(
+                        "runtime fill value type differs from its variable".into(),
+                    ));
+                }
+            }
+            if Some(fill.variable) == target_key
+                && let VmValue::Integer(value) = &fill.value
+            {
+                target_character = usize::try_from(*value).unwrap_or(0);
+            }
+            plans.push(FillPlan {
+                global_index,
+                characters,
+                value: fill.value.clone(),
+            });
+        }
+
+        let program = self
+            .generations
+            .get(&generation)
+            .ok_or_else(|| VmError::InvalidState("current generation is missing".into()))?;
+        for plan in plans {
+            let definition = &program.artifact.globals[plan.global_index];
+            for character in plan.characters {
+                self.memory
+                    .cell_mut(generation, definition, character)
+                    .expect("the complete fill batch was validated before mutation")
+                    .fill(plan.value.clone())
+                    .expect("the complete fill batch type was validated before mutation");
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn allocate_frame_id(&mut self) -> FrameId {
@@ -809,6 +1004,16 @@ impl Vm {
         place: &PlaceDescriptor,
     ) -> Result<VmValue, VmError> {
         let (generation, definition) = self.place_definition(fiber, place)?;
+        self.read_place_resolved(fiber, place, generation, definition)
+    }
+
+    pub(crate) fn read_place_resolved(
+        &self,
+        fiber: &Fiber,
+        place: &PlaceDescriptor,
+        generation: GenerationId,
+        definition: &erabasic_bytecode::BytecodeGlobal,
+    ) -> Result<VmValue, VmError> {
         if definition.storage == BytecodeStorage::FunctionLocal {
             let frame = find_frame(fiber, place.frame, definition.owner)?;
             let cell = frame
@@ -824,11 +1029,7 @@ impl Vm {
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
-                || {
-                    self.generations.get(&generation).map_or(0, |program| {
-                        self.memory.target_character(&program.artifact, generation)
-                    })
-                },
+                || self.target_character_for_generation(generation),
                 |value| usize::try_from(value).unwrap_or(usize::MAX),
             )
         } else {
@@ -865,11 +1066,7 @@ impl Vm {
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
-                || {
-                    self.generations.get(&generation).map_or(0, |program| {
-                        self.memory.target_character(&program.artifact, generation)
-                    })
-                },
+                || self.target_character_for_generation(generation),
                 |value| usize::try_from(value).unwrap_or(usize::MAX),
             )
         } else {
@@ -879,6 +1076,94 @@ impl Vm {
             .cell(generation, definition, character)
             .map(VariableCell::to_values)
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))
+    }
+
+    pub(crate) fn place_array_len(
+        &self,
+        fiber: &Fiber,
+        place: &PlaceDescriptor,
+    ) -> Result<usize, VmError> {
+        if !place.indices.is_empty() {
+            return Err(VmError::InvalidArguments(
+                "array place must be unindexed".into(),
+            ));
+        }
+        let (generation, definition) = self.place_definition(fiber, place)?;
+        if definition.storage == BytecodeStorage::FunctionLocal {
+            let frame = find_frame(fiber, place.frame, definition.owner)?;
+            let cell = frame
+                .locals
+                .get(&definition.key)
+                .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
+            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) = cell.first() {
+                return self.place_array_len(fiber, &bound);
+            }
+            return Ok(cell.len());
+        }
+        let character = if definition.storage == BytecodeStorage::Character {
+            place.character.map_or_else(
+                || self.target_character_for_generation(generation),
+                |value| usize::try_from(value).unwrap_or(usize::MAX),
+            )
+        } else {
+            0
+        };
+        self.memory
+            .cell(generation, definition, character)
+            .map(VariableCell::len)
+            .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))
+    }
+
+    pub(crate) fn fill_place_array_range(
+        &mut self,
+        fiber: &mut Fiber,
+        place: &PlaceDescriptor,
+        start: usize,
+        end: usize,
+        value: VmValue,
+    ) -> Result<(), VmError> {
+        if !place.indices.is_empty() {
+            return Err(VmError::InvalidArguments(
+                "array place must be unindexed".into(),
+            ));
+        }
+        let (generation, definition) = self.place_definition(fiber, place)?;
+        let definition = definition.clone();
+        if !definition.mutable {
+            return Err(VmError::InvalidState("place is immutable".into()));
+        }
+        if definition.storage == BytecodeStorage::FunctionLocal {
+            let bound = find_frame(fiber, place.frame, definition.owner)?
+                .locals
+                .get(&definition.key)
+                .and_then(VariableCell::first)
+                .and_then(|value| match value {
+                    VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => Some(*place),
+                    VmValue::Integer(_) | VmValue::String(_) => None,
+                });
+            if let Some(bound) = bound {
+                return self.fill_place_array_range(fiber, &bound, start, end, value);
+            }
+            return find_frame_mut(fiber, place.frame, definition.owner)?
+                .locals
+                .get_mut(&definition.key)
+                .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?
+                .fill_range(start, end, value)
+                .map_err(VmError::InvalidArguments);
+        }
+        let character = if definition.storage == BytecodeStorage::Character {
+            place.character.map_or_else(
+                || self.target_character_for_generation(generation),
+                |value| usize::try_from(value).unwrap_or(usize::MAX),
+            )
+        } else {
+            0
+        };
+        self.memory
+            .cell_mut(generation, &definition, character)
+            .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
+            .fill_range(start, end, value)
+            .map_err(VmError::InvalidArguments)
     }
 
     pub(crate) fn write_place(
@@ -926,11 +1211,7 @@ impl Vm {
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
-                || {
-                    self.generations.get(&generation).map_or(0, |program| {
-                        self.memory.target_character(&program.artifact, generation)
-                    })
-                },
+                || self.target_character_for_generation(generation),
                 |value| usize::try_from(value).unwrap_or(usize::MAX),
             )
         } else {
@@ -983,11 +1264,7 @@ impl Vm {
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
-                || {
-                    self.generations.get(&generation).map_or(0, |program| {
-                        self.memory.target_character(&program.artifact, generation)
-                    })
-                },
+                || self.target_character_for_generation(generation),
                 |index| usize::try_from(index).unwrap_or(usize::MAX),
             )
         } else {

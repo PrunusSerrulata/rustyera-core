@@ -76,6 +76,11 @@ UV_CACHE_DIR=/tmp/rustyera-uv-cache \
   TUI 保留行数未超过 runtime 的 `MaxLog`；成功时输出 `ITEM_CONFIRM_OK`。
 - `ERA_AUDIT_MAX_DAY1_SECONDS` 设置从 TUI worker 冷启动到日 1 菜单的最大秒数；超过时脚本输出
   `DAY1_PERFORMANCE_ERROR` 并以退出码 5 结束。
+- `ERA_AUDIT_WAKE_CHECK=1` 会在日 1 菜单提交“睁开眼睛”，并在包含 `[Look]` 的真实自宅稳定
+  输入处输出 `WAKE_TO_HOME_MILESTONE`；`ERA_AUDIT_MAX_WAKE_SECONDS` 为该区间设置硬门槛，
+  超过时输出 `WAKE_TO_HOME_PERFORMANCE_ERROR` 并以退出码 5 结束。
+- `ERA_AUDIT_PROFILE_WAKE=1` 在上述区间输出超过 10 ms 的 C ABI drive/pump 耗时、指令数、
+  runtime transition 数和队列长度，用于区分 VM 与前端投影热点。
 - `ERA_AUDIT_WAIT_FOR_CACHE=1` 到达日 1 后继续等待前端自动持久化编译缓存，并输出
   `COMPILED_CACHE_BYTES`；日 1 性能门槛仍只使用到达菜单时的耗时。
 - 设置 `ERA_AUDIT_SNAPSHOT_PATH=/tmp/name.snapshot` 可在目标等待点导出；再设置
