@@ -82,6 +82,7 @@ try {
     Assert-True (($project.result.functions.name -contains "SYSTEM_TITLE") -and
         ($project.result.functions.name -contains "ORACLE_TEST") -and
         ($project.result.functions.name -contains "ORACLE_INPUT") -and
+        ($project.result.functions.name -contains "ORACLE_RESTART_FLOW") -and
         ($project.result.functions.name -contains "ORACLE_MAP") -and
         ($project.result.functions.name -contains "ORACLE_NATIVE") -and
         ($project.result.functions.name -contains "ORACLE_REFLECTION") -and
@@ -218,6 +219,24 @@ try {
     Assert-True $inputRun.ok "input function run failed"
     Assert-True ($inputRun.result.termination -eq "completed") "input function did not complete"
     Assert-True ($inputRun.result.watches.RESULT -eq 42) "input did not update RESULT"
+
+    $restartRun = Invoke-Oracle @{
+        id = "restart"
+        op = "run"
+        entry = "ORACLE_RESTART_FLOW"
+        uiInputs = @(
+            @{ text = "C"; changedByMouse = $true },
+            @{ text = "0"; changedByMouse = $true },
+            @{ text = "6"; changedByMouse = $true },
+            @{ text = "0"; changedByMouse = $true }
+        )
+    }
+    Assert-True ($restartRun.ok -and $restartRun.result.termination -eq "completed") "RESTART menu run failed"
+    $restartOutput = $restartRun.result.output -join "`n"
+    Assert-True ($restartOutput.Contains("move display=1") -and
+        $restartOutput.Contains("ability page=1") -and
+        -not $restartOutput.Contains("invalid move") -and
+        -not $restartOutput.Contains("invalid ability")) "RESTART did not redraw the current function menu"
 
     $tempOneInputGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-oneinput-oracle-" + [guid]::NewGuid())
     Copy-Item "$PSScriptRoot/fixture" $tempOneInputGame -Recurse
