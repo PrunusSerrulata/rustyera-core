@@ -23,9 +23,9 @@ pub use schema::{
     VariableSchema,
 };
 pub use static_data::{
-    CharacterTemplate, ExtensionData, GameBase, NameAlias, NameTable, NameTableKind, ProjectData,
-    ProjectStaticData, ReplaceSettings,
+    CharacterTemplate, ExtensionData, GameBase, LegacyEncoding, NameAlias, NameTable,
+    NameTableKind, ProjectData, ProjectStaticData, ReplaceSettings,
 };
 
 /// Version of the serialized `ProjectData` contract.
-pub const PROJECT_DATA_FORMAT_VERSION: u32 = 1;
+pub const PROJECT_DATA_FORMAT_VERSION: u32 = 2;

@@ -1,5 +1,7 @@
 use crate::*;
-use erabasic_ast::{Argument, AssignOp, BinaryOp, DiagnosticCode, ExprKind, StatementKind};
+use erabasic_ast::{
+    Alignment, Argument, AssignOp, BinaryOp, DiagnosticCode, ExprKind, FormPart, StatementKind,
+};
 
 #[test]
 fn precedence_matches_expected_shape() {
@@ -306,6 +308,38 @@ fn printform_argument_becomes_formatted_ast() {
         panic!("expected instruction")
     };
     assert!(matches!(arguments.first(), Some(Argument::Formatted(_))));
+}
+
+#[test]
+fn printform_preserves_width_alignment_and_triple_parts() {
+    let output = parse_line(
+        "PRINTFORM |{LOCAL:0, 6, LEFT}|%LOCALS:0, 8, RIGHT%|***",
+        &DefaultParserContext::default(),
+    );
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Instruction { arguments, .. } = output.value.unwrap().kind else {
+        panic!("expected instruction")
+    };
+    let [Argument::Formatted(formatted)] = arguments.as_slice() else {
+        panic!("expected formatted argument")
+    };
+    assert!(matches!(
+        formatted.parts.as_slice(),
+        [
+            FormPart::Text(_),
+            FormPart::IntegerInterpolation {
+                alignment: Some(Alignment::Left),
+                ..
+            },
+            FormPart::Text(_),
+            FormPart::StringInterpolation {
+                alignment: Some(Alignment::Right),
+                ..
+            },
+            FormPart::Text(_),
+            FormPart::Triple { symbol: '*', .. }
+        ]
+    ));
 }
 
 #[test]

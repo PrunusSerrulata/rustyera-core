@@ -1517,13 +1517,21 @@ impl<'a> Builder<'a> {
                 HirFormPart::Interpolation {
                     expression,
                     width,
+                    alignment,
                     integer,
                     location,
-                    ..
                 } => {
                     let mut parameters = vec![self.lower_expression(expression, fallback)];
                     if let Some(width) = width {
                         parameters.push(self.lower_expression(width, fallback));
+                        self.emit(
+                            opcode::push_integer(i64::from(matches!(
+                                alignment,
+                                Some(erabasic_ast::Alignment::Left)
+                            ))),
+                            *location,
+                        );
+                        parameters.push(BytecodeType::Integer);
                     }
                     self.emit_native_call(
                         if *integer {
@@ -1564,7 +1572,7 @@ impl<'a> Builder<'a> {
                         .to_vec();
                 }
                 HirFormPart::Triple { symbol, location } => {
-                    self.emit(opcode::push_string(&symbol.to_string()), *location);
+                    self.lower_form_triple(*symbol, *location);
                 }
             }
             parts = parts.saturating_add(1);
@@ -1575,6 +1583,49 @@ impl<'a> Builder<'a> {
             self.emit(opcode::concat(parts), formatted.location);
         }
         BytecodeType::String
+    }
+
+    fn lower_form_triple(&mut self, symbol: char, location: SourceLocation) {
+        let (value_name, index_name) = match symbol {
+            '*' => ("NAME", "TARGET"),
+            '+' => ("CALLNAME", "MASTER"),
+            '=' => ("CALLNAME", "PLAYER"),
+            '/' => ("NAME", "ASSI"),
+            '$' => ("CALLNAME", "TARGET"),
+            _ => {
+                self.emit(opcode::push_string(&symbol.to_string()), location);
+                return;
+            }
+        };
+        let variable_key = |name: &str| {
+            self.context
+                .program
+                .variables
+                .iter()
+                .find(|variable| variable.name.eq_ignore_ascii_case(name))
+                .and_then(|variable| self.context.variable_keys.get(&variable.id))
+                .copied()
+        };
+        let (Some(index), Some(value)) = (variable_key(index_name), variable_key(value_name))
+        else {
+            self.emit(
+                EncodedInstruction::new(
+                    Opcode::Trap,
+                    format!("FORM triple {symbol}{symbol}{symbol} variables are missing")
+                        .into_bytes(),
+                ),
+                location,
+            );
+            return;
+        };
+        self.emit(
+            opcode::variable(Opcode::LoadVariable, index, 0, 0),
+            location,
+        );
+        self.emit(
+            opcode::variable(Opcode::LoadVariable, value, 1, 0),
+            location,
+        );
     }
 
     pub(super) fn emit_runtime_call(

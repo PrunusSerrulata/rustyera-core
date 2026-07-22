@@ -62,6 +62,7 @@ impl AnalysisParserContext {
             lexer: LexerConfig {
                 allow_full_width_space: options.allow_full_width_space,
                 debug_semicolon: options.debug_semicolon,
+                ignore_triple_symbols: options.ignore_triple_symbols,
                 ..LexerConfig::default()
             },
             macros: Arc::new(MacroTable::new()),

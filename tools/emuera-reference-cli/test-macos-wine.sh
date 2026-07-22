@@ -99,6 +99,7 @@ printf '%s\n' \
     '{"id":"wine-reflection","op":"run","entry":"ORACLE_REFLECTION","watch":["RESULT:12","RESULT:13","RESULTS:8","RESULTS:9"]}' \
     '{"id":"wine-map","op":"run","entry":"ORACLE_MAP","watch":["RESULT","RESULTS"]}' \
     '{"id":"wine-presentation","op":"run","entry":"ORACLE_PRESENTATION"}' \
+    '{"id":"wine-print-family","op":"run","entry":"ORACLE_PRINT_FAMILY"}' \
     '{"id":"wine-html-pop","op":"run","entry":"ORACLE_HTML_POP","watch":["RESULTS:30"]}' \
     '{"id":"wine-presentation-23","op":"run","entry":"ORACLE_PRESENTATION_23","watch":["RESULTS:31","RESULTS:32","RESULTS:33","RESULTS:34"]}' \
     '{"id":"wine-structured","op":"run","entry":"ORACLE_STRUCTURED","watch":["RESULT:0","RESULT:1","RESULT:2","RESULT:3","RESULT:4","RESULT:5","RESULTS:0","RESULTS:1","RESULTS:2"]}' \
@@ -134,7 +135,7 @@ perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 44 and
+    length == 45 and
     map(.id) == [
         "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-toneinput",
         "wine-config-drawing", "wine-config-font-size", "wine-config-fore-color", "wine-config-stain-list",
@@ -142,12 +143,12 @@ jq -e -s '
         "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
         "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
         "wine-putform", "wine-savenos",
-        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-reflection", "wine-map", "wine-presentation", "wine-html-pop", "wine-presentation-23", "wine-structured", "wine-compat-12", "wine-presentation-3", "wine-input", "wine-restart", "wine-oneinput-load", "wine-oneinput-text", "wine-oneinput-mouse-default", "wine-oneinput-long-load", "wine-oneinput-mouse-long", "wine-system-load", "wine-stopcalltrain", "wine-reset"
+        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-reflection", "wine-map", "wine-presentation", "wine-print-family", "wine-html-pop", "wine-presentation-23", "wine-structured", "wine-compat-12", "wine-presentation-3", "wine-input", "wine-restart", "wine-oneinput-load", "wine-oneinput-text", "wine-oneinput-mouse-default", "wine-oneinput-long-load", "wine-oneinput-mouse-long", "wine-system-load", "wine-stopcalltrain", "wine-reset"
     ] and
     all(.[]; .ok == true) and
     (map(select(.id == "wine-load"))[0].result.termination == "waitingInput") and
     (map(select(.id == "wine-load"))[0].result.output | contains(["TITLE_CHARANUM=0"])) and
-    (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["EVENTFIRST", "ORACLE_COMPAT", "ORACLE_COMPAT_12", "ORACLE_COMPAT_REST", "ORACLE_DYNAMIC_1", "ORACLE_HTML_POP", "ORACLE_INPUT", "ORACLE_LIST_TARGET", "ORACLE_MAP", "ORACLE_NATIVE", "ORACLE_PRESENTATION", "ORACLE_PRESENTATION_23", "ORACLE_PRESENTATION_3", "ORACLE_REFLECTION", "ORACLE_RESTART_ABILITY", "ORACLE_RESTART_FLOW", "ORACLE_RESTART_MOVE", "ORACLE_STRUCTURED", "ORACLE_TEST", "SYSTEM_TITLE"]) and
+    (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["EVENTFIRST", "ORACLE_COMPAT", "ORACLE_COMPAT_12", "ORACLE_COMPAT_REST", "ORACLE_DYNAMIC_1", "ORACLE_HTML_POP", "ORACLE_INPUT", "ORACLE_LIST_TARGET", "ORACLE_MAP", "ORACLE_NATIVE", "ORACLE_PRESENTATION", "ORACLE_PRESENTATION_23", "ORACLE_PRESENTATION_3", "ORACLE_PRINT_FAMILY", "ORACLE_REFLECTION", "ORACLE_RESTART_ABILITY", "ORACLE_RESTART_FLOW", "ORACLE_RESTART_MOVE", "ORACLE_STRUCTURED", "ORACLE_TEST", "SYSTEM_TITLE"]) and
     (map(select(.id == "wine-project"))[0].result.functions | map(select(.name == "SYSTEM_TITLE"))[0].lines | map(.functionCode) | contains(["PRINTFORM", "IF", "CALL", "CALL", "ENDIF", "INPUT", "RETURN"])) and
     (map(select(.id == "wine-csv-varsize"))[0].result.value == 120) and
     (map(select(.id == "wine-csv-name"))[0].result.value == 2) and
@@ -199,6 +200,13 @@ jq -e -s '
     (map(select(.id == "wine-map"))[0].result.output | join("\n") | contains("MAP=2,1,1,1|3|b,a")) and
     (map(select(.id == "wine-presentation"))[0].result.termination == "completed") and
     (map(select(.id == "wine-presentation"))[0].result.output | join("\n") | contains("VISIBLE")) and
+    (map(select(.id == "wine-print-family"))[0].result.termination == "completed") and
+    (map(select(.id == "wine-print-family"))[0].result.output | join("\n") | contains("|  7|7  |界  |Target|Call|Call|Target|Call| X")) and
+    (map(select(.id == "wine-print-family"))[0].result.output | join("\n") | contains("ヒラガナ")) and
+    (map(select(.id == "wine-print-family"))[0].result.output | join("\n") | contains("Right[1]")) and
+    (map(select(.id == "wine-print-family"))[0].result.output | join("\n") | contains("Left[2]")) and
+    (map(select(.id == "wine-print-family"))[0].result.output | join("\n") | contains("F3[3]")) and
+    (map(select(.id == "wine-print-family"))[0].result.output | join("\n") | contains("L[4]")) and
     (map(select(.id == "wine-structured"))[0].result.termination == "completed") and
     (map(select(.id == "wine-structured"))[0].result.watches."RESULTS:0" | contains("<xs:schema id=\"NewDataSet\"")) and
     (map(select(.id == "wine-structured"))[0].result.watches."RESULTS:1" | contains("A&amp;B")) and

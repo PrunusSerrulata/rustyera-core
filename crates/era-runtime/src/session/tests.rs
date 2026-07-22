@@ -1687,6 +1687,150 @@ fn reference_presentation_fixture_preserves_logical_intent() {
     }));
 }
 
+fn flattened_display_text(runs: &[DisplayRun]) -> String {
+    runs.iter()
+        .map(|run| match run {
+            DisplayRun::Text { text, .. } => text.clone(),
+            DisplayRun::Button { runs, .. } | DisplayRun::ColumnCell { content: runs, .. } => {
+                flattened_display_text(runs)
+            }
+            _ => String::new(),
+        })
+        .collect()
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn printform_and_printc_family_preserve_reference_semantics() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["ja".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).expect("hello");
+    drain(&mut session);
+
+    let source = "@SYSTEM_TITLE\nCALL ORACLE_PRINT_FAMILY\nWAIT\nRETURN\n";
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(source.into()),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "print-family.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(
+                        include_str!(
+                            "../../../../tools/emuera-reference-cli/tests/fixture/erb/print-family.erb"
+                        )
+                        .into(),
+                    ),
+                    content_hash: None,
+                },
+            ],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).expect("load");
+    let load = drain(&mut session);
+    assert!(
+        load.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::ProjectLoadReport(report) if report.success
+        )),
+        "{load:#?}"
+    );
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let mut run_messages = Vec::new();
+    for _ in 0..32 {
+        session.drive(RuntimeDriveBudget::default()).expect("run");
+        run_messages.extend(drain(&mut session));
+        if session.phase() == RuntimePhase::WaitingInput {
+            break;
+        }
+    }
+    assert_eq!(
+        session.phase(),
+        RuntimePhase::WaitingInput,
+        "{run_messages:#?}"
+    );
+    let snapshot = session.presentation.snapshot();
+
+    let rendered = snapshot
+        .history
+        .logical_lines
+        .iter()
+        .map(|line| flattened_display_text(&line.runs))
+        .collect::<Vec<_>>();
+    assert!(
+        rendered.contains(&"|  7|7  |界  |Target|Call|Call|Target|Call| X".into()),
+        "{rendered:#?}"
+    );
+    assert!(rendered.contains(&"ヒラガナ".into()), "{rendered:#?}");
+
+    let cell_line = snapshot
+        .history
+        .logical_lines
+        .iter()
+        .find(|line| {
+            line.runs
+                .iter()
+                .filter(|run| matches!(run, DisplayRun::ColumnCell { .. }))
+                .count()
+                == 4
+        })
+        .expect("four script PRINTC cells must remain on one line");
+    let cells = cell_line
+        .runs
+        .iter()
+        .filter_map(|run| match run {
+            DisplayRun::ColumnCell {
+                content,
+                alignment,
+                preferred_columns,
+            } => Some((content, alignment, preferred_columns)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(cells.len(), 4);
+    assert_eq!(*cells[0].1, era_runtime_protocol::CellAlignment::Right);
+    assert_eq!(*cells[1].1, era_runtime_protocol::CellAlignment::Left);
+    assert!(cells.iter().all(|cell| *cell.2 == 25));
+    assert!(
+        cells
+            .iter()
+            .all(|cell| matches!(cell.0.as_slice(), [DisplayRun::Button { .. }]))
+    );
+    let DisplayRun::Button { runs, .. } = &cells[0].0[0] else {
+        unreachable!()
+    };
+    let DisplayRun::Text { style, .. } = &runs[0] else {
+        unreachable!()
+    };
+    assert_eq!(style.foreground.red, 0xc0);
+    assert_eq!(session.command_intents.len(), 4);
+}
+
 #[test]
 fn typed_input_updates_result_and_sixth_argument_honors_message_skip() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());

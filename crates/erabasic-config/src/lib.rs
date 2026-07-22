@@ -158,7 +158,7 @@ pub fn catalog() -> Vec<ConfigSpec> {
         spec!(CompatiFunctionNoignoreCase, "関数・属性については大文字小文字を無視しない", "Do not ignore case for functions and attributes", b false, PortableSemantic),
         spec!(SystemAllowFullSpace, "全角スペースをホワイトスペースに含める", "Whitespace includes full-width space", b true, PortableSemantic),
         spec!(CompatiLinefeedAs1739, "ver1739以前の非ボタン折り返しを再現する", "Reproduce wrapping behavior like in pre ver1739", b false, PortableSemantic),
-        spec!(useLanguage, "内部で使用する東アジア言語", "Default ANSI encoding", e "JAPANESE" ["JAPANESE", "KOREAN", "CHINESE_HANS", "CHINESE_HANT"], QueryOnlyClientPreference),
+        spec!(useLanguage, "内部で使用する東アジア言語", "Default ANSI encoding", e "JAPANESE" ["JAPANESE", "KOREAN", "CHINESE_HANS", "CHINESE_HANT"], PortableSemantic),
         spec!(AllowLongInputByMouse, "ONEINPUT系命令でマウスによる2文字以上の入力を許可する", "Allow long input by mouse for ONEINPUT", b false, PortableSemantic),
         spec!(CompatiCallEvent, "イベント関数のCALLを許可する", "Allow CALL on event functions", b false, PortableSemantic),
         spec!(CompatiSPChara, "SPキャラを使用する", "Allow SP characters", b false, PortableSemantic),

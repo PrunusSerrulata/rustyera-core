@@ -11,6 +11,7 @@ impl Lexer<'_> {
         self.push(crate::TokenKind::Formatted(formatted), start, self.pos);
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn read_formatted_until(&mut self, end: FormEnd, start: usize) -> FormattedToken {
         let mut parts = Vec::new();
         let mut text = String::new();
@@ -27,7 +28,8 @@ impl Lexer<'_> {
             if matches!(ch, '\r' | '\n') {
                 break;
             }
-            if "*+=/$".contains(ch)
+            if !self.config.ignore_triple_symbols
+                && "*+=/$".contains(ch)
                 && self.source[self.pos..].chars().take(3).all(|c| c == ch)
                 && self.source[self.pos..].chars().take(3).count() == 3
             {
@@ -89,9 +91,31 @@ impl Lexer<'_> {
             }
             if ch == '\\' {
                 self.bump();
-                if let Some(escaped) = self.current() {
-                    text.push(escaped);
-                    self.bump();
+                match self.current() {
+                    Some('s') => {
+                        text.push(' ');
+                        self.bump();
+                    }
+                    Some('S') => {
+                        text.push('\u{3000}');
+                        self.bump();
+                    }
+                    Some('t') => {
+                        text.push('\t');
+                        self.bump();
+                    }
+                    Some('n') => {
+                        text.push('\n');
+                        self.bump();
+                    }
+                    Some('\r' | '\n') => {
+                        self.bump();
+                    }
+                    Some(escaped) => {
+                        text.push(escaped);
+                        self.bump();
+                    }
+                    None => self.unterminated_form(start, "missing character after FORM escape"),
                 }
             } else {
                 text.push(ch);

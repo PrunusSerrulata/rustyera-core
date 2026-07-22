@@ -295,8 +295,24 @@ pub struct ExtensionData {
     pub static_data_tables: BTreeSet<String>,
 }
 
+/// Legacy multibyte encoding selected by Emuera's `useLanguage` option.
+///
+/// Source files remain UTF-8. This value is retained only for script-visible
+/// operations such as FORM string-width padding that count bytes in the selected
+/// ANSI code page in the pinned reference implementation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LegacyEncoding {
+    #[default]
+    Japanese,
+    Korean,
+    ChineseHans,
+    ChineseHant,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProjectStaticData {
+    pub legacy_encoding: LegacyEncoding,
     pub game_base: GameBase,
     pub name_tables: BTreeMap<NameTableKind, NameTable>,
     pub item_prices: Vec<i64>,

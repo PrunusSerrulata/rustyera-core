@@ -20,6 +20,7 @@ use erabasic_csv::{
     FrontendFile as CsvFrontendFile, FrontendIoError as CsvIoError,
     FrontendIoErrorKind as CsvIoErrorKind, ProjectFiles, load_project,
 };
+use erabasic_data::LegacyEncoding;
 use erabasic_hir::SemanticType;
 use erabasic_parser::ArgumentStyle;
 use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_compiler_output};
@@ -92,6 +93,7 @@ struct SemanticConfig {
     line_height: u32,
     print_c_per_line: u32,
     print_c_length: u32,
+    legacy_encoding: LegacyEncoding,
 }
 
 impl Default for SemanticConfig {
@@ -116,6 +118,7 @@ impl Default for SemanticConfig {
             line_height: 19,
             print_c_per_line: 3,
             print_c_length: 25,
+            legacy_encoding: LegacyEncoding::Japanese,
         }
     }
 }
@@ -319,9 +322,10 @@ fn build_project_inner_with_extensions(
             byte_column: None,
         }),
     }));
-    let Some(data) = csv.data else {
+    let Some(mut data) = csv.data else {
         return failed(manifest.project_revision, diagnostics, previous);
     };
+    data.static_data.legacy_encoding = config.legacy_encoding;
     sync_replace_configuration(&mut config.values, &data.static_data.replace);
     config
         .money_label
@@ -1125,6 +1129,17 @@ fn apply_catalog_semantics(config: &mut SemanticConfig) {
         config.csv.allow_full_width_space = value;
         config.analyzer.allow_full_width_space = value;
     }
+    if let Some(value) = boolean("SystemIgnoreTripleSymbol") {
+        config.analyzer.ignore_triple_symbols = value;
+    }
+    if let Some(value) = string("useLanguage") {
+        config.legacy_encoding = match value.to_ascii_uppercase().as_str() {
+            "KOREAN" => LegacyEncoding::Korean,
+            "CHINESE_HANS" => LegacyEncoding::ChineseHans,
+            "CHINESE_HANT" => LegacyEncoding::ChineseHant,
+            _ => LegacyEncoding::Japanese,
+        };
+    }
     if let Some(value) = string("ReplaceContinuationBR") {
         let value = value.trim_matches('"').to_owned();
         config.csv.continuation_separator.clone_from(&value);
@@ -1442,7 +1457,7 @@ mod tests {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
-                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nフォント名:Test\n",
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
             )],
             &mut diagnostics,
         );
@@ -1464,6 +1479,8 @@ mod tests {
         assert!(config.analyzer.compatible_call_event);
         assert!(config.analyzer.compatible_function_argument_optional);
         assert!(config.analyzer.compatible_function_argument_auto_convert);
+        assert!(config.analyzer.ignore_triple_symbols);
+        assert_eq!(config.legacy_encoding, LegacyEncoding::Korean);
         assert_eq!(
             diagnostics
                 .iter()

@@ -172,6 +172,12 @@ try {
     Assert-True ($presentationRun.result.termination -eq "completed") "presentation function did not complete"
     Assert-True (($presentationRun.result.output -join "`n").Contains("VISIBLE")) "NOSKIP presentation output differs"
 
+    $printFamily = Invoke-Oracle @{ id = "print-family"; op = "run"; entry = "ORACLE_PRINT_FAMILY" }
+    Assert-True ($printFamily.ok -and $printFamily.result.termination -eq "completed") "PRINT family oracle failed"
+    Assert-True (($printFamily.result.output -join "`n").Contains("|  7|7  |界  |Target|Call|Call|Target|Call| X")) "PRINTFORM output differs"
+    Assert-True (($printFamily.result.output -join "`n").Contains("ヒラガナ")) "PRINTFORMK output differs"
+    Assert-True (($printFamily.result.output -join "`n").Contains("Right[1]") -and ($printFamily.result.output -join "`n").Contains("Left[2]") -and ($printFamily.result.output -join "`n").Contains("F3[3]") -and ($printFamily.result.output -join "`n").Contains("L[4]")) "PRINTC family output differs"
+
     $htmlPop = Invoke-Oracle @{ id = "html-pop"; op = "run"; entry = "ORACLE_HTML_POP"; watch = @("RESULTS:30") }
     Assert-True $htmlPop.ok "HTML_POPPRINTINGSTR function run failed"
     Assert-True ($htmlPop.result.watches.'RESULTS:30' -eq "A&lt;&amp;<button value='42'>choose</button>") "HTML_POPPRINTINGSTR differs"
