@@ -1015,7 +1015,7 @@ impl RuntimeSession {
         if matches!(name.as_str(), "SAVEGAME" | "LOADGAME") {
             if !matches!(
                 self.controller.flow,
-                Some(SystemFlow::Shop | SystemFlow::Normal)
+                Some(SystemFlow::Title | SystemFlow::Shop | SystemFlow::Normal)
             ) {
                 return self.fault(
                     FaultCode::VmFault,

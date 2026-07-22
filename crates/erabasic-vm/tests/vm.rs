@@ -181,6 +181,12 @@ fn run_compiled_result(artifact: &BytecodeArtifact) -> VmValue {
 }
 
 #[test]
+fn power_statement_writes_the_destination_instead_of_passing_its_place_as_an_operand() {
+    let artifact = compile_source("@SYSTEM_TITLE\nPOWER RESULT, 2, 3\nRETURN\n");
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(8));
+}
+
+#[test]
 fn scalar_ref_parameters_store_aliases_and_mutate_the_callers_arrays() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\n#DIM VALUES, 3\nVALUES:1 = 3\nCALL MUTATE_REF(VALUES)\nRETURN\n@MUTATE_REF(NUMBERS)\n#DIM REF NUMBERS\nNUMBERS:1 = 7\nRETURN\n",

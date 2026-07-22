@@ -295,7 +295,12 @@ impl VmRuntimePort for RuntimeVm {
         function: SymbolKey,
         arguments: Vec<VmValue>,
     ) -> Result<FiberId, VmError> {
-        self.vm.spawn_entry(function, arguments)
+        let fiber = self.vm.spawn_entry(function, arguments)?;
+        // Runtime roots are dispatched sequentially by the caller-pumped system
+        // controller. The newest root owns the input wait that an exact snapshot
+        // must resume; older completed roots must not remain the primary fiber.
+        self.vm.set_primary_fiber(fiber)?;
+        Ok(fiber)
     }
 
     fn fiber_status(&self, fiber: FiberId) -> Option<FiberStatus> {

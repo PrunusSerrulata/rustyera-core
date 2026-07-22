@@ -2746,6 +2746,140 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
 }
 
 #[test]
+fn project_title_can_open_loadgame() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "title-loadgame-test".into(),
+            features: vec![RuntimeFeature::Storage],
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "title.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nLOADGAME\nRETURN\n".into()),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let mut messages = Vec::new();
+    for _ in 0..4 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        messages.extend(drain(&mut session));
+        if messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::StorageRequest(_)))
+        {
+            break;
+        }
+    }
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::StorageRequest(StorageRequest {
+                operation: StorageOperation::List { .. },
+                ..
+            })
+        )),
+        "{messages:#?}"
+    );
+    assert_ne!(session.phase(), RuntimePhase::Faulted);
+}
+
+#[test]
+fn vm_snapshot_export_uses_the_latest_system_root_as_primary() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "successive-root-snapshot-test".into(),
+            features: vec![RuntimeFeature::VmSnapshot],
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "snapshot.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nBEGIN SHOP\n@EVENTSHOP\nRETURN\n@SHOW_SHOP\nINPUT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    for _ in 0..12 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        if session.phase() == RuntimePhase::WaitingInput {
+            break;
+        }
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::StateExportRequest(StateExportRequest {
+            kind: StateExportKind::VmSnapshot,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let messages = drain(&mut session);
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::StateExportReady(StateExportReady {
+                result: StateExportResult::Ready { .. },
+                ..
+            })
+        )),
+        "{messages:#?}"
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn savedata_uses_atomic_frontend_storage_and_resumes_only_after_completion() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
