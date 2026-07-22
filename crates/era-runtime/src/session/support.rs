@@ -595,19 +595,13 @@ pub(super) fn fill_runtime_variable(
     value: VmValue,
     all_characters: bool,
 ) -> Result<(), RuntimeError> {
-    let prepared = vm
-        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
-            writes: Vec::new(),
-            fills: vec![VmRuntimeFill {
-                variable: runtime_variable_key(vm, name)?,
-                value,
-                all_characters,
-            }],
-            clear_characters: false,
-            add_characters_from_csv: Vec::new(),
-        })
-        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-    vm.commit_runtime_state(prepared)
+    let variable = runtime_variable_key(vm, name)?;
+    vm.vm_mut()
+        .fill_runtime_variables(&[VmRuntimeFill {
+            variable,
+            value,
+            all_characters,
+        }])
         .map_err(|error| RuntimeError::Internal(error.to_string()))
 }
 
@@ -699,15 +693,8 @@ pub(super) fn reset_after_show_user(vm: &mut RuntimeVm) -> Result<(), RuntimeErr
             all_characters: matches!(name, "DOWNBASE" | "CUP" | "CDOWN"),
         });
     }
-    let prepared = vm
-        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
-            writes: Vec::new(),
-            fills,
-            clear_characters: false,
-            add_characters_from_csv: Vec::new(),
-        })
-        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-    vm.commit_runtime_state(prepared)
+    vm.vm_mut()
+        .fill_runtime_variables(&fills)
         .map_err(|error| RuntimeError::Internal(error.to_string()))
 }
 

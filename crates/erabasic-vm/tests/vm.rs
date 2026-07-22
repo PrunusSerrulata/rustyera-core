@@ -19,8 +19,8 @@ use erabasic_vm::{
     EraSaveScope, FiberStatus, HostCallRequest, HostCallResult, HostReady, HostRebindRequest,
     HostWaitStability, NativeServiceRegistry, RunBudget, RuntimeVm, SnapshotBlocker,
     SnapshotEligibility, Vm, VmBreakpoint, VmBreakpointLocation, VmConfig, VmDebugControl,
-    VmDebugInspect, VmDebugVariableWrite, VmEvent, VmFaultCode, VmHost, VmRuntimePort,
-    VmRuntimeStatePort, VmRuntimeStateTransaction, VmSnapshot, VmStepKind, VmValue,
+    VmDebugInspect, VmDebugVariableWrite, VmEvent, VmFaultCode, VmHost, VmRuntimeFill,
+    VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction, VmSnapshot, VmStepKind, VmValue,
 };
 
 fn project_data() -> erabasic_data::ProjectData {
@@ -584,9 +584,16 @@ fn array_shift_and_remove_commit_after_validating_the_whole_array() {
 #[test]
 fn findelement_uses_the_verified_regex_subset() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULTS:1 '= \"abc\"\nRESULTS:2 '= \"zz\"\nRESULT = FINDELEMENT(RESULTS, \"^ab$\", 0, 3, 1)\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"zz\"\nRESULTS:1 '= \"abc\"\nRESULTS:2 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"^ab$\", 0, 3, 1)\nRETURN\n",
     );
-    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(0));
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(2));
+
+    // An empty range never inspects an element, so even an invalid pattern is
+    // intentionally not compiled and the query returns the not-found sentinel.
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"a(?=b)\", 0, 0, 0)\nRETURN\n",
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(-1));
 
     let artifact = compile_source(
         "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"a(?=b)\", 0, 1, 0)\nRETURN\n",
@@ -964,7 +971,7 @@ fn character_mutations_commit_as_one_memory_transaction() {
 #[test]
 fn varset_fills_only_the_validated_half_open_range() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nFLAG:0 = 1\nFLAG:1 = 2\nFLAG:2 = 3\nFLAG:3 = 4\nVARSET FLAG, 9, 1, 3\nRESULT = FLAG:1\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:0 = 1\nFLAG:1 = 2\nFLAG:2 = 3\nFLAG:3 = 4\nVARSET FLAG, 9, 1, 3\nRESULTS:0 '= \"a\"\nRESULTS:1 '= \"b\"\nRESULTS:2 '= \"c\"\nRESULTS:3 '= \"d\"\nVARSET RESULTS, \"x\", 3, 1\nRESULT = FLAG:1\nRETURN\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -995,6 +1002,12 @@ fn varset_fills_only_the_validated_half_open_range() {
         .find(|global| global.name == "FLAG")
         .unwrap()
         .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .unwrap()
+        .key;
     assert_eq!(
         (0..4)
             .map(|index| vm.read_variable(flag, &[index], None).unwrap())
@@ -1010,6 +1023,55 @@ fn varset_fills_only_the_validated_half_open_range() {
         vm.read_variable(result, &[0], None),
         Ok(VmValue::Integer(9))
     );
+    assert_eq!(
+        (0..4)
+            .map(|index| vm.read_variable(results, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::String("a".into()),
+            VmValue::String("x".into()),
+            VmValue::String("x".into()),
+            VmValue::String("d".into()),
+        ]
+    );
+}
+
+#[test]
+fn direct_runtime_fills_validate_the_complete_batch_before_mutation() {
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.write_variable(flag, &[0], None, VmValue::Integer(7))
+        .unwrap();
+
+    let error = vm.fill_runtime_variables(&[
+        VmRuntimeFill {
+            variable: flag,
+            value: VmValue::Integer(1),
+            all_characters: false,
+        },
+        VmRuntimeFill {
+            variable: SymbolKey::derive("test.missing", b"runtime-fill"),
+            value: VmValue::Integer(2),
+            all_characters: false,
+        },
+    ]);
+    assert!(matches!(error, Err(erabasic_vm::VmError::InvalidState(_))));
+    assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(7)));
+
+    vm.fill_runtime_variables(&[VmRuntimeFill {
+        variable: flag,
+        value: VmValue::Integer(3),
+        all_characters: false,
+    }])
+    .unwrap();
+    assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(3)));
+    assert_eq!(vm.read_variable(flag, &[1], None), Ok(VmValue::Integer(3)));
 }
 
 #[test]

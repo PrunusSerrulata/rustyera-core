@@ -348,6 +348,7 @@ impl Vm {
             next_generation: snapshot.next_generation,
             pending_reload: None,
             debug: crate::debug::DebugState::default(),
+            regex_cache: crate::regex_compat::RegexCache::default(),
         })
     }
 }

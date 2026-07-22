@@ -26,7 +26,9 @@ pub(super) fn execute_regex_match(
             "REGEXPMATCH pattern must be a string".into(),
         ));
     };
-    let regex = crate::regex_compat::compile(pattern).map_err(VmError::InvalidArguments)?;
+    let regex = vm
+        .compile_regex(pattern)
+        .map_err(VmError::InvalidArguments)?;
     let captures = regex
         .captures_iter(input)
         .map(|captures| {

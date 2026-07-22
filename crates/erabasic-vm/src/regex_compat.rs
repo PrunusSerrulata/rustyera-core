@@ -1,4 +1,31 @@
+use std::collections::{HashMap, VecDeque};
+
 use regex::Regex;
+
+const MAXIMUM_CACHED_PATTERNS: usize = 128;
+
+#[derive(Clone, Default)]
+pub(crate) struct RegexCache {
+    entries: HashMap<String, Result<Regex, String>>,
+    insertion_order: VecDeque<String>,
+}
+
+impl RegexCache {
+    pub(crate) fn get_or_compile(&mut self, pattern: &str) -> Result<Regex, String> {
+        if let Some(cached) = self.entries.get(pattern) {
+            return cached.clone();
+        }
+        let compiled = compile(pattern);
+        if self.entries.len() == MAXIMUM_CACHED_PATTERNS
+            && let Some(oldest) = self.insertion_order.pop_front()
+        {
+            self.entries.remove(&oldest);
+        }
+        self.insertion_order.push_back(pattern.to_owned());
+        self.entries.insert(pattern.to_owned(), compiled.clone());
+        compiled
+    }
+}
 
 /// Compile the deliberately small intersection between .NET and Rust regex syntax.
 ///
@@ -113,5 +140,23 @@ mod tests {
     fn rejects_backtracking_only_constructs() {
         assert!(compile(r"(a)\1").is_err());
         assert!(compile(r"a(?=b)").is_err());
+    }
+
+    #[test]
+    fn cache_reuses_successes_and_errors_with_a_fixed_bound() {
+        let mut cache = RegexCache::default();
+        assert!(cache.get_or_compile("a+").unwrap().is_match("aaa"));
+        assert!(cache.get_or_compile("a+").unwrap().is_match("aaa"));
+        assert_eq!(cache.entries.len(), 1);
+
+        assert!(cache.get_or_compile("a(?=b)").is_err());
+        assert!(cache.get_or_compile("a(?=b)").is_err());
+        assert_eq!(cache.entries.len(), 2);
+
+        for index in 0..=MAXIMUM_CACHED_PATTERNS {
+            cache.get_or_compile(&format!("pattern-{index}")).unwrap();
+        }
+        assert_eq!(cache.entries.len(), MAXIMUM_CACHED_PATTERNS);
+        assert!(!cache.entries.contains_key("a+"));
     }
 }

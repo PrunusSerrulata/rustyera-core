@@ -54,6 +54,12 @@ impl Vm {
         self.debug.paused
     }
 
+    pub(crate) fn debug_checks_active(&self) -> bool {
+        self.debug.resume_skip.is_some()
+            || self.debug.step.is_some()
+            || !self.debug.breakpoints.is_empty()
+    }
+
     pub(crate) fn debug_step_fiber(&self) -> Option<FiberId> {
         self.debug.step.as_ref().map(|step| step.fiber)
     }

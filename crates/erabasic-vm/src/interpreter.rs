@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use erabasic_bytecode::{
     BytecodeFunctionKind, BytecodeStorage, BytecodeType, HostSnapshotCapability, ImportKind,
     Opcode, SymbolKey, opcode,
 };
 
-use crate::state::{EventDispatch, EventDispatchEntry, ForLoopState};
+use crate::state::{EventDispatch, EventDispatchEntry, ForLoopState, ProgramGeneration};
 use crate::{
     Fiber, FiberId, FiberState, HostCallRequest, HostCallResult, HostReady, HostWaitStability,
     NativeCallRequest, NativePlaceView, NativeReady, NativeServiceRegistry, PlaceDescriptor,
@@ -55,62 +57,31 @@ impl StepError {
     }
 }
 
-struct InstructionPosition {
+struct InstructionPosition<'a> {
     generation: crate::GenerationId,
     function: SymbolKey,
     instruction: usize,
-    encoded: DispatchInstruction,
+    encoded: DispatchInstruction<'a>,
 }
 
-const INLINE_INSTRUCTION_BYTES: usize = 24;
+#[derive(Clone)]
+struct FunctionCursor {
+    generation: crate::GenerationId,
+    function: SymbolKey,
+    index: usize,
+    program: Arc<ProgramGeneration>,
+}
 
-/// Most `EraBasic` operands fit in 24 bytes. Keeping them inline avoids allocating
-/// a fresh `Vec` for every interpreted instruction while still owning the bytes
-/// across the mutable VM dispatch boundary.
-struct DispatchInstruction {
+struct DispatchInstruction<'a> {
     opcode: u16,
-    payload: DispatchPayload,
+    payload: &'a [u8],
 }
 
-enum DispatchPayload {
-    Inline {
-        length: u8,
-        bytes: [u8; INLINE_INSTRUCTION_BYTES],
-    },
-    Heap(Vec<u8>),
-}
-
-impl DispatchPayload {
-    fn new(payload: &[u8]) -> Self {
-        if payload.len() <= INLINE_INSTRUCTION_BYTES {
-            let mut bytes = [0; INLINE_INSTRUCTION_BYTES];
-            bytes[..payload.len()].copy_from_slice(payload);
-            Self::Inline {
-                length: u8::try_from(payload.len()).expect("inline payload length fits in u8"),
-                bytes,
-            }
-        } else {
-            Self::Heap(payload.to_vec())
-        }
-    }
-}
-
-impl std::ops::Deref for DispatchPayload {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Inline { length, bytes } => &bytes[..usize::from(*length)],
-            Self::Heap(bytes) => bytes,
-        }
-    }
-}
-
-impl DispatchInstruction {
+impl DispatchInstruction<'static> {
     fn trap() -> Self {
         Self {
             opcode: Opcode::Trap as u16,
-            payload: DispatchPayload::new(&[]),
+            payload: &[],
         }
     }
 }
@@ -140,6 +111,11 @@ impl Vm {
         }
         let quantum = budget.fiber_quantum.max(1);
         let mut budget_exhausted = false;
+        let mut function_cursor = None;
+        // Debug controls cannot be installed concurrently while this mutable VM
+        // slice is running. Once active, keep checking until the slice ends so
+        // resume-skip and step-plan transitions retain their existing behavior.
+        let debug_checks_active = self.debug_checks_active();
         while let Some(fiber_id) = self.runnable.pop_front() {
             if self
                 .debug_step_fiber()
@@ -167,11 +143,11 @@ impl Vm {
                     budget_exhausted = true;
                     break;
                 }
-                if let Some(stop) = self.debug_stop_before(&fiber) {
+                if debug_checks_active && let Some(stop) = self.debug_stop_before(&fiber) {
                     report.events.push(VmEvent::DebugStopped(stop));
                     break;
                 }
-                let position = match self.instruction_position(&fiber) {
+                let position = match self.instruction_position(&fiber, &mut function_cursor) {
                     Ok(position) => position,
                     Err(error) => {
                         let fallback = fiber.frames.last().map_or(
@@ -223,7 +199,9 @@ impl Vm {
                 }
                 match outcome {
                     Ok(StepOutcome::Continue) => {
-                        if let Some(stop) = self.debug_stop_after(&fiber, false, false) {
+                        if debug_checks_active
+                            && let Some(stop) = self.debug_stop_after(&fiber, false, false)
+                        {
                             report.events.push(VmEvent::DebugStopped(stop));
                             break;
                         }
@@ -234,7 +212,9 @@ impl Vm {
                         report
                             .events
                             .push(VmEvent::FiberYielded { fiber: fiber.id });
-                        if let Some(stop) = self.debug_stop_after(&fiber, false, false) {
+                        if debug_checks_active
+                            && let Some(stop) = self.debug_stop_after(&fiber, false, false)
+                        {
                             report.events.push(VmEvent::DebugStopped(stop));
                         }
                         break;
@@ -247,7 +227,9 @@ impl Vm {
                                 request: wait.request,
                             });
                         }
-                        if let Some(stop) = self.debug_stop_after(&fiber, true, false) {
+                        if debug_checks_active
+                            && let Some(stop) = self.debug_stop_after(&fiber, true, false)
+                        {
                             report.events.push(VmEvent::DebugStopped(stop));
                         }
                         break;
@@ -257,7 +239,9 @@ impl Vm {
                             fiber: fiber.id,
                             value,
                         });
-                        if let Some(stop) = self.debug_stop_after(&fiber, false, true) {
+                        if debug_checks_active
+                            && let Some(stop) = self.debug_stop_after(&fiber, false, true)
+                        {
                             report.events.push(VmEvent::DebugStopped(stop));
                         }
                         break;
@@ -302,14 +286,14 @@ impl Vm {
                     if fiber.consecutive_budget_exhaustions
                         > self.config.maximum_consecutive_budget_exhaustions
                     {
-                        let position =
-                            self.instruction_position(&fiber)
-                                .unwrap_or(InstructionPosition {
-                                    generation: self.current_generation,
-                                    function: SymbolKey::default(),
-                                    instruction: 0,
-                                    encoded: DispatchInstruction::trap(),
-                                });
+                        let position = self
+                            .instruction_position(&fiber, &mut function_cursor)
+                            .unwrap_or(InstructionPosition {
+                                generation: self.current_generation,
+                                function: SymbolKey::default(),
+                                instruction: 0,
+                                encoded: DispatchInstruction::trap(),
+                            });
                         let fault = self.make_fault(
                             fiber.id,
                             &position,
@@ -341,29 +325,66 @@ impl Vm {
         report
     }
 
-    fn instruction_position(&self, fiber: &Fiber) -> Result<InstructionPosition, VmError> {
+    fn instruction_position<'cursor>(
+        &self,
+        fiber: &Fiber,
+        cursor: &'cursor mut Option<FunctionCursor>,
+    ) -> Result<InstructionPosition<'cursor>, VmError> {
         let frame = fiber
             .frames
             .last()
             .ok_or_else(|| VmError::InvalidState("runnable fiber has no frame".into()))?;
-        let generation = self
-            .generations
-            .get(&frame.generation)
-            .ok_or_else(|| VmError::InvalidState("frame generation was reclaimed".into()))?;
-        let function = generation
-            .function(frame.function)
+        if cursor
+            .as_ref()
+            .is_none_or(|cursor| cursor.generation != frame.generation)
+        {
+            let program =
+                Arc::clone(self.generations.get(&frame.generation).ok_or_else(|| {
+                    VmError::InvalidState("frame generation was reclaimed".into())
+                })?);
+            let index = *program
+                .function_index(frame.function)
+                .ok_or(VmError::MissingFunction(frame.function))?;
+            *cursor = Some(FunctionCursor {
+                generation: frame.generation,
+                function: frame.function,
+                index,
+                program,
+            });
+        } else if cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.function != frame.function)
+        {
+            let cursor = cursor.as_mut().expect("the generation cursor exists");
+            cursor.index = *cursor
+                .program
+                .function_index(frame.function)
+                .ok_or(VmError::MissingFunction(frame.function))?;
+            cursor.function = frame.function;
+        }
+        let cursor = cursor
+            .as_ref()
+            .expect("the generation cursor was initialized");
+        let function = cursor
+            .program
+            .artifact
+            .functions
+            .get(cursor.index)
+            .filter(|function| function.key == frame.function)
             .ok_or(VmError::MissingFunction(frame.function))?;
         let encoded = function
             .code
             .get(frame.instruction)
             .ok_or_else(|| VmError::InvalidState("instruction pointer left its function".into()))?;
+        // The cursor owns the generation Arc, so this payload borrow is independent
+        // of `self` and remains valid across mutable VM dispatch for this instruction.
         Ok(InstructionPosition {
             generation: frame.generation,
             function: frame.function,
             instruction: frame.instruction,
             encoded: DispatchInstruction {
                 opcode: encoded.opcode,
-                payload: DispatchPayload::new(&encoded.payload),
+                payload: &encoded.payload,
             },
         })
     }
@@ -372,7 +393,7 @@ impl Vm {
     fn execute_instruction(
         &mut self,
         fiber: &mut Fiber,
-        position: &InstructionPosition,
+        position: &InstructionPosition<'_>,
         host: &mut impl VmHost,
         natives: &mut NativeServiceRegistry,
         host_calls: &mut u32,
@@ -391,13 +412,13 @@ impl Vm {
         match opcode {
             Opcode::Nop => {}
             Opcode::PushInteger => {
-                let bytes = exact::<8>(&position.encoded.payload)?;
+                let bytes = exact::<8>(position.encoded.payload)?;
                 frame
                     .stack
                     .push(VmValue::Integer(i64::from_le_bytes(bytes)));
             }
             Opcode::PushString => {
-                let length = read_u32(&position.encoded.payload, 0)? as usize;
+                let length = read_u32(position.encoded.payload, 0)? as usize;
                 let bytes = position
                     .encoded
                     .payload
@@ -412,8 +433,8 @@ impl Vm {
                 frame.stack.push(VmValue::String(value.into()));
             }
             Opcode::LoadVariable | Opcode::StoreVariable | Opcode::MakePlace => {
-                let key = read_key(&position.encoded.payload)?;
-                let count = read_u16(&position.encoded.payload, 16)? as usize;
+                let key = read_key(position.encoded.payload)?;
+                let count = read_u16(position.encoded.payload, 16)? as usize;
                 let operation = *position.encoded.payload.get(18).ok_or_else(|| {
                     StepError::new(
                         VmFaultCode::InvalidInstruction,
@@ -432,7 +453,6 @@ impl Vm {
                     .generations
                     .get(&position.generation)
                     .expect("validated frame generation exists");
-                let artifact = &program.artifact;
                 let definition = program.global(key).ok_or_else(|| {
                     StepError::new(
                         VmFaultCode::MissingSymbol,
@@ -443,7 +463,7 @@ impl Vm {
                     if indices.len() > definition.dimensions.len() {
                         Some(indices.remove(0))
                     } else {
-                        Some(self.memory.target_character(artifact, position.generation) as u64)
+                        Some(self.target_character_for_generation(position.generation) as u64)
                     }
                 } else {
                     None
@@ -474,7 +494,9 @@ impl Vm {
                         .stack
                         .push(value);
                 } else if opcode == Opcode::LoadVariable {
-                    let value = self.read_place(fiber, &place).map_err(map_vm_error)?;
+                    let value = self
+                        .read_place_resolved(fiber, &place, position.generation, definition)
+                        .map_err(map_vm_error)?;
                     fiber
                         .frames
                         .last_mut()
@@ -484,7 +506,9 @@ impl Vm {
                 } else {
                     let mut value = value.expect("store value was popped");
                     if operation != 0 {
-                        let previous = self.read_place(fiber, &place).map_err(map_vm_error)?;
+                        let previous = self
+                            .read_place_resolved(fiber, &place, position.generation, definition)
+                            .map_err(map_vm_error)?;
                         value = binary_value(assign_binary_tag(operation)?, previous, value)?;
                     }
                     self.write_place(fiber, &place, value)
@@ -564,7 +588,7 @@ impl Vm {
                     .map_err(map_vm_error)?;
             }
             Opcode::Concat => {
-                let count = read_u16(&position.encoded.payload, 0)? as usize;
+                let count = read_u16(position.encoded.payload, 0)? as usize;
                 let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
                 let mut parts = Vec::with_capacity(count);
                 for _ in 0..count {
@@ -758,7 +782,7 @@ impl Vm {
                     })?;
             }
             Opcode::Jump | Opcode::JumpIfFalse => {
-                let target = read_u32(&position.encoded.payload, 0)? as usize;
+                let target = read_u32(position.encoded.payload, 0)? as usize;
                 let take = if opcode == Opcode::JumpIfFalse {
                     let VmValue::Integer(condition) =
                         pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?
@@ -781,7 +805,7 @@ impl Vm {
                 }
             }
             Opcode::ResolveFunction => {
-                let missing_target = read_u32(&position.encoded.payload, 0)? as usize;
+                let missing_target = read_u32(position.encoded.payload, 0)? as usize;
                 let allow_missing = position.encoded.payload.get(4).copied() == Some(1);
                 let method = position.encoded.payload.get(5).copied() == Some(1);
                 let VmValue::String(name) =
@@ -844,7 +868,7 @@ impl Vm {
                 }
             }
             Opcode::InvokeDynamic => {
-                let argument_count = read_u16(&position.encoded.payload, 0)? as usize;
+                let argument_count = read_u16(position.encoded.payload, 0)? as usize;
                 let tail = position.encoded.payload.get(2).copied() == Some(1);
                 let new_frame = self.allocate_frame_id();
                 let arguments = pop_arguments(
@@ -864,7 +888,7 @@ impl Vm {
                     .get(&position.generation)
                     .expect("validated frame generation exists");
                 let artifact = &generation.artifact;
-                let target = generation.function_by_name(&name).cloned().ok_or_else(|| {
+                let target = generation.function_by_name(&name).ok_or_else(|| {
                     StepError::new(VmFaultCode::MissingSymbol, "resolved function disappeared")
                 })?;
                 let mut arguments = arguments;
@@ -878,16 +902,17 @@ impl Vm {
                     };
                 }
                 let arguments =
-                    prepare_dynamic_arguments(&target, arguments, artifact.call_compatibility)
+                    prepare_dynamic_arguments(target, arguments, artifact.call_compatibility)
                         .map_err(map_vm_error)?;
                 self.memory.ensure_function_statics(
                     position.generation,
+                    target.key,
                     generation.function_statics(target.key),
                 );
                 bind_persistent_arguments(
                     &mut self.memory,
                     position.generation,
-                    &target,
+                    target,
                     generation,
                     &arguments,
                 )
@@ -897,7 +922,7 @@ impl Vm {
                 let frame = make_frame(
                     new_frame,
                     position.generation,
-                    &target,
+                    target,
                     generation.function_locals(target.key),
                     arguments,
                     false,
@@ -916,8 +941,8 @@ impl Vm {
                 }
             }
             Opcode::Call | Opcode::CallNative | Opcode::CallHost => {
-                let import_index = read_u32(&position.encoded.payload, 0)? as usize;
-                let argument_count = read_u16(&position.encoded.payload, 4)? as usize;
+                let import_index = read_u32(position.encoded.payload, 0)? as usize;
+                let argument_count = read_u16(position.encoded.payload, 4)? as usize;
                 let new_frame = (opcode == Opcode::Call).then(|| self.allocate_frame_id());
                 let generation = self
                     .generations
@@ -942,7 +967,7 @@ impl Vm {
                                 "maximum call depth exceeded",
                             ));
                         }
-                        let target = generation.function(import.key).cloned().ok_or_else(|| {
+                        let target = generation.function(import.key).ok_or_else(|| {
                             StepError::new(VmFaultCode::MissingSymbol, "called function is missing")
                         })?;
                         if target.kind == BytecodeFunctionKind::Event
@@ -956,15 +981,16 @@ impl Vm {
                                 ),
                             ));
                         }
-                        validate_arguments(&target, &arguments).map_err(map_vm_error)?;
+                        validate_arguments(target, &arguments).map_err(map_vm_error)?;
                         self.memory.ensure_function_statics(
                             position.generation,
+                            target.key,
                             generation.function_statics(target.key),
                         );
                         bind_persistent_arguments(
                             &mut self.memory,
                             position.generation,
-                            &target,
+                            target,
                             generation,
                             &arguments,
                         )
@@ -972,7 +998,7 @@ impl Vm {
                         fiber.frames.push(make_frame(
                             new_frame.expect("function call reserved a frame id"),
                             position.generation,
-                            &target,
+                            target,
                             generation.function_locals(target.key),
                             arguments,
                             target.result.is_some(),
@@ -985,10 +1011,16 @@ impl Vm {
                         ));
                     }
                     (Opcode::CallNative, ImportKind::Native) => {
+                        let target_index =
+                            generation.native_import_index(import.key).ok_or_else(|| {
+                                StepError::new(
+                                    VmFaultCode::MissingSymbol,
+                                    "native import is missing",
+                                )
+                            })?;
                         let target = artifact
                             .native_imports
-                            .iter()
-                            .find(|candidate| candidate.import.key == import.key)
+                            .get(target_index)
                             .ok_or_else(|| {
                                 StepError::new(
                                     VmFaultCode::MissingSymbol,
@@ -998,27 +1030,32 @@ impl Vm {
                             .import
                             .clone();
                         let result_type = target.result;
-                        let native_name = target.name.to_ascii_lowercase();
+                        let native_name = generation
+                            .normalized_native_name(target_index)
+                            .ok_or_else(|| {
+                                StepError::new(
+                                    VmFaultCode::MissingSymbol,
+                                    "native import is missing",
+                                )
+                            })?;
+                        let native_name = native_name.as_ref();
                         let mut rollback = None;
-                        let ready = if matches!(native_name.as_str(), "initrand" | "dumprand") {
+                        let ready = if matches!(native_name, "initrand" | "dumprand") {
                             execute_random_place_transaction(
                                 &mut self.memory,
                                 position.generation,
                                 artifact,
                                 natives,
-                                &native_name,
+                                native_name,
                             )
                             .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
                             NativeReady::default()
-                        } else if matches!(native_name.as_str(), "swap" | "swapvar") {
+                        } else if matches!(native_name, "swap" | "swapvar") {
                             execute_swap_transaction(self, fiber, &arguments)
                                 .map_err(map_vm_error)?;
                             NativeReady::default()
-                        } else if matches!(
-                            native_name.as_str(),
-                            "setbit" | "clearbit" | "invertbit"
-                        ) {
-                            execute_bit_mutation(self, fiber, &native_name, &arguments)
+                        } else if matches!(native_name, "setbit" | "clearbit" | "invertbit") {
+                            execute_bit_mutation(self, fiber, native_name, &arguments)
                                 .map_err(map_vm_error)?;
                             NativeReady::default()
                         } else if native_name == "split" {
@@ -1033,18 +1070,16 @@ impl Vm {
                             NativeReady::value(
                                 execute_strjoin(self, fiber, &arguments).map_err(map_vm_error)?,
                             )
-                        } else if matches!(
-                            native_name.as_str(),
-                            "arrayremove" | "arrayshift" | "arraysort"
-                        ) {
-                            execute_array_mutation(self, fiber, &native_name, &arguments)
+                        } else if matches!(native_name, "arrayremove" | "arrayshift" | "arraysort")
+                        {
+                            execute_array_mutation(self, fiber, native_name, &arguments)
                                 .map_err(map_vm_error)?;
                             NativeReady::default()
                         } else if native_name == "arraycopy" {
                             execute_array_copy(self, fiber, &arguments).map_err(map_vm_error)?;
                             NativeReady::default()
-                        } else if matches!(native_name.as_str(), "varset" | "cvarset") {
-                            execute_variable_fill(self, fiber, &native_name, &arguments)
+                        } else if matches!(native_name, "varset" | "cvarset") {
+                            execute_variable_fill(self, fiber, native_name, &arguments)
                                 .map_err(map_vm_error)?;
                             NativeReady::default()
                         } else if native_name == "arraymsort" {
@@ -1057,8 +1092,7 @@ impl Vm {
                                 execute_array_multi_sort_ex(self, fiber, &arguments)
                                     .map_err(map_vm_error)?,
                             )
-                        } else if matches!(native_name.as_str(), "findelement" | "findlastelement")
-                        {
+                        } else if matches!(native_name, "findelement" | "findlastelement") {
                             NativeReady::value(
                                 execute_find_element(
                                     self,
@@ -1074,7 +1108,7 @@ impl Vm {
                                     .map_err(map_vm_error)?,
                             )
                         } else if matches!(
-                            native_name.as_str(),
+                            native_name,
                             "sumarray"
                                 | "sumcarray"
                                 | "maxarray"
@@ -1090,11 +1124,11 @@ impl Vm {
                                 | "allsames"
                         ) {
                             NativeReady::value(
-                                execute_array_query(self, fiber, &native_name, &arguments)
+                                execute_array_query(self, fiber, native_name, &arguments)
                                     .map_err(map_vm_error)?,
                             )
                         } else if matches!(
-                            native_name.as_str(),
+                            native_name,
                             "charanum"
                                 | "getchara"
                                 | "getspchara"
@@ -1117,11 +1151,11 @@ impl Vm {
                                 | "findlastchara"
                         ) {
                             NativeReady::value(
-                                execute_character_query(self, fiber, &native_name, &arguments)
+                                execute_character_query(self, fiber, native_name, &arguments)
                                     .map_err(map_vm_error)?,
                             )
                         } else if matches!(
-                            native_name.as_str(),
+                            native_name,
                             "addchara"
                                 | "addspchara"
                                 | "adddefchara"
@@ -1135,7 +1169,7 @@ impl Vm {
                                 | "sortchara"
                                 | "reset_stain"
                         ) {
-                            execute_character_mutation(self, &native_name, &arguments)
+                            execute_character_mutation(self, native_name, &arguments)
                                 .map_err(map_vm_error)?;
                             NativeReady::default()
                         } else {
@@ -1181,10 +1215,13 @@ impl Vm {
                         }
                     }
                     (Opcode::CallHost, ImportKind::Host) => {
+                        let target_index =
+                            generation.host_import_index(import.key).ok_or_else(|| {
+                                StepError::new(VmFaultCode::MissingSymbol, "host import is missing")
+                            })?;
                         let target = artifact
                             .host_imports
-                            .iter()
-                            .find(|candidate| candidate.import.key == import.key)
+                            .get(target_index)
                             .cloned()
                             .ok_or_else(|| {
                                 StepError::new(VmFaultCode::MissingSymbol, "host import is missing")
@@ -1258,7 +1295,7 @@ impl Vm {
                 }
             }
             Opcode::JumpDynamicLabel => {
-                let missing_target = read_u32(&position.encoded.payload, 0)? as usize;
+                let missing_target = read_u32(position.encoded.payload, 0)? as usize;
                 let VmValue::String(name) =
                     pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?
                 else {
@@ -1340,14 +1377,12 @@ impl Vm {
                         "maximum call depth exceeded",
                     ));
                 }
-                let target = generation
-                    .function(active.function)
-                    .cloned()
-                    .ok_or_else(|| {
-                        StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
-                    })?;
+                let target = generation.function(active.function).ok_or_else(|| {
+                    StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
+                })?;
                 self.memory.ensure_function_statics(
                     position.generation,
+                    target.key,
                     generation.function_statics(target.key),
                 );
                 fiber
@@ -1358,7 +1393,7 @@ impl Vm {
                 fiber.frames.push(make_frame(
                     frame_id,
                     position.generation,
-                    &target,
+                    target,
                     generation.function_locals(target.key),
                     Vec::new(),
                     false,
@@ -1398,17 +1433,18 @@ impl Vm {
                             .generations
                             .get(&generation)
                             .expect("validated frame generation exists");
-                        let target = program.function(next.function).cloned().ok_or_else(|| {
+                        let target = program.function(next.function).ok_or_else(|| {
                             StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
                         })?;
                         self.memory.ensure_function_statics(
                             generation,
+                            target.key,
                             program.function_statics(target.key),
                         );
                         fiber.frames.push(make_frame(
                             frame_id,
                             generation,
-                            &target,
+                            target,
                             program.function_locals(target.key),
                             Vec::new(),
                             false,
@@ -1434,7 +1470,7 @@ impl Vm {
                 return Ok(StepOutcome::Blocked);
             }
             Opcode::Trap => {
-                let message = String::from_utf8_lossy(&position.encoded.payload);
+                let message = String::from_utf8_lossy(position.encoded.payload);
                 return Err(StepError::new(VmFaultCode::Trap, message));
             }
         }
@@ -1451,7 +1487,7 @@ impl Vm {
     fn make_fault(
         &self,
         fiber: FiberId,
-        position: &InstructionPosition,
+        position: &InstructionPosition<'_>,
         code: VmFaultCode,
         message: impl Into<String>,
     ) -> VmFault {
@@ -1472,7 +1508,7 @@ impl Vm {
 
     fn execution_origin(
         &self,
-        position: &InstructionPosition,
+        position: &InstructionPosition<'_>,
         command: &str,
     ) -> crate::VmExecutionOrigin {
         let generation = self.generations.get(&position.generation);
@@ -1490,7 +1526,7 @@ impl Vm {
         }
     }
 
-    fn command_for_position(&self, position: &InstructionPosition) -> String {
+    fn command_for_position(&self, position: &InstructionPosition<'_>) -> String {
         let Ok(opcode) = Opcode::try_from(position.encoded.opcode) else {
             return format!("opcode:{}", position.encoded.opcode);
         };

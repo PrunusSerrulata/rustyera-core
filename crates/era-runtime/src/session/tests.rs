@@ -1049,6 +1049,50 @@ fn training_reset_updates_shared_and_all_character_state_atomically() {
 }
 
 #[test]
+fn show_user_reset_clears_shared_and_character_deltas() {
+    let build = build_project(
+        &ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@EVENTTRAIN\nRETURN\n".into()),
+                content_hash: None,
+            }],
+        },
+        None,
+    );
+    let mut vm = RuntimeVm::new(build.artifact.expect("valid project"), VmConfig::default());
+    for (name, character) in [
+        ("UP", None),
+        ("DOWN", None),
+        ("LOSEBASE", None),
+        ("DOWNBASE", Some(0)),
+        ("CUP", Some(0)),
+        ("CDOWN", Some(0)),
+    ] {
+        write_runtime_integer(&mut vm, name, &[0], character, 9).unwrap();
+    }
+
+    reset_after_show_user(&mut vm).unwrap();
+
+    for (name, character) in [
+        ("UP", None),
+        ("DOWN", None),
+        ("LOSEBASE", None),
+        ("DOWNBASE", Some(0)),
+        ("CUP", Some(0)),
+        ("CDOWN", Some(0)),
+    ] {
+        assert_eq!(
+            read_runtime_integer(&vm, name, &[0], character).unwrap(),
+            0,
+            "{name} was not reset"
+        );
+    }
+}
+
+#[test]
 fn shop_purchase_validates_stock_and_commits_money_item_and_bought_together() {
     let build = build_project(
         &ProjectManifest {

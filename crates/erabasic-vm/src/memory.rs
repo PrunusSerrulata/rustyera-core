@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use erabasic_bytecode::{
     BytecodeArtifact, BytecodeConstant, BytecodeGlobal, BytecodeStorage, BytecodeType, SymbolKey,
@@ -54,6 +54,7 @@ impl VariableValues {
         }
     }
 
+    #[inline]
     fn get(&self, index: usize) -> Option<VmValue> {
         match self {
             Self::Integers(values) => values.get(index).copied().map(VmValue::Integer),
@@ -71,6 +72,7 @@ impl VariableValues {
         }
     }
 
+    #[inline]
     fn set(&mut self, index: usize, value: VmValue) -> Result<(), String> {
         match (self, value) {
             (Self::Integers(values), VmValue::Integer(value)) => set_slot(values, index, value),
@@ -93,6 +95,28 @@ impl VariableValues {
             (Self::Strings(values), VmValue::String(value)) => values.fill(value),
             (Self::IntegerPlaces(values), VmValue::IntegerPlace(value))
             | (Self::StringPlaces(values), VmValue::StringPlace(value)) => values.fill(*value),
+            (values, value) => {
+                return Err(format!(
+                    "variable expects {:?}, found {:?}",
+                    values.value_type(),
+                    value.value_type()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn fill_range(&mut self, start: usize, end: usize, value: VmValue) -> Result<(), String> {
+        if start > end || end > self.len() {
+            return Err("variable fill range is outside its storage".into());
+        }
+        match (self, value) {
+            (Self::Integers(values), VmValue::Integer(value)) => values[start..end].fill(value),
+            (Self::Strings(values), VmValue::String(value)) => values[start..end].fill(value),
+            (Self::IntegerPlaces(values), VmValue::IntegerPlace(value))
+            | (Self::StringPlaces(values), VmValue::StringPlace(value)) => {
+                values[start..end].fill(*value);
+            }
             (values, value) => {
                 return Err(format!(
                     "variable expects {:?}, found {:?}",
@@ -159,6 +183,7 @@ impl VariableCell {
         }
     }
 
+    #[inline]
     pub fn read(&self, indices: &[u64]) -> Result<VmValue, String> {
         let offset = flatten(&self.dimensions, indices)?;
         self.values
@@ -166,6 +191,7 @@ impl VariableCell {
             .ok_or_else(|| "variable offset is outside its storage".into())
     }
 
+    #[inline]
     pub fn write(&mut self, indices: &[u64], value: VmValue) -> Result<(), String> {
         let offset = flatten(&self.dimensions, indices)?;
         self.values.set(offset, value)
@@ -175,20 +201,32 @@ impl VariableCell {
         self.values.len()
     }
 
+    #[inline]
     pub(crate) fn first(&self) -> Option<VmValue> {
         self.values.get(0)
     }
 
+    #[inline]
     pub(crate) fn get(&self, index: usize) -> Option<VmValue> {
         self.values.get(index)
     }
 
+    #[inline]
     pub(crate) fn set(&mut self, index: usize, value: VmValue) -> Result<(), String> {
         self.values.set(index, value)
     }
 
     pub(crate) fn fill(&mut self, value: VmValue) -> Result<(), String> {
         self.values.fill(value)
+    }
+
+    pub(crate) fn fill_range(
+        &mut self,
+        start: usize,
+        end: usize,
+        value: VmValue,
+    ) -> Result<(), String> {
+        self.values.fill_range(start, end, value)
     }
 
     pub(crate) fn to_values(&self) -> Vec<VmValue> {
@@ -293,9 +331,22 @@ fn element_count(dimensions: &[u64]) -> Option<usize> {
         .and_then(|length| usize::try_from(length).ok())
 }
 
+#[inline]
 fn flatten(dimensions: &[u64], indices: &[u64]) -> Result<usize, String> {
     if indices.len() > dimensions.len() {
         return Err("too many variable indices".into());
+    }
+    if dimensions.is_empty() {
+        return Ok(0);
+    }
+    if let [length] = dimensions {
+        let index = indices.first().copied().unwrap_or(0);
+        if index >= *length {
+            return Err(format!(
+                "index {index} is outside dimension 0 of length {length}"
+            ));
+        }
+        return usize::try_from(index).map_err(|_| "variable offset exceeds this platform".into());
     }
     let mut offset = 0u64;
     for (dimension, length) in dimensions.iter().enumerate() {
@@ -332,12 +383,27 @@ pub(crate) struct LegacyMemory {
     pub characters: Vec<BTreeMap<SymbolKey, VariableCell>>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct StaticInitializationCache(HashSet<(GenerationId, SymbolKey)>);
+
+// This cache only avoids repeated idempotent checks. It is not VM state and
+// must not affect snapshot equality or the deterministic serialized payload.
+impl PartialEq for StaticInitializationCache {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for StaticInitializationCache {}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Memory {
     pub shared: BTreeMap<SymbolKey, VariableCell>,
     pub statics: BTreeMap<SymbolKey, VariableCell>,
     pub characters: Vec<BTreeMap<SymbolKey, VariableCell>>,
     pub legacy: BTreeMap<GenerationId, LegacyMemory>,
+    #[serde(skip)]
+    initialized_static_functions: StaticInitializationCache,
 }
 
 impl Memory {
@@ -399,8 +465,16 @@ impl Memory {
     pub(crate) fn ensure_function_statics<'a>(
         &mut self,
         generation: GenerationId,
+        function: SymbolKey,
         definitions: impl IntoIterator<Item = &'a BytecodeGlobal>,
     ) {
+        if !self
+            .initialized_static_functions
+            .0
+            .insert((generation, function))
+        {
+            return;
+        }
         for definition in definitions {
             if self
                 .legacy
@@ -518,26 +592,54 @@ impl Memory {
     }
 
     pub fn target_character(&self, artifact: &BytecodeArtifact, generation: GenerationId) -> usize {
-        let Some(definition) = find_definition(artifact, "TARGET") else {
+        self.target_character_from_definition(find_definition(artifact, "TARGET"), generation)
+    }
+
+    #[inline]
+    pub(crate) fn target_character_from_definition(
+        &self,
+        definition: Option<&BytecodeGlobal>,
+        generation: GenerationId,
+    ) -> usize {
+        let Some(definition) = definition else {
             return 0;
         };
-        let cell = self
-            .legacy
-            .get(&generation)
-            .and_then(|memory| memory.shared.get(&definition.key))
-            .or_else(|| self.shared.get(&definition.key));
+        let cell = if self.legacy.is_empty() {
+            self.shared.get(&definition.key)
+        } else {
+            self.legacy
+                .get(&generation)
+                .and_then(|memory| memory.shared.get(&definition.key))
+                .or_else(|| self.shared.get(&definition.key))
+        };
         match cell.and_then(VariableCell::first) {
             Some(VmValue::Integer(value)) => usize::try_from(value).unwrap_or(0),
             _ => 0,
         }
     }
 
+    #[inline]
     pub fn cell(
         &self,
         generation: GenerationId,
         definition: &BytecodeGlobal,
         character: usize,
     ) -> Option<&VariableCell> {
+        if self.legacy.is_empty() {
+            return match definition.storage {
+                BytecodeStorage::Project
+                | BytecodeStorage::Constant
+                | BytecodeStorage::Calculated => self.shared.get(&definition.key),
+                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
+                    self.statics.get(&definition.key)
+                }
+                BytecodeStorage::Character => self
+                    .characters
+                    .get(character)
+                    .and_then(|values| values.get(&definition.key)),
+                BytecodeStorage::FunctionLocal => None,
+            };
+        }
         let legacy = self.legacy.get(&generation);
         match definition.storage {
             BytecodeStorage::Project | BytecodeStorage::Constant | BytecodeStorage::Calculated => {
@@ -560,12 +662,28 @@ impl Memory {
         }
     }
 
+    #[inline]
     pub fn cell_mut(
         &mut self,
         generation: GenerationId,
         definition: &BytecodeGlobal,
         character: usize,
     ) -> Option<&mut VariableCell> {
+        if self.legacy.is_empty() {
+            return match definition.storage {
+                BytecodeStorage::Project
+                | BytecodeStorage::Constant
+                | BytecodeStorage::Calculated => self.shared.get_mut(&definition.key),
+                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
+                    self.statics.get_mut(&definition.key)
+                }
+                BytecodeStorage::Character => self
+                    .characters
+                    .get_mut(character)
+                    .and_then(|values| values.get_mut(&definition.key)),
+                BytecodeStorage::FunctionLocal => None,
+            };
+        }
         let use_legacy =
             self.legacy
                 .get(&generation)
@@ -708,6 +826,9 @@ impl Memory {
 
     pub fn reclaim_generation(&mut self, generation: GenerationId) {
         self.legacy.remove(&generation);
+        self.initialized_static_functions
+            .0
+            .retain(|(cached, _)| *cached != generation);
     }
 }
 
@@ -822,6 +943,22 @@ mod tests {
 
         assert_eq!(cell.first(), Some(VmValue::IntegerPlace(Box::new(place))));
         assert!(cell.storage_is_valid());
+    }
+
+    #[test]
+    fn common_variable_shapes_preserve_flattening_and_bounds() {
+        assert_eq!(flatten(&[], &[]).unwrap(), 0);
+        assert_eq!(flatten(&[8], &[]).unwrap(), 0);
+        assert_eq!(flatten(&[8], &[7]).unwrap(), 7);
+        assert_eq!(flatten(&[2, 3], &[1, 2]).unwrap(), 5);
+        assert_eq!(
+            flatten(&[8], &[8]).unwrap_err(),
+            "index 8 is outside dimension 0 of length 8"
+        );
+        assert_eq!(
+            flatten(&[8], &[1, 0]).unwrap_err(),
+            "too many variable indices"
+        );
     }
 
     #[test]
