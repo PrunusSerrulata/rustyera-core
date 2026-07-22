@@ -19,7 +19,7 @@ const SNAPSHOT_HEADER_BYTES: usize = 60;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SnapshotBlocker {
     PendingHotReload,
-    PrimaryFiberNotAtStableInput,
+    PrimaryFiberNotSnapshotStable,
     RunnableFiber(FiberId),
     TransientHostWait(FiberId),
     AwaitResume(FiberId),
@@ -219,20 +219,8 @@ impl Vm {
         if self.pending_reload.is_some() {
             blockers.push(SnapshotBlocker::PendingHotReload);
         }
-        let primary_stable = self
-            .primary_fiber
-            .and_then(|id| self.fibers.get(&id))
-            .is_some_and(|fiber| {
-                matches!(
-                    fiber.state,
-                    FiberState::WaitingHost(crate::WaitingHost {
-                        stability: HostWaitStability::StableInput,
-                        ..
-                    })
-                )
-            });
-        if !primary_stable {
-            blockers.push(SnapshotBlocker::PrimaryFiberNotAtStableInput);
+        if !has_snapshot_stable_root(self.primary_fiber, &self.fibers) {
+            blockers.push(SnapshotBlocker::PrimaryFiberNotSnapshotStable);
         }
         for (id, fiber) in &self.fibers {
             match &fiber.state {
@@ -265,7 +253,7 @@ impl Vm {
         }
     }
 
-    /// Capture the VM at a stable input wait.
+    /// Capture the VM at a stable input wait or after all fibers have terminated.
     ///
     /// # Errors
     ///
@@ -375,21 +363,11 @@ fn validate_snapshot(
             "stable snapshots cannot contain legacy-generation storage".into(),
         ));
     }
-    let primary_stable = snapshot
-        .primary_fiber
-        .and_then(|id| snapshot.fibers.get(&id))
-        .is_some_and(|fiber| {
-            matches!(
-                fiber.state,
-                FiberState::WaitingHost(crate::WaitingHost {
-                    stability: HostWaitStability::StableInput,
-                    ..
-                })
-            )
-        });
-    if !primary_stable || snapshot.fibers.len() > config.maximum_fibers {
+    if !has_snapshot_stable_root(snapshot.primary_fiber, &snapshot.fibers)
+        || snapshot.fibers.len() > config.maximum_fibers
+    {
         return Err(VmError::Snapshot(
-            "snapshot does not have one stable primary fiber".into(),
+            "snapshot does not have a stable or quiescent primary fiber".into(),
         ));
     }
     let mut frame_ids = std::collections::BTreeSet::new();
@@ -521,6 +499,30 @@ fn validate_snapshot(
         ));
     }
     Ok(())
+}
+
+fn has_snapshot_stable_root(primary: Option<FiberId>, fibers: &BTreeMap<FiberId, Fiber>) -> bool {
+    let Some(primary) = primary.and_then(|id| fibers.get(&id)) else {
+        return false;
+    };
+    if matches!(
+        primary.state,
+        FiberState::WaitingHost(crate::WaitingHost {
+            stability: HostWaitStability::StableInput,
+            ..
+        })
+    ) {
+        return true;
+    }
+    // Runtime-owned system menus wait outside the VM after their dispatch root
+    // returns. At that point the runtime snapshot carries the resumable input
+    // operation and controller state, while the VM is safely quiescent.
+    fibers.values().all(|fiber| {
+        matches!(
+            fiber.state,
+            FiberState::Completed(_) | FiberState::Cancelled
+        )
+    })
 }
 
 fn validate_cell(

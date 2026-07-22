@@ -209,7 +209,7 @@ pub trait VmRuntimePort {
     fn snapshot_eligibility(&self) -> SnapshotEligibility;
     /// # Errors
     ///
-    /// Returns an error unless the VM is at a stable, snapshot-capable input wait.
+    /// Returns an error unless the VM is at a stable input wait or is quiescent.
     fn snapshot(&self) -> Result<VmSnapshot, VmError>;
     /// # Errors
     ///
