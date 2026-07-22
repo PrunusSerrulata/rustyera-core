@@ -690,6 +690,116 @@ fn arraycopy_resolves_runtime_variable_names_and_array_queries_keep_places() {
 }
 
 #[test]
+fn arraycopy_copies_the_shared_extent_when_array_lengths_differ() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n#DIM TARGET_LIST, 3\nTARGET:0 = 7\nTARGET:1 = 8\nTARGET:2 = 9\nTARGET:3 = 10\nARRAYCOPY \"TARGET\", \"TARGET_LIST\"\nRESULT:0 = TARGET_LIST:0\nRESULT:1 = TARGET_LIST:1\nRESULT:2 = TARGET_LIST:2\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..3)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::Integer(7),
+            VmValue::Integer(8),
+            VmValue::Integer(9),
+        ]
+    );
+}
+
+#[test]
+fn arraycopy_intersects_each_dimension_and_preserves_other_destination_cells() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n#DIM SOURCE_VALUES, 2, 3\n#DIM DESTINATION_VALUES, 3, 2\nSOURCE_VALUES:0:0 = 1\nSOURCE_VALUES:0:1 = 2\nSOURCE_VALUES:0:2 = 3\nSOURCE_VALUES:1:0 = 4\nSOURCE_VALUES:1:1 = 5\nSOURCE_VALUES:1:2 = 6\nDESTINATION_VALUES:2:0 = 9\nDESTINATION_VALUES:2:1 = 9\nARRAYCOPY \"SOURCE_VALUES\", \"DESTINATION_VALUES\"\nRESULT:10 = DESTINATION_VALUES:0:0\nRESULT:11 = DESTINATION_VALUES:0:1\nRESULT:12 = DESTINATION_VALUES:1:0\nRESULT:13 = DESTINATION_VALUES:1:1\nRESULT:14 = DESTINATION_VALUES:2:0\nRESULT:15 = DESTINATION_VALUES:2:1\nRETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..6)
+            .map(|index| vm.read_variable(result, &[index + 10], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::Integer(1),
+            VmValue::Integer(2),
+            VmValue::Integer(4),
+            VmValue::Integer(5),
+            VmValue::Integer(9),
+            VmValue::Integer(9),
+        ]
+    );
+}
+
+#[test]
+fn printsingleforms_expands_a_constant_template_in_the_current_function_scope() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nCALL DRAW_INFORMATIONLINE, \"地图\"\nRETURN\n@DRAW_INFORMATIONLINE(ARGS)\n#DIMS EQUAL\nEQUAL = =\nPRINTSINGLEFORMS \"== %ARGS% \" + \"%(EQUAL * 3)%\"\nRETURN\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = ReadyHost::default();
+    let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(host.strings, vec!["== 地图 ==="]);
+}
+
+#[test]
 fn arraymsort_reorders_complete_rows_before_committing() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nRESULT:0 = 30\nRESULT:1 = 10\nRESULT:2 = 20\nRESULT:9 = ARRAYMSORT(FLAG, RESULT)\nRETURN\n",
@@ -1301,12 +1411,15 @@ fn initrand_and_dumprand_exchange_all_randdata_state_atomically() {
 #[derive(Default)]
 struct ReadyHost {
     calls: Vec<i64>,
+    strings: Vec<String>,
 }
 
 impl VmHost for ReadyHost {
     fn call(&mut self, request: HostCallRequest) -> HostCallResult {
         if let Some(VmValue::Integer(value)) = request.arguments.first() {
             self.calls.push(*value);
+        } else if let Some(VmValue::String(value)) = request.arguments.first() {
+            self.strings.push(value.clone());
         }
         let value = request.import.result.map(|result| match result {
             BytecodeType::Integer => VmValue::Integer(0),

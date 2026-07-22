@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use erabasic_ast::{
-    Argument, Diagnostic, Expr, ExprKind, Function as AstFunction, ParseOutput, Script, Severity,
-    SourceKind, Span, Statement, StatementKind, VariableRef,
+    Argument, Diagnostic, Expr, ExprKind, FormPart, FormattedString, Function as AstFunction,
+    ParseOutput, Script, Severity, SourceKind, Span, Statement, StatementKind, VariableRef,
 };
 use erabasic_csv::{CsvDiagnosticSeverity, CsvLoadOptions, resolve_deferred_indices};
 use erabasic_data::ProjectData;
@@ -932,17 +932,44 @@ fn analyze_instruction(
                     continue;
                 }
                 let expression = analyzer.analyze(expression);
-                let constraint = signature
-                    .and_then(|signature| {
-                        signature.arguments.get(index).or_else(|| {
-                            signature
-                                .variadic
-                                .then(|| signature.arguments.last())
-                                .flatten()
-                        })
-                    })
-                    .or_else(|| {
-                        method_signature.and_then(|signature| {
+                let constant_form = if index == 0 && key.contains("FORMS") {
+                    match &expression.constant {
+                        Some(ConstantValue::String(value)) => Some(value.clone()),
+                        Some(ConstantValue::Integer(_)) | None => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(template) = constant_form {
+                    // FORMS instructions evaluate their string expression first and then parse
+                    // the result as FORM text in the current function scope. Constant templates
+                    // can be lowered into ordinary formatted HIR without adding a runtime parser.
+                    let expression_span = expression.location.span;
+                    let mut parsed = erabasic_parser::parse_formatted_at(
+                        &template,
+                        expression_span.start,
+                        context,
+                    );
+                    for diagnostic in &mut parsed.diagnostics {
+                        confine_span(&mut diagnostic.span, expression_span);
+                    }
+                    for diagnostic in parsed.diagnostics.drain(..) {
+                        analyzer.diagnostics.push(map_parser_diagnostic(
+                            source.source.id,
+                            &source.source.relative_path,
+                            &source.text,
+                            &diagnostic,
+                        ));
+                    }
+                    if let Some(mut formatted) = parsed.value {
+                        confine_formatted_spans(&mut formatted, expression_span);
+                        HirArgument::Formatted(analyzer.analyze_formatted(&formatted))
+                    } else {
+                        HirArgument::Expression(expression)
+                    }
+                } else {
+                    let constraint = signature
+                        .and_then(|signature| {
                             signature.arguments.get(index).or_else(|| {
                                 signature
                                     .variadic
@@ -950,26 +977,36 @@ fn analyze_instruction(
                                     .flatten()
                             })
                         })
+                        .or_else(|| {
+                            method_signature.and_then(|signature| {
+                                signature.arguments.get(index).or_else(|| {
+                                    signature
+                                        .variadic
+                                        .then(|| signature.arguments.last())
+                                        .flatten()
+                                })
+                            })
+                        });
+                    let mutable = constraint.is_some_and(|constraint| {
+                        matches!(
+                            constraint,
+                            crate::ArgumentConstraint::MutableInteger
+                                | crate::ArgumentConstraint::MutableString
+                                | crate::ArgumentConstraint::MutableAny
+                                | crate::ArgumentConstraint::ReferenceAny
+                                | crate::ArgumentConstraint::ReferenceOrString
+                                | crate::ArgumentConstraint::MutableReferenceOrString
+                        )
                     });
-                let mutable = constraint.is_some_and(|constraint| {
-                    matches!(
-                        constraint,
-                        crate::ArgumentConstraint::MutableInteger
-                            | crate::ArgumentConstraint::MutableString
-                            | crate::ArgumentConstraint::MutableAny
-                            | crate::ArgumentConstraint::ReferenceAny
-                            | crate::ArgumentConstraint::ReferenceOrString
-                            | crate::ArgumentConstraint::MutableReferenceOrString
-                    )
-                });
-                if mutable {
-                    if let HirExprKind::Variable { place } = expression.kind {
-                        HirArgument::Place(place)
+                    if mutable {
+                        if let HirExprKind::Variable { place } = expression.kind {
+                            HirArgument::Place(place)
+                        } else {
+                            HirArgument::Expression(expression)
+                        }
                     } else {
                         HirArgument::Expression(expression)
                     }
-                } else {
-                    HirArgument::Expression(expression)
                 }
             }
             Argument::MixedExpression { expression, is_px } => {
@@ -1015,7 +1052,15 @@ fn analyze_instruction(
                     constant: None,
                     location: place.location,
                 }),
-                HirArgument::Omitted | HirArgument::Formatted(_) | HirArgument::Raw(_) => None,
+                HirArgument::Formatted(value) => Some(HirExpr {
+                    kind: HirExprKind::Formatted {
+                        value: value.clone(),
+                    },
+                    value_type: SemanticType::String,
+                    constant: None,
+                    location: value.location,
+                }),
+                HirArgument::Omitted | HirArgument::Raw(_) => None,
             })
             .collect();
         if !matches!(
@@ -1824,6 +1869,87 @@ fn append_parser_diagnostics<T>(
     for diagnostic in &output.diagnostics {
         diagnostics.push(map_parser_diagnostic(source, path, text, diagnostic));
     }
+}
+
+fn confine_formatted_spans(formatted: &mut FormattedString, container: Span) {
+    formatted.span = container;
+    for part in &mut formatted.parts {
+        match part {
+            FormPart::Text(_) => {}
+            FormPart::StringInterpolation {
+                expression,
+                width,
+                span,
+                ..
+            }
+            | FormPart::IntegerInterpolation {
+                expression,
+                width,
+                span,
+                ..
+            } => {
+                confine_expr_spans(expression, container);
+                if let Some(width) = width {
+                    confine_expr_spans(width, container);
+                }
+                confine_span(span, container);
+            }
+            FormPart::Conditional {
+                condition,
+                then_value,
+                else_value,
+                span,
+            } => {
+                confine_expr_spans(condition, container);
+                confine_formatted_spans(then_value, container);
+                if let Some(else_value) = else_value {
+                    confine_formatted_spans(else_value, container);
+                }
+                confine_span(span, container);
+            }
+            FormPart::Triple { span, .. } => confine_span(span, container),
+        }
+    }
+}
+
+fn confine_expr_spans(expression: &mut Expr, container: Span) {
+    confine_span(&mut expression.span, container);
+    match &mut expression.kind {
+        ExprKind::Variable { indices, .. } => {
+            for index in indices {
+                confine_expr_spans(index, container);
+            }
+        }
+        ExprKind::Call { args, .. } => {
+            for argument in args.iter_mut().flatten() {
+                confine_expr_spans(argument, container);
+            }
+        }
+        ExprKind::Unary { operand, .. }
+        | ExprKind::Postfix { operand, .. }
+        | ExprKind::Group(operand) => confine_expr_spans(operand, container),
+        ExprKind::Binary { left, right, .. } => {
+            confine_expr_spans(left, container);
+            confine_expr_spans(right, container);
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            confine_expr_spans(condition, container);
+            confine_expr_spans(then_expr, container);
+            confine_expr_spans(else_expr, container);
+        }
+        ExprKind::Formatted(formatted) => confine_formatted_spans(formatted, container),
+        ExprKind::Integer(_) | ExprKind::String(_) | ExprKind::Identifier(_) | ExprKind::Error => {}
+    }
+}
+
+fn confine_span(span: &mut Span, container: Span) {
+    let start = span.start.clamp(container.start, container.end);
+    let end = span.end.clamp(start, container.end);
+    *span = Span::new(start, end);
 }
 
 fn map_parser_diagnostic(
