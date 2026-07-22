@@ -383,10 +383,17 @@ Runtime 返回：
 ### 项目加载
 
 前端提交 `ProjectLoad`（tag `19`），其中包含 `ProjectManifest` 和可选的编译缓存
-transfer ID。缓存是 Runtime 生成、前端只负责持久化的不透明 gzip 数据，通过
+transfer ID。缓存是 Runtime 生成、带独立格式版本且由 zstd 压缩的不透明数据，前端只负责
+持久化，通过
 `StateExportKind::CompiledProjectCache` 使用现有分块传输导入/导出。完全匹配时跳过
 分析和编译；源码变化时缓存作为增量编译基线。未携带缓存的旧 tag `10` 仍按无缓存
 项目加载处理。
+
+冷编译后的首次 `CompiledProjectCache` 导出请求可能以可恢复的 `InvalidState` 返回，表示
+Runtime 已在后台开始准备缓存。前端应继续泵动 session 并低频重试；
+`runtime.compiled_cache_ready` 诊断可用于提前重试，但不是唤醒机制，也不能代替 caller pump。
+准备完成后的相同导出请求返回正常 `StateExportReady` 和分块数据。缓存编码失败会使用非
+`InvalidState` 拒绝，前端不得无限重试。
 
 `ReturnToTitle`（tag `23`）和当前 session 内的 VM snapshot 恢复复用已加载 artifact，
 不重新检查项目文件。

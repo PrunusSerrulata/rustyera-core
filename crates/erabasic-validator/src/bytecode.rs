@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 
 use erabasic_bytecode::{
     BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeStorage, BytecodeType,
@@ -75,7 +76,7 @@ impl ValidationContext {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ValidatedArtifact(BytecodeArtifact);
+pub struct ValidatedArtifact(Arc<BytecodeArtifact>);
 
 impl ValidatedArtifact {
     #[must_use]
@@ -85,6 +86,15 @@ impl ValidatedArtifact {
 
     #[must_use]
     pub fn into_inner(self) -> BytecodeArtifact {
+        Arc::unwrap_or_clone(self.0)
+    }
+
+    /// Return shared ownership of the immutable, already-validated artifact.
+    ///
+    /// Runtime and VM layers commonly retain the same large project artifact. Sharing it
+    /// avoids cloning all bytecode and source-map records when a VM generation is created.
+    #[must_use]
+    pub fn into_shared(self) -> Arc<BytecodeArtifact> {
         self.0
     }
 }
@@ -132,7 +142,7 @@ fn validate_artifact(
     ValidationReport {
         value: diagnostics
             .is_empty()
-            .then_some(ValidatedArtifact(artifact)),
+            .then_some(ValidatedArtifact(Arc::new(artifact))),
         diagnostics,
     }
 }

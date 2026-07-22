@@ -136,7 +136,7 @@ impl Vm {
             .pending_reload
             .take()
             .ok_or_else(|| VmError::HotReload("no hot-reload plan is pending".into()))?;
-        let target = plan.target.into_inner();
+        let target = plan.target.into_shared();
         let new_generation = GenerationId(self.next_generation);
 
         // Memory migration has no recoverable failure after `plan_migration`

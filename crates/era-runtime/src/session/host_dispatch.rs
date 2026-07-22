@@ -969,21 +969,7 @@ impl RuntimeSession {
             };
             let mut value = value.clone();
             value.push_str(&suffix);
-            let prepared = vm
-                .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
-                    writes: vec![VmRuntimeWrite {
-                        variable,
-                        indices: Vec::new(),
-                        character: None,
-                        value: VmValue::String(value),
-                    }],
-                    fills: Vec::new(),
-                    clear_characters: false,
-                    add_characters_from_csv: Vec::new(),
-                })
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-            vm.commit_runtime_state(prepared)
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            write_runtime_string(vm, "SAVEDATA_TEXT", value)?;
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
         if name == "SAVENOS" {

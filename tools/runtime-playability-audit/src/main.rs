@@ -13,11 +13,11 @@ use era_runtime_protocol::{
     ClientCapabilities, ClientHello, DiagnosticSeverity, FileCategory, FilePayload, FrontendInput,
     FrontendIoError, FrontendIoErrorKind, InputIntent, InputModality, LOCAL_DATE_TIME_OPERATION,
     LOCAL_DATE_TIME_OPERATION_VERSION, LocalDateTimeResponse, ProjectManifest,
-    RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeMessage, ServiceCapability, ServiceKind,
-    ServiceResponse, ServiceResult, ShutdownRequest, StartMode, StartRequest, StateExportKind,
-    StateExportRequest, StateExportResult, StateImportBegin, StateImportChunk, StateImportCommit,
-    StorageCapabilities, StorageNamespace, StorageOperation, StorageResponse, StorageResult,
-    SubmittedFile, WaitChange,
+    RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeMessage, SequenceAcknowledgement,
+    ServiceCapability, ServiceKind, ServiceResponse, ServiceResult, ShutdownRequest, StartMode,
+    StartRequest, StateExportKind, StateExportRequest, StateExportResult, StateImportBegin,
+    StateImportChunk, StateImportCommit, StorageCapabilities, StorageNamespace, StorageOperation,
+    StorageResponse, StorageResult, SubmittedFile, WaitChange,
 };
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_compiler::{ExecutionBinding, default_host_registry};
@@ -540,7 +540,11 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                 column_cells: true,
                 separators: true,
                 available_fonts: Vec::new(),
-                services: Vec::<ServiceCapability>::new(),
+                services: vec![ServiceCapability {
+                    kind: ServiceKind::Clock,
+                    operation: LOCAL_DATE_TIME_OPERATION.into(),
+                    versions: VersionRange::exact(LOCAL_DATE_TIME_OPERATION_VERSION),
+                }],
                 storage: StorageCapabilities {
                     revisions: true,
                     atomic_replace: true,
@@ -706,7 +710,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
             .unwrap();
         let drive_elapsed = drive_started.elapsed();
         let drain_started = std::time::Instant::now();
-        let out = drain(&mut session);
+        let (out, last_outbound_sequence) = drain_with_last_sequence(&mut session);
         let drain_elapsed = drain_started.elapsed();
         if benchmark && (drive_elapsed.as_millis() >= 250 || drain_elapsed.as_millis() >= 250) {
             println!(
@@ -743,6 +747,29 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
             match message {
                 RuntimeMessage::Fault(fault) => {
                     println!("runtime_fault_step={step} {fault:?}");
+                }
+                RuntimeMessage::ServiceRequest(request)
+                    if request.kind == ServiceKind::Clock
+                        && request.operation == LOCAL_DATE_TIME_OPERATION =>
+                {
+                    followups.push(RuntimeMessage::ServiceResponse(ServiceResponse {
+                        request_id: request.request_id,
+                        result: ServiceResult::Ready {
+                            payload: ProtocolBytes::new(
+                                encode_canonical(&LocalDateTimeResponse {
+                                    year: 2026,
+                                    month: 7,
+                                    day: 19,
+                                    hour: 12,
+                                    minute: 0,
+                                    second: 0,
+                                    millisecond: 0,
+                                    utc_offset_minutes: 480,
+                                })
+                                .expect("encode fixed audit time"),
+                            ),
+                        },
+                    }));
                 }
                 RuntimeMessage::ServiceRequest(request) if !benchmark => println!(
                     "runtime_service_step={step} {:?}/{}",
@@ -791,6 +818,37 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                             entries: Vec::new(),
                         },
                         StorageOperation::Delete { .. } => StorageResult::Deleted,
+                        StorageOperation::ReadRange {
+                            offset,
+                            maximum_bytes,
+                            change_token,
+                        } => storage.get(&key).map_or_else(not_found, |stored| {
+                            if change_token
+                                .as_ref()
+                                .is_some_and(|expected| expected != &stored.1)
+                            {
+                                return StorageResult::Error {
+                                    error: FrontendIoError {
+                                        kind: FrontendIoErrorKind::Conflict,
+                                        message: "audit storage changed during range read".into(),
+                                        platform_code: None,
+                                    },
+                                };
+                            }
+                            let bytes = stored.0.as_slice();
+                            let start = usize::try_from(offset)
+                                .unwrap_or(usize::MAX)
+                                .min(bytes.len());
+                            let end = start
+                                .saturating_add(maximum_bytes as usize)
+                                .min(bytes.len());
+                            StorageResult::ReadChunk {
+                                data: ProtocolBytes::new(bytes[start..end].to_vec()),
+                                offset,
+                                complete: end == bytes.len(),
+                                change_token: stored.1.clone(),
+                            }
+                        }),
                     };
                     followups.push(RuntimeMessage::StorageResponse(StorageResponse {
                         request_id: request.request_id,
@@ -848,6 +906,11 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                 }
                 _ => {}
             }
+        }
+        if let Some(through_sequence) = last_outbound_sequence {
+            followups.push(RuntimeMessage::Acknowledge(SequenceAcknowledgement {
+                through_sequence,
+            }));
         }
         for followup in followups {
             submit(&mut session, sequence, followup);
@@ -1239,12 +1302,18 @@ fn drive(session: &mut RuntimeSession) {
 }
 
 fn drain(session: &mut RuntimeSession) -> Vec<RuntimeMessage> {
+    drain_with_last_sequence(session).0
+}
+
+fn drain_with_last_sequence(session: &mut RuntimeSession) -> (Vec<RuntimeMessage>, Option<u64>) {
     let mut messages = Vec::new();
+    let mut last_sequence = None;
     while let Some(bytes) = session.poll_envelope() {
         let envelope = decode_envelope(&bytes, audit_wire_limits()).unwrap();
+        last_sequence = Some(envelope.sequence);
         messages.push(RuntimeMessage::from_envelope(&envelope).unwrap());
     }
-    messages
+    (messages, last_sequence)
 }
 
 fn audit_wire_limits() -> WireLimits {

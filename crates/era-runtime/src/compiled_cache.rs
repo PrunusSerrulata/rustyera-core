@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use era_protocol::ProtocolBytes;
 use era_runtime_protocol::{ExtensionDeclaration, FilePayload, ProjectIdentity, ProjectManifest};
@@ -10,9 +11,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::project::NormalizedProjectSnapshot;
 
 const MAGIC: &[u8; 8] = b"RERACACH";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const SECTION_COUNT: u32 = 1;
-const COMPRESSION_LEVEL: i32 = 7;
+const COMPRESSION_LEVEL: i32 = 3;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Serialize)]
@@ -84,6 +85,7 @@ pub(crate) fn project_identity(manifest: &ProjectManifest) -> ProjectIdentity {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn encode(
     manifest: &ProjectManifest,
     extensions: &[ExtensionDeclaration],
@@ -91,6 +93,38 @@ pub(crate) fn encode(
     incremental: &IncrementalState,
     snapshot: &NormalizedProjectSnapshot,
 ) -> Result<Vec<u8>, String> {
+    encode_inner(manifest, extensions, artifact, incremental, snapshot, None)
+}
+
+pub(crate) fn encode_cancellable(
+    manifest: &ProjectManifest,
+    extensions: &[ExtensionDeclaration],
+    artifact: &ValidatedArtifact,
+    incremental: &IncrementalState,
+    snapshot: &NormalizedProjectSnapshot,
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    encode_inner(
+        manifest,
+        extensions,
+        artifact,
+        incremental,
+        snapshot,
+        Some(cancelled),
+    )
+}
+
+fn encode_inner(
+    manifest: &ProjectManifest,
+    extensions: &[ExtensionDeclaration],
+    artifact: &ValidatedArtifact,
+    incremental: &IncrementalState,
+    snapshot: &NormalizedProjectSnapshot,
+    cancelled: Option<&AtomicBool>,
+) -> Result<Vec<u8>, String> {
+    if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return Err("compiled cache build cancelled".into());
+    }
     let mut output = Vec::new();
     output.extend_from_slice(MAGIC);
     output.extend_from_slice(&VERSION.to_le_bytes());
@@ -103,6 +137,7 @@ pub(crate) fn encode(
             incremental,
             snapshot,
         },
+        cancelled,
     )?;
     let digest = blake3::hash(&output);
     output.extend_from_slice(digest.as_bytes());
@@ -163,11 +198,15 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<DecodedCompil
     })
 }
 
-fn append_section<T: Serialize>(output: &mut Vec<u8>, value: &T) -> Result<(), String> {
+fn append_section<T: Serialize>(
+    output: &mut Vec<u8>,
+    value: &T,
+    cancelled: Option<&AtomicBool>,
+) -> Result<(), String> {
     let encoder = zstd::stream::Encoder::new(Vec::new(), COMPRESSION_LEVEL)
         .map_err(|error| error.to_string())?;
-    let mut writer = CountingWriter::new(encoder);
-    serde_json::to_writer(&mut writer, value).map_err(|error| error.to_string())?;
+    let mut writer = CountingWriter::new(encoder, cancelled);
+    rmp_serde::encode::write(&mut writer, value).map_err(|error| error.to_string())?;
     let decoded_length = writer.bytes;
     let compressed = writer
         .into_inner()
@@ -214,7 +253,7 @@ fn decode_section<T: DeserializeOwned>(
     let decoder =
         zstd::stream::read::Decoder::new(compressed).map_err(|error| error.to_string())?;
     let mut reader = CountingReader::new(decoder.take(decoded_length.saturating_add(1)));
-    let value = serde_json::from_reader(&mut reader).map_err(|error| error.to_string())?;
+    let value = rmp_serde::from_read(&mut reader).map_err(|error| error.to_string())?;
     let mut tail = [0_u8; 1];
     if reader.read(&mut tail).map_err(|error| error.to_string())? != 0
         || reader.bytes != decoded_length
@@ -246,14 +285,19 @@ fn read_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64, String> {
     ))
 }
 
-struct CountingWriter<W> {
+struct CountingWriter<'a, W> {
     inner: W,
     bytes: u64,
+    cancelled: Option<&'a AtomicBool>,
 }
 
-impl<W> CountingWriter<W> {
-    const fn new(inner: W) -> Self {
-        Self { inner, bytes: 0 }
+impl<'a, W> CountingWriter<'a, W> {
+    const fn new(inner: W, cancelled: Option<&'a AtomicBool>) -> Self {
+        Self {
+            inner,
+            bytes: 0,
+            cancelled,
+        }
     }
 
     fn into_inner(self) -> W {
@@ -261,8 +305,17 @@ impl<W> CountingWriter<W> {
     }
 }
 
-impl<W: Write> Write for CountingWriter<W> {
+impl<W: Write> Write for CountingWriter<'_, W> {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        if self
+            .cancelled
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "compiled cache build cancelled",
+            ));
+        }
         let written = self.inner.write(buffer)?;
         self.bytes = self.bytes.saturating_add(written as u64);
         Ok(written)
@@ -321,6 +374,8 @@ impl Write for HashWriter {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use era_runtime_protocol::{FileCategory, FilePayload, SubmittedFile};
 
     use super::*;
@@ -377,5 +432,68 @@ mod tests {
     #[test]
     fn compiled_project_cache_rejects_corruption() {
         assert!(decode(b"not a compiled cache", 1024).is_err());
+    }
+
+    #[test]
+    fn compiled_project_cache_encoding_honors_cancellation() {
+        let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+        let mut build = crate::project::build_project(&project, None);
+        assert!(build.report.success, "{:?}", build.report.diagnostics);
+        build.incremental.compact();
+        let cancelled = AtomicBool::new(true);
+
+        let error = encode_cancellable(
+            &project,
+            &[],
+            build.artifact.as_ref().unwrap(),
+            &build.incremental,
+            build.snapshot.as_ref().unwrap(),
+            &cancelled,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "compiled cache build cancelled");
+    }
+
+    #[test]
+    fn v3_binary_cache_is_smaller_than_the_v2_json_encoding() {
+        const SHARED_CONTAINER_OVERHEAD: usize = 128;
+
+        let mut source = "@SYSTEM_TITLE\nRETURN\n".to_owned();
+        for index in 0..256 {
+            write!(
+                source,
+                "@CACHE_SIZE_{index}\nPRINTL repeated compiled cache payload\nRETURN\n"
+            )
+            .unwrap();
+        }
+        let project = manifest(&source, 1);
+        let mut build = crate::project::build_project(&project, None);
+        assert!(build.report.success, "{:?}", build.report.diagnostics);
+        build.incremental.compact();
+        let payload = CompiledCachePayloadRef {
+            artifact: build.artifact.as_ref().unwrap().artifact(),
+            incremental: &build.incremental,
+            snapshot: build.snapshot.as_ref().unwrap(),
+        };
+        let encoder = zstd::stream::Encoder::new(Vec::new(), 7).unwrap();
+        let mut writer = CountingWriter::new(encoder, None);
+        serde_json::to_writer(&mut writer, &payload).unwrap();
+        let v2_payload = writer.into_inner().finish().unwrap();
+        let v3 = encode(
+            &project,
+            &[],
+            build.artifact.as_ref().unwrap(),
+            &build.incremental,
+            build.snapshot.as_ref().unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            v3.len() < v2_payload.len() + SHARED_CONTAINER_OVERHEAD,
+            "v3={} v2={}",
+            v3.len(),
+            v2_payload.len() + SHARED_CONTAINER_OVERHEAD
+        );
     }
 }
