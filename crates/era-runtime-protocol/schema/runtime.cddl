@@ -59,8 +59,9 @@ server-hello = { 0: any, 1: any, 2: [* uint], 3: runtime-limits, 4: uint, 5: any
 runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint }
 version-rejected = { 0: any, 1: tstr }
 project-manifest = { 0: uint, 1: [* any] }
-project-load-request = { 0: project-manifest, ? 1: uint }
-project-load-report = { 0: uint, 1: bool, 2: [* any] }
+project-identity = { 0: uint, 1: bstr }
+project-load-request = { 0: project-identity, ? 1: project-manifest / null, ? 2: uint / null }
+project-load-report = { 0: uint, 1: bool, 2: [* any], 3: bool }
 reload-project = { 0: uint, 1: uint, 2: [* any] }
 project-analysis-request = { 0: project-manifest, 1: [* tstr], 2: bool }
 project-analysis-report = { 0: uint, 1: bool, 2: [* any], 3: [* tstr] }
@@ -115,7 +116,8 @@ presentation-operation =
   [10, [any]] /
   [11, [[* any]]] /
   [12, [redraw-state]] /
-  [13, [uint]]
+  [13, [uint]] /
+  [14, [uint]]
 storage-request = { 0: uint, 1: uint, 2: tstr, 3: storage-operation, 4: tstr, 5: uint / null }
 storage-response = { 0: uint, 1: any }
 storage-operation =
@@ -123,11 +125,14 @@ storage-operation =
   [1, bstr, bool, storage-precondition] /
   [2, tstr / null, bool] /
   [3, storage-precondition] /
-  [4]
+  [4] /
+  [5, uint, uint, tstr / null]
 storage-precondition = [0] / [1] / [2, tstr]
 service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr, 5: uint / null }
 service-response = { 0: uint, 1: any }
-; Protocol 20 retains the typed Protocol 19 service payloads and adds complete presentation deltas.
+; Protocol 22 adds source-identity-first project loading, bounded storage range reads,
+; and runtime-owned physical-history trimming.
+; It retains the typed Protocol 19 service payloads and complete Protocol 20 presentation deltas.
 ; These include typed HTML, physical-history serialization,
 ; canvas image decode/PNG encode, ProjectionQueryContext, HTML measurement,
 ; TextExtent and CanvasPixel request/response maps.

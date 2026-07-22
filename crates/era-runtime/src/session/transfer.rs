@@ -204,7 +204,7 @@ impl RuntimeSession {
             };
             self.outbound_transfer = Some(OutboundStateTransfer {
                 descriptor: descriptor.clone(),
-                bytes,
+                bytes: bytes.into(),
                 next_offset: 0,
             });
             StateExportResult::Ready {

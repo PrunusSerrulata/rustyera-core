@@ -81,7 +81,7 @@ payload 的未压缩 JSON 长度为 434,246 bytes（不含 60-byte 容器头）�
 - dense variable cell 按声明类型分别保存 `Vec<i64>`、`Vec<String>` 或 place descriptor；只有
   操作数栈、Host/调试接口和传统存档边界才构造公共 `VmValue`。角色变量、全局数组、局部变量
   和引用参数仍走原有 shape/type 检查。
-- VM snapshot 8 和 runtime snapshot 14 使用流式、确定性的 zlib best-compression 容器，记录
+- VM snapshot 8 和 runtime snapshot 15 使用流式、确定性的 zlib best-compression 容器，记录
   压缩/展开长度并校验压缩 payload 的 BLAKE3。恢复时同时限制输入和最大展开长度，防止伪造
   长度导致无界解压；格式版本不符时继续拒绝恢复。
 
@@ -89,7 +89,8 @@ payload 的未压缩 JSON 长度为 434,246 bytes（不含 60-byte 容器头）�
 
 - 展示输出以完整 snapshot 建立同步基线，随后只发送变化行和变化字段的 delta，消除了每次
   `PRINT` 都复制并投影全部历史所形成的二次增长。该 wire 行为由 runtime protocol 20.0
-  明确定义，重同步仍发送完整 snapshot。
+  引入并由 protocol 22.0 延续，重同步仍发送完整 snapshot；Protocol 22 的 `TrimLines` 让
+  runtime 在不改变 `LINECOUNT` 的前提下执行 `MaxLog`，长时间游戏不再无限保留物理历史。
 - VM 为函数、全局变量、函数静态/局部变量、指令 byte offset 和源码映射建立每代只读索引，
   热路径不再反复线性扫描完整 artifact。
 - 常见指令的 operand 使用栈内小缓冲，避免解释每条短指令时分配新的 `Vec`；超长 operand
@@ -104,6 +105,19 @@ payload 的未压缩 JSON 长度为 434,246 bytes（不含 60-byte 容器头）�
   parser context 并行解析。indexed parallel collection 保持源码、函数和诊断的确定顺序。
 - compiler 在同一个 indexed parallel pass 中完成函数缓存键序列化、缓存命中判断和未命中
   lowering，避免所有 worker 启动前的串行函数哈希阶段；并行度不同仍产生逐字节相同的容器。
+- analyzer 在符号表和函数私有变量预处理完成后并行分析互不依赖的函数体，indexed collect
+  保持 HIR 与诊断顺序确定；compiler 和 artifact 身份计算把 JSON 直接流入 BLAKE3，避免为
+  完整 HIR、源码映射和函数体创建大型临时序列化缓冲。
+- TUI 使用持久化 stat/hash 源码索引。普通启动和重启只重新读取签名变化的 UTF-8 文件，先以
+  轻量源码身份尝试载入缓存；只有缓存不匹配时才物化并传输完整 manifest，显式“重新载入所有
+  脚本”仍执行完整内容扫描。
+- 编译缓存 v2 将 artifact、增量状态和规范化项目快照作为一个可跨字段去重的 payload 流式
+  编码并用 zstd 压缩，同时校验压缩 section 及整体摘要；这移除了旧 `.erbc` 默认解码上限造成的永久缓存未命中，也避免旧 v1
+  构造超过 1 GB JSON 中间值。旧 v1 文件在 v2 成功写入后由前端清理。以完整 eraTW 项目实测，
+  v2 产物为 143,674,679 bytes，较同一项目旧 v1 的 153,171,103 bytes 减少约 6.2%。
+- 保存/读取菜单的目录 List 只返回廉价 stat change token，runtime 只为当前页的已占用槽位按
+  64 KiB 稳定区间增量解析存档头；删除时才对单个目标执行完整摘要 Stat，避免打开菜单时读取、
+  哈希并解码全部存档。
 - compiler 构造的内存 artifact 在生成 ID 前走专用结构验证路径，最终身份只计算一次；runtime
   接收同一进程内的 compiler-owned artifact 时重复结构检查但不再重复序列化完整源码映射。
   解码、磁盘或网络输入仍必须走不可信字节码入口并复算 `execution_id` 与 `artifact_id`。

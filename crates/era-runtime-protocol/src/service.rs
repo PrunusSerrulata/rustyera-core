@@ -71,6 +71,16 @@ pub enum StorageOperation {
     /// Read metadata without transferring the file contents.
     #[n(4)]
     Stat,
+    /// Read one stable file range without hashing the complete file.
+    #[n(5)]
+    ReadRange {
+        #[n(0)]
+        offset: u64,
+        #[n(1)]
+        maximum_bytes: u32,
+        #[n(2)]
+        change_token: Option<String>,
+    },
 }
 
 /// Optimistic concurrency condition applied by the frontend at commit time.
@@ -114,6 +124,9 @@ pub struct StorageEntry {
     pub byte_length: u64,
     #[n(2)]
     pub revision: Option<String>,
+    /// Cheap opaque identity used only to invalidate read-only metadata caches.
+    #[n(3)]
+    pub change_token: Option<String>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -154,6 +167,17 @@ pub enum StorageResult {
     },
     #[n(5)]
     Metadata(#[n(0)] StorageMetadata),
+    #[n(6)]
+    ReadChunk {
+        #[n(0)]
+        data: ProtocolBytes,
+        #[n(1)]
+        offset: u64,
+        #[n(2)]
+        complete: bool,
+        #[n(3)]
+        change_token: String,
+    },
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

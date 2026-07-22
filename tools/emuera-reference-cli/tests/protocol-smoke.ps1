@@ -178,6 +178,12 @@ try {
     Assert-True (($printFamily.result.output -join "`n").Contains("ヒラガナ")) "PRINTFORMK output differs"
     Assert-True (($printFamily.result.output -join "`n").Contains("Right[1]") -and ($printFamily.result.output -join "`n").Contains("Left[2]") -and ($printFamily.result.output -join "`n").Contains("F3[3]") -and ($printFamily.result.output -join "`n").Contains("L[4]")) "PRINTC family output differs"
 
+    $lineCount = Invoke-Oracle @{ id = "linecount"; op = "run"; entry = "ORACLE_LINECOUNT"; watch = @("RESULT:50", "RESULT:51", "RESULT:52") }
+    Assert-True ($lineCount.ok -and $lineCount.result.termination -eq "completed") "LINECOUNT oracle failed"
+    Assert-True (($lineCount.result.watches.'RESULT:50' -eq 2) -and
+        ($lineCount.result.watches.'RESULT:51' -eq 1) -and
+        ($lineCount.result.watches.'RESULT:52' -eq 3)) "LINECOUNT/CLEARLINE behavior differs"
+
     $htmlPop = Invoke-Oracle @{ id = "html-pop"; op = "run"; entry = "ORACLE_HTML_POP"; watch = @("RESULTS:30") }
     Assert-True $htmlPop.ok "HTML_POPPRINTINGSTR function run failed"
     Assert-True ($htmlPop.result.watches.'RESULTS:30' -eq "A&lt;&amp;<button value='42'>choose</button>") "HTML_POPPRINTINGSTR differs"

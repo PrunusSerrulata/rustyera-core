@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{self, Write as _};
+use std::sync::Arc;
 
 use era_debug_protocol::{DebugMessage, DebugResponse, DebugScope, GrantToken, ScriptOutputChunk};
 use era_protocol::{
@@ -220,7 +221,7 @@ struct InboundStateTransfer {
 #[derive(Debug)]
 struct OutboundStateTransfer {
     descriptor: StateTransferDescriptor,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
     next_offset: u64,
 }
 
@@ -320,7 +321,7 @@ pub struct RuntimeSession {
     system_menu: SystemMenuState,
     load_slot_paths: Vec<String>,
     occupied_slot_paths: BTreeSet<String>,
-    slot_revisions: BTreeMap<String, String>,
+    slot_change_tokens: BTreeMap<String, String>,
     slot_labels: BTreeMap<String, String>,
     invalid_slot_paths: BTreeSet<String>,
     system_menu_host_request: Option<erabasic_vm::HostRequestId>,
@@ -330,7 +331,7 @@ pub struct RuntimeSession {
     pending_project_load: Option<PendingProjectLoad>,
     pending_candidate_commit: Option<PendingCandidateCommit>,
     candidate_clock: Option<LocalDateTimeResponse>,
-    compiled_project_cache: Option<Vec<u8>>,
+    compiled_project_cache: Option<Arc<[u8]>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -59,9 +59,9 @@ pub use presentation::{
 };
 pub use project::{
     DiagnosticSeverity, FileCategory, FileChange, FilePayload, FrontendIoError,
-    FrontendIoErrorKind, ProjectAnalysisReport, ProjectAnalysisRequest, ProjectLoadReport,
-    ProjectLoadRequest, ProjectManifest, ProtocolDiagnostic, ReloadProject, SourceLocation,
-    SubmittedFile, validate_relative_path,
+    FrontendIoErrorKind, ProjectAnalysisReport, ProjectAnalysisRequest, ProjectIdentity,
+    ProjectLoadReport, ProjectLoadRequest, ProjectManifest, ProtocolDiagnostic, ReloadProject,
+    SourceLocation, SubmittedFile, validate_relative_path,
 };
 pub use service::{
     CancelExternalRequest, CanvasPixelRequest, CanvasPixelResponse, DECODE_CANVAS_IMAGE_OPERATION,

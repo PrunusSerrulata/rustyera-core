@@ -72,6 +72,8 @@ UV_CACHE_DIR=/tmp/rustyera-uv-cache \
   2 表示输入耗尽，3 表示超时，4 表示扫描完等待点仍无合格 snapshot。
 - `ERA_AUDIT_LAYOUT_CHECK=1` 会从主菜单进入日 1，确认游戏菜单的 Look 行已显示，再选择移动、提交 `C`
   并确认切换前后的地图按钮行都在输入等待处结束；成功时输出 `TUI_LAYOUT_OK`。
+- `ERA_AUDIT_ITEM_CHECK=1` 会在到达日 1 菜单后选择“道具确认[805]”，确认页面进入稳定输入等待且
+  TUI 保留行数未超过 runtime 的 `MaxLog`；成功时输出 `ITEM_CONFIRM_OK`。
 - 设置 `ERA_AUDIT_SNAPSHOT_PATH=/tmp/name.snapshot` 可在目标等待点导出；再设置
   `ERA_AUDIT_SNAPSHOT_EVERY_WAIT=1` 会从每个无 deadline 的稳定等待开始寻找首个合格点。
   成功时 stdout 输出 `VM_SNAPSHOT_BYTES`。

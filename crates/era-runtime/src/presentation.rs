@@ -13,6 +13,10 @@ use std::fmt::Write as _;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+const fn dirty_line_count() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct PresentationModel {
@@ -26,6 +30,10 @@ pub(crate) struct PresentationModel {
     pending_temporary: bool,
     input_wait: Option<InputWait>,
     next_line: u64,
+    logical_line_count: i64,
+    /// The calculated VM variable is synchronized lazily before execution resumes.
+    #[serde(skip, default = "dirty_line_count")]
+    line_count_dirty: bool,
     settings: PresentationSettings,
     project_column_cells: bool,
     project_separators: bool,
@@ -92,6 +100,8 @@ impl Default for PresentationModel {
             pending_temporary: false,
             input_wait: None,
             next_line: 1,
+            logical_line_count: 0,
+            line_count_dirty: true,
             settings: PresentationSettings {
                 drawable_width: LogicalLength(760_000),
                 line_height: LogicalLength(19_000),
@@ -146,6 +156,18 @@ impl Default for PresentationModel {
 }
 
 impl PresentationModel {
+    pub(crate) const fn logical_line_count(&self) -> i64 {
+        self.logical_line_count
+    }
+
+    pub(crate) const fn line_count_is_dirty(&self) -> bool {
+        self.line_count_dirty
+    }
+
+    pub(crate) fn mark_line_count_synchronized(&mut self) {
+        self.line_count_dirty = false;
+    }
+
     pub(crate) fn last_line_auto_button_values(&self) -> Vec<i64> {
         let Some(line) = self.lines.last() else {
             return Vec::new();
@@ -274,6 +296,9 @@ impl PresentationModel {
             self.pending_temporary = false;
             count -= 1;
         }
+        let logical_deletions = i64::try_from(count).unwrap_or(i64::MAX);
+        self.logical_line_count = self.logical_line_count.wrapping_sub(logical_deletions);
+        self.line_count_dirty = true;
         let keep = self.lines.len().saturating_sub(count);
         self.lines.truncate(keep);
         self.history_operations
@@ -293,6 +318,8 @@ impl PresentationModel {
             self.pending_runs.clear();
         } else if self.lines.last().is_some_and(|line| line.temporary) {
             self.lines.pop();
+            self.logical_line_count = self.logical_line_count.wrapping_sub(1);
+            self.line_count_dirty = true;
         }
         self.replace_next_temporary = true;
         self.append_print_text(text, true, true);
@@ -938,6 +965,12 @@ impl PresentationModel {
         self.pending_temporary = false;
         self.next_line = self.next_line.saturating_add(1);
         self.lines.push(line.clone());
+        self.logical_line_count = if self.logical_line_count == i64::MAX {
+            0
+        } else {
+            self.logical_line_count + 1
+        };
+        self.line_count_dirty = true;
         if self.replace_next_temporary {
             self.history_operations
                 .push(PresentationHistoryOperation::ReplaceTemporary { line });
@@ -946,6 +979,7 @@ impl PresentationModel {
             self.history_operations
                 .push(PresentationHistoryOperation::Append { line });
         }
+        self.trim_physical_history();
         self.bump();
     }
 
@@ -1008,9 +1042,29 @@ impl PresentationModel {
         };
         self.next_line = self.next_line.saturating_add(1);
         self.lines.push(line.clone());
+        self.logical_line_count = if self.logical_line_count == i64::MAX {
+            0
+        } else {
+            self.logical_line_count + 1
+        };
+        self.line_count_dirty = true;
         self.history_operations
             .push(PresentationHistoryOperation::Append { line });
+        self.trim_physical_history();
         self.bump();
+    }
+
+    fn trim_physical_history(&mut self) {
+        let maximum = self.settings.maximum_physical_lines as usize;
+        let excess = self.lines.len().saturating_sub(maximum);
+        if excess == 0 {
+            return;
+        }
+        self.lines.drain(..excess);
+        self.history_operations
+            .push(PresentationHistoryOperation::TrimPhysical {
+                count: u32::try_from(excess).unwrap_or(u32::MAX),
+            });
     }
 
     fn button_run(
@@ -1173,6 +1227,10 @@ impl PresentationModel {
                 PresentationHistoryOperation::SetButtonGeneration { generation } => {
                     operations.push(PresentationOperation::SetButtonGeneration { generation });
                 }
+                PresentationHistoryOperation::TrimPhysical { count } => {
+                    operations.push(PresentationOperation::TrimLines { count });
+                    delivery.pending_line_id = None;
+                }
             }
         }
 
@@ -1220,7 +1278,10 @@ impl PresentationModel {
         }
 
         delivery.revision = Some(self.revision);
-        delivery.history_index = self.history_operations.len();
+        // Encoded outbound envelopes own retransmission after this point. Keeping the
+        // same semantic edits in the presentation model made long sessions grow forever.
+        self.history_operations.clear();
+        delivery.history_index = 0;
         delivery.dirty = PresentationDirty::default();
         self.delivery = delivery;
         PresentationUpdate::Delta(PresentationDelta {
@@ -1233,9 +1294,10 @@ impl PresentationModel {
     /// Produce an authoritative baseline and advance the per-session delivery cursor.
     pub(crate) fn snapshot_for_delivery(&mut self) -> PresentationSnapshot {
         let snapshot = self.snapshot();
+        self.history_operations.clear();
         self.delivery = PresentationDelivery {
             revision: Some(self.revision),
-            history_index: self.history_operations.len(),
+            history_index: 0,
             pending_line_id: (!self.pending_runs.is_empty()).then_some(self.next_line),
             dirty_lines: BTreeSet::new(),
             dirty: PresentationDirty::default(),
@@ -1245,6 +1307,7 @@ impl PresentationModel {
 
     pub(crate) fn snapshot(&self) -> PresentationSnapshot {
         let mut lines = self.lines.clone();
+        let committed_line_count = lines.len();
         if !self.pending_runs.is_empty() {
             lines.push(DisplayLine {
                 line_id: self.next_line,
@@ -1263,26 +1326,14 @@ impl PresentationModel {
             self.project_html,
             self.project_graphics,
         );
-        let mut history_operations = self.history_operations.clone();
-        for operation in &mut history_operations {
-            let line = match operation {
-                PresentationHistoryOperation::Append { line }
-                | PresentationHistoryOperation::ReplaceTemporary { line } => Some(line),
-                PresentationHistoryOperation::DeletePhysical { .. }
-                | PresentationHistoryOperation::Clear
-                | PresentationHistoryOperation::SetButtonGeneration { .. } => None,
-            };
-            if let Some(line) = line {
-                project_lines(
-                    std::slice::from_mut(line),
-                    self.project_column_cells,
-                    self.project_separators,
-                    self.settings.line_height.0,
-                    self.project_html,
-                    self.project_graphics,
-                );
-            }
-        }
+        // A snapshot is a self-contained replay baseline, not an ever-growing audit log.
+        // Deltas retain exact edits until delivery; snapshots normalize the currently retained
+        // physical rows to Append operations so resynchronization remains bounded by MaxLog.
+        let history_operations = lines[..committed_line_count]
+            .iter()
+            .cloned()
+            .map(|line| PresentationHistoryOperation::Append { line })
+            .collect();
         PresentationSnapshot {
             revision: self.revision,
             title: self.title.clone(),
@@ -1956,6 +2007,10 @@ mod tests {
                     snapshot.history.logical_lines.truncate(retained);
                 }
                 PresentationOperation::Clear => snapshot.history.logical_lines.clear(),
+                PresentationOperation::TrimLines { count } => {
+                    let count = (count as usize).min(snapshot.history.logical_lines.len());
+                    snapshot.history.logical_lines.drain(..count);
+                }
                 PresentationOperation::SetTitle { title } => snapshot.title = title,
                 PresentationOperation::SetBackgrounds { backgrounds } => {
                     snapshot.backgrounds = backgrounds;
@@ -2319,10 +2374,13 @@ mod tests {
             ]
         );
         assert_eq!(snapshot.tooltip.normalized_format.unknown_bits, 1_u64 << 40);
-        assert!(snapshot.history.operations.iter().any(|operation| matches!(
-            operation,
-            PresentationHistoryOperation::SetButtonGeneration { generation: 1 }
-        )));
+        assert!(
+            snapshot
+                .history
+                .operations
+                .iter()
+                .all(|operation| matches!(operation, PresentationHistoryOperation::Append { .. }))
+        );
         assert!(matches!(
             &snapshot.history.logical_lines[0].runs[0],
             DisplayRun::Button {
@@ -2333,5 +2391,42 @@ mod tests {
         ));
         assert!(model.remove_background("SAME"));
         assert_eq!(model.snapshot().backgrounds.len(), 1);
+    }
+
+    #[test]
+    fn logical_line_count_tracks_reference_clearline_semantics() {
+        let mut model = PresentationModel::default();
+        model.append_text("one".into(), false);
+        model.append_text("two".into(), false);
+        assert_eq!(model.logical_line_count(), 2);
+
+        model.append_print_text("pending".into(), false, false);
+        model.delete_last_lines(2);
+        assert_eq!(model.logical_line_count(), 1);
+        assert_eq!(model.snapshot().history.logical_lines.len(), 1);
+
+        model.delete_last_lines(3);
+        assert_eq!(model.logical_line_count(), -2);
+    }
+
+    #[test]
+    fn max_log_trims_oldest_physical_lines_without_changing_linecount() {
+        let mut model = PresentationModel::default();
+        model.settings.maximum_physical_lines = 2;
+        model.append_text("one".into(), false);
+        model.append_text("two".into(), false);
+        model.append_text("three".into(), false);
+
+        let snapshot = model.snapshot();
+        assert_eq!(model.logical_line_count(), 3);
+        assert_eq!(snapshot.history.logical_lines.len(), 2);
+        assert_eq!(snapshot.history.operations.len(), 2);
+        assert!(
+            snapshot
+                .history
+                .operations
+                .iter()
+                .all(|operation| matches!(operation, PresentationHistoryOperation::Append { .. }))
+        );
     }
 }

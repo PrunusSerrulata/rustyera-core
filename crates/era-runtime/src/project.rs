@@ -384,6 +384,7 @@ fn build_project_inner_with_extensions(
                 project_revision: manifest.project_revision,
                 success,
                 diagnostics,
+                payload_required: false,
             },
             snapshot: None,
         };
@@ -492,6 +493,7 @@ fn build_project_inner_with_extensions(
             project_revision: manifest.project_revision,
             success,
             diagnostics,
+            payload_required: false,
         },
         snapshot: Some(NormalizedProjectSnapshot {
             manifest: manifest.clone(),
@@ -869,6 +871,7 @@ fn failed_with_incremental(
             project_revision: revision,
             success: false,
             diagnostics,
+            payload_required: false,
         },
         snapshot: None,
     }

@@ -92,7 +92,7 @@ impl RuntimeSession {
             system_menu: SystemMenuState::Title,
             load_slot_paths: Vec::new(),
             occupied_slot_paths: BTreeSet::new(),
-            slot_revisions: BTreeMap::new(),
+            slot_change_tokens: BTreeMap::new(),
             slot_labels: BTreeMap::new(),
             invalid_slot_paths: BTreeSet::new(),
             system_menu_host_request: None,
@@ -201,6 +201,7 @@ impl RuntimeSession {
                     transitions += 1;
                     continue;
                 };
+                synchronize_line_count(&mut self.presentation, &mut vm)?;
                 let report = vm.drive(
                     RunBudget {
                         maximum_instructions: remaining
@@ -359,13 +360,17 @@ impl RuntimeSession {
             );
         }
         match message {
-            RuntimeMessage::ProjectManifest(manifest) => self.load_project(
-                message_id,
-                &ProjectLoadRequest {
-                    manifest,
-                    compiled_cache_transfer_id: None,
-                },
-            ),
+            RuntimeMessage::ProjectManifest(manifest) => {
+                let identity = crate::compiled_cache::project_identity(&manifest);
+                self.load_project(
+                    message_id,
+                    &ProjectLoadRequest {
+                        identity,
+                        manifest: Some(manifest),
+                        compiled_cache_transfer_id: None,
+                    },
+                )
+            }
             RuntimeMessage::ProjectLoad(request) => self.load_project(message_id, &request),
             RuntimeMessage::ReturnToTitle(_) => self.return_to_title(message_id),
             RuntimeMessage::ProjectAnalysisRequest(request) => {
@@ -537,7 +542,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 21.0 is required".into(),
+                    message: "runtime protocol 22.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -843,22 +848,40 @@ impl RuntimeSession {
             None => None,
         };
         self.set_phase(RuntimePhase::LoadingProject)?;
-        let mut build = self.build_project_from_cache(request, cache_bytes.as_deref());
+        let mut build = match self.build_project_from_cache(request, cache_bytes.as_deref()) {
+            Ok(build) => build,
+            Err(report) => {
+                self.emit(RuntimeMessage::ProjectLoadReport(report), Some(message_id))?;
+                return self.set_phase(RuntimePhase::Ready);
+            }
+        };
         build.incremental.compact();
-        self.compiled_project_cache = match (
-            build.artifact.as_ref(),
-            build.snapshot.as_ref(),
-            build.report.success,
-        ) {
-            (Some(artifact), Some(snapshot), true) => crate::compiled_cache::encode(
-                &request.manifest,
-                &self.extension_declarations,
-                artifact,
-                &build.incremental,
-                snapshot,
-            )
-            .ok(),
-            _ => None,
+        let exact_cache_hit = build
+            .report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "runtime.compiled_cache_hit");
+        self.compiled_project_cache = if exact_cache_hit {
+            // The validated imported bytes are already the desired opaque export. Re-encoding
+            // the multi-gigabyte logical artifact would erase most of the warm-start win.
+            cache_bytes.map(Into::into)
+        } else {
+            match (
+                build.artifact.as_ref(),
+                build.snapshot.as_ref(),
+                build.report.success,
+            ) {
+                (Some(artifact), Some(snapshot), true) => crate::compiled_cache::encode(
+                    &snapshot.manifest,
+                    &self.extension_declarations,
+                    artifact,
+                    &build.incremental,
+                    snapshot,
+                )
+                .ok()
+                .map(Into::into),
+                _ => None,
+            }
         };
         self.incremental = build.incremental;
         self.artifact = build.artifact;
@@ -930,11 +953,11 @@ impl RuntimeSession {
         Ok(())
     }
 
-    fn build_project_from_cache(
+    pub(super) fn build_project_from_cache(
         &self,
         request: &ProjectLoadRequest,
         cache_bytes: Option<&[u8]>,
-    ) -> ProjectBuild {
+    ) -> Result<ProjectBuild, ProjectLoadReport> {
         let maximum =
             usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
         let mut cache_warning = None;
@@ -949,15 +972,15 @@ impl RuntimeSession {
                 },
             );
         let expected_key =
-            crate::compiled_cache::project_key(&request.manifest, &self.extension_declarations);
+            crate::compiled_cache::project_key(&request.identity, &self.extension_declarations);
         let mut build = match cached {
             Some(mut exact) if exact.key == expected_key => {
-                exact.snapshot.manifest = request.manifest.clone();
+                exact.snapshot.manifest.project_revision = request.identity.project_revision;
                 ProjectBuild {
                     artifact: Some(exact.artifact),
                     incremental: exact.incremental,
                     report: ProjectLoadReport {
-                        project_revision: request.manifest.project_revision,
+                        project_revision: request.identity.project_revision,
                         success: true,
                         diagnostics: vec![ProtocolDiagnostic {
                             code: "runtime.compiled_cache_hit".into(),
@@ -965,11 +988,50 @@ impl RuntimeSession {
                             message: "loaded the exact compiled project cache".into(),
                             source: None,
                         }],
+                        payload_required: false,
                     },
                     snapshot: Some(exact.snapshot),
                 }
             }
             cached => {
+                let Some(manifest) = request.manifest.as_ref() else {
+                    let mut diagnostics = Vec::new();
+                    if let Some(error) = cache_warning.take() {
+                        diagnostics.push(ProtocolDiagnostic {
+                            code: "runtime.compiled_cache_ignored".into(),
+                            severity: DiagnosticSeverity::Warning,
+                            message: error,
+                            source: None,
+                        });
+                    }
+                    diagnostics.push(ProtocolDiagnostic {
+                        code: "runtime.project_payload_required".into(),
+                        severity: DiagnosticSeverity::Information,
+                        message: "compiled cache is missing or does not match the project".into(),
+                        source: None,
+                    });
+                    return Err(ProjectLoadReport {
+                        project_revision: request.identity.project_revision,
+                        success: false,
+                        diagnostics,
+                        payload_required: true,
+                    });
+                };
+                let actual_identity = crate::compiled_cache::project_identity(manifest);
+                if actual_identity.source_digest != request.identity.source_digest {
+                    return Err(ProjectLoadReport {
+                        project_revision: request.identity.project_revision,
+                        success: false,
+                        diagnostics: vec![ProtocolDiagnostic {
+                            code: "runtime.project_identity_mismatch".into(),
+                            severity: DiagnosticSeverity::Error,
+                            message: "submitted project payload differs from its source identity"
+                                .into(),
+                            source: None,
+                        }],
+                        payload_required: false,
+                    });
+                }
                 let previous_incremental = cached
                     .as_ref()
                     .map_or(&self.incremental, |value| &value.incremental);
@@ -979,7 +1041,7 @@ impl RuntimeSession {
                     .or_else(|| self.vm.as_ref().map(|vm| vm.vm().artifact()))
                     .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
                 build_project_with_extensions(
-                    &request.manifest,
+                    manifest,
                     Some(previous_incremental),
                     previous_artifact,
                     &self.extension_declarations,
@@ -994,7 +1056,7 @@ impl RuntimeSession {
                 source: None,
             });
         }
-        build
+        Ok(build)
     }
 
     pub(super) fn finish_project_load(
@@ -1216,7 +1278,8 @@ impl RuntimeSession {
                 &self.incremental,
                 &cached_snapshot,
             )
-            .ok();
+            .ok()
+            .map(Into::into);
         }
         if let Some(snapshot) = &self.project_snapshot {
             self.presentation.configure_project(snapshot);
@@ -1554,7 +1617,7 @@ impl RuntimeSession {
         self.system_menu = system_menu;
         self.load_slot_paths = payload.load_slot_paths;
         self.occupied_slot_paths = payload.occupied_slot_paths;
-        self.slot_revisions.clear();
+        self.slot_change_tokens.clear();
         self.slot_labels.clear();
         self.invalid_slot_paths.clear();
         self.system_menu_host_request = payload.system_menu_host_request;
@@ -1695,7 +1758,7 @@ impl RuntimeSession {
         self.system_menu = SystemMenuState::Title;
         self.load_slot_paths.clear();
         self.occupied_slot_paths.clear();
-        self.slot_revisions.clear();
+        self.slot_change_tokens.clear();
         self.slot_labels.clear();
         self.invalid_slot_paths.clear();
         self.system_menu_host_request = None;

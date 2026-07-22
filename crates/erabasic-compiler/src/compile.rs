@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::Write;
 
 use erabasic_analyzer::AnalyzedProject;
 use erabasic_bytecode::{
@@ -198,9 +199,7 @@ fn compile_project_inner(
         };
     }
 
-    let options_bytes = serde_json::to_vec(&options.optimization)
-        .expect("compiler semantic options are serializable");
-    let compiler_options = Digest::hash("rustyera.compiler.options.v1", &[&options_bytes]);
+    let compiler_options = canonical_digest("rustyera.compiler.options.v2", &options.optimization);
     let function_keys = function_keys(&project.program.functions, &project.program.sources);
     let variable_keys = variable_keys(&project.program.variables, &function_keys);
     let functions_by_id = project
@@ -224,17 +223,13 @@ fn compile_project_inner(
         source_indices: &source_indices,
         host_registry,
     };
-    let shared_dependencies = serde_json::to_vec(&(
-        &project.program.variables,
-        host_registry,
-        options.optimization,
-    ))
-    .expect("compiler dependencies are serializable");
-    // Hash the project-wide block once. Feeding it into BLAKE3 for every function
-    // made cold compilation O(function count × static-data size) on large games.
-    let shared_dependencies = Digest::hash(
-        "rustyera.compiler.shared-dependencies.v1",
-        &[&shared_dependencies],
+    let shared_dependencies = canonical_digest(
+        "rustyera.compiler.shared-dependencies.v2",
+        &(
+            &project.program.variables,
+            host_registry,
+            options.optimization,
+        ),
     );
     let previous_functions = previous
         .filter(|state| state.compiler_abi == erabasic_bytecode::COMPILER_ABI_VERSION)
@@ -250,11 +245,15 @@ fn compile_project_inner(
             .par_iter()
             .map(|function| {
                 let key = function_keys[&function.id];
-                let function_bytes =
-                    serde_json::to_vec(function).expect("HIR function is serializable");
+                let function_digest =
+                    canonical_digest("rustyera.compiler.hir-function.v3", function);
                 let cache_key = Digest::hash(
-                    "rustyera.compiler.function.v2",
-                    &[&function_bytes, &shared_dependencies.0, &compiler_options.0],
+                    "rustyera.compiler.function.v3",
+                    &[
+                        &function_digest.0,
+                        &shared_dependencies.0,
+                        &compiler_options.0,
+                    ],
                 );
                 if let Some(entry) = previous_functions
                     .and_then(|functions| functions.get(&key))
@@ -499,6 +498,29 @@ fn compile_project_inner(
         incremental_state,
         diagnostics,
         stats,
+    }
+}
+
+fn canonical_digest<T: Serialize + ?Sized>(domain: &str, value: &T) -> Digest {
+    let mut writer = DigestWriter {
+        hasher: blake3::Hasher::new_derive_key(domain),
+    };
+    serde_json::to_writer(&mut writer, value).expect("compiler identity values are serializable");
+    Digest(*writer.hasher.finalize().as_bytes())
+}
+
+struct DigestWriter {
+    hasher: blake3::Hasher,
+}
+
+impl Write for DigestWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.hasher.update(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

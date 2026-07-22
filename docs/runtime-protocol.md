@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 21.0 and debug protocol 4.0 over common wire 2.0 are
+dynamic library. Runtime protocol 22.0 and debug protocol 4.0 over common wire 2.0 are
 development contracts: by explicit project policy they
 do not promise backward compatibility until a frontend exists.
 
@@ -63,7 +63,7 @@ The normative state flow is:
 ```text
 ABI session allocation
   -> ClientHello / ServerHello
-  -> ProjectManifest / ProjectLoadReport
+  -> ProjectLoad / ProjectLoadReport
   -> Ready
   -> Start(new game | traditional save | exact VM snapshot)
   -> Running <-> WaitingInput
@@ -85,12 +85,15 @@ presentation/runtime snapshot rather than guessing missing deltas.
 
 ## Project and external services
 
-At project load or reload, the frontend submits a deterministically sorted manifest.
+At project load the frontend first submits a deterministic source identity and may attach an
+opaque compiled-project cache. If the cache is exact, source payloads are not transferred. On a
+miss, the runtime reports `payload_required` and the frontend retries with the deterministically
+sorted full manifest. Reload always submits the changed source payloads.
 Each entry contains a normalized relative path, category and one of UTF-8 text, binary
 bytes or the I/O error observed by the frontend. Source positions always use UTF-8 byte
 offsets. Absolute, drive-qualified and parent-traversing paths are invalid.
 
-Protocol 21 may attach an imported opaque compiled-project cache to the load request. The runtime
+Protocol 22 may attach an imported opaque compiled-project cache to the load request. The runtime
 validates its format, digest, bytecode and source/extension identity. An exact identity skips
 analysis and compilation; a changed identity supplies the previous artifact and compact compiler
 state for incremental lowering. Successful builds can be exported through the existing bounded
@@ -99,7 +102,7 @@ and never consult source files or this cache.
 
 Runtime-initiated work is asynchronous:
 
-- storage operations cover reads, metadata queries, atomic/idempotent writes, recursive or
+- storage operations cover reads, stable bounded range reads, metadata queries, atomic/idempotent writes, recursive or
   top-level listing and deletion in
   project, save, global-save, DAT, log and resource namespaces;
 - platform services cover font metrics, image/canvas operations, audio, networking,
@@ -215,7 +218,8 @@ supported locale. Canonical system text carries both the runtime-selected text a
 with arguments, allowing accessible clients to understand its role without becoming authoritative
 for wording or game state.
 
-The runtime stores a revisioned semantic presentation model. Protocol 20 sends one full snapshot
+The runtime stores a revisioned semantic presentation model. Protocol 22 retains the Protocol 20
+snapshot/delta model: it sends one full snapshot
 as the synchronization baseline, then emits ordered deltas for changed lines and recoverable
 fields; resynchronization always establishes a new full baseline. The snapshot includes an ordered
 semantic history journal, text/styles/buttons, typed HTML,
@@ -240,6 +244,10 @@ REDRAW bit 2 is an acknowledged `PresentNow` effect, while snapshots remain sync
 automatic paint is disabled. Pixel buffers, font objects
 and audio devices remain frontend caches. Content-addressed source-image facts remain distinct
 from realized canvas and presentation observations.
+
+`TrimLines` removes only the oldest retained physical lines. It implements runtime-owned `MaxLog`
+without changing EraBasic `LINECOUNT`, whose value follows committed output and `CLEARLINE`
+semantics independently of bounded frontend history.
 
 Canvas replay covers pixel writes, fills, brush/pen/font/dash state, lines, text, sprite and
 canvas composition, color matrices, masks and rotation. Source-canvas commands bind the source

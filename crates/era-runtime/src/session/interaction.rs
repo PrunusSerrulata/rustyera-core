@@ -1206,25 +1206,15 @@ impl RuntimeSession {
                     self.operations.restore_active_input(pending);
                     return self.reject(0, CommandErrorCode::InvalidValue, "unknown delete slot");
                 };
-                let Some(revision) = self.slot_revisions.get(&path).cloned() else {
-                    self.operations.restore_active_input(pending);
-                    return self.reject(
-                        0,
-                        CommandErrorCode::InvalidState,
-                        "save slot revision is unavailable",
-                    );
-                };
                 let save = self.system_menu == SystemMenuState::SaveSlots;
                 self.close_wait(pending.wait.wait_id)?;
                 self.issue_storage(
-                    PendingStorage::DeleteMenuSlot {
+                    PendingStorage::StatDeleteMenuSlot {
                         save,
                         path: path.clone(),
                     },
                     StorageNamespace::Save,
-                    StorageOperation::Delete {
-                        precondition: StoragePrecondition::Revision(revision),
-                    },
+                    StorageOperation::Stat,
                     path,
                 )
             }
@@ -1253,7 +1243,7 @@ impl RuntimeSession {
                 if target_page != self.system_menu_page {
                     self.close_wait(pending.wait.wait_id)?;
                     self.system_menu_page = target_page;
-                    return self.render_slot_menu(menu == SystemMenuState::SaveSlots);
+                    return self.scan_slot_page(menu == SystemMenuState::SaveSlots);
                 }
                 let path = save_slot_path(slot);
                 if menu == SystemMenuState::SaveSlots {
