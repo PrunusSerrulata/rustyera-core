@@ -4358,3 +4358,82 @@ fn effect_acknowledgements_are_exact_and_failures_become_diagnostics() {
             if code == "runtime.device_effect_failed"
     ));
 }
+
+#[test]
+fn return_to_title_reuses_the_loaded_artifact_without_project_loading() {
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8("@SYSTEM_TITLE\nWAIT\nRETURN\n".into()),
+            content_hash: None,
+        }],
+    };
+    let mut build = crate::project::build_project(&manifest, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    let expected = build
+        .artifact
+        .as_ref()
+        .unwrap()
+        .artifact()
+        .manifest
+        .artifact_id;
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::Ready;
+    session.epoch = SessionEpoch(1);
+    session.artifact = build.artifact.take();
+    session.incremental = build.incremental;
+    session.project_snapshot = build.snapshot;
+    session.start_new_game(7).unwrap();
+
+    session.return_to_title(99).unwrap();
+
+    assert_eq!(session.phase, RuntimePhase::Starting);
+    assert_eq!(
+        session
+            .artifact
+            .as_ref()
+            .unwrap()
+            .artifact()
+            .manifest
+            .artifact_id,
+        expected
+    );
+    assert!(
+        drain(&mut session)
+            .iter()
+            .all(|message| !matches!(message, RuntimeMessage::ProjectLoadReport(_)))
+    );
+}
+
+#[test]
+fn project_load_rejects_an_uncommitted_cache_without_changing_phase() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::Ready;
+    session.epoch = SessionEpoch(1);
+
+    session
+        .load_project(
+            99,
+            &ProjectLoadRequest {
+                manifest: ProjectManifest {
+                    project_revision: 1,
+                    files: Vec::new(),
+                },
+                compiled_cache_transfer_id: Some(123),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(session.phase, RuntimePhase::Ready);
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(CommandRejected {
+            code: CommandErrorCode::InvalidValue,
+            ..
+        })
+    )));
+}

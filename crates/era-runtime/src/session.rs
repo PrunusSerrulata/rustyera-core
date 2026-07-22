@@ -31,7 +31,7 @@ use era_runtime_protocol::{
     OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION, OpenUrlRequest, OpenUrlResponse,
     POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
     PointerStateResponse, PresentationLength, ProjectAnalysisRequest, ProjectLoadReport,
-    ProjectManifest, ProjectionIntegerResponse, ProjectionObservation, ProjectionQueryContext,
+    ProjectLoadRequest, ProjectionIntegerResponse, ProjectionObservation, ProjectionQueryContext,
     ProjectionState, ProjectionStringIndexRequest, ProjectionStringResponse, ProtocolDiagnostic,
     RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION,
     RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault, RuntimeFeature,
@@ -75,7 +75,7 @@ use crate::presentation::{
 #[cfg(test)]
 use crate::project::build_project;
 use crate::project::{
-    NormalizedProjectSnapshot, apply_project_delta, build_project_with_extensions,
+    NormalizedProjectSnapshot, ProjectBuild, apply_project_delta, build_project_with_extensions,
 };
 use crate::runtime_snapshot::{
     self, CULTURE_TABLE_VERSION, RUNTIME_SNAPSHOT_FORMAT_VERSION, RuntimeSnapshotPayload,
@@ -330,6 +330,7 @@ pub struct RuntimeSession {
     pending_project_load: Option<PendingProjectLoad>,
     pending_candidate_commit: Option<PendingCandidateCommit>,
     candidate_clock: Option<LocalDateTimeResponse>,
+    compiled_project_cache: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

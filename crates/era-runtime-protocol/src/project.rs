@@ -87,6 +87,16 @@ pub struct ProjectManifest {
     pub files: Vec<SubmittedFile>,
 }
 
+/// Load a project, optionally seeding the build from an opaque runtime-produced cache.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectLoadRequest {
+    #[n(0)]
+    pub manifest: ProjectManifest,
+    #[n(1)]
+    pub compiled_cache_transfer_id: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]

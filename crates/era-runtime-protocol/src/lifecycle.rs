@@ -388,6 +388,11 @@ pub struct StartRequest {
     pub mode: StartMode,
 }
 
+/// Discard the active game timeline and enter the title flow without reloading the project.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ReturnToTitleRequest {}
+
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]
@@ -396,6 +401,9 @@ pub enum StateExportKind {
     TraditionalSave,
     #[n(1)]
     VmSnapshot,
+    /// Opaque, versioned compiler cache. Frontends persist but never interpret these bytes.
+    #[n(2)]
+    CompiledProjectCache,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

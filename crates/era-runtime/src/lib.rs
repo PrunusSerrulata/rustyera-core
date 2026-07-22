@@ -4,6 +4,7 @@
 //! rendering, audio, or operating-system input work. Those operations cross the
 //! versioned frontend protocol and are committed only after correlated responses.
 
+mod compiled_cache;
 mod controller;
 mod host;
 mod key_macro;
