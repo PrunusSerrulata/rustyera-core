@@ -291,7 +291,12 @@ impl Vm {
             }
 
             if matches!(fiber.state, FiberState::Runnable) {
-                if used >= quantum && !yielded {
+                // A fiber quantum is scheduler preemption, not evidence that the caller's
+                // instruction budget was exhausted. Large finite EraBasic routines can span
+                // many quanta in one run slice (for example, the eraTW all-items scan). Count
+                // only slices that actually consume the caller-visible budget so such work is
+                // not mistaken for persistent runaway execution.
+                if report.instructions >= budget.maximum_instructions && !yielded {
                     fiber.consecutive_budget_exhaustions =
                         fiber.consecutive_budget_exhaustions.saturating_add(1);
                     if fiber.consecutive_budget_exhaustions
