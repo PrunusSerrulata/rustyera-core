@@ -70,6 +70,8 @@ UV_CACHE_DIR=/tmp/rustyera-uv-cache \
   `ERA_AUDIT_FALLBACK_ANSWER` 提供非交互 fallback。stdout 输出每次 wait、答案、进度和
   `DAY1_MILESTONE`。退出码 0 表示到达里程碑或成功导出 snapshot，1 表示 runtime/前端错误，
   2 表示输入耗尽，3 表示超时，4 表示扫描完等待点仍无合格 snapshot。
+- `ERA_AUDIT_LAYOUT_CHECK=1` 会从主菜单进入日 1，确认游戏菜单的 Look 行已显示，再选择移动、提交 `C`
+  并确认切换前后的地图按钮行都在输入等待处结束；成功时输出 `TUI_LAYOUT_OK`。
 - 设置 `ERA_AUDIT_SNAPSHOT_PATH=/tmp/name.snapshot` 可在目标等待点导出；再设置
   `ERA_AUDIT_SNAPSHOT_EVERY_WAIT=1` 会从每个无 deadline 的稳定等待开始寻找首个合格点。
   成功时 stdout 输出 `VM_SNAPSHOT_BYTES`。

@@ -40,7 +40,8 @@ The repository also includes `frontends/era-tui`, a Python 3.12/Textual applicat
 frontend managed by `uv`. It dynamically loads `era-runtime-capi`, pumps canonical CBOR
 runtime and debug envelopes on a dedicated worker thread, renders the normalized text model,
 and owns project scanning, storage, dialogs, keyboard/mouse collection, and terminal-specific
-projection services. It intentionally does not advertise image, video, audio, or HTML rendering.
+projection services. It renders the normalized HTML console dialect as terminal rows and
+buttons, while image, video, and audio capabilities remain intentionally unadvertised.
 
 The currently implemented data flows are:
 
