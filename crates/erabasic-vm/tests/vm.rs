@@ -1751,6 +1751,20 @@ fn persistent_budget_exhaustion_trips_the_watchdog() {
     let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
     let mut host = ReadyHost::default();
     let mut natives = NativeServiceRegistry::default();
+    let first_report = vm.run_slice(
+        &mut host,
+        &mut natives,
+        RunBudget {
+            maximum_instructions: 4,
+            maximum_host_calls: 0,
+            fiber_quantum: 2,
+        },
+    );
+    assert!(matches!(
+        vm.fiber_status(fiber),
+        Some(FiberStatus::Runnable)
+    ));
+    assert!(first_report.events.is_empty());
     let report = vm.run_slice(
         &mut host,
         &mut natives,
@@ -1765,6 +1779,43 @@ fn persistent_budget_exhaustion_trips_the_watchdog() {
         Some(FiberStatus::Faulted(ref fault)) if fault.code == VmFaultCode::RunawayExecution
     ));
     assert!(report.events.iter().any(|event| matches!(
+        event,
+        VmEvent::FiberFaulted { fault, .. } if fault.code == VmFaultCode::RunawayExecution
+    )));
+}
+
+#[test]
+fn finite_work_spanning_many_fiber_quanta_does_not_trip_budget_watchdog() {
+    let entry = SymbolKey::derive("test.function", b"finite");
+    let mut code = vec![erabasic_bytecode::EncodedInstruction::new(Opcode::Nop, Vec::new()); 8];
+    code.push(opcode::return_value(false));
+    let artifact = artifact(vec![function(entry, "FINITE", code)], Vec::new());
+    let mut vm = Vm::new(
+        validated(&artifact),
+        VmConfig {
+            maximum_consecutive_budget_exhaustions: 1,
+            ..VmConfig::default()
+        },
+    );
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = ReadyHost::default();
+    let mut natives = NativeServiceRegistry::default();
+    let report = vm.run_slice(
+        &mut host,
+        &mut natives,
+        RunBudget {
+            maximum_instructions: 32,
+            maximum_host_calls: 0,
+            fiber_quantum: 2,
+        },
+    );
+
+    assert_eq!(report.instructions, 9);
+    assert!(matches!(
+        vm.fiber_status(fiber),
+        Some(FiberStatus::Completed(None))
+    ));
+    assert!(!report.events.iter().any(|event| matches!(
         event,
         VmEvent::FiberFaulted { fault, .. } if fault.code == VmFaultCode::RunawayExecution
     )));
