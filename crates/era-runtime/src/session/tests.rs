@@ -2809,7 +2809,7 @@ fn project_title_can_open_loadgame() {
 }
 
 #[test]
-fn vm_snapshot_export_uses_the_latest_system_root_as_primary() {
+fn vm_snapshot_export_accepts_a_runtime_owned_system_wait() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(
         &mut session,
@@ -2834,8 +2834,7 @@ fn vm_snapshot_export_uses_the_latest_system_root_as_primary() {
                 relative_path: "snapshot.erb".into(),
                 category: FileCategory::Erb,
                 payload: FilePayload::Utf8(
-                    "@SYSTEM_TITLE\nBEGIN SHOP\n@EVENTSHOP\nRETURN\n@SHOW_SHOP\nINPUT\nRETURN\n"
-                        .into(),
+                    "@SYSTEM_TITLE\nBEGIN SHOP\n@EVENTSHOP\nRETURN\n@SHOW_SHOP\nRETURN\n".into(),
                 ),
                 content_hash: None,
             }],
@@ -2858,6 +2857,12 @@ fn vm_snapshot_export_uses_the_latest_system_root_as_primary() {
         }
     }
     assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    assert!(
+        session
+            .operations
+            .active_input()
+            .is_some_and(|input| input.wait.system_input && input.host_request.is_none())
+    );
     submit(
         &mut session,
         3,

@@ -1504,6 +1504,49 @@ fn stable_wait_snapshot_round_trips_and_requires_exact_artifact() {
 }
 
 #[test]
+fn quiescent_vm_snapshot_round_trips_without_host_wait_rebinding() {
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = ReadyHost::default();
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    assert!(matches!(
+        vm.fiber_status(fiber),
+        Some(FiberStatus::Completed(_))
+    ));
+    assert_eq!(
+        vm.snapshot_eligibility(&natives),
+        SnapshotEligibility::Eligible
+    );
+
+    let snapshot = vm.snapshot(&natives).unwrap();
+    let mut restore_host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let restored = Vm::restore_snapshot(
+        validated(&artifact),
+        VmConfig::default(),
+        snapshot,
+        &mut restore_host,
+        &mut natives,
+    )
+    .unwrap();
+    assert!(restore_host.rebound.is_empty());
+    assert!(matches!(
+        restored.fiber_status(fiber),
+        Some(FiberStatus::Completed(_))
+    ));
+}
+
+#[test]
 fn transient_qte_wait_cannot_be_snapshotted() {
     let (artifact, entry) = host_artifact(HostSnapshotCapability::StableWait);
     let mut vm = Vm::new(validated(&artifact), VmConfig::default());
