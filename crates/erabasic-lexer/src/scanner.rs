@@ -496,6 +496,7 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FormattedTokenPart;
 
     #[test]
     fn lexes_unicode_and_longest_operators() {
@@ -515,6 +516,41 @@ mod tests {
             output.tokens[0].kind,
             TokenKind::String("a b\u{3000}c\n".into())
         );
+    }
+
+    #[test]
+    fn formatted_text_uses_emuera_escapes_and_can_disable_triples() {
+        let macros = MacroTable::new();
+        let (formatted, diagnostics) =
+            lex_formatted("界\\sA\\SB\\tC\\nD\\%***", &LexerConfig::default(), &macros);
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+        assert!(matches!(
+            formatted.parts.as_slice(),
+            [
+                FormattedTokenPart::Text(text),
+                FormattedTokenPart::Triple { symbol: '*', span }
+            ] if text == "界 A\u{3000}B\tC\nD%" && *span == Span::new(17, 20)
+        ));
+
+        let config = LexerConfig {
+            ignore_triple_symbols: true,
+            ..LexerConfig::default()
+        };
+        let (formatted, diagnostics) = lex_formatted("***", &config, &macros);
+        assert!(diagnostics.is_empty());
+        assert!(matches!(
+            formatted.parts.as_slice(),
+            [FormattedTokenPart::Text(text)] if text == "***"
+        ));
+    }
+
+    #[test]
+    fn formatted_escape_at_end_reports_a_utf8_span() {
+        let (_, diagnostics) = lex_formatted("界\\", &LexerConfig::default(), &MacroTable::new());
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == DiagnosticCode::UnterminatedFormattedString
+                && diagnostic.span == Span::new(0, 4)
+        }));
     }
 
     #[test]

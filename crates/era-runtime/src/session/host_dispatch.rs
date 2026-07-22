@@ -3036,10 +3036,18 @@ impl RuntimeSession {
         if name == "PRINT_PALAM" {
             let target = u64::try_from(integer_argument_value(&request.arguments, 0)?)
                 .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
-            for text in format_character_palam(vm, target)? {
+            let per_line = self
+                .project_snapshot
+                .as_ref()
+                .map_or(3, |project| project.print_c_per_line.max(1));
+            for (index, text) in format_character_palam(vm, target)?.into_iter().enumerate() {
                 self.presentation
                     .append_column_cell(text, CellAlignment::Right);
+                if (index + 1) % usize::try_from(per_line).unwrap_or(usize::MAX) == 0 {
+                    self.presentation.flush_pending_line();
+                }
             }
+            self.presentation.flush_pending_line();
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
@@ -3047,8 +3055,9 @@ impl RuntimeSession {
             let project = self.project_snapshot.as_ref().ok_or_else(|| {
                 RuntimeError::Internal("PRINT_SHOPITEM has no loaded project".into())
             })?;
+            let per_line = project.print_c_per_line.max(1);
             let entries = format_shop_items(vm, project)?;
-            for (text, value) in entries {
+            for (index, (text, value)) in entries.into_iter().enumerate() {
                 let token = self.allocate_interaction();
                 self.presentation.append_button(
                     text,
@@ -3057,7 +3066,11 @@ impl RuntimeSession {
                     Some(CellAlignment::Left),
                 );
                 self.command_intents.insert(token, VmValue::Integer(value));
+                if (index + 1) % usize::try_from(per_line).unwrap_or(usize::MAX) == 0 {
+                    self.presentation.flush_pending_line();
+                }
             }
+            self.presentation.flush_pending_line();
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
@@ -3072,30 +3085,57 @@ impl RuntimeSession {
             }
             if name == "REUSELASTLINE" {
                 self.presentation.print_temporary_line(text);
-            } else if is_column_print(&name) {
-                let alignment = if name.ends_with("LC") {
-                    CellAlignment::Left
-                } else {
-                    CellAlignment::Right
-                };
-                self.presentation.append_column_cell(text, alignment);
-            } else if print_uses_default_color(&name) {
-                self.presentation
-                    .append_default_color_text(text, false, print_commits_line(&name));
-            } else if name.starts_with("PRINTPLAIN") {
-                self.presentation
-                    .append_plain_print_text(text, false, print_commits_line(&name));
+            } else if let Some(alignment) = column_print_alignment(&name) {
+                // EmueraConsole.PrintC ignores empty strings entirely.
+                if !text.is_empty() {
+                    if print_uses_default_color(&name) {
+                        self.presentation
+                            .append_default_color_column_cell(text, alignment);
+                    } else {
+                        self.presentation.append_column_cell(text, alignment);
+                    }
+                    let values = self.presentation.last_column_auto_button_values();
+                    let tokens = values
+                        .iter()
+                        .map(|_| self.allocate_interaction())
+                        .collect::<Vec<_>>();
+                    for (token, value) in self.presentation.bind_last_column_auto_buttons(&tokens) {
+                        self.command_intents.insert(token, VmValue::Integer(value));
+                    }
+                }
             } else {
-                self.presentation
-                    .append_print_text(text, false, print_commits_line(&name));
-            }
-            if print_commits_line(&name) && !name.starts_with("PRINTPLAIN") {
-                let count = self.presentation.last_line_auto_button_values().len();
-                let tokens = (0..count)
-                    .map(|_| self.allocate_interaction())
-                    .collect::<Vec<_>>();
-                for (token, value) in self.presentation.bind_last_line_auto_buttons(&tokens) {
-                    self.command_intents.insert(token, VmValue::Integer(value));
+                let default_color = print_uses_default_color(&name);
+                let plain = name.starts_with("PRINTPLAIN");
+                let commit_at_end = print_commits_line(&name);
+                let mut fragments = text.split('\n').peekable();
+                while let Some(fragment) = fragments.next() {
+                    let line_break = fragments.peek().is_some();
+                    if default_color {
+                        self.presentation.append_default_color_text(
+                            fragment.to_owned(),
+                            false,
+                            false,
+                        );
+                    } else if plain {
+                        self.presentation.append_plain_print_text(
+                            fragment.to_owned(),
+                            false,
+                            false,
+                        );
+                    } else {
+                        self.presentation
+                            .append_print_text(fragment.to_owned(), false, false);
+                    }
+                    if line_break || commit_at_end {
+                        if default_color {
+                            self.presentation.force_default_color_new_line();
+                        } else {
+                            self.presentation.force_new_line();
+                        }
+                        if !plain {
+                            bind_last_output_buttons(self);
+                        }
+                    }
                 }
             }
             if name.ends_with('W') {
@@ -3502,6 +3542,18 @@ fn bind_html_document(
         Ok(())
     }
     visit(session, &mut document.nodes, false)
+}
+
+fn bind_last_output_buttons(session: &mut RuntimeSession) {
+    let count = session.presentation.last_line_auto_button_values().len();
+    let tokens = (0..count)
+        .map(|_| session.allocate_interaction())
+        .collect::<Vec<_>>();
+    for (token, value) in session.presentation.bind_last_line_auto_buttons(&tokens) {
+        session
+            .command_intents
+            .insert(token, VmValue::Integer(value));
+    }
 }
 
 fn mixed_lengths(arguments: &[VmValue]) -> Result<Vec<PresentationLength>, RuntimeError> {

@@ -9,6 +9,7 @@ blake3.workspace = true
 erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-data = { path = "../erabasic-data" }
 erabasic-validator = { path = "../erabasic-validator" }
+encoding_rs.workspace = true
 flate2.workspace = true
 regex.workspace = true
 quick-xml.workspace = true

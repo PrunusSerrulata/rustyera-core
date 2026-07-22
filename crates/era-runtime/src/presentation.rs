@@ -44,9 +44,7 @@ pub(crate) struct PresentationModel {
     audio: Vec<AudioState>,
     tooltip: TooltipSettings,
     resources: ResourceReplay,
-    print_c_per_line: u32,
     print_c_length: u32,
-    pending_column_cells: u32,
     /// Frontend delivery bookkeeping is transport state, not authoritative game state.
     #[serde(skip)]
     delivery: PresentationDelivery,
@@ -141,9 +139,7 @@ impl Default for PresentationModel {
                 normalized_format: TooltipFormat::default(),
             },
             resources: ResourceReplay::default(),
-            print_c_per_line: 3,
             print_c_length: 25,
-            pending_column_cells: 0,
             delivery: PresentationDelivery::default(),
         }
     }
@@ -276,7 +272,6 @@ impl PresentationModel {
         if count != 0 && !self.pending_runs.is_empty() {
             self.pending_runs.clear();
             self.pending_temporary = false;
-            self.pending_column_cells = 0;
             count -= 1;
         }
         let keep = self.lines.len().saturating_sub(count);
@@ -296,7 +291,6 @@ impl PresentationModel {
     pub(crate) fn print_temporary_line(&mut self, text: String) {
         if !self.pending_runs.is_empty() && self.pending_temporary {
             self.pending_runs.clear();
-            self.pending_column_cells = 0;
         } else if self.lines.last().is_some_and(|line| line.temporary) {
             self.lines.pop();
         }
@@ -324,6 +318,12 @@ impl PresentationModel {
     /// Append PRINT-family text to the canonical logical line buffer.
     pub(crate) fn append_print_text(&mut self, text: String, temporary: bool, commit: bool) {
         self.pending_temporary |= temporary;
+        if text.is_empty() {
+            if commit {
+                self.force_new_line();
+            }
+            return;
+        }
         self.pending_runs.push(self.text_run(text));
         self.bump();
         if commit {
@@ -334,6 +334,12 @@ impl PresentationModel {
     /// Append text that must remain outside automatic `[value]` button grouping.
     pub(crate) fn append_plain_print_text(&mut self, text: String, temporary: bool, commit: bool) {
         self.pending_temporary |= temporary;
+        if text.is_empty() {
+            if commit {
+                self.force_new_line();
+            }
+            return;
+        }
         self.pending_plain_runs.insert(self.pending_runs.len());
         self.pending_runs.push(self.text_run(text));
         self.bump();
@@ -364,11 +370,60 @@ impl PresentationModel {
             // Emuera's default PrintCLength is 25. This is layout intent, not padding.
             preferred_columns: self.print_c_length,
         });
-        self.pending_column_cells = self.pending_column_cells.saturating_add(1);
         self.bump();
-        if self.pending_column_cells >= self.print_c_per_line {
+    }
+
+    pub(crate) fn append_default_color_column_cell(
+        &mut self,
+        text: String,
+        alignment: CellAlignment,
+    ) {
+        let foreground = self.current_style.foreground;
+        self.current_style.foreground = self.default_style.foreground;
+        self.append_column_cell(text, alignment);
+        self.current_style.foreground = foreground;
+    }
+
+    pub(crate) fn last_column_auto_button_values(&self) -> Vec<i64> {
+        let Some(DisplayRun::ColumnCell { content, .. }) = self.pending_runs.last() else {
+            return Vec::new();
+        };
+        auto_button_values(content, &BTreeSet::new())
+    }
+
+    pub(crate) fn bind_last_column_auto_buttons(
+        &mut self,
+        tokens: &[InteractionToken],
+    ) -> Vec<(InteractionToken, i64)> {
+        let Some(DisplayRun::ColumnCell { content, .. }) = self.pending_runs.last_mut() else {
+            return Vec::new();
+        };
+        let bindings = bind_auto_buttons(content, &BTreeSet::new(), tokens, self.button_generation);
+        if !bindings.is_empty() {
+            self.bump();
+        }
+        bindings
+    }
+
+    pub(crate) fn flush_pending_line(&mut self) {
+        if !self.pending_runs.is_empty() {
             self.commit_line();
         }
+    }
+
+    pub(crate) fn force_new_line(&mut self) {
+        if self.pending_runs.is_empty() {
+            self.pending_runs.push(self.text_run(String::new()));
+            self.bump();
+        }
+        self.commit_line();
+    }
+
+    pub(crate) fn force_default_color_new_line(&mut self) {
+        let foreground = self.current_style.foreground;
+        self.current_style.foreground = self.default_style.foreground;
+        self.force_new_line();
+        self.current_style.foreground = foreground;
     }
 
     pub(crate) fn append_separator(&mut self, pattern: String) {
@@ -461,7 +516,6 @@ impl PresentationModel {
             return String::new();
         }
         let runs = std::mem::take(&mut self.pending_runs);
-        self.pending_column_cells = 0;
         self.pending_temporary = false;
         let mut output = String::new();
         for run in &runs {
@@ -866,7 +920,6 @@ impl PresentationModel {
         self.settings.button_focus_foreground =
             rgb_color(i64::from(color("FocusColor").unwrap_or(0x00ff_ff00)));
         self.current_style = self.default_style.clone();
-        self.print_c_per_line = project.print_c_per_line.max(1);
         self.print_c_length = project.print_c_length.max(1);
         self.delivery.dirty.settings = true;
         self.bump();
@@ -883,7 +936,6 @@ impl PresentationModel {
             runs: std::mem::take(&mut self.pending_runs),
         };
         self.pending_temporary = false;
-        self.pending_column_cells = 0;
         self.next_line = self.next_line.saturating_add(1);
         self.lines.push(line.clone());
         if self.replace_next_temporary {
@@ -929,14 +981,10 @@ impl PresentationModel {
                 alignment,
                 preferred_columns: self.print_c_length,
             });
-            self.pending_column_cells = self.pending_column_cells.saturating_add(1);
         } else {
             self.pending_runs.push(button);
         }
         self.bump();
-        if column_alignment.is_some() && self.pending_column_cells >= self.print_c_per_line {
-            self.commit_line();
-        }
     }
 
     fn append_button_with_system_text(
@@ -1736,10 +1784,19 @@ fn project_runs(
                         preferred_columns,
                     });
                 } else {
-                    if !projected.is_empty() {
-                        projected.push(plain_text(" ".into(), line_height));
+                    let width = projected_text_width(&content);
+                    let padding = " ".repeat(
+                        usize::try_from(preferred_columns)
+                            .unwrap_or(usize::MAX)
+                            .saturating_sub(width),
+                    );
+                    if alignment == CellAlignment::Right && !padding.is_empty() {
+                        projected.push(plain_text(padding.clone(), line_height));
                     }
                     projected.extend(content);
+                    if alignment == CellAlignment::Left && !padding.is_empty() {
+                        projected.push(plain_text(padding, line_height));
+                    }
                 }
             }
             DisplayRun::Separator { pattern, .. } if !separators => {
@@ -1766,6 +1823,24 @@ fn project_runs(
         }
     }
     projected
+}
+
+fn projected_text_width(runs: &[DisplayRun]) -> usize {
+    runs.iter()
+        .map(|run| match run {
+            DisplayRun::Text { text, .. } => UnicodeWidthStr::width(text.as_str()),
+            DisplayRun::Button { runs, .. } | DisplayRun::ColumnCell { content: runs, .. } => {
+                projected_text_width(runs)
+            }
+            DisplayRun::HtmlDocument { document } => UnicodeWidthStr::width(
+                strip_markup(&erabasic_html::serialize_document(document)).as_str(),
+            ),
+            DisplayRun::Image { alt_text, .. } => {
+                alt_text.as_deref().map_or(0, UnicodeWidthStr::width)
+            }
+            DisplayRun::Shape { .. } | DisplayRun::Separator { .. } | DisplayRun::Space { .. } => 0,
+        })
+        .sum()
 }
 
 fn strip_markup(markup: &str) -> String {
@@ -1992,17 +2067,21 @@ mod tests {
     }
 
     #[test]
-    fn plain_projection_keeps_cell_content_and_inserts_one_ascii_space() {
+    fn plain_projection_pads_column_cells_to_their_preferred_width() {
         let mut model = PresentationModel::default();
         model.set_projection(false, false, false, false, false);
         model.append_column_cell("A".into(), CellAlignment::Right);
         model.append_column_cell("B".into(), CellAlignment::Right);
         let snapshot = model.snapshot();
-        assert_eq!(snapshot.history.logical_lines[0].runs.len(), 3);
-        assert!(matches!(
-            &snapshot.history.logical_lines[0].runs[1],
-            DisplayRun::Text { text, .. } if text == " "
-        ));
+        let text = snapshot.history.logical_lines[0]
+            .runs
+            .iter()
+            .filter_map(|run| match run {
+                DisplayRun::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(text, format!("{}A{}B", " ".repeat(24), " ".repeat(24)));
 
         model.append_print_text(String::new(), false, true);
         let committed = model.snapshot();

@@ -359,20 +359,21 @@ renderer 实现了对应观测能力。
 
 ## 4. 非平凡文本输出功能
 
-| 功能 | 参考语义 | 当前问题 |
+| 功能 | 参考语义 | 当前实现/差异 |
 | --- | --- | --- |
 | `ALIGNMENT RIGHT/CENTER` | 按实际物理宽度右对齐或居中 | 只保存意图；这是允许的跨平台投影 |
-| `PRINTC` | Shift-JIS 字节宽度补齐，并用 GDI 测量修正；右对齐 | 只对 4 个精确命令生成 ColumnCell |
-| `PRINTLC` | 左对齐并补齐到列宽 | 同上 |
+| `PRINTC` | Shift-JIS 字节宽度补齐，并用 GDI 测量修正；右对齐 | `PRINTC/CK/CD` 与 `PRINTFORMC/CK/CD` 均生成右对齐 ColumnCell；runtime 保存列宽意图，TUI 按终端 cell width 补齐 |
+| `PRINTLC` | 左对齐并补齐到列宽 | `PRINTLC/LCK/LCD` 与 `PRINTFORMLC/LCK/LCD` 均生成左对齐 ColumnCell；物理测量留给前端 |
 | `PRINTBUTTONC/LC` | 带值按钮和列布局 | 使用带 token 的 ColumnCell；物理补齐和测量由前端投影 |
-| 表格式布局 | `PrintCPerLine` 自动换行；TRAIN、SHOP、PALAM 等内建输出依赖它 | TRAIN 当前输出普通 button，不是 ColumnCell；连续调教也错误输出 |
+| 表格式布局 | `PrintCPerLine` 控制 PALAM、SHOP 等内建表格换行；脚本 PRINTC 连续追加直到显式换行 | PALAM、SHOP 与脚本 PRINTC 已保存连续 ColumnCell；TRAIN/连续调教的专用表格输出仍待补齐 |
+| FORM 字符串 | `{整数}`、`%字符串%` 的动态宽度和 LEFT/RIGHT、三连记号、反斜杠转义；字符串宽度按 `useLanguage` 的 ANSI 编码计数 | 已在编译器/VM 实现；源码仍统一为 UTF-8，ANSI 编码只参与可观察的宽度计数；`SystemIgnoreTripleSymbol` 可关闭三连记号展开 |
 | `PRINTSINGLE*` | 立即 flush 为单独物理行 | Rust 不提交行，因为名字不以 L/W 结尾 |
 | `PRINTN` | 保持 lineEnd=false，同时进入输入等待 | Rust 既不等待，也没有正确的物理行拼接 |
 | `PRINT*W` | 输出、换行并等待 | 基本存在 |
 | K 后缀 | 按 FORCEKANA 状态进行平假名、片假名、全半角转换 | 使用内置日语 LCID 0x0411 兼容表，不依赖平台 locale |
 | D 后缀 | 临时忽略 SETCOLOR，使用默认或用户颜色 | 使用规范化默认前景色，不改变其余样式 |
 | L/W 后缀 | 控制换行和等待 | 只按名称末尾粗略处理 |
-| 嵌入 `\n` | 递归切成多个显示行 | Rust 将换行保留在同一个 Text run |
+| 嵌入 `\n` | 递归切成多个显示行 | runtime 将嵌入换行拆为独立逻辑行，并在每行完成自动按钮绑定 |
 | `PRINTPLAIN*` | 不把 `[数字]` 转换成按钮 | 普通 PRINT 自动识别，PLAIN 保持不可选择 |
 | `PRINTDATA*` | 随机数据列表、多行输出、选择索引、K/D/L/W | 已实现，包括带下标选择目标 |
 | `STRDATA` | 随机选择并拼接字符串数据块 | 已实现，包括带下标目标 |

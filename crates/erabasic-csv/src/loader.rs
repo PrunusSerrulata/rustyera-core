@@ -1,4 +1,4 @@
-use erabasic_data::{PROJECT_DATA_FORMAT_VERSION, ProjectData, ProjectStaticData};
+use erabasic_data::{LegacyEncoding, PROJECT_DATA_FORMAT_VERSION, ProjectData, ProjectStaticData};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -58,6 +58,7 @@ pub fn load_project(files: &ProjectFiles, options: &CsvLoadOptions) -> CsvLoadRe
             format_version: PROJECT_DATA_FORMAT_VERSION,
             schema,
             static_data: ProjectStaticData {
+                legacy_encoding: LegacyEncoding::default(),
                 game_base,
                 name_tables,
                 item_prices,

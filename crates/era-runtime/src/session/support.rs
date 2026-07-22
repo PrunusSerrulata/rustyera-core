@@ -1051,8 +1051,16 @@ pub(super) fn is_runtime_print_command(name: &str) -> bool {
         )
 }
 
-pub(super) fn is_column_print(name: &str) -> bool {
-    matches!(name, "PRINTC" | "PRINTLC" | "PRINTFORMC" | "PRINTFORMLC")
+pub(super) fn column_print_alignment(name: &str) -> Option<CellAlignment> {
+    match name {
+        "PRINTC" | "PRINTCK" | "PRINTCD" | "PRINTFORMC" | "PRINTFORMCK" | "PRINTFORMCD" => {
+            Some(CellAlignment::Right)
+        }
+        "PRINTLC" | "PRINTLCK" | "PRINTLCD" | "PRINTFORMLC" | "PRINTFORMLCK" | "PRINTFORMLCD" => {
+            Some(CellAlignment::Left)
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn print_commits_line(name: &str) -> bool {

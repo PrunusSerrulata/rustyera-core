@@ -37,9 +37,11 @@ impl std::ops::BitOr for LexFlags {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct LexerConfig {
     pub allow_full_width_space: bool,
     pub debug_semicolon: bool,
+    pub ignore_triple_symbols: bool,
     pub expand_macros: bool,
     pub max_macro_expansion_depth: usize,
 }
@@ -49,6 +51,7 @@ impl Default for LexerConfig {
         Self {
             allow_full_width_space: false,
             debug_semicolon: false,
+            ignore_triple_symbols: false,
             expand_macros: true,
             max_macro_expansion_depth: 64,
         }
