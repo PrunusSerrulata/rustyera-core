@@ -24,6 +24,7 @@ use erabasic_data::LegacyEncoding;
 use erabasic_hir::SemanticType;
 use erabasic_parser::ArgumentStyle;
 use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_compiler_output};
+use serde::{Deserialize, Serialize};
 
 use crate::resource::ResourceGraph;
 
@@ -34,7 +35,7 @@ pub(crate) struct ProjectBuild {
     pub(crate) snapshot: Option<NormalizedProjectSnapshot>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) manifest: ProjectManifest,
@@ -64,7 +65,7 @@ pub(crate) struct NormalizedProjectSnapshot {
         std::collections::BTreeMap<String, era_runtime_protocol::ExtensionDeclaration>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct NormalizedResourceIdentity {
     pub(crate) relative_path: String,
     pub(crate) category: FileCategory,

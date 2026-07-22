@@ -10,16 +10,17 @@ use crate::{
     DeviceStateChanged, EffectAcknowledgement, EffectBatch, ExitRequested, ExtensionRegistrySubmit,
     FrontendInput, InputUndoRequest, InputUndoState, KeyMacroCommand, KeyMacroProfileSubmit,
     KeyMacroState, PresentationDelta, PresentationSnapshot, ProjectAnalysisReport,
-    ProjectAnalysisRequest, ProjectLoadReport, ProjectManifest, ProjectionObservation,
-    ProjectionState, ProtocolDiagnostic, ReloadProject, ResynchronizeRequest, RuntimeFault,
-    RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceRequest,
-    ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest, StateExportChunk,
-    StateExportChunkRequest, StateExportReady, StateExportRequest, StateImportAccepted,
-    StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
-    StorageRequest, StorageResponse, VersionRejected, WaitChange,
+    ProjectAnalysisRequest, ProjectLoadReport, ProjectLoadRequest, ProjectManifest,
+    ProjectionObservation, ProjectionState, ProtocolDiagnostic, ReloadProject,
+    ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault, RuntimePhase, RuntimeStateChanged,
+    SequenceAcknowledgement, ServerHello, ServiceRequest, ServiceResponse, ShutdownReady,
+    ShutdownRequest, StartRequest, StateExportChunk, StateExportChunkRequest, StateExportReady,
+    StateExportRequest, StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit,
+    StateImportReady, StateTransferCancel, StorageRequest, StorageResponse, VersionRejected,
+    WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(20, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(21, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -71,12 +72,16 @@ pub enum RuntimeMessage {
     KeyMacroStateChanged(#[n(0)] KeyMacroState),
     #[n(18)]
     ExtensionRegistrySubmit(#[n(0)] ExtensionRegistrySubmit),
+    #[n(19)]
+    ProjectLoad(#[n(0)] ProjectLoadRequest),
     #[n(20)]
     Start(#[n(0)] StartRequest),
     #[n(21)]
     StateChanged(#[n(0)] RuntimeStateChanged),
     #[n(22)]
     ExitRequested(#[n(0)] ExitRequested),
+    #[n(23)]
+    ReturnToTitle(#[n(0)] ReturnToTitleRequest),
     #[n(30)]
     Input(#[n(0)] FrontendInput),
     #[n(31)]
@@ -167,9 +172,11 @@ impl RuntimeMessage {
             Self::KeyMacroCommand(_) => 16,
             Self::KeyMacroStateChanged(_) => 17,
             Self::ExtensionRegistrySubmit(_) => 18,
+            Self::ProjectLoad(_) => 19,
             Self::Start(_) => 20,
             Self::StateChanged(_) => 21,
             Self::ExitRequested(_) => 22,
+            Self::ReturnToTitle(_) => 23,
             Self::Input(_) => 30,
             Self::AdvanceTime(_) => 31,
             Self::WaitChanged(_) => 32,

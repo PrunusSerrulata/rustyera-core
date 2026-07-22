@@ -4,7 +4,7 @@
 [Runtime 前端公共 API 指南](runtime-frontend-api.zh-CN.md)。
 
 This document specifies the interfaces used by the RustyEra runtime and its C ABI
-dynamic library. Runtime protocol 20.0 and debug protocol 4.0 over common wire 2.0 are
+dynamic library. Runtime protocol 21.0 and debug protocol 4.0 over common wire 2.0 are
 development contracts: by explicit project policy they
 do not promise backward compatibility until a frontend exists.
 
@@ -89,6 +89,13 @@ At project load or reload, the frontend submits a deterministically sorted manif
 Each entry contains a normalized relative path, category and one of UTF-8 text, binary
 bytes or the I/O error observed by the frontend. Source positions always use UTF-8 byte
 offsets. Absolute, drive-qualified and parent-traversing paths are invalid.
+
+Protocol 21 may attach an imported opaque compiled-project cache to the load request. The runtime
+validates its format, digest, bytecode and source/extension identity. An exact identity skips
+analysis and compilation; a changed identity supplies the previous artifact and compact compiler
+state for incremental lowering. Successful builds can be exported through the existing bounded
+chunk transfer. `ReturnToTitle` and active-session VM snapshot restore retain the loaded project
+and never consult source files or this cache.
 
 Runtime-initiated work is asynchronous:
 

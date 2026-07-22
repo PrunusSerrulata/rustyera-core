@@ -102,6 +102,7 @@ impl RuntimeSession {
             pending_project_load: None,
             pending_candidate_commit: None,
             candidate_clock: None,
+            compiled_project_cache: None,
         }
     }
 
@@ -358,7 +359,15 @@ impl RuntimeSession {
             );
         }
         match message {
-            RuntimeMessage::ProjectManifest(manifest) => self.load_project(message_id, &manifest),
+            RuntimeMessage::ProjectManifest(manifest) => self.load_project(
+                message_id,
+                &ProjectLoadRequest {
+                    manifest,
+                    compiled_cache_transfer_id: None,
+                },
+            ),
+            RuntimeMessage::ProjectLoad(request) => self.load_project(message_id, &request),
+            RuntimeMessage::ReturnToTitle(_) => self.return_to_title(message_id),
             RuntimeMessage::ProjectAnalysisRequest(request) => {
                 self.analyze_project(message_id, &request)
             }
@@ -528,7 +537,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 20.0 is required".into(),
+                    message: "runtime protocol 21.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -807,7 +816,7 @@ impl RuntimeSession {
     pub(super) fn load_project(
         &mut self,
         message_id: u64,
-        manifest: &ProjectManifest,
+        request: &ProjectLoadRequest,
     ) -> Result<(), RuntimeError> {
         if !matches!(
             self.phase,
@@ -819,19 +828,38 @@ impl RuntimeSession {
                 "project loading requires an idle runtime",
             );
         }
+        let cache_bytes = match request.compiled_cache_transfer_id {
+            Some(transfer_id) => {
+                let Some(bytes) = self.consume_state_import(
+                    message_id,
+                    transfer_id,
+                    StateExportKind::CompiledProjectCache,
+                )?
+                else {
+                    return Ok(());
+                };
+                Some(bytes)
+            }
+            None => None,
+        };
         self.set_phase(RuntimePhase::LoadingProject)?;
-        let previous_artifact = self
-            .vm
-            .as_ref()
-            .map(|vm| vm.vm().artifact())
-            .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
-        let mut build = build_project_with_extensions(
-            manifest,
-            Some(&self.incremental),
-            previous_artifact,
-            &self.extension_declarations,
-        );
+        let mut build = self.build_project_from_cache(request, cache_bytes.as_deref());
         build.incremental.compact();
+        self.compiled_project_cache = match (
+            build.artifact.as_ref(),
+            build.snapshot.as_ref(),
+            build.report.success,
+        ) {
+            (Some(artifact), Some(snapshot), true) => crate::compiled_cache::encode(
+                &request.manifest,
+                &self.extension_declarations,
+                artifact,
+                &build.incremental,
+                snapshot,
+            )
+            .ok(),
+            _ => None,
+        };
         self.incremental = build.incremental;
         self.artifact = build.artifact;
         self.project_snapshot = build.snapshot;
@@ -843,19 +871,28 @@ impl RuntimeSession {
         if !build.report.success || metadata.is_empty() {
             return self.finish_project_load(message_id, build.report);
         }
+        self.begin_project_image_metadata(message_id, build.report, metadata)
+    }
+
+    fn begin_project_image_metadata(
+        &mut self,
+        message_id: u64,
+        mut report: ProjectLoadReport,
+        metadata: Vec<(String, [u8; 32])>,
+    ) -> Result<(), RuntimeError> {
         if self
             .service_capabilities
             .get(&(ServiceKind::Image, IMAGE_METADATA_OPERATION.into()))
             != Some(&IMAGE_METADATA_OPERATION_VERSION)
         {
-            build.report.success = false;
-            build.report.diagnostics.push(ProtocolDiagnostic {
+            report.success = false;
+            report.diagnostics.push(ProtocolDiagnostic {
                 code: "runtime.missing_image_metadata_service".into(),
                 severity: DiagnosticSeverity::Error,
                 message: "resource sprites require the negotiated image_metadata service".into(),
                 source: None,
             });
-            return self.finish_project_load(message_id, build.report);
+            return self.finish_project_load(message_id, report);
         }
         let remaining_metadata = metadata
             .iter()
@@ -863,7 +900,7 @@ impl RuntimeSession {
             .collect();
         self.pending_project_load = Some(PendingProjectLoad {
             message_id,
-            report: build.report,
+            report,
             remaining_metadata,
             reload: None,
         });
@@ -891,6 +928,73 @@ impl RuntimeSession {
             )?;
         }
         Ok(())
+    }
+
+    fn build_project_from_cache(
+        &self,
+        request: &ProjectLoadRequest,
+        cache_bytes: Option<&[u8]>,
+    ) -> ProjectBuild {
+        let maximum =
+            usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
+        let mut cache_warning = None;
+        let cached =
+            cache_bytes.and_then(
+                |bytes| match crate::compiled_cache::decode(bytes, maximum) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        cache_warning = Some(error);
+                        None
+                    }
+                },
+            );
+        let expected_key =
+            crate::compiled_cache::project_key(&request.manifest, &self.extension_declarations);
+        let mut build = match cached {
+            Some(mut exact) if exact.key == expected_key => {
+                exact.snapshot.manifest = request.manifest.clone();
+                ProjectBuild {
+                    artifact: Some(exact.artifact),
+                    incremental: exact.incremental,
+                    report: ProjectLoadReport {
+                        project_revision: request.manifest.project_revision,
+                        success: true,
+                        diagnostics: vec![ProtocolDiagnostic {
+                            code: "runtime.compiled_cache_hit".into(),
+                            severity: DiagnosticSeverity::Information,
+                            message: "loaded the exact compiled project cache".into(),
+                            source: None,
+                        }],
+                    },
+                    snapshot: Some(exact.snapshot),
+                }
+            }
+            cached => {
+                let previous_incremental = cached
+                    .as_ref()
+                    .map_or(&self.incremental, |value| &value.incremental);
+                let previous_artifact = cached
+                    .as_ref()
+                    .map(|value| value.artifact.artifact())
+                    .or_else(|| self.vm.as_ref().map(|vm| vm.vm().artifact()))
+                    .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
+                build_project_with_extensions(
+                    &request.manifest,
+                    Some(previous_incremental),
+                    previous_artifact,
+                    &self.extension_declarations,
+                )
+            }
+        };
+        if let Some(error) = cache_warning {
+            build.report.diagnostics.push(ProtocolDiagnostic {
+                code: "runtime.compiled_cache_ignored".into(),
+                severity: DiagnosticSeverity::Warning,
+                message: error,
+                source: None,
+            });
+        }
+        build
     }
 
     pub(super) fn finish_project_load(
@@ -1099,6 +1203,21 @@ impl RuntimeSession {
         build.incremental.compact();
         self.incremental = build.incremental;
         self.project_snapshot = build.snapshot;
+        if let (Some(artifact), Some(snapshot)) =
+            (self.artifact.as_ref(), self.project_snapshot.as_ref())
+        {
+            let mut cached_snapshot = snapshot.clone();
+            cached_snapshot.resource_graph =
+                crate::resource::ResourceGraph::from_manifest(&cached_snapshot.manifest).0;
+            self.compiled_project_cache = crate::compiled_cache::encode(
+                &cached_snapshot.manifest,
+                &self.extension_declarations,
+                artifact,
+                &self.incremental,
+                &cached_snapshot,
+            )
+            .ok();
+        }
         if let Some(snapshot) = &self.project_snapshot {
             self.presentation.configure_project(snapshot);
         }
@@ -1152,11 +1271,18 @@ impl RuntimeSession {
         message_id: u64,
         request: &StartRequest,
     ) -> Result<(), RuntimeError> {
-        if self.phase != RuntimePhase::Ready {
+        let vm_snapshot_restore = matches!(request.mode, StartMode::VmSnapshot { .. });
+        if (!vm_snapshot_restore && self.phase != RuntimePhase::Ready)
+            || (vm_snapshot_restore
+                && !matches!(
+                    self.phase,
+                    RuntimePhase::Ready | RuntimePhase::WaitingInput | RuntimePhase::Faulted
+                ))
+        {
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidState,
-                "start requires a successfully loaded project",
+                "start requires a loaded project in a replaceable state",
             );
         }
         if matches!(request.mode, StartMode::NewGame { .. }) {
@@ -1471,7 +1597,7 @@ impl RuntimeSession {
         self.set_phase(RuntimePhase::Starting)?;
         let artifact = self
             .artifact
-            .take()
+            .clone()
             .ok_or_else(|| RuntimeError::Internal("loaded artifact is missing".into()))?;
         let title = artifact
             .artifact()
@@ -1496,6 +1622,73 @@ impl RuntimeSession {
         };
         result?;
         self.renew_debug_grant()
+    }
+
+    pub(super) fn return_to_title(&mut self, message_id: u64) -> Result<(), RuntimeError> {
+        if !matches!(
+            self.phase,
+            RuntimePhase::Ready
+                | RuntimePhase::Running
+                | RuntimePhase::WaitingInput
+                | RuntimePhase::Faulted
+        ) || self.project_snapshot.is_none()
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "return to title requires a loaded project",
+            );
+        }
+        if self.operations.has_candidate_write() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "return to title cannot cancel an emitted save commit",
+            );
+        }
+        let (services, storage) = self.operations.external_requests();
+        for request_id in services {
+            self.emit(
+                RuntimeMessage::CancelExternalRequest(CancelExternalRequest {
+                    request_id,
+                    kind: ExternalRequestKind::Service,
+                }),
+                None,
+            )?;
+        }
+        for request_id in storage {
+            self.emit(
+                RuntimeMessage::CancelExternalRequest(CancelExternalRequest {
+                    request_id,
+                    kind: ExternalRequestKind::Storage,
+                }),
+                None,
+            )?;
+        }
+        self.operations.clear();
+        self.effect_journal.clear();
+        self.inbound_transfer = None;
+        self.outbound_transfer = None;
+        self.vm = None;
+        self.controller = SystemController::default();
+        self.presentation = PresentationModel::default();
+        if let Some(project) = &self.project_snapshot {
+            self.presentation.configure_project(project);
+        }
+        self.queued_input.clear();
+        self.command_intents.clear();
+        self.reusable_system_intents.clear();
+        self.undo_checkpoint = None;
+        self.undo_replay = None;
+        self.undo_token = None;
+        self.exit_requested = None;
+        self.set_phase(RuntimePhase::Ready)?;
+        self.start(
+            message_id,
+            &StartRequest {
+                mode: StartMode::NewGame { seed: None },
+            },
+        )
     }
 
     pub(super) fn open_title_menu(&mut self) -> Result<(), RuntimeError> {

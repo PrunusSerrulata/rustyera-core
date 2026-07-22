@@ -39,12 +39,13 @@ pub use lifecycle::{
     ClientCapabilities, ClientHello, ClientStateChanged, CommandErrorCode, CommandRejected,
     ExecutionOrigin, ExitReason, ExitRequested, FaultCode, InputModality, ProjectionLength,
     ProjectionObservation, ProjectionSize, ProjectionState, ProjectionTransform,
-    ResynchronizeRequest, RuntimeFault, RuntimeFeature, RuntimeLimits, RuntimePhase,
-    RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceCapability, ShutdownReady,
-    ShutdownRequest, SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk,
-    StateExportChunkRequest, StateExportKind, StateExportReady, StateExportRequest,
-    StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit,
-    StateImportReady, StateTransferCancel, StateTransferDescriptor, TextBoxLayout, VersionRejected,
+    ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault, RuntimeFeature, RuntimeLimits,
+    RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceCapability,
+    ShutdownReady, ShutdownRequest, SnapshotIneligibleReason, StartMode, StartRequest,
+    StateExportChunk, StateExportChunkRequest, StateExportKind, StateExportReady,
+    StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk,
+    StateImportCommit, StateImportReady, StateTransferCancel, StateTransferDescriptor,
+    TextBoxLayout, VersionRejected,
 };
 pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage, RuntimeResynchronized};
 pub use presentation::{
@@ -59,8 +60,8 @@ pub use presentation::{
 pub use project::{
     DiagnosticSeverity, FileCategory, FileChange, FilePayload, FrontendIoError,
     FrontendIoErrorKind, ProjectAnalysisReport, ProjectAnalysisRequest, ProjectLoadReport,
-    ProjectManifest, ProtocolDiagnostic, ReloadProject, SourceLocation, SubmittedFile,
-    validate_relative_path,
+    ProjectLoadRequest, ProjectManifest, ProtocolDiagnostic, ReloadProject, SourceLocation,
+    SubmittedFile, validate_relative_path,
 };
 pub use service::{
     CancelExternalRequest, CanvasPixelRequest, CanvasPixelResponse, DECODE_CANVAS_IMAGE_OPERATION,

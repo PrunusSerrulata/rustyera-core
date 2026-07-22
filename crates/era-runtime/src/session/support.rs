@@ -302,6 +302,23 @@ pub(super) fn integer_argument_value(
     }
 }
 
+pub(super) fn color_argument_value(arguments: &[VmValue]) -> Result<i64, &'static str> {
+    match arguments {
+        [VmValue::Integer(rgb)] => Ok(rgb & 0xff_ffff),
+        [
+            VmValue::Integer(red),
+            VmValue::Integer(green),
+            VmValue::Integer(blue),
+        ] => {
+            if !(0..=255).contains(red) || !(0..=255).contains(green) || !(0..=255).contains(blue) {
+                return Err("color channels must be between 0 and 255");
+            }
+            Ok((red << 16) | (green << 8) | blue)
+        }
+        _ => Err("color requires one packed RGB value or three R,G,B values"),
+    }
+}
+
 pub(super) fn vm_place(value: &VmValue) -> Option<PlaceDescriptor> {
     match value {
         VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => Some(place.as_ref().clone()),
@@ -1491,10 +1508,12 @@ pub(super) fn debugger_suspends_message(message: &RuntimeMessage) -> bool {
     matches!(
         message,
         RuntimeMessage::ProjectManifest(_)
+            | RuntimeMessage::ProjectLoad(_)
             | RuntimeMessage::ProjectAnalysisRequest(_)
             | RuntimeMessage::KeyMacroProfileSubmit(_)
             | RuntimeMessage::KeyMacroCommand(_)
             | RuntimeMessage::ExtensionRegistrySubmit(_)
+            | RuntimeMessage::ReturnToTitle(_)
             | RuntimeMessage::Start(_)
             | RuntimeMessage::Input(_)
             | RuntimeMessage::InputUndoRequest(_)
@@ -1692,4 +1711,35 @@ pub(super) fn decompose_full_kana(character: char) -> Option<[char; 2]> {
     full.chars()
         .position(|candidate| candidate == character)
         .and_then(|index| Some([bases.chars().nth(index)?, marks.chars().nth(index)?]))
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn emuera_color_arguments_accept_packed_or_three_channels() {
+        assert_eq!(
+            color_argument_value(&[VmValue::Integer(0x01_18_3c)]),
+            Ok(0x01_18_3c)
+        );
+        assert_eq!(
+            color_argument_value(&[
+                VmValue::Integer(1),
+                VmValue::Integer(24),
+                VmValue::Integer(60),
+            ]),
+            Ok(0x01_18_3c)
+        );
+        assert_eq!(color_argument_value(&[VmValue::Integer(-1)]), Ok(0xff_ffff));
+        assert!(color_argument_value(&[VmValue::Integer(1), VmValue::Integer(2)]).is_err());
+        assert!(
+            color_argument_value(&[
+                VmValue::Integer(256),
+                VmValue::Integer(0),
+                VmValue::Integer(0),
+            ])
+            .is_err()
+        );
+    }
 }

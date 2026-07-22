@@ -1871,8 +1871,13 @@ impl RuntimeSession {
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
         if name == "SETCOLOR" {
-            self.presentation
-                .set_foreground(integer_argument_value(&request.arguments, 0)?);
+            let color = match color_argument_value(&request.arguments) {
+                Ok(color) => color,
+                Err(error) => {
+                    return self.fault(FaultCode::VmFault, error, Some(request.origin.clone()));
+                }
+            };
+            self.presentation.set_foreground(color);
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
         if matches!(name.as_str(), "SETCOLORBYNAME" | "SETBGCOLORBYNAME") {
@@ -1960,8 +1965,13 @@ impl RuntimeSession {
             return commit_integer_result(vm, request.id, value);
         }
         if name == "SETBGCOLOR" {
-            self.presentation
-                .set_background(integer_argument_value(&request.arguments, 0)?);
+            let color = match color_argument_value(&request.arguments) {
+                Ok(color) => color,
+                Err(error) => {
+                    return self.fault(FaultCode::VmFault, error, Some(request.origin.clone()));
+                }
+            };
+            self.presentation.set_background(color);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }

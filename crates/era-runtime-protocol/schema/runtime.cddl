@@ -12,9 +12,11 @@ runtime-message =
   [16, key-macro-command] /
   [17, key-macro-state] /
   [18, extension-registry-submit] /
+  [19, project-load-request] /
   [20, start-request] /
   [21, runtime-state] /
   [22, exit-requested] /
+  [23, {}] /
   [30, frontend-input] /
   [31, advance-time] /
   [32, wait-change] /
@@ -57,6 +59,7 @@ server-hello = { 0: any, 1: any, 2: [* uint], 3: runtime-limits, 4: uint, 5: any
 runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint }
 version-rejected = { 0: any, 1: tstr }
 project-manifest = { 0: uint, 1: [* any] }
+project-load-request = { 0: project-manifest, ? 1: uint }
 project-load-report = { 0: uint, 1: bool, 2: [* any] }
 reload-project = { 0: uint, 1: uint, 2: [* any] }
 project-analysis-request = { 0: project-manifest, 1: [* tstr], 2: bool }

@@ -340,7 +340,7 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 | 字段 | 含义 |
 | --- | --- |
 | `wire_version` | 公共信封版本，当前为 `2.0`。 |
-| `channel_version` | `Runtime` channel 当前为 `20.0`；`Debug` channel 当前为 `4.0`。 |
+| `channel_version` | `Runtime` channel 当前为 `21.0`；`Debug` channel 当前为 `4.0`。 |
 | `channel` | 正常运行必须为 `Runtime`；调试使用独立 `Debug` channel。 |
 | `session` | 首次 `ClientHello` 可为空；握手成功后必须等于 `ServerHello.session`。 |
 | `session_epoch` | 首次握手可为空；之后必须等于当前时间线 epoch。新游戏、恢复或热替换提交后旧 epoch 消息失效。 |
@@ -365,7 +365,7 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `20.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `21.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
@@ -382,7 +382,16 @@ Runtime 返回：
 
 ### 项目加载
 
-前端提交 `ProjectManifest`（tag `10`）：
+前端提交 `ProjectLoad`（tag `19`），其中包含 `ProjectManifest` 和可选的编译缓存
+transfer ID。缓存是 Runtime 生成、前端只负责持久化的不透明 gzip 数据，通过
+`StateExportKind::CompiledProjectCache` 使用现有分块传输导入/导出。完全匹配时跳过
+分析和编译；源码变化时缓存作为增量编译基线。未携带缓存的旧 tag `10` 仍按无缓存
+项目加载处理。
+
+`ReturnToTitle`（tag `23`）和当前 session 内的 VM snapshot 恢复复用已加载 artifact，
+不重新检查项目文件。
+
+`ProjectManifest` 字段：
 
 | 字段 | 含义 |
 | --- | --- |

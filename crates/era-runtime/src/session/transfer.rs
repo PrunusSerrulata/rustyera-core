@@ -11,6 +11,53 @@ impl RuntimeSession {
         message_id: u64,
         request: StateExportRequest,
     ) -> Result<(), RuntimeError> {
+        if request.kind == StateExportKind::CompiledProjectCache {
+            if self.outbound_transfer.is_some() {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "another state export is already active",
+                );
+            }
+            let Some(bytes) = self.compiled_project_cache.clone() else {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "no compiled project cache is available",
+                );
+            };
+            if u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+                > self.options.limits.maximum_transfer_bytes
+            {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::ResourceLimit,
+                    "compiled project cache exceeds the negotiated transfer limit",
+                );
+            }
+            let transfer_id = self.allocate_transfer();
+            let descriptor = StateTransferDescriptor {
+                transfer_id,
+                kind: request.kind,
+                total_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                digest: ProtocolBytes::new(blake3::hash(&bytes).as_bytes().to_vec()),
+                artifact_id: None,
+            };
+            self.outbound_transfer = Some(OutboundStateTransfer {
+                descriptor: descriptor.clone(),
+                bytes,
+                next_offset: 0,
+            });
+            return self.emit(
+                RuntimeMessage::StateExportReady(StateExportReady {
+                    kind: request.kind,
+                    result: StateExportResult::Ready {
+                        transfer: descriptor,
+                    },
+                }),
+                Some(message_id),
+            );
+        }
         let stable_wait = self.operations.active_input().is_some_and(|pending| {
             pending.wait.stability == WaitStability::StableInput
                 && pending.wait.deadline_ns.is_none()
@@ -134,6 +181,7 @@ impl RuntimeSession {
                     })
                     .map_err(RuntimeError::Internal)?
                 }
+                StateExportKind::CompiledProjectCache => unreachable!("handled above"),
             };
             if u64::try_from(bytes.len()).unwrap_or(u64::MAX)
                 > self.options.limits.maximum_transfer_bytes
