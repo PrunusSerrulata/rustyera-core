@@ -19,11 +19,32 @@ impl RuntimeSession {
                     "another state export is already active",
                 );
             }
+            if let Some(error) = self.compiled_cache_failure.clone() {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::ResourceLimit,
+                    &format!("compiled project cache preparation failed: {error}"),
+                );
+            }
+            if self.compiled_project_cache.is_none() && self.compiled_cache_task.is_none() {
+                if let Err(error) = self.start_compiled_cache_build() {
+                    return self.reject(message_id, CommandErrorCode::ResourceLimit, &error);
+                }
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "compiled project cache preparation started",
+                );
+            }
             let Some(bytes) = self.compiled_project_cache.clone() else {
                 return self.reject(
                     message_id,
                     CommandErrorCode::InvalidState,
-                    "no compiled project cache is available",
+                    if self.compiled_cache_task.is_some() {
+                        "compiled project cache is still being prepared"
+                    } else {
+                        "no compiled project cache is available"
+                    },
                 );
             };
             if u64::try_from(bytes.len()).unwrap_or(u64::MAX)
@@ -220,6 +241,99 @@ impl RuntimeSession {
             }),
             Some(message_id),
         )
+    }
+
+    pub(super) fn start_compiled_cache_build(&mut self) -> Result<(), String> {
+        let artifact = self
+            .artifact
+            .clone()
+            .ok_or_else(|| "compiled cache build has no loaded artifact".to_owned())?;
+        self.compiled_cache_failure = None;
+        let mut snapshot = self
+            .project_snapshot
+            .clone()
+            .ok_or_else(|| "compiled cache build has no project snapshot".to_owned())?;
+        snapshot.resource_graph =
+            crate::resource::ResourceGraph::from_manifest(&snapshot.manifest).0;
+        let extensions = self.extension_declarations.clone();
+        let incremental = self.incremental.clone();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let handle = std::thread::Builder::new()
+            .name("rustyera-compiled-cache".into())
+            .spawn(move || {
+                crate::compiled_cache::encode_cancellable(
+                    &snapshot.manifest,
+                    &extensions,
+                    &artifact,
+                    &incremental,
+                    &snapshot,
+                    &worker_cancelled,
+                )
+            })
+            .map_err(|error| format!("cannot start compiled cache worker: {error}"))?;
+        self.compiled_cache_task = Some(CompiledCacheTask {
+            cancelled,
+            handle: Some(handle),
+        });
+        Ok(())
+    }
+
+    pub(super) fn poll_compiled_cache_task(&mut self) -> Result<(), RuntimeError> {
+        let Some(task) = self.compiled_cache_task.as_ref() else {
+            return Ok(());
+        };
+        if !task.handle.as_ref().is_some_and(JoinHandle::is_finished) {
+            return Ok(());
+        }
+        let mut task = self
+            .compiled_cache_task
+            .take()
+            .expect("finished compiled cache task exists");
+        let handle = task
+            .handle
+            .take()
+            .expect("finished compiled cache task has a join handle");
+        match handle.join() {
+            Ok(Ok(bytes)) => {
+                self.compiled_cache_failure = None;
+                self.compiled_project_cache = Some(bytes.into());
+                self.emit(
+                    RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        code: "runtime.compiled_cache_ready".into(),
+                        severity: DiagnosticSeverity::Information,
+                        message: "compiled project cache is ready for frontend persistence".into(),
+                        source: None,
+                    }),
+                    None,
+                )
+            }
+            Ok(Err(error)) => {
+                self.compiled_cache_failure = Some(error.clone());
+                self.emit(
+                    RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        code: "runtime.compiled_cache_failed".into(),
+                        severity: DiagnosticSeverity::Warning,
+                        message: error,
+                        source: None,
+                    }),
+                    None,
+                )
+            }
+            Err(_) => {
+                let error = "compiled cache worker panicked".to_owned();
+                self.compiled_cache_failure = Some(error.clone());
+                self.emit(
+                    RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        code: "runtime.compiled_cache_failed".into(),
+                        severity: DiagnosticSeverity::Warning,
+                        message: error,
+                        source: None,
+                    }),
+                    None,
+                )
+            }
+        }
     }
 
     pub(super) fn begin_state_import(

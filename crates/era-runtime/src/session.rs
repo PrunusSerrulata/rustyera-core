@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{self, Write as _};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
 
 use era_debug_protocol::{DebugMessage, DebugResponse, DebugScope, GrantToken, ScriptOutputChunk};
 use era_protocol::{
@@ -225,6 +227,20 @@ struct OutboundStateTransfer {
     next_offset: u64,
 }
 
+struct CompiledCacheTask {
+    cancelled: Arc<AtomicBool>,
+    handle: Option<JoinHandle<Result<Vec<u8>, String>>>,
+}
+
+impl Drop for CompiledCacheTask {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 enum InboundMessage {
@@ -332,6 +348,8 @@ pub struct RuntimeSession {
     pending_candidate_commit: Option<PendingCandidateCommit>,
     candidate_clock: Option<LocalDateTimeResponse>,
     compiled_project_cache: Option<Arc<[u8]>>,
+    compiled_cache_task: Option<CompiledCacheTask>,
+    compiled_cache_failure: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -332,7 +332,7 @@ impl Vm {
             return Err(VmError::Snapshot(error));
         }
 
-        let artifact = artifact.into_inner();
+        let artifact = artifact.into_shared();
         let generation = snapshot.current_generation;
         Ok(Self {
             config,

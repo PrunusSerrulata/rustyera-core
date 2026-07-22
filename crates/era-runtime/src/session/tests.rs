@@ -4510,6 +4510,11 @@ fn return_to_title_reuses_the_loaded_artifact_without_project_loading() {
     session.project_snapshot = build.snapshot;
     session.start_new_game(7).unwrap();
 
+    assert!(std::ptr::eq(
+        session.artifact.as_ref().unwrap().artifact(),
+        session.vm.as_ref().unwrap().vm().artifact(),
+    ));
+
     session.return_to_title(99).unwrap();
 
     assert_eq!(session.phase, RuntimePhase::Starting);
@@ -4528,6 +4533,114 @@ fn return_to_title_reuses_the_loaded_artifact_without_project_loading() {
             .iter()
             .all(|message| !matches!(message, RuntimeMessage::ProjectLoadReport(_)))
     );
+}
+
+#[test]
+fn compiled_cache_export_prepares_the_payload_off_thread() {
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+            content_hash: None,
+        }],
+    };
+    let identity = crate::compiled_cache::project_identity(&manifest);
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::Ready;
+    session.epoch = SessionEpoch(1);
+
+    session
+        .load_project(
+            99,
+            &ProjectLoadRequest {
+                identity,
+                manifest: Some(manifest),
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+
+    assert!(session.compiled_project_cache.is_none());
+    assert!(session.compiled_cache_task.is_none());
+    let _ = drain(&mut session);
+    session
+        .export_state(
+            100,
+            StateExportRequest {
+                kind: StateExportKind::CompiledProjectCache,
+            },
+        )
+        .unwrap();
+    assert!(session.compiled_cache_task.is_some());
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(CommandRejected { message, .. })
+            if message == "compiled project cache preparation started"
+    )));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while session.compiled_cache_task.is_some() {
+        session.poll_compiled_cache_task().unwrap();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "compiled cache worker did not finish"
+        );
+        std::thread::yield_now();
+    }
+    let completion = drain(&mut session);
+    assert!(
+        completion.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::Diagnostic(ProtocolDiagnostic { code, .. })
+                if code == "runtime.compiled_cache_ready"
+        )),
+        "{completion:#?}"
+    );
+    let bytes = session.compiled_project_cache.as_ref().unwrap();
+    assert!(crate::compiled_cache::decode(bytes, 64 * 1024 * 1024).is_ok());
+
+    session
+        .export_state(
+            101,
+            StateExportRequest {
+                kind: StateExportKind::CompiledProjectCache,
+            },
+        )
+        .unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::StateExportReady(StateExportReady {
+            kind: StateExportKind::CompiledProjectCache,
+            result: StateExportResult::Ready { .. },
+        })
+    )));
+}
+
+#[test]
+fn compiled_cache_export_does_not_retry_a_failed_background_build() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.compiled_cache_failure = Some("synthetic encoding failure".into());
+
+    session
+        .export_state(
+            100,
+            StateExportRequest {
+                kind: StateExportKind::CompiledProjectCache,
+            },
+        )
+        .unwrap();
+
+    assert!(session.compiled_cache_task.is_none());
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(CommandRejected {
+            code: CommandErrorCode::ResourceLimit,
+            message,
+            ..
+        }) if message.contains("synthetic encoding failure")
+    )));
 }
 
 #[test]

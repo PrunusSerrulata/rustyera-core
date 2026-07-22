@@ -15,6 +15,7 @@ ROOT = REPOSITORY_ROOT
 sys.path.insert(0, str(ROOT / "frontends" / "era-tui" / "src"))
 
 from rustyera_tui.presentation import PresentationModel  # noqa: E402
+from rustyera_tui.project import StorageBackend  # noqa: E402
 from rustyera_tui.runtime import RuntimeClient, RuntimeWorker  # noqa: E402
 
 _original_pump = RuntimeClient.pump
@@ -70,7 +71,10 @@ def main() -> int:
     layout_check = os.environ.get("ERA_AUDIT_LAYOUT_CHECK") == "1"
     layout_stage: str | None = None
     item_check = os.environ.get("ERA_AUDIT_ITEM_CHECK") == "1"
+    maximum_day_one_seconds = os.environ.get("ERA_AUDIT_MAX_DAY1_SECONDS")
+    wait_for_cache = os.environ.get("ERA_AUDIT_WAIT_FOR_CACHE") == "1"
     item_stage: str | None = None
+    day_one_reached = False
     snapshot_requested = False
     snapshot_attempts = 0
     snapshot_attempt_wait: tuple[dict[int, object], str] | None = None
@@ -88,6 +92,7 @@ def main() -> int:
         wait: dict[int, object], tail: str, *, snapshot_attempted: bool = False
     ) -> int | None:
         nonlocal answer_index, snapshot_requested, snapshot_attempt_wait, layout_stage, item_stage
+        nonlocal day_one_reached
         if wait[1] == 0:
             worker.send("submit_text", "")
         elif layout_check and layout_stage == "day_one":
@@ -144,10 +149,19 @@ def main() -> int:
             print(f"answer[{answer_index}]={answer}")
             worker.send("submit_text", str(answer))
         elif wait[5] and all(marker in tail for marker in ("SAVE", "LOAD", "UPDATE")):
+            elapsed = time.monotonic() - started
             print(
                 f"DAY1_MILESTONE wait={wait[0]} answers={answer_index} "
-                f"elapsed={time.monotonic() - started:.2f}s lines={len(model.lines)}"
+                f"elapsed={elapsed:.2f}s lines={len(model.lines)}"
             )
+            if maximum_day_one_seconds is not None and elapsed > float(
+                maximum_day_one_seconds
+            ):
+                print(
+                    "DAY1_PERFORMANCE_ERROR "
+                    f"elapsed={elapsed:.2f}s limit={float(maximum_day_one_seconds):.2f}s"
+                )
+                return 5
             if layout_check:
                 layout_stage = "day_one"
                 worker.send("submit_text", "100")
@@ -161,6 +175,8 @@ def main() -> int:
             elif snapshot_every_wait:
                 print(f"NO_ELIGIBLE_SNAPSHOT_POINT attempts={snapshot_attempts}")
                 return 4
+            elif wait_for_cache:
+                day_one_reached = True
             else:
                 return 0
         elif fallback_answer is not None and "[完成決定]" in tail:
@@ -237,8 +253,21 @@ def main() -> int:
                     size = Path(snapshot_path).stat().st_size
                     print(f"VM_SNAPSHOT_BYTES={size}")
                     return 0
+            if event.kind == "status" and day_one_reached:
+                if event.value == "编译缓存保存失败。":
+                    print("COMPILED_CACHE_ERROR persistence failed")
+                    return 1
+                if event.value == "编译缓存已保存。":
+                    cache_path = StorageBackend(project).compiled_cache_path()
+                    print(
+                        f"COMPILED_CACHE_BYTES={cache_path.stat().st_size} "
+                        f"elapsed={time.monotonic() - started:.2f}s"
+                    )
+                    return 0
             if event.kind == "log" and (
-                "Fault" in str(event.value) or "unsupported" in str(event.value).lower()
+                "Fault" in str(event.value)
+                or "unsupported" in str(event.value).lower()
+                or "runtime.compiled_cache_" in str(event.value)
             ):
                 print(f"LOG: {event.value}")
             if event.kind != "wait" or event.value is None:

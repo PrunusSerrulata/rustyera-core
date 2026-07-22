@@ -18,7 +18,7 @@ use crate::{PreparedRuntimeState, VmRuntimeRead, VmRuntimeStatePort, VmRuntimeSt
 
 #[derive(Clone, Debug)]
 pub(crate) struct ProgramGeneration {
-    pub artifact: BytecodeArtifact,
+    pub artifact: Arc<BytecodeArtifact>,
     function_indices: HashMap<SymbolKey, usize>,
     function_name_indices: BTreeMap<String, usize>,
     global_indices: BTreeMap<SymbolKey, usize>,
@@ -30,7 +30,7 @@ pub(crate) struct ProgramGeneration {
 
 impl ProgramGeneration {
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn new(artifact: BytecodeArtifact) -> Self {
+    pub(crate) fn new(artifact: Arc<BytecodeArtifact>) -> Self {
         // Era projects commonly contain tens of thousands of functions. Resolving the
         // active function with a linear scan for every instruction makes otherwise
         // lightweight EraBasic execution quadratic in the project size.
@@ -355,7 +355,7 @@ impl Vm {
     }
 
     fn new_with_memory(artifact: ValidatedArtifact, config: VmConfig, title_state: bool) -> Self {
-        let artifact = artifact.into_inner();
+        let artifact = artifact.into_shared();
         let memory = if title_state {
             Memory::title(&artifact)
         } else {

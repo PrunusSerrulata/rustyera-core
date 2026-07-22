@@ -550,20 +550,9 @@ pub(super) fn write_runtime_integer(
     character: Option<u64>,
     value: i64,
 ) -> Result<(), RuntimeError> {
-    let prepared = vm
-        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
-            writes: vec![VmRuntimeWrite {
-                variable: runtime_variable_key(vm, name)?,
-                indices: indices.to_vec(),
-                character,
-                value: VmValue::Integer(value),
-            }],
-            fills: Vec::new(),
-            clear_characters: false,
-            add_characters_from_csv: Vec::new(),
-        })
-        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-    vm.commit_runtime_state(prepared)
+    let variable = runtime_variable_key(vm, name)?;
+    vm.vm_mut()
+        .write_variable(variable, indices, character, VmValue::Integer(value))
         .map_err(|error| RuntimeError::Internal(error.to_string()))
 }
 
@@ -594,20 +583,9 @@ pub(super) fn write_runtime_string(
     name: &str,
     value: String,
 ) -> Result<(), RuntimeError> {
-    let prepared = vm
-        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
-            writes: vec![VmRuntimeWrite {
-                variable: runtime_variable_key(vm, name)?,
-                indices: Vec::new(),
-                character: None,
-                value: VmValue::String(value),
-            }],
-            fills: Vec::new(),
-            clear_characters: false,
-            add_characters_from_csv: Vec::new(),
-        })
-        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-    vm.commit_runtime_state(prepared)
+    let variable = runtime_variable_key(vm, name)?;
+    vm.vm_mut()
+        .write_variable(variable, &[], None, VmValue::String(value))
         .map_err(|error| RuntimeError::Internal(error.to_string()))
 }
 

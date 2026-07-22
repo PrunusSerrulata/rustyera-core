@@ -103,6 +103,8 @@ impl RuntimeSession {
             pending_candidate_commit: None,
             candidate_clock: None,
             compiled_project_cache: None,
+            compiled_cache_task: None,
+            compiled_cache_failure: None,
         }
     }
 
@@ -174,6 +176,7 @@ impl RuntimeSession {
         &mut self,
         budget: RuntimeDriveBudget,
     ) -> Result<RuntimeDriveReport, RuntimeError> {
+        self.poll_compiled_cache_task()?;
         let transition_limit = budget.maximum_runtime_transitions.max(1);
         let mut transitions = 0;
         let mut instructions = 0;
@@ -847,6 +850,11 @@ impl RuntimeSession {
             }
             None => None,
         };
+        // Loading a new project invalidates both a completed cache and any detached result
+        // still being produced for the previous project identity.
+        self.compiled_project_cache = None;
+        self.compiled_cache_task = None;
+        self.compiled_cache_failure = None;
         self.set_phase(RuntimePhase::LoadingProject)?;
         let mut build = match self.build_project_from_cache(request, cache_bytes.as_deref()) {
             Ok(build) => build,
@@ -866,22 +874,9 @@ impl RuntimeSession {
             // the multi-gigabyte logical artifact would erase most of the warm-start win.
             cache_bytes.map(Into::into)
         } else {
-            match (
-                build.artifact.as_ref(),
-                build.snapshot.as_ref(),
-                build.report.success,
-            ) {
-                (Some(artifact), Some(snapshot), true) => crate::compiled_cache::encode(
-                    &snapshot.manifest,
-                    &self.extension_declarations,
-                    artifact,
-                    &build.incremental,
-                    snapshot,
-                )
-                .ok()
-                .map(Into::into),
-                _ => None,
-            }
+            // Cache serialization is intentionally lazy. It is a frontend persistence concern
+            // and must not add a multi-second zstd pass to the cold-start critical path.
+            None
         };
         self.incremental = build.incremental;
         self.artifact = build.artifact;
@@ -1265,22 +1260,9 @@ impl RuntimeSession {
         build.incremental.compact();
         self.incremental = build.incremental;
         self.project_snapshot = build.snapshot;
-        if let (Some(artifact), Some(snapshot)) =
-            (self.artifact.as_ref(), self.project_snapshot.as_ref())
-        {
-            let mut cached_snapshot = snapshot.clone();
-            cached_snapshot.resource_graph =
-                crate::resource::ResourceGraph::from_manifest(&cached_snapshot.manifest).0;
-            self.compiled_project_cache = crate::compiled_cache::encode(
-                &cached_snapshot.manifest,
-                &self.extension_declarations,
-                artifact,
-                &self.incremental,
-                &cached_snapshot,
-            )
-            .ok()
-            .map(Into::into);
-        }
+        self.compiled_project_cache = None;
+        self.compiled_cache_task = None;
+        self.compiled_cache_failure = None;
         if let Some(snapshot) = &self.project_snapshot {
             self.presentation.configure_project(snapshot);
         }

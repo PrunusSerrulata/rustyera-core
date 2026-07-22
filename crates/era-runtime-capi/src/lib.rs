@@ -224,7 +224,14 @@ extern "C" fn session_destroy(header: EraCallHeader, handle: EraSessionHandle) -
         if !valid_header::<EraCallHeader>(header) {
             return EraStatus::AbiMismatch;
         }
-        if lock_registry().sessions.remove(&handle.value).is_some() {
+        // Runtime destruction may cancel/join background cache work and release a large VM.
+        // Never retain the process-wide registry lock while running those destructors, or an
+        // unrelated session create/drive call would be serialized behind cleanup.
+        let removed = {
+            let mut registry = lock_registry();
+            registry.sessions.remove(&handle.value)
+        };
+        if removed.is_some() {
             EraStatus::Ok
         } else {
             EraStatus::InvalidHandle
