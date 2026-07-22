@@ -15,7 +15,8 @@
 
 Rust 二进制自身的构建时间不计入结果。测试没有清空操作系统文件缓存，因此“冷启动”指
 没有字节码/增量编译缓存、没有已有 runtime session 的应用级冷启动。计时工具位于本地被
-忽略的 `.audit/runtime-playability/`，不会成为产品前端或 runtime 的依赖。
+`tools/runtime-playability-audit/`，其生成物由局部 `.gitignore` 隔离，不会成为产品前端或
+runtime 的依赖。
 
 ## 结果
 

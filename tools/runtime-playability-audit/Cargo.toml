@@ -1,0 +1,20 @@
+[package]
+name = "rustyera-runtime-audit"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+blake3 = "1.5.5"
+era-protocol = { path = "../../crates/era-protocol" }
+era-runtime = { path = "../../crates/era-runtime" }
+era-runtime-protocol = { path = "../../crates/era-runtime-protocol" }
+erabasic-analyzer = { path = "../../crates/erabasic-analyzer" }
+erabasic-compiler = { path = "../../crates/erabasic-compiler" }
+erabasic-csv = { path = "../../crates/erabasic-csv" }
+erabasic-data = { path = "../../crates/erabasic-data" }
+erabasic-bytecode = { path = "../../crates/erabasic-bytecode" }
+erabasic-parser = { path = "../../crates/erabasic-parser" }
+erabasic-validator = { path = "../../crates/erabasic-validator" }
+erabasic-vm = { path = "../../crates/erabasic-vm" }
