@@ -1,0 +1,8 @@
+/artifacts/
+/target/
+/__pycache__/
+*.log
+*.sav
+*.snapshot
+*-result.ndjson
+*-stderr.log
