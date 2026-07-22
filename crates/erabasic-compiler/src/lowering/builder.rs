@@ -379,6 +379,40 @@ impl<'a> Builder<'a> {
             );
             return;
         }
+        if name == "POWER" {
+            let Some(destination) = arguments.first() else {
+                self.emit(
+                    EncodedInstruction::new(Opcode::Trap, b"POWER destination is missing".to_vec()),
+                    location,
+                );
+                return;
+            };
+            let parameter_types = arguments
+                .iter()
+                .skip(1)
+                .map(|argument| self.lower_argument(argument, location))
+                .collect::<Vec<_>>();
+            self.emit_runtime_call(
+                "POWER",
+                &parameter_types,
+                Some(BytecodeType::Integer),
+                false,
+                location,
+            );
+            let destination_type = self.lower_argument(destination, location);
+            if destination_type != BytecodeType::IntegerPlace {
+                self.diagnostics.push(CompilerDiagnostic::at(
+                    CompilerDiagnosticCode::InvalidHir,
+                    location,
+                    "POWER destination is not an integer place",
+                ));
+            }
+            self.emit(
+                EncodedInstruction::new(Opcode::StorePlace, Vec::new()),
+                location,
+            );
+            return;
+        }
         if name == "DO" {
             return;
         }
