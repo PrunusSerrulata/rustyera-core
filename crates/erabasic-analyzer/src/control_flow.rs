@@ -300,6 +300,17 @@ pub(crate) fn build_control_flow(
                     }
                 }
             }
+            "RESTART" => {
+                if let Some(target) = lines.first() {
+                    edges.push(ControlFlowEdge {
+                        kind: ControlFlowKind::Goto,
+                        from: line.id,
+                        to: Some(target.id),
+                        function: None,
+                        label: None,
+                    });
+                }
+            }
             "CALL" | "CALLF" | "TRYCALL" | "JUMP" | "TRYJUMP" | "BEGIN" => {
                 if let Some(target) = raw_target(arguments)
                     && let Some(function) = symbols.function(target)
@@ -439,7 +450,7 @@ fn falls_through(line: &HirStatement) -> bool {
             if matches!(
                 target.name(),
                 "RETURN" | "RETURNF" | "RETURNFORM" | "JUMP" | "BEGIN" | "GOTO" | "QUIT"
-                    | "BREAK" | "CONTINUE"
+                    | "BREAK" | "CONTINUE" | "RESTART"
             )
     )
 }

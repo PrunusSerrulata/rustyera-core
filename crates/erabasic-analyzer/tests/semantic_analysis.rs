@@ -52,6 +52,53 @@ fn frontend_observation_reports_source_and_control_dependency() {
 }
 
 #[test]
+fn restart_branches_to_the_current_function_entry_without_falling_through() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "restart.erb",
+                "@SYSTEM_TITLE\nPRINT first\nRESTART\nPRINT unreachable\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.severity,
+            erabasic_analyzer::AnalyzerDiagnosticSeverity::Error
+                | erabasic_analyzer::AnalyzerDiagnosticSeverity::Fatal
+        )),
+        "{:#?}",
+        report.diagnostics
+    );
+    let function = &report
+        .project
+        .expect("valid RESTART project")
+        .program
+        .functions[0];
+    let restart = function
+        .lines
+        .iter()
+        .find(|line| {
+            matches!(
+                &line.kind,
+                HirStatementKind::Instruction { target, .. } if target.name() == "RESTART"
+            )
+        })
+        .expect("RESTART line");
+    assert!(function.control_flow.iter().any(|edge| {
+        edge.kind == erabasic_hir::ControlFlowKind::Goto
+            && edge.from == restart.id
+            && edge.to == function.lines.first().map(|line| line.id)
+    }));
+    assert!(!function.control_flow.iter().any(|edge| {
+        edge.kind == erabasic_hir::ControlFlowKind::Next && edge.from == restart.id
+    }));
+}
+
+#[test]
 fn resolves_header_constants_variables_and_typed_expressions() {
     let report = analyze_project(
         AnalysisInput {
