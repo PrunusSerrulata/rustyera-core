@@ -314,7 +314,6 @@ fn analyze_with_context(
     }
 
     let reachable = reachable_functions(sources, &definitions, &symbols, options);
-    let mut functions = Vec::new();
     for definition in &definitions {
         let source = &sources[definition.source_index];
         let function = &source.script.functions[definition.function_index];
@@ -328,41 +327,56 @@ fn analyze_with_context(
             options,
             &mut diagnostics,
         );
-        // A same-name normal function after the first one can never be selected
-        // by Emuera's non-event dictionary. Keep its identity for deterministic
-        // source ordering, but do not lower an unreachable replacement body.
-        let should_analyze = options.analysis_mode
-            || (!definition.shadowed
-                && (!options.ignore_uncalled_functions || reachable.contains(&definition.id)));
-        let hir = if should_analyze {
-            analyze_function(
-                definition.id,
-                definition.kind,
-                definition.return_type,
-                definition.definition_order,
-                source,
-                function,
-                &symbols,
-                catalog,
-                context,
-                &index_resolver,
-                options,
-                &mut diagnostics,
-            )
-        } else {
-            uncalled_function(
-                definition.id,
-                definition.kind,
-                definition.return_type,
-                definition.definition_order,
-                source,
-                function,
-            )
-        };
-        if !reachable.contains(&definition.id) {
-            report_uncalled(source, function, options, &mut diagnostics);
-        }
-        functions.push(hir);
+    }
+    // Function bodies only read the completed symbol table. Indexed Rayon collection keeps
+    // HIR ordering deterministic while large projects analyze independent bodies in parallel.
+    let analyzed_functions = definitions
+        .par_iter()
+        .map(|definition| {
+            let source = &sources[definition.source_index];
+            let function = &source.script.functions[definition.function_index];
+            let mut function_diagnostics = Vec::new();
+            // A same-name normal function after the first one can never be selected
+            // by Emuera's non-event dictionary. Keep its identity for deterministic
+            // source ordering, but do not lower an unreachable replacement body.
+            let should_analyze = options.analysis_mode
+                || (!definition.shadowed
+                    && (!options.ignore_uncalled_functions || reachable.contains(&definition.id)));
+            let hir = if should_analyze {
+                analyze_function(
+                    definition.id,
+                    definition.kind,
+                    definition.return_type,
+                    definition.definition_order,
+                    source,
+                    function,
+                    &symbols,
+                    catalog,
+                    context,
+                    &index_resolver,
+                    options,
+                    &mut function_diagnostics,
+                )
+            } else {
+                uncalled_function(
+                    definition.id,
+                    definition.kind,
+                    definition.return_type,
+                    definition.definition_order,
+                    source,
+                    function,
+                )
+            };
+            if !reachable.contains(&definition.id) {
+                report_uncalled(source, function, options, &mut function_diagnostics);
+            }
+            (hir, function_diagnostics)
+        })
+        .collect::<Vec<_>>();
+    let mut functions = Vec::with_capacity(analyzed_functions.len());
+    for (function, function_diagnostics) in analyzed_functions {
+        functions.push(function);
+        diagnostics.extend(function_diagnostics);
     }
 
     for source in sources

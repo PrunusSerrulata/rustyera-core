@@ -1,7 +1,8 @@
 use era_debug_protocol::{DEBUG_PROTOCOL_VERSION, DebugHello, DebugMessage, DebugScope};
 use era_protocol::{Channel, Envelope, ProtocolBytes, decode_envelope, encode_envelope};
 use era_runtime_protocol::{
-    DisplayRun, FileCategory, FileChange, FilePayload, ProjectManifest, SubmittedFile,
+    DisplayRun, FileCategory, FileChange, FilePayload, ProjectIdentity, ProjectManifest,
+    SubmittedFile,
 };
 
 use super::*;
@@ -1361,6 +1362,82 @@ fn project_load_start_and_print_cross_the_message_boundary() {
                     if text.contains("TITLE_CHARANUM=0")
             )
         })
+    }));
+}
+
+#[test]
+fn linecount_drives_clearline_and_bounded_padding_loops() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "linecount-test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["ja".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(
+                        "@SYSTEM_TITLE\nCALL ORACLE_LINECOUNT\nWAIT\nRETURN\n".into(),
+                    ),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "linecount.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(
+                        include_str!(
+                            "../../../../tools/emuera-reference-cli/tests/fixture/erb/linecount.erb"
+                        )
+                        .into(),
+                    ),
+                    content_hash: None,
+                },
+            ],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    for _ in 0..20 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        if session.phase() == RuntimePhase::WaitingInput {
+            break;
+        }
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    assert_eq!(session.presentation.logical_line_count(), 3);
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "RESULT", &[50], None).unwrap(), 2);
+    assert_eq!(read_runtime_integer(vm, "RESULT", &[51], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "RESULT", &[52], None).unwrap(), 3);
+    let snapshot = session.presentation.snapshot();
+    assert_eq!(snapshot.history.logical_lines.len(), 3);
+    assert!(snapshot.history.logical_lines.iter().any(|line| {
+        line.runs
+            .iter()
+            .any(|run| matches!(run, DisplayRun::Text { text, .. } if text == "one"))
     }));
 }
 
@@ -3020,11 +3097,20 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
             StorageResponse {
                 request_id: request.request_id,
                 result: StorageResult::Listed {
-                    entries: vec![StorageEntry {
-                        relative_path: "save01.sav".into(),
-                        byte_length: 3,
-                        revision: Some("r1".into()),
-                    }],
+                    entries: vec![
+                        StorageEntry {
+                            relative_path: "save01.sav".into(),
+                            byte_length: 3,
+                            revision: None,
+                            change_token: Some("t1".into()),
+                        },
+                        StorageEntry {
+                            relative_path: "save25.sav".into(),
+                            byte_length: 3,
+                            revision: None,
+                            change_token: Some("t25".into()),
+                        },
+                    ],
                 },
             },
         )
@@ -3037,19 +3123,35 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
         })
         .expect("slot metadata read");
     assert_eq!(scan.relative_path, "save01.sav");
+    assert!(matches!(
+        scan.operation,
+        StorageOperation::ReadRange {
+            offset: 0,
+            maximum_bytes: 65_536,
+            ..
+        }
+    ));
     session
         .complete_storage(
             3,
             StorageResponse {
                 request_id: scan.request_id,
-                result: StorageResult::Read {
+                result: StorageResult::ReadChunk {
                     data: ProtocolBytes::new(b"bad".to_vec()),
-                    revision: Some("r1".into()),
+                    offset: 0,
+                    complete: true,
+                    change_token: "t1".into(),
                 },
             },
         )
         .unwrap();
     assert!(session.invalid_slot_paths.contains("save01.sav"));
+    assert!(session.occupied_slot_paths.contains("save25.sav"));
+    assert!(
+        drain(&mut session)
+            .iter()
+            .all(|message| !matches!(message, RuntimeMessage::StorageRequest(_)))
+    );
     let pending = session
         .operations
         .take_active_input()
@@ -3083,6 +3185,27 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
     session
         .finish_system_input(pending, &VmValue::Integer(-1_001))
         .unwrap();
+    let stat = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::StorageRequest(request) => Some(request),
+            _ => None,
+        })
+        .expect("slot delete stat");
+    assert_eq!(stat.relative_path, "save01.sav");
+    assert_eq!(stat.operation, StorageOperation::Stat);
+    session
+        .complete_storage(
+            4,
+            StorageResponse {
+                request_id: stat.request_id,
+                result: StorageResult::Metadata(era_runtime_protocol::StorageMetadata {
+                    byte_length: 3,
+                    revision: Some("r1".into()),
+                }),
+            },
+        )
+        .unwrap();
     let delete = drain(&mut session)
         .into_iter()
         .find_map(|message| match message {
@@ -3090,7 +3213,6 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
             _ => None,
         })
         .expect("revision-bound slot delete");
-    assert_eq!(delete.relative_path, "save01.sav");
     assert!(matches!(
         delete.operation,
         StorageOperation::Delete {
@@ -3099,7 +3221,7 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
     ));
     session
         .complete_storage(
-            4,
+            5,
             StorageResponse {
                 request_id: delete.request_id,
                 result: StorageResult::Error {
@@ -4419,10 +4541,14 @@ fn project_load_rejects_an_uncommitted_cache_without_changing_phase() {
         .load_project(
             99,
             &ProjectLoadRequest {
-                manifest: ProjectManifest {
+                identity: ProjectIdentity {
+                    project_revision: 1,
+                    source_digest: ProtocolBytes::new(vec![0; 32]),
+                },
+                manifest: Some(ProjectManifest {
                     project_revision: 1,
                     files: Vec::new(),
-                },
+                }),
                 compiled_cache_transfer_id: Some(123),
             },
         )
@@ -4436,4 +4562,82 @@ fn project_load_rejects_an_uncommitted_cache_without_changing_phase() {
             ..
         })
     )));
+}
+
+#[test]
+fn identity_only_project_load_requests_payload_after_a_cache_miss() {
+    let manifest = ProjectManifest {
+        project_revision: 4,
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+            content_hash: None,
+        }],
+    };
+    let identity = crate::compiled_cache::project_identity(&manifest);
+    let session = RuntimeSession::new(RuntimeOptions::default());
+
+    let Err(report) = session.build_project_from_cache(
+        &ProjectLoadRequest {
+            identity,
+            manifest: None,
+            compiled_cache_transfer_id: None,
+        },
+        None,
+    ) else {
+        panic!("an identity without an exact cache needs source payloads");
+    };
+
+    assert!(!report.success);
+    assert!(report.payload_required);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "runtime.project_payload_required")
+    );
+}
+
+#[test]
+fn exact_compiled_cache_load_does_not_require_a_manifest() {
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+            content_hash: None,
+        }],
+    };
+    let mut initial = crate::project::build_project(&manifest, None);
+    assert!(initial.report.success, "{:?}", initial.report.diagnostics);
+    initial.incremental.compact();
+    let cache = crate::compiled_cache::encode(
+        &manifest,
+        &[],
+        initial.artifact.as_ref().unwrap(),
+        &initial.incremental,
+        initial.snapshot.as_ref().unwrap(),
+    )
+    .unwrap();
+    let mut identity = crate::compiled_cache::project_identity(&manifest);
+    identity.project_revision = 8;
+    let session = RuntimeSession::new(RuntimeOptions::default());
+
+    let cached = session
+        .build_project_from_cache(
+            &ProjectLoadRequest {
+                identity,
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+            Some(&cache),
+        )
+        .expect("an exact cache loads from source identity alone");
+
+    assert!(cached.report.success);
+    assert!(!cached.report.payload_required);
+    assert_eq!(cached.report.project_revision, 8);
+    assert_eq!(cached.snapshot.unwrap().manifest.project_revision, 8);
 }

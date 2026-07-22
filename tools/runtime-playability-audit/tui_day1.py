@@ -69,6 +69,8 @@ def main() -> int:
     snapshot_every_wait = os.environ.get("ERA_AUDIT_SNAPSHOT_EVERY_WAIT") == "1"
     layout_check = os.environ.get("ERA_AUDIT_LAYOUT_CHECK") == "1"
     layout_stage: str | None = None
+    item_check = os.environ.get("ERA_AUDIT_ITEM_CHECK") == "1"
+    item_stage: str | None = None
     snapshot_requested = False
     snapshot_attempts = 0
     snapshot_attempt_wait: tuple[dict[int, object], str] | None = None
@@ -85,7 +87,7 @@ def main() -> int:
     def advance_wait(
         wait: dict[int, object], tail: str, *, snapshot_attempted: bool = False
     ) -> int | None:
-        nonlocal answer_index, snapshot_requested, snapshot_attempt_wait, layout_stage
+        nonlocal answer_index, snapshot_requested, snapshot_attempt_wait, layout_stage, item_stage
         if wait[1] == 0:
             worker.send("submit_text", "")
         elif layout_check and layout_stage == "day_one":
@@ -111,6 +113,31 @@ def main() -> int:
                 print("MAP_C_ROW_OK after_toggle=1")
                 print("TUI_LAYOUT_OK")
                 return 0
+        elif item_check and item_stage == "command_menu":
+            rows = display_rows(model)
+            if not any("道具確認[805]" in row for row in rows):
+                print(f"ITEM_CONFIRM_ERROR missing_command tail={rows[-30:]!r}")
+                return 1
+            item_stage = "opening"
+            worker.send("submit_text", "805")
+        elif item_check and item_stage == "opening":
+            rows = display_rows(model)
+            if not any("所持道具一覧" in row for row in rows) or not any(
+                "[999] 返回" in row for row in rows
+            ):
+                print(f"ITEM_CONFIRM_ERROR tail={rows[-30:]!r}")
+                return 1
+            if len(model.lines) > model.maximum_physical_lines:
+                print(
+                    f"ITEM_CONFIRM_ERROR unbounded_history={len(model.lines)} "
+                    f"limit={model.maximum_physical_lines}"
+                )
+                return 1
+            print(
+                f"ITEM_CONFIRM_OK elapsed={time.monotonic() - started:.2f}s "
+                f"lines={len(model.lines)} limit={model.maximum_physical_lines}"
+            )
+            return 0
         elif answer_index < len(answers):
             answer = answers[answer_index]
             answer_index += 1
@@ -123,6 +150,9 @@ def main() -> int:
             )
             if layout_check:
                 layout_stage = "day_one"
+                worker.send("submit_text", "100")
+            elif item_check:
+                item_stage = "command_menu"
                 worker.send("submit_text", "100")
             elif snapshot_path and not snapshot_attempted:
                 worker.send("export_snapshot", snapshot_path)

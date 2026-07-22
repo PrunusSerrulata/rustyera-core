@@ -10,20 +10,14 @@ pub(super) fn runtime_variable_key(
     name: &str,
 ) -> Result<erabasic_bytecode::SymbolKey, RuntimeError> {
     vm.vm()
-        .artifact()
-        .globals
-        .iter()
-        .find(|global| global.name.eq_ignore_ascii_case(name))
+        .global_by_name(name)
         .map(|global| global.key)
         .ok_or_else(|| RuntimeError::Internal(format!("system variable {name} is missing")))
 }
 
 pub(super) fn runtime_variable_length(vm: &RuntimeVm, name: &str) -> usize {
     vm.vm()
-        .artifact()
-        .globals
-        .iter()
-        .find(|global| global.name.eq_ignore_ascii_case(name))
+        .global_by_name(name)
         .and_then(|global| global.dimensions.first())
         .and_then(|length| usize::try_from(*length).ok())
         .unwrap_or(0)
@@ -571,6 +565,28 @@ pub(super) fn write_runtime_integer(
         .map_err(|error| RuntimeError::Internal(error.to_string()))?;
     vm.commit_runtime_state(prepared)
         .map_err(|error| RuntimeError::Internal(error.to_string()))
+}
+
+pub(super) fn synchronize_line_count(
+    presentation: &mut PresentationModel,
+    vm: &mut RuntimeVm,
+) -> Result<(), RuntimeError> {
+    if !presentation.line_count_is_dirty() {
+        return Ok(());
+    }
+    // The analyzer only materializes calculated globals that a project references.
+    // A project without LINECOUNT therefore needs no VM cell synchronization.
+    if vm.vm().global_by_name("LINECOUNT").is_some() {
+        write_runtime_integer(
+            vm,
+            "LINECOUNT",
+            &[],
+            None,
+            presentation.logical_line_count(),
+        )?;
+    }
+    presentation.mark_line_count_synchronized();
+    Ok(())
 }
 
 pub(super) fn write_runtime_string(

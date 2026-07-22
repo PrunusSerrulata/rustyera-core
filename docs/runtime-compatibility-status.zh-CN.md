@@ -20,7 +20,7 @@ snapshot、热替换和主要系统流程框架已经存在，但仍有数个会
 - `PRINT*` 的 K/D 后缀和常用专用输出已经实现，但 N/SINGLE/C 等后缀仍缺少完整语义。
 - 调教和 `EVENTCOMEND` 主流程已实现；SHOP 自动存档已按进入来源限定。
 - 很多已进入 Host catalog 的命令最终落入通用 `UnsupportedRuntimeFeature`。
-- Protocol 20.0 保留前端实际渲染观测 typed service、强类型坐标和结构化 HTML，并新增完整展示 delta；具体应用前端仍需
+- Protocol 22.0 保留前端实际渲染观测 typed service、强类型坐标、结构化 HTML 和完整展示 delta，并新增源码身份优先加载、稳定区间读取和物理历史裁剪；具体应用前端仍需
   实现这些可选能力，runtime 不提供布局或 raster 近似回退。
 
 主要证据集中在：
@@ -239,7 +239,7 @@ runtime 只持有并投影 `HOTKEY_STATE`。物理 ButtonWrap、文本历史、�
 
 ### 2.2 更新后设计原则与当前实现的矛盾
 
-本节记录更新后原则发现的矛盾及当前 Protocol 20.0 的处理结果：
+本节记录更新后原则发现的矛盾及当前 Protocol 22.0 的处理结果：
 
 1. **已解决：权威 snapshot 的伪物理文本布局。** Protocol 14.0 删除 `RunLayout` 和
    `DisplayLine::layout_width_millipixels`；文本、按钮、shape 仅保存语义结构。

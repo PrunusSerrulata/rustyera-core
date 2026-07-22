@@ -348,8 +348,7 @@ pub struct PresentationSettings {
     pub background: Color,
     #[n(3)]
     pub button_focus_foreground: Color,
-    /// Projection-side physical line limit. Runtime retains the semantic
-    /// journal so a renderer change never mutates game state.
+    /// Runtime-owned physical history limit. Trimming old rows never changes LINECOUNT.
     #[n(4)]
     pub maximum_physical_lines: u32,
     #[n(5)]
@@ -384,6 +383,12 @@ pub enum PresentationHistoryOperation {
         #[n(0)]
         generation: u64,
     },
+    /// Discard physical history from the oldest edge after reaching `MaxLog`.
+    #[n(5)]
+    TrimPhysical {
+        #[n(0)]
+        count: u32,
+    },
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -391,6 +396,8 @@ pub enum PresentationHistoryOperation {
 pub struct PresentationHistory {
     #[n(0)]
     pub logical_lines: Vec<DisplayLine>,
+    /// Self-contained replay baseline for the currently retained physical rows. A snapshot may
+    /// normalize prior edits to `Append`; this is not an unbounded audit journal.
     #[n(1)]
     pub operations: Vec<PresentationHistoryOperation>,
 }
@@ -825,6 +832,12 @@ pub enum PresentationOperation {
     SetButtonGeneration {
         #[n(0)]
         generation: u64,
+    },
+    /// Discard the oldest projected lines while retaining the logical line counter.
+    #[n(14)]
+    TrimLines {
+        #[n(0)]
+        count: u32,
     },
 }
 

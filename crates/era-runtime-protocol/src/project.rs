@@ -87,13 +87,26 @@ pub struct ProjectManifest {
     pub files: Vec<SubmittedFile>,
 }
 
+/// Lightweight identity used to validate an opaque compiled-project cache before source
+/// payloads are transferred.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ProjectIdentity {
+    #[n(0)]
+    pub project_revision: u64,
+    #[n(1)]
+    pub source_digest: ProtocolBytes,
+}
+
 /// Load a project, optionally seeding the build from an opaque runtime-produced cache.
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct ProjectLoadRequest {
     #[n(0)]
-    pub manifest: ProjectManifest,
+    pub identity: ProjectIdentity,
     #[n(1)]
+    pub manifest: Option<ProjectManifest>,
+    #[n(2)]
     pub compiled_cache_transfer_id: Option<u64>,
 }
 
@@ -146,6 +159,9 @@ pub struct ProjectLoadReport {
     pub success: bool,
     #[n(2)]
     pub diagnostics: Vec<ProtocolDiagnostic>,
+    /// The supplied cache was not exact and the frontend must retry with a full manifest.
+    #[n(3)]
+    pub payload_required: bool,
 }
 
 /// One-shot project analysis that never replaces the active runtime project.

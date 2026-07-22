@@ -4,10 +4,12 @@
 //! all filesystem errors remain frontend responsibilities.
 
 mod binary;
+mod metadata;
 mod model;
 mod text;
 
 pub use binary::{decode_binary, decode_save_extension, encode_binary, encode_save_extension};
+pub use metadata::{SaveMetadataInspection, inspect_metadata};
 pub use model::{
     OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveExtension,
     SaveFileKind, SaveFormat, SaveMetadata, SaveValue, Text1808Layout, Text1808ValueType,

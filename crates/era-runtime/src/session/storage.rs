@@ -157,6 +157,7 @@ impl RuntimeSession {
             let maximum = self.options.limits.maximum_drive_instructions.max(1);
             let mut executed = 0_u64;
             loop {
+                synchronize_line_count(&mut self.presentation, &mut candidate)?;
                 let report = candidate.drive(
                     RunBudget {
                         maximum_instructions: maximum.saturating_sub(executed).max(1),
@@ -616,21 +617,75 @@ impl RuntimeSession {
                     save,
                     path,
                     remaining,
+                    mut data,
+                    change_token: expected_token,
                 },
-                StorageResult::Read { data, .. },
+                StorageResult::ReadChunk {
+                    data: chunk,
+                    offset,
+                    complete,
+                    change_token,
+                },
             ) => {
+                if offset != data.len() as u64
+                    || expected_token
+                        .as_ref()
+                        .is_some_and(|expected| expected != &change_token)
+                {
+                    return self.reject(
+                        message_id,
+                        CommandErrorCode::StaleRequest,
+                        "save metadata chunks are not contiguous",
+                    );
+                }
+                data.extend_from_slice(chunk.as_slice());
+                let inspection = era_runtime_save::inspect_metadata(
+                    &data,
+                    complete,
+                    era_runtime_save::SaveCodecLimits::default(),
+                );
+                if matches!(
+                    inspection,
+                    Ok(era_runtime_save::SaveMetadataInspection::NeedMore)
+                ) {
+                    let maximum = era_runtime_save::SaveCodecLimits::default().maximum_bytes;
+                    if data.len() >= maximum {
+                        self.invalid_slot_paths.insert(path.clone());
+                        self.slot_labels
+                            .insert(path, "corrupt: metadata exceeds limit".into());
+                        return self.scan_next_menu_slot(save, remaining);
+                    }
+                    let next = (64 * 1024usize).min(maximum.saturating_sub(data.len()));
+                    let next_offset = data.len() as u64;
+                    return self.issue_storage(
+                        PendingStorage::ScanMenuSlot {
+                            save,
+                            path: path.clone(),
+                            remaining,
+                            data,
+                            change_token: Some(change_token.clone()),
+                        },
+                        StorageNamespace::Save,
+                        StorageOperation::ReadRange {
+                            offset: next_offset,
+                            maximum_bytes: u32::try_from(next).unwrap_or(u32::MAX),
+                            change_token: Some(change_token),
+                        },
+                        path,
+                    );
+                }
                 let vm = self
                     .vm
                     .as_ref()
                     .ok_or_else(|| RuntimeError::Internal("save menu scan has no VM".into()))?;
-                let status = match decode_scoped_save(
-                    data.as_slice(),
-                    vm.vm().artifact(),
-                    era_runtime_save::SaveFileKind::Normal,
-                ) {
-                    Ok(decoded) => {
+                let status = match inspection {
+                    Ok(era_runtime_save::SaveMetadataInspection::Complete {
+                        kind: era_runtime_save::SaveFileKind::Normal,
+                        metadata,
+                        ..
+                    }) => {
                         let game = &vm.vm().artifact().project_data.static_data.game_base;
-                        if decoded.state.unique_code != game.unique_code {
+                        if metadata.unique_code != game.unique_code {
                             Err("different game".to_owned())
                         } else if !vm
                             .vm()
@@ -638,15 +693,20 @@ impl RuntimeSession {
                             .project_data
                             .save_load_context()
                             .compatibility
-                            .accepts(decoded.state.unique_code, decoded.state.version)
+                            .accepts(metadata.unique_code, metadata.version)
                         {
                             Err("different version".to_owned())
                         } else {
-                            Ok(decoded.description)
+                            Ok(metadata.description)
                         }
                     }
+                    Ok(era_runtime_save::SaveMetadataInspection::Complete { .. }) => {
+                        Err("different save kind".to_owned())
+                    }
+                    Ok(era_runtime_save::SaveMetadataInspection::NeedMore) => unreachable!(),
                     Err(error) => Err(format!("corrupt: {error}")),
                 };
+                self.slot_change_tokens.insert(path.clone(), change_token);
                 match status {
                     Ok(label) => {
                         self.slot_labels.insert(path, label);
@@ -663,12 +723,13 @@ impl RuntimeSession {
                     save,
                     path,
                     remaining,
+                    ..
                 },
                 StorageResult::Error { error },
             ) => {
                 if error.kind == FrontendIoErrorKind::NotFound {
                     self.occupied_slot_paths.remove(&path);
-                    self.slot_revisions.remove(&path);
+                    self.slot_change_tokens.remove(&path);
                 } else {
                     self.invalid_slot_paths.insert(path.clone());
                     self.slot_labels
@@ -676,9 +737,44 @@ impl RuntimeSession {
                 }
                 self.scan_next_menu_slot(save, remaining)
             }
+            (
+                PendingStorage::StatDeleteMenuSlot { save, path },
+                StorageResult::Metadata(metadata),
+            ) => {
+                let Some(revision) = metadata.revision else {
+                    self.system_menu = if save {
+                        SystemMenuState::SaveSlots
+                    } else {
+                        SystemMenuState::LoadSlots
+                    };
+                    return self.render_slot_menu(save);
+                };
+                self.issue_storage(
+                    PendingStorage::DeleteMenuSlot {
+                        save,
+                        path: path.clone(),
+                    },
+                    StorageNamespace::Save,
+                    StorageOperation::Delete {
+                        precondition: StoragePrecondition::Revision(revision),
+                    },
+                    path,
+                )
+            }
+            (
+                PendingStorage::StatDeleteMenuSlot { save, path }
+                | PendingStorage::DeleteMenuSlot { save, path },
+                StorageResult::Error { error },
+            ) if error.kind == FrontendIoErrorKind::NotFound => {
+                self.occupied_slot_paths.remove(&path);
+                self.slot_change_tokens.remove(&path);
+                self.slot_labels.remove(&path);
+                self.render_slot_menu(save)
+            }
             (PendingStorage::DeleteMenuSlot { save, path }, StorageResult::Deleted) => {
                 self.occupied_slot_paths.remove(&path);
-                self.slot_revisions.remove(&path);
+                self.slot_change_tokens.remove(&path);
+                self.slot_labels.remove(&path);
                 self.system_menu = if save {
                     SystemMenuState::SaveSlots
                 } else {
@@ -686,14 +782,11 @@ impl RuntimeSession {
                 };
                 self.render_slot_menu(save)
             }
-            (PendingStorage::DeleteMenuSlot { save, path }, StorageResult::Error { error })
-                if error.kind == FrontendIoErrorKind::NotFound =>
-            {
-                self.occupied_slot_paths.remove(&path);
-                self.slot_revisions.remove(&path);
-                self.render_slot_menu(save)
-            }
-            (PendingStorage::DeleteMenuSlot { save, .. }, StorageResult::Error { error }) => {
+            (
+                PendingStorage::StatDeleteMenuSlot { save, .. }
+                | PendingStorage::DeleteMenuSlot { save, .. },
+                StorageResult::Error { error },
+            ) => {
                 self.presentation.append_system_text(
                     format!("delete failed: {error:?}"),
                     SystemTextKey::InvalidValue,
@@ -822,26 +915,32 @@ impl RuntimeSession {
                 "storage list contains an invalid relative path",
             );
         }
+        let previous_tokens = std::mem::take(&mut self.slot_change_tokens);
         self.occupied_slot_paths = entries
             .iter()
             .map(|entry| entry.relative_path.clone())
             .collect();
-        self.slot_revisions = entries
+        self.slot_change_tokens = entries
             .into_iter()
-            .filter_map(|entry| {
-                entry
-                    .revision
-                    .map(|revision| (entry.relative_path, revision))
-            })
+            .filter_map(|entry| entry.change_token.map(|token| (entry.relative_path, token)))
             .collect();
-        self.slot_labels.clear();
-        self.invalid_slot_paths.clear();
+        self.slot_labels
+            .retain(|path, _| previous_tokens.get(path) == self.slot_change_tokens.get(path));
+        self.invalid_slot_paths
+            .retain(|path| previous_tokens.get(path) == self.slot_change_tokens.get(path));
         self.system_menu = if save {
             SystemMenuState::SaveSlots
         } else {
             SystemMenuState::LoadSlots
         };
-        let mut remaining = self.occupied_slot_paths.iter().cloned().collect::<Vec<_>>();
+        self.scan_slot_page(save)
+    }
+
+    pub(super) fn scan_slot_page(&mut self, save: bool) -> Result<(), RuntimeError> {
+        let mut remaining = self.slot_page_paths(save);
+        remaining.retain(|path| {
+            self.occupied_slot_paths.contains(path) && !self.slot_labels.contains_key(path)
+        });
         remaining.reverse();
         self.scan_next_menu_slot(save, remaining)
     }
@@ -859,11 +958,34 @@ impl RuntimeSession {
                 save,
                 path: path.clone(),
                 remaining,
+                data: Vec::new(),
+                change_token: self.slot_change_tokens.get(&path).cloned(),
             },
             StorageNamespace::Save,
-            StorageOperation::Read,
+            StorageOperation::ReadRange {
+                offset: 0,
+                maximum_bytes: 64 * 1024,
+                change_token: self.slot_change_tokens.get(&path).cloned(),
+            },
             path,
         )
+    }
+
+    fn slot_page_paths(&mut self, save: bool) -> Vec<String> {
+        let slot_count = self
+            .project_snapshot
+            .as_ref()
+            .map_or(20, |snapshot| snapshot.save_slot_count)
+            .max(20);
+        let page_count = slot_count.div_ceil(20);
+        self.system_menu_page = self.system_menu_page.min(page_count.saturating_sub(1));
+        let start = self.system_menu_page.saturating_mul(20);
+        let end = start.saturating_add(20).min(slot_count);
+        let mut paths = (start..end).map(save_slot_path).collect::<Vec<_>>();
+        if !save {
+            paths.push(save_slot_path(99));
+        }
+        paths
     }
 
     #[allow(clippy::too_many_lines)]
@@ -875,12 +997,7 @@ impl RuntimeSession {
             .max(20);
         let page_count = slot_count.div_ceil(20);
         self.system_menu_page = self.system_menu_page.min(page_count.saturating_sub(1));
-        let start = self.system_menu_page.saturating_mul(20);
-        let end = start.saturating_add(20).min(slot_count);
-        self.load_slot_paths = (start..end).map(save_slot_path).collect();
-        if !save {
-            self.load_slot_paths.push(save_slot_path(99));
-        }
+        self.load_slot_paths = self.slot_page_paths(save);
         let question = if save {
             SystemTextKey::SaveQuestion
         } else {
@@ -915,13 +1032,7 @@ impl RuntimeSession {
                 token,
             );
             choices.insert(token, VmValue::Integer(i64::from(slot)));
-            if occupied
-                && self.storage_capabilities.delete
-                && self.storage_capabilities.revisions
-                && self
-                    .slot_revisions
-                    .contains_key(&self.load_slot_paths[index])
-            {
+            if occupied && self.storage_capabilities.delete && self.storage_capabilities.revisions {
                 let delete = self.allocate_interaction();
                 self.presentation.append_system_button(
                     format!("Delete {}", self.load_slot_paths[index]),
@@ -980,6 +1091,8 @@ impl RuntimeSession {
         self.system_menu = SystemMenuState::Title;
         self.load_slot_paths.clear();
         self.occupied_slot_paths.clear();
+        self.slot_change_tokens.clear();
+        self.slot_labels.clear();
         self.resume_storage_host(request, Vec::new())
     }
 

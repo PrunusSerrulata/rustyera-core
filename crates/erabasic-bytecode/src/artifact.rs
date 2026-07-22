@@ -1,5 +1,6 @@
 use erabasic_data::ProjectData;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 use crate::{
     BytecodeType, COMPILER_ABI_VERSION, CONTAINER_VERSION, Digest, FormatVersion, HOST_ABI_VERSION,
@@ -200,41 +201,50 @@ impl BytecodeArtifact {
     /// Returns an error if one of the canonical section values cannot be encoded.
     pub fn refresh_ids(&mut self) -> Result<(), serde_json::Error> {
         self.canonicalize();
-        let versions = serde_json::to_vec(&(
-            self.manifest.isa_version,
-            self.manifest.compiler_abi,
-            self.manifest.native_abi,
-            self.manifest.program_version.vm_abi,
-            self.manifest.program_version.host_abi,
-            &self.manifest.compiler_options,
-            &self.manifest.required_features,
-        ))?;
-        let project = serde_json::to_vec(&self.project_data)?;
-        let globals = serde_json::to_vec(&self.globals)?;
-        let native = serde_json::to_vec(&self.native_imports)?;
-        let host = serde_json::to_vec(&self.host_imports)?;
-        let functions = serde_json::to_vec(&self.functions)?;
-        let events = serde_json::to_vec(&self.event_groups)?;
-        let call_compatibility = serde_json::to_vec(&self.call_compatibility)?;
+        let versions = canonical_digest(
+            "rustyera.bytecode.identity.versions.v2",
+            &(
+                self.manifest.isa_version,
+                self.manifest.compiler_abi,
+                self.manifest.native_abi,
+                self.manifest.program_version.vm_abi,
+                self.manifest.program_version.host_abi,
+                &self.manifest.compiler_options,
+                &self.manifest.required_features,
+            ),
+        )?;
+        let project =
+            canonical_digest("rustyera.bytecode.identity.project.v2", &self.project_data)?;
+        let globals = canonical_digest("rustyera.bytecode.identity.globals.v2", &self.globals)?;
+        let native =
+            canonical_digest("rustyera.bytecode.identity.native.v2", &self.native_imports)?;
+        let host = canonical_digest("rustyera.bytecode.identity.host.v2", &self.host_imports)?;
+        let functions =
+            canonical_digest("rustyera.bytecode.identity.functions.v2", &self.functions)?;
+        let events = canonical_digest("rustyera.bytecode.identity.events.v2", &self.event_groups)?;
+        let call_compatibility = canonical_digest(
+            "rustyera.bytecode.identity.call-compatibility.v2",
+            &self.call_compatibility,
+        )?;
         let execution_id = Digest::hash(
-            "rustyera.bytecode.execution.v1",
+            "rustyera.bytecode.execution.v2",
             &[
-                &versions,
-                &project,
-                &globals,
-                &native,
-                &host,
-                &functions,
-                &events,
-                &call_compatibility,
+                &versions.0,
+                &project.0,
+                &globals.0,
+                &native.0,
+                &host.0,
+                &functions.0,
+                &events.0,
+                &call_compatibility.0,
             ],
         );
         self.manifest.program_version.execution_id = execution_id;
 
-        let sources = serde_json::to_vec(&self.source_map)?;
+        let sources = canonical_digest("rustyera.bytecode.identity.sources.v2", &self.source_map)?;
         self.manifest.artifact_id = Digest::hash(
-            "rustyera.bytecode.artifact.v1",
-            &[&execution_id.0, &sources],
+            "rustyera.bytecode.artifact.v2",
+            &[&execution_id.0, &sources.0],
         );
         Ok(())
     }
@@ -242,6 +252,32 @@ impl BytecodeArtifact {
     #[must_use]
     pub fn into_unvalidated(self) -> UnvalidatedArtifact {
         UnvalidatedArtifact(self)
+    }
+}
+
+fn canonical_digest<T: Serialize + ?Sized>(
+    domain: &str,
+    value: &T,
+) -> Result<Digest, serde_json::Error> {
+    let mut writer = DigestWriter {
+        hasher: blake3::Hasher::new_derive_key(domain),
+    };
+    serde_json::to_writer(&mut writer, value)?;
+    Ok(Digest(*writer.hasher.finalize().as_bytes()))
+}
+
+struct DigestWriter {
+    hasher: blake3::Hasher,
+}
+
+impl Write for DigestWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.hasher.update(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

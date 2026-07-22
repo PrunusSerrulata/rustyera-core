@@ -340,7 +340,7 @@ C ABI 传输的是 `era_protocol::Envelope` 的确定性 CBOR 编码，而非 JS
 | 字段 | 含义 |
 | --- | --- |
 | `wire_version` | 公共信封版本，当前为 `2.0`。 |
-| `channel_version` | `Runtime` channel 当前为 `21.0`；`Debug` channel 当前为 `4.0`。 |
+| `channel_version` | `Runtime` channel 当前为 `22.0`；`Debug` channel 当前为 `4.0`。 |
 | `channel` | 正常运行必须为 `Runtime`；调试使用独立 `Debug` channel。 |
 | `session` | 首次 `ClientHello` 可为空；握手成功后必须等于 `ServerHello.session`。 |
 | `session_epoch` | 首次握手可为空；之后必须等于当前时间线 epoch。新游戏、恢复或热替换提交后旧 epoch 消息失效。 |
@@ -365,7 +365,7 @@ canonical CBOR。不要把 Serde JSON 投影作为 wire 数据发送。
 
 | 字段 | 含义 |
 | --- | --- |
-| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `21.0`。 |
+| `runtime_versions` | 前端接受的 runtime protocol 版本区间。当前应包含 `22.0`。 |
 | `client_name` | 用于诊断的前端名称。 |
 | `features` | 前端能够处理的功能集合。 |
 | `requested_limits` | 希望采用的资源限制。 |
@@ -484,7 +484,7 @@ Runtime 是展示语义状态的权威持有者；前端只负责渲染投影。
   应用 operations 并更新为 `new_revision`；
 - revision 不匹配时不要猜测或部分应用，应请求 `Resynchronize`（tag `94`）。
 
-Protocol 20 runtime 在首次同步、恢复后首次输出、能力投影改变以及显式重同步时发送
+Protocol 22 runtime 延续 Protocol 20 的展示契约：在首次同步、恢复后首次输出、能力投影改变以及显式重同步时发送
 `PresentationSnapshot`，其余展示变化通常发送 `PresentationDelta`。delta 覆盖行追加、替换、
 删除、清屏，以及 title、background、audio、input wait、settings、tooltip、resource replay、
 top-layer HTML、redraw 和 button generation。前端必须同时实现两种消息，且不能假定正常运行
@@ -496,6 +496,8 @@ top-layer HTML、redraw 和 button generation。前端必须同时实现两种�
 `SetHtmlIsland` 和 `SetRedraw` 直接替换对应缓存字段。`SetButtonGeneration` 把所有 generation
 不等于新值的既有按钮（包括嵌套 HTML 按钮）置为 disabled。样式等只影响未来输出的内部变化
 可能产生 operations 为空但 revision 前进的合法 delta，前端仍必须接受其 `new_revision`。
+`TrimLines` 只从头部移除超出 `maximum_physical_lines` 的物理历史；不得据此修改脚本可见的
+`LINECOUNT`。后者由 Runtime 按提交输出和 `CLEARLINE` 的参考语义独立维护。
 
 Snapshot 包含标题、行、背景、tooltip 策略、逻辑音频状态、当前输入等待、全局展示设置
 以及 `ResourceReplay`。后者提供 Runtime 已解析的 sprite 定义、动态 sprite 与 canvas
@@ -541,8 +543,10 @@ runtime 分配的 token、generation 和 enabled。前端不得再次解析 attr
 Protocol 20.0 新增完整 delta operation 集并与开发期 Protocol 19.0 不兼容，前端 Schema
 与绑定必须同步更新。
 
-`PresentationHistory.operations` 是物理历史的唯一有序输入：前端从空历史按顺序重放
-append、delete-physical、replace-temporary、clear 和 button-generation，再按
+`PresentationHistory.operations` 是 snapshot 中物理历史的自包含有序基线：前端从空历史
+重放即可得到当前保留的物理行；Runtime 可以把当前行规范化为一组 append，而不是保留无限
+增长的历史审计日志。实时 delta 仍按顺序发送 append、delete-physical、replace-temporary、
+clear、button-generation 和 trim，再按
 `maximum_physical_lines` 裁剪已排版的物理行。`logical_lines` 是同一时刻供语义化展示、
 无障碍和调试使用的规范化视图，不能在重放 operations 前再次作为物理初始行插入。
 两者均已按握手能力投影。Runtime 不接收普通投影回写。`ProjectionState.text_box_layout` 使用

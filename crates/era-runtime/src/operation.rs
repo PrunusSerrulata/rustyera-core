@@ -43,6 +43,12 @@ pub(crate) enum PendingStorage {
         save: bool,
         path: String,
         remaining: Vec<String>,
+        data: Vec<u8>,
+        change_token: Option<String>,
+    },
+    StatDeleteMenuSlot {
+        save: bool,
+        path: String,
     },
     DeleteMenuSlot {
         save: bool,

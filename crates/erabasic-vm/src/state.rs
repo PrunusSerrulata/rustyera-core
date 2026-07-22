@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use erabasic_bytecode::{
@@ -19,7 +19,7 @@ use crate::{PreparedRuntimeState, VmRuntimeRead, VmRuntimeStatePort, VmRuntimeSt
 #[derive(Clone, Debug)]
 pub(crate) struct ProgramGeneration {
     pub artifact: BytecodeArtifact,
-    function_indices: BTreeMap<SymbolKey, usize>,
+    function_indices: HashMap<SymbolKey, usize>,
     function_name_indices: BTreeMap<String, usize>,
     global_indices: BTreeMap<SymbolKey, usize>,
     global_name_indices: BTreeMap<String, usize>,
@@ -396,6 +396,14 @@ impl Vm {
             .get(&self.current_generation)
             .expect("the current generation is always retained")
             .artifact
+    }
+
+    /// Resolve a current-generation global by its `EraBasic` case-insensitive name.
+    #[must_use]
+    pub fn global_by_name(&self, name: &str) -> Option<&erabasic_bytecode::BytecodeGlobal> {
+        self.generations
+            .get(&self.current_generation)?
+            .global_by_name(name)
     }
 
     #[must_use]
