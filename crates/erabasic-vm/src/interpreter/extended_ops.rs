@@ -174,19 +174,76 @@ pub(super) fn execute_array_copy(
             "ARRAYCOPY array types differ".into(),
         ));
     }
-    if source_dimensions != destination_dimensions {
+    if source_dimensions.len() != destination_dimensions.len() {
         return Err(VmError::InvalidArguments(
             "ARRAYCOPY dimensions differ".into(),
         ));
     }
     let source_values = array_snapshot_any_rank(vm, fiber, &source)?;
-    let destination_values = array_snapshot_any_rank(vm, fiber, &destination)?;
-    if source_values.len() != destination_values.len() {
-        return Err(VmError::InvalidArguments(
-            "ARRAYCOPY dimensions differ".into(),
-        ));
+    let mut destination_values = array_snapshot_any_rank(vm, fiber, &destination)?;
+    copy_shared_array_extent(
+        &source_values,
+        &source_dimensions,
+        &mut destination_values,
+        &destination_dimensions,
+    )?;
+    commit_array_any_rank(vm, fiber, &destination, destination_values)
+}
+
+fn copy_shared_array_extent(
+    source: &[VmValue],
+    source_dimensions: &[u64],
+    destination: &mut [VmValue],
+    destination_dimensions: &[u64],
+) -> Result<(), VmError> {
+    // Emuera accepts arrays of the same rank even when individual lengths differ. Each
+    // dimension is truncated independently, while destination cells outside the shared
+    // rectangular extent retain their previous values.
+    for (destination_offset, destination_value) in destination.iter_mut().enumerate() {
+        let coordinates = array_coordinates(destination_dimensions, destination_offset)?;
+        if coordinates
+            .iter()
+            .zip(source_dimensions)
+            .any(|(index, length)| index >= length)
+        {
+            continue;
+        }
+        let source_offset = array_offset(source_dimensions, &coordinates)?;
+        let source_value = source.get(source_offset).ok_or_else(|| {
+            VmError::InvalidState("ARRAYCOPY source storage has an invalid length".into())
+        })?;
+        *destination_value = source_value.clone();
     }
-    commit_array_any_rank(vm, fiber, &destination, source_values)
+    Ok(())
+}
+
+fn array_coordinates(dimensions: &[u64], mut offset: usize) -> Result<Vec<u64>, VmError> {
+    let mut coordinates = vec![0; dimensions.len()];
+    for dimension in (0..dimensions.len()).rev() {
+        let length = usize::try_from(dimensions[dimension]).map_err(|_| {
+            VmError::InvalidState("ARRAYCOPY dimension exceeds this platform".into())
+        })?;
+        if length == 0 {
+            return Err(VmError::InvalidState(
+                "ARRAYCOPY array has a zero-length dimension".into(),
+            ));
+        }
+        coordinates[dimension] = u64::try_from(offset % length).unwrap_or(u64::MAX);
+        offset /= length;
+    }
+    Ok(coordinates)
+}
+
+fn array_offset(dimensions: &[u64], coordinates: &[u64]) -> Result<usize, VmError> {
+    let offset = dimensions
+        .iter()
+        .zip(coordinates)
+        .try_fold(0u64, |offset, (length, index)| {
+            offset.checked_mul(*length)?.checked_add(*index)
+        })
+        .ok_or_else(|| VmError::InvalidState("ARRAYCOPY array offset overflow".into()))?;
+    usize::try_from(offset)
+        .map_err(|_| VmError::InvalidState("ARRAYCOPY array offset exceeds this platform".into()))
 }
 
 pub(super) fn execute_array_multi_sort(
