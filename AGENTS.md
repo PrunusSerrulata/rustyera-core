@@ -11,7 +11,7 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
 判定、状态变化及其他脚本可观察行为，在不违反更高优先级原则时仍应严格兼容。
 依赖 WinForms、GDI、设备或平台状态的行为应提炼为 runtime 持有的可移植语义，
 由不同前端投影。有意差异、稳定不支持项和遗漏功能必须分别记录，详见
-`docs/design-principles.md` 和 `docs/runtime-compatibility-status.zh-CN.md`。
+`docs/design-principles.zh-CN.md` 及对应实现测试。
 
 所有输入源码直接按 UTF-8 处理，不需要支持 GBK、Shift-JIS 等传统编码。
 
@@ -23,7 +23,9 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
   加载器；自身不执行文件 I/O。
 - `crates/erabasic-lexer`：EraBasic lexer，包括上下文终止规则和格式化字符串。
 - `crates/erabasic-parser`：表达式、逻辑行、ERH、ERB、预处理器和块结构 parser。
+- `crates/erabasic-config`：Emuera 配置项的可序列化模型和规范化处理。
 - `crates/erabasic-hir`：稳定、可序列化的类型化高级中间表示。
+- `crates/erabasic-html`：EraBasic HTML 子集的规范化与安全文本处理。
 - `crates/erabasic-analyzer`：项目级声明、符号、类型、指令参数和控制流语义分析。
 - `crates/erabasic-bytecode`：版本化 VM 指令、Host ABI、自包含容器、源码映射和补丁。
 - `crates/erabasic-compiler`：确定性、可并行并支持函数级缓存的 HIR 到字节码编译器。
@@ -42,6 +44,9 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
 - `reference/eraTW`：真实游戏eraTW中使用的完整脚本集，包含csv、erh和erb。
 - `reference/emuera.em/emuera-reference-cli`：绕过 UI 调用参考实现的 NDJSON 测试工具；
   平台测试脚本位于 `tools/`。
+- `frontends/era-tui`：通过公共 C ABI 驱动 runtime 的 Python/Textual TUI，主要用于
+  验证参考实现、真实游戏脚本和 C ABI 可用性。
+- `tools/runtime-tester`：runtime、C ABI 和 TUI 的人工/长流程测试工具。
 
 保持各 crate 的职责边界。较大的实现应合理拆分为 module，不要堆积至单个源文件中。
 公共类型应尽量由 crate 根模块稳定地重新导出。
@@ -55,13 +60,16 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
 reference CLI 能够调用参考实现的 evaluator、VM 和 runtime，也不代表 Rust 侧已实现
 参考 runtime 的全部能力。未实现组件的说明只记录范围和状态，不预先承诺具体内部架构。
 
-本项目不实现具体的应用前端/宿主：GUI、TUI、游戏启动器、文件扫描、渲染、音频
-和输入循环都不属于本仓库。本文所说的“应用前端”与已经实现的 EraBasic“语言
-前端”（lexer/parser）不是同一概念。
+本仓库包含一个具体应用前端：`frontends/era-tui` 下的 Python/Textual TUI。它通过
+公共 C ABI 使用 runtime，并负责项目文件扫描、终端渲染、输入采集和平台 I/O。该
+实现的主要目的，是对照参考实现、运行真实游戏脚本并验证 `era-runtime-capi` 的端到端
+可用性；它不是排版质量、字体兼容性或性能表现的标杆，也不限制未来 GUI、Web 或其他
+前端的架构。本文所说的“应用前端”与 EraBasic“语言前端”（lexer/parser）不是同一
+概念。
 
 项目边界是 runtime 库及其与外部应用前端之间的公共接口。应用前端负责文件 I/O，
 并向 Rust 库提交相对路径、解码后的 UTF-8 内容或对应 I/O 错误。runtime 通过公共
-数据/事件接口与前端交互，不在本仓库加入某一种具体前端实现。
+数据/事件接口与 TUI 或其他前端交互；runtime 和 VM 不依赖仓库中的具体 TUI 实现。
 
 ## 接口兼容性策略
 
@@ -121,14 +129,20 @@ WinForms/GDI 的实现细节引入 runtime。
 - 避免无关重构、批量格式化和跨 crate 的非必要 API 变化。
 - 保持确定性：测试用 JSON、诊断顺序、集合遍历和 AST 输出不得依赖随机哈希顺序。
 
-若本任务修改了 Rust 实现或 C# reference CLI，提交修改前必须由下文指定的测试
-子 agent 运行：
+若本任务修改了 Rust 实现，主 agent 必须先完成代码格式化。随后由下文指定的测试
+子 agent 依次确认格式、处理编译器错误和 Clippy warning；只有这些步骤全部通过后，
+才能运行全量 Rust 测试：
 
 ```sh
 cargo fmt --all -- --check
-cargo test --workspace
+cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
+
+若本任务只修改 C# reference CLI 实现而未修改 Rust 实现，也应在参考实现冒烟测试
+之前确认现有 Rust workspace 能通过上述检查；全量测试仍必须放在格式、编译器
+和 Clippy 检查之后。
 
 ## 测试要求
 
@@ -153,13 +167,23 @@ cargo clippy --workspace --all-targets -- -D warnings
 输入，必须立即通知测试子 agent，并要求其重新构建所需产物、使用新代码产物重跑受
 影响的测试；旧产物或旧结果不得作为最终验证依据。
 
-仅当本任务修改了 Rust 实现或 C# reference CLI 时，才运行 Rust 格式检查、全量测试、
-lint、对应平台的 reference CLI smoke test，以及使用相同输入的 Rust/C# 差分测试。
-此时测试顺序为：先运行最小 Rust 回归测试，再运行 Rust 全量格式、测试和 lint，随后
-运行对应平台的参考实现脚本确认 oracle 可用，最后比较 Rust 与 C# 输出。平台 smoke
-test 不能代替真正的差分比较。若两者均未修改，则不得仅为例行验证运行 Rust 测试或
-C# reference CLI 差分测试；其他语言、前端或工具的改动仍应由上述测试子 agent 运行
-与其直接相关的测试。
+仅当本任务修改了 Rust 实现或 C# reference CLI 实现时，才运行 Rust workspace
+检查、全量测试、对应平台的 reference CLI 冒烟测试，以及使用相同输入的 Rust/C#
+差分测试。顺序必须为：
+
+1. 主 agent 完成代码格式化并编写最小回归测试；
+2. 测试子 agent 运行 `cargo fmt --all -- --check`；
+3. 测试子 agent 运行 `cargo check --workspace --all-targets`，确认所有编译器错误已处理；
+4. 测试子 agent 运行 `cargo clippy --workspace --all-targets -- -D warnings`，确认所有
+   Clippy error/warning 已处理；
+5. 运行最小 Rust 回归测试；
+6. 只有前述步骤全部通过后，运行 `cargo test --workspace`；
+7. 运行当前平台参考脚本确认 oracle 可用；
+8. 最后比较相同输入的 Rust 与 C# 输出。
+
+平台冒烟测试不能代替真正的差分比较。若 Rust 实现和 C# reference CLI 实现均未
+修改，不得仅为例行验证运行 Rust 全量测试或 C# reference CLI 差分测试；文档、其他
+语言、前端或工具改动仍应由上述测试子 agent 运行与其直接相关的检查。
 
 ### Windows
 
@@ -189,7 +213,7 @@ macOS 脚本使用项目内固定的 `.wine-prefix/emuera-reference-cli`，并�
 
 如果平台脚本超时、无输出、进程提前退出或返回协议错误，应将其视为
 `emuera-reference-cli` 缺陷并优先修复。修复后必须重新运行导致故障的请求以及完整
-平台 smoke test；若触碰参考目录，还要验证普通 Emuera 项目仍可编译，并在
+平台冒烟测试；若触碰参考目录，还要验证普通 Emuera 项目仍可编译，并在
 `REFERENCE_CHANGES.md` 记录隔离方式和正常游戏链路为何不受影响。
 
 如果当前机器无法运行目标平台脚本，不得把它描述为已验证；应说明阻塞原因，并给
