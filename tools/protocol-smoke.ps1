@@ -9,9 +9,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$toolDirectory = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $toolDirectory "../.."))
-$project = Join-Path $toolDirectory "Emuera.ReferenceCli.csproj"
+$repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$cliDirectory = Join-Path $repositoryRoot "reference/emuera.em/emuera-reference-cli"
+$fixtureDirectory = Join-Path $cliDirectory "tests"
+$project = Join-Path $cliDirectory "Emuera.ReferenceCli.csproj"
 if ([string]::IsNullOrWhiteSpace($Executable)) {
     & dotnet publish $project `
         -c Debug-NAudio `
@@ -24,7 +25,7 @@ if ([string]::IsNullOrWhiteSpace($Executable)) {
     if ($LASTEXITCODE -ne 0) {
         throw "Reference CLI publish failed with exit code $LASTEXITCODE"
     }
-    $Executable = Join-Path $toolDirectory "bin/x64/Debug-NAudio/net10.0-windows/win-x64/publish/Emuera.ReferenceCli.exe"
+    $Executable = Join-Path $cliDirectory "bin/x64/Debug-NAudio/net10.0-windows/win-x64/publish/Emuera.ReferenceCli.exe"
 }
 if ([string]::IsNullOrWhiteSpace($OutputFile)) {
     $OutputFile = Join-Path $repositoryRoot ".wine-tmp/emuera-reference-cli/windows-smoke.ndjson"
@@ -94,7 +95,7 @@ try {
     Assert-True $expression.ok "parseExpression failed"
 
     $tempGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-oracle-" + [guid]::NewGuid())
-    Copy-Item "$PSScriptRoot/fixture" $tempGame -Recurse
+    Copy-Item (Join-Path $fixtureDirectory "fixture") $tempGame -Recurse
 
     $load = Invoke-Oracle @{ id = 6; op = "load"; gameDir = $tempGame }
     Assert-True $load.ok "fixture game failed to load"
@@ -344,8 +345,8 @@ try {
         (($pendingAutoButton.result.output -join "`n").Contains("pending auto=58"))) "pending automatic button input differs"
 
     $tempOneInputGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-oneinput-oracle-" + [guid]::NewGuid())
-    Copy-Item "$PSScriptRoot/fixture" $tempOneInputGame -Recurse
-    Copy-Item "$PSScriptRoot/fixture-oneinput/*" $tempOneInputGame -Recurse -Force
+    Copy-Item (Join-Path $fixtureDirectory "fixture") $tempOneInputGame -Recurse
+    Copy-Item (Join-Path $fixtureDirectory "fixture-oneinput/*") $tempOneInputGame -Recurse -Force
     $oneInputLoad = Invoke-Oracle @{ id = "oneinput-load"; op = "load"; gameDir = $tempOneInputGame }
     Assert-True $oneInputLoad.ok "ONEINPUT fixture failed to load"
     $oneInputText = Invoke-Oracle @{
@@ -375,9 +376,9 @@ try {
         ($oneInputMouse.result.watches.'RESULTS:42' -eq "L")) "default mouse ONEINPUT truncation differs"
 
     $tempOneInputLongGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-oneinput-long-oracle-" + [guid]::NewGuid())
-    Copy-Item "$PSScriptRoot/fixture" $tempOneInputLongGame -Recurse
-    Copy-Item "$PSScriptRoot/fixture-oneinput/*" $tempOneInputLongGame -Recurse -Force
-    Copy-Item "$PSScriptRoot/fixture-oneinput-long/*" $tempOneInputLongGame -Recurse -Force
+    Copy-Item (Join-Path $fixtureDirectory "fixture") $tempOneInputLongGame -Recurse
+    Copy-Item (Join-Path $fixtureDirectory "fixture-oneinput/*") $tempOneInputLongGame -Recurse -Force
+    Copy-Item (Join-Path $fixtureDirectory "fixture-oneinput-long/*") $tempOneInputLongGame -Recurse -Force
     $oneInputLongLoad = Invoke-Oracle @{ id = "oneinput-long-load"; op = "load"; gameDir = $tempOneInputLongGame }
     Assert-True $oneInputLongLoad.ok "long ONEINPUT fixture failed to load"
     $oneInputLong = Invoke-Oracle @{
@@ -394,8 +395,8 @@ try {
         ($oneInputLong.result.watches.'RESULTS:42' -eq "LONG")) "AllowLongInputByMouse differs"
 
     $tempSystemGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-system-oracle-" + [guid]::NewGuid())
-    Copy-Item "$PSScriptRoot/fixture" $tempSystemGame -Recurse
-    Copy-Item "$PSScriptRoot/fixture-system/*" $tempSystemGame -Recurse -Force
+    Copy-Item (Join-Path $fixtureDirectory "fixture") $tempSystemGame -Recurse
+    Copy-Item (Join-Path $fixtureDirectory "fixture-system/*") $tempSystemGame -Recurse -Force
     $systemLoad = Invoke-Oracle @{ id = "system-load"; op = "load"; gameDir = $tempSystemGame }
     Assert-True ($systemLoad.ok -and $systemLoad.result.termination -eq "error") "system fixture did not reproduce the reference STOPCALLTRAIN error"
     $stopCallTrain = Invoke-Oracle @{ id = "stopcalltrain"; op = "run"; watch = @("RESULT:30", "RESULT:31") }

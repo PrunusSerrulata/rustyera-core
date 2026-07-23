@@ -13,8 +13,7 @@ Cargo.lock
 /reference/eraTW
 /reference/*.png
 
-# Local Emuera reference oracle, its macOS/Wine harness, and generated output.
-#/tools/emuera-reference-cli/
+# Local Emuera reference oracle, its platform harnesses, and generated output.
 /tools/**/bin
 /tools/**/obj
 /.wine-prefix/

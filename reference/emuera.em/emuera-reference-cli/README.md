@@ -18,10 +18,10 @@ Rust component without a matching differential comparison.
 Use the NAudio configuration to avoid the Windows Media Player COM dependency:
 
 ```powershell
-dotnet build tools/emuera-reference-cli/Emuera.ReferenceCli.csproj `
+dotnet build reference/emuera.em/emuera-reference-cli/Emuera.ReferenceCli.csproj `
   -c Debug-NAudio -p:Platform=x64 -r win-x64
 
-dotnet run --project tools/emuera-reference-cli/Emuera.ReferenceCli.csproj `
+dotnet run --project reference/emuera.em/emuera-reference-cli/Emuera.ReferenceCli.csproj `
   -c Debug-NAudio -p:Platform=x64 -r win-x64
 ```
 
@@ -96,13 +96,13 @@ for comparison.
 On Windows, run (the script publishes the self-contained CLI first):
 
 ```powershell
-tools/emuera-reference-cli/tests/protocol-smoke.ps1
+tools/protocol-smoke.ps1
 ```
 
 On macOS with the repository Wine prefix, run:
 
 ```sh
-tools/emuera-reference-cli/test-macos-wine.sh
+tools/test-macos-wine.sh
 ```
 
 The test checks that malformed requests do not kill the persistent process,

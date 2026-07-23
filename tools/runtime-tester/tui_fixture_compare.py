@@ -19,7 +19,7 @@ from rustyera_tui.runtime import RuntimeWorker  # noqa: E402
 def main() -> int:
     worker = RuntimeWorker(
         runtime_library(),
-        ROOT / "tools" / "emuera-reference-cli" / "tests" / "fixture",
+        ROOT / "reference" / "emuera.em" / "emuera-reference-cli" / "tests" / "fixture",
     )
     model = PresentationModel()
     worker.start()

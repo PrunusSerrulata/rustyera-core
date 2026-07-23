@@ -2,7 +2,7 @@
 
 `reference/emuera.em` is the compatibility oracle and is read-only by default.
 This file is the mandatory audit log for the small exceptions needed by
-`tools/emuera-reference-cli`. It records reference-tree changes separately
+`reference/emuera.em/emuera-reference-cli`. It records reference-tree changes separately
 from Rust and wrapper changes.
 
 The pinned compatibility baseline remains
@@ -47,6 +47,35 @@ current tree.
 
 ## Change records
 
+### 2026-07-23: Co-locate the reference CLI with the pinned reference tree
+
+The wrapper was moved from `tools/emuera-reference-cli` to
+`reference/emuera.em/emuera-reference-cli` so the reference implementation and its
+headless adapter are kept together. The Windows and macOS launch scripts remain outside the
+reference tree as `tools/protocol-smoke.ps1` and `tools/test-macos-wine.sh`.
+
+Reference-tree file inventory for this relocation:
+
+- `emuera-reference-cli/Emuera.ReferenceCli.csproj`: moved and changed only its relative
+  `ProjectReference` to `../Emuera/Emuera.csproj`.
+- `emuera-reference-cli/JsonProjection.cs`, `OracleService.cs`, `Program.cs`,
+  `ReferenceHost.cs`: moved without content or execution-semantics changes.
+- `emuera-reference-cli/README.md`: moved and updated command paths.
+- `emuera-reference-cli/REFERENCE_CHANGES.md`: moved and records this relocation.
+- `emuera-reference-cli/tests/fixture-oneinput-long/csv/_fixed.config`,
+  `tests/fixture-oneinput/erb/oneinput.erb`, `tests/fixture-system/csv/TRAIN.CSV`, and
+  `tests/fixture-system/erb/oracle.erb`: moved without content changes.
+- `emuera-reference-cli/tests/fixture/csv/.gitkeep`, `ABL.CSV`, `ABL.als`, `CHARA0.CSV`,
+  `CSTR.CSV`, `GAMEBASE.CSV`, `ITEM.CSV`, `STR.CSV`, `VarExt-oracle.csv`,
+  `VariableSize.CSV`, and `_Replace.csv`: moved without content changes.
+- `emuera-reference-cli/tests/fixture/erb/linecount.erb`, `oracle.erb`,
+  `print-family.erb`, and `restart.erb`: moved without content changes.
+- `emuera-reference-cli/tests/wine-smoke.ndjson`: moved without content changes.
+
+No file under `reference/emuera.em/Emuera` was changed for this relocation. Headless
+isolation and normal-game semantics are therefore unchanged; the existing gated hooks listed
+above remain the only modifications to the pinned implementation.
+
 ### Headless oracle integration
 
 The initial CLI integration added the friend-assembly declaration, headless mode
@@ -82,8 +111,8 @@ and reset; and added a watchdog.
 
 Verification:
 
-- `dotnet build tools/emuera-reference-cli/Emuera.ReferenceCli.csproj -c Debug-NAudio -p:Platform=x64 -r win-x64 --no-restore`
-- `tools/emuera-reference-cli/test-macos-wine.sh`
+- `dotnet build reference/emuera.em/emuera-reference-cli/Emuera.ReferenceCli.csproj -c Debug-NAudio -p:Platform=x64 -r win-x64 --no-restore`
+- `tools/test-macos-wine.sh`
 - `cargo test -p erabasic-csv reference_cli_fixture_has_the_same_rust_projection -- --exact`
 - `cargo test --workspace`
 

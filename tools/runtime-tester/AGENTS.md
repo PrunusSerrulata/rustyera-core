@@ -1,4 +1,4 @@
-# Runtime Playability Audit Tool
+# Runtime Tester
 
 本目录是 runtime、C ABI 和 Textual frontend 的人工/长流程测试工具，不属于产品 runtime，
 也不向游戏或前端提供稳定 API。本文件覆盖本目录及其子目录。
@@ -20,7 +20,7 @@
 从仓库根执行：
 
 ```sh
-cargo run --manifest-path tools/runtime-playability-audit/Cargo.toml -- COMMAND [PROJECT] [FILTER]
+cargo run --manifest-path tools/runtime-tester/Cargo.toml -- COMMAND [PROJECT] [FILTER]
 ```
 
 支持的命令与输入输出：
@@ -53,7 +53,7 @@ cargo run --manifest-path tools/runtime-playability-audit/Cargo.toml -- COMMAND 
 ```sh
 cargo build --release -p era-runtime-capi
 UV_CACHE_DIR=/tmp/rustyera-uv-cache \
-  uv --project frontends/era-tui run python tools/runtime-playability-audit/tui_day1.py
+  uv --project frontends/era-tui run python tools/runtime-tester/tui_day1.py
 ```
 
 公共输入环境变量：
@@ -90,7 +90,8 @@ UV_CACHE_DIR=/tmp/rustyera-uv-cache \
 - `tui_snapshot_restore.py SNAPSHOT` 输入已导出的 snapshot；stdout 输出传输状态和
   `RESTORE_OK phase=... wait=...`，退出码 0 表示恢复到稳定等待，1 表示错误，2 表示超时；
   `ERA_AUDIT_EXPECT_HOME=1` 还会要求恢复后的展示历史包含自宅 `[Look]` 菜单。
-- `tui_fixture_compare.py` 输入固定的 `tools/emuera-reference-cli/tests/fixture`，stdout
+- `tui_fixture_compare.py` 输入固定的
+  `reference/emuera.em/emuera-reference-cli/tests/fixture`，stdout
   输出单行 UTF-8 JSON，包含 `termination`、展示文本、wait kind 和 system-input 标志；
   用于与 reference CLI 对同一 fixture 的 NDJSON 字段比较。
 
