@@ -22,7 +22,6 @@ erabasic-hir = { path = "../erabasic-hir" }
 erabasic-parser = { path = "../erabasic-parser" }
 erabasic-validator = { path = "../erabasic-validator" }
 erabasic-vm = { path = "../erabasic-vm" }
-flate2.workspace = true
 zstd.workspace = true
 minicbor.workspace = true
 serde.workspace = true

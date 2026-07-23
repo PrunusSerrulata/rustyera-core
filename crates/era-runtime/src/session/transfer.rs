@@ -126,24 +126,22 @@ impl RuntimeSession {
                 )
                 .map_err(|error| RuntimeError::Internal(error.to_string()))?,
                 StateExportKind::VmSnapshot => {
-                    let vm_snapshot = match vm.snapshot() {
-                        Ok(snapshot) => snapshot.encode().map_err(|error| {
-                            RuntimeError::Internal(format!("VM snapshot encode failed: {error}"))
-                        })?,
-                        Err(_) => {
-                            return self.emit(
-                                RuntimeMessage::StateExportReady(StateExportReady {
-                                    kind: request.kind,
-                                    result: StateExportResult::Ineligible {
-                                        reasons: vec![
-                                            SnapshotIneligibleReason::SnapshotStateUnavailable,
-                                        ],
-                                    },
-                                }),
-                                Some(message_id),
-                            );
-                        }
-                    };
+                    if !matches!(vm.snapshot_eligibility(), SnapshotEligibility::Eligible) {
+                        return self.emit(
+                            RuntimeMessage::StateExportReady(StateExportReady {
+                                kind: request.kind,
+                                result: StateExportResult::Ineligible {
+                                    reasons: vec![
+                                        SnapshotIneligibleReason::SnapshotStateUnavailable,
+                                    ],
+                                },
+                            }),
+                            Some(message_id),
+                        );
+                    }
+                    let vm_snapshot = vm.encode_snapshot().map_err(|error| {
+                        RuntimeError::Internal(format!("VM snapshot encode failed: {error}"))
+                    })?;
                     let project = self.project_snapshot.as_ref().ok_or_else(|| {
                         RuntimeError::Internal("snapshot export has no project identity".into())
                     })?;

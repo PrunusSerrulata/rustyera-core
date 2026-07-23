@@ -4,7 +4,6 @@ use std::io::{Read, Write};
 use era_runtime_protocol::InteractionToken;
 use erabasic_bytecode::Digest;
 use erabasic_vm::VmValue;
-use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use serde::{Deserialize, Serialize};
 
 use crate::controller::SystemController;
@@ -12,10 +11,11 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 15;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 16;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 60;
+const COMPRESSION_LEVEL: i32 = 1;
 
 #[derive(Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
@@ -26,6 +26,7 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) resource_count: u64,
     pub(crate) resource_graph: ResourceGraph,
     pub(crate) epoch: u64,
+    #[serde(with = "snapshot_bytes")]
     pub(crate) vm_snapshot: Vec<u8>,
     pub(crate) presentation: PresentationModel,
     pub(crate) operations: PendingOperations,
@@ -67,8 +68,50 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) undo_replay: Option<super::session::UndoReplay>,
 }
 
-/// JSON objects cannot represent structured interaction tokens as keys. The runtime snapshot
-/// encodes those internal maps as ordered key/value pairs and rejects duplicate keys on restore.
+mod snapshot_bytes {
+    use std::fmt;
+
+    use serde::{Deserializer, Serializer, de::Visitor};
+
+    pub(super) fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(bytes)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct BytesVisitor;
+
+        impl<'de> Visitor<'de> for BytesVisitor {
+            type Value = Vec<u8>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a VM snapshot byte string")
+            }
+
+            fn visit_bytes<E>(self, bytes: &[u8]) -> Result<Self::Value, E> {
+                Ok(bytes.to_vec())
+            }
+
+            fn visit_borrowed_bytes<E>(self, bytes: &'de [u8]) -> Result<Self::Value, E> {
+                Ok(bytes.to_vec())
+            }
+
+            fn visit_byte_buf<E>(self, bytes: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(bytes)
+            }
+        }
+
+        deserializer.deserialize_byte_buf(BytesVisitor)
+    }
+}
+
+/// Ordered key/value pairs keep interaction-token maps deterministic across
+/// serializers and let restore reject duplicate keys explicitly.
 pub(crate) mod token_value_map {
     use std::collections::BTreeMap;
 
@@ -106,11 +149,10 @@ pub(crate) mod token_value_map {
 }
 
 pub(crate) fn encode(payload: &RuntimeSnapshotPayload) -> Result<Vec<u8>, String> {
-    // Runtime snapshots are explicit, infrequent operations at stable waits, so
-    // favor transfer/storage size over compression throughput.
-    let encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+    let encoder = zstd::stream::Encoder::new(Vec::new(), COMPRESSION_LEVEL)
+        .map_err(|error| error.to_string())?;
     let mut writer = CountingWriter::new(encoder);
-    serde_json::to_writer(&mut writer, payload).map_err(|error| error.to_string())?;
+    rmp_serde::encode::write(&mut writer, payload).map_err(|error| error.to_string())?;
     let uncompressed_len = writer.bytes;
     let payload = writer
         .into_inner()
@@ -168,16 +210,20 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<RuntimeSnapsh
     // Limit expansion independently from the untrusted length header. Reading
     // one byte past the declaration lets the length check reject extra output.
     let decompression_limit = (uncompressed_length as u64).saturating_add(1);
-    let mut reader = CountingReader::new(ZlibDecoder::new(payload).take(decompression_limit));
-    let decoded: RuntimeSnapshotPayload =
-        serde_json::from_reader(&mut reader).map_err(|error| error.to_string())?;
-    if reader.bytes != uncompressed_length as u64 {
+    let decoder = zstd::stream::read::Decoder::new(payload).map_err(|error| error.to_string())?;
+    let mut reader = CountingReader::new(decoder.take(decompression_limit));
+    let snapshot: RuntimeSnapshotPayload =
+        rmp_serde::from_read(&mut reader).map_err(|error| error.to_string())?;
+    let mut tail = [0_u8; 1];
+    if reader.read(&mut tail).map_err(|error| error.to_string())? != 0
+        || reader.bytes != uncompressed_length as u64
+    {
         return Err("runtime snapshot raw length is inconsistent".into());
     }
-    if decoded.format_version != RUNTIME_SNAPSHOT_FORMAT_VERSION {
+    if snapshot.format_version != RUNTIME_SNAPSHOT_FORMAT_VERSION {
         return Err("runtime snapshot payload version differs from its container".into());
     }
-    Ok(decoded)
+    Ok(snapshot)
 }
 
 struct CountingWriter<W> {
@@ -338,7 +384,7 @@ mod tests {
             undo_checkpoint: None,
             undo_replay: None,
         };
-        let uncompressed = serde_json::to_vec(&payload).unwrap();
+        let uncompressed = rmp_serde::to_vec(&payload).unwrap();
         let encoded = encode(&payload).unwrap();
         assert!(encoded.len() < uncompressed.len());
         let mut understated = encoded.clone();

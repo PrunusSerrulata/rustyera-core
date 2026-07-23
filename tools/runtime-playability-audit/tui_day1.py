@@ -103,12 +103,14 @@ def main() -> int:
     item_check = os.environ.get("ERA_AUDIT_ITEM_CHECK") == "1"
     maximum_day_one_seconds = os.environ.get("ERA_AUDIT_MAX_DAY1_SECONDS")
     maximum_wake_seconds = os.environ.get("ERA_AUDIT_MAX_WAKE_SECONDS")
+    maximum_snapshot_seconds = os.environ.get("ERA_AUDIT_MAX_SNAPSHOT_SECONDS")
     wake_check = os.environ.get("ERA_AUDIT_WAKE_CHECK") == "1" or maximum_wake_seconds is not None
     wait_for_cache = os.environ.get("ERA_AUDIT_WAIT_FOR_CACHE") == "1"
     item_stage: str | None = None
     day_one_reached = False
     wake_started: float | None = None
     snapshot_requested = False
+    snapshot_started: float | None = None
     snapshot_attempts = 0
     snapshot_attempt_wait: tuple[dict[int, object], str] | None = None
     interactive_stdin = os.environ.get("ERA_AUDIT_STDIN") == "1" or sys.stdin.isatty()
@@ -124,7 +126,8 @@ def main() -> int:
     def advance_wait(
         wait: dict[int, object], tail: str, *, snapshot_attempted: bool = False
     ) -> int | None:
-        nonlocal answer_index, snapshot_requested, snapshot_attempt_wait, layout_stage, item_stage
+        nonlocal answer_index, snapshot_requested, snapshot_started, snapshot_attempt_wait
+        nonlocal layout_stage, item_stage
         nonlocal day_one_reached, wake_started
         global _wake_profile_active, _wake_profile_origin
         if wait[1] == 0:
@@ -146,6 +149,12 @@ def main() -> int:
                     f"elapsed={elapsed:.3f}s limit={float(maximum_wake_seconds):.3f}s"
                 )
                 return 5
+            if snapshot_path and not snapshot_attempted:
+                snapshot_started = time.monotonic()
+                worker.send("export_snapshot", snapshot_path)
+                snapshot_requested = True
+                snapshot_attempt_wait = (wait, tail)
+                return None
             return 0
         elif layout_check and layout_stage == "day_one":
             look_rows = [row for row in display_rows(model) if "[Look]" in row]
@@ -226,6 +235,7 @@ def main() -> int:
                 item_stage = "command_menu"
                 worker.send("submit_text", "100")
             elif snapshot_path and not snapshot_attempted:
+                snapshot_started = time.monotonic()
                 worker.send("export_snapshot", snapshot_path)
                 snapshot_requested = True
                 snapshot_attempt_wait = (wait, tail)
@@ -308,7 +318,21 @@ def main() -> int:
             if event.kind == "status" and snapshot_requested and snapshot_path:
                 if "VM 快照已导出" in str(event.value):
                     size = Path(snapshot_path).stat().st_size
-                    print(f"VM_SNAPSHOT_BYTES={size}")
+                    elapsed = (
+                        time.monotonic() - snapshot_started
+                        if snapshot_started is not None
+                        else float("nan")
+                    )
+                    print(f"VM_SNAPSHOT_BYTES={size} elapsed={elapsed:.3f}s")
+                    if maximum_snapshot_seconds is not None and elapsed > float(
+                        maximum_snapshot_seconds
+                    ):
+                        print(
+                            "VM_SNAPSHOT_PERFORMANCE_ERROR "
+                            f"elapsed={elapsed:.3f}s "
+                            f"limit={float(maximum_snapshot_seconds):.3f}s"
+                        )
+                        return 5
                     return 0
             if event.kind == "status" and day_one_reached:
                 if event.value == "编译缓存保存失败。":
@@ -344,6 +368,7 @@ def main() -> int:
             if snapshot_every_wait and snapshot_path and wait[2] == 0 and wait.get(8) is None:
                 snapshot_attempts += 1
                 snapshot_requested = True
+                snapshot_started = time.monotonic()
                 snapshot_attempt_wait = (wait, tail)
                 worker.send("export_snapshot", snapshot_path)
                 continue

@@ -85,9 +85,11 @@ UV_CACHE_DIR=/tmp/rustyera-uv-cache \
   `COMPILED_CACHE_BYTES`；日 1 性能门槛仍只使用到达菜单时的耗时。
 - 设置 `ERA_AUDIT_SNAPSHOT_PATH=/tmp/name.snapshot` 可在目标等待点导出；再设置
   `ERA_AUDIT_SNAPSHOT_EVERY_WAIT=1` 会从每个无 deadline 的稳定等待开始寻找首个合格点。
-  成功时 stdout 输出 `VM_SNAPSHOT_BYTES`。
+  成功时 stdout 输出 `VM_SNAPSHOT_BYTES` 和导出耗时；`ERA_AUDIT_MAX_SNAPSHOT_SECONDS`
+  为从前端发出导出命令到原子落盘设置硬门槛，超过时以退出码 5 结束。
 - `tui_snapshot_restore.py SNAPSHOT` 输入已导出的 snapshot；stdout 输出传输状态和
-  `RESTORE_OK phase=... wait=...`，退出码 0 表示恢复到稳定等待，1 表示错误，2 表示超时。
+  `RESTORE_OK phase=... wait=...`，退出码 0 表示恢复到稳定等待，1 表示错误，2 表示超时；
+  `ERA_AUDIT_EXPECT_HOME=1` 还会要求恢复后的展示历史包含自宅 `[Look]` 菜单。
 - `tui_fixture_compare.py` 输入固定的 `tools/emuera-reference-cli/tests/fixture`，stdout
   输出单行 UTF-8 JSON，包含 `termination`、展示文本、wait kind 和 system-input 标志；
   用于与 reference CLI 对同一 fixture 的 NDJSON 字段比较。
