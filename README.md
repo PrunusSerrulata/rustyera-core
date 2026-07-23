@@ -1,169 +1,141 @@
 # RustyEra
 
-RustyEra is a UTF-8 Rust implementation of the EraBasic language and runtime
-used by Emuera.EM. Compatibility is pinned to
-reference commit `26a35dc9334bb67590b96f7b8efbefbf199e391e` (the Emuera 1.824
-family). When requirements conflict, the project prioritizes cross-client and
-cross-platform support, then architectural purity, then strict reference behavior.
-The [design principles](docs/design-principles.md) define how that ordering is applied.
+RustyEra 是用 Rust 重新实现的 EraBasic 语言工具链与运行环境，兼容目标固定为
+Emuera 参考实现提交 `26a35dc9334bb67590b96f7b8efbefbf199e391e`（Emuera 1.824
+系列）。项目覆盖从 UTF-8 源码、静态数据、语义分析、字节码、虚拟机到可移植
+runtime 协议和 C ABI 的完整链路，并提供一个 Python/Textual TUI 作为集成验证前端。
 
-Only UTF-8 input is supported. The Rust crates do not detect or decode
-Shift-JIS, GBK, or other legacy encodings.
+项目仍处于开发阶段，尚未覆盖 Emuera 的全部指令、系统流程以及依赖
+WinForms/GDI/CBG 的客户端能力。协议中存在类型或参考 CLI 能够执行某项操作，不代表
+Rust 实现已经支持对应能力。
 
-## Current architecture
+## 项目目标
 
-The workspace currently contains these implemented components:
+发生目标冲突时，优先级依次为：
 
-| Crate | Responsibility |
+1. 跨客户端、跨平台支持；
+2. 架构纯净；
+3. 与固定 Emuera 参考实现严格保持行为一致。
+
+这一顺序只用于解决冲突。只要不违背更高优先级，游戏规则、输入判定、状态变化以及
+其他脚本可观察行为仍必须与参考实现一致。依赖具体窗口系统、字体、设备状态或像素
+布局的行为，应提炼为 runtime 持有的可移植语义，再由不同前端投影。
+
+RustyEra 只接受 UTF-8 源码和配置内容，不负责识别或转换 Shift-JIS、GBK 等传统编码。
+详细原则见[设计原则](docs/design-principles.zh-CN.md)。
+
+## 项目结构
+
+### EraBasic 语言与执行链路
+
+| 模块 | 职责 |
 | --- | --- |
-| `erabasic-ast` | Syntax AST, UTF-8 byte spans, and stable diagnostics shared by the lexer and parser. |
-| `erabasic-lexer` | Context-sensitive tokenization, caller-selected terminators, macros, and FORM string decomposition. |
-| `erabasic-parser` | Expressions, logical lines, ERH declarations, ERB functions, preprocessors, and block structure. |
-| `erabasic-data` | Deterministic, Serde-compatible project schema, static data, and initialization/save-loading contracts used by the analyzer, runtime and persistence layer. |
-| `erabasic-csv` | Emuera-compatible loading of an in-memory project file snapshot. It performs no filesystem I/O. |
-| `erabasic-hir` | Deterministic, Serde-compatible typed expressions, variables, functions, lines, and control-flow links. |
-| `erabasic-analyzer` | Project-level ERH/ERB symbol resolution, type checking, declaration processing, instruction reduction, and control-flow analysis. |
-| `erabasic-bytecode` | Versioned VM-native instructions, the single `CallHost` boundary, source maps, canonical `.erbc` containers, and patches. |
-| `erabasic-compiler` | Deterministic parallel HIR lowering with function-level incremental reuse. |
-| `erabasic-validator` | Structural, type, control-flow, stack, capability, and ABI validation for HIR and untrusted bytecode. |
-| `erabasic-vm` | Deterministic interpretation, cooperative multi-fiber scheduling, Host/native calls, snapshots, traditional save-state views, and generation-pinned hot reload. |
-| `erabasic-repl` | A small development REPL for manually inspecting lexer and parser behavior. |
-| `era-protocol` | Deterministic CBOR envelope, version negotiation, identifiers, limits, and diagnostic JSON projection for future runtime transports. |
-| `era-runtime-protocol` | Normal runtime/frontend lifecycle, project, input, presentation, storage, and service interface definitions. |
-| `era-debug-protocol` | Separately versioned, capability-gated EraBasic debugger interface definitions. |
-| `era-runtime-save` | In-memory traditional-save codecs, migration policy, and schema-aware state restoration. |
-| `era-runtime` | Caller-pumped authoritative runtime for the project lifecycle, VM scheduling, presentation/input, services, persistence, hot reload, system flows, and debugging. |
-| `era-runtime-ffi` | Safe C ABI function-table and checked header declarations. |
-| `era-runtime-capi` | Dynamic-library implementation of the C ABI; this is the only crate that audits raw pointers and uses `unsafe`. |
+| `erabasic-ast` | 公共 AST、UTF-8 byte span 与稳定诊断结构。 |
+| `erabasic-lexer` | 上下文相关词法分析、终止规则、宏与 FORM 字符串拆分。 |
+| `erabasic-parser` | 表达式、逻辑行、ERH、ERB、预处理器与块结构解析。 |
+| `erabasic-config` | Emuera 配置项的可序列化模型与规范化处理。 |
+| `erabasic-data` | 项目静态数据、初始化数据与存档加载契约。 |
+| `erabasic-csv` | 只处理前端提交内容的内存 CSV 加载器，不执行文件 I/O。 |
+| `erabasic-hir` | 稳定、可序列化的类型化高级中间表示。 |
+| `erabasic-analyzer` | 项目级符号、类型、声明、指令参数与控制流分析。 |
+| `erabasic-bytecode` | 版本化 VM 指令、Host ABI、自包含容器、源码映射与补丁。 |
+| `erabasic-compiler` | 确定性、可并行且支持函数级缓存的 HIR 到字节码编译器。 |
+| `erabasic-validator` | HIR 与不可信字节码的结构、类型、控制流和 ABI 验证。 |
+| `erabasic-vm` | 确定性解释器、协作式多 fiber 调度、Host/Native 边界、快照与热替换。 |
+| `erabasic-html` | EraBasic HTML 子集的规范化与安全文本处理。 |
+| `erabasic-repl` | 用于人工检查 lexer、parser 和 analyzer 的开发工具。 |
 
-The repository also includes `frontends/era-tui`, a Python 3.12/Textual application
-frontend managed by `uv`. It dynamically loads `era-runtime-capi`, pumps canonical CBOR
-runtime and debug envelopes on a dedicated worker thread, renders the normalized text model,
-and owns project scanning, storage, dialogs, keyboard/mouse collection, and terminal-specific
-projection services. It renders the normalized HTML console dialect as terminal rows and
-buttons, while image, video, and audio capabilities remain intentionally unadvertised.
+### Runtime、协议与边界
 
-The currently implemented data flows are:
+| 模块 | 职责 |
+| --- | --- |
+| `era-protocol` | 确定性 CBOR 信封、版本协商、标识符、限制与诊断投影。 |
+| `era-runtime-protocol` | 正常运行时的生命周期、项目、输入、展示、存储与服务消息。 |
+| `era-debug-protocol` | 独立版本、按能力授权的调试协议。 |
+| `era-runtime-save` | 不执行文件 I/O 的传统存档编解码、迁移与恢复。 |
+| `era-runtime` | caller-pumped 权威 runtime，驱动 VM 并持有游戏、展示、交互和存档状态。 |
+| `era-runtime-ffi` | 安全 Rust FFI 函数表与经过检查的结构声明。 |
+| `era-runtime-capi` | C ABI 动态库实现；这是 workspace 中唯一包含原始指针 `unsafe` 边界的 crate。 |
 
-```text
-EraBasic UTF-8 source -> erabasic-lexer -> erabasic-parser -> erabasic-ast
+### 前端、参考实现与工具
 
-frontend paths + UTF-8 contents/I/O errors -> erabasic-csv -> erabasic-data
+| 路径 | 用途 |
+| --- | --- |
+| `frontends/era-tui` | Python 3.12/Textual TUI，通过公共 C ABI 驱动 runtime。主要用于验证参考行为、真实游戏脚本和 C ABI 可用性，不是排版或性能标杆。 |
+| `reference/emuera.em` | 固定版本的 C# Emuera 兼容性参考实现。 |
+| `reference/emuera.em/emuera-reference-cli` | 无窗口 NDJSON oracle，用于差分测试。 |
+| `reference/eraTW` | 真实游戏 eraTW 的 CSV、ERH 与 ERB 输入；不纳入版本控制。 |
+| `tools/runtime-tester` | runtime、C ABI 与 TUI 的人工/长流程测试工具。 |
+| `tools/protocol-smoke.ps1`、`tools/test-macos-wine.sh` | Windows 与 macOS/Wine 参考 CLI 冒烟测试。 |
 
-ProjectData + frontend ERH/ERB paths + UTF-8 contents/I/O errors
-    -> erabasic-analyzer -> enriched ProjectData + erabasic-hir
+## 模块关系
 
-AnalyzedProject -> erabasic-compiler -> erabasic-validator
-    -> self-contained .erbc bytes + incremental cache/patch
+```mermaid
+flowchart LR
+    SRC[UTF-8 ERH/ERB] --> LEX[erabasic-lexer]
+    LEX --> PARSER[erabasic-parser]
+    PARSER --> AST[erabasic-ast]
 
-frontend envelopes -> era-runtime -> erabasic-vm
-                   <- presentation/input/service envelopes
+    CSVFILES[前端提交的 CSV 内容] --> CSV[erabasic-csv]
+    CSV --> DATA[erabasic-data]
+    AST --> ANALYZER[erabasic-analyzer]
+    DATA --> ANALYZER
+    ANALYZER --> HIR[erabasic-hir]
+    HIR --> COMPILER[erabasic-compiler]
+    COMPILER --> BYTECODE[erabasic-bytecode]
+    BYTECODE --> VALIDATOR[erabasic-validator]
+    VALIDATOR --> VM[erabasic-vm]
+
+    TUI[Python Textual TUI] <--> CAPI[era-runtime-capi]
+    CAPI --> FFI[era-runtime-ffi]
+    FFI --> RUNTIME[era-runtime]
+    RUNTIME <--> VM
+    RUNTIME <--> RPROTO[era-runtime-protocol]
+    RUNTIME <--> DPROTO[era-debug-protocol]
+    RUNTIME <--> SAVE[era-runtime-save]
 ```
 
-Public types are re-exported from each crate root. Larger implementations are split
-into modules by syntax, data domain, executable format, or compilation phase.
+应用前端负责文件扫描、UTF-8 解码、终端或 GUI 投影、平台输入与实际 I/O。runtime
+只接收版本化消息和前端提交的数据，不直接访问文件系统、系统时钟或设备 API。
 
-## Runtime scope and compatibility status
+## 环境要求
 
-The runtime is implemented as a transport-neutral actor and a C ABI dynamic library.
-It never performs file I/O or samples a clock/device directly. The
-frontend submits project contents and pumps versioned envelopes through
-`session_submit`, `session_drive`, and `session_poll`.
+- 当前稳定版 Rust 工具链，支持 workspace 使用的 Rust 2024 edition；
+- 构建 TUI 时需要 Python 3.12 或更高版本及 `uv`；
+- 运行 C# 参考 CLI 时需要 .NET 10 Windows Desktop 工具链；
+- macOS 上运行参考 CLI 还需要 Wine、`jq` 和 Perl。
 
-The implemented surface includes project loading and compilation, bounded VM execution,
-canonical presentation and input/QTE handling, clock/key/entropy services, current and
-historical traditional-save restoration, candidate `SAVEINFO` transactions, stable-wait
-exact snapshots, incremental hot reload, runtime-owned save/load menus, the independent
-debug channel, Map/XML/DataTable/VAREXT Native services, resource/canvas replay and typed
-image/audio/network/storage boundaries. Only implemented capabilities are advertised.
+所有命令默认从仓库根目录执行。
 
-This is not full Emuera runtime coverage. Remaining compiler/runtime instructions,
-system-flow deviations, unsupported WinForms/GDI-dependent operations and non-trivial
-text/presentation gaps are tracked explicitly in the
-[runtime compatibility status](docs/runtime-compatibility-status.zh-CN.md). The public
-interfaces and ownership boundary are documented in
-[`docs/runtime-protocol.md`](docs/runtime-protocol.md),
-[`docs/debug-protocol.md`](docs/debug-protocol.md), and the
-[`reference mapping`](docs/runtime-reference-mapping.md).
+## 编译
 
-The parser still produces a syntax AST. `ParserContext` supports syntax decisions
-that depend on registries, while `erabasic-analyzer` owns the project-level semantic
-passes and produces HIR. CSV loading checks and normalizes project data, but it is
-separate from executable artifact validation. The C# reference CLI can invoke Emuera's existing evaluator
-and VM for oracle purposes. The Rust VM and runtime are separate implementations;
-an unlisted reference runtime operation must not be inferred to be supported.
+编译全部 Rust crate：
 
-RustyEra now includes one optional concrete application frontend, the portable Textual TUI in
-`frontends/era-tui`. It is kept outside the Rust workspace and communicates only through the
-public C ABI; the Rust runtime crates still contain no GUI, terminal, filesystem scanner, audio
-system, or platform input loop. Here, “application frontend” means this host/UI layer and is
-distinct from the implemented EraBasic *language* front end.
-
-## Bytecode contract
-
-The compiler emits a deterministic, self-contained `.erbc` container. Its execution
-identity covers code, project data, variable layout, semantic compiler options, and
-native/Host ABI requirements; debug source locations use a separate artifact identity.
-The bytecode and compiler crates perform no filesystem I/O.
-
-VM-native instructions own data, arithmetic, control flow, EraBasic calls, yielding,
-and continuation values. Every operation that crosses into an application frontend
-uses the one `CallHost` opcode plus a typed, capability-tagged import. Printing text,
-showing images, audio, input, clocks, storage, and extension plugins therefore do not
-receive dedicated VM opcodes.
-
-Decoded bytes are intentionally returned as `UnvalidatedArtifact`. A caller must bind
-the declared native and Host imports and pass the value through `validate_bytecode`
-before `erabasic-vm` may execute it. Source maps resolve function/code offsets to a
-relative path, UTF-8 byte span, line, and byte column.
-
-The project boundary is a runtime library plus public interfaces
-between that runtime and an external frontend. The frontend owns filesystem
-I/O and submits relative paths together with decoded UTF-8 content or the I/O
-error it observed. The VM remains runtime-independent and no specific frontend
-architecture is prescribed here.
-
-## Library use
-
-Parse ERH and ERB source with one persistent parser context:
-
-```rust
-use erabasic_parser::{DefaultParserContext, parse_erb, parse_erh};
-
-let mut context = DefaultParserContext::default();
-let header = parse_erh("#DEFINE TEN 10\n", &mut context);
-assert!(!header.has_errors());
-
-let script = parse_erb("@TEST\nRESULT = TEN + 1\n", &mut context);
-assert!(!script.has_errors());
-println!("{:#?}", script.value);
+```sh
+cargo build --workspace
 ```
 
-Applications with their own instruction, variable, function, or configuration
-registries can implement `ParserContext`.
+编译 release C ABI 动态库：
 
-Load project data without giving the CSV crate filesystem access:
-
-```rust
-use erabasic_csv::{CsvLoadOptions, FilePayload, FrontendFile, ProjectFiles, load_project};
-
-let report = load_project(
-    &ProjectFiles {
-        csv: vec![FrontendFile {
-            relative_path: "ABL.csv".into(),
-            payload: FilePayload::Utf8("0,Strength\n".into()),
-        }],
-        erb: vec![],
-    },
-    &CsvLoadOptions::default(),
-);
-assert!(report.data.is_some());
+```sh
+cargo build --release -p era-runtime-capi
 ```
 
-## REPL
+动态库位于 `target/release/`，文件名分别为：
 
-Run `cargo run -p erabasic-repl`. A plain line is parsed as one EraBasic logical
-line. Explicit modes are also available:
+- macOS：`libera_runtime_capi.dylib`
+- Linux：`libera_runtime_capi.so`
+- Windows：`era_runtime_capi.dll`
+
+## 使用方法
+
+### EraBasic REPL
+
+```sh
+cargo run -p erabasic-repl
+```
+
+REPL 支持：
 
 ```text
 :lex SOURCE
@@ -175,60 +147,100 @@ line. Explicit modes are also available:
 :quit
 ```
 
-`:file` treats `.erh` files as headers and all other extensions as ERB. The REPL
-keeps one parser context, so declarations and macros loaded from an ERH file are
-visible to files parsed later. The REPL is a developer tool, not an application
-frontend or runtime.
+`:file` 将 `.erh` 作为声明头处理，其他文件作为 ERB 处理。REPL 会保留同一个 parser
+上下文，因此先加载的宏和声明会影响后续输入。它只是开发检查工具，不是游戏运行前端。
 
-## Compatibility and testing
+### Python TUI
 
-Every change must have focused Rust tests and pass the workspace checks:
+先安装依赖：
 
 ```sh
-cargo fmt --all -- --check
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+uv sync --project frontends/era-tui
 ```
 
-Compatibility work also uses the pinned C# implementation through the
-persistent NDJSON [reference CLI](reference/emuera.em/emuera-reference-cli/README.md):
+TUI 接收一个可选资源目录，默认使用当前工作目录。资源目录中应包含 `CSV/`、`ERB/`
+以及当前平台的 `era-runtime-capi` release 动态库；存档、日志、快照和编译缓存默认也
+写入该目录。
+
+```sh
+uv --project frontends/era-tui run rustyera-tui /path/to/resource-directory
+```
+
+也可通过 `--runtime-library PATH` 或 `ERA_RUNTIME_LIBRARY=PATH` 单独指定动态库。
+仓库开发环境可以在 `frontends/era-tui` 下建立指向 `reference/eraTW/{CSV,ERB}` 和
+`target/release` 动态库的相对符号链接；这些本地链接已被 `.gitignore` 排除。
+
+TUI 的功能、按键和存储约定见
+[TUI 说明](frontends/era-tui/README.md)。
+
+### 作为 Rust 库使用
+
+解析 ERH 与 ERB：
+
+```rust
+use erabasic_parser::{DefaultParserContext, parse_erb, parse_erh};
+
+let mut context = DefaultParserContext::default();
+let header = parse_erh("#DEFINE TEN 10\n", &mut context);
+assert!(!header.has_errors());
+
+let script = parse_erb("@TEST\nRESULT = TEN + 1\n", &mut context);
+assert!(!script.has_errors());
+```
+
+加载前端已读取的 CSV：
+
+```rust
+use erabasic_csv::{CsvLoadOptions, FilePayload, FrontendFile, ProjectFiles, load_project};
+
+let report = load_project(
+    &ProjectFiles {
+        csv: vec![FrontendFile {
+            relative_path: "ABL.csv".into(),
+            payload: FilePayload::Utf8("0,力量\n".into()),
+        }],
+        erb: vec![],
+    },
+    &CsvLoadOptions::default(),
+);
+assert!(report.data.is_some());
+```
+
+## 验证与测试
+
+开发流程和测试职责以 [AGENTS.md](AGENTS.md) 为准。修改 Rust 实现时，先完成格式化，
+处理全部编译器错误和 Clippy 警告，再执行全量测试：
+
+```sh
+cargo fmt --all
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+兼容性修改还必须运行当前平台的参考 CLI 冒烟测试，并使用相同输入比较 Rust 与 C#
+结果：
 
 ```powershell
-# Windows
 tools/protocol-smoke.ps1
 ```
 
 ```sh
-# macOS through the repository Wine prefix
 tools/test-macos-wine.sh
 ```
 
-A platform smoke test proves only that the oracle works. Differential tests
-must also give the Rust and C# implementations the same source or fixture and
-compare the relevant tokens, syntax shape, diagnostics, schema/static data,
-output, state, values, and termination reason. Request IDs, absolute paths, and
-other explicitly environmental metadata may be ignored.
+## 文档
 
-If `emuera-reference-cli` fails to start, exits unexpectedly, or hangs, it must
-be repaired instead of skipping the oracle comparison. A repair may add a
-minimal headless/reference-only hook under `reference/emuera.em` when necessary,
-but it must not change the normal game's backend execution semantics. Every
-reference-tree modification must be listed separately in both the task handoff
-and [the reference CLI change log](reference/emuera.em/emuera-reference-cli/REFERENCE_CHANGES.md).
+- [设计原则](docs/design-principles.zh-CN.md)
+- [输入与等待兼容性](docs/input-wait-compatibility.zh-CN.md)
+- [Emuera runtime 参考映射](docs/runtime-reference-mapping.zh-CN.md)
+- [参考 CLI](reference/emuera.em/emuera-reference-cli/README.md)
+- [参考实现 headless 修改记录](reference/emuera.em/emuera-reference-cli/REFERENCE_CHANGES.md)
+- [运行时测试工具](tools/runtime-tester/AGENTS.md)
 
-Detailed contributor rules and the required test/reporting workflow are in
-[AGENTS.md](AGENTS.md).
+## 许可证
 
-## Design notes
-
-Emuera's lexer changes terminators according to its caller and permits nested
-expressions inside FORM strings. Object-like macro expansion also modifies the
-token stream. These behaviors are not a good fit for one regular lexer, so the
-implementation uses an explicit UTF-8 cursor. Expressions use a Pratt parser
-whose binding powers correspond to the pinned `OperatorCode.cs` behavior.
-
-Whitespace and comments are discarded from the syntax AST, while meaningful
-nodes retain UTF-8 byte spans. Diagnostics use stable English categories and
-byte spans rather than reproducing localized C# messages. C# projections must
-distinguish those offsets from the reference implementation's UTF-16 code-unit
-positions.
+RustyEra 自有代码和文档采用
+[GNU 通用公共许可证第 3 版](LICENSE)（SPDX：`GPL-3.0-only`）。
+`reference/emuera.em` 及其他第三方内容仍分别遵循其随附许可证，GPLv3 不改变这些
+第三方材料的原有授权条款。
