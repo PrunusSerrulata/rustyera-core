@@ -2440,6 +2440,100 @@ fn restart_redraws_string_and_integer_button_menus_in_the_current_function() {
 }
 
 #[test]
+fn inputs_accepts_an_automatic_button_from_the_pending_print_buffer() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "pending-auto-button-test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["ja".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).expect("hello");
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "pending-button.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    concat!(
+                        "@SYSTEM_TITLE\nCALL ORACLE_PENDING_AUTO_BUTTON\nWAIT\nRETURN\n",
+                        include_str!(
+                            "../../../../tools/emuera-reference-cli/tests/fixture/erb/restart.erb"
+                        )
+                    )
+                    .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).expect("load");
+    let loaded = drain(&mut session);
+    assert!(
+        loaded.iter().any(
+            |message| matches!(message, RuntimeMessage::ProjectLoadReport(report) if report.success)
+        ),
+        "project load failed: {loaded:?}"
+    );
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    for _ in 0..8 {
+        session
+            .drive(RuntimeDriveBudget::default())
+            .expect("input wait");
+        if session.operations.active_input().is_some() {
+            break;
+        }
+    }
+    let (wait_id, submission_token, back_button) = {
+        let pending = session.operations.active_input().expect("INPUTS wait");
+        assert_eq!(pending.wait.kind, WaitKind::StringValue);
+        let token = pending
+            .choices
+            .iter()
+            .find_map(|(token, value)| (*value == VmValue::Integer(58)).then_some(*token))
+            .expect("pending automatic button must belong to the active wait");
+        (pending.wait.wait_id, pending.wait.submission_token, token)
+    };
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id,
+            token: submission_token,
+            monotonic_time_ns: 0,
+            intent: InputIntent::Activate(back_button),
+            message_skip: false,
+        }),
+    );
+    for _ in 0..8 {
+        session
+            .drive(RuntimeDriveBudget::default())
+            .expect("accept back button");
+    }
+    assert!(session.presentation.snapshot().history.logical_lines.iter().any(
+        |line| line.runs.iter().any(
+            |run| matches!(run, era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("pending auto=58"))
+        )
+    ));
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn input_undo_records_only_accepted_scalar_input_after_a_checkpoint() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());

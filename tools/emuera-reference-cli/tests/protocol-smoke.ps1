@@ -333,6 +333,16 @@ try {
         -not $restartOutput.Contains("invalid move") -and
         -not $restartOutput.Contains("invalid ability")) "RESTART did not redraw the current function menu"
 
+    $pendingAutoButton = Invoke-Oracle @{
+        id = "pending-auto-button"
+        op = "run"
+        entry = "ORACLE_PENDING_AUTO_BUTTON"
+        uiInputs = @(@{ text = "58"; changedByMouse = $true })
+    }
+    Assert-True ($pendingAutoButton.ok -and
+        $pendingAutoButton.result.termination -eq "completed" -and
+        (($pendingAutoButton.result.output -join "`n").Contains("pending auto=58"))) "pending automatic button input differs"
+
     $tempOneInputGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-oneinput-oracle-" + [guid]::NewGuid())
     Copy-Item "$PSScriptRoot/fixture" $tempOneInputGame -Recurse
     Copy-Item "$PSScriptRoot/fixture-oneinput/*" $tempOneInputGame -Recurse -Force
