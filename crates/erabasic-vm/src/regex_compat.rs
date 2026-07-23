@@ -39,6 +39,103 @@ pub(crate) fn compile(pattern: &str) -> Result<Regex, String> {
     Regex::new(&translated).map_err(|error| format!("unsupported or invalid regex: {error}"))
 }
 
+/// Match the portable subset `(<one character atom>)\1{N}`.
+///
+/// Rust's linear-time regex engine deliberately omits backreferences. Era games
+/// nevertheless use this bounded shape to detect long separator lines. Handling
+/// it directly retains deterministic linear behavior without enabling arbitrary
+/// backtracking.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum RepeatedCharacterMatch {
+    Unsupported,
+    NoMatch,
+    Match(std::ops::Range<usize>),
+}
+
+pub(crate) fn find_repeated_character(pattern: &str, input: &str) -> RepeatedCharacterMatch {
+    let Some(body) = pattern.strip_prefix('(') else {
+        return RepeatedCharacterMatch::Unsupported;
+    };
+    let Some((atom, repetition)) = body.split_once(r")\1{") else {
+        return RepeatedCharacterMatch::Unsupported;
+    };
+    let Some(repetition) = repetition.strip_suffix('}') else {
+        return RepeatedCharacterMatch::Unsupported;
+    };
+    let Ok(repetitions) = repetition.parse::<usize>() else {
+        return RepeatedCharacterMatch::Unsupported;
+    };
+    let Some(required) = repetitions.checked_add(1) else {
+        return RepeatedCharacterMatch::Unsupported;
+    };
+    let Some(predicate) = CharacterPredicate::parse(atom) else {
+        return RepeatedCharacterMatch::Unsupported;
+    };
+
+    let mut characters = input.char_indices().peekable();
+    while let Some((start, character)) = characters.next() {
+        // System.Text.RegularExpressions operates on UTF-16 code units. A
+        // supplementary scalar therefore cannot repeat immediately in this
+        // one-code-unit capture shape because its low surrogate intervenes.
+        if character.len_utf16() != 1 || !predicate.matches(character) {
+            continue;
+        }
+        let mut count = 1usize;
+        let mut end = start + character.len_utf8();
+        while count < required
+            && let Some(&(next, candidate)) = characters.peek()
+            && candidate == character
+        {
+            characters.next();
+            count += 1;
+            end = next + candidate.len_utf8();
+        }
+        if count == required {
+            return RepeatedCharacterMatch::Match(start..end);
+        }
+    }
+    RepeatedCharacterMatch::NoMatch
+}
+
+enum CharacterPredicate {
+    AnyNonNewline,
+    Equal(char),
+    NotEqual(char),
+}
+
+impl CharacterPredicate {
+    fn parse(atom: &str) -> Option<Self> {
+        if atom == "." {
+            return Some(Self::AnyNonNewline);
+        }
+        if let Some(value) = atom
+            .strip_prefix("[^")
+            .and_then(|value| value.strip_suffix(']'))
+            .and_then(single_character)
+        {
+            return Some(Self::NotEqual(value));
+        }
+        atom.strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .and_then(single_character)
+            .map(Self::Equal)
+    }
+
+    fn matches(&self, character: char) -> bool {
+        match self {
+            Self::AnyNonNewline => character != '\n',
+            Self::Equal(expected) => character == *expected,
+            Self::NotEqual(excluded) => character != *excluded,
+        }
+    }
+}
+
+fn single_character(source: &str) -> Option<char> {
+    let mut characters = source.chars();
+    let character = characters.next()?;
+    (character.len_utf16() == 1 && characters.next().is_none()).then_some(character)
+}
+
 fn reject_unsupported(pattern: &str) -> Result<(), String> {
     let bytes = pattern.as_bytes();
     let mut index = 0;
@@ -140,6 +237,31 @@ mod tests {
     fn rejects_backtracking_only_constructs() {
         assert!(compile(r"(a)\1").is_err());
         assert!(compile(r"a(?=b)").is_err());
+    }
+
+    #[test]
+    fn finds_bounded_repeated_character_backreferences_without_backtracking() {
+        let pattern = r"([^ ])\1{15}";
+        assert_eq!(
+            find_repeated_character(pattern, "<p>----------------</p>"),
+            RepeatedCharacterMatch::Match(3..19)
+        );
+        assert_eq!(
+            find_repeated_character(pattern, "---------------"),
+            RepeatedCharacterMatch::NoMatch
+        );
+        assert_eq!(
+            find_repeated_character(pattern, "                "),
+            RepeatedCharacterMatch::NoMatch
+        );
+        assert_eq!(
+            find_repeated_character(pattern, "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"),
+            RepeatedCharacterMatch::NoMatch
+        );
+        assert_eq!(
+            find_repeated_character(r"(ab)\1", "abab"),
+            RepeatedCharacterMatch::Unsupported
+        );
     }
 
     #[test]

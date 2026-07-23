@@ -1,6 +1,13 @@
 use erabasic_ast::{AssignOp, Diagnostic, Expr, ExprKind, Span, VariableRef};
 use erabasic_lexer::{Operator, Token, TokenKind};
 
+pub(crate) fn trim_line_start(source: &str, allow_full_width_space: bool) -> &str {
+    source.trim_start_matches(|character| {
+        matches!(character, ' ' | '\t' | '\r')
+            || (allow_full_width_space && character == '\u{3000}')
+    })
+}
+
 pub(crate) fn shifted(span: Span, base: usize) -> Span {
     Span::new(span.start + base, span.end + base)
 }
@@ -98,10 +105,21 @@ pub(crate) fn expr_to_variable(expr: Expr) -> Option<VariableRef> {
 }
 
 pub(crate) fn lines_with_offsets(source: &str) -> impl Iterator<Item = (usize, &str)> {
-    let mut offset = 0;
-    source.split_inclusive('\n').map(move |line| {
-        let start = offset;
-        offset += line.len();
-        (start, line.strip_suffix('\n').unwrap_or(line))
+    let mut next = (!source.is_empty()).then_some(0);
+    std::iter::from_fn(move || {
+        let start = next?;
+        let delimiter = source.as_bytes()[start..]
+            .iter()
+            .position(|byte| matches!(byte, b'\r' | b'\n'))
+            .map(|offset| start + offset);
+        let Some(end) = delimiter else {
+            next = None;
+            return Some((start, &source[start..]));
+        };
+        let delimiter_length = usize::from(
+            source.as_bytes()[end] == b'\r' && source.as_bytes().get(end + 1) == Some(&b'\n'),
+        ) + 1;
+        next = (end + delimiter_length < source.len()).then_some(end + delimiter_length);
+        Some((start, &source[start..end]))
     })
 }

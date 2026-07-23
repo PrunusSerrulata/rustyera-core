@@ -577,7 +577,7 @@ fn portable_graphics_and_textbox_compatibility_paths_are_runtime_owned() {
                 relative_path: "portable.erb".into(),
                 category: FileCategory::Erb,
                 payload: FilePayload::Utf8(
-                    "@SYSTEM_TITLE\nRESULT = GCREATE(1, 2, 2)\nRESULT = GSETCOLOR(1, 4294967295, 0, -1)\nRESULT:1 = BITMAP_CACHE_ENABLE(1)\nRESULTS:40 = %HTML_TOPLAINTEXT(\"a&nbsp;b\")%\nRESULT:41 = GCREATE(7, 2, 2)\nRESULT:42 = GSETBRUSH(7, 4294901760)\nRESULT:43 = GGETBRUSH(7)\nRESULT:44 = GSETPEN(7, 4278255360, 2)\nRESULT:45 = GGETPEN(7)\nRESULT:46 = GGETPENWIDTH(7)\nRESULT:47 = GFILLRECTANGLE(7, 0, 0, 2, 2)\nRESULT:48 = GDRAWLINE(7, 0, 0, 1, 1)\nRESULT:49 = GDISPOSE(7)\nRESULT:2 = MOVETEXTBOX(10, 20, 30)\nWAIT\nRETURN\n"
+                    "@SYSTEM_TITLE\nRESULT = GCREATE(1, 2, 2)\nRESULT = GSETCOLOR(1, 4294967295, 0, -1)\nRESULT:1 = BITMAP_CACHE_ENABLE(1)\nRESULTS:40 = %HTML_TOPLAINTEXT(\"a&nbsp;b\")%\nRESULT:41 = GCREATE(7, 2, 2)\nRESULT:42 = GSETBRUSH(7, 4294901760)\nRESULT:43 = GGETBRUSH(7)\nRESULT:44 = GSETPEN(7, 4278255360, 2)\nRESULT:45 = GGETPEN(7)\nRESULT:46 = GGETPENWIDTH(7)\nRESULT:47 = GFILLRECTANGLE(7, 0, 0, 2, 2)\nRESULT:48 = GDRAWLINE(7, 0, 0, 1, 1)\nRESULT:49 = GDISPOSE(7)\nRESULT:50 = CBGCLEAR()\nRESULT:2 = MOVETEXTBOX(10, 20, 30)\nWAIT\nRETURN\n"
                         .into(),
                 ),
                 content_hash: None,
@@ -630,6 +630,7 @@ fn portable_graphics_and_textbox_compatibility_paths_are_runtime_owned() {
         (47, 1),
         (48, 1),
         (49, 1),
+        (50, 1),
     ];
     for (index, expected) in expected_graphics {
         assert_eq!(
@@ -2159,7 +2160,7 @@ fn untimed_one_input_message_skip_keeps_the_complete_default() {
                 relative_path: "input.erb".into(),
                 category: FileCategory::Erb,
                 payload: FilePayload::Utf8(
-                    "@SYSTEM_TITLE\nINPUT\nONEINPUTS \"LONG\", 0, 0\nPRINTFORML got=%RESULTS%\nWAIT\nRETURN\n"
+                    "@SYSTEM_TITLE\nINPUT\nONEINPUTS LONG, 0, 0\nPRINTFORML got=%RESULTS%\nWAIT\nRETURN\n"
                         .into(),
                 ),
                 content_hash: None,
@@ -4037,6 +4038,7 @@ fn reference_bar_and_portable_named_colors_are_deterministic() {
         Err("BAR length must be between 1 and 99")
     );
     assert_eq!(named_color("Magenta"), Some(0x00ff_00ff));
+    assert_eq!(named_color("LightSalmon"), Some(0x00ff_a07a));
     assert_eq!(named_color("transparent"), None);
 }
 

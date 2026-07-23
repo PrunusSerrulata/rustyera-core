@@ -255,7 +255,12 @@ pub(crate) fn lower_function(
                 let instruction = builder.code.len();
                 builder.emit(opcode::jump(Opcode::Jump, 0), line.location);
                 if let Some(target) = target {
-                    pending_jumps.push((instruction, target, true));
+                    // BREAK resumes at the following logical line. If that line is
+                    // an ELSE/ELSEIF/CASE boundary, its synthetic entry jump must
+                    // run so a selected branch cannot fall into the next branch.
+                    // CONTINUE instead targets the executable entry of its loop
+                    // boundary and deliberately bypasses such prologue metadata.
+                    pending_jumps.push((instruction, target, structural_name == Some("CONTINUE")));
                 } else {
                     pending_function_end_jumps.push(instruction);
                 }

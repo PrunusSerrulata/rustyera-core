@@ -125,7 +125,7 @@ impl Lexer<'_> {
         if !text.is_empty() {
             parts.push(FormattedTokenPart::Text(text));
         }
-        if !closed && !matches!(end, FormEnd::EndOfLine) {
+        if !closed && !matches!(end, FormEnd::EndOfLine | FormEnd::Comma) {
             self.unterminated_form(start, "unterminated formatted string");
         }
         FormattedToken {
@@ -196,6 +196,7 @@ pub(super) enum FormEnd {
     Quote,
     SharpOrYenAt,
     YenAt,
+    Comma,
     EndOfLine,
 }
 
@@ -207,6 +208,7 @@ impl FormEnd {
                 lexer.current() == Some('#') || lexer.source[lexer.pos..].starts_with("\\@")
             }
             Self::YenAt => lexer.source[lexer.pos..].starts_with("\\@"),
+            Self::Comma => lexer.current() == Some(','),
             Self::EndOfLine => false,
         }
     }
@@ -215,7 +217,7 @@ impl FormEnd {
             Self::Quote => lexer.bump(),
             Self::SharpOrYenAt if lexer.current() == Some('#') => lexer.bump(),
             Self::SharpOrYenAt | Self::YenAt => lexer.pos += 2,
-            Self::EndOfLine => {}
+            Self::Comma | Self::EndOfLine => {}
         }
     }
 }

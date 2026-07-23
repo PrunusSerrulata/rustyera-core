@@ -2,14 +2,16 @@ use erabasic_ast::{
     Argument, AssignOp, Diagnostic, DiagnosticCode, Directive, Expr, ExprKind, ParseOutput,
     PostfixOp, Span, Statement, StatementKind, UnaryOp,
 };
-use erabasic_lexer::{LexEnd, LexFlags, Token, TokenKind, lex_formatted, lex_with};
+use erabasic_lexer::{
+    LexEnd, LexFlags, Token, TokenKind, lex_formatted, lex_formatted_until_comma, lex_with,
+};
 
 use crate::context::{ArgumentStyle, InstructionSpec, ParserContext};
 use crate::expression::ExpressionParser;
 use crate::formatted::{lower_formatted, parse_formatted_at, shift_formatted};
 use crate::util::{
     assign_op, expr_to_variable, shift_diagnostics, shift_tokens, split_top_level,
-    top_level_assignment,
+    top_level_assignment, trim_line_start,
 };
 
 pub fn parse_line(source: &str, context: &dyn ParserContext) -> ParseOutput<Statement> {
@@ -22,8 +24,8 @@ pub(crate) fn parse_line_at(
     base: usize,
     context: &dyn ParserContext,
 ) -> ParseOutput<Statement> {
-    let leading = source.len() - source.trim_start_matches([' ', '\t']).len();
-    let line = &source[leading..];
+    let line = trim_line_start(source, context.lexer_config().allow_full_width_space);
+    let leading = source.len() - line.len();
     let line_base = base + leading;
     if line.is_empty() || line.starts_with(';') {
         return ParseOutput {
@@ -32,8 +34,7 @@ pub(crate) fn parse_line_at(
         };
     }
     if let Some(label_body) = line.strip_prefix('$') {
-        let name = label_body
-            .trim_start_matches([' ', '\t'])
+        let name = trim_line_start(label_body, context.lexer_config().allow_full_width_space)
             .split([' ', '\t', ';'])
             .next()
             .unwrap_or_default()
@@ -250,6 +251,7 @@ pub(crate) fn parse_line_at(
                 | ArgumentStyle::PrintV
                 | ArgumentStyle::Times
                 | ArgumentStyle::DynamicCall
+                | ArgumentStyle::FormattedFirst
         )
     {
         // The preliminary whole-line lex identifies the instruction name, but
@@ -416,6 +418,31 @@ fn parse_assignment_right(
             span: Span::new(right_base, line_base + line.len()),
         });
     }
+    let tokens = if matches!(
+        operator.kind,
+        TokenKind::Operator(
+            erabasic_lexer::Operator::AddAssign
+                | erabasic_lexer::Operator::SubtractAssign
+                | erabasic_lexer::Operator::MultiplyAssign
+                | erabasic_lexer::Operator::DivideAssign
+                | erabasic_lexer::Operator::ModuloAssign
+                | erabasic_lexer::Operator::BitAndAssign
+                | erabasic_lexer::Operator::BitOrAssign
+                | erabasic_lexer::Operator::BitXorAssign
+                | erabasic_lexer::Operator::ShiftLeftAssign
+                | erabasic_lexer::Operator::ShiftRightAssign
+        )
+    ) && matches!(
+        tokens.last(),
+        Some(Token {
+            kind: TokenKind::Symbol(','),
+            ..
+        })
+    ) {
+        &tokens[..tokens.len() - 1]
+    } else {
+        tokens
+    };
     let mut parser = ExpressionParser::new(tokens);
     let right = parser.parse();
     if !parser.diagnostics.is_empty() {
@@ -467,6 +494,9 @@ fn parse_arguments(
     }
     if style == ArgumentStyle::DynamicCall {
         return parse_dynamic_call_arguments(source, base, context);
+    }
+    if style == ArgumentStyle::FormattedFirst {
+        return parse_formatted_first_arguments(source, base, context);
     }
     if style == ArgumentStyle::Formatted {
         if source.starts_with("@\"") {
@@ -528,6 +558,37 @@ fn parse_arguments(
             arguments.push(Argument::Expression(expr));
         }
         diagnostics.append(&mut parser.diagnostics);
+    }
+    ParseOutput {
+        value: Some(arguments),
+        diagnostics,
+    }
+}
+
+fn parse_formatted_first_arguments(
+    source: &str,
+    base: usize,
+    context: &dyn ParserContext,
+) -> ParseOutput<Vec<Argument>> {
+    let (form, consumed, lex_diagnostics) =
+        lex_formatted_until_comma(source, context.lexer_config(), context.macros());
+    let mut formatted = lower_formatted(&form);
+    formatted.diagnostics.splice(0..0, lex_diagnostics);
+    shift_formatted(&mut formatted, base);
+    let mut diagnostics = formatted.diagnostics;
+    let mut arguments = formatted
+        .value
+        .map_or_else(Vec::new, |value| vec![Argument::Formatted(value)]);
+    if source.as_bytes().get(consumed) == Some(&b',') {
+        let tail_start = consumed + 1;
+        let mut tail = parse_arguments(
+            &source[tail_start..],
+            base + tail_start,
+            ArgumentStyle::Expressions,
+            context,
+        );
+        diagnostics.append(&mut tail.diagnostics);
+        arguments.extend(tail.value.unwrap_or_default());
     }
     ParseOutput {
         value: Some(arguments),

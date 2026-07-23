@@ -8,6 +8,7 @@ license.workspace = true
 blake3.workspace = true
 erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-data = { path = "../erabasic-data" }
+erabasic-html = { path = "../erabasic-html" }
 erabasic-validator = { path = "../erabasic-validator" }
 encoding_rs.workspace = true
 regex.workspace = true

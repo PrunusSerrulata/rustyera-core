@@ -76,6 +76,7 @@ jq -nc --arg gameDir "$FIXTURE_WINDOWS_PATH" \
     '{id:"wine-load",op:"load",gameDir:$gameDir}' >>"$REQUEST_FILE"
 printf '%s\n' \
     '{"id":"wine-toneinput","op":"execute","statement":"TONEINPUTS 1000, \"DEFAULT\", 1, \"timeout\", 0, 0"}' \
+    '{"id":"wine-tooltip-delay","op":"execute","statement":"TOOLTIP_SETDELAY 0"}' \
     '{"id":"wine-config-drawing","op":"eval","source":"GETCONFIGS(\"描画インターフェース\")"}' \
     '{"id":"wine-config-font-size","op":"eval","source":"GETCONFIG(\"フォントサイズ\")"}' \
     '{"id":"wine-config-fore-color","op":"eval","source":"GETCONFIG(\"文字色\")"}' \
@@ -96,7 +97,8 @@ printf '%s\n' \
     '{"id":"wine-run","op":"run","entry":"ORACLE_TEST","watch":["RESULT"]}' \
     '{"id":"wine-compat","op":"run","entry":"ORACLE_COMPAT","watch":["FLAG:0"]}' \
     '{"id":"wine-compat-rest","op":"run","entry":"ORACLE_COMPAT_REST","watch":["RESULT:1","RESULT:2","RESULT:3","RESULT:4","RESULT:5","RESULTS:10","FLAG:1","FLAG:2"]}' \
-    '{"id":"wine-native-tail","op":"run","entry":"ORACLE_NATIVE","watch":["RESULT:0","RESULT:1","RESULT:2","RESULT:3","RESULT:4","RESULT:5","RESULT:6","RESULT:7","RESULT:8","RESULT:9","RESULT:10","RESULT:11","RESULT:12","RESULTS:0","RESULTS:1","RESULTS:2","RESULTS:3","RESULTS:4","RESULTS:5","RESULTS:6","RESULTS:7"]}' \
+    '{"id":"wine-native-tail","op":"run","entry":"ORACLE_NATIVE","watch":["RESULT:0","RESULT:1","RESULT:2","RESULT:3","RESULT:4","RESULT:5","RESULT:6","RESULT:7","RESULT:8","RESULT:9","RESULT:10","RESULT:11","RESULT:12","RESULT:13","RESULTS:0","RESULTS:1","RESULTS:2","RESULTS:3","RESULTS:4","RESULTS:5","RESULTS:6","RESULTS:7"]}' \
+    '{"id":"wine-dynamic-variables","op":"run","entry":"ORACLE_DYNAMIC_VARIABLES","watch":["RESULT:1","RESULT:2","RESULT:50","RESULT:51","RESULT:52","RESULT:53","RESULT:54","RESULTS:50","RESULTS:51","RESULTS:52","FLAG:4","SAVESTR:0"]}' \
     '{"id":"wine-reflection","op":"run","entry":"ORACLE_REFLECTION","watch":["RESULT:12","RESULT:13","RESULTS:8","RESULTS:9"]}' \
     '{"id":"wine-map","op":"run","entry":"ORACLE_MAP","watch":["RESULT","RESULTS"]}' \
     '{"id":"wine-presentation","op":"run","entry":"ORACLE_PRESENTATION"}' \
@@ -106,7 +108,7 @@ printf '%s\n' \
     '{"id":"wine-presentation-23","op":"run","entry":"ORACLE_PRESENTATION_23","watch":["RESULTS:31","RESULTS:32","RESULTS:33","RESULTS:34"]}' \
     '{"id":"wine-structured","op":"run","entry":"ORACLE_STRUCTURED","watch":["RESULT:0","RESULT:1","RESULT:2","RESULT:3","RESULT:4","RESULT:5","RESULTS:0","RESULTS:1","RESULTS:2"]}' \
     '{"id":"wine-compat-12","op":"run","entry":"ORACLE_COMPAT_12","watch":["RESULT:20","RESULT:21","RESULT:22","RESULT:23","RESULT:24","RESULTS:20","RESULTS:21","RESULTS:22"]}' \
-    '{"id":"wine-presentation-3","op":"run","entry":"ORACLE_PRESENTATION_3","watch":["RESULT:40","RESULT:41","RESULT:42","RESULT:43","RESULT:44","RESULT:45","RESULT:46","RESULT:47","RESULT:48","RESULT:49","RESULTS:40"]}' \
+    '{"id":"wine-presentation-3","op":"run","entry":"ORACLE_PRESENTATION_3","watch":["RESULT:40","RESULT:41","RESULT:42","RESULT:43","RESULT:44","RESULT:45","RESULT:46","RESULT:47","RESULT:48","RESULT:49","RESULT:50","RESULTS:40"]}' \
     '{"id":"wine-input","op":"run","entry":"ORACLE_INPUT","inputs":["42"],"watch":["RESULT"]}' \
     '{"id":"wine-restart","op":"run","entry":"ORACLE_RESTART_FLOW","uiInputs":[{"text":"C","changedByMouse":true},{"text":"0","changedByMouse":true},{"text":"6","changedByMouse":true},{"text":"0","changedByMouse":true}]}' \
     '{"id":"wine-pending-auto-button","op":"run","entry":"ORACLE_PENDING_AUTO_BUTTON","uiInputs":[{"text":"58","changedByMouse":true}]}' \
@@ -138,20 +140,22 @@ perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 47 and
+    length == 49 and
     map(.id) == [
         "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-toneinput",
+        "wine-tooltip-delay",
         "wine-config-drawing", "wine-config-font-size", "wine-config-fore-color", "wine-config-stain-list",
         "wine-getmillisecond", "wine-getsecond", "wine-project",
         "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
         "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
         "wine-putform", "wine-savenos",
-        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-reflection", "wine-map", "wine-presentation", "wine-print-family", "wine-linecount", "wine-html-pop", "wine-presentation-23", "wine-structured", "wine-compat-12", "wine-presentation-3", "wine-input", "wine-restart", "wine-pending-auto-button", "wine-oneinput-load", "wine-oneinput-text", "wine-oneinput-mouse-default", "wine-oneinput-long-load", "wine-oneinput-mouse-long", "wine-system-load", "wine-stopcalltrain", "wine-reset"
+        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-dynamic-variables", "wine-reflection", "wine-map", "wine-presentation", "wine-print-family", "wine-linecount", "wine-html-pop", "wine-presentation-23", "wine-structured", "wine-compat-12", "wine-presentation-3", "wine-input", "wine-restart", "wine-pending-auto-button", "wine-oneinput-load", "wine-oneinput-text", "wine-oneinput-mouse-default", "wine-oneinput-long-load", "wine-oneinput-mouse-long", "wine-system-load", "wine-stopcalltrain", "wine-reset"
     ] and
     all(.[]; .ok == true) and
     (map(select(.id == "wine-load"))[0].result.termination == "waitingInput") and
+    (map(select(.id == "wine-tooltip-delay"))[0].result.termination == "waitingInput") and
     (map(select(.id == "wine-load"))[0].result.output | contains(["TITLE_CHARANUM=0"])) and
-    (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["EVENTFIRST", "ORACLE_COMPAT", "ORACLE_COMPAT_12", "ORACLE_COMPAT_REST", "ORACLE_DYNAMIC_1", "ORACLE_HTML_POP", "ORACLE_INPUT", "ORACLE_LINECOUNT", "ORACLE_LIST_TARGET", "ORACLE_MAP", "ORACLE_NATIVE", "ORACLE_PENDING_AUTO_BUTTON", "ORACLE_PRESENTATION", "ORACLE_PRESENTATION_23", "ORACLE_PRESENTATION_3", "ORACLE_PRINT_FAMILY", "ORACLE_REFLECTION", "ORACLE_RESTART_ABILITY", "ORACLE_RESTART_FLOW", "ORACLE_RESTART_MOVE", "ORACLE_STRUCTURED", "ORACLE_TEST", "SYSTEM_TITLE"]) and
+    (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["EVENTFIRST", "ORACLE_COMPAT", "ORACLE_COMPAT_12", "ORACLE_COMPAT_REST", "ORACLE_DYNAMIC_1", "ORACLE_DYNAMIC_VARIABLES", "ORACLE_HTML_POP", "ORACLE_INPUT", "ORACLE_LINECOUNT", "ORACLE_LIST_TARGET", "ORACLE_MAP", "ORACLE_NATIVE", "ORACLE_PENDING_AUTO_BUTTON", "ORACLE_PRESENTATION", "ORACLE_PRESENTATION_23", "ORACLE_PRESENTATION_3", "ORACLE_PRINT_FAMILY", "ORACLE_REFLECTION", "ORACLE_RESTART_ABILITY", "ORACLE_RESTART_FLOW", "ORACLE_RESTART_MOVE", "ORACLE_STRUCTURED", "ORACLE_TEST", "SYSTEM_TITLE"]) and
     (map(select(.id == "wine-project"))[0].result.functions | map(select(.name == "SYSTEM_TITLE"))[0].lines | map(.functionCode) | contains(["PRINTFORM", "IF", "CALL", "CALL", "ENDIF", "INPUT", "RETURN"])) and
     (map(select(.id == "wine-csv-varsize"))[0].result.value == 120) and
     (map(select(.id == "wine-csv-name"))[0].result.value == 2) and
@@ -180,6 +184,7 @@ jq -e -s '
     (map(select(.id == "wine-presentation-3"))[0].result.watches."RESULT:47" == 1) and
     (map(select(.id == "wine-presentation-3"))[0].result.watches."RESULT:48" == 1) and
     (map(select(.id == "wine-presentation-3"))[0].result.watches."RESULT:49" == 1) and
+    (map(select(.id == "wine-presentation-3"))[0].result.watches."RESULT:50" == 1) and
     (map(select(.id == "wine-presentation-3"))[0].result.watches."RESULTS:40" == "a b") and
     (map(select(.id == "wine-presentation-23"))[0].result.termination == "completed") and
     (map(select(.id == "wine-presentation-23"))[0].result.watches."RESULTS:31" == "<button value=\u002716\u0027>[0x10] hex </button><button value=\u0027100\u0027>[1e2] exponent</button>") and
@@ -197,7 +202,8 @@ jq -e -s '
     (map(select(.id == "wine-compat-rest"))[0].result.watches."RESULTS:10" == "STORED") and
     (map(select(.id == "wine-compat-rest"))[0].result.watches."FLAG:1" == 7) and
     (map(select(.id == "wine-compat-rest"))[0].result.watches."FLAG:2" == 8) and
-    (map(select(.id == "wine-native-tail"))[0].result.watches == {"RESULT:0":0,"RESULT:1":4,"RESULT:2":1,"RESULT:3":1,"RESULT:4":2,"RESULT:5":2,"RESULT:6":1,"RESULT:7":946,"RESULT:8":946,"RESULT:9":12,"RESULT:10":1,"RESULT:11":66051,"RESULT:12":2,"RESULTS:0":"a\\+b","RESULTS:1":"β","RESULTS:2":"ABC","RESULTS:3":"abc","RESULTS:4":"b/c","RESULTS:5":"a,b,c,","RESULTS:6":"β","RESULTS:7":"ff"}) and
+    (map(select(.id == "wine-native-tail"))[0].result.watches == {"RESULT:0":0,"RESULT:1":4,"RESULT:2":1,"RESULT:3":1,"RESULT:4":2,"RESULT:5":2,"RESULT:6":1,"RESULT:7":946,"RESULT:8":946,"RESULT:9":12,"RESULT:10":1,"RESULT:11":66051,"RESULT:12":2,"RESULT:13":0,"RESULTS:0":"a\\+b","RESULTS:1":"β","RESULTS:2":"ABC","RESULTS:3":"abc","RESULTS:4":"b/c","RESULTS:5":"a,b,c,","RESULTS:6":"β","RESULTS:7":"ff"}) and
+    (map(select(.id == "wine-dynamic-variables"))[0].result.watches == {"RESULT:1":65,"RESULT:2":30028,"RESULT:50":1,"RESULT:51":9,"RESULT:52":16752762,"RESULT:53":-1,"RESULT:54":2,"RESULTS:50":"local","RESULTS:51":"saved","RESULTS:52":"ab","FLAG:4":9,"SAVESTR:0":"saved"}) and
     (map(select(.id == "wine-reflection"))[0].result.watches == {"RESULT:12":1,"RESULT:13":1,"RESULTS:8":"ORACLE_REFLECTION","RESULTS:9":"SAVEDATA_TEXT"}) and
     (map(select(.id == "wine-map"))[0].result.termination == "completed") and
     (map(select(.id == "wine-map"))[0].result.output | join("\n") | contains("MAP=2,1,1,1|3|b,a")) and

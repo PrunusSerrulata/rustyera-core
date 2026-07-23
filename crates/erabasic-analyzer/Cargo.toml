@@ -12,6 +12,7 @@ erabasic-data = { path = "../erabasic-data" }
 erabasic-hir = { path = "../erabasic-hir" }
 erabasic-lexer = { path = "../erabasic-lexer" }
 erabasic-parser = { path = "../erabasic-parser" }
+encoding_rs.workspace = true
 rayon.workspace = true
 serde.workspace = true
 

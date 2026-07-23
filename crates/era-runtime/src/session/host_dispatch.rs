@@ -2010,6 +2010,11 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
+        if name == "CBGCLEAR" {
+            self.presentation.clear_client_backgrounds();
+            commit_integer_result(vm, request.id, 1)?;
+            return self.emit_presentation();
+        }
         if name.starts_with("TOOLTIP_") {
             let result = match name.as_str() {
                 "TOOLTIP_SETCOLOR" => {

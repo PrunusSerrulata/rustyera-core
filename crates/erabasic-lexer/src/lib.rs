@@ -11,5 +11,5 @@ mod scanner;
 mod token;
 
 pub use config::{LexEnd, LexFlags, LexOutput, LexerConfig, MacroTable};
-pub use scanner::{lex, lex_formatted, lex_with};
+pub use scanner::{lex, lex_formatted, lex_formatted_until_comma, lex_with};
 pub use token::{FormattedToken, FormattedTokenPart, Operator, Token, TokenKind};

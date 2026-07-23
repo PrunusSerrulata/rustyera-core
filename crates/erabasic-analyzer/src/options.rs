@@ -26,6 +26,11 @@ pub struct AnalyzerOptions {
     pub compatible_call_event: bool,
     pub system_save_in_binary: bool,
     pub use_erd: bool,
+    /// Interpret a positive VARSIZE dimension as one-based, matching
+    /// `VarsizeDimConfig`; the pinned default uses zero-based dimensions.
+    pub varsize_dimension_is_one_based: bool,
+    /// Portable RGB value returned by restructurable GETDEFCOLOR calls.
+    pub default_foreground_color: i64,
     pub analysis_mode: bool,
     pub debug_mode: bool,
     pub allow_full_width_space: bool,
@@ -51,6 +56,8 @@ impl Default for AnalyzerOptions {
             compatible_call_event: false,
             system_save_in_binary: false,
             use_erd: true,
+            varsize_dimension_is_one_based: false,
+            default_foreground_color: 0x00c0_c0c0,
             analysis_mode: false,
             debug_mode: false,
             allow_full_width_space: true,

@@ -193,7 +193,9 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         Any, Formatted, Integer, MutableAny, MutableInteger, MutableReferenceOrString,
         MutableString, ReferenceOrString, String,
     };
-    use ArgumentStyle::{Expressions, Formatted as FormStyle, None as NoArgs, PrintV, Raw, Times};
+    use ArgumentStyle::{
+        Expressions, Formatted as FormStyle, FormattedFirst, None as NoArgs, PrintV, Raw, Times,
+    };
 
     let mut result = BTreeMap::new();
     let mut add =
@@ -252,6 +254,9 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     }
     add("ASSERT", Expressions, &[Integer], 1, false, false);
     add("THROW", FormStyle, &[Formatted], 0, false, true);
+    // The statement form is distinct from ENCODETOUNI(string, position): it
+    // consumes one nullable FORM string and writes its code points to RESULT.
+    add("ENCODETOUNI", FormStyle, &[Formatted], 0, false, true);
     add("FORCEKANA", Expressions, &[Integer], 1, false, false);
     add("UPCHECK", NoArgs, &[], 0, false, false);
     add("CUPCHECK", Expressions, &[Integer], 1, false, false);
@@ -338,7 +343,6 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     // The assignment spelling `ARRAY = a, b, c` is parsed as SET with one
     // mutable destination followed by consecutive values.
     add("SET", Expressions, &[MutableAny, Any], 2, true, false);
-    add("SETVAR", Expressions, &[MutableAny, Any], 2, false, false);
     add(
         "TIMES",
         Times,
@@ -494,8 +498,8 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     for name in ["INPUTS", "ONEINPUTS", "BINPUTS", "ONEBINPUTS"] {
         add(
             name,
-            Expressions,
-            &[String, Integer, Integer],
+            FormattedFirst,
+            &[Formatted, Integer, Integer],
             0,
             false,
             true,
@@ -582,6 +586,11 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         false,
         false,
     );
+    // These two instructions use Emuera's STR argument builder, which consumes the
+    // unquoted remainder as a color name instead of parsing an expression.
+    for name in ["SETCOLORBYNAME", "SETBGCOLORBYNAME"] {
+        add(name, Raw, &[ArgumentConstraint::Raw], 1, false, false);
+    }
     // SETFONT uses STR_EXPRESSION_NULLABLE: an empty invocation resets the font.
     add("SETFONT", Expressions, &[String], 0, false, true);
     add("PRINTDATA", Expressions, &[MutableInteger], 0, false, true);
@@ -872,15 +881,10 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     for name in ["STRLENFORM", "STRLENFORMU"] {
         add(name, IntType, &[String], 1, false);
     }
-    for name in [
-        "SUBSTRING",
-        "SUBSTRINGU",
-        "STRFORM",
-        "REPLACE",
-        "UNICODETOSTR",
-        "TOLOWER",
-        "TOUPPER",
-    ] {
+    for name in ["SUBSTRING", "SUBSTRINGU"] {
+        add(name, StrType, &[String, Integer, Integer], 1, false);
+    }
+    for name in ["STRFORM", "REPLACE", "UNICODETOSTR", "TOLOWER", "TOUPPER"] {
         add(name, StrType, &[Any], 1, true);
     }
     // Emuera's UNICODE converts one UTF-16 code unit value to a string.  It is
@@ -892,6 +896,8 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("VARSIZE", IntType, &[String, Integer], 1, false);
     add("EXISTFUNCTION", IntType, &[String, Integer], 1, false);
     add("EXISTVAR", IntType, &[String], 1, false);
+    add("GETVAR", IntType, &[String], 1, false);
+    add("GETVARS", StrType, &[String], 1, false);
     add("GETDOINGFUNCTION", StrType, &[], 0, false);
     for name in [
         "ENUMFUNCBEGINSWITH",
@@ -911,6 +917,7 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         3,
         false,
     );
+    add("COLOR_FROMNAME", IntType, &[String], 1, false);
     add("TOSTR", StrType, &[Integer, String], 1, false);
     for name in ["TOFULL", "TOHALF"] {
         add(name, StrType, &[String], 1, false);
@@ -921,7 +928,8 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     for name in ["STRLENS", "STRLENSU", "UNICODEBYTE"] {
         add(name, IntType, &[String], 1, false);
     }
-    add("ENCODETOUNI", IntType, &[String, Integer], 1, true);
+    add("ENCODETOUNI", IntType, &[String, Integer], 1, false);
+    add("SETVAR", IntType, &[String, Any], 2, false);
     add("CHARATU", StrType, &[String, Integer], 2, false);
     add(
         "STRJOIN",
@@ -1348,6 +1356,12 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         result
             .get_mut(name)
             .expect("find-element signature was inserted")
+            .allow_omitted = true;
+    }
+    for name in ["SUBSTRING", "SUBSTRINGU", "ENCODETOUNI"] {
+        result
+            .get_mut(name)
+            .expect("optional string method signature was inserted")
             .allow_omitted = true;
     }
     for name in ["DT_SELECT", "DT_ROW_ADD", "DT_ROW_SET", "DT_CELL_SET"] {

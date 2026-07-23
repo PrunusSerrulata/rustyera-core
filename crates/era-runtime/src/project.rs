@@ -1135,6 +1135,12 @@ fn apply_catalog_semantics(config: &mut SemanticConfig) {
         config.csv.use_erd = value;
         config.analyzer.use_erd = value;
     }
+    if let Some(value) = boolean("VarsizeDimConfig") {
+        config.analyzer.varsize_dimension_is_one_based = value;
+    }
+    if let Some(ConfigValue::Color(value)) = config.values.get_code("ForeColor") {
+        config.analyzer.default_foreground_color = i64::from(*value);
+    }
     if let Some(value) = boolean("SystemAllowFullSpace") {
         config.csv.allow_full_width_space = value;
         config.analyzer.allow_full_width_space = value;
@@ -1512,7 +1518,7 @@ mod tests {
         let mut diagnostics = Vec::new();
         let config = parse_configuration(
             &[configuration(
-                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nImitate ERD to VARSIZE dimension specification:YES\nText color:1,2,3\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
             )],
             &mut diagnostics,
         );
@@ -1535,6 +1541,8 @@ mod tests {
         assert!(config.analyzer.compatible_function_argument_optional);
         assert!(config.analyzer.compatible_function_argument_auto_convert);
         assert!(config.analyzer.ignore_triple_symbols);
+        assert!(config.analyzer.varsize_dimension_is_one_based);
+        assert_eq!(config.analyzer.default_foreground_color, 0x0001_0203);
         assert_eq!(config.legacy_encoding, LegacyEncoding::Korean);
         assert_eq!(
             diagnostics

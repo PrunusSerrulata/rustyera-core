@@ -10,6 +10,7 @@ use crate::line::{parse_directive, parse_line_at};
 use crate::preprocessor::{PreprocessorFrame, handle_preprocessor};
 use crate::util::{
     expr_to_variable, lines_with_offsets, shift_diagnostics, shift_tokens, split_top_level,
+    trim_line_start,
 };
 
 pub fn parse_erh(source: &str, context: &mut dyn ParserContext) -> ParseOutput<Script> {
@@ -49,7 +50,7 @@ fn parse_script(
             line = without_bom;
             offset += '\u{feff}'.len_utf8();
         }
-        let trimmed = line.trim_start_matches([' ', '\t']);
+        let trimmed = trim_line_start(line, context.lexer_config().allow_full_width_space);
         let leading = line.len() - trimmed.len();
         let base = offset + leading;
         if handle_preprocessor(trimmed, base, context, &mut preprocessor, &mut diagnostics) {
@@ -68,7 +69,8 @@ fn parse_script(
                 let (part_offset, raw_part) = lines[line_index];
                 line_index += 1;
                 let part = raw_part.trim_end_matches('\r');
-                let part_trimmed = part.trim_start_matches([' ', '\t']);
+                let part_trimmed =
+                    trim_line_start(part, context.lexer_config().allow_full_width_space);
                 if part_trimmed == "}" {
                     closed = true;
                     break;
@@ -102,7 +104,7 @@ fn parse_script(
             continue;
         }
 
-        let trimmed = line.trim_start_matches([' ', '\t']);
+        let trimmed = trim_line_start(line, context.lexer_config().allow_full_width_space);
         let leading = line.len() - trimmed.len();
         let base = offset + leading;
         if trimmed.is_empty() || trimmed.starts_with(';') {

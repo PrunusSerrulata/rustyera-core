@@ -6,9 +6,11 @@
 use serde::{Deserialize, Serialize};
 
 mod button;
+mod color;
 mod markup;
 
 pub use button::{ButtonSegment, split_auto_buttons};
+pub use color::named_color;
 pub use markup::{
     HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlDocument, HtmlElementKind, HtmlElementSemantic,
     HtmlError, HtmlErrorKind, HtmlInteraction, HtmlLength, HtmlNode, parse_document,

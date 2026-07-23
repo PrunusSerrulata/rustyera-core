@@ -23,11 +23,12 @@ use character_ops::{character_series, execute_character_mutation, execute_charac
 use extended_ops::{
     array_snapshot_any_rank, execute_array_copy, execute_array_multi_sort,
     execute_array_multi_sort_ex, execute_random_place_transaction, execute_regex_match,
-    global_unindexed_place,
+    global_unindexed_place, indexed_place,
 };
 use native_ops::{
     array_place, array_snapshot, execute_array_mutation, execute_array_query, execute_bit_mutation,
-    execute_find_element, execute_getnum, execute_split_transaction, execute_strjoin,
+    execute_encode_to_uni_result, execute_find_element, execute_get_var, execute_getnum,
+    execute_index_by_name, execute_set_var, execute_split_transaction, execute_strjoin,
     execute_swap_transaction, execute_variable_fill, integer_argument, native_implicit_place_views,
     native_place_views, optional_index, validate_native_ready,
 };
@@ -1066,6 +1067,24 @@ impl Vm {
                             NativeReady::value(
                                 execute_getnum(self, fiber, &arguments).map_err(map_vm_error)?,
                             )
+                        } else if native_name == "__indexbyname" {
+                            NativeReady::value(
+                                execute_index_by_name(self, fiber, &arguments)
+                                    .map_err(map_vm_error)?,
+                            )
+                        } else if native_name == "setvar" {
+                            NativeReady::value(
+                                execute_set_var(self, fiber, &arguments).map_err(map_vm_error)?,
+                            )
+                        } else if matches!(native_name, "getvar" | "getvars") {
+                            NativeReady::value(
+                                execute_get_var(self, fiber, &arguments, native_name == "getvars")
+                                    .map_err(map_vm_error)?,
+                            )
+                        } else if native_name == "__encodetouni_result" {
+                            execute_encode_to_uni_result(self, fiber, &arguments)
+                                .map_err(map_vm_error)?;
+                            NativeReady::default()
                         } else if native_name == "strjoin" {
                             NativeReady::value(
                                 execute_strjoin(self, fiber, &arguments).map_err(map_vm_error)?,

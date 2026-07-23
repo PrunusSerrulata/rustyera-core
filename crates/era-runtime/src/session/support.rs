@@ -928,33 +928,8 @@ pub(super) fn make_bar(
     Ok(result)
 }
 
-/// Portable subset of System.Drawing's named-color table. CSS names cover the
-/// script-facing names used by real projects while keeping platform behavior out.
-#[allow(clippy::unreadable_literal)]
 pub(super) fn named_color(name: &str) -> Option<i64> {
-    Some(match name.to_ascii_lowercase().as_str() {
-        "black" => 0x000000,
-        "white" => 0xffffff,
-        "red" => 0xff0000,
-        "green" => 0x008000,
-        "blue" => 0x0000ff,
-        "yellow" => 0xffff00,
-        "gray" | "grey" => 0x808080,
-        "silver" => 0xc0c0c0,
-        "maroon" => 0x800000,
-        "purple" => 0x800080,
-        "fuchsia" | "magenta" => 0xff00ff,
-        "lime" => 0x00ff00,
-        "olive" => 0x808000,
-        "navy" => 0x000080,
-        "teal" => 0x008080,
-        "aqua" | "cyan" => 0x00ffff,
-        "orange" => 0xffa500,
-        "pink" => 0xffc0cb,
-        "brown" => 0xa52a2a,
-        "gold" => 0xffd700,
-        _ => return None,
-    })
+    erabasic_html::named_color(name).map(i64::from)
 }
 
 pub(super) fn string_array_writes(

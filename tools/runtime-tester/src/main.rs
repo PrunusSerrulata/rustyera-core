@@ -5,14 +5,16 @@ use std::{
 };
 
 use era_protocol::{
-    Channel, Envelope, ProtocolBytes, VersionRange, WireLimits, decode_envelope, encode_canonical,
-    encode_envelope,
+    Channel, Envelope, ProtocolBytes, VersionRange, WireLimits, decode_canonical, decode_envelope,
+    encode_canonical, encode_envelope,
 };
 use era_runtime::{RuntimeDriveBudget, RuntimeOptions, RuntimeSession};
 use era_runtime_protocol::{
-    ClientCapabilities, ClientHello, DiagnosticSeverity, FileCategory, FilePayload, FrontendInput,
-    FrontendIoError, FrontendIoErrorKind, InputIntent, InputModality, LOCAL_DATE_TIME_OPERATION,
-    LOCAL_DATE_TIME_OPERATION_VERSION, LocalDateTimeResponse, ProjectManifest,
+    ClientCapabilities, ClientHello, DiagnosticSeverity, DisplayLine, FileCategory, FilePayload,
+    FrontendInput, FrontendIoError, FrontendIoErrorKind, HTML_GET_PRINTED_STR_OPERATION,
+    HTML_GET_PRINTED_STR_OPERATION_VERSION, InputIntent, InputModality, LOCAL_DATE_TIME_OPERATION,
+    LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment, LocalDateTimeResponse, PresentationOperation,
+    ProjectManifest, ProjectionStringIndexRequest, ProjectionStringResponse,
     RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeMessage, SequenceAcknowledgement,
     ServiceCapability, ServiceKind, ServiceResponse, ServiceResult, ShutdownRequest, StartMode,
     StartRequest, StateExportKind, StateExportRequest, StateExportResult, StateImportBegin,
@@ -21,6 +23,32 @@ use era_runtime_protocol::{
 };
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_compiler::{ExecutionBinding, default_host_registry};
+
+fn decode_project_text(bytes: &[u8]) -> Option<String> {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Some(text.to_owned());
+    }
+    // The audit harness acts as a frontend: match Emuera's strict UTF-8-first
+    // detection and normalize its Windows-31J fallback before submission.
+    encoding_rs::SHIFT_JIS
+        .decode_without_bom_handling_and_without_replacement(bytes)
+        .map(|text| text.into_owned())
+}
+
+fn read_project_text(path: impl AsRef<Path>) -> std::io::Result<String> {
+    let path = path.as_ref();
+    let bytes = fs::read(path)?;
+    decode_project_text(&bytes).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} is neither valid UTF-8 nor valid Windows-31J",
+                path.display()
+            ),
+        )
+    })
+}
 
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -71,9 +99,7 @@ fn main() {
 
 fn audit_restore_saved() {
     let root = project_argument(2);
-    let mut paths = Vec::new();
-    collect(&root, &root, &mut paths);
-    paths.sort();
+    let paths = collect_project_files(&root);
     let mut files = Vec::new();
     for relative in paths {
         let lower = relative.to_ascii_lowercase();
@@ -92,7 +118,7 @@ fn audit_restore_saved() {
             relative_path: relative.clone(),
             category,
             payload: FilePayload::Utf8(
-                fs::read_to_string(root.join(relative)).expect("submitted project is UTF-8"),
+                read_project_text(root.join(relative)).expect("decode submitted project source"),
             ),
             content_hash: None,
         });
@@ -108,9 +134,7 @@ fn audit_restore_saved() {
 fn audit_analyzer(compile: bool) {
     let total_started = std::time::Instant::now();
     let root = project_argument(2);
-    let mut paths = Vec::new();
-    collect(&root, &root, &mut paths);
-    paths.sort();
+    let paths = collect_project_files(&root);
     let mut csv_files = erabasic_csv::ProjectFiles::default();
     let mut sources = Vec::new();
     for relative in paths {
@@ -118,20 +142,20 @@ fn audit_analyzer(compile: bool) {
         if !matches!(lower.rsplit('.').next(), Some("csv" | "erb" | "erh")) {
             continue;
         }
-        let text = fs::read_to_string(root.join(&relative)).unwrap();
-        let stripped = relative
-            .strip_prefix("CSV/")
-            .or_else(|| relative.strip_prefix("ERB/"))
-            .unwrap_or(&relative)
-            .to_owned();
+        let text = read_project_text(root.join(&relative)).unwrap();
         if lower.ends_with(".csv") {
+            let stripped = relative
+                .strip_prefix("CSV/")
+                .or_else(|| relative.strip_prefix("csv/"))
+                .unwrap_or(&relative)
+                .to_owned();
             csv_files.csv.push(erabasic_csv::FrontendFile {
                 relative_path: stripped,
                 payload: erabasic_csv::FilePayload::Utf8(text),
             });
         } else {
             sources.push(erabasic_analyzer::ProjectSource {
-                relative_path: stripped,
+                relative_path: relative,
                 payload: erabasic_analyzer::SourcePayload::Utf8(text),
             });
         }
@@ -251,12 +275,6 @@ fn audit_analyzer(compile: bool) {
                         * std::mem::size_of::<erabasic_bytecode::EncodedInstruction>()
                 })
                 .sum::<usize>();
-            let payload_capacity_bytes = artifact
-                .functions
-                .iter()
-                .flat_map(|function| &function.code)
-                .map(|instruction| instruction.payload.capacity())
-                .sum::<usize>();
             let mergeable_source_entries = artifact
                 .source_map
                 .entries
@@ -273,12 +291,11 @@ fn audit_analyzer(compile: bool) {
                 })
                 .count();
             println!(
-                "functions={} instructions={} instruction_payload_bytes={} instruction_capacity_bytes={} payload_capacity_bytes={} source_entries={} statement_fingerprints={} mergeable_source_entries={} size_source_entry={} size_encoded_instruction={} size_vm_value={}",
+                "functions={} instructions={} instruction_payload_bytes={} instruction_capacity_bytes={} source_entries={} statement_fingerprints={} mergeable_source_entries={} size_source_entry={} size_encoded_instruction={} size_vm_value={}",
                 artifact.functions.len(),
                 instruction_count,
                 instruction_payload_bytes,
                 instruction_capacity_bytes,
-                payload_capacity_bytes,
                 artifact.source_map.entries.len(),
                 artifact.source_map.statement_fingerprints.len(),
                 mergeable_source_entries,
@@ -360,14 +377,13 @@ fn audit_analyzer(compile: bool) {
 
 fn audit_csv() {
     let root = project_argument(2);
-    let mut paths = Vec::new();
-    collect(&root, &root, &mut paths);
+    let paths = collect_project_files(&root);
     let mut files = erabasic_csv::ProjectFiles::default();
     for relative in paths {
         if !relative.to_ascii_lowercase().ends_with(".csv") {
             continue;
         }
-        let content = fs::read_to_string(root.join(&relative)).unwrap();
+        let content = read_project_text(root.join(&relative)).unwrap();
         let path = relative
             .strip_prefix("CSV/")
             .unwrap_or(&relative)
@@ -415,7 +431,7 @@ fn audit_csv() {
 
 fn audit_parse_file() {
     let path = env::args().nth(2).expect("parse-file path");
-    let source = fs::read_to_string(&path).unwrap();
+    let source = read_project_text(&path).unwrap();
     let mut context = erabasic_parser::DefaultParserContext::default();
     let output = erabasic_parser::parse_erb(&source, &mut context);
     println!("parser_diagnostics={}", output.diagnostics.len());
@@ -466,9 +482,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         },
         PathBuf::from,
     );
-    let mut paths = Vec::new();
-    collect(&root, &root, &mut paths);
-    paths.sort();
+    let paths = collect_project_files(&root);
     let mut files = Vec::new();
     for relative in paths {
         let lower = relative.to_ascii_lowercase();
@@ -483,7 +497,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         } else {
             continue;
         };
-        let text = fs::read_to_string(root.join(&relative)).expect("minimal fixture is UTF-8");
+        let text = read_project_text(root.join(&relative)).expect("decode project source");
         let submitted_path = if keep_root_paths {
             relative.clone()
         } else {
@@ -540,11 +554,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                 column_cells: true,
                 separators: true,
                 available_fonts: Vec::new(),
-                services: vec![ServiceCapability {
-                    kind: ServiceKind::Clock,
-                    operation: LOCAL_DATE_TIME_OPERATION.into(),
-                    versions: VersionRange::exact(LOCAL_DATE_TIME_OPERATION_VERSION),
-                }],
+                services: audit_service_capabilities(),
                 storage: StorageCapabilities {
                     revisions: true,
                     atomic_replace: true,
@@ -700,6 +710,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
     let mut day_one_elapsed = None;
     let mut snapshot_count = 0_u64;
     let mut delta_count = 0_u64;
+    let mut presentation_lines = Vec::<DisplayLine>::new();
     for step in 0..20_000 {
         let drive_started = std::time::Instant::now();
         let drive_report = session
@@ -728,6 +739,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
             match &message {
                 RuntimeMessage::PresentationSnapshot(snapshot) => {
                     snapshot_count += 1;
+                    presentation_lines.clone_from(&snapshot.history.logical_lines);
                     if benchmark {
                         println!(
                             "snapshot step={step} elapsed_ms={} revision={} lines={} history={} sprites={} canvases={} redraw={}",
@@ -741,7 +753,10 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                         );
                     }
                 }
-                RuntimeMessage::PresentationDelta(_) => delta_count += 1,
+                RuntimeMessage::PresentationDelta(delta) => {
+                    delta_count += 1;
+                    apply_presentation_delta(&mut presentation_lines, &delta.operations);
+                }
                 _ => {}
             }
             match message {
@@ -767,6 +782,29 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                                     utc_offset_minutes: 480,
                                 })
                                 .expect("encode fixed audit time"),
+                            ),
+                        },
+                    }));
+                }
+                RuntimeMessage::ServiceRequest(request)
+                    if request.kind == ServiceKind::PresentationQuery
+                        && request.operation == HTML_GET_PRINTED_STR_OPERATION =>
+                {
+                    let query: ProjectionStringIndexRequest =
+                        decode_canonical(request.payload.as_slice())
+                            .expect("decode printed HTML audit query");
+                    followups.push(RuntimeMessage::ServiceResponse(ServiceResponse {
+                        request_id: request.request_id,
+                        result: ServiceResult::Ready {
+                            payload: ProtocolBytes::new(
+                                encode_canonical(&ProjectionStringResponse {
+                                    context: query.context,
+                                    value: headless_html_printed_str(
+                                        &presentation_lines,
+                                        query.index,
+                                    ),
+                                })
+                                .expect("encode printed HTML audit response"),
                             ),
                         },
                     }));
@@ -981,16 +1019,22 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
 
 fn report_rss(stage: &str) {
     let pid = std::process::id().to_string();
-    let output = Command::new("/bin/ps")
+    let Ok(output) = Command::new("/bin/ps")
         .args(["-o", "rss=", "-p", &pid])
         .output()
-        .expect("query current RSS");
-    let rss_kib = String::from_utf8(output.stdout)
-        .expect("ps RSS is UTF-8")
-        .trim()
-        .parse::<u64>()
-        .expect("ps RSS is numeric");
-    println!("rss_{stage}_bytes={}", rss_kib * 1024);
+    else {
+        println!("rss_{stage}_bytes=unavailable");
+        return;
+    };
+    let Ok(stdout) = String::from_utf8(output.stdout) else {
+        println!("rss_{stage}_bytes=unavailable");
+        return;
+    };
+    let Ok(rss_kib) = stdout.trim().parse::<u64>() else {
+        println!("rss_{stage}_bytes=unavailable");
+        return;
+    };
+    println!("rss_{stage}_bytes={}", rss_kib.saturating_mul(1024));
 }
 
 fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
@@ -1027,11 +1071,7 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
                 column_cells: true,
                 separators: true,
                 available_fonts: Vec::new(),
-                services: vec![ServiceCapability {
-                    kind: ServiceKind::Clock,
-                    operation: LOCAL_DATE_TIME_OPERATION.into(),
-                    versions: VersionRange::exact(LOCAL_DATE_TIME_OPERATION_VERSION),
-                }],
+                services: audit_service_capabilities(),
                 storage: StorageCapabilities {
                     revisions: true,
                     atomic_replace: true,
@@ -1124,6 +1164,7 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
 
     let mut sequence = 6;
     let mut last_text = String::new();
+    let mut presentation_lines = Vec::<DisplayLine>::new();
     for step in 0..2_000 {
         drive(&mut session);
         let mut followups = Vec::new();
@@ -1132,6 +1173,7 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
             match message {
                 RuntimeMessage::Fault(fault) => println!("restore_fault_step={step} {fault:?}"),
                 RuntimeMessage::PresentationSnapshot(snapshot) => {
+                    presentation_lines.clone_from(&snapshot.history.logical_lines);
                     last_text = snapshot
                         .history
                         .logical_lines
@@ -1143,6 +1185,9 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
                         .map(display_text)
                         .collect::<Vec<_>>()
                         .join(" | ");
+                }
+                RuntimeMessage::PresentationDelta(delta) => {
+                    apply_presentation_delta(&mut presentation_lines, &delta.operations);
                 }
                 RuntimeMessage::WaitChanged(WaitChange::Opened(wait)) => {
                     println!("restore_wait_step={step} {wait:?}");
@@ -1193,6 +1238,29 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
                         },
                     }));
                 }
+                RuntimeMessage::ServiceRequest(request)
+                    if request.kind == ServiceKind::PresentationQuery
+                        && request.operation == HTML_GET_PRINTED_STR_OPERATION =>
+                {
+                    let query: ProjectionStringIndexRequest =
+                        decode_canonical(request.payload.as_slice())
+                            .expect("decode restore printed HTML query");
+                    followups.push(RuntimeMessage::ServiceResponse(ServiceResponse {
+                        request_id: request.request_id,
+                        result: ServiceResult::Ready {
+                            payload: ProtocolBytes::new(
+                                encode_canonical(&ProjectionStringResponse {
+                                    context: query.context,
+                                    value: headless_html_printed_str(
+                                        &presentation_lines,
+                                        query.index,
+                                    ),
+                                })
+                                .expect("encode restore printed HTML response"),
+                            ),
+                        },
+                    }));
+                }
                 RuntimeMessage::ServiceRequest(request) => {
                     println!("restore_unhandled_service={request:?}");
                 }
@@ -1221,6 +1289,105 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
     drive(&mut session);
     println!("restore_shutdown_messages={:?}", drain(&mut session));
     println!("restore_shutdown_phase={:?}", session.phase());
+}
+
+fn audit_service_capabilities() -> Vec<ServiceCapability> {
+    vec![
+        ServiceCapability {
+            kind: ServiceKind::Clock,
+            operation: LOCAL_DATE_TIME_OPERATION.into(),
+            versions: VersionRange::exact(LOCAL_DATE_TIME_OPERATION_VERSION),
+        },
+        ServiceCapability {
+            kind: ServiceKind::PresentationQuery,
+            operation: HTML_GET_PRINTED_STR_OPERATION.into(),
+            versions: VersionRange::exact(HTML_GET_PRINTED_STR_OPERATION_VERSION),
+        },
+    ]
+}
+
+fn apply_presentation_delta(lines: &mut Vec<DisplayLine>, operations: &[PresentationOperation]) {
+    for operation in operations {
+        match operation {
+            PresentationOperation::AppendLine { line } => lines.push(line.clone()),
+            PresentationOperation::DeleteLines { count } => {
+                lines.truncate(lines.len().saturating_sub(*count as usize));
+            }
+            PresentationOperation::Clear => lines.clear(),
+            PresentationOperation::ReplaceLine { line_id, line } => {
+                if let Some(current) = lines.iter_mut().find(|current| current.line_id == *line_id)
+                {
+                    current.clone_from(line);
+                }
+            }
+            PresentationOperation::TrimLines { count } => {
+                let count = (*count as usize).min(lines.len());
+                lines.drain(..count);
+            }
+            PresentationOperation::SetTitle { .. }
+            | PresentationOperation::SetBackgrounds { .. }
+            | PresentationOperation::SetAudio { .. }
+            | PresentationOperation::SetInputWait { .. }
+            | PresentationOperation::SetSettings { .. }
+            | PresentationOperation::SetTooltip { .. }
+            | PresentationOperation::SetResources { .. }
+            | PresentationOperation::SetHtmlIsland { .. }
+            | PresentationOperation::SetRedraw { .. }
+            | PresentationOperation::SetButtonGeneration { .. } => {}
+        }
+    }
+}
+
+fn headless_html_printed_str(lines: &[DisplayLine], line_number: i64) -> String {
+    let Ok(line_number) = usize::try_from(line_number) else {
+        return String::new();
+    };
+    let mut logical_index = 0usize;
+    let mut selected = Vec::new();
+    for line in lines.iter().rev() {
+        if logical_index == line_number {
+            selected.push(line);
+        }
+        if line.logical_line_start {
+            logical_index += 1;
+        }
+        if logical_index > line_number {
+            break;
+        }
+    }
+    if selected.is_empty() {
+        return String::new();
+    }
+    selected.reverse();
+    let alignment = match selected[0].alignment {
+        LineAlignment::Left => "left",
+        LineAlignment::Center => "center",
+        LineAlignment::Right => "right",
+    };
+    let body = selected
+        .into_iter()
+        .map(|line| {
+            let text = line.runs.iter().map(display_text).collect::<String>();
+            escape_html(&text)
+        })
+        .collect::<Vec<_>>()
+        .join("<br>");
+    format!("<p align='{alignment}'><nobr>{body}</nobr></p>")
+}
+
+fn escape_html(source: &str) -> String {
+    let mut result = String::with_capacity(source.len());
+    for character in source.chars() {
+        match character {
+            '&' => result.push_str("&amp;"),
+            '>' => result.push_str("&gt;"),
+            '<' => result.push_str("&lt;"),
+            '"' => result.push_str("&quot;"),
+            '\'' => result.push_str("&apos;"),
+            _ => result.push(character),
+        }
+    }
+    result
 }
 
 fn display_text(run: &era_runtime_protocol::DisplayRun) -> String {
@@ -1258,6 +1425,41 @@ fn collect(root: &Path, current: &Path, out: &mut Vec<String>) {
             );
         }
     }
+}
+
+fn collect_project_files(root: &Path) -> Vec<String> {
+    let mut paths = Vec::new();
+    collect(root, root, &mut paths);
+    let has_csv_root = has_direct_child_directory(root, "CSV");
+    let has_erb_root = has_direct_child_directory(root, "ERB");
+    paths.retain(|relative| {
+        let lower = relative.to_ascii_lowercase();
+        let first = lower.split('/').next().unwrap_or_default();
+        if lower.ends_with(".csv") && has_csv_root {
+            return first == "csv";
+        }
+        if (lower.ends_with(".erb") || lower.ends_with(".erh")) && has_erb_root {
+            return first == "erb";
+        }
+        if lower.ends_with(".config") && has_csv_root && lower.contains('/') {
+            return first == "csv";
+        }
+        true
+    });
+    paths.sort();
+    paths
+}
+
+fn has_direct_child_directory(root: &Path, expected: &str) -> bool {
+    fs::read_dir(root).is_ok_and(|entries| {
+        entries.filter_map(Result::ok).any(|entry| {
+            entry.file_type().is_ok_and(|file_type| file_type.is_dir())
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(expected)
+        })
+    })
 }
 
 fn submit(session: &mut RuntimeSession, sequence: u64, message: RuntimeMessage) {
@@ -1320,5 +1522,112 @@ fn audit_wire_limits() -> WireLimits {
     WireLimits {
         maximum_envelope_bytes: 128 * 1024 * 1024,
         maximum_payload_bytes: 127 * 1024 * 1024,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{collect_project_files, decode_project_text, headless_html_printed_str};
+    use era_runtime_protocol::{Color, DisplayLine, DisplayRun, LineAlignment, TextStyle};
+    use std::fs;
+
+    fn text_line(
+        line_id: u64,
+        logical_line_start: bool,
+        alignment: LineAlignment,
+        text: &str,
+    ) -> DisplayLine {
+        DisplayLine {
+            line_id,
+            temporary: false,
+            logical_line_start,
+            line_end: true,
+            alignment,
+            runs: vec![DisplayRun::Text {
+                text: text.into(),
+                style: TextStyle {
+                    foreground: Color::default(),
+                    background: None,
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                    strikeout: false,
+                    font_family: None,
+                    font_millipoints: 12_000,
+                },
+                system_text: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn project_text_decoder_prefers_utf8_and_strips_its_bom() {
+        assert_eq!(
+            decode_project_text(b"\xEF\xBB\xBFPRINTL \xE4\xBD\xA0\xE5\xA5\xBD").as_deref(),
+            Some("PRINTL 你好")
+        );
+    }
+
+    #[test]
+    fn project_text_decoder_falls_back_to_windows_31j() {
+        let source = "サブディレクトリを検索する:YES";
+        let (encoded, _, had_errors) = encoding_rs::SHIFT_JIS.encode(source);
+        assert!(!had_errors);
+        assert!(std::str::from_utf8(&encoded).is_err());
+        assert_eq!(decode_project_text(&encoded).as_deref(), Some(source));
+    }
+
+    #[test]
+    fn project_text_decoder_rejects_invalid_windows_31j() {
+        assert_eq!(decode_project_text(b"\x81"), None);
+    }
+
+    #[test]
+    fn project_collection_ignores_uninstalled_sources_beside_canonical_roots() {
+        let root = std::env::temp_dir().join(format!(
+            "rustyera-runtime-tester-project-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("CSV")).unwrap();
+        fs::create_dir_all(root.join("ERB/GUIDE")).unwrap();
+        fs::create_dir_all(root.join("GUIDE")).unwrap();
+        fs::create_dir_all(root.join("patch/ERB")).unwrap();
+        fs::write(root.join("CSV/GAMEBASE.CSV"), "コード,1\n").unwrap();
+        fs::write(root.join("ERB/GUIDE/main.erb"), "@SYSTEM_TITLE\n").unwrap();
+        fs::write(root.join("GUIDE/main.erb"), "@UNINSTALLED\n").unwrap();
+        fs::write(root.join("patch/ERB/optional.erb"), "@UNINSTALLED\n").unwrap();
+        fs::write(
+            root.join("emuera.config"),
+            "描画インターフェース:TEXTRENDERER",
+        )
+        .unwrap();
+
+        let paths = collect_project_files(&root);
+
+        assert_eq!(
+            paths,
+            ["CSV/GAMEBASE.CSV", "ERB/GUIDE/main.erb", "emuera.config"]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn headless_html_query_groups_the_newest_logical_line() {
+        let lines = vec![
+            text_line(1, true, LineAlignment::Left, "old"),
+            text_line(2, true, LineAlignment::Center, "A&B"),
+            text_line(3, false, LineAlignment::Center, "<tail>"),
+        ];
+
+        assert_eq!(
+            headless_html_printed_str(&lines, 0),
+            "<p align='center'><nobr>A&amp;B<br>&lt;tail&gt;</nobr></p>"
+        );
+        assert_eq!(
+            headless_html_printed_str(&lines, 1),
+            "<p align='left'><nobr>old</nobr></p>"
+        );
+        assert_eq!(headless_html_printed_str(&lines, 2), "");
     }
 }
