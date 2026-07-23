@@ -1,4 +1,9 @@
-use serde::{Deserialize, Serialize};
+use std::{fmt, ops::Deref};
+
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{SeqAccess, Visitor},
+};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -88,10 +93,178 @@ impl TryFrom<u16> for Opcode {
     }
 }
 
+const INLINE_PAYLOAD_BYTES: usize = 19;
+
+/// Compact instruction operand storage.
+///
+/// `EraBasic`'s common encoded operands are at most 19 bytes. Keeping those bytes in the
+/// instruction avoids millions of individual heap allocations when a persisted artifact is
+/// deserialized, while the custom serde representation remains the same byte sequence used by
+/// existing containers and artifact identities.
+#[derive(Clone, Eq, PartialEq)]
+pub struct InstructionPayload(InstructionPayloadStorage);
+
+#[derive(Clone, Eq, PartialEq)]
+enum InstructionPayloadStorage {
+    Inline {
+        bytes: [u8; INLINE_PAYLOAD_BYTES],
+        length: u8,
+    },
+    Heap(Box<[u8]>),
+}
+
+impl InstructionPayload {
+    #[must_use]
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        match &self.0 {
+            InstructionPayloadStorage::Inline { bytes, length } => &bytes[..usize::from(*length)],
+            InstructionPayloadStorage::Heap(bytes) => bytes,
+        }
+    }
+
+    fn from_slice(value: &[u8]) -> Self {
+        if value.len() <= INLINE_PAYLOAD_BYTES {
+            let mut bytes = [0; INLINE_PAYLOAD_BYTES];
+            bytes[..value.len()].copy_from_slice(value);
+            Self(InstructionPayloadStorage::Inline {
+                bytes,
+                length: u8::try_from(value.len()).expect("inline payload length fits in u8"),
+            })
+        } else {
+            Self(InstructionPayloadStorage::Heap(value.into()))
+        }
+    }
+}
+
+impl From<Vec<u8>> for InstructionPayload {
+    fn from(value: Vec<u8>) -> Self {
+        if value.len() <= INLINE_PAYLOAD_BYTES {
+            let mut bytes = [0; INLINE_PAYLOAD_BYTES];
+            bytes[..value.len()].copy_from_slice(&value);
+            Self(InstructionPayloadStorage::Inline {
+                bytes,
+                length: u8::try_from(value.len()).expect("inline payload length fits in u8"),
+            })
+        } else {
+            Self(InstructionPayloadStorage::Heap(value.into_boxed_slice()))
+        }
+    }
+}
+
+impl Default for InstructionPayload {
+    fn default() -> Self {
+        Self::from(Vec::new())
+    }
+}
+
+impl Deref for InstructionPayload {
+    type Target = [u8];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl AsRef<[u8]> for InstructionPayload {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl fmt::Debug for InstructionPayload {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_list().entries(self.as_slice()).finish()
+    }
+}
+
+impl Serialize for InstructionPayload {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(self.as_slice())
+    }
+}
+
+impl<'de> Deserialize<'de> for InstructionPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct PayloadVisitor;
+
+        impl<'de> Visitor<'de> for PayloadVisitor {
+            type Value = InstructionPayload;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an instruction operand byte sequence")
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut inline = [0; INLINE_PAYLOAD_BYTES];
+                let mut length = 0;
+                while let Some(byte) = sequence.next_element()? {
+                    if length < INLINE_PAYLOAD_BYTES {
+                        inline[length] = byte;
+                        length += 1;
+                        continue;
+                    }
+                    let mut heap = Vec::with_capacity(
+                        sequence
+                            .size_hint()
+                            .map_or(length + 1, |remaining| length + remaining + 1),
+                    );
+                    heap.extend_from_slice(&inline);
+                    heap.push(byte);
+                    while let Some(byte) = sequence.next_element()? {
+                        heap.push(byte);
+                    }
+                    return Ok(InstructionPayload(InstructionPayloadStorage::Heap(
+                        heap.into_boxed_slice(),
+                    )));
+                }
+                Ok(InstructionPayload(InstructionPayloadStorage::Inline {
+                    bytes: inline,
+                    length: u8::try_from(length).expect("inline payload length fits in u8"),
+                }))
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(InstructionPayload::from_slice(value))
+            }
+
+            fn visit_borrowed_bytes<E>(self, value: &'de [u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(InstructionPayload::from_slice(value))
+            }
+
+            fn visit_byte_buf<E>(self, value: Vec<u8>) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(InstructionPayload::from(value))
+            }
+        }
+
+        deserializer.deserialize_bytes(PayloadVisitor)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EncodedInstruction {
     pub opcode: u16,
-    pub payload: Vec<u8>,
+    pub payload: InstructionPayload,
 }
 
 impl EncodedInstruction {
@@ -99,7 +272,7 @@ impl EncodedInstruction {
     pub fn new(opcode: Opcode, payload: Vec<u8>) -> Self {
         Self {
             opcode: opcode as u16,
-            payload,
+            payload: payload.into(),
         }
     }
 
@@ -232,5 +405,38 @@ pub mod opcode {
             3 => BytecodeType::StringPlace,
             _ => return None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SymbolKey;
+
+    #[test]
+    fn compact_payload_preserves_the_existing_wire_shape() {
+        let short_json =
+            r#"{"opcode":3,"payload":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18]}"#;
+        let short: EncodedInstruction = serde_json::from_str(short_json).unwrap();
+        assert_eq!(short.payload.as_slice(), &(0_u8..19).collect::<Vec<_>>());
+        assert_eq!(serde_json::to_string(&short).unwrap(), short_json);
+
+        let long_bytes = (0_u8..32).collect::<Vec<_>>();
+        let long = EncodedInstruction::new(Opcode::Trap, long_bytes.clone());
+        let round_trip: EncodedInstruction =
+            serde_json::from_slice(&serde_json::to_vec(&long).unwrap()).unwrap();
+        assert_eq!(round_trip.payload.as_slice(), long_bytes);
+    }
+
+    #[test]
+    fn common_instruction_payloads_remain_inline_sized() {
+        assert!(std::mem::size_of::<InstructionPayload>() <= 24);
+        assert!(std::mem::size_of::<EncodedInstruction>() <= 32);
+        assert_eq!(
+            opcode::variable(Opcode::LoadVariable, SymbolKey([7; 16]), 1, 0)
+                .payload
+                .len(),
+            INLINE_PAYLOAD_BYTES
+        );
     }
 }

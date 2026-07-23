@@ -7,6 +7,7 @@ use erabasic_bytecode::{
     HostImport, ISA_VERSION, ImportKind, NATIVE_ABI_VERSION, NativeImport, Opcode, SymbolKey,
     UnvalidatedArtifact, VM_ABI_VERSION, opcode,
 };
+use rayon::prelude::*;
 
 use crate::{ValidationCode, ValidationDiagnostic, ValidationLimits, ValidationReport};
 
@@ -538,28 +539,39 @@ fn validate_source_map(artifact: &BytecodeArtifact, diagnostics: &mut Vec<Valida
             )
         })
         .collect();
-    for entry in &artifact.source_map.entries {
-        let valid = functions
-            .get(&entry.function)
-            .is_some_and(|length| entry.code_start < entry.code_end && entry.code_end <= *length)
-            && artifact
-                .source_map
-                .sources
-                .get(entry.source_index as usize)
-                .is_some_and(|source| {
-                    entry.byte_start <= entry.byte_end && entry.byte_end <= source.byte_len
-                })
-            && artifact
-                .source_map
-                .statement_fingerprints
-                .get(entry.statement_fingerprint as usize)
-                .is_some();
-        if !valid {
-            diagnostics.push(ValidationDiagnostic::project(
-                ValidationCode::InvalidSourceMap,
-                "source-map entry is outside its function or source",
-            ));
-        }
+    let entry_diagnostics = artifact
+        .source_map
+        .entries
+        .par_chunks(65_536)
+        .map(|entries| {
+            let mut chunk_diagnostics = Vec::new();
+            for entry in entries {
+                let valid = functions.get(&entry.function).is_some_and(|length| {
+                    entry.code_start < entry.code_end && entry.code_end <= *length
+                }) && artifact
+                    .source_map
+                    .sources
+                    .get(entry.source_index as usize)
+                    .is_some_and(|source| {
+                        entry.byte_start <= entry.byte_end && entry.byte_end <= source.byte_len
+                    })
+                    && artifact
+                        .source_map
+                        .statement_fingerprints
+                        .get(entry.statement_fingerprint as usize)
+                        .is_some();
+                if !valid {
+                    chunk_diagnostics.push(ValidationDiagnostic::project(
+                        ValidationCode::InvalidSourceMap,
+                        "source-map entry is outside its function or source",
+                    ));
+                }
+            }
+            chunk_diagnostics
+        })
+        .collect::<Vec<_>>();
+    for mut chunk in entry_diagnostics {
+        diagnostics.append(&mut chunk);
     }
 }
 
@@ -588,16 +600,25 @@ fn validate_functions(
         .iter()
         .map(|import| (import.import.key, &import.import))
         .collect();
-    for function in &artifact.functions {
-        validate_function(
-            function,
-            &globals,
-            &functions,
-            &native,
-            &host,
-            context,
-            diagnostics,
-        );
+    let function_diagnostics = artifact
+        .functions
+        .par_iter()
+        .map(|function| {
+            let mut diagnostics = Vec::new();
+            validate_function(
+                function,
+                &globals,
+                &functions,
+                &native,
+                &host,
+                context,
+                &mut diagnostics,
+            );
+            diagnostics
+        })
+        .collect::<Vec<_>>();
+    for mut function in function_diagnostics {
+        diagnostics.append(&mut function);
     }
 }
 

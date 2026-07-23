@@ -1,6 +1,7 @@
 use erabasic_bytecode::{
-    ArtifactManifest, BytecodeArtifact, DecodeError, DecodeLimits, Digest, PatchError, SourceMap,
-    SourceRecord, SymbolKey, apply_patch, create_patch, decode_artifact, encode_artifact,
+    ArtifactManifest, BytecodeArtifact, BytecodeFunction, BytecodeFunctionKind, DecodeError,
+    DecodeLimits, Digest, PatchError, SourceMap, SourceMapEntry, SourceRecord, SymbolKey,
+    apply_patch, create_patch, decode_artifact, encode_artifact, opcode,
 };
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
 
@@ -58,6 +59,51 @@ fn symbol_keys_keep_the_canonical_lowercase_hex_json_shape() {
     let encoded = serde_json::to_string(&key).expect("symbol key should serialize");
     assert_eq!(encoded, "\"00010f102a3b4c5d6e7f8091a2b3c4ff\"");
     assert_eq!(serde_json::from_str::<SymbolKey>(&encoded).unwrap(), key);
+}
+
+#[test]
+fn binary_identity_covers_instruction_and_exact_source_origin_contents() {
+    let mut with_instruction = artifact();
+    let function = SymbolKey::derive("binary-identity-test", b"function");
+    with_instruction.functions.push(BytecodeFunction {
+        key: function,
+        name: "IDENTITY".into(),
+        kind: BytecodeFunctionKind::Normal,
+        parameters: Vec::new(),
+        result: None,
+        labels: Vec::new(),
+        imports: Vec::new(),
+        code: vec![opcode::push_integer(1)],
+        max_stack: 1,
+    });
+    with_instruction.refresh_ids().unwrap();
+    let mut changed_instruction = with_instruction.clone();
+    changed_instruction.functions[0].code[0] = opcode::push_integer(2);
+    changed_instruction.refresh_ids().unwrap();
+    assert_ne!(
+        changed_instruction.manifest.program_version.execution_id,
+        with_instruction.manifest.program_version.execution_id
+    );
+
+    let mut no_origin = with_instruction;
+    no_origin.source_map.entries.push(SourceMapEntry {
+        function,
+        code_start: 0,
+        code_end: 1,
+        byte_start: 2,
+        byte_end: 3,
+        statement_fingerprint: 0,
+        origin_chain: None,
+        source_index: 0,
+    });
+    no_origin.refresh_ids().unwrap();
+    let mut empty_origin = no_origin.clone();
+    empty_origin.source_map.entries[0].origin_chain = Some(Box::default());
+    empty_origin.refresh_ids().unwrap();
+    assert_ne!(
+        empty_origin.manifest.artifact_id,
+        no_origin.manifest.artifact_id
+    );
 }
 
 #[test]

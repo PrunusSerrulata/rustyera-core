@@ -321,13 +321,15 @@ pub(crate) fn lower_function(
         builder.code[instruction].payload = u32::try_from(*target_index)
             .unwrap_or(u32::MAX)
             .to_le_bytes()
-            .to_vec();
+            .to_vec()
+            .into();
     }
     for instruction in pending_function_end_jumps {
         builder.code[instruction].payload = u32::try_from(function_end)
             .unwrap_or(u32::MAX)
             .to_le_bytes()
-            .to_vec();
+            .to_vec()
+            .into();
     }
 
     // Source-map construction used to search and serialize the whole statement

@@ -8,6 +8,7 @@ license.workspace = true
 erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-data = { path = "../erabasic-data" }
 erabasic-hir = { path = "../erabasic-hir" }
+rayon.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

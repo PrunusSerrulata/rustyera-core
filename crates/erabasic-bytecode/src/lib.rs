@@ -27,7 +27,7 @@ pub use host::{
     OperationState, OperationWaitPolicy, RuntimeImport, RuntimeImportKind, TransactionPolicy,
 };
 pub use ids::{Digest, SymbolKey};
-pub use isa::{BytecodeType, EncodedInstruction, Opcode, opcode};
+pub use isa::{BytecodeType, EncodedInstruction, InstructionPayload, Opcode, opcode};
 pub use patch::{BytecodePatch, PatchError, apply_patch, create_patch};
 pub use source_map::{ResolvedSourceLocation, SourceMap, SourceMapEntry, SourceRecord};
 pub use version::{
