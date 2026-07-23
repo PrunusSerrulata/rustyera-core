@@ -1509,7 +1509,7 @@ fn linecount_drives_clearline_and_bounded_padding_loops() {
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
                         include_str!(
-                            "../../../../tools/emuera-reference-cli/tests/fixture/erb/linecount.erb"
+                            "../../../../reference/emuera.em/emuera-reference-cli/tests/fixture/erb/linecount.erb"
                         )
                         .into(),
                     ),
@@ -1951,7 +1951,7 @@ fn printform_and_printc_family_preserve_reference_semantics() {
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
                         include_str!(
-                            "../../../../tools/emuera-reference-cli/tests/fixture/erb/print-family.erb"
+                            "../../../../reference/emuera.em/emuera-reference-cli/tests/fixture/erb/print-family.erb"
                         )
                         .into(),
                     ),
@@ -2248,7 +2248,9 @@ fn restart_redraws_string_and_integer_button_menus_in_the_current_function() {
     drain(&mut session);
     let source = concat!(
         "@SYSTEM_TITLE\nCALL ORACLE_RESTART_FLOW\nWAIT\nRETURN\n",
-        include_str!("../../../../tools/emuera-reference-cli/tests/fixture/erb/restart.erb")
+        include_str!(
+            "../../../../reference/emuera.em/emuera-reference-cli/tests/fixture/erb/restart.erb"
+        )
     );
     submit(
         &mut session,
@@ -2468,7 +2470,7 @@ fn inputs_accepts_an_automatic_button_from_the_pending_print_buffer() {
                     concat!(
                         "@SYSTEM_TITLE\nCALL ORACLE_PENDING_AUTO_BUTTON\nWAIT\nRETURN\n",
                         include_str!(
-                            "../../../../tools/emuera-reference-cli/tests/fixture/erb/restart.erb"
+                            "../../../../reference/emuera.em/emuera-reference-cli/tests/fixture/erb/restart.erb"
                         )
                     )
                     .into(),

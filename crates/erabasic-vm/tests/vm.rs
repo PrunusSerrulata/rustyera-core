@@ -2410,7 +2410,7 @@ fn dynamic_calls_apply_omission_conversion_and_event_compatibility_options() {
 #[test]
 fn compatibility_rest_matches_the_reference_oracle_fixture() {
     let artifact = compile_source(include_str!(
-        "../../../tools/emuera-reference-cli/tests/fixture/erb/oracle.erb"
+        "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/erb/oracle.erb"
     ));
     let entry = artifact
         .functions

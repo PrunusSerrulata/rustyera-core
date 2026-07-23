@@ -40,7 +40,8 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
   `unsafe` 指针边界的 C ABI 动态库实现。
 - `reference/emuera.em`：固定版本的 C# Emuera 参考实现。
 - `reference/eraTW`：真实游戏eraTW中使用的完整脚本集，包含csv、erh和erb。
-- `tools/emuera-reference-cli`：绕过 UI 调用参考实现的 NDJSON 测试工具及平台脚本。
+- `reference/emuera.em/emuera-reference-cli`：绕过 UI 调用参考实现的 NDJSON 测试工具；
+  平台测试脚本位于 `tools/`。
 
 保持各 crate 的职责边界。较大的实现应合理拆分为 module，不要堆积至单个源文件中。
 公共类型应尽量由 crate 根模块稳定地重新导出。
@@ -99,7 +100,7 @@ WinForms/GDI 的实现细节引入 runtime。
   结果而改变 parser、数据加载、验证、执行或状态转移规则。正常模式必须继续调用
   原有逻辑；headless 分支只能隔离 UI、暴露只读状态或施加测试安全限制。
 - 所有 `reference/emuera.em` 内的 oracle 相关修改都必须逐文件、逐目的追加到
-  `tools/emuera-reference-cli/REFERENCE_CHANGES.md`，并在最终交付中另设清单报告。
+  `reference/emuera.em/emuera-reference-cli/REFERENCE_CHANGES.md`，并在最终交付中另设清单报告。
   不得只用“修复了 reference CLI”概括参考目录改动。
 - 不要更新参考实现版本或 commit，除非用户明确要求。兼容基准固定为项目文档中
   记录的 commit。
@@ -165,7 +166,7 @@ C# reference CLI 差分测试；其他语言、前端或工具的改动仍应由
 在 Windows 上运行：
 
 ```powershell
-tools/emuera-reference-cli/tests/protocol-smoke.ps1
+tools/protocol-smoke.ps1
 ```
 
 ### macOS
@@ -173,7 +174,7 @@ tools/emuera-reference-cli/tests/protocol-smoke.ps1
 在 macOS 上运行：
 
 ```sh
-tools/emuera-reference-cli/test-macos-wine.sh
+tools/test-macos-wine.sh
 ```
 
 macOS 脚本使用项目内固定的 `.wine-prefix/emuera-reference-cli`，并将临时请求、

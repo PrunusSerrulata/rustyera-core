@@ -586,7 +586,9 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             project_data: empty_project(),
             sources: vec![source(
                 "oracle.erb",
-                include_str!("../../../tools/emuera-reference-cli/tests/fixture/erb/oracle.erb"),
+                include_str!(
+                    "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/erb/oracle.erb"
+                ),
             )],
         },
         &AnalyzerOptions::analysis_mode(),

@@ -5,19 +5,20 @@ set -euo pipefail
 # process. The fixed prefix keeps Wine initialization and the installed state
 # stable between differential-test runs.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PROJECT="$SCRIPT_DIR/Emuera.ReferenceCli.csproj"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CLI_DIR="$REPO_ROOT/reference/emuera.em/emuera-reference-cli"
+PROJECT="$CLI_DIR/Emuera.ReferenceCli.csproj"
 WINE_PREFIX="$REPO_ROOT/.wine-prefix/emuera-reference-cli"
 WORK_DIR="$REPO_ROOT/.wine-tmp/emuera-reference-cli"
-PUBLISH_DIR="$SCRIPT_DIR/bin/x64/Debug-NAudio/net10.0-windows/win-x64/publish"
+PUBLISH_DIR="$CLI_DIR/bin/x64/Debug-NAudio/net10.0-windows/win-x64/publish"
 EXECUTABLE="$PUBLISH_DIR/Emuera.ReferenceCli.exe"
 OUTPUT_FILE="${1:-$WORK_DIR/wine-smoke.ndjson}"
 REQUEST_FILE="$WORK_DIR/requests.ndjson"
 STDERR_FILE="$WORK_DIR/wine-stderr.log"
-FIXTURE_SOURCE_DIR="$SCRIPT_DIR/tests/fixture"
-SYSTEM_FIXTURE_SOURCE_DIR="$SCRIPT_DIR/tests/fixture-system"
-ONEINPUT_FIXTURE_SOURCE_DIR="$SCRIPT_DIR/tests/fixture-oneinput"
-ONEINPUT_LONG_FIXTURE_SOURCE_DIR="$SCRIPT_DIR/tests/fixture-oneinput-long"
+FIXTURE_SOURCE_DIR="$CLI_DIR/tests/fixture"
+SYSTEM_FIXTURE_SOURCE_DIR="$CLI_DIR/tests/fixture-system"
+ONEINPUT_FIXTURE_SOURCE_DIR="$CLI_DIR/tests/fixture-oneinput"
+ONEINPUT_LONG_FIXTURE_SOURCE_DIR="$CLI_DIR/tests/fixture-oneinput-long"
 ORACLE_TIMEOUT_SECONDS="${EMUERA_REFERENCE_TIMEOUT_SECONDS:-30}"
 
 for command_name in dotnet wine winepath jq perl; do

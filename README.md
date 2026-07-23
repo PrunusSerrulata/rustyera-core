@@ -191,16 +191,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 Compatibility work also uses the pinned C# implementation through the
-persistent NDJSON [reference CLI](tools/emuera-reference-cli/README.md):
+persistent NDJSON [reference CLI](reference/emuera.em/emuera-reference-cli/README.md):
 
 ```powershell
 # Windows
-tools/emuera-reference-cli/tests/protocol-smoke.ps1
+tools/protocol-smoke.ps1
 ```
 
 ```sh
 # macOS through the repository Wine prefix
-tools/emuera-reference-cli/test-macos-wine.sh
+tools/test-macos-wine.sh
 ```
 
 A platform smoke test proves only that the oracle works. Differential tests
@@ -214,7 +214,7 @@ be repaired instead of skipping the oracle comparison. A repair may add a
 minimal headless/reference-only hook under `reference/emuera.em` when necessary,
 but it must not change the normal game's backend execution semantics. Every
 reference-tree modification must be listed separately in both the task handoff
-and [the reference CLI change log](tools/emuera-reference-cli/REFERENCE_CHANGES.md).
+and [the reference CLI change log](reference/emuera.em/emuera-reference-cli/REFERENCE_CHANGES.md).
 
 Detailed contributor rules and the required test/reporting workflow are in
 [AGENTS.md](AGENTS.md).
