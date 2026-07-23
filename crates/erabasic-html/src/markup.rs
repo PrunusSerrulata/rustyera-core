@@ -886,26 +886,7 @@ fn parse_color(value: &str) -> Result<u32, ()> {
         let color = u32::from_str_radix(hex, 16).map_err(|_| ())?;
         return (color <= 0x00ff_ffff).then_some(color).ok_or(());
     }
-    let color = match value.to_ascii_lowercase().as_str() {
-        "black" => 0x0000_0000,
-        "white" => 0x00ff_ffff,
-        "red" => 0x00ff_0000,
-        "green" => 0x0000_8000,
-        "blue" => 0x0000_00ff,
-        "yellow" => 0x00ff_ff00,
-        "gray" | "grey" => 0x0080_8080,
-        "silver" => 0x00c0_c0c0,
-        "maroon" => 0x0080_0000,
-        "purple" => 0x0080_0080,
-        "fuchsia" => 0x00ff_00ff,
-        "lime" => 0x0000_ff00,
-        "olive" => 0x0080_8000,
-        "navy" => 0x0000_0080,
-        "teal" => 0x0000_8080,
-        "aqua" => 0x0000_ffff,
-        _ => return Err(()),
-    };
-    Ok(color)
+    crate::named_color(value).ok_or(())
 }
 
 fn decode_entities(source: &str, base: usize) -> Result<String, HtmlError> {

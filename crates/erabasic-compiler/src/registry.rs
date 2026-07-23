@@ -81,6 +81,14 @@ pub fn default_host_registry() -> HostRegistry {
         };
         registry.bindings.entry(name).or_insert(binding);
     }
+    registry.register_execution(
+        "__INDEXBYNAME",
+        ExecutionBinding::Native(native_contract("__INDEXBYNAME")),
+    );
+    registry.register_execution(
+        "__ENCODETOUNI_RESULT",
+        ExecutionBinding::Native(native_contract("__ENCODETOUNI_RESULT")),
+    );
 
     register_hosts(
         &mut registry,
@@ -170,11 +178,13 @@ const IMPLEMENTED_NATIVE_NAMES: &[&str] = &[
     "bitcount",
     "strlen",
     "strlenu",
+    "strform",
     "toint",
     "isnumeric",
     "unicode",
     "convert",
     "color_fromrgb",
+    "color_fromname",
     "max",
     "min",
     "limit",
@@ -213,6 +223,9 @@ const IMPLEMENTED_NATIVE_NAMES: &[&str] = &[
     "arrayshift",
     "arraysort",
     "arraycopy",
+    "getvar",
+    "getvars",
+    "setvar",
     "varset",
     "cvarset",
     "arraymsort",
@@ -668,6 +681,7 @@ fn native_contract(name: &str) -> OperationContract {
         name.as_str(),
         "rand" | "randomize" | "initrand" | "dumprand"
     );
+    let variable_read = matches!(name.as_str(), "getvar" | "getvars");
     let variable_mutation = matches!(
         name.as_str(),
         "swap"
@@ -676,6 +690,7 @@ fn native_contract(name: &str) -> OperationContract {
             | "arrayshift"
             | "arraysort"
             | "arraycopy"
+            | "setvar"
             | "varset"
             | "cvarset"
             | "arraymsort"
@@ -696,12 +711,13 @@ fn native_contract(name: &str) -> OperationContract {
             | "clearbit"
             | "invertbit"
             | "split"
+            | "__encodetouni_result"
     );
     let mutable = structured || random || variable_mutation;
     OperationContract {
         state: if structured || random {
             OperationState::Native
-        } else if variable_mutation {
+        } else if variable_mutation || variable_read {
             OperationState::Vm
         } else {
             OperationState::Pure

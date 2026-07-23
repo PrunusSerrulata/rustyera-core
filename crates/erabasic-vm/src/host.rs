@@ -226,11 +226,13 @@ impl NativeServiceRegistry {
                     | "bitcount"
                     | "strlen"
                     | "strlenu"
+                    | "strform"
                     | "toint"
                     | "isnumeric"
                     | "unicode"
                     | "convert"
                     | "color_fromrgb"
+                    | "color_fromname"
                     | "max"
                     | "min"
                     | "limit"
@@ -517,11 +519,13 @@ pub fn evaluate_pure_native(name: &str, arguments: Vec<VmValue>) -> Result<VmVal
             | "bitcount"
             | "strlen"
             | "strlenu"
+            | "strform"
             | "toint"
             | "isnumeric"
             | "unicode"
             | "convert"
             | "color_fromrgb"
+            | "color_fromname"
             | "max"
             | "min"
             | "limit"
@@ -642,6 +646,16 @@ impl NativeService for CoreNative {
                     i64::try_from(string(0)?.encode_utf16().count()).unwrap_or(i64::MAX),
                 )
             }
+            "strform" => {
+                let value = string(0)?;
+                if value.contains(['%', '{', '}', '\\']) {
+                    return Err(
+                        "STRFORM runtime expansion is not yet supported for FORM metacharacters"
+                            .into(),
+                    );
+                }
+                VmValue::String(value.into())
+            }
             "toint" => VmValue::Integer(parse_era_numeric(string(0)?, false)?.unwrap_or(0)),
             "isnumeric" => {
                 VmValue::Integer(i64::from(parse_era_numeric(string(0)?, true)?.is_some()))
@@ -662,6 +676,13 @@ impl NativeService for CoreNative {
                     return Err("COLOR_FROMRGB channels must be between 0 and 255".into());
                 }
                 VmValue::Integer((channels[0] << 16) | (channels[1] << 8) | channels[2])
+            }
+            "color_fromname" => {
+                let name = string(0)?;
+                if name.eq_ignore_ascii_case("transparent") {
+                    return Err("COLOR_FROMNAME does not accept Transparent".into());
+                }
+                VmValue::Integer(erabasic_html::named_color(name).map_or(-1, i64::from))
             }
             "unicode" => {
                 let value = u32::try_from(integer(0)?)
@@ -711,16 +732,28 @@ impl NativeService for CoreNative {
                 (integer(1)?..=integer(2)?).contains(&integer(0)?),
             )),
             "tostr" => VmValue::String(integer(0)?.to_string()),
-            "substring" => VmValue::String(substring_utf8_bytes(
-                string(0)?,
-                integer(1)?,
-                args.get(2).map(|_| integer(2)).transpose()?,
-            )?),
-            "substringu" => VmValue::String(substring_scalars(
-                string(0)?,
-                integer(1)?,
-                args.get(2).map(|_| integer(2)).transpose()?,
-            )?),
+            "substring" => {
+                let start = match args.get(1) {
+                    None | Some(VmValue::Integer(i64::MIN)) => 0,
+                    Some(_) => integer(1)?,
+                };
+                let length = match args.get(2) {
+                    None | Some(VmValue::Integer(i64::MIN)) => None,
+                    Some(_) => Some(integer(2)?),
+                };
+                VmValue::String(substring_utf8_bytes(string(0)?, start, length)?)
+            }
+            "substringu" => {
+                let start = match args.get(1) {
+                    None | Some(VmValue::Integer(i64::MIN)) => 0,
+                    Some(_) => integer(1)?,
+                };
+                let length = match args.get(2) {
+                    None | Some(VmValue::Integer(i64::MIN)) => None,
+                    Some(_) => Some(integer(2)?),
+                };
+                VmValue::String(substring_scalars(string(0)?, start, length)?)
+            }
             "strfind" => {
                 let start = usize::try_from(integer(2).unwrap_or(0)).unwrap_or(usize::MAX);
                 let haystack = string(0)?;
@@ -1249,6 +1282,18 @@ mod tests {
         assert_eq!(substring_utf8_bytes("A界B", 1, Some(1)), Ok("界".into()));
         assert_eq!(substring_utf8_bytes("A界B", 2, Some(1)), Ok("B".into()));
         assert_eq!(substring_scalars("A界B", 1, Some(1)), Ok("界".into()));
+    }
+
+    #[test]
+    fn strform_preserves_plain_runtime_text_and_rejects_unimplemented_expansion() {
+        assert_eq!(
+            evaluate_pure_native("STRFORM", vec![VmValue::String("plain text".into())]),
+            Ok(VmValue::String("plain text".into()))
+        );
+        assert_eq!(
+            evaluate_pure_native("STRFORM", vec![VmValue::String("%RESULTS%".into())]),
+            Err("STRFORM runtime expansion is not yet supported for FORM metacharacters".into())
+        );
     }
 
     #[test]

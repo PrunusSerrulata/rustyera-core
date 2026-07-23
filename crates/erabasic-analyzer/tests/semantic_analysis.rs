@@ -5,7 +5,7 @@ use erabasic_analyzer::{
 use erabasic_csv::{
     CsvLoadOptions, FilePayload as CsvFilePayload, FrontendFile, ProjectFiles, load_project,
 };
-use erabasic_hir::{HirStatementKind, SemanticType};
+use erabasic_hir::{HirArgument, HirStatementKind, SemanticType};
 use erabasic_parser::ArgumentStyle;
 
 fn empty_project() -> erabasic_data::ProjectData {
@@ -151,6 +151,412 @@ fn resolves_header_constants_variables_and_typed_expressions() {
         function.control_flow.iter().any(|edge| {
             edge.kind == erabasic_hir::ControlFlowKind::Branch && edge.to.is_some()
         })
+    );
+}
+
+#[test]
+fn varsize_is_a_load_time_constant_for_global_and_private_dimensions() {
+    let sources = vec![
+        source(
+            "sizes.erh",
+            "#DIMS LABELS = \"A\", \"B\", \"C\"\n\
+             #DIM GRID, 2, 4\n\
+             #DIM CONST LABEL_COUNT = VARSIZE(\"LABELS\")\n\
+             #DIM CONST SECOND_LENGTH = VARSIZE(\"GRID\", 1)\n\
+             #DIM VALUES, LABEL_COUNT\n",
+        ),
+        source(
+            "sizes.erb",
+            "@SYSTEM_TITLE\n\
+             #DIM CFLAG_COPY, VARSIZE(\"CFLAG\")\n\
+             RETURN\n",
+        ),
+    ];
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: sources.clone(),
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let project = report.project.unwrap();
+    assert_eq!(
+        project.data.schema.variable("VALUES").unwrap().dimensions,
+        [3]
+    );
+    let second_length = project
+        .program
+        .variables
+        .iter()
+        .find(|variable| variable.name == "SECOND_LENGTH")
+        .unwrap();
+    assert_eq!(
+        second_length.initial_values,
+        [erabasic_hir::ConstantValue::Integer(4)]
+    );
+    let cflag_copy = project
+        .program
+        .variables
+        .iter()
+        .find(|variable| variable.name == "CFLAG_COPY")
+        .unwrap();
+    assert_eq!(
+        cflag_copy.dimensions,
+        project.data.schema.variable("CFLAG").unwrap().dimensions
+    );
+
+    let mut one_based = AnalyzerOptions::analysis_mode();
+    one_based.varsize_dimension_is_one_based = true;
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources,
+        },
+        &one_based,
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let second_length = report
+        .project
+        .unwrap()
+        .program
+        .variables
+        .into_iter()
+        .find(|variable| variable.name == "SECOND_LENGTH")
+        .unwrap();
+    assert_eq!(
+        second_length.initial_values,
+        [erabasic_hir::ConstantValue::Integer(2)]
+    );
+}
+
+#[test]
+fn getnum_and_string_lengths_are_available_during_declaration_loading() {
+    let mut project_data = empty_project();
+    project_data
+        .static_data
+        .name_tables
+        .get_mut(&erabasic_data::NameTableKind::Cflag)
+        .unwrap()
+        .lookup
+        .insert("known".into(), 17);
+    let report = analyze_project(
+        AnalysisInput {
+            project_data,
+            sources: vec![source(
+                "constants.erh",
+                "#DIM LOOKUPS = GETNUM(CFLAG, \"known\"), GETNUM(CFLAG, \"missing\")\n\
+                 #DIM CONST LEGACY_WIDTH = STRLENS(\"A界\")\n\
+                 #DIM CONST UTF16_WIDTH = STRLENSU(\"😀\")\n\
+                 #DIM CONST DEFAULT_COLOR = GETDEFCOLOR()\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let variables = report.project.unwrap().program.variables;
+    let lookups = variables
+        .iter()
+        .find(|variable| variable.name == "LOOKUPS")
+        .unwrap();
+    assert_eq!(
+        lookups.initial_values,
+        [
+            erabasic_hir::ConstantValue::Integer(17),
+            erabasic_hir::ConstantValue::Integer(-1)
+        ]
+    );
+    let legacy_width = variables
+        .iter()
+        .find(|variable| variable.name == "LEGACY_WIDTH")
+        .unwrap();
+    assert_eq!(
+        legacy_width.initial_values,
+        [erabasic_hir::ConstantValue::Integer(3)]
+    );
+    let utf16_width = variables
+        .iter()
+        .find(|variable| variable.name == "UTF16_WIDTH")
+        .unwrap();
+    assert_eq!(
+        utf16_width.initial_values,
+        [erabasic_hir::ConstantValue::Integer(2)]
+    );
+    let default_color = variables
+        .iter()
+        .find(|variable| variable.name == "DEFAULT_COLOR")
+        .unwrap();
+    assert_eq!(
+        default_color.initial_values,
+        [erabasic_hir::ConstantValue::Integer(0x00c0_c0c0)]
+    );
+}
+
+#[test]
+fn unresolved_named_indices_in_dynamic_call_candidates_are_deferred() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "dynamic.erb",
+                "@SYSTEM_TITLE\n\
+                 CALLFORM \"OPTIONAL\"\n\
+                 RETURN\n\
+                 @OPTIONAL\n\
+                 RESULT = CFLAG:LOCAL\n\
+                 RESULT = CFLAG:not_in_csv\n\
+                 RETURN\n",
+            )],
+        },
+        &AnalyzerOptions::default(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.severity,
+            erabasic_analyzer::AnalyzerDiagnosticSeverity::Error
+                | erabasic_analyzer::AnalyzerDiagnosticSeverity::Fatal
+        )),
+        "{:#?}",
+        report.diagnostics
+    );
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == AnalyzerDiagnosticCode::DeferredIndex
+            && diagnostic.severity == erabasic_analyzer::AnalyzerDiagnosticSeverity::Warning
+    }));
+    let project = report.project.unwrap();
+    let optional = project
+        .program
+        .functions
+        .iter()
+        .find(|function| function.name == "OPTIONAL")
+        .unwrap();
+    let HirStatementKind::Assignment {
+        value: local_index, ..
+    } = &optional.lines[0].kind
+    else {
+        panic!("expected local-index assignment");
+    };
+    let erabasic_hir::HirExprKind::Variable { place } = &local_index.kind else {
+        panic!("expected indexed variable");
+    };
+    assert!(matches!(
+        &place.indices[0].kind,
+        erabasic_hir::HirExprKind::Variable { .. }
+    ));
+    let HirStatementKind::Assignment { value, .. } = &optional.lines[1].kind else {
+        panic!("expected assignment");
+    };
+    let erabasic_hir::HirExprKind::Variable { place } = &value.kind else {
+        panic!("expected indexed variable");
+    };
+    assert!(matches!(
+        &place.indices[0].kind,
+        erabasic_hir::HirExprKind::Call {
+            target: erabasic_hir::CallTarget::Builtin { name },
+            ..
+        } if name == "__INDEXBYNAME"
+    ));
+}
+
+#[test]
+fn named_color_instructions_keep_the_unquoted_remainder() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "colors.erb",
+                "@SYSTEM_TITLE\nSETCOLORBYNAME GRAY\nSETBGCOLORBYNAME navy\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let function = &report.project.unwrap().program.functions[0];
+    assert!(matches!(
+        &function.lines[0].kind,
+        HirStatementKind::Instruction { arguments, .. }
+            if matches!(arguments.as_slice(), [HirArgument::Raw(value)] if value == "GRAY")
+    ));
+    assert!(matches!(
+        &function.lines[1].kind,
+        HirStatementKind::Instruction { arguments, .. }
+            if matches!(arguments.as_slice(), [HirArgument::Raw(value)] if value == "navy")
+    ));
+}
+
+#[test]
+fn string_input_defaults_use_formatted_string_grammar() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "inputs.erb",
+                "@SYSTEM_TITLE\nINPUTS 決定, 1, 0\nINPUTS %RESULTS%\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let function = &report.project.unwrap().program.functions[0];
+    assert!(matches!(
+        &function.lines[0].kind,
+        HirStatementKind::Instruction { arguments, .. }
+            if matches!(
+                arguments.as_slice(),
+                [
+                    HirArgument::Formatted(_),
+                    HirArgument::Expression(erabasic_hir::HirExpr {
+                        constant: Some(erabasic_hir::ConstantValue::Integer(1)),
+                        ..
+                    }),
+                    HirArgument::Expression(erabasic_hir::HirExpr {
+                        constant: Some(erabasic_hir::ConstantValue::Integer(0)),
+                        ..
+                    })
+                ]
+            )
+    ));
+    assert!(matches!(
+        &function.lines[1].kind,
+        HirStatementKind::Instruction { arguments, .. }
+            if matches!(arguments.as_slice(), [HirArgument::Formatted(_)])
+    ));
+}
+
+#[test]
+fn legacy_string_methods_keep_their_distinct_statement_grammars() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "strings.erb",
+                "@SYSTEM_TITLE\n\
+                 #DIMS NAME\n\
+                 ENCODETOUNI %NAME%\n\
+                 RESULTS = %SUBSTRING(NAME, , 1)%\n\
+                 SETVAR \"NAME\", \"updated\"\n\
+                 RETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let function = &report.project.unwrap().program.functions[0];
+    assert!(matches!(
+        &function.lines[0].kind,
+        HirStatementKind::Instruction { target, arguments }
+            if target.name() == "ENCODETOUNI"
+                && matches!(arguments.as_slice(), [HirArgument::Formatted(_)])
+    ));
+    assert!(matches!(
+        &function.lines[2].kind,
+        HirStatementKind::Instruction {
+            target: erabasic_hir::InstructionTarget::BuiltinMethod {
+                name,
+                return_type: SemanticType::Integer,
+            },
+            arguments,
+        } if name == "SETVAR"
+            && matches!(
+                arguments.as_slice(),
+                [HirArgument::Expression(_), HirArgument::Expression(_)]
+            )
+    ));
+}
+
+#[test]
+fn configured_full_width_space_and_stray_carriage_return_can_prefix_lines() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "spacing.erb",
+                "@SYSTEM_TITLE\n\u{3000}; translated comment\n\u{3000}\tPRINTL first\n\rPRINTL second\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    assert_eq!(report.project.unwrap().program.functions[0].lines.len(), 3);
+}
+
+#[test]
+fn block_conditions_ignore_a_final_argument_separator() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "condition.erb",
+                "@SYSTEM_TITLE\nIF RESULT,\nRESULT *= 2,\nPRINTL active\nENDIF\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
     );
 }
 
@@ -622,6 +1028,7 @@ fn reference_cli_project_fixture_has_compatible_semantic_shape() {
             "ORACLE_PRESENTATION_23",
             "ORACLE_TEST",
             "ORACLE_NATIVE",
+            "ORACLE_DYNAMIC_VARIABLES",
             "ORACLE_INPUT",
             "ORACLE_REFLECTION",
             "ORACLE_MAP",
@@ -807,6 +1214,56 @@ fn csv_name_tables_resolve_identifier_indices() {
     assert_eq!(
         place.indices[0].constant,
         Some(erabasic_hir::ConstantValue::Integer(2))
+    );
+}
+
+#[test]
+fn str_indices_resolve_through_strname_instead_of_initial_values() {
+    let project_data = load_project(
+        &ProjectFiles {
+            csv: vec![
+                FrontendFile {
+                    relative_path: "STR.csv".into(),
+                    payload: CsvFilePayload::Utf8("0,initial text\n".into()),
+                },
+                FrontendFile {
+                    relative_path: "STRNAME.csv".into(),
+                    payload: CsvFilePayload::Utf8("7,named_slot\n".into()),
+                },
+            ],
+            erb: Vec::new(),
+        },
+        &CsvLoadOptions::default(),
+    )
+    .data
+    .unwrap();
+    let report = analyze_project(
+        AnalysisInput {
+            project_data,
+            sources: vec![source(
+                "strname.erb",
+                "@SYSTEM_TITLE\nSTR:named_slot = \"updated\"\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let function = &report.project.unwrap().program.functions[0];
+    let HirStatementKind::Assignment { target, .. } = &function.lines[0].kind else {
+        panic!("expected STR assignment");
+    };
+    assert_eq!(
+        target.indices[0].constant,
+        Some(erabasic_hir::ConstantValue::Integer(7))
     );
 }
 

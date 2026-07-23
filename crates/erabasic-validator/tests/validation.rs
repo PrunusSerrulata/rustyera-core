@@ -1,9 +1,9 @@
 use erabasic_bytecode::{
-    ArtifactManifest, BytecodeArtifact, BytecodeFunction, CapabilityFallback, Digest,
-    HostCapability, HostEffect, HostImport, HostSnapshotCapability, Opcode, OperationContract,
-    OperationDebugPolicy, OperationHotReloadPolicy, OperationPersistence, OperationSnapshotPolicy,
-    OperationState, OperationWaitPolicy, RuntimeImport, SourceMap, SymbolKey, TransactionPolicy,
-    opcode,
+    ArtifactManifest, BytecodeArtifact, BytecodeFunction, BytecodeGlobal, BytecodePersistence,
+    BytecodeStorage, BytecodeType, CapabilityFallback, Digest, HostCapability, HostEffect,
+    HostImport, HostSnapshotCapability, Opcode, OperationContract, OperationDebugPolicy,
+    OperationHotReloadPolicy, OperationPersistence, OperationSnapshotPolicy, OperationState,
+    OperationWaitPolicy, RuntimeImport, SourceMap, SymbolKey, TransactionPolicy, opcode,
 };
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
 use erabasic_validator::{
@@ -139,6 +139,56 @@ fn compiler_output_validation_defers_identity_checks_only() {
             .iter()
             .any(|diagnostic| diagnostic.code == ValidationCode::InvalidOperand)
     );
+}
+
+#[test]
+fn accepts_a_builtin_array_disabled_by_variable_size() {
+    let function_key = SymbolKey::derive("test.function", b"disabled-array");
+    let variable_key = SymbolKey::derive("test.variable", b"A");
+    let mut data = project_data();
+    let schema = data.schema.variables.get_mut("A").expect("builtin A");
+    assert!(schema.can_forbid);
+    schema.dimensions = vec![0];
+    let mut artifact = BytecodeArtifact {
+        manifest: ArtifactManifest::new(Digest::default()),
+        call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        project_data: data,
+        globals: vec![BytecodeGlobal {
+            key: variable_key,
+            name: "A".into(),
+            value_type: BytecodeType::Integer,
+            dimensions: vec![0],
+            mutable: true,
+            storage: BytecodeStorage::Project,
+            persistence: BytecodePersistence::GameSave,
+            initial_values: Vec::new(),
+            owner: None,
+        }],
+        native_imports: Vec::new(),
+        host_imports: Vec::new(),
+        functions: vec![BytecodeFunction {
+            key: function_key,
+            name: "VALID".into(),
+            kind: erabasic_bytecode::BytecodeFunctionKind::Normal,
+            parameters: Vec::new(),
+            result: None,
+            labels: Vec::new(),
+            imports: Vec::new(),
+            code: vec![opcode::return_value(false)],
+            max_stack: 0,
+        }],
+        event_groups: Vec::new(),
+        source_map: SourceMap::default(),
+    };
+    artifact.refresh_ids().unwrap();
+
+    let report = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &ValidationContext::for_artifact(&artifact),
+    );
+
+    assert!(report.value.is_some(), "{:#?}", report.diagnostics);
+    assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
 }
 
 #[test]

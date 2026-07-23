@@ -1,5 +1,5 @@
 use erabasic_ast::{BinaryOp, Expr, ExprKind, FormPart, FormattedString, PostfixOp, UnaryOp};
-use erabasic_data::{NameTableKind, ProjectData};
+use erabasic_data::{LegacyEncoding, NameTableKind, ProjectData};
 use erabasic_hir::{
     CallTarget, ConstantValue, FunctionId, HirCallArgument, HirExpr, HirExprKind, HirFormPart,
     HirFormattedString, HirPlace, SemanticType, SourceId, SourceLocation,
@@ -29,6 +29,7 @@ pub(crate) struct ExpressionAnalyzer<'a> {
 pub(crate) struct IndexResolver {
     tables: BTreeMap<(String, usize), BTreeMap<String, i64>>,
     rename: BTreeMap<String, i64>,
+    legacy_encoding: LegacyEncoding,
 }
 
 impl IndexResolver {
@@ -77,10 +78,11 @@ impl IndexResolver {
             .iter()
             .filter_map(|(name, value)| value.parse().ok().map(|value| (name.clone(), value)))
             .collect();
+        result.legacy_encoding = project.static_data.legacy_encoding;
         result
     }
 
-    fn resolve(&self, variable: &str, dimension: usize, name: &str) -> Option<i64> {
+    pub(crate) fn resolve(&self, variable: &str, dimension: usize, name: &str) -> Option<i64> {
         self.tables
             .get(&(variable.to_ascii_uppercase(), dimension))
             .and_then(|table| table.get(name))
@@ -91,9 +93,30 @@ impl IndexResolver {
         self.rename.get(name).copied()
     }
 
-    fn has_table(&self, variable: &str, dimension: usize) -> bool {
+    pub(crate) fn has_table(&self, variable: &str, dimension: usize) -> bool {
         self.tables
             .contains_key(&(variable.to_ascii_uppercase(), dimension))
+    }
+
+    pub(crate) fn legacy_encoded_len(&self, value: &str) -> usize {
+        if value.is_ascii() {
+            return value.len();
+        }
+        let encoding = match self.legacy_encoding {
+            LegacyEncoding::Japanese => encoding_rs::SHIFT_JIS,
+            LegacyEncoding::Korean => encoding_rs::EUC_KR,
+            LegacyEncoding::ChineseHans => encoding_rs::GBK,
+            LegacyEncoding::ChineseHant => encoding_rs::BIG5,
+        };
+        value
+            .chars()
+            .map(|character| {
+                let mut utf8 = [0; 4];
+                let encoded = character.encode_utf8(&mut utf8);
+                let (bytes, _, had_errors) = encoding.encode(encoded);
+                if had_errors { 1 } else { bytes.len() }
+            })
+            .sum()
     }
 }
 
@@ -260,21 +283,57 @@ impl ExpressionAnalyzer<'_> {
             .enumerate()
             .map(|(dimension, index)| {
                 let data_dimension = dimension.saturating_sub(usize::from(explicit_character));
-                if let ExprKind::Identifier(index_name) = &index.kind
+                let index_location = SourceLocation::new(self.source, index.span);
+                let index = if let ExprKind::Identifier(index_name) = &index.kind
                     && (!explicit_character || dimension > 0)
-                    && let Some(value) =
+                    && self.index_resolver.has_table(name, data_dimension)
+                {
+                    if let Some(value) =
                         self.index_resolver
                             .resolve(name, data_dimension, index_name)
-                {
-                    return HirExpr {
-                        kind: HirExprKind::Integer { value },
-                        value_type: SemanticType::Integer,
-                        constant: Some(ConstantValue::Integer(value)),
-                        location: SourceLocation::new(self.source, index.span),
-                    };
-                }
-                let index_location = SourceLocation::new(self.source, index.span);
-                let index = self.analyze(index);
+                    {
+                        return HirExpr {
+                            kind: HirExprKind::Integer { value },
+                            value_type: SemanticType::Integer,
+                            constant: Some(ConstantValue::Integer(value)),
+                            location: index_location,
+                        };
+                    }
+                    if self
+                        .symbols
+                        .resolve_variable(self.function, index_name)
+                        .is_some()
+                        || self.catalog.functions.contains_key(&self.key(index_name))
+                        || self.index_resolver.resolve_rename(index_name).is_some()
+                    {
+                        self.analyze(index)
+                    } else {
+                        // The reference defers reduction of uncalled function bodies. Rust
+                        // compiles dynamic-call candidates eagerly, so preserve an unresolved
+                        // symbolic index as the equivalent GETNUM lookup instead of rejecting
+                        // an otherwise unneeded function during project startup.
+                        self.diagnostics.push(AnalyzerDiagnostic::at(
+                            AnalyzerDiagnosticCode::DeferredIndex,
+                            AnalyzerDiagnosticSeverity::Warning,
+                            1,
+                            self.source,
+                            self.path,
+                            self.text,
+                            index.span,
+                            format!("named index {index_name} for {name} is deferred to runtime"),
+                        ));
+                        HirExpr {
+                            kind: HirExprKind::String {
+                                value: index_name.clone(),
+                            },
+                            value_type: SemanticType::String,
+                            constant: Some(ConstantValue::String(index_name.clone())),
+                            location: index_location,
+                        }
+                    }
+                } else {
+                    self.analyze(index)
+                };
                 if index.value_type == SemanticType::String
                     && self.index_resolver.has_table(name, data_dimension)
                 {
@@ -291,11 +350,21 @@ impl ExpressionAnalyzer<'_> {
                     return HirExpr {
                         kind: HirExprKind::Call {
                             target: CallTarget::Builtin {
-                                name: "GETNUM".into(),
+                                name: "__INDEXBYNAME".into(),
                             },
                             arguments: vec![
                                 HirCallArgument::Place(array),
                                 HirCallArgument::Value(index),
+                                HirCallArgument::Value(HirExpr {
+                                    kind: HirExprKind::Integer {
+                                        value: i64::try_from(data_dimension).unwrap_or(i64::MAX),
+                                    },
+                                    value_type: SemanticType::Integer,
+                                    constant: Some(ConstantValue::Integer(
+                                        i64::try_from(data_dimension).unwrap_or(i64::MAX),
+                                    )),
+                                    location: index_location,
+                                }),
                             ],
                         },
                         value_type: SemanticType::Integer,
@@ -829,7 +898,9 @@ fn data_variables_for_kind(kind: NameTableKind) -> &'static [&'static str] {
         NameTableKind::Base => &["BASE", "MAXBASE", "LOSEBASE", "DOWNBASE"],
         NameTableKind::Source => &["SOURCE"],
         NameTableKind::Ex => &["EX", "NOWEX"],
-        NameTableKind::Str => &["STR"],
+        // STR.CSV contains initial string values. Symbolic STR indices come from
+        // STRNAME.CSV in the reference implementation.
+        NameTableKind::Str => &[],
         NameTableKind::Equip => &["EQUIP"],
         NameTableKind::Tequip => &["TEQUIP"],
         NameTableKind::Flag => &["FLAG"],
@@ -839,7 +910,7 @@ fn data_variables_for_kind(kind: NameTableKind) -> &'static [&'static str] {
         NameTableKind::Cstr => &["CSTR"],
         NameTableKind::Stain => &["STAIN"],
         NameTableKind::Cdflag1 | NameTableKind::Cdflag2 => &["CDFLAG"],
-        NameTableKind::Strname => &["STRNAME"],
+        NameTableKind::Strname => &["STR", "STRNAME"],
         NameTableKind::Tstr => &["TSTR"],
         NameTableKind::Savestr => &["SAVESTR"],
         NameTableKind::Global => &["GLOBAL"],

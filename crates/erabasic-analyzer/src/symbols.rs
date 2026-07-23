@@ -198,6 +198,14 @@ impl Symbols {
             .collect()
     }
 
+    pub fn variable_dimensions(&self, function: FunctionId) -> BTreeMap<String, Vec<usize>> {
+        self.variables
+            .iter()
+            .filter(|variable| variable.owner.is_none() || variable.owner == Some(function))
+            .map(|variable| (self.key(&variable.name), variable.dimensions.clone()))
+            .collect()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn add_variable(
         &mut self,

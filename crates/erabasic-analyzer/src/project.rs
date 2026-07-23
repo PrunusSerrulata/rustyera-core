@@ -324,6 +324,7 @@ fn analyze_with_context(
             function,
             &mut symbols,
             context,
+            &index_resolver,
             options,
             &mut diagnostics,
         );
@@ -1047,9 +1048,16 @@ fn analyze_instruction(
             index_resolver,
         )));
     }
-    if key == "SIF" && matches!(lowered.last(), Some(HirArgument::Omitted)) {
-        // A few reference-compatible scripts retain a dangling comma after an
-        // SIF condition. The statement builder consumes only its first term.
+    if static_target && lowered.len() > 1 && matches!(lowered.last(), Some(HirArgument::Omitted)) {
+        // Emuera treats a final comma after a static CALL/JUMP target as the end
+        // of its argument list, not as an extra omitted user-function argument.
+        lowered.pop();
+    }
+    if matches!(key.as_str(), "IF" | "ELSEIF" | "SIF" | "WHILE" | "REPEAT")
+        && matches!(lowered.last(), Some(HirArgument::Omitted))
+    {
+        // The reference condition builders consume their first term and tolerate
+        // a dangling comma left by translated scripts.
         lowered.pop();
     }
     if let Some(signature) = signature {
@@ -1406,12 +1414,14 @@ fn source_file(id: SourceId, relative_path: String, kind: SourceKind, text: &str
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn register_private_variables(
     function_id: FunctionId,
     source: &ParsedProjectSource,
     function: &AstFunction,
     symbols: &mut Symbols,
     context: &AnalysisParserContext,
+    index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) {
@@ -1427,7 +1437,8 @@ fn register_private_variables(
     // Building the constant lookup clones every constant name and value. Most
     // functions have no private declarations, so defer that work until the
     // declaration parser can actually consume it.
-    let constants = symbols.constant_values();
+    let mut constants = symbols.constant_values();
+    let mut variable_dimensions = symbols.variable_dimensions(function_id);
     for directive in private_directives {
         let input = DeclarationInput {
             source: source.source.id,
@@ -1435,7 +1446,14 @@ fn register_private_variables(
             text: &source.text,
             directive,
         };
-        match parse_private_declaration(&input, context, &constants, options) {
+        match parse_private_declaration(
+            &input,
+            context,
+            &constants,
+            &variable_dimensions,
+            index_resolver,
+            options,
+        ) {
             Ok(declaration) => {
                 if symbols.register_private(function_id, &declaration).is_err() {
                     diagnostics.push(AnalyzerDiagnostic::at(
@@ -1451,6 +1469,14 @@ fn register_private_variables(
                             declaration.schema.id.name()
                         ),
                     ));
+                } else {
+                    let key = key(declaration.schema.id.name(), options.ignore_case);
+                    variable_dimensions.insert(key.clone(), declaration.schema.dimensions.clone());
+                    if declaration.schema.storage == erabasic_data::StorageScope::Constant
+                        && let Some(value) = declaration.initial_values.first()
+                    {
+                        constants.insert(key, value.clone());
+                    }
                 }
             }
             Err(message) => diagnostics.push(AnalyzerDiagnostic::at(

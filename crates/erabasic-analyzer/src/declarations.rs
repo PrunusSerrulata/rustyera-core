@@ -10,7 +10,7 @@ use erabasic_parser::{ParserContext, parse_expression};
 
 use crate::{
     AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerDiagnosticSeverity, AnalyzerOptions,
-    symbols::is_reserved,
+    expression::IndexResolver, symbols::is_reserved,
 };
 
 pub(crate) struct DeclarationInput<'a> {
@@ -44,6 +44,18 @@ pub(crate) fn analyze_global_declarations(
 ) -> DeclarationOutput {
     let mut output = DeclarationOutput::default();
     let mut constants = BTreeMap::new();
+    let index_resolver = IndexResolver::new(project);
+    let mut variable_dimensions: BTreeMap<_, _> = project
+        .schema
+        .variables
+        .values()
+        .map(|schema| {
+            (
+                normalize(schema.id.name(), options.ignore_case),
+                schema.dimensions.clone(),
+            )
+        })
+        .collect();
     let mut pending: Vec<_> = inputs
         .iter()
         .filter(|input| matches!(input.directive.name.as_str(), "DIM" | "DIMS"))
@@ -55,7 +67,15 @@ pub(crate) fn analyze_global_declarations(
         let before = pending.len();
         let mut deferred = Vec::new();
         for input in pending {
-            match parse_dim(input, false, context, &constants, options) {
+            match parse_dim(
+                input,
+                false,
+                context,
+                &constants,
+                &variable_dimensions,
+                &index_resolver,
+                options,
+            ) {
                 Ok(variable) => {
                     let key = normalize(variable.schema.id.name(), options.ignore_case);
                     if is_reserved(variable.schema.id.name()) {
@@ -84,6 +104,7 @@ pub(crate) fn analyze_global_declarations(
                     project
                         .schema
                         .register_user_variable(variable.schema.clone());
+                    variable_dimensions.insert(key.clone(), variable.schema.dimensions.clone());
                     add_registrations(&variable.schema, &mut output.registrations);
                     output.variables.insert(key, variable);
                 }
@@ -110,9 +131,20 @@ pub(crate) fn parse_private_declaration(
     input: &DeclarationInput<'_>,
     context: &dyn ParserContext,
     constants: &BTreeMap<String, ConstantValue>,
+    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
 ) -> Result<DeclaredVariable, String> {
-    parse_dim(input, true, context, constants, options).map_err(|error| error.to_string())
+    parse_dim(
+        input,
+        true,
+        context,
+        constants,
+        variable_dimensions,
+        index_resolver,
+        options,
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Debug)]
@@ -142,14 +174,22 @@ impl std::fmt::Display for DimError {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn parse_dim(
     input: &DeclarationInput<'_>,
     private: bool,
     context: &dyn ParserContext,
     constants: &BTreeMap<String, ConstantValue>,
+    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
 ) -> Result<DeclaredVariable, DimError> {
+    let constant_evaluation = ConstantEvaluation {
+        constants,
+        variable_dimensions,
+        index_resolver,
+        options,
+    };
     let is_string = input.directive.name == "DIMS";
     // Directive arguments are kept raw by the syntax parser. Emuera's declaration
     // lexer still terminates them at an unescaped semicolon, including when no space
@@ -238,7 +278,7 @@ fn parse_dim(
                 dimensions.push(0);
                 continue;
             }
-            let value = parse_constant(segment, context, constants, options)?;
+            let value = parse_constant(segment, context, &constant_evaluation)?;
             let ConstantValue::Integer(value) = value else {
                 return Err(DimError::Invalid("array size must be an integer".into()));
             };
@@ -275,7 +315,7 @@ fn parse_dim(
                     "array initializers cannot be omitted".into(),
                 ));
             }
-            let value = parse_constant(segment, context, constants, options)?;
+            let value = parse_constant(segment, context, &constant_evaluation)?;
             if matches!(value, ConstantValue::String(_)) != is_string {
                 return Err(DimError::InvalidInitializer(
                     "initializer type does not match the variable".into(),
@@ -466,11 +506,17 @@ fn split_top_level_indices(source: &str, target: char) -> Vec<usize> {
     indices
 }
 
+struct ConstantEvaluation<'a> {
+    constants: &'a BTreeMap<String, ConstantValue>,
+    variable_dimensions: &'a BTreeMap<String, Vec<usize>>,
+    index_resolver: &'a IndexResolver,
+    options: &'a AnalyzerOptions,
+}
+
 fn parse_constant(
     source: &str,
     context: &dyn ParserContext,
-    constants: &BTreeMap<String, ConstantValue>,
-    options: &AnalyzerOptions,
+    evaluation: &ConstantEvaluation<'_>,
 ) -> Result<ConstantValue, DimError> {
     let output = parse_expression(source.trim(), context);
     if output.has_errors() {
@@ -481,25 +527,24 @@ fn parse_constant(
     let expression = output
         .value
         .ok_or_else(|| DimError::Invalid("constant expression is empty".into()))?;
-    evaluate_constant(&expression, constants, options)
+    evaluate_constant(&expression, evaluation)
 }
 
 fn evaluate_constant(
     expression: &Expr,
-    constants: &BTreeMap<String, ConstantValue>,
-    options: &AnalyzerOptions,
+    evaluation: &ConstantEvaluation<'_>,
 ) -> Result<ConstantValue, DimError> {
     match &expression.kind {
         ExprKind::Integer(value) => Ok(ConstantValue::Integer(*value)),
         ExprKind::String(value) => Ok(ConstantValue::String(value.clone())),
-        ExprKind::Identifier(name) => constants
-            .get(&normalize(name, options.ignore_case))
+        ExprKind::Identifier(name) => evaluation
+            .constants
+            .get(&normalize(name, evaluation.options.ignore_case))
             .cloned()
             .ok_or_else(|| DimError::UnknownConstant(name.clone())),
-        ExprKind::Group(inner) => evaluate_constant(inner, constants, options),
+        ExprKind::Group(inner) => evaluate_constant(inner, evaluation),
         ExprKind::Unary { op, operand } => {
-            let ConstantValue::Integer(value) = evaluate_constant(operand, constants, options)?
-            else {
+            let ConstantValue::Integer(value) = evaluate_constant(operand, evaluation)? else {
                 return Err(DimError::Invalid("integer unary operand required".into()));
             };
             let value = match op {
@@ -516,8 +561,8 @@ fn evaluate_constant(
             Ok(ConstantValue::Integer(value))
         }
         ExprKind::Binary { op, left, right } => {
-            let left = evaluate_constant(left, constants, options)?;
-            let right = evaluate_constant(right, constants, options)?;
+            let left = evaluate_constant(left, evaluation)?;
+            let right = evaluate_constant(right, evaluation)?;
             evaluate_binary(*op, left, right)
         }
         ExprKind::Ternary {
@@ -525,16 +570,33 @@ fn evaluate_constant(
             then_expr,
             else_expr,
         } => {
-            let ConstantValue::Integer(condition) =
-                evaluate_constant(condition, constants, options)?
+            let ConstantValue::Integer(condition) = evaluate_constant(condition, evaluation)?
             else {
                 return Err(DimError::Invalid("integer condition required".into()));
             };
             evaluate_constant(
                 if condition != 0 { then_expr } else { else_expr },
-                constants,
-                options,
+                evaluation,
             )
+        }
+        ExprKind::Call { name, args } if name.eq_ignore_ascii_case("VARSIZE") => {
+            evaluate_varsize(args, evaluation)
+        }
+        ExprKind::Call { name, args } if name.eq_ignore_ascii_case("GETNUM") => {
+            evaluate_getnum(args, evaluation)
+        }
+        ExprKind::Call { name, args }
+            if name.eq_ignore_ascii_case("GETDEFCOLOR") && args.is_empty() =>
+        {
+            Ok(ConstantValue::Integer(
+                evaluation.options.default_foreground_color,
+            ))
+        }
+        ExprKind::Call { name, args }
+            if matches!(name.to_ascii_uppercase().as_str(), "STRLENS" | "STRLENSU")
+                && args.len() == 1 =>
+        {
+            evaluate_string_length(name, args, evaluation)
         }
         ExprKind::Call { name, args }
             if name.eq_ignore_ascii_case("UNICODE") && args.len() == 1 =>
@@ -542,8 +604,7 @@ fn evaluate_constant(
             let argument = args[0]
                 .as_ref()
                 .ok_or_else(|| DimError::Invalid("UNICODE requires an argument".into()))?;
-            let ConstantValue::Integer(value) = evaluate_constant(argument, constants, options)?
-            else {
+            let ConstantValue::Integer(value) = evaluate_constant(argument, evaluation)? else {
                 return Err(DimError::Invalid(
                     "UNICODE requires an integer argument".into(),
                 ));
@@ -554,31 +615,161 @@ fn evaluate_constant(
                 .ok_or_else(|| DimError::Invalid("UNICODE argument is out of range".into()))?;
             Ok(ConstantValue::String(value.to_string()))
         }
-        ExprKind::Formatted(formatted) => evaluate_formatted(formatted, constants, options),
+        ExprKind::Formatted(formatted) => evaluate_formatted(formatted, evaluation),
         _ => Err(DimError::Invalid(
             "initializer must be a load-time constant".into(),
         )),
     }
 }
 
+fn evaluate_string_length(
+    name: &str,
+    arguments: &[Option<Expr>],
+    evaluation: &ConstantEvaluation<'_>,
+) -> Result<ConstantValue, DimError> {
+    let name = name.to_ascii_uppercase();
+    let argument = arguments[0]
+        .as_ref()
+        .ok_or_else(|| DimError::Invalid(format!("{name} requires an argument")))?;
+    let ConstantValue::String(value) = evaluate_constant(argument, evaluation)? else {
+        return Err(DimError::Invalid(format!(
+            "{name} requires a constant string argument"
+        )));
+    };
+    let length = if name == "STRLENS" {
+        evaluation.index_resolver.legacy_encoded_len(&value)
+    } else {
+        value.encode_utf16().count()
+    };
+    Ok(ConstantValue::Integer(
+        i64::try_from(length).unwrap_or(i64::MAX),
+    ))
+}
+
+fn evaluate_varsize(
+    arguments: &[Option<Expr>],
+    evaluation: &ConstantEvaluation<'_>,
+) -> Result<ConstantValue, DimError> {
+    if !(1..=2).contains(&arguments.len()) {
+        return Err(DimError::Invalid(
+            "VARSIZE requires one or two arguments".into(),
+        ));
+    }
+    let variable_argument = arguments[0]
+        .as_ref()
+        .ok_or_else(|| DimError::Invalid("VARSIZE variable name cannot be omitted".into()))?;
+    let ConstantValue::String(variable_name) = evaluate_constant(variable_argument, evaluation)?
+    else {
+        return Err(DimError::Invalid(
+            "VARSIZE variable name must be a constant string".into(),
+        ));
+    };
+    let dimensions = evaluation
+        .variable_dimensions
+        .get(&normalize(&variable_name, evaluation.options.ignore_case))
+        .ok_or_else(|| DimError::UnknownConstant(variable_name.clone()))?;
+    let mut dimension = if let Some(argument) = arguments.get(1) {
+        let argument = argument
+            .as_ref()
+            .ok_or_else(|| DimError::Invalid("VARSIZE dimension cannot be omitted".into()))?;
+        let ConstantValue::Integer(value) = evaluate_constant(argument, evaluation)? else {
+            return Err(DimError::Invalid(
+                "VARSIZE dimension must be a constant integer".into(),
+            ));
+        };
+        value
+    } else {
+        0
+    };
+    if evaluation.options.varsize_dimension_is_one_based && dimension > 0 {
+        dimension -= 1;
+    }
+    let dimension = usize::try_from(dimension)
+        .map_err(|_| DimError::Invalid("VARSIZE dimension must be non-negative".into()))?;
+    let length = dimensions
+        .get(dimension)
+        .copied()
+        .ok_or_else(|| DimError::Invalid("VARSIZE dimension exceeds the variable rank".into()))?;
+    Ok(ConstantValue::Integer(
+        i64::try_from(length).unwrap_or(i64::MAX),
+    ))
+}
+
+fn evaluate_getnum(
+    arguments: &[Option<Expr>],
+    evaluation: &ConstantEvaluation<'_>,
+) -> Result<ConstantValue, DimError> {
+    if !(2..=3).contains(&arguments.len()) {
+        return Err(DimError::Invalid(
+            "GETNUM requires two or three arguments".into(),
+        ));
+    }
+    let variable = arguments[0]
+        .as_ref()
+        .and_then(constant_variable_name)
+        .ok_or_else(|| DimError::Invalid("GETNUM argument 1 must be a variable name".into()))?;
+    if !evaluation
+        .variable_dimensions
+        .contains_key(&normalize(variable, evaluation.options.ignore_case))
+    {
+        return Err(DimError::UnknownConstant(variable.into()));
+    }
+    let key_argument = arguments[1]
+        .as_ref()
+        .ok_or_else(|| DimError::Invalid("GETNUM key cannot be omitted".into()))?;
+    let ConstantValue::String(key) = evaluate_constant(key_argument, evaluation)? else {
+        return Err(DimError::Invalid(
+            "GETNUM key must be a constant string".into(),
+        ));
+    };
+    let dimension = if let Some(argument) = arguments.get(2) {
+        let argument = argument
+            .as_ref()
+            .ok_or_else(|| DimError::Invalid("GETNUM dimension cannot be omitted".into()))?;
+        let ConstantValue::Integer(value) = evaluate_constant(argument, evaluation)? else {
+            return Err(DimError::Invalid(
+                "GETNUM dimension must be a constant integer".into(),
+            ));
+        };
+        let value = if value > 0 { value - 1 } else { value };
+        usize::try_from(value)
+            .map_err(|_| DimError::Invalid("GETNUM dimension must be non-negative".into()))?
+    } else {
+        0
+    };
+    Ok(ConstantValue::Integer(
+        evaluation
+            .index_resolver
+            .resolve(variable, dimension, &key)
+            .unwrap_or(-1),
+    ))
+}
+
+fn constant_variable_name(expression: &Expr) -> Option<&str> {
+    match &expression.kind {
+        ExprKind::Identifier(name) => Some(name),
+        ExprKind::Variable { name, indices } if indices.is_empty() => Some(name),
+        ExprKind::Group(inner) => constant_variable_name(inner),
+        _ => None,
+    }
+}
+
 fn evaluate_formatted(
     formatted: &FormattedString,
-    constants: &BTreeMap<String, ConstantValue>,
-    options: &AnalyzerOptions,
+    evaluation: &ConstantEvaluation<'_>,
 ) -> Result<ConstantValue, DimError> {
     let mut result = String::new();
     for part in &formatted.parts {
         match part {
             FormPart::Text(value) => result.push_str(value),
             FormPart::StringInterpolation { expression, .. } => {
-                match evaluate_constant(expression, constants, options)? {
+                match evaluate_constant(expression, evaluation)? {
                     ConstantValue::String(value) => result.push_str(&value),
                     ConstantValue::Integer(value) => result.push_str(&value.to_string()),
                 }
             }
             FormPart::IntegerInterpolation { expression, .. } => {
-                let ConstantValue::Integer(value) =
-                    evaluate_constant(expression, constants, options)?
+                let ConstantValue::Integer(value) = evaluate_constant(expression, evaluation)?
                 else {
                     return Err(DimError::Invalid(
                         "integer interpolation requires an integer".into(),
@@ -592,8 +783,7 @@ fn evaluate_formatted(
                 else_value,
                 ..
             } => {
-                let ConstantValue::Integer(condition) =
-                    evaluate_constant(condition, constants, options)?
+                let ConstantValue::Integer(condition) = evaluate_constant(condition, evaluation)?
                 else {
                     return Err(DimError::Invalid(
                         "formatted condition requires an integer".into(),
@@ -605,8 +795,7 @@ fn evaluate_formatted(
                     else_value.as_deref()
                 };
                 if let Some(selected) = selected {
-                    let ConstantValue::String(value) =
-                        evaluate_formatted(selected, constants, options)?
+                    let ConstantValue::String(value) = evaluate_formatted(selected, evaluation)?
                     else {
                         unreachable!("formatted evaluation always returns a string");
                     };

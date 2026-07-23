@@ -346,13 +346,28 @@ fn validate_runtime_layout(
         );
         let unbound_reference = global.storage == BytecodeStorage::FunctionLocal
             && reference_parameters.contains(&global.key);
+        let disabled_builtin = global.dimensions.contains(&0)
+            && artifact
+                .project_data
+                .schema
+                .variable(&global.name)
+                .is_some_and(|schema| {
+                    schema.can_forbid
+                        && schema.dimensions.len() == global.dimensions.len()
+                        && schema
+                            .dimensions
+                            .iter()
+                            .zip(&global.dimensions)
+                            .all(|(schema, bytecode)| u64::try_from(*schema) == Ok(*bytecode))
+                });
         if function_storage != global.owner.is_some()
             || global
                 .owner
                 .is_some_and(|owner| !function_keys.contains(&owner))
             || (global.storage != BytecodeStorage::Calculated
                 && global.dimensions.contains(&0)
-                && !unbound_reference)
+                && !unbound_reference
+                && !disabled_builtin)
         {
             diagnostics.push(ValidationDiagnostic::project(
                 ValidationCode::InvalidOperand,
@@ -563,7 +578,25 @@ fn validate_source_map(artifact: &BytecodeArtifact, diagnostics: &mut Vec<Valida
                 if !valid {
                     chunk_diagnostics.push(ValidationDiagnostic::project(
                         ValidationCode::InvalidSourceMap,
-                        "source-map entry is outside its function or source",
+                        format!(
+                            "source-map entry is outside its function or source \
+                             (function={:?}, code={}..{} of {:?}, source={}, bytes={}..{} of {:?}, \
+                             fingerprint={} of {})",
+                            entry.function,
+                            entry.code_start,
+                            entry.code_end,
+                            functions.get(&entry.function),
+                            entry.source_index,
+                            entry.byte_start,
+                            entry.byte_end,
+                            artifact
+                                .source_map
+                                .sources
+                                .get(entry.source_index as usize)
+                                .map(|source| source.byte_len),
+                            entry.statement_fingerprint,
+                            artifact.source_map.statement_fingerprints.len(),
+                        ),
                     ));
                 }
             }

@@ -8,8 +8,8 @@
 
 use crate::rules::{is_identifier_delimiter, is_identifier_start, operator_at};
 use crate::{
-    FormattedToken, LexEnd, LexFlags, LexOutput, LexerConfig, MacroTable, Operator, Token,
-    TokenKind,
+    FormattedToken, FormattedTokenPart, LexEnd, LexFlags, LexOutput, LexerConfig, MacroTable,
+    Operator, Token, TokenKind,
 };
 use erabasic_ast::{Diagnostic, DiagnosticCode, Span};
 use formatted::FormEnd;
@@ -52,6 +52,18 @@ pub fn lex_formatted(
     let mut lexer = Lexer::new(source, config, LexFlags::NONE, macros);
     let value = lexer.read_formatted_until(FormEnd::EndOfLine, 0);
     (value, lexer.output.diagnostics)
+}
+
+/// Lex the first command-style FORM operand and stop before its separator.
+#[must_use]
+pub fn lex_formatted_until_comma(
+    source: &str,
+    config: &LexerConfig,
+    macros: &MacroTable,
+) -> (FormattedToken, usize, Vec<Diagnostic>) {
+    let mut lexer = Lexer::new(source, config, LexFlags::NONE, macros);
+    let value = lexer.read_formatted_until(FormEnd::Comma, 0);
+    (value, lexer.pos, lexer.output.diagnostics)
 }
 
 struct Lexer<'a> {
@@ -259,7 +271,7 @@ impl<'a> Lexer<'a> {
             self.output
                 .tokens
                 .extend(replacement.iter().cloned().map(|mut token| {
-                    token.from_macro = true;
+                    anchor_macro_token(&mut token, Span::new(start, self.pos));
                     token
                 }));
             return;
@@ -493,6 +505,46 @@ impl<'a> Lexer<'a> {
     }
 }
 
+fn anchor_macro_token(token: &mut Token, invocation: Span) {
+    token.span = invocation;
+    token.from_macro = true;
+    if let TokenKind::Formatted(formatted) = &mut token.kind {
+        anchor_macro_formatted(formatted, invocation);
+    }
+}
+
+fn anchor_macro_formatted(formatted: &mut FormattedToken, invocation: Span) {
+    formatted.span = invocation;
+    for part in &mut formatted.parts {
+        match part {
+            FormattedTokenPart::Text(_) => {}
+            FormattedTokenPart::StringInterpolation { tokens, span }
+            | FormattedTokenPart::IntegerInterpolation { tokens, span } => {
+                *span = invocation;
+                for token in tokens {
+                    anchor_macro_token(token, invocation);
+                }
+            }
+            FormattedTokenPart::Conditional {
+                condition,
+                then_value,
+                else_value,
+                span,
+            } => {
+                *span = invocation;
+                for token in condition {
+                    anchor_macro_token(token, invocation);
+                }
+                anchor_macro_formatted(then_value, invocation);
+                if let Some(else_value) = else_value {
+                    anchor_macro_formatted(else_value, invocation);
+                }
+            }
+            FormattedTokenPart::Triple { span, .. } => *span = invocation,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,6 +597,16 @@ mod tests {
     }
 
     #[test]
+    fn formatted_input_operand_stops_before_its_top_level_comma() {
+        let source = "value=%ARGS:0, 1%, 1, 0";
+        let (formatted, consumed, diagnostics) =
+            lex_formatted_until_comma(source, &LexerConfig::default(), &MacroTable::new());
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+        assert_eq!(&source[..consumed], "value=%ARGS:0, 1%");
+        assert_eq!(formatted.span, Span::new(0, consumed));
+    }
+
+    #[test]
     fn formatted_escape_at_end_reports_a_utf8_span() {
         let (_, diagnostics) = lex_formatted("界\\", &LexerConfig::default(), &MacroTable::new());
         assert!(diagnostics.iter().any(|diagnostic| {
@@ -587,5 +649,27 @@ mod tests {
                 }]
             ));
         }
+    }
+
+    #[test]
+    fn macro_expansion_is_anchored_to_its_invocation() {
+        let replacement = lex("FLAG:12", &LexerConfig::default()).tokens;
+        let mut macros = MacroTable::new();
+        macros.insert("PLACE".into(), replacement);
+
+        let output = lex_with(
+            "1 + PLACE",
+            &LexerConfig::default(),
+            LexEnd::EndOfLine,
+            LexFlags::NONE,
+            &macros,
+        );
+
+        assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+        assert!(
+            output.tokens[2..]
+                .iter()
+                .all(|token| { token.from_macro && token.span == Span::new(4, 9) })
+        );
     }
 }

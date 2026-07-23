@@ -311,6 +311,32 @@ fn printform_argument_becomes_formatted_ast() {
 }
 
 #[test]
+fn string_input_parses_one_form_default_then_expression_flags() {
+    let output = parse_line(
+        "ONEINPUTS value=%RESULTS%, 1, 0",
+        &DefaultParserContext::default(),
+    );
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Instruction { arguments, .. } = output.value.unwrap().kind else {
+        panic!("expected ONEINPUTS instruction");
+    };
+    assert!(matches!(
+        arguments.as_slice(),
+        [
+            Argument::Formatted(_),
+            Argument::Expression(erabasic_ast::Expr {
+                kind: ExprKind::Integer(1),
+                ..
+            }),
+            Argument::Expression(erabasic_ast::Expr {
+                kind: ExprKind::Integer(0),
+                ..
+            })
+        ]
+    ));
+}
+
+#[test]
 fn printform_preserves_width_alignment_and_triple_parts() {
     let output = parse_line(
         "PRINTFORM |{LOCAL:0, 6, LEFT}|%LOCALS:0, 8, RIGHT%|***",
@@ -386,6 +412,14 @@ fn joins_braced_physical_lines_and_consumes_utf8_bom() {
 }
 
 #[test]
+fn standalone_carriage_return_starts_a_new_physical_line() {
+    let source = "@SYSTEM_TITLE\nIF 1\nELSE\r      IF 1\nPRINTL nested\nENDIF\nENDIF\nRETURN\n";
+    let output = parse_erb(source, &mut DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    assert_eq!(output.value.unwrap().functions[0].body.len(), 7);
+}
+
+#[test]
 fn media_arguments_preserve_mixed_number_units() {
     let output = parse_line(
         "PRINT_RECT 10px, 20, 30px, 40",
@@ -433,6 +467,16 @@ fn preprocessor_omits_inactive_branch() {
     let script = output.value.unwrap();
     assert_eq!(script.functions.len(), 1);
     assert_eq!(script.functions[0].name, "KEPT");
+}
+
+#[test]
+fn if_ndebug_keeps_the_release_branch() {
+    let source = "[IF_NDEBUG]\n@RELEASE\nRETURN\n[ELSE]\n@DEBUG\nRETURN\n[ENDIF]\n";
+    let output = parse_erb(source, &mut DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let script = output.value.unwrap();
+    assert_eq!(script.functions.len(), 1);
+    assert_eq!(script.functions[0].name, "RELEASE");
 }
 
 #[test]

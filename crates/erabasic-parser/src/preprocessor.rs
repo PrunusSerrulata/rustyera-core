@@ -24,11 +24,11 @@ pub(crate) fn handle_preprocessor(
     let command = fields.next().unwrap_or_default().to_uppercase();
     let parent_active = stack.iter().all(|frame| frame.active);
     match command.as_str() {
-        "IF" | "IF_DEBUG" => {
-            let condition = if command == "IF_DEBUG" {
-                context.lexer_config().debug_semicolon
-            } else {
-                eval_preprocessor(fields.collect::<Vec<_>>().join(" ").as_str(), context)
+        "IF" | "IF_DEBUG" | "IF_NDEBUG" => {
+            let condition = match command.as_str() {
+                "IF_DEBUG" => context.lexer_config().debug_semicolon,
+                "IF_NDEBUG" => !context.lexer_config().debug_semicolon,
+                _ => eval_preprocessor(fields.collect::<Vec<_>>().join(" ").as_str(), context),
             };
             stack.push(PreprocessorFrame {
                 parent_active,

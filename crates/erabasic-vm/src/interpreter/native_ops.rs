@@ -6,6 +6,7 @@
 use super::{
     BytecodeStorage, BytecodeType, Fiber, NativePlaceView, NativeReady, PlaceDescriptor, Vm,
     VmError, VmValue, array_snapshot_any_rank, character_series, global_unindexed_place,
+    indexed_place,
 };
 
 pub(super) fn execute_swap_transaction(
@@ -249,26 +250,300 @@ pub(super) fn execute_getnum(
     fiber: &Fiber,
     arguments: &[VmValue],
 ) -> Result<VmValue, VmError> {
+    let (_, _, _, value) = lookup_named_index(vm, fiber, arguments)?;
+    Ok(VmValue::Integer(value.unwrap_or(-1)))
+}
+
+pub(super) fn execute_index_by_name(
+    vm: &Vm,
+    fiber: &Fiber,
+    arguments: &[VmValue],
+) -> Result<VmValue, VmError> {
+    let (variable, key, dimension, value) = lookup_named_index(vm, fiber, arguments)?;
+    let value = value.ok_or_else(|| {
+        VmError::InvalidArguments(format!(
+            "{variable} has no named index {key:?} in dimension {dimension}"
+        ))
+    })?;
+    Ok(VmValue::Integer(value))
+}
+
+pub(super) fn execute_set_var(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    arguments: &[VmValue],
+) -> Result<VmValue, VmError> {
+    let Some(VmValue::String(reference)) = arguments.first() else {
+        return Err(VmError::InvalidArguments(
+            "SETVAR variable name must be a string".into(),
+        ));
+    };
+    let value = arguments
+        .get(1)
+        .cloned()
+        .ok_or_else(|| VmError::InvalidArguments("SETVAR value is missing".into()))?;
+    let (target, value_type, variable_name) =
+        resolve_dynamic_variable_target(vm, fiber, reference, true)?;
+    if value.value_type() != value_type {
+        return Err(VmError::InvalidArguments(format!(
+            "SETVAR value type differs from {variable_name}"
+        )));
+    }
+    // Resolve and type-check the complete destination before the mutation.
+    let _ = vm.read_place(fiber, &target)?;
+    vm.write_place(fiber, &target, value)?;
+    Ok(VmValue::Integer(1))
+}
+
+pub(super) fn execute_get_var(
+    vm: &Vm,
+    fiber: &Fiber,
+    arguments: &[VmValue],
+    string_result: bool,
+) -> Result<VmValue, VmError> {
+    let Some(VmValue::String(reference)) = arguments.first() else {
+        return Err(VmError::InvalidArguments(
+            "GETVAR variable name must be a string".into(),
+        ));
+    };
+    let (target, value_type, variable_name) =
+        resolve_dynamic_variable_target(vm, fiber, reference, false)?;
+    let expected = if string_result {
+        BytecodeType::String
+    } else {
+        BytecodeType::Integer
+    };
+    if value_type != expected {
+        return Err(VmError::InvalidArguments(format!(
+            "{} target {variable_name} has the wrong value type",
+            if string_result { "GETVARS" } else { "GETVAR" }
+        )));
+    }
+    vm.read_place(fiber, &target)
+}
+
+fn resolve_dynamic_variable_target(
+    vm: &Vm,
+    fiber: &Fiber,
+    reference: &str,
+    require_mutable: bool,
+) -> Result<(PlaceDescriptor, BytecodeType, String), VmError> {
+    let frame = fiber.frames.last().expect("frame exists");
+    let generation = frame.generation;
+    let function = frame.function;
+    let frame_id = frame.id;
+    let fiber_id = fiber.id;
+    let mut components = reference.split(':');
+    let variable_name = components.next().unwrap_or_default().trim();
+    if variable_name.is_empty() {
+        return Err(VmError::InvalidArguments(
+            "SETVAR variable name is empty".into(),
+        ));
+    }
+    let (definition, mut indices) = {
+        let program = vm
+            .generations
+            .get(&generation)
+            .ok_or_else(|| VmError::InvalidState("SETVAR generation is missing".into()))?;
+        let globals = &program.artifact.globals;
+        let definition = globals
+            .iter()
+            .find(|definition| {
+                definition.owner == Some(function)
+                    && definition.name.eq_ignore_ascii_case(variable_name)
+            })
+            .or_else(|| {
+                globals.iter().find(|definition| {
+                    definition.owner.is_none()
+                        && definition.name.eq_ignore_ascii_case(variable_name)
+                })
+            })
+            .cloned()
+            .ok_or_else(|| {
+                VmError::InvalidArguments(format!(
+                    "SETVAR target {variable_name:?} is not a variable"
+                ))
+            })?;
+        if require_mutable && !definition.mutable {
+            return Err(VmError::InvalidArguments(format!(
+                "SETVAR target {variable_name:?} is read-only"
+            )));
+        }
+        let table = name_table_kind(&definition.name).and_then(|kind| {
+            program
+                .artifact
+                .project_data
+                .static_data
+                .name_tables
+                .get(&kind)
+        });
+        let indices = components
+            .map(|component| set_var_index(table, &definition.name, component))
+            .collect::<Result<Vec<_>, _>>()?;
+        (definition, indices)
+    };
+    let character = if definition.storage == BytecodeStorage::Character {
+        if indices.len() > definition.dimensions.len() {
+            Some(indices.remove(0))
+        } else {
+            Some(u64::try_from(vm.target_character_for_generation(generation)).unwrap_or(u64::MAX))
+        }
+    } else {
+        None
+    };
+    let target = PlaceDescriptor {
+        variable: definition.key,
+        indices,
+        character,
+        fiber: Some(fiber_id),
+        frame: (definition.storage == BytecodeStorage::FunctionLocal).then_some(frame_id),
+    };
+    Ok((target, definition.value_type, definition.name))
+}
+
+fn set_var_index(
+    table: Option<&erabasic_data::NameTable>,
+    variable_name: &str,
+    component: &str,
+) -> Result<u64, VmError> {
+    let component = component.trim();
+    if component.is_empty() {
+        return Err(VmError::InvalidArguments(
+            "SETVAR contains an empty variable index".into(),
+        ));
+    }
+    if let Ok(index) = component.parse::<i64>() {
+        return u64::try_from(index).map_err(|_| {
+            VmError::InvalidArguments(format!("SETVAR variable index {component:?} is negative"))
+        });
+    }
+    let index = table
+        .and_then(|table| {
+            table.lookup.get(component).or_else(|| {
+                table
+                    .lookup
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(component))
+                    .map(|(_, index)| index)
+            })
+        })
+        .copied()
+        .ok_or_else(|| {
+            VmError::InvalidArguments(format!(
+                "SETVAR variable {variable_name} has no named index {component:?}"
+            ))
+        })?;
+    u64::try_from(index).map_err(|_| {
+        VmError::InvalidArguments(format!(
+            "SETVAR variable {variable_name} has a negative named index {component:?}"
+        ))
+    })
+}
+
+pub(super) fn execute_encode_to_uni_result(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    arguments: &[VmValue],
+) -> Result<(), VmError> {
+    let Some(VmValue::String(value)) = arguments.first() else {
+        return Err(VmError::InvalidArguments(
+            "ENCODETOUNI statement requires a string".into(),
+        ));
+    };
+    let result = global_unindexed_place(vm, fiber, "RESULT")?;
+    let capacity = vm.place_array_len(fiber, &result)?;
+    let utf16 = value.encode_utf16().collect::<Vec<_>>();
+    if utf16.len() >= capacity {
+        return Err(VmError::InvalidArguments(format!(
+            "ENCODETOUNI input has {} UTF-16 units but RESULT can hold only {}",
+            utf16.len(),
+            capacity.saturating_sub(1)
+        )));
+    }
+    let mut encoded = Vec::with_capacity(utf16.len());
+    for (index, unit) in utf16.iter().copied().enumerate() {
+        let code_point = if (0xd800..=0xdbff).contains(&unit) {
+            let Some(low) = utf16.get(index + 1).copied() else {
+                return Err(VmError::InvalidArguments(
+                    "ENCODETOUNI input ends with an unpaired UTF-16 surrogate".into(),
+                ));
+            };
+            if !(0xdc00..=0xdfff).contains(&low) {
+                return Err(VmError::InvalidArguments(
+                    "ENCODETOUNI input contains an unpaired UTF-16 surrogate".into(),
+                ));
+            }
+            0x1_0000 + ((u32::from(unit) - 0xd800) << 10) + (u32::from(low) - 0xdc00)
+        } else if (0xdc00..=0xdfff).contains(&unit) {
+            // The pinned reference advances one UTF-16 position after converting
+            // a surrogate pair, then rejects the low surrogate on the next pass.
+            return Err(VmError::InvalidArguments(
+                "ENCODETOUNI input contains an isolated low UTF-16 surrogate".into(),
+            ));
+        } else {
+            u32::from(unit)
+        };
+        encoded.push(VmValue::Integer(i64::from(code_point)));
+    }
+    let mut writes = Vec::with_capacity(encoded.len() + 1);
+    writes.push((
+        indexed_place(&result, 0),
+        VmValue::Integer(i64::try_from(encoded.len()).unwrap_or(i64::MAX)),
+    ));
+    writes.extend(
+        encoded
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| (indexed_place(&result, index + 1), value)),
+    );
+    for (target, value) in &writes {
+        let previous = vm.read_place(fiber, target)?;
+        if previous.value_type() != value.value_type() {
+            return Err(VmError::InvalidState(
+                "ENCODETOUNI RESULT element has an unexpected type".into(),
+            ));
+        }
+    }
+    for (target, value) in writes {
+        vm.write_place(fiber, &target, value)?;
+    }
+    Ok(())
+}
+
+fn lookup_named_index(
+    vm: &Vm,
+    fiber: &Fiber,
+    arguments: &[VmValue],
+) -> Result<(String, String, i64, Option<i64>), VmError> {
     let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = arguments.first() else {
         return Err(VmError::InvalidArguments(
-            "GETNUM argument 1 is not a variable reference".into(),
+            "named index argument 1 is not a variable reference".into(),
         ));
     };
     let Some(VmValue::String(key)) = arguments.get(1) else {
         return Err(VmError::InvalidArguments(
-            "GETNUM key is not a string".into(),
+            "named index key is not a string".into(),
         ));
+    };
+    let dimension = match arguments.get(2) {
+        None => 0,
+        Some(VmValue::Integer(value)) => *value,
+        Some(_) => {
+            return Err(VmError::InvalidArguments(
+                "named index dimension is not an integer".into(),
+            ));
+        }
     };
     let generation = fiber.frames.last().expect("frame exists").generation;
     let program = vm
         .generations
         .get(&generation)
-        .ok_or_else(|| VmError::InvalidState("GETNUM generation is missing".into()))?;
+        .ok_or_else(|| VmError::InvalidState("named index generation is missing".into()))?;
     let name = program
         .global(place.variable)
         .map(|definition| definition.name.as_str())
         .ok_or_else(|| {
-            VmError::InvalidArguments("GETNUM variable is not project-visible".into())
+            VmError::InvalidArguments("named index variable is not project-visible".into())
         })?;
     let kind = name_table_kind(name);
     let value = kind
@@ -281,8 +556,8 @@ pub(super) fn execute_getnum(
                 .get(&kind)
         })
         .and_then(|table| table.lookup.get(key))
-        .map_or(-1, |index| i64::from(*index));
-    Ok(VmValue::Integer(value))
+        .map(|index| i64::from(*index));
+    Ok((name.into(), key.clone(), dimension, value))
 }
 
 fn name_table_kind(name: &str) -> Option<erabasic_data::NameTableKind> {
@@ -302,7 +577,7 @@ fn name_table_kind(name: &str) -> Option<erabasic_data::NameTableKind> {
             }
             "SOURCE" => Some(erabasic_data::NameTableKind::Source),
             "EX" => Some(erabasic_data::NameTableKind::Ex),
-            "STR" => Some(erabasic_data::NameTableKind::Str),
+            "STR" | "STRNAME" => Some(erabasic_data::NameTableKind::Strname),
             "EQUIP" => Some(erabasic_data::NameTableKind::Equip),
             "TEQUIP" => Some(erabasic_data::NameTableKind::Tequip),
             "FLAG" => Some(erabasic_data::NameTableKind::Flag),
@@ -311,7 +586,6 @@ fn name_table_kind(name: &str) -> Option<erabasic_data::NameTableKind> {
             "TCVAR" => Some(erabasic_data::NameTableKind::Tcvar),
             "CSTR" => Some(erabasic_data::NameTableKind::Cstr),
             "STAIN" => Some(erabasic_data::NameTableKind::Stain),
-            "STRNAME" => Some(erabasic_data::NameTableKind::Strname),
             "TSTR" => Some(erabasic_data::NameTableKind::Tstr),
             "SAVESTR" => Some(erabasic_data::NameTableKind::Savestr),
             "GLOBAL" => Some(erabasic_data::NameTableKind::Global),
@@ -680,6 +954,13 @@ pub(super) fn execute_find_element(
         match (value, needle) {
             (VmValue::Integer(value), VmValue::Integer(needle)) => Ok(value == needle),
             (VmValue::String(value), VmValue::String(needle)) => {
+                match crate::regex_compat::find_repeated_character(needle, value) {
+                    crate::regex_compat::RepeatedCharacterMatch::Unsupported => {}
+                    crate::regex_compat::RepeatedCharacterMatch::NoMatch => return Ok(false),
+                    crate::regex_compat::RepeatedCharacterMatch::Match(matched) => {
+                        return Ok(!exact || matched.len() == value.len());
+                    }
+                }
                 if compiled_regex.is_none() {
                     compiled_regex = Some(
                         vm.compile_regex(needle)

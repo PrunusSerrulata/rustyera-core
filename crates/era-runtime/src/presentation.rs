@@ -49,6 +49,11 @@ pub(crate) struct PresentationModel {
     replace_next_temporary: bool,
     html_island: Vec<erabasic_html::HtmlDocument>,
     backgrounds: Vec<MediaPlacement>,
+    /// CBG layers are distinct from SETBGIMAGE backgrounds in Emuera. They share
+    /// the portable frontend projection, but commands must be able to clear either
+    /// collection without disturbing the other.
+    #[serde(default)]
+    client_backgrounds: Vec<MediaPlacement>,
     audio: Vec<AudioState>,
     tooltip: TooltipSettings,
     resources: ResourceReplay,
@@ -135,6 +140,7 @@ impl Default for PresentationModel {
             replace_next_temporary: false,
             html_island: Vec::new(),
             backgrounds: Vec::new(),
+            client_backgrounds: Vec::new(),
             audio: Vec::new(),
             tooltip: TooltipSettings {
                 foreground: rgb_color(0),
@@ -834,6 +840,21 @@ impl PresentationModel {
         self.bump();
     }
 
+    pub(crate) fn clear_client_backgrounds(&mut self) {
+        self.client_backgrounds.clear();
+        self.delivery.dirty.backgrounds = true;
+        self.bump();
+    }
+
+    fn projected_backgrounds(&self) -> Vec<MediaPlacement> {
+        let mut backgrounds =
+            Vec::with_capacity(self.backgrounds.len() + self.client_backgrounds.len());
+        backgrounds.extend(self.backgrounds.iter().cloned());
+        backgrounds.extend(self.client_backgrounds.iter().cloned());
+        backgrounds.sort_by_key(|placement| std::cmp::Reverse(placement.depth));
+        backgrounds
+    }
+
     pub(crate) fn set_tooltip_colors(&mut self, foreground: i64, background: i64) {
         self.tooltip.foreground = rgb_color(foreground);
         self.tooltip.background = rgb_color(background);
@@ -1129,7 +1150,7 @@ impl PresentationModel {
         if delivery.dirty.backgrounds {
             operations.push(PresentationOperation::SetBackgrounds {
                 backgrounds: if self.project_graphics {
-                    self.backgrounds.clone()
+                    self.projected_backgrounds()
                 } else {
                     Vec::new()
                 },
@@ -1342,7 +1363,7 @@ impl PresentationModel {
                 operations: history_operations,
             },
             backgrounds: if self.project_graphics {
-                self.backgrounds.clone()
+                self.projected_backgrounds()
             } else {
                 Vec::new()
             },
@@ -2344,6 +2365,37 @@ mod tests {
         assert_eq!(snapshot.backgrounds[0].opacity.denominator, 255);
         assert_eq!(snapshot.tooltip.delay_ms, 250);
         assert_eq!(snapshot.tooltip.duration_ms, i16::MAX as u32);
+    }
+
+    #[test]
+    fn clearing_client_backgrounds_preserves_set_bg_image_state() {
+        let mut model = PresentationModel::default();
+        model.set_projection(true, true, true, true, true);
+        model.add_background("PERSISTENT".into(), 2, 255);
+        model.client_backgrounds.push(MediaPlacement {
+            resource_id: "CBG".into(),
+            x: LogicalLength(0),
+            y: LogicalLength(0),
+            width: LogicalLength(1),
+            height: LogicalLength(1),
+            depth: 1,
+            opacity: RationalOpacity {
+                numerator: 255,
+                denominator: 255,
+            },
+            revision: 1,
+            hover_resource_id: None,
+            mask_resource_id: None,
+            requested_width: None,
+            requested_height: None,
+            requested_y: None,
+        });
+
+        model.clear_client_backgrounds();
+
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.backgrounds.len(), 1);
+        assert_eq!(snapshot.backgrounds[0].resource_id, "PERSISTENT");
     }
 
     #[test]

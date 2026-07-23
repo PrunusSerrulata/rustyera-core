@@ -359,6 +359,22 @@ impl<'a> Builder<'a> {
             self.store_method_result(SemanticType::Integer, location);
             return;
         }
+        if name == "ENCODETOUNI" {
+            let parameter_type = if let Some(argument) = arguments.first() {
+                self.lower_argument(argument, location)
+            } else {
+                self.emit(opcode::push_string(""), location);
+                BytecodeType::String
+            };
+            self.emit_runtime_call(
+                "__ENCODETOUNI_RESULT",
+                &[parameter_type],
+                None,
+                false,
+                location,
+            );
+            return;
+        }
         if matches!(name, "BREAK" | "CONTINUE" | "RESTART" | "GOTO" | "TRYGOTO") {
             // Their concrete jump is emitted from the analyzed control-flow edge
             // after this statement; they are not Host operations.

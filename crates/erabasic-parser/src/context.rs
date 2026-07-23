@@ -15,6 +15,8 @@ pub enum ArgumentStyle {
     Times,
     /// Formatted function name followed by an optional parenthesized argument list.
     DynamicCall,
+    /// One FORM operand ending at a comma, followed by ordinary expression operands.
+    FormattedFirst,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +116,11 @@ impl ParserContext for DefaultParserContext {
             ArgumentStyle::DynamicCall
         } else if NO_ARG_INSTRUCTIONS.contains(&upper.as_str()) {
             ArgumentStyle::None
+        } else if matches!(
+            upper.as_str(),
+            "INPUTS" | "ONEINPUTS" | "BINPUTS" | "ONEBINPUTS"
+        ) {
+            ArgumentStyle::FormattedFirst
         } else if is_formatted_instruction(&upper) {
             ArgumentStyle::Formatted
         } else if matches!(upper.as_str(), "PRINTV" | "PRINTVL" | "PRINTVW") {

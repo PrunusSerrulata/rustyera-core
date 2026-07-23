@@ -56,6 +56,25 @@ fn frontend_observation_calls_emit_nonfatal_source_notices() {
 }
 
 #[test]
+fn static_call_ignores_a_final_argument_separator() {
+    let report = compile_project(
+        &analyze("@SYSTEM_TITLE\nCALL TARGET,\nRETURN\n@TARGET\nRETURN\n"),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.artifact.is_some(), "{:#?}", report.diagnostics);
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.severity == CompilerDiagnosticSeverity::Error }),
+        "{:#?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn host_operations_use_only_call_host_and_round_trip() {
     let project =
         analyze("@SYSTEM_TITLE\nPRINTFORM value={1 + 2}\nINPUT 0\nRESULT = 4 + 5\nRETURN\n");
