@@ -93,7 +93,7 @@ for comparison.
 
 ## Smoke test
 
-After building on Windows, run:
+On Windows, run (the script publishes the self-contained CLI first):
 
 ```powershell
 tools/emuera-reference-cli/tests/protocol-smoke.ps1
