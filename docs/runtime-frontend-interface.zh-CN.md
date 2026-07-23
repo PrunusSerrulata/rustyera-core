@@ -396,8 +396,11 @@ runtime → 前端还会主动发送：21 `StateChanged`、22 `ExitRequested`、
 
 路径会把 `\` 规范为 `/`，忽略空段和 `.`；空路径、绝对路径、盘符和 `..` 被拒绝。
 `SourceLocation` 是 `relative_path, byte_start, byte_end, line?, byte_column?`；offset 和
-column 都是 UTF-8 byte，不是字符数或 UTF-16 code unit。`ProtocolDiagnostic` 字段为
-`code`、Information/Warning/Error、`message`、`source?`。
+column 都是 UTF-8 byte，不是字符数或 UTF-16 code unit；`line` 和 `byte_column`
+均从 0 开始，面向用户展示时应转换为从 1 开始。项目编译诊断会尽可能同时填写行和
+byte column，前端可用提交的 UTF-8 源码按 `byte_start..byte_end` 显示源码行和精确
+标记范围。`ProtocolDiagnostic` 字段为 `code`、Information/Warning/Error、
+`message`、`source?`。
 
 ### 7.2 输入
 
