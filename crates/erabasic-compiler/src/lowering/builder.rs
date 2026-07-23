@@ -134,12 +134,13 @@ impl<'a> Builder<'a> {
                 self.code[jump].payload = u32::try_from(self.code.len())
                     .unwrap_or(u32::MAX)
                     .to_le_bytes()
-                    .to_vec();
+                    .to_vec()
+                    .into();
             }
         }
         let end = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
         for jump in end_jumps {
-            self.code[jump].payload = end.to_le_bytes().to_vec();
+            self.code[jump].payload = end.to_le_bytes().to_vec().into();
         }
         if !is_string {
             if name.ends_with('L') {
@@ -152,7 +153,8 @@ impl<'a> Builder<'a> {
             self.code[jump].payload = u32::try_from(self.code.len())
                 .unwrap_or(u32::MAX)
                 .to_le_bytes()
-                .to_vec();
+                .to_vec()
+                .into();
         }
     }
 
@@ -277,7 +279,8 @@ impl<'a> Builder<'a> {
                 self.code[instruction].payload = u32::try_from(self.code.len())
                     .unwrap_or(u32::MAX)
                     .to_le_bytes()
-                    .to_vec();
+                    .to_vec()
+                    .into();
                 continue;
             }
             let resolve = self.code.len();
@@ -311,12 +314,12 @@ impl<'a> Builder<'a> {
                     .to_vec();
                 payload.push(1);
                 payload.push(0);
-                payload
+                payload.into()
             };
         }
         let end = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
         for jump in end_jumps {
-            self.code[jump].payload = end.to_le_bytes().to_vec();
+            self.code[jump].payload = end.to_le_bytes().to_vec().into();
         }
     }
 
@@ -1114,9 +1117,9 @@ impl<'a> Builder<'a> {
                     .to_vec();
                 payload.push(1);
                 payload.push(u8::from(method));
-                payload
+                payload.into()
             };
-            self.code[success].payload = end.to_le_bytes().to_vec();
+            self.code[success].payload = end.to_le_bytes().to_vec().into();
         }
     }
 
@@ -1434,7 +1437,8 @@ impl<'a> Builder<'a> {
                         self.code[branch].payload = u32::try_from(self.code.len())
                             .unwrap_or(u32::MAX)
                             .to_le_bytes()
-                            .to_vec();
+                            .to_vec()
+                            .into();
                         self.lower_expression(right, fallback);
                         self.emit(opcode::unary(2), location);
                         if *op == BinaryOp::LogicalOr {
@@ -1443,7 +1447,8 @@ impl<'a> Builder<'a> {
                         self.code[end].payload = u32::try_from(self.code.len())
                             .unwrap_or(u32::MAX)
                             .to_le_bytes()
-                            .to_vec();
+                            .to_vec()
+                            .into();
                     } else {
                         self.lower_expression(right, fallback);
                         self.emit(opcode::unary(2), location);
@@ -1455,7 +1460,8 @@ impl<'a> Builder<'a> {
                         self.code[branch].payload = u32::try_from(self.code.len())
                             .unwrap_or(u32::MAX)
                             .to_le_bytes()
-                            .to_vec();
+                            .to_vec()
+                            .into();
                         self.emit(
                             opcode::push_integer(i64::from(*op == BinaryOp::Nand)),
                             location,
@@ -1463,7 +1469,8 @@ impl<'a> Builder<'a> {
                         self.code[end].payload = u32::try_from(self.code.len())
                             .unwrap_or(u32::MAX)
                             .to_le_bytes()
-                            .to_vec();
+                            .to_vec()
+                            .into();
                     }
                 } else {
                     self.lower_expression(left, fallback);
@@ -1485,12 +1492,14 @@ impl<'a> Builder<'a> {
                 self.code[false_jump].payload = u32::try_from(self.code.len())
                     .unwrap_or(u32::MAX)
                     .to_le_bytes()
-                    .to_vec();
+                    .to_vec()
+                    .into();
                 self.lower_expression(else_expr, fallback);
                 self.code[end_jump].payload = u32::try_from(self.code.len())
                     .unwrap_or(u32::MAX)
                     .to_le_bytes()
-                    .to_vec();
+                    .to_vec()
+                    .into();
             }
             HirExprKind::Formatted { value } => {
                 self.lower_formatted(value, fallback);
@@ -1560,7 +1569,8 @@ impl<'a> Builder<'a> {
                     self.code[false_jump].payload = u32::try_from(self.code.len())
                         .unwrap_or(u32::MAX)
                         .to_le_bytes()
-                        .to_vec();
+                        .to_vec()
+                        .into();
                     if let Some(else_value) = else_value {
                         self.lower_formatted(else_value, fallback);
                     } else {
@@ -1569,7 +1579,8 @@ impl<'a> Builder<'a> {
                     self.code[end_jump].payload = u32::try_from(self.code.len())
                         .unwrap_or(u32::MAX)
                         .to_le_bytes()
-                        .to_vec();
+                        .to_vec()
+                        .into();
                 }
                 HirFormPart::Triple { symbol, location } => {
                     self.lower_form_triple(*symbol, *location);

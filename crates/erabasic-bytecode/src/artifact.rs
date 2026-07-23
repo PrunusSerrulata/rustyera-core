@@ -1,4 +1,5 @@
 use erabasic_data::ProjectData;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
@@ -219,8 +220,13 @@ impl BytecodeArtifact {
         let native =
             canonical_digest("rustyera.bytecode.identity.native.v2", &self.native_imports)?;
         let host = canonical_digest("rustyera.bytecode.identity.host.v2", &self.host_imports)?;
-        let functions =
-            canonical_digest("rustyera.bytecode.identity.functions.v2", &self.functions)?;
+        let functions = parallel_binary_digest(
+            "rustyera.bytecode.identity.functions.v4",
+            "rustyera.bytecode.identity.function-chunk.v4",
+            &self.functions,
+            256,
+            encode_function_chunk,
+        );
         let events = canonical_digest("rustyera.bytecode.identity.events.v2", &self.event_groups)?;
         let call_compatibility = canonical_digest(
             "rustyera.bytecode.identity.call-compatibility.v2",
@@ -241,7 +247,29 @@ impl BytecodeArtifact {
         );
         self.manifest.program_version.execution_id = execution_id;
 
-        let sources = canonical_digest("rustyera.bytecode.identity.sources.v2", &self.source_map)?;
+        let source_records = canonical_digest(
+            "rustyera.bytecode.identity.source-records.v3",
+            &self.source_map.sources,
+        )?;
+        let statement_fingerprints = binary_digest_sequence(
+            "rustyera.bytecode.identity.statement-fingerprints.v4",
+            &self.source_map.statement_fingerprints,
+        );
+        let source_entries = parallel_binary_digest(
+            "rustyera.bytecode.identity.source-entries.v4",
+            "rustyera.bytecode.identity.source-entry-chunk.v4",
+            &self.source_map.entries,
+            65_536,
+            encode_source_entry_chunk,
+        );
+        let sources = Digest::hash(
+            "rustyera.bytecode.identity.sources.v4",
+            &[
+                &source_records.0,
+                &statement_fingerprints.0,
+                &source_entries.0,
+            ],
+        );
         self.manifest.artifact_id = Digest::hash(
             "rustyera.bytecode.artifact.v2",
             &[&execution_id.0, &sources.0],
@@ -264,6 +292,171 @@ fn canonical_digest<T: Serialize + ?Sized>(
     };
     serde_json::to_writer(&mut writer, value)?;
     Ok(Digest(*writer.hasher.finalize().as_bytes()))
+}
+
+fn parallel_binary_digest<T: Sync>(
+    domain: &str,
+    chunk_domain: &str,
+    values: &[T],
+    chunk_size: usize,
+    encode_chunk: fn(&[T], &mut Vec<u8>),
+) -> Digest {
+    let chunks = values
+        .par_chunks(chunk_size)
+        .map(|chunk| {
+            let mut encoded = Vec::new();
+            encode_chunk(chunk, &mut encoded);
+            Digest::hash(chunk_domain, &[&encoded])
+        })
+        .collect::<Vec<_>>();
+    binary_digest_sequence(domain, &chunks)
+}
+
+fn binary_digest_sequence(domain: &str, values: &[Digest]) -> Digest {
+    let mut encoded = Vec::with_capacity(8 + values.len().saturating_mul(32));
+    append_length(&mut encoded, values.len());
+    for value in values {
+        encoded.extend_from_slice(&value.0);
+    }
+    Digest::hash(domain, &[&encoded])
+}
+
+/// Canonical binary identity encoding for the bytecode section.
+///
+/// Unlike the public JSON representation, this internal versioned encoding avoids converting
+/// millions of numeric operand bytes to decimal text. Every variable-width value is length
+/// prefixed, every enum has an explicit tag, and the identity domains are versioned alongside the
+/// compiler ABI.
+fn encode_function_chunk(functions: &[BytecodeFunction], output: &mut Vec<u8>) {
+    append_length(output, functions.len());
+    for function in functions {
+        output.extend_from_slice(&function.key.0);
+        append_string(output, &function.name);
+        output.push(match function.kind {
+            BytecodeFunctionKind::Normal => 0,
+            BytecodeFunctionKind::Event => 1,
+            BytecodeFunctionKind::System => 2,
+            BytecodeFunctionKind::Method => 3,
+        });
+        append_length(output, function.parameters.len());
+        for parameter in &function.parameters {
+            output.extend_from_slice(&parameter.key.0);
+            append_length(output, parameter.indices.len());
+            for index in &parameter.indices {
+                output.extend_from_slice(&index.to_le_bytes());
+            }
+            append_bytecode_type(output, parameter.value_type);
+            output.push(u8::from(parameter.by_reference));
+            append_constant(output, parameter.default.as_ref());
+        }
+        match function.result {
+            Some(value_type) => {
+                output.push(1);
+                append_bytecode_type(output, value_type);
+            }
+            None => output.push(0),
+        }
+        append_length(output, function.labels.len());
+        for label in &function.labels {
+            append_string(output, &label.name);
+            output.extend_from_slice(&label.instruction.to_le_bytes());
+        }
+        append_length(output, function.imports.len());
+        for import in &function.imports {
+            output.push(match import.kind {
+                ImportKind::Function => 0,
+                ImportKind::Native => 1,
+                ImportKind::Host => 2,
+            });
+            output.extend_from_slice(&import.key.0);
+        }
+        append_length(output, function.code.len());
+        for instruction in &function.code {
+            output.extend_from_slice(&instruction.opcode.to_le_bytes());
+            append_length(output, instruction.payload.len());
+            output.extend_from_slice(instruction.payload.as_slice());
+        }
+        output.extend_from_slice(&function.max_stack.to_le_bytes());
+    }
+}
+
+fn append_bytecode_type(output: &mut Vec<u8>, value_type: BytecodeType) {
+    output.push(match value_type {
+        BytecodeType::Integer => 0,
+        BytecodeType::String => 1,
+        BytecodeType::IntegerPlace => 2,
+        BytecodeType::StringPlace => 3,
+    });
+}
+
+fn append_constant(output: &mut Vec<u8>, constant: Option<&BytecodeConstant>) {
+    match constant {
+        None => output.push(0),
+        Some(BytecodeConstant::Integer(value)) => {
+            output.push(1);
+            output.extend_from_slice(&value.to_le_bytes());
+        }
+        Some(BytecodeConstant::String(value)) => {
+            output.push(2);
+            append_string(output, value);
+        }
+    }
+}
+
+fn encode_source_entry_chunk(entries: &[crate::SourceMapEntry], output: &mut Vec<u8>) {
+    append_length(output, entries.len());
+    let group_count = entries
+        .windows(2)
+        .filter(|pair| pair[0].function != pair[1].function)
+        .count()
+        + usize::from(!entries.is_empty());
+    append_length(output, group_count);
+    let mut group_start = 0;
+    while group_start < entries.len() {
+        let function = entries[group_start].function;
+        let group_length =
+            entries[group_start..].partition_point(|entry| entry.function == function);
+        output.extend_from_slice(&function.0);
+        append_length(output, group_length);
+        for entry in &entries[group_start..group_start + group_length] {
+            append_varint(output, entry.code_start);
+            append_varint(output, entry.code_end);
+            append_varint(output, entry.byte_start);
+            append_varint(output, entry.byte_end);
+            append_varint(output, u64::from(entry.statement_fingerprint));
+            match entry.origin_chain.as_deref() {
+                None => output.push(0),
+                Some(origins) => {
+                    output.push(1);
+                    append_length(output, origins.len());
+                    for &(source_index, byte_start, byte_end) in origins {
+                        append_varint(output, u64::from(source_index));
+                        append_varint(output, byte_start);
+                        append_varint(output, byte_end);
+                    }
+                }
+            }
+            append_varint(output, u64::from(entry.source_index));
+        }
+        group_start += group_length;
+    }
+}
+
+fn append_string(output: &mut Vec<u8>, value: &str) {
+    append_length(output, value.len());
+    output.extend_from_slice(value.as_bytes());
+}
+
+fn append_length(output: &mut Vec<u8>, value: usize) {
+    output.extend_from_slice(&(value as u64).to_le_bytes());
+}
+
+fn append_varint(output: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        output.push(u8::try_from(value & 0x7f).expect("masked varint byte fits in u8") | 0x80);
+        value >>= 7;
+    }
+    output.push(u8::try_from(value).expect("final varint byte fits in u8"));
 }
 
 struct DigestWriter {

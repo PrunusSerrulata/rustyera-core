@@ -78,7 +78,7 @@ fn rejects_unknown_opcodes() {
             imports: Vec::new(),
             code: vec![erabasic_bytecode::EncodedInstruction {
                 opcode: Opcode::Trap as u16 + 1,
-                payload: Vec::new(),
+                payload: Vec::new().into(),
             }],
             max_stack: 0,
         }],
