@@ -66,11 +66,12 @@ RSS 会包含 macOS malloc 保留但当前不再使用的页，且完整运行�
 前端到达日 1 菜单约 13.35 秒，仍远低于 30 秒进阶目标，说明紧凑存储没有用明显启动回退换取
 内存下降。
 
-真实 eraTW 在标题选择的稳定脚本输入点导出的 runtime/VM snapshot 为 133,468 bytes；同一
-payload 的未压缩 JSON 长度为 434,246 bytes（不含 60-byte 容器头），压缩后体积约为原来的
-30.7%。该快照已通过 C ABI、前端分块传输和恢复测试，恢复后仍停在相同的稳定整数输入等待。
-日 1 runtime 自有系统菜单当前返回 `SnapshotStateUnavailable`，因此没有把该不合资格状态
-伪装成日 1 snapshot 样本；这属于既有 snapshot 资格/系统流程问题，而非编码器或恢复失败。
+真实 eraTW 在“睁开眼睛”后的自宅稳定输入点，旧 VM snapshot 8/runtime snapshot 15 的
+JSON + zlib best-compression 链路从前端发出导出命令到原子落盘需要 **37.638 秒**，文件为
+7,206,491 bytes。当前格式在同一真实 TUI/C ABI 路径连续五次导出分别为 **0.169、0.132、
+0.144、0.131、0.123 秒**，中位数 0.132 秒、最大值 0.169 秒，5/5 低于 3 秒；文件为
+4,449,679–4,455,440 bytes。最后一个样本又经前端分块导入和 runtime 恢复，回到稳定整数
+输入等待，并确认展示历史仍包含自宅 `[Look]` 菜单。
 
 本轮采用的内存策略如下：
 
@@ -85,9 +86,12 @@ payload 的未压缩 JSON 长度为 434,246 bytes（不含 60-byte 容器头）�
 - dense variable cell 按声明类型分别保存 `Vec<i64>`、`Vec<String>` 或 place descriptor；只有
   操作数栈、Host/调试接口和传统存档边界才构造公共 `VmValue`。角色变量、全局数组、局部变量
   和引用参数仍走原有 shape/type 检查。
-- VM snapshot 8 和 runtime snapshot 15 使用流式、确定性的 zlib best-compression 容器，记录
-  压缩/展开长度并校验压缩 payload 的 BLAKE3。恢复时同时限制输入和最大展开长度，防止伪造
-  长度导致无界解压；格式版本不符时继续拒绝恢复。
+- VM snapshot 9 和 runtime snapshot 16 使用流式、确定性的 MessagePack + zstd level 1
+  容器。VM 直接借用稳定状态编码，不再先深复制完整 memory；dense cell 由声明维度给出完整
+  长度，只记录非默认 `(index, value)`，恢复时拒绝类型不符、重复、乱序或越界条目。runtime
+  外层把 VM 容器作为 binary byte string 写入，不再转换成 JSON 十进制数组。两层仍记录
+  压缩/展开长度并校验压缩 payload 的 BLAKE3，恢复时限制输入和最大展开长度；旧格式会因
+  明确版本不符而拒绝恢复。
 
 ## 已实施优化
 

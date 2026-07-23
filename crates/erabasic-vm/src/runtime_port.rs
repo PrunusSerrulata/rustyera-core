@@ -211,6 +211,12 @@ pub trait VmRuntimePort {
     ///
     /// Returns an error unless the VM is at a stable input wait or is quiescent.
     fn snapshot(&self) -> Result<VmSnapshot, VmError>;
+    /// Encode a stable snapshot without first cloning the complete VM state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the VM is stable and all state can be serialized.
+    fn encode_snapshot(&self) -> Result<Vec<u8>, VmError>;
     /// # Errors
     ///
     /// Returns an error for incompatible storage or generation/resource limits.

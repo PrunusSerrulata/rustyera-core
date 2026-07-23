@@ -489,6 +489,10 @@ impl VmRuntimePort for RuntimeVm {
         self.vm.snapshot(&self.natives)
     }
 
+    fn encode_snapshot(&self) -> Result<Vec<u8>, VmError> {
+        self.vm.encode_snapshot(&self.natives)
+    }
+
     fn prepare_hot_reload(&mut self, target: ValidatedArtifact) -> Result<(), VmError> {
         let migrated = self
             .natives

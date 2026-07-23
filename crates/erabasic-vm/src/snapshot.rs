@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use erabasic_bytecode::{Digest, ProgramVersion};
 use erabasic_validator::ValidatedArtifact;
-use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -13,8 +12,9 @@ use crate::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 8;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 9;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
+const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SnapshotBlocker {
@@ -47,9 +47,25 @@ pub struct VmSnapshot {
     next_frame: u64,
     next_request: u64,
     next_generation: u64,
-    // JSON object keys cannot losslessly represent a 128-bit SymbolKey. A sorted
-    // pair list keeps the snapshot deterministic and format-independent.
+    // A sorted pair list keeps native state deterministic and independent from
+    // a serializer's map-key representation.
     native_states: Vec<(erabasic_bytecode::SymbolKey, Vec<u8>)>,
+}
+
+#[derive(Serialize)]
+struct VmSnapshotRef<'a> {
+    format_version: u32,
+    program_version: ProgramVersion,
+    artifact_id: Digest,
+    current_generation: GenerationId,
+    memory: &'a Memory,
+    fibers: &'a BTreeMap<FiberId, Fiber>,
+    primary_fiber: Option<FiberId>,
+    next_fiber: u64,
+    next_frame: u64,
+    next_request: u64,
+    next_generation: u64,
+    native_states: &'a [(erabasic_bytecode::SymbolKey, Vec<u8>)],
 }
 
 impl VmSnapshot {
@@ -69,25 +85,7 @@ impl VmSnapshot {
     ///
     /// Returns an error if the snapshot payload cannot be serialized.
     pub fn encode(&self) -> Result<Vec<u8>, VmError> {
-        // Snapshots are created only at explicit stable waits. Prefer the smallest
-        // portable representation over encoder throughput for this infrequent path.
-        let encoder = ZlibEncoder::new(Vec::new(), Compression::best());
-        let mut writer = CountingWriter::new(encoder);
-        serde_json::to_writer(&mut writer, self)
-            .map_err(|error| VmError::Snapshot(error.to_string()))?;
-        let uncompressed_len = writer.bytes;
-        let payload = writer
-            .into_inner()
-            .finish()
-            .map_err(|error| VmError::Snapshot(error.to_string()))?;
-        let mut bytes = Vec::with_capacity(SNAPSHOT_HEADER_BYTES + payload.len());
-        bytes.extend_from_slice(&SNAPSHOT_MAGIC);
-        bytes.extend_from_slice(&SNAPSHOT_FORMAT_VERSION.to_le_bytes());
-        bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(&uncompressed_len.to_le_bytes());
-        bytes.extend_from_slice(blake3::hash(&payload).as_bytes());
-        bytes.extend_from_slice(&payload);
-        Ok(bytes)
+        encode_snapshot_payload(self)
     }
 
     /// Decode and checksum a snapshot container without performing I/O.
@@ -145,10 +143,18 @@ impl VmSnapshot {
         // decompression one byte past the declared length so malformed payloads
         // cannot turn snapshot restore into an unbounded allocation path.
         let decompression_limit = (uncompressed_length as u64).saturating_add(1);
-        let mut reader = CountingReader::new(ZlibDecoder::new(payload).take(decompression_limit));
-        let snapshot: Self = serde_json::from_reader(&mut reader)
+        let decoder = zstd::stream::read::Decoder::new(payload)
             .map_err(|error| VmError::Snapshot(error.to_string()))?;
-        if reader.bytes != uncompressed_length as u64 {
+        let mut reader = CountingReader::new(decoder.take(decompression_limit));
+        let snapshot: Self = rmp_serde::from_read(&mut reader)
+            .map_err(|error| VmError::Snapshot(error.to_string()))?;
+        let mut tail = [0_u8; 1];
+        if reader
+            .read(&mut tail)
+            .map_err(|error| VmError::Snapshot(error.to_string()))?
+            != 0
+            || reader.bytes != uncompressed_length as u64
+        {
             return Err(VmError::Snapshot(
                 "snapshot raw length is inconsistent".into(),
             ));
@@ -160,6 +166,27 @@ impl VmSnapshot {
         }
         Ok(snapshot)
     }
+}
+
+fn encode_snapshot_payload<T: Serialize + ?Sized>(snapshot: &T) -> Result<Vec<u8>, VmError> {
+    let encoder = zstd::stream::Encoder::new(Vec::new(), SNAPSHOT_COMPRESSION_LEVEL)
+        .map_err(|error| VmError::Snapshot(error.to_string()))?;
+    let mut writer = CountingWriter::new(encoder);
+    rmp_serde::encode::write(&mut writer, snapshot)
+        .map_err(|error| VmError::Snapshot(error.to_string()))?;
+    let uncompressed_len = writer.bytes;
+    let payload = writer
+        .into_inner()
+        .finish()
+        .map_err(|error| VmError::Snapshot(error.to_string()))?;
+    let mut bytes = Vec::with_capacity(SNAPSHOT_HEADER_BYTES + payload.len());
+    bytes.extend_from_slice(&SNAPSHOT_MAGIC);
+    bytes.extend_from_slice(&SNAPSHOT_FORMAT_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(&uncompressed_len.to_le_bytes());
+    bytes.extend_from_slice(blake3::hash(&payload).as_bytes());
+    bytes.extend_from_slice(&payload);
+    Ok(bytes)
 }
 
 struct CountingWriter<W> {
@@ -285,6 +312,39 @@ impl Vm {
         })
     }
 
+    /// Encode the current stable state without cloning dense VM memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the VM is not snapshot-eligible, a native service
+    /// cannot be captured, or the payload cannot be serialized.
+    pub fn encode_snapshot(&self, natives: &NativeServiceRegistry) -> Result<Vec<u8>, VmError> {
+        if let SnapshotEligibility::Ineligible(blockers) = self.snapshot_eligibility(natives) {
+            return Err(VmError::Snapshot(format!(
+                "VM is not at a stable snapshot point: {blockers:?}"
+            )));
+        }
+        let native_states = natives
+            .snapshots()
+            .map_err(VmError::Snapshot)?
+            .into_iter()
+            .collect::<Vec<_>>();
+        encode_snapshot_payload(&VmSnapshotRef {
+            format_version: SNAPSHOT_FORMAT_VERSION,
+            program_version: self.artifact().manifest.program_version,
+            artifact_id: self.artifact_id(),
+            current_generation: self.current_generation,
+            memory: &self.memory,
+            fibers: &self.fibers,
+            primary_fiber: self.primary_fiber,
+            next_fiber: self.next_fiber,
+            next_frame: self.next_frame,
+            next_request: self.next_request,
+            next_generation: self.next_generation,
+            native_states: &native_states,
+        })
+    }
+
     /// Restore only against the exact artifact identity. Native state is rolled
     /// back if the host rejects its atomic wait-rebind batch.
     ///
@@ -295,7 +355,7 @@ impl Vm {
     pub fn restore_snapshot(
         artifact: ValidatedArtifact,
         config: VmConfig,
-        snapshot: VmSnapshot,
+        mut snapshot: VmSnapshot,
         host: &mut impl VmHost,
         natives: &mut NativeServiceRegistry,
     ) -> Result<Self, VmError> {
@@ -309,6 +369,17 @@ impl Vm {
             ));
         }
         validate_snapshot(&snapshot, expected, config)?;
+        snapshot
+            .memory
+            .materialize_snapshot()
+            .map_err(VmError::Snapshot)?;
+        for fiber in snapshot.fibers.values_mut() {
+            for frame in &mut fiber.frames {
+                for cell in frame.locals.values_mut() {
+                    cell.materialize_snapshot().map_err(VmError::Snapshot)?;
+                }
+            }
+        }
         let rebinds = snapshot
             .fibers
             .iter()

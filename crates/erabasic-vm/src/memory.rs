@@ -4,7 +4,9 @@ use erabasic_bytecode::{
     BytecodeArtifact, BytecodeConstant, BytecodeGlobal, BytecodeStorage, BytecodeType, SymbolKey,
 };
 use erabasic_data::{CharacterSelection, CharacterTemplate, RuntimeDefaults};
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer, de::Error as _, ser::SerializeSeq as _,
+};
 
 use crate::{GenerationId, PlaceDescriptor, VmValue};
 
@@ -15,12 +17,28 @@ use crate::{GenerationId, PlaceDescriptor, VmValue};
 /// the enum's largest payload and waste two thirds of each integer allocation.
 /// The VM converts at its boundary instead, preserving the public value model
 /// and snapshot semantics while storing dense arrays in their native layout.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum VariableValues {
     Integers(Vec<i64>),
     Strings(Vec<String>),
     IntegerPlaces(Vec<PlaceDescriptor>),
     StringPlaces(Vec<PlaceDescriptor>),
+    SparseIntegers {
+        length: usize,
+        entries: Vec<(usize, i64)>,
+    },
+    SparseStrings {
+        length: usize,
+        entries: Vec<(usize, String)>,
+    },
+    SparseIntegerPlaces {
+        length: usize,
+        entries: Vec<(usize, PlaceDescriptor)>,
+    },
+    SparseStringPlaces {
+        length: usize,
+        entries: Vec<(usize, PlaceDescriptor)>,
+    },
 }
 
 impl VariableValues {
@@ -39,10 +57,10 @@ impl VariableValues {
 
     const fn value_type(&self) -> BytecodeType {
         match self {
-            Self::Integers(_) => BytecodeType::Integer,
-            Self::Strings(_) => BytecodeType::String,
-            Self::IntegerPlaces(_) => BytecodeType::IntegerPlace,
-            Self::StringPlaces(_) => BytecodeType::StringPlace,
+            Self::Integers(_) | Self::SparseIntegers { .. } => BytecodeType::Integer,
+            Self::Strings(_) | Self::SparseStrings { .. } => BytecodeType::String,
+            Self::IntegerPlaces(_) | Self::SparseIntegerPlaces { .. } => BytecodeType::IntegerPlace,
+            Self::StringPlaces(_) | Self::SparseStringPlaces { .. } => BytecodeType::StringPlace,
         }
     }
 
@@ -51,6 +69,10 @@ impl VariableValues {
             Self::Integers(values) => values.len(),
             Self::Strings(values) => values.len(),
             Self::IntegerPlaces(values) | Self::StringPlaces(values) => values.len(),
+            Self::SparseIntegers { length, .. }
+            | Self::SparseStrings { length, .. }
+            | Self::SparseIntegerPlaces { length, .. }
+            | Self::SparseStringPlaces { length, .. } => *length,
         }
     }
 
@@ -69,11 +91,35 @@ impl VariableValues {
                 .cloned()
                 .map(Box::new)
                 .map(VmValue::StringPlace),
+            Self::SparseIntegers { length, entries } => (index < *length).then(|| {
+                VmValue::Integer(sparse_value(entries, index).copied().unwrap_or_default())
+            }),
+            Self::SparseStrings { length, entries } => (index < *length).then(|| {
+                VmValue::String(sparse_value(entries, index).cloned().unwrap_or_default())
+            }),
+            Self::SparseIntegerPlaces { length, entries } => (index < *length).then(|| {
+                VmValue::IntegerPlace(Box::new(
+                    sparse_value(entries, index).cloned().unwrap_or_default(),
+                ))
+            }),
+            Self::SparseStringPlaces { length, entries } => (index < *length).then(|| {
+                VmValue::StringPlace(Box::new(
+                    sparse_value(entries, index).cloned().unwrap_or_default(),
+                ))
+            }),
         }
     }
 
     #[inline]
     fn set(&mut self, index: usize, value: VmValue) -> Result<(), String> {
+        if value.value_type() != self.value_type() {
+            return Err(format!(
+                "variable expects {:?}, found {:?}",
+                self.value_type(),
+                value.value_type()
+            ));
+        }
+        self.materialize()?;
         match (self, value) {
             (Self::Integers(values), VmValue::Integer(value)) => set_slot(values, index, value),
             (Self::Strings(values), VmValue::String(value)) => set_slot(values, index, value),
@@ -81,27 +127,25 @@ impl VariableValues {
             | (Self::StringPlaces(values), VmValue::StringPlace(value)) => {
                 set_slot(values, index, *value)
             }
-            (values, value) => Err(format!(
-                "variable expects {:?}, found {:?}",
-                values.value_type(),
-                value.value_type()
-            )),
+            _ => unreachable!("materialized storage matches the checked value type"),
         }
     }
 
     fn fill(&mut self, value: VmValue) -> Result<(), String> {
+        if value.value_type() != self.value_type() {
+            return Err(format!(
+                "variable expects {:?}, found {:?}",
+                self.value_type(),
+                value.value_type()
+            ));
+        }
+        self.materialize()?;
         match (self, value) {
             (Self::Integers(values), VmValue::Integer(value)) => values.fill(value),
             (Self::Strings(values), VmValue::String(value)) => values.fill(value),
             (Self::IntegerPlaces(values), VmValue::IntegerPlace(value))
             | (Self::StringPlaces(values), VmValue::StringPlace(value)) => values.fill(*value),
-            (values, value) => {
-                return Err(format!(
-                    "variable expects {:?}, found {:?}",
-                    values.value_type(),
-                    value.value_type()
-                ));
-            }
+            _ => unreachable!("materialized storage matches the checked value type"),
         }
         Ok(())
     }
@@ -110,6 +154,14 @@ impl VariableValues {
         if start > end || end > self.len() {
             return Err("variable fill range is outside its storage".into());
         }
+        if value.value_type() != self.value_type() {
+            return Err(format!(
+                "variable expects {:?}, found {:?}",
+                self.value_type(),
+                value.value_type()
+            ));
+        }
+        self.materialize()?;
         match (self, value) {
             (Self::Integers(values), VmValue::Integer(value)) => values[start..end].fill(value),
             (Self::Strings(values), VmValue::String(value)) => values[start..end].fill(value),
@@ -117,13 +169,7 @@ impl VariableValues {
             | (Self::StringPlaces(values), VmValue::StringPlace(value)) => {
                 values[start..end].fill(*value);
             }
-            (values, value) => {
-                return Err(format!(
-                    "variable expects {:?}, found {:?}",
-                    values.value_type(),
-                    value.value_type()
-                ));
-            }
+            _ => unreachable!("materialized storage matches the checked value type"),
         }
         Ok(())
     }
@@ -144,8 +190,63 @@ impl VariableValues {
                 .map(Box::new)
                 .map(VmValue::StringPlace)
                 .collect(),
+            Self::SparseIntegers { length, entries } => (0..*length)
+                .map(|index| sparse_value(entries, index).copied().unwrap_or_default())
+                .map(VmValue::Integer)
+                .collect(),
+            Self::SparseStrings { length, entries } => (0..*length)
+                .map(|index| sparse_value(entries, index).cloned().unwrap_or_default())
+                .map(VmValue::String)
+                .collect(),
+            Self::SparseIntegerPlaces { length, entries } => (0..*length)
+                .map(|index| sparse_value(entries, index).cloned().unwrap_or_default())
+                .map(Box::new)
+                .map(VmValue::IntegerPlace)
+                .collect(),
+            Self::SparseStringPlaces { length, entries } => (0..*length)
+                .map(|index| sparse_value(entries, index).cloned().unwrap_or_default())
+                .map(Box::new)
+                .map(VmValue::StringPlace)
+                .collect(),
         }
     }
+
+    fn materialize(&mut self) -> Result<(), String> {
+        match self {
+            Self::SparseIntegers { length, entries } => {
+                let mut values = try_default_vector::<i64>(*length)?;
+                apply_sparse_entries(&mut values, std::mem::take(entries))?;
+                *self = Self::Integers(values);
+            }
+            Self::SparseStrings { length, entries } => {
+                let mut values = try_default_vector::<String>(*length)?;
+                apply_sparse_entries(&mut values, std::mem::take(entries))?;
+                *self = Self::Strings(values);
+            }
+            Self::SparseIntegerPlaces { length, entries } => {
+                let mut values = try_default_vector::<PlaceDescriptor>(*length)?;
+                apply_sparse_entries(&mut values, std::mem::take(entries))?;
+                *self = Self::IntegerPlaces(values);
+            }
+            Self::SparseStringPlaces { length, entries } => {
+                let mut values = try_default_vector::<PlaceDescriptor>(*length)?;
+                apply_sparse_entries(&mut values, std::mem::take(entries))?;
+                *self = Self::StringPlaces(values);
+            }
+            Self::Integers(_)
+            | Self::Strings(_)
+            | Self::IntegerPlaces(_)
+            | Self::StringPlaces(_) => {}
+        }
+        Ok(())
+    }
+}
+
+fn sparse_value<T>(entries: &[(usize, T)], index: usize) -> Option<&T> {
+    entries
+        .binary_search_by_key(&index, |(entry, _)| *entry)
+        .ok()
+        .map(|position| &entries[position].1)
 }
 
 fn set_slot<T>(values: &mut [T], index: usize, value: T) -> Result<(), String> {
@@ -156,11 +257,183 @@ fn set_slot<T>(values: &mut [T], index: usize, value: T) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct VariableCell {
     pub value_type: BytecodeType,
     pub dimensions: Vec<u64>,
     values: VariableValues,
+}
+
+struct SparseDefaults<'a, T>(&'a [T]);
+
+impl<T> Serialize for SparseDefaults<'_, T>
+where
+    T: Default + PartialEq + Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let default = T::default();
+        let count = self.0.iter().filter(|value| *value != &default).count();
+        let mut entries = serializer.serialize_seq(Some(count))?;
+        for (index, value) in self.0.iter().enumerate() {
+            if value != &default {
+                entries.serialize_element(&(index, value))?;
+            }
+        }
+        entries.end()
+    }
+}
+
+#[derive(Serialize)]
+enum SparseVariableValuesRef<'a> {
+    Integers(SparseDefaults<'a, i64>),
+    Strings(SparseDefaults<'a, String>),
+    IntegerPlaces(SparseDefaults<'a, PlaceDescriptor>),
+    StringPlaces(SparseDefaults<'a, PlaceDescriptor>),
+}
+
+#[derive(Serialize)]
+enum SparseVariableValuesEntriesRef<'a> {
+    Integers(&'a [(usize, i64)]),
+    Strings(&'a [(usize, String)]),
+    IntegerPlaces(&'a [(usize, PlaceDescriptor)]),
+    StringPlaces(&'a [(usize, PlaceDescriptor)]),
+}
+
+#[derive(Serialize, Deserialize)]
+enum SparseVariableValues {
+    Integers(Vec<(usize, i64)>),
+    Strings(Vec<(usize, String)>),
+    IntegerPlaces(Vec<(usize, PlaceDescriptor)>),
+    StringPlaces(Vec<(usize, PlaceDescriptor)>),
+}
+
+impl Serialize for VariableCell {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match &self.values {
+            VariableValues::Integers(values) => (
+                &self.value_type,
+                &self.dimensions,
+                SparseVariableValuesRef::Integers(SparseDefaults(values)),
+            )
+                .serialize(serializer),
+            VariableValues::Strings(values) => (
+                &self.value_type,
+                &self.dimensions,
+                SparseVariableValuesRef::Strings(SparseDefaults(values)),
+            )
+                .serialize(serializer),
+            VariableValues::IntegerPlaces(values) => (
+                &self.value_type,
+                &self.dimensions,
+                SparseVariableValuesRef::IntegerPlaces(SparseDefaults(values)),
+            )
+                .serialize(serializer),
+            VariableValues::StringPlaces(values) => (
+                &self.value_type,
+                &self.dimensions,
+                SparseVariableValuesRef::StringPlaces(SparseDefaults(values)),
+            )
+                .serialize(serializer),
+            VariableValues::SparseIntegers { entries, .. } => (
+                &self.value_type,
+                &self.dimensions,
+                SparseVariableValuesEntriesRef::Integers(entries),
+            )
+                .serialize(serializer),
+            VariableValues::SparseStrings { entries, .. } => (
+                &self.value_type,
+                &self.dimensions,
+                SparseVariableValuesEntriesRef::Strings(entries),
+            )
+                .serialize(serializer),
+            VariableValues::SparseIntegerPlaces { entries, .. } => (
+                &self.value_type,
+                &self.dimensions,
+                SparseVariableValuesEntriesRef::IntegerPlaces(entries),
+            )
+                .serialize(serializer),
+            VariableValues::SparseStringPlaces { entries, .. } => (
+                &self.value_type,
+                &self.dimensions,
+                SparseVariableValuesEntriesRef::StringPlaces(entries),
+            )
+                .serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for VariableCell {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (value_type, dimensions, sparse) =
+            <(BytecodeType, Vec<u64>, SparseVariableValues)>::deserialize(deserializer)?;
+        let length = element_count(&dimensions)
+            .ok_or_else(|| D::Error::custom("snapshot variable dimensions overflow"))?;
+        let values = match (value_type, sparse) {
+            (BytecodeType::Integer, SparseVariableValues::Integers(entries)) => {
+                validate_sparse_entries(length, &entries).map_err(D::Error::custom)?;
+                VariableValues::SparseIntegers { length, entries }
+            }
+            (BytecodeType::String, SparseVariableValues::Strings(entries)) => {
+                validate_sparse_entries(length, &entries).map_err(D::Error::custom)?;
+                VariableValues::SparseStrings { length, entries }
+            }
+            (BytecodeType::IntegerPlace, SparseVariableValues::IntegerPlaces(entries)) => {
+                validate_sparse_entries(length, &entries).map_err(D::Error::custom)?;
+                VariableValues::SparseIntegerPlaces { length, entries }
+            }
+            (BytecodeType::StringPlace, SparseVariableValues::StringPlaces(entries)) => {
+                validate_sparse_entries(length, &entries).map_err(D::Error::custom)?;
+                VariableValues::SparseStringPlaces { length, entries }
+            }
+            _ => {
+                return Err(D::Error::custom(
+                    "snapshot variable values differ from their declared type",
+                ));
+            }
+        };
+        Ok(Self {
+            value_type,
+            dimensions,
+            values,
+        })
+    }
+}
+
+fn try_default_vector<T: Default>(length: usize) -> Result<Vec<T>, String> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(length)
+        .map_err(|_| "snapshot variable allocation failed")?;
+    values.resize_with(length, T::default);
+    Ok(values)
+}
+
+fn apply_sparse_entries<T>(values: &mut [T], entries: Vec<(usize, T)>) -> Result<(), &'static str> {
+    validate_sparse_entries(values.len(), &entries)?;
+    for (index, value) in entries {
+        values[index] = value;
+    }
+    Ok(())
+}
+
+fn validate_sparse_entries<T>(length: usize, entries: &[(usize, T)]) -> Result<(), &'static str> {
+    let mut previous = None;
+    for (index, _) in entries {
+        if *index >= length || previous.is_some_and(|previous| *index <= previous) {
+            return Err("snapshot variable entries are not strictly ordered and in bounds");
+        }
+        previous = Some(*index);
+    }
+    Ok(())
 }
 
 impl VariableCell {
@@ -277,6 +550,10 @@ impl VariableCell {
 
     pub(crate) fn storage_is_valid(&self) -> bool {
         self.values.value_type() == self.value_type
+    }
+
+    pub(crate) fn materialize_snapshot(&mut self) -> Result<(), String> {
+        self.values.materialize()
     }
 
     pub fn migrate(&self, definition: &BytecodeGlobal) -> Self {
@@ -407,6 +684,22 @@ pub(crate) struct Memory {
 }
 
 impl Memory {
+    pub(crate) fn materialize_snapshot(&mut self) -> Result<(), String> {
+        for cell in self
+            .shared
+            .values_mut()
+            .chain(self.statics.values_mut())
+            .chain(
+                self.characters
+                    .iter_mut()
+                    .flat_map(|character| character.values_mut()),
+            )
+        {
+            cell.materialize_snapshot()?;
+        }
+        Ok(())
+    }
+
     pub fn title(artifact: &BytecodeArtifact) -> Self {
         let mut result = Self::empty(artifact);
         // Emuera initializes ordinary variable defaults before SYSTEM_TITLE, but
@@ -943,6 +1236,63 @@ mod tests {
 
         assert_eq!(cell.first(), Some(VmValue::IntegerPlace(Box::new(place))));
         assert!(cell.storage_is_valid());
+    }
+
+    #[test]
+    fn snapshot_cells_use_sparse_round_trippable_storage() {
+        let mut integer = VariableCell::new(&global(BytecodeType::Integer, vec![1_000_000]));
+        integer.set(999_999, VmValue::Integer(42)).unwrap();
+        let encoded = rmp_serde::to_vec(&integer).unwrap();
+        assert!(encoded.len() < 128);
+        let mut decoded = rmp_serde::from_slice::<VariableCell>(&encoded).unwrap();
+        decoded.materialize_snapshot().unwrap();
+        assert_eq!(decoded, integer);
+
+        let mut string = VariableCell::new(&global(BytecodeType::String, vec![8]));
+        string.set(5, VmValue::String("preserved".into())).unwrap();
+        let encoded = rmp_serde::to_vec(&string).unwrap();
+        let mut decoded = rmp_serde::from_slice::<VariableCell>(&encoded).unwrap();
+        decoded.materialize_snapshot().unwrap();
+        assert_eq!(decoded, string);
+
+        let mut place = VariableCell::new(&global(BytecodeType::IntegerPlace, vec![3]));
+        place
+            .set(
+                2,
+                VmValue::IntegerPlace(Box::new(PlaceDescriptor {
+                    variable: SymbolKey::derive("memory.test", b"snapshot-place"),
+                    indices: vec![4],
+                    ..PlaceDescriptor::default()
+                })),
+            )
+            .unwrap();
+        let encoded = rmp_serde::to_vec(&place).unwrap();
+        let mut decoded = rmp_serde::from_slice::<VariableCell>(&encoded).unwrap();
+        decoded.materialize_snapshot().unwrap();
+        assert_eq!(decoded, place);
+
+        for malformed in [
+            SparseVariableValues::Integers(vec![(1, 1), (1, 2)]),
+            SparseVariableValues::Integers(vec![(2, 1)]),
+            SparseVariableValues::Strings(vec![(1, "wrong type".into())]),
+        ] {
+            let encoded = rmp_serde::to_vec(&(BytecodeType::Integer, vec![2], malformed)).unwrap();
+            assert!(rmp_serde::from_slice::<VariableCell>(&encoded).is_err());
+        }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn sparse_snapshot_decode_defers_untrusted_dense_allocation() {
+        let encoded = rmp_serde::to_vec(&(
+            BytecodeType::Integer,
+            vec![u64::MAX],
+            SparseVariableValues::Integers(Vec::new()),
+        ))
+        .unwrap();
+        let decoded = rmp_serde::from_slice::<VariableCell>(&encoded).unwrap();
+        assert_eq!(decoded.len(), usize::MAX);
+        assert!(decoded.values.get(usize::MAX - 1).is_some());
     }
 
     #[test]

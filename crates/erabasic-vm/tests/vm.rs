@@ -1632,14 +1632,22 @@ fn stable_wait_snapshot_round_trips_and_requires_exact_artifact() {
         vm.snapshot_eligibility(&natives),
         SnapshotEligibility::Eligible
     );
+    let direct = vm.encode_snapshot(&natives).unwrap();
     let snapshot = vm.snapshot(&natives).unwrap();
-    let uncompressed = serde_json::to_vec(&snapshot).unwrap();
     let bytes = snapshot.encode().unwrap();
-    assert!(bytes.len() < uncompressed.len() / 4);
+    assert_eq!(direct, bytes);
+    let uncompressed_len =
+        usize::try_from(u64::from_le_bytes(bytes[20..28].try_into().unwrap())).unwrap();
+    assert!(
+        uncompressed_len < 4_096,
+        "default dense storage should use sparse snapshot encoding"
+    );
     let mut understated = bytes.clone();
-    understated[20..28].copy_from_slice(&((uncompressed.len() as u64) - 1).to_le_bytes());
-    assert!(VmSnapshot::decode(&understated, uncompressed.len()).is_err());
-    let decoded = VmSnapshot::decode(&bytes, uncompressed.len()).unwrap();
+    understated[20..28].copy_from_slice(&((uncompressed_len as u64) - 1).to_le_bytes());
+    let maximum = bytes.len().max(uncompressed_len);
+    assert!(VmSnapshot::decode(&understated, maximum).is_err());
+    let decoded = VmSnapshot::decode(&bytes, maximum).unwrap();
+    assert_eq!(decoded.encode().unwrap(), bytes);
     let mut restore_host = PendingHost {
         stability: HostWaitStability::StableInput,
         rebound: Vec::new(),

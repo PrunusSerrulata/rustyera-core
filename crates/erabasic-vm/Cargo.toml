@@ -10,11 +10,12 @@ erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-data = { path = "../erabasic-data" }
 erabasic-validator = { path = "../erabasic-validator" }
 encoding_rs.workspace = true
-flate2.workspace = true
 regex.workspace = true
 quick-xml.workspace = true
+rmp-serde.workspace = true
 serde.workspace = true
 serde_json = "1.0.112"
+zstd.workspace = true
 
 [dev-dependencies]
 erabasic-analyzer = { path = "../erabasic-analyzer" }
