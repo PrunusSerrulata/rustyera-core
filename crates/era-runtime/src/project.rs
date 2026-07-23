@@ -205,6 +205,7 @@ fn build_project_inner_with_extensions(
     extension_declarations: &[era_runtime_protocol::ExtensionDeclaration],
 ) -> ProjectBuild {
     let mut diagnostics = Vec::new();
+    let source_texts = manifest_source_texts(manifest);
     let (extensions, host_registry, extension_map) =
         prepare_extensions(extension_declarations, &mut diagnostics);
     let mut files = manifest.files.clone();
@@ -347,29 +348,32 @@ fn build_project_inner_with_extensions(
         &analyzer_options,
         &extensions,
     );
-    diagnostics.extend(
-        analysis
-            .diagnostics
-            .iter()
-            .map(|diagnostic| ProtocolDiagnostic {
-                code: format!("analyzer.{:?}", diagnostic.code).to_ascii_lowercase(),
-                severity: match diagnostic.severity {
-                    AnalyzerDiagnosticSeverity::Notice => DiagnosticSeverity::Information,
-                    AnalyzerDiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
-                    AnalyzerDiagnosticSeverity::Error | AnalyzerDiagnosticSeverity::Fatal => {
-                        DiagnosticSeverity::Error
-                    }
-                },
-                message: diagnostic.message.clone(),
-                source: diagnostic.source.as_ref().map(|source| SourceLocation {
-                    relative_path: source.relative_path.clone(),
-                    byte_start: source.byte_start as u64,
-                    byte_end: source.byte_end as u64,
-                    line: Some(u64::from(source.physical_line)),
-                    byte_column: None,
-                }),
-            }),
-    );
+    diagnostics.extend(analysis.diagnostics.iter().map(|diagnostic| {
+        let source = diagnostic.source.as_ref().map(|source| {
+            let text = source_texts
+                .get(&source.relative_path.to_ascii_lowercase())
+                .copied();
+            project_source_location(
+                source.relative_path.clone(),
+                source.byte_start,
+                source.byte_end,
+                Some(u64::from(source.physical_line)),
+                text,
+            )
+        });
+        ProtocolDiagnostic {
+            code: format!("analyzer.{:?}", diagnostic.code).to_ascii_lowercase(),
+            severity: match diagnostic.severity {
+                AnalyzerDiagnosticSeverity::Notice => DiagnosticSeverity::Information,
+                AnalyzerDiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
+                AnalyzerDiagnosticSeverity::Error | AnalyzerDiagnosticSeverity::Fatal => {
+                    DiagnosticSeverity::Error
+                }
+            },
+            message: diagnostic.message.clone(),
+            source,
+        }
+    }));
     let Some(project) = analysis.project else {
         return failed(manifest.project_revision, diagnostics, previous);
     };
@@ -396,38 +400,40 @@ fn build_project_inner_with_extensions(
         previous,
         previous_artifact,
     );
-    diagnostics.extend(
-        compile
-            .diagnostics
-            .iter()
-            .map(|diagnostic| ProtocolDiagnostic {
-                code: format!("compiler.{:?}", diagnostic.code).to_ascii_lowercase(),
-                severity: match diagnostic.severity {
-                    erabasic_compiler::CompilerDiagnosticSeverity::Notice => {
-                        DiagnosticSeverity::Information
-                    }
-                    erabasic_compiler::CompilerDiagnosticSeverity::Warning => {
-                        DiagnosticSeverity::Warning
-                    }
-                    erabasic_compiler::CompilerDiagnosticSeverity::Error => {
-                        DiagnosticSeverity::Error
-                    }
-                },
-                message: diagnostic.message.clone(),
-                source: diagnostic.location.map(|location| SourceLocation {
-                    relative_path: project
-                        .program
-                        .sources
-                        .iter()
-                        .find(|source| source.id == location.source)
-                        .map_or_else(String::new, |source| source.relative_path.clone()),
-                    byte_start: location.span.start as u64,
-                    byte_end: location.span.end as u64,
-                    line: None,
-                    byte_column: None,
-                }),
-            }),
-    );
+    diagnostics.extend(compile.diagnostics.iter().map(|diagnostic| {
+        let source = diagnostic.location.map(|location| {
+            let relative_path = project
+                .program
+                .sources
+                .iter()
+                .find(|source| source.id == location.source)
+                .map_or_else(String::new, |source| source.relative_path.clone());
+            let text = source_texts
+                .get(&relative_path.to_ascii_lowercase())
+                .copied();
+            project_source_location(
+                relative_path,
+                location.span.start,
+                location.span.end,
+                None,
+                text,
+            )
+        });
+        ProtocolDiagnostic {
+            code: format!("compiler.{:?}", diagnostic.code).to_ascii_lowercase(),
+            severity: match diagnostic.severity {
+                erabasic_compiler::CompilerDiagnosticSeverity::Notice => {
+                    DiagnosticSeverity::Information
+                }
+                erabasic_compiler::CompilerDiagnosticSeverity::Warning => {
+                    DiagnosticSeverity::Warning
+                }
+                erabasic_compiler::CompilerDiagnosticSeverity::Error => DiagnosticSeverity::Error,
+            },
+            message: diagnostic.message.clone(),
+            source,
+        }
+    }));
     let incremental = compile.incremental_state;
     let Some(artifact) = compile.artifact else {
         return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
@@ -1422,6 +1428,51 @@ fn payload_hash(payload: &FilePayload) -> Option<blake3::Hash> {
     }
 }
 
+fn manifest_source_texts(manifest: &ProjectManifest) -> std::collections::BTreeMap<String, &str> {
+    manifest
+        .files
+        .iter()
+        .filter_map(|file| {
+            let FilePayload::Utf8(text) = &file.payload else {
+                return None;
+            };
+            let path = validate_relative_path(&file.relative_path).ok()?;
+            Some((path.to_ascii_lowercase(), text.as_str()))
+        })
+        .collect()
+}
+
+fn project_source_location(
+    relative_path: String,
+    byte_start: usize,
+    byte_end: usize,
+    fallback_line: Option<u64>,
+    text: Option<&str>,
+) -> SourceLocation {
+    let (line, byte_column) = text.map_or((fallback_line, None), |text| {
+        let clamped_start = byte_start.min(text.len());
+        let prefix = &text.as_bytes()[..clamped_start];
+        let line_start = prefix
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |index| index + 1);
+        let line = prefix
+            .iter()
+            .fold(0u64, |count, byte| count + u64::from(*byte == b'\n'));
+        (
+            Some(line),
+            Some(u64::try_from(clamped_start - line_start).unwrap_or(u64::MAX)),
+        )
+    });
+    SourceLocation {
+        relative_path,
+        byte_start: u64::try_from(byte_start).unwrap_or(u64::MAX),
+        byte_end: u64::try_from(byte_end).unwrap_or(u64::MAX),
+        line,
+        byte_column,
+    }
+}
+
 fn project_diagnostic(
     code: &str,
     severity: DiagnosticSeverity,
@@ -1541,6 +1592,60 @@ mod tests {
             "scripts/main.erb"
         );
         assert_eq!(category_relative_path("CSV.csv", "CSV"), "CSV.csv");
+    }
+
+    #[test]
+    fn project_source_location_reports_zero_based_utf8_byte_line_and_column() {
+        let text = "最初の行\n\tRESULT = 未定義\n";
+        let byte_start = text.find("未定義").unwrap();
+        let location = project_source_location(
+            "ERB/main.erb".into(),
+            byte_start,
+            byte_start + "未定義".len(),
+            None,
+            Some(text),
+        );
+
+        assert_eq!(location.relative_path, "ERB/main.erb");
+        assert_eq!(location.line, Some(1));
+        assert_eq!(location.byte_column, Some(10));
+        assert_eq!(location.byte_start, u64::try_from(byte_start).unwrap());
+        assert_eq!(
+            location.byte_end,
+            u64::try_from(byte_start + "未定義".len()).unwrap()
+        );
+    }
+
+    #[test]
+    fn project_build_populates_analyzer_diagnostic_line_and_byte_column() {
+        let text = "@SYSTEM_TITLE\nUNKNOWN 1\nRETURN\n";
+        let build = build_project(
+            &ProjectManifest {
+                project_revision: 1,
+                files: vec![SubmittedFile {
+                    relative_path: "ERB/bad.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(text.into()),
+                    content_hash: None,
+                }],
+            },
+            None,
+        );
+
+        let diagnostic = build
+            .report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "analyzer.unknowninstruction")
+            .expect("unknown-instruction diagnostic");
+        let source = diagnostic.source.as_ref().expect("source location");
+        assert_eq!(source.relative_path, "ERB/bad.erb");
+        assert_eq!(source.line, Some(1));
+        assert_eq!(source.byte_column, Some(0));
+        assert_eq!(
+            source.byte_start,
+            u64::try_from(text.find("UNKNOWN").unwrap()).unwrap()
+        );
     }
 
     #[test]
