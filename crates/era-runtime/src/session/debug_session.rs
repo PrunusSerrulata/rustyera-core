@@ -36,22 +36,45 @@ impl RuntimeSession {
                 Err(RuntimeError::Internal(message)) if message == DEBUG_REQUEST_REJECTED => Ok(()),
                 result => result,
             },
-            DebugMessage::Revoke(revoke) => {
-                if self
-                    .active_debug_grant
-                    .as_ref()
-                    .is_some_and(|grant| grant.token.grant_id == revoke.grant_id)
-                {
-                    self.active_debug_grant = None;
-                }
-                Ok(())
-            }
+            DebugMessage::Revoke(revoke) => self.revoke_debug_grant(revoke.grant_id),
             _ => self.emit_debug_error(
                 DebugErrorCode::InvalidState,
                 "debug message direction is frontend-incompatible",
                 Some(message_id),
             ),
         }
+    }
+
+    fn revoke_debug_grant(&mut self, grant_id: SessionId) -> Result<(), RuntimeError> {
+        if self
+            .active_debug_grant
+            .as_ref()
+            .is_none_or(|grant| grant.token.grant_id != grant_id)
+        {
+            return Ok(());
+        }
+        if self.phase == RuntimePhase::DebugPaused {
+            let stop = self
+                .vm
+                .as_ref()
+                .and_then(VmDebugInspect::stop_token)
+                .ok_or_else(|| {
+                    RuntimeError::Internal("debug-paused runtime has no VM stop token".into())
+                })?;
+            self.vm
+                .as_mut()
+                .ok_or_else(|| RuntimeError::Internal("debug-paused runtime has no VM".into()))?
+                .continue_execution(stop)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            self.resume_debug_time();
+            let phase = self
+                .debug_resume_phase
+                .take()
+                .unwrap_or(RuntimePhase::Running);
+            self.set_phase(phase)?;
+        }
+        self.active_debug_grant = None;
+        Ok(())
     }
 
     fn debug_hello(&mut self, message_id: u64, hello: &DebugHello) -> Result<(), RuntimeError> {

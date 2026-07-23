@@ -1,9 +1,13 @@
-use era_debug_protocol::{DEBUG_PROTOCOL_VERSION, DebugHello, DebugMessage, DebugScope};
+use era_debug_protocol::{
+    AuthorizedDebugRequest, DEBUG_PROTOCOL_VERSION, DebugCommand, DebugHello, DebugMessage,
+    DebugRevoke, DebugScope, GrantToken,
+};
 use era_protocol::{Channel, Envelope, ProtocolBytes, decode_envelope, encode_envelope};
 use era_runtime_protocol::{
     DisplayRun, FileCategory, FileChange, FilePayload, ProjectIdentity, ProjectManifest,
     SubmittedFile,
 };
+use erabasic_vm::VmDebugInspect;
 
 use super::*;
 
@@ -827,6 +831,66 @@ fn debugger_pause_freezes_frontend_time_until_resume() {
     assert_eq!(session.logical_time_ns, 500);
     session.resume_debug_time();
     assert_eq!(session.frontend_time_origin, Some((1_000, 500)));
+}
+
+#[test]
+fn revoking_the_active_debugger_resumes_a_debug_paused_runtime() {
+    let build = build_project(
+        &ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nWAIT\nRETURN\n".into()),
+                content_hash: None,
+            }],
+        },
+        None,
+    );
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::WaitingInput;
+    session.epoch = SessionEpoch(1);
+    session.vm = Some(RuntimeVm::new(
+        build.artifact.expect("valid project"),
+        VmConfig::default(),
+    ));
+    let grant = GrantToken {
+        grant_id: SessionId { high: 7, low: 9 },
+        session_epoch: session.epoch.0,
+        program_generation: 0,
+        issued_runtime_revision: session.revision,
+    };
+    session.active_debug_grant = Some(ActiveDebugGrant {
+        token: grant,
+        scopes: BTreeSet::from([DebugScope::ExecutionControl]),
+    });
+
+    session
+        .handle_debug_message(
+            1,
+            DebugMessage::Request(AuthorizedDebugRequest {
+                grant,
+                command: DebugCommand::Pause,
+            }),
+        )
+        .unwrap();
+    assert_eq!(session.phase, RuntimePhase::DebugPaused);
+    assert!(session.vm.as_ref().unwrap().stop_token().is_some());
+
+    session
+        .handle_debug_message(
+            2,
+            DebugMessage::Revoke(DebugRevoke {
+                grant_id: grant.grant_id,
+                reason: "frontend disabled debugging".into(),
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(session.phase, RuntimePhase::WaitingInput);
+    assert!(session.active_debug_grant.is_none());
+    assert!(session.vm.as_ref().unwrap().stop_token().is_none());
 }
 
 #[test]
