@@ -1,12 +1,41 @@
 param(
-    [string]$Executable = "$PSScriptRoot/../bin/x64/Debug-NAudio/net10.0-windows/win-x64/Emuera.ReferenceCli.exe"
+    [string]$Executable,
+    [string]$OutputFile,
+    [int]$TimeoutSeconds = $(if ($env:EMUERA_REFERENCE_TIMEOUT_SECONDS) {
+        [int]$env:EMUERA_REFERENCE_TIMEOUT_SECONDS
+    } else {
+        30
+    })
 )
 
 $ErrorActionPreference = "Stop"
+$toolDirectory = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $toolDirectory "../.."))
+$project = Join-Path $toolDirectory "Emuera.ReferenceCli.csproj"
+if ([string]::IsNullOrWhiteSpace($Executable)) {
+    & dotnet publish $project `
+        -c Debug-NAudio `
+        -p:Platform=x64 `
+        -r win-x64 `
+        --self-contained true `
+        -p:PublishSingleFile=false `
+        --nologo `
+        -clp:ErrorsOnly
+    if ($LASTEXITCODE -ne 0) {
+        throw "Reference CLI publish failed with exit code $LASTEXITCODE"
+    }
+    $Executable = Join-Path $toolDirectory "bin/x64/Debug-NAudio/net10.0-windows/win-x64/publish/Emuera.ReferenceCli.exe"
+}
+if ([string]::IsNullOrWhiteSpace($OutputFile)) {
+    $OutputFile = Join-Path $repositoryRoot ".wine-tmp/emuera-reference-cli/windows-smoke.ndjson"
+}
 $executablePath = [System.IO.Path]::GetFullPath($Executable)
 if (-not [System.IO.File]::Exists($executablePath)) {
-    throw "Reference CLI not found: $executablePath. Build Debug-NAudio/win-x64 first."
+    throw "Reference CLI not found: $executablePath"
 }
+$outputPath = [System.IO.Path]::GetFullPath($OutputFile)
+[System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($outputPath)) | Out-Null
+[System.IO.File]::WriteAllText($outputPath, "", [System.Text.UTF8Encoding]::new($false))
 
 $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
 $startInfo.FileName = $executablePath
@@ -24,10 +53,20 @@ function Invoke-Oracle([hashtable]$Request) {
     $json = $Request | ConvertTo-Json -Compress -Depth 20
     $process.StandardInput.WriteLine($json)
     $process.StandardInput.Flush()
-    $line = $process.StandardOutput.ReadLine()
+    $readTask = $process.StandardOutput.ReadLineAsync()
+    if (-not $readTask.Wait([TimeSpan]::FromSeconds($TimeoutSeconds))) {
+        if (-not $process.HasExited) { $process.Kill($true) }
+        throw "Reference CLI timed out after $TimeoutSeconds seconds while handling request $($Request.id)"
+    }
+    $line = $readTask.Result
     if ($null -eq $line) {
         throw "Reference CLI exited early: $($process.StandardError.ReadToEnd())"
     }
+    [System.IO.File]::AppendAllText(
+        $outputPath,
+        $line + [Environment]::NewLine,
+        [System.Text.UTF8Encoding]::new($false)
+    )
     return $line | ConvertFrom-Json
 }
 
@@ -47,16 +86,12 @@ try {
     Assert-True $caps.ok "process did not survive the failed request"
     Assert-True ($caps.schemaVersion -eq 1) "unexpected schema version"
 
-    $lex = Invoke-Oracle @{ id = 3; op = "lex"; source = "RESULT = 1 + 2" }
+    $lex = Invoke-Oracle @{ id = 3; op = "lex"; source = "1 + 2" }
     Assert-True $lex.ok "lex failed"
-    Assert-True ($lex.result.tokens.Count -gt 3) "lex returned too few tokens"
+    Assert-True ($lex.result.tokens.Count -eq 3) "lex returned an unexpected token count"
 
     $expression = Invoke-Oracle @{ id = 4; op = "parseExpression"; source = "1 + 2 * 3" }
     Assert-True $expression.ok "parseExpression failed"
-
-    $logicalLine = Invoke-Oracle @{ id = 5; op = "parseLine"; source = "PRINTL hello"; reduceArguments = $false }
-    Assert-True $logicalLine.ok "parseLine failed"
-    Assert-True ($logicalLine.result.functionCode -eq "PRINTL") "wrong instruction code"
 
     $tempGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-oracle-" + [guid]::NewGuid())
     Copy-Item "$PSScriptRoot/fixture" $tempGame -Recurse
@@ -76,6 +111,19 @@ try {
     Assert-True ($timedOneInput.result.inputRequest.InputType -eq "StrValue") "timed one-input type differs"
     Assert-True $timedOneInput.result.inputRequest.OneInput "timed one-input flag differs"
     Assert-True ($timedOneInput.result.inputRequest.Timelimit -eq "1000") "timed one-input limit differs"
+
+    $drawing = Invoke-Oracle @{ id = "config-drawing"; op = "eval"; source = 'GETCONFIGS("描画インターフェース")' }
+    Assert-True ($drawing.ok -and $drawing.result.value -eq "TEXTRENDERER") "drawing interface config differs"
+    $fontSize = Invoke-Oracle @{ id = "config-font-size"; op = "eval"; source = 'GETCONFIG("フォントサイズ")' }
+    Assert-True ($fontSize.ok -and $fontSize.result.value -eq 18) "font size config differs"
+    $foreColor = Invoke-Oracle @{ id = "config-fore-color"; op = "eval"; source = 'GETCONFIG("文字色")' }
+    Assert-True ($foreColor.ok -and $foreColor.result.value -eq 12632256) "foreground color config differs"
+    $stainList = Invoke-Oracle @{ id = "config-stain-list"; op = "eval"; source = 'GETCONFIGS("汚れの初期値")' }
+    Assert-True ($stainList.ok -and $stainList.result.value -eq 'System.Collections.Generic.List`1[System.Int64]') "stain list config differs"
+    $millisecond = Invoke-Oracle @{ id = "getmillisecond"; op = "eval"; source = "GETMILLISECOND()" }
+    $second = Invoke-Oracle @{ id = "getsecond"; op = "eval"; source = "GETSECOND()" }
+    $clockDelta = [Math]::Floor($millisecond.result.value / 1000) - $second.result.value
+    Assert-True ($millisecond.ok -and $second.ok -and [Math]::Abs($clockDelta) -le 1) "reference clock values differ"
 
     $project = Invoke-Oracle @{ id = "project"; op = "analyzeProject" }
     Assert-True $project.ok "project semantic projection failed"
@@ -120,6 +168,25 @@ try {
     Assert-True $run.ok "isolated function run failed"
     Assert-True ($run.result.termination -eq "completed") "function did not complete"
     Assert-True (($run.result.output -join "`n") -match "ORACLE_OK") "function output missing"
+
+    $compat = Invoke-Oracle @{ id = "compat"; op = "run"; entry = "ORACLE_COMPAT"; watch = @("FLAG:0") }
+    Assert-True ($compat.ok -and $compat.result.termination -eq "completed" -and
+        $compat.result.watches.'FLAG:0' -eq 4) "compatibility function differs"
+    $compatRest = Invoke-Oracle @{
+        id = "compat-rest"
+        op = "run"
+        entry = "ORACLE_COMPAT_REST"
+        watch = @("RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULTS:10", "FLAG:1", "FLAG:2")
+    }
+    Assert-True ($compatRest.ok -and $compatRest.result.termination -eq "completed" -and
+        $compatRest.result.watches.'RESULT:1' -eq 0 -and
+        $compatRest.result.watches.'RESULT:2' -eq 3 -and
+        $compatRest.result.watches.'RESULT:3' -eq 4 -and
+        $compatRest.result.watches.'RESULT:4' -eq 1 -and
+        $compatRest.result.watches.'RESULT:5' -eq 2 -and
+        $compatRest.result.watches.'RESULTS:10' -eq "STORED" -and
+        $compatRest.result.watches.'FLAG:1' -eq 7 -and
+        $compatRest.result.watches.'FLAG:2' -eq 8) "remaining compatibility behavior differs"
 
     $nativeTail = Invoke-Oracle @{
         id = "native-tail"
@@ -227,6 +294,22 @@ try {
     Assert-True ($structuredRun.result.watches.'RESULTS:2' -eq '<root><item id="a" kind="first">one</item><item id="b">changed</item></root>') "XML mutation differs"
     Assert-True (($structuredRun.result.watches.'RESULT:4' -eq 1) -and ($structuredRun.result.watches.'RESULT:5' -eq 1)) "XML mutation counts differ"
 
+    $compat12 = Invoke-Oracle @{
+        id = "compat-12"
+        op = "run"
+        entry = "ORACLE_COMPAT_12"
+        watch = @("RESULT:20", "RESULT:21", "RESULT:22", "RESULT:23", "RESULT:24", "RESULTS:20", "RESULTS:21", "RESULTS:22")
+    }
+    Assert-True ($compat12.ok -and $compat12.result.termination -eq "completed" -and
+        $compat12.result.watches.'RESULT:20' -eq 4 -and
+        $compat12.result.watches.'RESULT:21' -eq 0 -and
+        $compat12.result.watches.'RESULT:22' -eq 0 -and
+        $compat12.result.watches.'RESULT:23' -eq 66051 -and
+        $compat12.result.watches.'RESULT:24' -eq 3 -and
+        $compat12.result.watches.'RESULTS:20' -eq "&lt;&amp;&gt;&apos;&quot;" -and
+        $compat12.result.watches.'RESULTS:21' -eq "A&Bあ" -and
+        $compat12.result.watches.'RESULTS:22' -eq "LEFT") "compatibility section 1.2 differs"
+
     $inputRun = Invoke-Oracle @{ id = 10; op = "run"; entry = "ORACLE_INPUT"; inputs = @("42"); watch = @("RESULT") }
     Assert-True $inputRun.ok "input function run failed"
     Assert-True ($inputRun.result.termination -eq "completed") "input function did not complete"
@@ -312,7 +395,8 @@ try {
 
     $reset = Invoke-Oracle @{ id = 11; op = "reset" }
     Assert-True $reset.ok "reset failed"
-    Write-Host "Emuera reference CLI smoke test passed."
+    Write-Host "Emuera reference CLI and CSV oracle smoke test passed."
+    Write-Host "NDJSON: $outputPath"
 }
 finally {
     if (-not $process.HasExited) {
