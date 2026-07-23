@@ -1408,6 +1408,17 @@ impl RuntimeSession {
             self.allocate_interaction(),
             self.logical_time_ns,
         ) {
+            // Bind automatic buttons still buffered on the current logical line before
+            // transferring the menu choices into the wait. Otherwise a trailing
+            // `PRINTFORM "[58] ..."` is rendered as clickable but its token remains
+            // outside the active INPUT/INPUTS validator.
+            let count = self.presentation.pending_auto_button_values().len();
+            let tokens = (0..count)
+                .map(|_| self.allocate_interaction())
+                .collect::<Vec<_>>();
+            for (token, value) in self.presentation.bind_pending_auto_buttons(&tokens) {
+                self.command_intents.insert(token, VmValue::Integer(value));
+            }
             if matches!(
                 pending.wait.kind,
                 WaitKind::IntegerValue
