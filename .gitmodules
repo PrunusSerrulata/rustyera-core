@@ -1,0 +1,3 @@
+[submodule "reference/emuera.em"]
+	path = reference/emuera.em
+	url = https://github.com/PrunusSerrulata/emuera.em.git
