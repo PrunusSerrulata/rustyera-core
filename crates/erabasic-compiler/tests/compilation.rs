@@ -75,6 +75,27 @@ fn static_call_ignores_a_final_argument_separator() {
 }
 
 #[test]
+fn static_call_target_stops_before_an_inline_comment() {
+    let report = compile_project(
+        &analyze(
+            "@SYSTEM_TITLE\nCALL TARGET; inline comment\nCALL TARGET, ; comment after separator\nRETURN\n@TARGET\nRETURN\n",
+        ),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.artifact.is_some(), "{:#?}", report.diagnostics);
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == CompilerDiagnosticCode::MissingImport),
+        "{:#?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn host_operations_use_only_call_host_and_round_trip() {
     let project =
         analyze("@SYSTEM_TITLE\nPRINTFORM value={1 + 2}\nINPUT 0\nRESULT = 4 + 5\nRETURN\n");

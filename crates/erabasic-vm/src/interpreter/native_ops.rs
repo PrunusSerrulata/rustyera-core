@@ -832,26 +832,35 @@ pub(super) fn execute_variable_fill(
                 "VARSET character destination has no character".into(),
             ));
         }
-        let value = arguments.get(1).cloned().unwrap_or(default);
+        let value = fill_value_or_default(arguments, 1, default);
         if value.value_type() != definition.value_type {
             return Err(VmError::InvalidArguments(
                 "VARSET value type differs".into(),
             ));
         }
-        if definition.dimensions.len() != 1 || !place.indices.is_empty() {
+        if definition.dimensions.is_empty() {
             let _ = vm.read_place(fiber, &place)?;
             return vm.write_place(fiber, &place, value);
         }
-        let length = vm.place_array_len(fiber, &place)?;
-        let mut start = optional_nonnegative(arguments, 2, 0, "VARSET start")?;
-        let mut end = optional_nonnegative(arguments, 3, length, "VARSET end")?;
-        if start > end {
-            std::mem::swap(&mut start, &mut end);
-        }
-        if end > length {
-            return Err(VmError::InvalidArguments("VARSET range is invalid".into()));
-        }
-        return vm.fill_place_array_range(fiber, &place, start, end, value);
+        let mut array = place;
+        array.indices.clear();
+        let length = vm.place_array_len(fiber, &array)?;
+        let (start, end) = if definition.dimensions.len() == 1 {
+            let mut start = optional_nonnegative(arguments, 2, 0, "VARSET start")?;
+            let mut end = optional_nonnegative(arguments, 3, length, "VARSET end")?;
+            if start > end {
+                std::mem::swap(&mut start, &mut end);
+            }
+            if end > length {
+                return Err(VmError::InvalidArguments("VARSET range is invalid".into()));
+            }
+            (start, end)
+        } else {
+            // The reference ignores range arguments for higher-rank arrays and
+            // applies VARSET to their complete flattened storage.
+            (0, length)
+        };
+        return vm.fill_place_array_range(fiber, &array, start, end, value);
     }
 
     if definition.storage != BytecodeStorage::Character || definition.dimensions.len() > 1 {
@@ -860,7 +869,7 @@ pub(super) fn execute_variable_fill(
         ));
     }
     let element = optional_nonnegative(arguments, 1, 0, "CVARSET element")?;
-    let value = arguments.get(2).cloned().unwrap_or(default);
+    let value = fill_value_or_default(arguments, 2, default);
     if value.value_type() != definition.value_type {
         return Err(VmError::InvalidArguments(
             "CVARSET value type differs".into(),
@@ -904,6 +913,16 @@ pub(super) fn execute_variable_fill(
         vm.write_place(fiber, &destination, value.clone())?;
     }
     Ok(())
+}
+
+fn fill_value_or_default(arguments: &[VmValue], index: usize, default: VmValue) -> VmValue {
+    match arguments.get(index) {
+        None | Some(VmValue::Integer(i64::MIN)) => default,
+        // Translated projects commonly use numeric zero to clear a string array.
+        // Treat it as the string default instead of materializing the text "0".
+        Some(VmValue::Integer(0)) if default.value_type() == BytecodeType::String => default,
+        Some(value) => value.clone(),
+    }
 }
 
 pub(super) fn optional_nonnegative(

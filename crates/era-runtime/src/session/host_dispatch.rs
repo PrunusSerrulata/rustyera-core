@@ -342,6 +342,44 @@ impl RuntimeSession {
             );
         }
         if name == "VARSIZE" {
+            if let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) =
+                request.arguments.first()
+            {
+                let dimensions =
+                    vm.host_place_dimensions(request.fiber, place)
+                        .map_err(|error| {
+                            RuntimeError::Internal(format!(
+                                "VARSIZE variable reference is invalid: {error}"
+                            ))
+                        })?;
+                let Some(VmValue::IntegerPlace(result)) = request.arguments.get(1) else {
+                    return Err(RuntimeError::Internal(
+                        "statement VARSIZE requires a RESULT output place".into(),
+                    ));
+                };
+                let writes = dimensions
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        let mut target = result.as_ref().clone();
+                        target
+                            .indices
+                            .push(u64::try_from(index).unwrap_or(u64::MAX));
+                        HostWrite {
+                            target,
+                            value: VmValue::Integer(i64::try_from(value).unwrap_or(i64::MAX)),
+                        }
+                    })
+                    .collect();
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady {
+                        value: None,
+                        writes,
+                    }),
+                );
+            }
             let variable = string_argument_value(&request.arguments, 0, "VARSIZE")?;
             let dimensions = vm
                 .variable_dimensions(request.fiber, variable)

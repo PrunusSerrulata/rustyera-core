@@ -193,7 +193,8 @@ fn validate_limits(
             "artifact exceeds a project resource limit",
         ));
     }
-    let mut total_elements = 0u64;
+    let mut resident_elements = 0u64;
+    let mut function_elements = BTreeMap::<SymbolKey, u64>::new();
     for global in &artifact.globals {
         let elements = global
             .dimensions
@@ -207,13 +208,42 @@ fn validate_limits(
                 format!("variable {} exceeds a storage resource limit", global.name),
             ));
         }
-        total_elements = total_elements.saturating_add(elements.unwrap_or(u64::MAX));
+        let elements = elements.unwrap_or(u64::MAX);
+        if matches!(
+            global.storage,
+            BytecodeStorage::FunctionLocal
+                | BytecodeStorage::FunctionStatic
+                | BytecodeStorage::FunctionPersistent
+        ) {
+            if let Some(owner) = global.owner {
+                let total = function_elements.entry(owner).or_default();
+                *total = total.saturating_add(elements);
+            }
+        } else {
+            resident_elements = resident_elements.saturating_add(elements);
+        }
     }
-    if total_elements > limits.maximum_total_variable_elements {
+    if resident_elements > limits.maximum_total_variable_elements {
         diagnostics.push(ValidationDiagnostic::project(
             ValidationCode::ResourceLimit,
             "artifact exceeds the total variable storage limit",
         ));
+    } else {
+        for (owner, elements) in function_elements {
+            if resident_elements.saturating_add(elements) > limits.maximum_total_variable_elements {
+                let function = artifact
+                    .functions
+                    .iter()
+                    .find(|function| function.key == owner)
+                    .map_or("<unknown>", |function| function.name.as_str());
+                diagnostics.push(ValidationDiagnostic::project(
+                    ValidationCode::ResourceLimit,
+                    format!(
+                        "function {function} variable storage exceeds the total variable storage limit"
+                    ),
+                ));
+            }
+        }
     }
     for function in &artifact.functions {
         if function.code.len() > limits.maximum_instructions_per_function

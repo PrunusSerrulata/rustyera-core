@@ -349,6 +349,34 @@ impl<'a> Builder<'a> {
             }
             return;
         }
+        if name == "VARSIZE" {
+            let mut parameter_types = arguments
+                .iter()
+                .map(|argument| self.lower_argument(argument, location))
+                .collect::<Vec<_>>();
+            let result = self
+                .context
+                .program
+                .variables
+                .iter()
+                .find(|variable| variable.name.eq_ignore_ascii_case("RESULT"))
+                .and_then(|variable| self.context.variable_keys.get(&variable.id))
+                .copied();
+            if let Some(result) = result {
+                self.emit(opcode::variable(Opcode::MakePlace, result, 0, 0), location);
+                parameter_types.push(BytecodeType::IntegerPlace);
+                self.emit_runtime_call(name, &parameter_types, None, false, location);
+            } else {
+                self.emit(
+                    EncodedInstruction::new(
+                        Opcode::Trap,
+                        b"VARSIZE result variable is missing".to_vec(),
+                    ),
+                    location,
+                );
+            }
+            return;
+        }
         if name == "GETMILLISECOND" {
             self.emit_runtime_call(name, &[], Some(BytecodeType::Integer), false, location);
             self.store_method_result(SemanticType::Integer, location);

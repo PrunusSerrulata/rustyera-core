@@ -15,6 +15,7 @@ fn full_project_options() -> CsvLoadOptions {
     CsvLoadOptions {
         use_rename_file: true,
         compatible_call_name: true,
+        compatible_sp_character: true,
         ..CsvLoadOptions::default()
     }
 }
@@ -130,6 +131,31 @@ fn loads_schema_static_data_and_phase_seeds() {
             .iter()
             .any(|diagnostic| diagnostic.code == CsvDiagnosticCode::DuplicateIndex)
     );
+}
+
+#[test]
+fn cflag_zero_only_marks_special_characters_when_compatibility_is_enabled() {
+    let files = ProjectFiles {
+        csv: vec![file("CHARA0.csv", "NO,0\nNAME,Player\nCFLAG,0,1900\n")],
+        erb: vec![],
+    };
+
+    let normal = load_project(&files, &CsvLoadOptions::default())
+        .data
+        .unwrap();
+    assert!(!normal.static_data.characters[0].is_sp_character);
+    assert_eq!(normal.static_data.characters[0].cflag[&0], 1900);
+
+    let compatible = load_project(
+        &files,
+        &CsvLoadOptions {
+            compatible_sp_character: true,
+            ..CsvLoadOptions::default()
+        },
+    )
+    .data
+    .unwrap();
+    assert!(compatible.static_data.characters[0].is_sp_character);
 }
 
 #[test]

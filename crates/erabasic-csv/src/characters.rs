@@ -51,7 +51,8 @@ pub(crate) fn load_characters(
         }
     }
     for character in &mut characters {
-        character.is_sp_character = character.cflag.get(&0).is_some_and(|value| *value != 0);
+        character.is_sp_character = options.compatible_sp_character
+            && character.cflag.get(&0).is_some_and(|value| *value != 0);
     }
     diagnose_duplicate_characters(&characters, options, diagnostics);
 

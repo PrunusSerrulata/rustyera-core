@@ -191,7 +191,7 @@ fn instruction(
 fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     use ArgumentConstraint::{
         Any, Formatted, Integer, MutableAny, MutableInteger, MutableReferenceOrString,
-        MutableString, ReferenceOrString, String,
+        MutableString, ReferenceAny, ReferenceOrString, String,
     };
     use ArgumentStyle::{
         Expressions, Formatted as FormStyle, FormattedFirst, None as NoArgs, PrintV, Raw, Times,
@@ -252,6 +252,9 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         // the same spelling are registered independently below.
         add(name, Expressions, &[MutableInteger], 1, false, false);
     }
+    // Unlike VARSIZE("NAME", dimension), the statement form consumes one bare
+    // array variable and writes all of its dimensions to RESULT.
+    add("VARSIZE", Expressions, &[ReferenceAny], 1, false, false);
     add("ASSERT", Expressions, &[Integer], 1, false, false);
     add("THROW", FormStyle, &[Formatted], 0, false, true);
     // The statement form is distinct from ENCODETOUNI(string, position): it

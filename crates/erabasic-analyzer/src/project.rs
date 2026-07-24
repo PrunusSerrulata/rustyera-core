@@ -1353,7 +1353,7 @@ fn is_era_escaped(source: &str, index: usize) -> bool {
         == 1
 }
 
-fn resolve_static_target(raw: &str, index_resolver: &IndexResolver) -> String {
+fn static_target_source(raw: &str) -> &str {
     let mut brackets = 0_u32;
     let mut quoted = false;
     let end = raw
@@ -1371,11 +1371,15 @@ fn resolve_static_target(raw: &str, index_resolver: &IndexResolver) -> String {
                 brackets = brackets.saturating_sub(1);
                 None
             }
-            ',' | '(' if !quoted && brackets == 0 => Some(index),
+            ',' | '(' | ';' if !quoted && brackets == 0 => Some(index),
             _ => None,
         })
         .unwrap_or(raw.len());
-    let target = raw[..end].trim().trim_matches('"');
+    &raw[..end]
+}
+
+fn resolve_static_target(raw: &str, index_resolver: &IndexResolver) -> String {
+    let target = static_target_source(raw).trim().trim_matches('"');
     let mut result = String::with_capacity(target.len());
     let mut rest = target;
     while let Some(start) = rest.find("[[") {
@@ -1548,12 +1552,7 @@ fn collect_statement_calls(statement: &Statement, calls: &mut Vec<String>) {
                 name.as_str(),
                 "CALL" | "CALLF" | "JUMP" | "BEGIN" | "TRYCALL" | "TRYJUMP"
             ) {
-                let target = raw_arguments
-                    .split(',')
-                    .next()
-                    .unwrap_or_default()
-                    .trim()
-                    .trim_matches('"');
+                let target = static_target_source(raw_arguments).trim().trim_matches('"');
                 if !target.is_empty() {
                     calls.push(target.to_owned());
                 }

@@ -10,13 +10,15 @@ use serde::{
 
 use crate::{GenerationId, PlaceDescriptor, VmValue};
 
-/// Dense variable storage is specialized by `EraBasic` value type.
+/// Variable storage is specialized by `EraBasic` value type.
 ///
 /// Most game memory consists of large integer arrays, especially character
 /// variables. Keeping every element in the public `VmValue` enum would retain
 /// the enum's largest payload and waste two thirds of each integer allocation.
-/// The VM converts at its boundary instead, preserving the public value model
-/// and snapshot semantics while storing dense arrays in their native layout.
+/// Large function-owned arrays additionally keep only non-default entries until
+/// an operation truly needs dense storage, matching the reference's lazy local
+/// allocation. The VM converts at its boundary, preserving the public value
+/// model and snapshot semantics.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum VariableValues {
     Integers(Vec<i64>),
@@ -42,6 +44,8 @@ enum VariableValues {
 }
 
 impl VariableValues {
+    const SPARSE_DEFAULT_MINIMUM_LENGTH: usize = 64 * 1024;
+
     fn with_default(value_type: BytecodeType, length: usize) -> Self {
         match value_type {
             BytecodeType::Integer => Self::Integers(vec![0; length]),
@@ -52,6 +56,30 @@ impl VariableValues {
             BytecodeType::StringPlace => {
                 Self::StringPlaces(vec![PlaceDescriptor::default(); length])
             }
+        }
+    }
+
+    fn with_lazy_default(value_type: BytecodeType, length: usize) -> Self {
+        if length < Self::SPARSE_DEFAULT_MINIMUM_LENGTH {
+            return Self::with_default(value_type, length);
+        }
+        match value_type {
+            BytecodeType::Integer => Self::SparseIntegers {
+                length,
+                entries: Vec::new(),
+            },
+            BytecodeType::String => Self::SparseStrings {
+                length,
+                entries: Vec::new(),
+            },
+            BytecodeType::IntegerPlace => Self::SparseIntegerPlaces {
+                length,
+                entries: Vec::new(),
+            },
+            BytecodeType::StringPlace => Self::SparseStringPlaces {
+                length,
+                entries: Vec::new(),
+            },
         }
     }
 
@@ -119,6 +147,19 @@ impl VariableValues {
                 value.value_type()
             ));
         }
+        match (&mut *self, &value) {
+            (Self::SparseIntegers { length, entries }, VmValue::Integer(value)) => {
+                return set_sparse_slot(*length, entries, index, *value);
+            }
+            (Self::SparseStrings { length, entries }, VmValue::String(value)) => {
+                return set_sparse_slot(*length, entries, index, value.clone());
+            }
+            (Self::SparseIntegerPlaces { length, entries }, VmValue::IntegerPlace(value))
+            | (Self::SparseStringPlaces { length, entries }, VmValue::StringPlace(value)) => {
+                return set_sparse_slot(*length, entries, index, value.as_ref().clone());
+            }
+            _ => {}
+        }
         self.materialize()?;
         match (self, value) {
             (Self::Integers(values), VmValue::Integer(value)) => set_slot(values, index, value),
@@ -138,6 +179,27 @@ impl VariableValues {
                 self.value_type(),
                 value.value_type()
             ));
+        }
+        let cleared_sparse = match (&mut *self, &value) {
+            (Self::SparseIntegers { entries, .. }, VmValue::Integer(0)) => {
+                entries.clear();
+                true
+            }
+            (Self::SparseStrings { entries, .. }, VmValue::String(value)) if value.is_empty() => {
+                entries.clear();
+                true
+            }
+            (Self::SparseIntegerPlaces { entries, .. }, VmValue::IntegerPlace(value))
+            | (Self::SparseStringPlaces { entries, .. }, VmValue::StringPlace(value))
+                if value.as_ref() == &PlaceDescriptor::default() =>
+            {
+                entries.clear();
+                true
+            }
+            _ => false,
+        };
+        if cleared_sparse {
+            return Ok(());
         }
         self.materialize()?;
         match (self, value) {
@@ -160,6 +222,27 @@ impl VariableValues {
                 self.value_type(),
                 value.value_type()
             ));
+        }
+        let cleared_sparse = match (&mut *self, &value) {
+            (Self::SparseIntegers { entries, .. }, VmValue::Integer(0)) => {
+                clear_sparse_range(entries, start, end);
+                true
+            }
+            (Self::SparseStrings { entries, .. }, VmValue::String(value)) if value.is_empty() => {
+                clear_sparse_range(entries, start, end);
+                true
+            }
+            (Self::SparseIntegerPlaces { entries, .. }, VmValue::IntegerPlace(value))
+            | (Self::SparseStringPlaces { entries, .. }, VmValue::StringPlace(value))
+                if value.as_ref() == &PlaceDescriptor::default() =>
+            {
+                clear_sparse_range(entries, start, end);
+                true
+            }
+            _ => false,
+        };
+        if cleared_sparse {
+            return Ok(());
         }
         self.materialize()?;
         match (self, value) {
@@ -247,6 +330,33 @@ fn sparse_value<T>(entries: &[(usize, T)], index: usize) -> Option<&T> {
         .binary_search_by_key(&index, |(entry, _)| *entry)
         .ok()
         .map(|position| &entries[position].1)
+}
+
+fn set_sparse_slot<T>(
+    length: usize,
+    entries: &mut Vec<(usize, T)>,
+    index: usize,
+    value: T,
+) -> Result<(), String>
+where
+    T: Default + PartialEq,
+{
+    if index >= length {
+        return Err("variable offset is outside its storage".into());
+    }
+    match entries.binary_search_by_key(&index, |(entry, _)| *entry) {
+        Ok(position) if value == T::default() => {
+            entries.remove(position);
+        }
+        Ok(position) => entries[position].1 = value,
+        Err(_) if value == T::default() => {}
+        Err(position) => entries.insert(position, (index, value)),
+    }
+    Ok(())
+}
+
+fn clear_sparse_range<T>(entries: &mut Vec<(usize, T)>, start: usize, end: usize) {
+    entries.retain(|(index, _)| *index < start || *index >= end);
 }
 
 fn set_slot<T>(values: &mut [T], index: usize, value: T) -> Result<(), String> {
@@ -439,7 +549,16 @@ fn validate_sparse_entries<T>(length: usize, entries: &[(usize, T)]) -> Result<(
 impl VariableCell {
     pub fn new(definition: &BytecodeGlobal) -> Self {
         let length = element_count(&definition.dimensions).unwrap_or(0);
-        let mut values = VariableValues::with_default(definition.value_type, length);
+        let mut values = if matches!(
+            definition.storage,
+            BytecodeStorage::FunctionLocal
+                | BytecodeStorage::FunctionStatic
+                | BytecodeStorage::FunctionPersistent
+        ) {
+            VariableValues::with_lazy_default(definition.value_type, length)
+        } else {
+            VariableValues::with_default(definition.value_type, length)
+        };
         for (index, value) in definition.initial_values.iter().enumerate() {
             let value = match value {
                 BytecodeConstant::Integer(value) => VmValue::Integer(*value),
@@ -782,18 +901,6 @@ impl Memory {
         }
     }
 
-    pub(crate) fn initialize_function_statics(&mut self, artifact: &BytecodeArtifact) {
-        for definition in &artifact.globals {
-            if matches!(
-                definition.storage,
-                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent
-            ) {
-                self.statics
-                    .insert(definition.key, VariableCell::new(definition));
-            }
-        }
-    }
-
     pub fn push_character(
         &mut self,
         artifact: &BytecodeArtifact,
@@ -816,6 +923,8 @@ impl Memory {
         self.set_named_optional_strings(artifact, "STR", &defaults.str_values);
         self.set_named_values(artifact, "PALAMLV", &defaults.palam_levels);
         self.set_named_values(artifact, "EXPLV", &defaults.exp_levels);
+        let static_data = &artifact.project_data.static_data;
+        let game_base = &static_data.game_base;
         for (name, value) in [
             ("ASSI", defaults.assi_0),
             ("TARGET", defaults.target_0),
@@ -825,10 +934,35 @@ impl Memory {
             ("RELATION", defaults.relation_default),
             ("LASTLOAD_VERSION", defaults.last_load_version),
             ("LASTLOAD_NO", defaults.last_load_no),
+            ("GAMEBASE_GAMECODE", game_base.unique_code),
+            ("GAMEBASE_VERSION", game_base.version),
+            ("GAMEBASE_ALLOWVERSION", game_base.compatible_min_version),
+            ("GAMEBASE_DEFAULTCHARA", game_base.default_character),
+            ("GAMEBASE_NOITEM", game_base.no_item),
+            ("__INT_MAX__", i64::MAX),
+            ("__INT_MIN__", i64::MIN),
         ] {
             self.set_named_integer(artifact, name, value);
         }
         self.set_named_string(artifact, "LASTLOAD_TEXT", &defaults.last_load_text);
+        for (name, value) in [
+            ("GAMEBASE_AUTHER", game_base.author.as_str()),
+            ("GAMEBASE_AUTHOR", game_base.author.as_str()),
+            ("GAMEBASE_INFO", game_base.info.as_str()),
+            ("GAMEBASE_YEAR", game_base.year.as_str()),
+            ("GAMEBASE_TITLE", game_base.title.as_str()),
+            ("GAMEBASE_URL", game_base.update_url.as_str()),
+            ("GAMEBASE_VERSIONNAME", game_base.version_name.as_str()),
+            (
+                "WINDOW_TITLE",
+                game_base.window_title.as_deref().unwrap_or_default(),
+            ),
+            ("MONEYLABEL", static_data.replace.money_label.as_str()),
+            ("DRAWLINESTR", static_data.replace.draw_line_string.as_str()),
+            ("EMUERA_VERSION", "1.824.0.0"),
+        ] {
+            self.set_named_string(artifact, name, value);
+        }
     }
 
     pub(crate) fn set_last_load(
@@ -1236,6 +1370,47 @@ mod tests {
 
         assert_eq!(cell.first(), Some(VmValue::IntegerPlace(Box::new(place))));
         assert!(cell.storage_is_valid());
+    }
+
+    #[test]
+    fn large_function_cells_keep_default_storage_sparse_during_point_updates() {
+        let mut integer_definition = global(BytecodeType::Integer, vec![1_000_000]);
+        integer_definition.storage = BytecodeStorage::FunctionPersistent;
+        integer_definition.owner = Some(SymbolKey::derive("memory.test", b"function"));
+        let mut integer = VariableCell::new(&integer_definition);
+        assert!(matches!(
+            integer.values,
+            VariableValues::SparseIntegers { ref entries, .. } if entries.is_empty()
+        ));
+        assert_eq!(integer.read(&[999_999]).unwrap(), VmValue::Integer(0));
+        integer.set(999_999, VmValue::Integer(42)).unwrap();
+        integer.set(10, VmValue::Integer(11)).unwrap();
+        integer.fill_range(0, 100, VmValue::Integer(0)).unwrap();
+        assert_eq!(integer.get(10), Some(VmValue::Integer(0)));
+        assert_eq!(integer.get(999_999), Some(VmValue::Integer(42)));
+        assert!(matches!(
+            integer.values,
+            VariableValues::SparseIntegers { ref entries, .. } if entries.len() == 1
+        ));
+        integer.set(999_999, VmValue::Integer(0)).unwrap();
+        assert!(matches!(
+            integer.values,
+            VariableValues::SparseIntegers { ref entries, .. } if entries.is_empty()
+        ));
+
+        let mut string_definition = global(BytecodeType::String, vec![1_000_000]);
+        string_definition.storage = BytecodeStorage::FunctionPersistent;
+        string_definition.owner = Some(SymbolKey::derive("memory.test", b"function"));
+        let mut string = VariableCell::new(&string_definition);
+        string
+            .set(750_000, VmValue::String("value".into()))
+            .unwrap();
+        string.fill(VmValue::String(String::new())).unwrap();
+        assert_eq!(string.get(750_000), Some(VmValue::String(String::new())));
+        assert!(matches!(
+            string.values,
+            VariableValues::SparseStrings { ref entries, .. } if entries.is_empty()
+        ));
     }
 
     #[test]

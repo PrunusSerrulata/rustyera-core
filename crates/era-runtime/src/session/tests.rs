@@ -1757,7 +1757,7 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
                     relative_path: "metadata.erb".into(),
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\n#DIMS VALUES, 3\n#DIMS CHOICES, 5\nCALL SIZE_OF, CHOICES\nPRINTFORML meta={VARSIZE(\"VALUES\")},{EXISTFUNCTION(\"SYSTEM_TITLE\")},{EXISTVAR(\"VALUES\")},%GETDOINGFUNCTION()%,{RESULT},%CHOICES:2%\nPRINTFORML funcs={ENUMFUNCWITH(\"SIZE\", CHOICES)},%CHOICES:0%\nPRINTFORML vars={ENUMVARWITH(\"SAVEDATA_TEXT\", CHOICES)},%CHOICES:0%\nCALL ORACLE_REFLECTION\nPRINTFORML reflection={RESULT:12},{RESULT:13},%RESULTS:8%,%RESULTS:9%\nRETURN\n@SIZE_OF(refChoices)\n#DIMS REF refChoices, 0\nrefChoices:2 '= \"bound\"\nRESULT = VARSIZE(\"refChoices\")\nRETURN\n@ORACLE_REFLECTION\n#DIMS NAMES, 4\nRESULT:12 = ENUMFUNCWITH(\"ORACLE_REFLECTION\", NAMES)\nRESULTS:8 = %NAMES:0%\nRESULT:13 = ENUMVARWITH(\"SAVEDATA_TEXT\", NAMES)\nRESULTS:9 = %NAMES:0%\nRETURN\n"
+                        "@SYSTEM_TITLE\n#DIMS VALUES, 3, 4\n#DIMS CHOICES, 5\nVARSIZE VALUES\nPRINTFORML statement={RESULT},{RESULT:1}\nCALL SIZE_OF, CHOICES\nPRINTFORML meta={VARSIZE(\"VALUES\")},{EXISTFUNCTION(\"SYSTEM_TITLE\")},{EXISTVAR(\"VALUES\")},%GETDOINGFUNCTION()%,{RESULT},%CHOICES:2%\nPRINTFORML funcs={ENUMFUNCWITH(\"SIZE\", CHOICES)},%CHOICES:0%\nPRINTFORML vars={ENUMVARWITH(\"SAVEDATA_TEXT\", CHOICES)},%CHOICES:0%\nCALL ORACLE_REFLECTION\nPRINTFORML reflection={RESULT:12},{RESULT:13},%RESULTS:8%,%RESULTS:9%\nRETURN\n@SIZE_OF(refChoices)\n#DIMS REF refChoices, 0\nrefChoices:2 '= \"bound\"\nRESULT = VARSIZE(\"refChoices\")\nRETURN\n@ORACLE_REFLECTION\n#DIMS NAMES, 4\nRESULT:12 = ENUMFUNCWITH(\"ORACLE_REFLECTION\", NAMES)\nRESULTS:8 = %NAMES:0%\nRESULT:13 = ENUMVARWITH(\"SAVEDATA_TEXT\", NAMES)\nRESULTS:9 = %NAMES:0%\nRETURN\n"
                             .into(),
                     ),
                     content_hash: None,
@@ -1806,6 +1806,10 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
             _ => None,
         })
         .collect::<String>();
+    assert!(
+        rendered.contains("statement=3,4"),
+        "{rendered}\n{output:#?}"
+    );
     assert!(rendered.contains("funcs=1,SIZE_OF"), "{rendered}");
     assert!(rendered.contains("vars=1,SAVEDATA_TEXT"), "{rendered}");
     assert!(
@@ -3701,6 +3705,86 @@ fn savedata_uses_atomic_frontend_storage_and_resumes_only_after_completion() {
     let vm = session.vm.as_ref().expect("runtime VM");
     assert_eq!(read_runtime_string(vm, "SAVEDATA_TEXT").unwrap(), "suffix");
     assert_eq!(read_runtime_integer(vm, "RESULT", &[], None).unwrap(), 20);
+}
+
+#[test]
+fn chkdata_returns_its_status_and_updates_the_description() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "check-save-test".into(),
+            features: vec![RuntimeFeature::Storage],
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "check.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nCHKDATA 99\nWAIT\nRETURN\n".into()),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let request = (0..8)
+        .find_map(|_| {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            drain(&mut session)
+                .into_iter()
+                .find_map(|message| match message {
+                    RuntimeMessage::StorageRequest(request) => Some(request),
+                    _ => None,
+                })
+        })
+        .expect("CHKDATA storage request");
+    assert_eq!(request.relative_path, "save99.sav");
+    assert_eq!(request.operation, StorageOperation::Read);
+
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::StorageResponse(StorageResponse {
+            request_id: request.request_id,
+            result: StorageResult::Error {
+                error: era_runtime_protocol::FrontendIoError {
+                    kind: FrontendIoErrorKind::NotFound,
+                    message: "missing slot".into(),
+                    platform_code: None,
+                },
+            },
+        }),
+    );
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        if session.operations.active_input().is_some() {
+            break;
+        }
+    }
+
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "RESULT", &[], None).unwrap(), 1);
+    assert_eq!(read_runtime_string(vm, "RESULTS").unwrap(), "missing slot");
 }
 
 #[test]

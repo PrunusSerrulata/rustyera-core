@@ -187,6 +187,14 @@ fn power_statement_writes_the_destination_instead_of_passing_its_place_as_an_ope
 }
 
 #[test]
+fn static_call_target_with_an_inline_comment_executes_in_the_vm() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nCALL TARGET; inline comment\nRETURN\n@TARGET\nRESULT = 42\nRETURN\n",
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(42));
+}
+
+#[test]
 fn scalar_ref_parameters_store_aliases_and_mutate_the_callers_arrays() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\n#DIM VALUES, 3\nVALUES:1 = 3\nCALL MUTATE_REF(VALUES)\nRETURN\n@MUTATE_REF(NUMBERS)\n#DIM REF NUMBERS\nNUMBERS:1 = 7\nRETURN\n",
@@ -1042,6 +1050,117 @@ fn varset_fills_only_the_validated_half_open_range() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn omitted_varset_values_use_the_destination_type_default() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         #DIMS WORDS, 2, 2\n\
+         FLAG:0 = 7\n\
+         FLAG:1 = 8\n\
+         VARSET FLAG,\n\
+         FLAG:5 = 9\n\
+         FLAG:6 = 10\n\
+         VARSET FLAG:5, 0\n\
+         RESULTS:0 '= \"a\"\n\
+         RESULTS:1 '= \"b\"\n\
+         RESULTS:2 '= \"c\"\n\
+         RESULTS:3 '= \"d\"\n\
+         VARSET RESULTS,, 2, 4\n\
+         VARSET RESULTS, 0, 0, 2\n\
+         ADDVOIDCHARA\n\
+         TARGET = 0\n\
+         CSTR:0 '= \"first\"\n\
+         CSTR:1 '= \"first-extra\"\n\
+         TARGET = 1\n\
+         CSTR:0 '= \"second\"\n\
+         CSTR:1 '= \"second-extra\"\n\
+         CVARSET CSTR, 0,\n\
+         CVARSET CSTR, 1, 0\n\
+         WORDS:0:0 '= \"zero\"\n\
+         WORDS:0:1 '= \"one\"\n\
+         WORDS:1:0 '= \"two\"\n\
+         WORDS:1:1 '= \"three\"\n\
+         VARSET WORDS, 0\n\
+         RETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .unwrap()
+        .key;
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .unwrap()
+        .key;
+    let cstr = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "CSTR")
+        .unwrap()
+        .key;
+    let words = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "WORDS")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..2)
+            .map(|index| vm.read_variable(flag, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![VmValue::Integer(0); 2]
+    );
+    assert_eq!(
+        (5..7)
+            .map(|index| vm.read_variable(flag, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![VmValue::Integer(0); 2]
+    );
+    assert_eq!(
+        (0..4)
+            .map(|index| vm.read_variable(results, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![VmValue::String(String::new()); 4]
+    );
+    assert_eq!(
+        [(0, 0), (0, 1), (1, 0), (1, 1)]
+            .into_iter()
+            .map(|(character, index)| {
+                vm.read_variable(cstr, &[index], Some(character)).unwrap()
+            })
+            .collect::<Vec<_>>(),
+        vec![VmValue::String(String::new()); 4]
+    );
+    assert_eq!(
+        [(0, 0), (0, 1), (1, 0), (1, 1)]
+            .into_iter()
+            .map(|(first, second)| { vm.read_variable(words, &[first, second], None).unwrap() })
+            .collect::<Vec<_>>(),
+        vec![VmValue::String(String::new()); 4]
+    );
+}
+
+#[test]
 fn dynamic_variable_methods_resolve_local_global_and_named_places() {
     let mut data = project_data();
     data.static_data
@@ -1142,6 +1261,8 @@ fn omitted_substring_and_statement_encodetouni_match_reference_results() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\n\
          RESULTS:12 = %SUBSTRING(\"abcd\", , 2)%\n\
+         RESULTS:13 = %SUBSTRING(\"abcd\", 2, -1)%\n\
+         RESULTS:14 = %SUBSTRINGU(\"aβcd\", 2, -1)%\n\
          RESULTS:20 '= \"A界\"\n\
          ENCODETOUNI %RESULTS:20%\n\
          RETURN\n",
@@ -1188,6 +1309,14 @@ fn omitted_substring_and_statement_encodetouni_match_reference_results() {
     assert_eq!(
         vm.read_variable(results, &[12], None),
         Ok(VmValue::String("ab".into()))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[13], None),
+        Ok(VmValue::String("cd".into()))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[14], None),
+        Ok(VmValue::String("cd".into()))
     );
 }
 
@@ -1555,6 +1684,84 @@ fn character_csv_queries_use_loaded_templates_and_character_lookup() {
             VmValue::Integer(1),
         ]
     );
+}
+
+#[test]
+fn title_memory_initializes_gamebase_and_replace_calculated_variables() {
+    let mut data = project_data();
+    data.static_data.game_base.unique_code = 42;
+    data.static_data.game_base.version = 1_234;
+    data.static_data.game_base.compatible_min_version = 1_200;
+    data.static_data.game_base.default_character = 7;
+    data.static_data.game_base.no_item = 8;
+    data.static_data.game_base.title = "Demo".into();
+    data.static_data.game_base.author = "Author".into();
+    data.static_data.game_base.year = "2026".into();
+    data.static_data.game_base.info = "Info".into();
+    data.static_data.game_base.window_title = Some("Window".into());
+    data.static_data.game_base.update_url = "https://example.invalid/update".into();
+    data.static_data.game_base.version_name = "Release".into();
+    data.static_data.replace.money_label = "円".into();
+    data.static_data.replace.draw_line_string = "=".into();
+
+    let artifact = compile_source_with_data("@SYSTEM_TITLE\nRETURN\n", data);
+    let vm = Vm::new(validated(&artifact), VmConfig::default());
+    let read = |name: &str| {
+        let key = artifact
+            .globals
+            .iter()
+            .find(|global| global.name == name)
+            .unwrap()
+            .key;
+        vm.read_variable(key, &[], None).unwrap()
+    };
+
+    assert_eq!(read("GAMEBASE_GAMECODE"), VmValue::Integer(42));
+    assert_eq!(read("GAMEBASE_VERSION"), VmValue::Integer(1_234));
+    assert_eq!(read("GAMEBASE_ALLOWVERSION"), VmValue::Integer(1_200));
+    assert_eq!(read("GAMEBASE_DEFAULTCHARA"), VmValue::Integer(7));
+    assert_eq!(read("GAMEBASE_NOITEM"), VmValue::Integer(8));
+    assert_eq!(read("GAMEBASE_AUTHER"), VmValue::String("Author".into()));
+    assert_eq!(read("GAMEBASE_AUTHOR"), VmValue::String("Author".into()));
+    assert_eq!(read("GAMEBASE_INFO"), VmValue::String("Info".into()));
+    assert_eq!(read("GAMEBASE_YEAR"), VmValue::String("2026".into()));
+    assert_eq!(read("GAMEBASE_TITLE"), VmValue::String("Demo".into()));
+    assert_eq!(
+        read("GAMEBASE_URL"),
+        VmValue::String("https://example.invalid/update".into())
+    );
+    assert_eq!(
+        read("GAMEBASE_VERSIONNAME"),
+        VmValue::String("Release".into())
+    );
+    assert_eq!(read("WINDOW_TITLE"), VmValue::String("Window".into()));
+    assert_eq!(read("MONEYLABEL"), VmValue::String("円".into()));
+    assert_eq!(read("DRAWLINESTR"), VmValue::String("=".into()));
+    assert_eq!(read("EMUERA_VERSION"), VmValue::String("1.824.0.0".into()));
+    assert_eq!(read("__INT_MAX__"), VmValue::Integer(i64::MAX));
+    assert_eq!(read("__INT_MIN__"), VmValue::Integer(i64::MIN));
+}
+
+#[test]
+fn normal_addchara_accepts_nonzero_cflag_zero_when_sp_compatibility_is_disabled() {
+    let loaded = load_project(
+        &ProjectFiles {
+            csv: vec![FrontendFile {
+                relative_path: "CHARA0.CSV".into(),
+                payload: CsvFilePayload::Utf8("NO,0\nNAME,Player\nCFLAG,0,1900\n".into()),
+            }],
+            erb: Vec::new(),
+        },
+        &CsvLoadOptions::default(),
+    )
+    .data
+    .expect("character CSV should load");
+    let artifact = compile_source_with_data(
+        "@SYSTEM_TITLE\nADDCHARA 0\nRESULT = CHARANUM\nRETURN\n",
+        loaded,
+    );
+
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(2));
 }
 
 #[test]
