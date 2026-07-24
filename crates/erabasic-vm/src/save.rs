@@ -264,7 +264,6 @@ pub(crate) fn prepare_reset_game_memory(
     // Emuera's surrounding title flow (or explicitly by the script), not by the
     // instruction itself.
     let mut memory = Memory::title(artifact);
-    memory.initialize_function_statics(artifact);
     let globals = exported_shared(artifact, current, EraSaveScope::Global);
     overlay_shared(
         artifact,
@@ -273,6 +272,20 @@ pub(crate) fn prepare_reset_game_memory(
         EraSaveScope::Global,
         &mut EraStateReport::default(),
     );
+    // Emuera clears the backing arrays of local/static variables that have
+    // already been created. It does not discard them while the function that
+    // issued RESETDATA is still running.
+    for definition in &artifact.globals {
+        if matches!(
+            definition.storage,
+            BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent
+        ) && current.statics.contains_key(&definition.key)
+        {
+            memory
+                .statics
+                .insert(definition.key, crate::VariableCell::new(definition));
+        }
+    }
     memory
 }
 
@@ -281,7 +294,6 @@ pub(crate) fn prepare_new_game_memory(
     current: &Memory,
 ) -> Memory {
     let mut memory = Memory::new_game(artifact);
-    memory.initialize_function_statics(artifact);
     let globals = exported_shared(artifact, current, EraSaveScope::Global);
     overlay_shared(
         artifact,
@@ -475,5 +487,68 @@ fn overlay_character(
         } else {
             report.restored_variables += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use erabasic_bytecode::{
+        ArtifactManifest, BytecodeArtifact, BytecodeGlobal, Digest, SourceMap,
+    };
+    use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
+
+    use super::*;
+    use crate::GenerationId;
+
+    #[test]
+    fn reset_memories_only_recreate_function_state_that_was_reached() {
+        let function = SymbolKey::derive("save.test.function", b"lazy");
+        let definition = BytecodeGlobal {
+            key: SymbolKey::derive("save.test.variable", b"lazy"),
+            name: "LOCAL".into(),
+            value_type: BytecodeType::Integer,
+            dimensions: vec![4],
+            mutable: true,
+            storage: BytecodeStorage::FunctionPersistent,
+            persistence: BytecodePersistence::None,
+            initial_values: Vec::new(),
+            owner: Some(function),
+        };
+        let artifact = BytecodeArtifact {
+            manifest: ArtifactManifest::new(Digest::default()),
+            call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+            project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+                .data
+                .unwrap(),
+            globals: vec![definition.clone()],
+            native_imports: Vec::new(),
+            host_imports: Vec::new(),
+            functions: Vec::new(),
+            event_groups: Vec::new(),
+            source_map: SourceMap::default(),
+        };
+        let mut current = Memory::title(&artifact);
+        current.ensure_function_statics(GenerationId(1), function, [&definition]);
+        assert_eq!(current.statics.len(), 1);
+        current
+            .statics
+            .get_mut(&definition.key)
+            .unwrap()
+            .set(0, VmValue::Integer(42))
+            .unwrap();
+
+        let reset = prepare_reset_game_memory(&artifact, &current);
+        assert_eq!(
+            reset.statics[&definition.key].first(),
+            Some(VmValue::Integer(0))
+        );
+
+        let mut new_game = prepare_new_game_memory(&artifact, &current);
+        assert!(new_game.statics.is_empty());
+        new_game.ensure_function_statics(GenerationId(1), function, [&definition]);
+        assert_eq!(
+            new_game.statics[&definition.key].first(),
+            Some(VmValue::Integer(0))
+        );
     }
 }

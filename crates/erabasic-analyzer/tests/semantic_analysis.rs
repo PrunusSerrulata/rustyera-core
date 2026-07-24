@@ -99,6 +99,50 @@ fn restart_branches_to_the_current_function_entry_without_falling_through() {
 }
 
 #[test]
+fn inline_comment_does_not_become_part_of_a_static_call_target() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "calls.erb",
+                "@SYSTEM_TITLE\nCALL HELPER; inline comment\nRETURN\n@HELPER\nRESULT = 1\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::default(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let project = report.project.unwrap();
+    let title_function = project
+        .program
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap();
+    let helper_function = project
+        .program
+        .functions
+        .iter()
+        .find(|function| function.name == "HELPER")
+        .unwrap();
+    assert!(
+        !helper_function.lines.is_empty(),
+        "callee was treated as unreachable"
+    );
+    assert!(title_function.control_flow.iter().any(|edge| {
+        edge.kind == erabasic_hir::ControlFlowKind::Call
+            && edge.function == Some(helper_function.id)
+    }));
+}
+
+#[test]
 fn resolves_header_constants_variables_and_typed_expressions() {
     let report = analyze_project(
         AnalysisInput {
@@ -511,6 +555,40 @@ fn legacy_string_methods_keep_their_distinct_statement_grammars() {
                 [HirArgument::Expression(_), HirArgument::Expression(_)]
             )
     ));
+}
+
+#[test]
+fn statement_varsize_preserves_the_array_reference() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "varsize.erb",
+                "@SYSTEM_TITLE\n#DIM VALUES, 3\nVARSIZE VALUES\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let function = &report.project.unwrap().program.functions[0];
+    assert!(function.lines.iter().any(|line| {
+        matches!(
+            &line.kind,
+            HirStatementKind::Instruction {
+                target: erabasic_hir::InstructionTarget::Builtin(name),
+                arguments,
+            } if name == "VARSIZE"
+                && matches!(arguments.as_slice(), [HirArgument::Place(_)])
+        )
+    }));
 }
 
 #[test]

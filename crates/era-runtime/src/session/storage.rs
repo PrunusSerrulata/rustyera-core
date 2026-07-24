@@ -572,8 +572,8 @@ impl RuntimeSession {
                 } else {
                     4
                 };
-                let writes = self.check_data_writes(status, &error.message)?;
-                self.resume_storage_host(request, writes)
+                let writes = self.check_data_writes(&error.message)?;
+                self.resume_storage_host_value(request, VmValue::Integer(status), writes)
             }
             (PendingStorage::HostCheck { request, kind }, StorageResult::Read { data, .. }) => {
                 let vm = self.vm.as_ref().ok_or_else(|| {
@@ -600,8 +600,8 @@ impl RuntimeSession {
                         }
                         Err(error) => (4, error.to_string()),
                     };
-                let writes = self.check_data_writes(status, &description)?;
-                self.resume_storage_host(request, writes)
+                let writes = self.check_data_writes(&description)?;
+                self.resume_storage_host_value(request, VmValue::Integer(status), writes)
             }
             (PendingStorage::HostLoadOrdinary { slot }, StorageResult::Read { data, .. }) => {
                 self.complete_ordinary_load(slot, data.as_slice())
@@ -1232,7 +1232,6 @@ impl RuntimeSession {
 
     pub(super) fn check_data_writes(
         &self,
-        status: i64,
         description: &str,
     ) -> Result<Vec<HostWrite>, RuntimeError> {
         let vm = self
@@ -1240,12 +1239,6 @@ impl RuntimeSession {
             .as_ref()
             .ok_or_else(|| RuntimeError::Internal("save check completion has no VM".into()))?;
         let mut writes = Vec::new();
-        if let Some(target) = global_place(vm, "RESULT") {
-            writes.push(HostWrite {
-                target,
-                value: VmValue::Integer(status),
-            });
-        }
         if let Some(target) = global_place(vm, "RESULTS") {
             writes.push(HostWrite {
                 target,

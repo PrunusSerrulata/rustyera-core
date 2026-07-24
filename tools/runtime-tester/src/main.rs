@@ -33,6 +33,7 @@ fn decode_project_text(bytes: &[u8]) -> Option<String> {
     // detection and normalize its Windows-31J fallback before submission.
     encoding_rs::SHIFT_JIS
         .decode_without_bom_handling_and_without_replacement(bytes)
+        .or_else(|| encoding_rs::GBK.decode_without_bom_handling_and_without_replacement(bytes))
         .map(|text| text.into_owned())
 }
 
@@ -42,10 +43,7 @@ fn read_project_text(path: impl AsRef<Path>) -> std::io::Result<String> {
     decode_project_text(&bytes).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!(
-                "{} is neither valid UTF-8 nor valid Windows-31J",
-                path.display()
-            ),
+            format!("{} is not valid UTF-8, Windows-31J, or GBK", path.display()),
         )
     })
 }
@@ -168,7 +166,7 @@ fn audit_analyzer(compile: bool) {
             use_rename_file: true,
             search_subdirectories: true,
             sort_with_filename: true,
-            allow_full_width_space: false,
+            allow_full_width_space: true,
             ..Default::default()
         },
     );
@@ -180,7 +178,7 @@ fn audit_analyzer(compile: bool) {
         ignore_uncalled_functions: true,
         compatible_function_argument_auto_convert: true,
         system_save_in_binary: true,
-        allow_full_width_space: false,
+        allow_full_width_space: true,
         ..Default::default()
     };
     let analyze_started = std::time::Instant::now();
@@ -1578,7 +1576,16 @@ mod tests {
     }
 
     #[test]
-    fn project_text_decoder_rejects_invalid_windows_31j() {
+    fn project_text_decoder_falls_back_to_gbk() {
+        let source = ";阶层怪物列表\n#DIM KAI_LIST\n";
+        let (encoded, _, had_errors) = encoding_rs::GBK.encode(source);
+        assert!(!had_errors);
+        assert!(std::str::from_utf8(&encoded).is_err());
+        assert_eq!(decode_project_text(&encoded).as_deref(), Some(source));
+    }
+
+    #[test]
+    fn project_text_decoder_rejects_invalid_supported_encodings() {
         assert_eq!(decode_project_text(b"\x81"), None);
     }
 

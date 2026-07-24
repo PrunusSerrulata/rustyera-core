@@ -162,6 +162,20 @@ impl RuntimeVm {
         self.vm.variable_dimensions(fiber, name)
     }
 
+    /// Return the active dimensions for a place supplied by a Host call.
+    ///
+    /// # Errors
+    ///
+    /// The place must still belong to the requesting fiber and resolve to an
+    /// active variable.
+    pub fn host_place_dimensions(
+        &self,
+        fiber: FiberId,
+        place: &PlaceDescriptor,
+    ) -> Result<Vec<u64>, VmError> {
+        self.vm.host_place_dimensions(fiber, place)
+    }
+
     /// Whether at least one fiber can make progress without a host completion.
     #[must_use]
     pub fn has_runnable_fibers(&self) -> bool {
@@ -402,7 +416,14 @@ impl VmRuntimePort for RuntimeVm {
             .ok_or_else(|| VmError::InvalidState("waiting host import is missing".into()))?;
         match &completion {
             VmHostCompletion::Ready(ready) => {
-                validate_ready(&self.vm, fiber_id, fiber, wait.result, ready)?;
+                validate_ready(
+                    &self.vm,
+                    fiber_id,
+                    fiber,
+                    &import.import.name,
+                    wait.result,
+                    ready,
+                )?;
             }
             VmHostCompletion::ReturnCurrent(_) => {
                 if fiber.frames.len() <= 1 {
@@ -662,13 +683,15 @@ fn validate_ready(
     vm: &Vm,
     fiber_id: FiberId,
     fiber: &crate::Fiber,
+    operation: &str,
     expected: Option<erabasic_bytecode::BytecodeType>,
     ready: &HostReady,
 ) -> Result<(), VmError> {
-    if expected != ready.value.as_ref().map(VmValue::value_type) {
-        return Err(VmError::InvalidArguments(
-            "host completion result type differs".into(),
-        ));
+    let actual = ready.value.as_ref().map(VmValue::value_type);
+    if expected != actual {
+        return Err(VmError::InvalidArguments(format!(
+            "{operation} host completion result type differs: expected {expected:?}, found {actual:?}"
+        )));
     }
     for write in &ready.writes {
         if write.target.fiber.is_some_and(|owner| owner != fiber_id) {

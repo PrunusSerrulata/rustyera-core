@@ -408,8 +408,7 @@ impl Vm {
         }) {
             let cell = frame.locals.get(&definition.key)?;
             if let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = cell.first() {
-                let (_, target) = self.place_definition(fiber, &place).ok()?;
-                return Some(target.dimensions.clone());
+                return self.place_dimensions(fiber, &place).ok();
             }
             return Some(cell.dimensions.clone());
         }
@@ -421,6 +420,57 @@ impl Vm {
                     && definition.name.eq_ignore_ascii_case(name)
             })
             .map(|definition| definition.dimensions.clone())
+    }
+
+    /// Resolve the complete shape of a place supplied by the active Host call.
+    ///
+    /// # Errors
+    ///
+    /// The place must belong to the requesting fiber and still refer to an
+    /// active variable or bound reference.
+    pub fn host_place_dimensions(
+        &self,
+        fiber: FiberId,
+        place: &PlaceDescriptor,
+    ) -> Result<Vec<u64>, VmError> {
+        let fiber = self
+            .fibers
+            .get(&fiber)
+            .ok_or_else(|| VmError::InvalidState("Host place fiber is missing".into()))?;
+        self.place_dimensions(fiber, place)
+    }
+
+    fn place_dimensions(
+        &self,
+        fiber: &Fiber,
+        place: &PlaceDescriptor,
+    ) -> Result<Vec<u64>, VmError> {
+        let mut place = place.clone();
+        for _ in 0..64 {
+            if place.fiber.is_some_and(|owner| owner != fiber.id) {
+                return Err(VmError::InvalidState(
+                    "place belongs to another fiber".into(),
+                ));
+            }
+            let (_, definition) = self.place_definition(fiber, &place)?;
+            if definition.storage != BytecodeStorage::FunctionLocal {
+                return Ok(definition.dimensions.clone());
+            }
+            let frame = find_frame(fiber, place.frame, definition.owner)?;
+            let cell = frame
+                .locals
+                .get(&definition.key)
+                .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
+            match cell.first() {
+                Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) => {
+                    place = *bound;
+                }
+                _ => return Ok(cell.dimensions.clone()),
+            }
+        }
+        Err(VmError::InvalidState(
+            "variable reference chain is too deep".into(),
+        ))
     }
 
     #[must_use]

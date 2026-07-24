@@ -741,7 +741,7 @@ impl NativeService for CoreNative {
                     None | Some(VmValue::Integer(i64::MIN)) => None,
                     Some(_) => Some(integer(2)?),
                 };
-                VmValue::String(substring_utf8_bytes(string(0)?, start, length)?)
+                VmValue::String(substring_utf8_bytes(string(0)?, start, length))
             }
             "substringu" => {
                 let start = match args.get(1) {
@@ -752,7 +752,7 @@ impl NativeService for CoreNative {
                     None | Some(VmValue::Integer(i64::MIN)) => None,
                     Some(_) => Some(integer(2)?),
                 };
-                VmValue::String(substring_scalars(string(0)?, start, length)?)
+                VmValue::String(substring_scalars(string(0)?, start, length))
             }
             "strfind" => {
                 let start = usize::try_from(integer(2).unwrap_or(0)).unwrap_or(usize::MAX);
@@ -1008,28 +1008,35 @@ fn parse_era_numeric(value: &str, numeric_check: bool) -> Result<Option<i64>, St
     Ok((index == bytes.len()).then_some(result))
 }
 
-fn substring_utf8_bytes(value: &str, start: i64, length: Option<i64>) -> Result<String, String> {
-    let start = usize::try_from(start).map_err(|_| "SUBSTRING start is negative")?;
+fn substring_utf8_bytes(value: &str, start: i64, length: Option<i64>) -> String {
+    let start = if start <= 0 {
+        0
+    } else {
+        usize::try_from(start).unwrap_or(usize::MAX)
+    };
     let start = utf8_boundary_at_or_after(value, start.min(value.len()));
     let requested_end = match length {
-        Some(length) => start
-            .saturating_add(usize::try_from(length).map_err(|_| "SUBSTRING length is negative")?),
-        None => value.len(),
+        Some(length) if length >= 0 => {
+            start.saturating_add(usize::try_from(length).unwrap_or(usize::MAX))
+        }
+        _ => value.len(),
     };
     let end = utf8_boundary_at_or_after(value, requested_end.min(value.len()));
-    Ok(value[start..end].into())
+    value[start..end].into()
 }
 
-fn substring_scalars(value: &str, start: i64, length: Option<i64>) -> Result<String, String> {
-    let start = usize::try_from(start).map_err(|_| "SUBSTRINGU start is negative")?;
-    let length = length
-        .map(|length| usize::try_from(length).map_err(|_| "SUBSTRINGU length is negative"))
-        .transpose()?;
-    Ok(value
+fn substring_scalars(value: &str, start: i64, length: Option<i64>) -> String {
+    let start = if start <= 0 {
+        0
+    } else {
+        usize::try_from(start).unwrap_or(usize::MAX)
+    };
+    let length = length.and_then(|length| usize::try_from(length).ok());
+    value
         .chars()
         .skip(start)
         .take(length.unwrap_or(usize::MAX))
-        .collect())
+        .collect()
 }
 
 fn utf8_boundary_at_or_after(value: &str, mut offset: usize) -> usize {
@@ -1279,9 +1286,13 @@ mod tests {
 
     #[test]
     fn non_u_substring_uses_utf8_bytes_and_advances_to_boundaries() {
-        assert_eq!(substring_utf8_bytes("A界B", 1, Some(1)), Ok("界".into()));
-        assert_eq!(substring_utf8_bytes("A界B", 2, Some(1)), Ok("B".into()));
-        assert_eq!(substring_scalars("A界B", 1, Some(1)), Ok("界".into()));
+        assert_eq!(substring_utf8_bytes("A界B", 1, Some(1)), "界");
+        assert_eq!(substring_utf8_bytes("A界B", 2, Some(1)), "B");
+        assert_eq!(substring_scalars("A界B", 1, Some(1)), "界");
+        assert_eq!(substring_utf8_bytes("abcdef", 2, Some(-1)), "cdef");
+        assert_eq!(substring_scalars("abcdef", 2, Some(-1)), "cdef");
+        assert_eq!(substring_utf8_bytes("abcdef", -1, Some(2)), "ab");
+        assert_eq!(substring_scalars("abcdef", -1, Some(2)), "ab");
     }
 
     #[test]

@@ -198,6 +198,75 @@ fn call_host_is_the_only_host_boundary_opcode() {
 }
 
 #[test]
+fn total_variable_limit_counts_each_function_storage_group_independently() {
+    let make_artifact = |same_owner: bool| {
+        let first_function = SymbolKey::derive("test.function", b"first-frame");
+        let second_function = SymbolKey::derive("test.function", b"second-frame");
+        let functions = [first_function, second_function]
+            .into_iter()
+            .enumerate()
+            .map(|(index, key)| BytecodeFunction {
+                key,
+                name: format!("FRAME_{index}"),
+                kind: erabasic_bytecode::BytecodeFunctionKind::Normal,
+                parameters: Vec::new(),
+                result: None,
+                labels: Vec::new(),
+                imports: Vec::new(),
+                code: vec![opcode::return_value(false)],
+                max_stack: 0,
+            })
+            .collect();
+        let mut artifact = BytecodeArtifact {
+            manifest: ArtifactManifest::new(Digest::default()),
+            call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+            project_data: project_data(),
+            globals: [first_function, second_function]
+                .into_iter()
+                .enumerate()
+                .map(|(index, owner)| BytecodeGlobal {
+                    key: SymbolKey::derive(
+                        "test.variable",
+                        format!("frame-local-{index}").as_bytes(),
+                    ),
+                    name: format!("LOCAL_{index}"),
+                    value_type: BytecodeType::Integer,
+                    dimensions: vec![6],
+                    mutable: true,
+                    storage: BytecodeStorage::FunctionLocal,
+                    persistence: BytecodePersistence::None,
+                    initial_values: Vec::new(),
+                    owner: Some(if same_owner { first_function } else { owner }),
+                })
+                .collect(),
+            native_imports: Vec::new(),
+            host_imports: Vec::new(),
+            functions,
+            event_groups: Vec::new(),
+            source_map: SourceMap::default(),
+        };
+        artifact.refresh_ids().unwrap();
+        artifact
+    };
+
+    let separate_frames = make_artifact(false);
+    let mut context = ValidationContext::for_artifact(&separate_frames);
+    context.limits.maximum_total_variable_elements = 10;
+    let report = validate_bytecode(separate_frames.into_unvalidated(), &context);
+    assert!(report.value.is_some(), "{:#?}", report.diagnostics);
+
+    let oversized_frame = make_artifact(true);
+    let mut context = ValidationContext::for_artifact(&oversized_frame);
+    context.limits.maximum_total_variable_elements = 10;
+    let report = validate_bytecode(oversized_frame.into_unvalidated(), &context);
+    assert!(report.value.is_none());
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == ValidationCode::ResourceLimit
+            && diagnostic.message.contains("variable storage exceeds")
+    }));
+}
+
+#[test]
 fn rejects_snapshot_vm_abi_mismatch() {
     let function_key = SymbolKey::derive("test.function", b"version");
     let mut artifact = BytecodeArtifact {
