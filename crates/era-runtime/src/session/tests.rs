@@ -1945,7 +1945,7 @@ fn printform_and_printc_family_preserve_reference_semantics() {
     session.drive(RuntimeDriveBudget::default()).expect("hello");
     drain(&mut session);
 
-    let source = "@SYSTEM_TITLE\nCALL ORACLE_PRINT_FAMILY\nWAIT\nRETURN\n";
+    let source = "@SYSTEM_TITLE\nLOCALS:0 = 你\nPRINTFORML %LOCALS:0,20,LEFT%体\nLOCALS:0 = 霊夢\nPRINTFORML %LOCALS:0,20,LEFT%体\nCALL ORACLE_PRINT_FAMILY\nWAIT\nRETURN\n";
     submit(
         &mut session,
         1,
@@ -2009,6 +2009,14 @@ fn printform_and_printc_family_preserve_reference_semantics() {
         .iter()
         .map(|line| flattened_display_text(&line.runs))
         .collect::<Vec<_>>();
+    assert!(
+        rendered.contains(&format!("你{}体", " ".repeat(18))),
+        "{rendered:#?}"
+    );
+    assert!(
+        rendered.contains(&format!("霊夢{}体", " ".repeat(16))),
+        "{rendered:#?}"
+    );
     assert!(
         rendered.contains(&"|  7|7  |界  |Target|Call|Call|Target|Call| X".into()),
         "{rendered:#?}"
