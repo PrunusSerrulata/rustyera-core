@@ -189,7 +189,7 @@ pub(crate) fn lower_function(
                     builder.emit(opcode::jump(Opcode::JumpIfFalse, 0), line.location);
                     pending_jumps.push((instruction, target, true));
                 }
-            } else if matches!(structural_name, Some("FOR" | "WHILE")) {
+            } else if matches!(structural_name, Some("FOR" | "REPEAT" | "WHILE")) {
                 let after_closer = outgoing
                     .iter()
                     .find(|edge| edge.kind == ControlFlowKind::Branch)
@@ -203,7 +203,7 @@ pub(crate) fn lower_function(
                 } else {
                     pending_function_end_jumps.push(instruction);
                 }
-            } else if structural_name == Some("NEXT") {
+            } else if matches!(structural_name, Some("NEXT" | "REND")) {
                 if let Some(body) = outgoing
                     .iter()
                     .find(|edge| edge.kind == ControlFlowKind::LoopBack)
@@ -233,7 +233,8 @@ pub(crate) fn lower_function(
                             _ => None,
                         })
                 });
-                if structural_name == Some("BREAK") && opener_name == Some("FOR") {
+                if structural_name == Some("BREAK") && matches!(opener_name, Some("FOR" | "REPEAT"))
+                {
                     builder.emit(
                         EncodedInstruction::new(Opcode::ForBreak, Vec::new()),
                         line.location,

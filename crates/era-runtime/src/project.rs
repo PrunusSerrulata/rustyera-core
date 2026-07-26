@@ -1829,6 +1829,50 @@ mod tests {
     }
 
     #[test]
+    fn search_subdirectories_configuration_loads_nested_character_templates() {
+        let build = build_project(
+            &ProjectManifest {
+                project_revision: 1,
+                files: vec![
+                    SubmittedFile {
+                        relative_path: "ERB/TITLE.ERB".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8("@SYSTEM_TITLE\nADDCHARA 0\nRETURN\n".into()),
+                        content_hash: None,
+                    },
+                    SubmittedFile {
+                        relative_path: "CSV/characters/Chara0.csv".into(),
+                        category: FileCategory::Csv,
+                        payload: FilePayload::Utf8("NO,0\nNAME,Master\n".into()),
+                        content_hash: None,
+                    },
+                    SubmittedFile {
+                        relative_path: "emuera.config".into(),
+                        category: FileCategory::Configuration,
+                        payload: FilePayload::Utf8(
+                            "\u{feff}サブディレクトリを検索する:YES\n".into(),
+                        ),
+                        content_hash: None,
+                    },
+                ],
+            },
+            None,
+        );
+        assert!(build.report.success, "{:?}", build.report.diagnostics);
+        let artifact = build.artifact.expect("compiled artifact");
+
+        assert!(
+            artifact
+                .artifact()
+                .project_data
+                .static_data
+                .characters
+                .iter()
+                .any(|template| template.no == 0 && template.name == "Master")
+        );
+    }
+
+    #[test]
     fn runtime_project_build_retains_a_compact_serializable_incremental_cache() {
         use std::fmt::Write as _;
 

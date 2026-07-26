@@ -327,6 +327,65 @@ fn rand_pseudo_variable_uses_the_random_native_instead_of_schema_storage() {
 }
 
 #[test]
+fn repeat_updates_count_and_continue_runs_rend_increment() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         RESULT = 0\n\
+         REPEAT 4\n\
+             SIF COUNT == 1\n\
+                 CONTINUE\n\
+             RESULT += COUNT + 1\n\
+         REND\n\
+         RESULT = RESULT * 10 + COUNT\n\
+         RETURN\n",
+    );
+
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(84));
+}
+
+#[test]
+fn break_advances_repeat_count_before_leaving_the_loop() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         RESULT = 0\n\
+         REPEAT 5\n\
+             RESULT += 10\n\
+             BREAK\n\
+         REND\n\
+         RESULT += COUNT\n\
+         RETURN\n",
+    );
+
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(11));
+}
+
+#[test]
+fn selectcase_loop_rejects_the_previous_string_tip() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         RESULTS '= GET_TIP(0)\n\
+         RESULT = RESULTS != \"zero\" && RESULTS != \"\"\n\
+         RETURN\n\
+         @GET_TIP(ARG)\n\
+         #FUNCTIONS\n\
+         #DIM INDEX\n\
+         #DIMS TEXT\n\
+         DO\n\
+             SELECTCASE INDEX\n\
+                 CASE 0\n\
+                     TEXT = \"zero\"\n\
+                 CASEELSE\n\
+                     TEXT = \"one\"\n\
+             ENDSELECT\n\
+             INDEX += 1\n\
+         LOOP TEXT == \"zero\"\n\
+         RETURNF TEXT\n",
+    );
+
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(1));
+}
+
+#[test]
 fn structured_map_native_preserves_order_and_commits_array_outputs() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\n#DIMS KEYS, 4\nRESULT:0 = MAP_CREATE(\"m\")\nRESULT:1 = MAP_SET(\"m\", \"b\", \"1\")\nRESULT:2 = MAP_SET(\"m\", \"a\", \"2\")\nRESULT:3 = MAP_SET(\"m\", \"b\", \"3\")\nRESULTS:0 = %MAP_GET(\"m\", \"b\")%\nRESULTS:1 = %MAP_GETKEYS(\"m\")%\nRESULTS:2 = %MAP_GETKEYS(\"m\", KEYS, 1)%\nRETURN\n",

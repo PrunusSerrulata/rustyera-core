@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::project::NormalizedProjectSnapshot;
 
 const MAGIC: &[u8; 8] = b"RERACACH";
-const VERSION: u32 = 4;
+// This is a semantic epoch as well as a wire-format version. Increment it whenever
+// compiler, analyzer or project-loading behavior can change an unchanged source's
+// artifact; an older artifact is not safe even as an incremental compilation seed.
+const VERSION: u32 = 5;
 const COMPRESSION_LEVEL: i32 = 3;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -1116,7 +1119,7 @@ mod tests {
         .unwrap();
 
         assert!(decode_compiled_project_manifest(&bytes, bytes.len() - 1).is_err());
-        bytes[8..12].copy_from_slice(&5_u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&4_u32.to_le_bytes());
         let digest_offset = bytes.len() - 32;
         let digest = blake3::hash(&bytes[..digest_offset]);
         bytes[digest_offset..].copy_from_slice(digest.as_bytes());
@@ -1124,7 +1127,7 @@ mod tests {
             decode_compiled_project_manifest(&bytes, 64 * 1024 * 1024)
                 .unwrap_err()
                 .to_string()
-                .contains("unsupported compiled project cache version 5")
+                .contains("unsupported compiled project cache version 4")
         );
     }
 
@@ -1183,7 +1186,7 @@ mod tests {
     }
 
     #[test]
-    fn v4_sharded_binary_cache_bounds_small_project_parallel_overhead() {
+    fn v5_sharded_binary_cache_bounds_small_project_parallel_overhead() {
         #[derive(Serialize)]
         struct V2PayloadRef<'a> {
             artifact: &'a BytecodeArtifact,
@@ -1214,7 +1217,7 @@ mod tests {
         let mut writer = CountingWriter::new(encoder, None);
         serde_json::to_writer(&mut writer, &payload).unwrap();
         let v2_payload = writer.into_inner().finish().unwrap();
-        let v4 = encode(
+        let v5 = encode(
             &project,
             &[],
             build.artifact.as_ref().unwrap(),
@@ -1224,9 +1227,9 @@ mod tests {
         .unwrap();
 
         assert!(
-            v4.len() <= v2_payload.len() + MAXIMUM_PARALLEL_SECTION_OVERHEAD,
-            "v4={} v2={}",
-            v4.len(),
+            v5.len() <= v2_payload.len() + MAXIMUM_PARALLEL_SECTION_OVERHEAD,
+            "v5={} v2={}",
+            v5.len(),
             v2_payload.len()
         );
     }
