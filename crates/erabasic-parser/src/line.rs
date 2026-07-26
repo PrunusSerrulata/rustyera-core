@@ -836,7 +836,10 @@ fn dynamic_call_separator(source: &str) -> Option<(usize, char)> {
     for (index, character) in source.char_indices() {
         match character {
             '"' if !percent => quoted = !quoted,
-            '%' if !quoted => percent = !percent,
+            // Percent signs inside `{...}` are expression modulo operators, not
+            // `%...%` FORM interpolation delimiters. Treating them as delimiters
+            // hides the closing brace and makes the target swallow `(arguments)`.
+            '%' if !quoted && braces == 0 => percent = !percent,
             '{' if !quoted && !percent => braces = braces.saturating_add(1),
             '}' if !quoted && !percent => braces = braces.saturating_sub(1),
             '[' if !quoted && !percent && braces == 0 => brackets = brackets.saturating_add(1),

@@ -533,3 +533,39 @@ fn dynamic_call_separates_formatted_target_from_lazy_arguments() {
     };
     assert_eq!(arguments.len(), 3);
 }
+
+#[test]
+fn dynamic_call_target_modulo_does_not_swallow_parenthesized_arguments() {
+    let output = parse_line(
+        "TRYCCALLFORM IRAI_一般{IRAI_ID % 1000}(CHARA, IRAI_ID, SCENE)",
+        &DefaultParserContext::default(),
+    );
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let statement = output.value.expect("dynamic call statement");
+    let StatementKind::Instruction {
+        name, arguments, ..
+    } = statement.kind
+    else {
+        panic!("expected instruction");
+    };
+    assert_eq!(name, "TRYCCALLFORM");
+    assert_eq!(arguments.len(), 4);
+    let Argument::Formatted(target) = &arguments[0] else {
+        panic!("expected formatted target");
+    };
+    assert!(matches!(
+        target.parts.as_slice(),
+        [
+            FormPart::Text(prefix),
+            FormPart::IntegerInterpolation { expression, .. }
+        ] if prefix == "IRAI_一般"
+            && matches!(
+                expression.kind,
+                ExprKind::Binary {
+                    op: BinaryOp::Modulo,
+                    ..
+                }
+            )
+    ));
+    assert_eq!(statement.span, erabasic_ast::Span::new(0, 63));
+}

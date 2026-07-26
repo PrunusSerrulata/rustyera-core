@@ -3102,24 +3102,74 @@ fn dynamic_try_resolves_before_arguments_and_form_call_invokes_target() {
 
 #[test]
 fn formatted_try_call_resolves_a_unicode_function_before_catch() {
-    let artifact = compile_source(
+    let artifact = compile_source_with_options(
         "@SYSTEM_TITLE\n\
+         #DIM REQUEST_ID\n\
+         REQUEST_ID = 2005\n\
          RESULT = 0\n\
-         TRYCCALLFORM IRAI_一般{6}(107, 107006, \"依頼実行時\")\n\
+         RESULTS:0 = IRAI_一般{REQUEST_ID % 1000}\n\
+         TRYCCALLFORM IRAI_一般{REQUEST_ID % 1000}(2, REQUEST_ID, \"依頼実行時\")\n\
          CATCH\n\
-         RESULT = -1\n\
+         FLAG:0 = -1\n\
          ENDCATCH\n\
          RETURN\n\
-         @IRAI_一般6(CHARA, IRAI_ID, SCENE)\n\
+         @IRAI_一般5(CHARA, IRAI_ID, SCENE)\n\
          #DIM CHARA\n\
          #DIM IRAI_ID\n\
          #DIMS SCENE\n\
-         RESULT = CHARA + IRAI_ID + STRLENS(SCENE)\n\
+         FLAG:0 = CHARA + IRAI_ID + (SCENE == \"依頼実行時\")\n\
          RETURN\n",
+        &AnalyzerOptions::default(),
     );
-    // STRLENS follows Emuera's UTF-8 byte-count mode, so five CJK characters
-    // contribute 15 here.
-    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(107_128));
+    assert!(
+        artifact
+            .functions
+            .iter()
+            .any(|function| function.name == "IRAI_一般5"),
+        "dynamic target was omitted from the compiled artifact"
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .expect("FLAG")
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .expect("RESULTS")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(results, &[0], None),
+        Ok(VmValue::String("IRAI_一般5".into()))
+    );
+    assert_eq!(
+        vm.read_variable(flag, &[0], None),
+        Ok(VmValue::Integer(2_008))
+    );
 }
 
 #[test]

@@ -143,6 +143,54 @@ fn inline_comment_does_not_become_part_of_a_static_call_target() {
 }
 
 #[test]
+fn structured_formatted_try_call_keeps_dynamic_targets_reachable() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "requests.erb",
+                "@SYSTEM_TITLE\n\
+                 #DIM REQUEST_ID\n\
+                 REQUEST_ID = 2005\n\
+                 TRYCCALLFORM IRAI_一般{REQUEST_ID % 1000}(2, REQUEST_ID, \"依頼実行時\")\n\
+                 CATCH\n\
+                 FLAG:0 = -1\n\
+                 ENDCATCH\n\
+                 RETURN\n\
+                 @IRAI_一般5(CHARA, IRAI_ID, SCENE)\n\
+                 #DIM CHARA\n\
+                 #DIM IRAI_ID\n\
+                 #DIMS SCENE\n\
+                 FLAG:0 = CHARA + IRAI_ID + (SCENE == \"依頼実行時\")\n\
+                 RETURN\n",
+            )],
+        },
+        &AnalyzerOptions::default(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.severity,
+            erabasic_analyzer::AnalyzerDiagnosticSeverity::Error
+                | erabasic_analyzer::AnalyzerDiagnosticSeverity::Fatal
+        )),
+        "{:#?}",
+        report.diagnostics
+    );
+    let project = report.project.expect("valid dynamic call project");
+    let target = project
+        .program
+        .functions
+        .iter()
+        .find(|function| function.name == "IRAI_一般5")
+        .expect("dynamic target declaration");
+    assert!(
+        !target.lines.is_empty(),
+        "TRYCCALLFORM target was treated as unreachable"
+    );
+}
+
+#[test]
 fn resolves_header_constants_variables_and_typed_expressions() {
     let report = analyze_project(
         AnalysisInput {
