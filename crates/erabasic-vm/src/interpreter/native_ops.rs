@@ -708,12 +708,19 @@ pub(super) fn array_snapshot(
     let definition = program
         .global(place.variable)
         .ok_or_else(|| VmError::InvalidState("array variable is missing".into()))?;
-    if definition.dimensions.len() != 1 || !place.indices.is_empty() {
+    if definition.dimensions.len() != 1 || place.indices.len() > 1 {
         return Err(VmError::InvalidArguments(
-            "array operation requires an unindexed one-dimensional variable".into(),
+            "array operation requires a one-dimensional variable".into(),
         ));
     }
-    vm.read_place_array(fiber, place)
+    // Reference-taking one-dimensional operations accept both `ARRAY` and
+    // `ARRAY:element`. For character data, the character selector has already
+    // been split into `place.character`; discarding the remaining element
+    // selector therefore preserves the selected character while exposing its
+    // complete array. The operation range comes from the following arguments.
+    let mut array = place.clone();
+    array.indices.clear();
+    vm.read_place_array(fiber, &array)
 }
 
 pub(super) fn commit_array(
@@ -722,7 +729,9 @@ pub(super) fn commit_array(
     place: &PlaceDescriptor,
     values: Vec<VmValue>,
 ) -> Result<(), VmError> {
-    vm.write_place_array(fiber, place, values)
+    let mut array = place.clone();
+    array.indices.clear();
+    vm.write_place_array(fiber, &array, values)
 }
 
 pub(super) fn execute_array_mutation(

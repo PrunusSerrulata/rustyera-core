@@ -584,7 +584,7 @@ fn portable_graphics_and_textbox_compatibility_paths_are_runtime_owned() {
                 relative_path: "portable.erb".into(),
                 category: FileCategory::Erb,
                 payload: FilePayload::Utf8(
-                    "@SYSTEM_TITLE\nRESULT = GCREATE(1, 2, 2)\nRESULT = GSETCOLOR(1, 4294967295, 0, -1)\nRESULT:1 = BITMAP_CACHE_ENABLE(1)\nRESULTS:40 = %HTML_TOPLAINTEXT(\"a&nbsp;b\")%\nRESULT:41 = GCREATE(7, 2, 2)\nRESULT:42 = GSETBRUSH(7, 4294901760)\nRESULT:43 = GGETBRUSH(7)\nRESULT:44 = GSETPEN(7, 4278255360, 2)\nRESULT:45 = GGETPEN(7)\nRESULT:46 = GGETPENWIDTH(7)\nRESULT:47 = GFILLRECTANGLE(7, 0, 0, 2, 2)\nRESULT:48 = GDRAWLINE(7, 0, 0, 1, 1)\nRESULT:49 = GDISPOSE(7)\nRESULT:50 = CBGCLEAR()\nRESULT:2 = MOVETEXTBOX(10, 20, 30)\nWAIT\nRETURN\n"
+                    "@SYSTEM_TITLE\nRESULT = GCREATE(1, 2, 2)\nRESULT = GSETCOLOR(1, 4294967295, 0, -1)\nRESULT:1 = BITMAP_CACHE_ENABLE(1)\nRESULTS:40 = %HTML_TOPLAINTEXT(\"a&nbsp;b\")%\nRESULT:41 = GCREATE(7, 2, 2)\nRESULT:42 = GSETBRUSH(7, 4294901760)\nRESULT:43 = GGETBRUSH(7)\nRESULT:44 = GSETPEN(7, 4278255360, 2)\nRESULT:45 = GGETPEN(7)\nRESULT:46 = GGETPENWIDTH(7)\nRESULT:47 = GFILLRECTANGLE(7, 0, 0, 2, 2)\nRESULT:48 = GDRAWLINE(7, 0, 0, 1, 1)\nRESULT:49 = GDISPOSE(7)\nRESULT:50 = CBGCLEAR()\nRESULT:51 = GCREATE(8, 2, 2)\nRESULT:52 = GCREATEFROMFILE(8, \"../outside.png\", 1)\nRESULT:53 = GDISPOSE(8)\nRESULT:54 = GCREATEFROMFILE(9, \"\")\nRESULT:2 = MOVETEXTBOX(10, 20, 30)\nWAIT\nRETURN\n"
                         .into(),
                 ),
                 content_hash: None,
@@ -638,6 +638,10 @@ fn portable_graphics_and_textbox_compatibility_paths_are_runtime_owned() {
         (48, 1),
         (49, 1),
         (50, 1),
+        (51, 1),
+        (52, 0),
+        (53, 1),
+        (54, 0),
     ];
     for (index, expected) in expected_graphics {
         assert_eq!(

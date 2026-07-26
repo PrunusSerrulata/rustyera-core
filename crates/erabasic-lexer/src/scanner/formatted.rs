@@ -142,12 +142,13 @@ impl Lexer<'_> {
             self.bump();
         }
         let then_start = self.pos;
-        let then_value = self.read_formatted_until(FormEnd::SharpOrYenAt, then_start);
+        let mut then_value = self.read_formatted_until(FormEnd::SharpOrYenAt, then_start);
+        trim_conditional_branch(&mut then_value);
         let else_value = if self.source[..self.pos].ends_with('#') {
             let else_start = self.pos;
-            Some(Box::new(
-                self.read_formatted_until(FormEnd::YenAt, else_start),
-            ))
+            let mut value = self.read_formatted_until(FormEnd::YenAt, else_start);
+            trim_conditional_branch(&mut value);
+            Some(Box::new(value))
         } else {
             None
         };
@@ -191,6 +192,21 @@ impl Lexer<'_> {
     }
 }
 
+// Emuera parses both conditional FORM branches with its `trim` mode. Only
+// literal whitespace at the outer edges is removed; whitespace next to an
+// interpolation is retained because the corresponding edge text is empty.
+fn trim_conditional_branch(value: &mut FormattedToken) {
+    if let Some(FormattedTokenPart::Text(text)) = value.parts.first_mut() {
+        *text = text.trim_start_matches([' ', '\t']).to_owned();
+    }
+    if let Some(FormattedTokenPart::Text(text)) = value.parts.last_mut() {
+        *text = text.trim_end_matches([' ', '\t']).to_owned();
+    }
+    value
+        .parts
+        .retain(|part| !matches!(part, FormattedTokenPart::Text(text) if text.is_empty()));
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum FormEnd {
     Quote,
@@ -224,7 +240,7 @@ impl FormEnd {
 
 #[cfg(test)]
 mod tests {
-    use crate::{LexerConfig, TokenKind, lex};
+    use crate::{FormattedTokenPart, LexerConfig, TokenKind, lex};
 
     #[test]
     fn lexes_formatted_string_parts() {
@@ -245,6 +261,34 @@ mod tests {
                 kind: TokenKind::Formatted(_),
                 ..
             }]
+        ));
+    }
+
+    #[test]
+    fn conditional_form_trims_only_literal_branch_edges() {
+        let output = lex(
+            "\\@ FLAG ?  yes\t # \t%NAME% tail  \\@",
+            &LexerConfig::default(),
+        );
+        let TokenKind::Formatted(form) = &output.tokens[0].kind else {
+            panic!("expected form")
+        };
+        let FormattedTokenPart::Conditional {
+            then_value,
+            else_value: Some(else_value),
+            ..
+        } = &form.parts[0]
+        else {
+            panic!("expected conditional form")
+        };
+        assert_eq!(
+            then_value.parts,
+            vec![FormattedTokenPart::Text("yes".into())]
+        );
+        assert!(matches!(
+            else_value.parts.as_slice(),
+            [FormattedTokenPart::StringInterpolation { .. }, FormattedTokenPart::Text(text)]
+                if text == " tail"
         ));
     }
 }
