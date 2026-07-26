@@ -2306,13 +2306,12 @@ impl RuntimeSession {
                 return self.complete_graphics_result(vm, request.id, 0);
             }
             let filename = string_argument_value(&request.arguments, 1, &name)?;
-            // Emuera treats an empty or missing image filename as an ordinary
-            // creation failure. Do not expose frontend path validation as a
-            // runtime-internal fault for that script-observable case.
-            if filename.is_empty() {
+            // Emuera treats a missing or unusable image filename as an ordinary
+            // creation failure. Keep unsafe paths away from the frontend without
+            // exposing portable path validation as a runtime-internal fault.
+            let Ok(path) = safe_relative_path(filename) else {
                 return self.complete_graphics_result(vm, request.id, 0);
-            }
-            let path = safe_relative_path(filename)?;
+            };
             let relative = request
                 .arguments
                 .get(2)
