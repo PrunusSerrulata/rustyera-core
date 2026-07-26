@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use erabasic_bytecode::{BytecodeArtifact, RuntimeImport, SymbolKey};
-use erabasic_data::LegacyEncoding;
 use serde::{Deserialize, Serialize};
+use unicode_width::UnicodeWidthStr;
 
 use crate::sfmt::Sfmt19937;
 use crate::structured::{StructuredExtension, StructuredScope};
@@ -197,13 +197,7 @@ impl NativeServiceRegistry {
             } else if matches!(name, "format_integer" | "format_string" | "times")
                 || name.starts_with("control_")
             {
-                registry.register(
-                    native.import.key,
-                    CompilerNative {
-                        name: name.into(),
-                        legacy_encoding: artifact.project_data.static_data.legacy_encoding,
-                    },
-                );
+                registry.register(native.import.key, CompilerNative { name: name.into() });
             } else if matches!(name, "rand" | "randomize" | "initrand" | "dumprand") {
                 registry.register(
                     native.import.key,
@@ -1048,7 +1042,6 @@ fn utf8_boundary_at_or_after(value: &str, mut offset: usize) -> usize {
 
 struct CompilerNative {
     name: String,
-    legacy_encoding: LegacyEncoding,
 }
 
 impl NativeService for CompilerNative {
@@ -1062,7 +1055,6 @@ impl NativeService for CompilerNative {
                     &value.to_string(),
                     request.arguments.get(1),
                     request.arguments.get(2),
-                    None,
                 )?)))
             }
             "format_string" => {
@@ -1080,7 +1072,6 @@ impl NativeService for CompilerNative {
                     &value,
                     request.arguments.get(1),
                     request.arguments.get(2),
-                    Some(self.legacy_encoding),
                 )?)))
             }
             "times" => {
@@ -1194,7 +1185,6 @@ fn apply_width(
     value: &str,
     width: Option<&VmValue>,
     alignment: Option<&VmValue>,
-    legacy_encoding: Option<LegacyEncoding>,
 ) -> Result<String, String> {
     let Some(width) = width else {
         return Ok(value.into());
@@ -1209,10 +1199,7 @@ fn apply_width(
         Some(_) => return Err("format alignment must be an integer".into()),
         None => false,
     };
-    let characters = legacy_encoding.map_or_else(
-        || value.chars().count(),
-        |encoding| legacy_encoded_len(value, encoding),
-    );
+    let characters = UnicodeWidthStr::width(value);
     if characters >= width {
         return Ok(value.into());
     }
@@ -1224,64 +1211,39 @@ fn apply_width(
     })
 }
 
-fn legacy_encoded_len(value: &str, encoding: LegacyEncoding) -> usize {
-    if value.is_ascii() {
-        return value.len();
-    }
-    let encoding = match encoding {
-        LegacyEncoding::Japanese => encoding_rs::SHIFT_JIS,
-        LegacyEncoding::Korean => encoding_rs::EUC_KR,
-        LegacyEncoding::ChineseHans => encoding_rs::GBK,
-        LegacyEncoding::ChineseHant => encoding_rs::BIG5,
-    };
-    value
-        .chars()
-        .map(|character| {
-            let mut utf8 = [0; 4];
-            let encoded = character.encode_utf8(&mut utf8);
-            let (bytes, _, had_errors) = encoding.encode(encoded);
-            if had_errors { 1 } else { bytes.len() }
-        })
-        .sum()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn form_width_honors_alignment_and_legacy_encoding() {
+    fn form_width_honors_alignment_and_unicode_display_columns() {
         assert_eq!(
-            apply_width(
-                "7",
-                Some(&VmValue::Integer(3)),
-                Some(&VmValue::Integer(0)),
-                None,
-            )
-            .unwrap(),
+            apply_width("7", Some(&VmValue::Integer(3)), Some(&VmValue::Integer(0)),).unwrap(),
             "  7"
         );
         assert_eq!(
-            apply_width(
-                "7",
-                Some(&VmValue::Integer(3)),
-                Some(&VmValue::Integer(1)),
-                None,
-            )
-            .unwrap(),
+            apply_width("7", Some(&VmValue::Integer(3)), Some(&VmValue::Integer(1)),).unwrap(),
             "7  "
         );
         assert_eq!(
             apply_width(
-                "😀",
-                Some(&VmValue::Integer(4)),
-                Some(&VmValue::Integer(0)),
-                Some(LegacyEncoding::ChineseHans),
+                "你",
+                Some(&VmValue::Integer(20)),
+                Some(&VmValue::Integer(1)),
             )
             .unwrap(),
-            "   😀"
+            format!("你{}", " ".repeat(18))
         );
-        assert!(apply_width("x", Some(&VmValue::Integer(-1)), None, None).is_err());
+        assert_eq!(
+            apply_width(
+                "霊夢",
+                Some(&VmValue::Integer(20)),
+                Some(&VmValue::Integer(1)),
+            )
+            .unwrap(),
+            format!("霊夢{}", " ".repeat(16))
+        );
+        assert!(apply_width("x", Some(&VmValue::Integer(-1)), None).is_err());
     }
 
     #[test]
@@ -1371,7 +1333,6 @@ mod tests {
         let target = PlaceDescriptor::default();
         let mut native = CompilerNative {
             name: "times".into(),
-            legacy_encoding: LegacyEncoding::Japanese,
         };
         let ready = native
             .call(NativeCallRequest {

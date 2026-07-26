@@ -298,8 +298,8 @@ pub struct ExtensionData {
 /// Legacy multibyte encoding selected by Emuera's `useLanguage` option.
 ///
 /// Source files remain UTF-8. This value is retained only for script-visible
-/// operations such as FORM string-width padding that count bytes in the selected
-/// ANSI code page in the pinned reference implementation.
+/// operations that explicitly expose the selected ANSI code page, such as legacy
+/// string-length evaluation. FORM padding uses portable Unicode display columns.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LegacyEncoding {

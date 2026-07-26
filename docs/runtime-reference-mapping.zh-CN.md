@@ -35,3 +35,8 @@ renderer。当脚本显式请求依赖字体、viewport 或 raster 的结果时�
 当前 Python/Textual TUI 用于检查上述公共 C ABI 和消息契约能否驱动真实项目。其终端
 排版、启动耗时或渲染吞吐不能代表 runtime 的规范化语义质量，也不能作为其他前端的
 性能基线。
+
+FORM/PRINTFORM 的字符串字段宽度按 Unicode 终端显示列计算。固定参考实现会按
+`useLanguage` 选择的 ANSI code page 字节数填充；这会让不可编码字符与同为全角的
+可编码字符落在不同列。RustyEra 在这里采用跨客户端一致的显示列语义；`STRLENS` 等
+明确依赖传统编码的操作不受此差异影响。
