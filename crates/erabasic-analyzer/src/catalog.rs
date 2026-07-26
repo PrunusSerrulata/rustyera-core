@@ -220,7 +220,6 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "REND",
         "NEXT",
         "WEND",
-        "LOOP",
         "CASEELSE",
         "ENDSELECT",
         "CATCH",
@@ -330,6 +329,9 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     for name in ["IF", "ELSEIF", "SIF", "WHILE", "REPEAT"] {
         add(name, Expressions, &[Integer], 1, false, false);
     }
+    // LOOP accepts an optional continuation condition. With no expression it
+    // remains the unconditional DO/LOOP form.
+    add("LOOP", Expressions, &[Integer], 0, false, false);
     add("SELECTCASE", Expressions, &[Any], 1, false, false);
     // CASE is not a comma-separated expression list: the reference also accepts
     // `IS <operator> value` and `lower TO upper`. Keep the selector source raw so

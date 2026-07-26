@@ -685,18 +685,39 @@ impl Vm {
                 frame.stack.push(VmValue::Integer(i64::from(active)));
             }
             Opcode::ForBreak => {
-                fiber
+                let state = fiber
                     .frames
-                    .last_mut()
-                    .expect("frame exists")
-                    .for_loops
-                    .pop()
+                    .last()
+                    .and_then(|frame| frame.for_loops.last())
+                    .cloned()
                     .ok_or_else(|| {
                         StepError::new(
                             VmFaultCode::InvalidInstruction,
                             "BREAK has no active FOR loop",
                         )
                     })?;
+                let VmValue::Integer(current) = self
+                    .read_place(fiber, &state.counter)
+                    .map_err(map_vm_error)?
+                else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "FOR counter storage is not integer",
+                    ));
+                };
+                self.write_place(
+                    fiber,
+                    &state.counter,
+                    VmValue::Integer(current.wrapping_add(state.step)),
+                )
+                .map_err(map_vm_error)?;
+                fiber
+                    .frames
+                    .last_mut()
+                    .expect("frame exists")
+                    .for_loops
+                    .pop()
+                    .expect("active FOR loop was checked");
             }
             Opcode::SelectStart => {
                 let value = pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?;

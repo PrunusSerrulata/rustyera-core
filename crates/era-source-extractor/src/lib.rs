@@ -14,7 +14,7 @@ pub const MAXIMUM_CACHE_BYTES: usize = 1024 * 1024 * 1024;
 
 /// Command-line usage shown by the standalone extractor.
 pub const USAGE: &str =
-    "Usage: rustyera-source-extractor [--force] <compiled-project-v4.bin.zst> [OUTPUT_DIR]";
+    "Usage: rustyera-source-extractor [--force] <compiled-project-v5.bin.zst> [OUTPUT_DIR]";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExtractOptions {

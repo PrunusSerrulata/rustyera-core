@@ -80,7 +80,7 @@ fn audit_game(extractor: &Path, game: &Path) {
         files,
     });
     let temporary = TemporaryDirectory::new();
-    let cache_path = temporary.0.join("compiled-project-v4.bin.zst");
+    let cache_path = temporary.0.join("compiled-project-v5.bin.zst");
     let output_path = temporary.0.join("extracted");
     fs::write(&cache_path, &cache).expect("write temporary compiled cache");
     let output = std::process::Command::new(extractor)

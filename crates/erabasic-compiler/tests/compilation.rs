@@ -644,6 +644,44 @@ fn structured_for_loop_reduces_control_state_to_one_branch_value() {
 }
 
 #[test]
+fn structured_repeat_loop_lowers_to_executable_counter_bytecode() {
+    let project = analyze("@SYSTEM_TITLE\nREPEAT 3\nRESULT += COUNT\nREND\nRETURN\n");
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = report
+        .artifact
+        .unwrap_or_else(|| panic!("{:#?}", report.diagnostics));
+    let function = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE");
+
+    assert!(
+        function
+            .code
+            .iter()
+            .any(|instruction| instruction.opcode == Opcode::ForStart as u16)
+    );
+    assert!(
+        function
+            .code
+            .iter()
+            .any(|instruction| instruction.opcode == Opcode::ForNext as u16)
+    );
+    assert!(
+        !artifact
+            .native_imports
+            .iter()
+            .any(|import| { import.import.name.eq_ignore_ascii_case("control_repeat") })
+    );
+}
+
+#[test]
 fn source_map_resolves_utf8_byte_locations() {
     let text = "@SYSTEM_TITLE\nPRINTL 中文\nRETURN\n";
     let artifact = compile_project(

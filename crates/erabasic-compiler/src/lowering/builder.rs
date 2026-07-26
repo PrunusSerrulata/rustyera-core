@@ -473,6 +473,48 @@ impl<'a> Builder<'a> {
             self.emit(opcode::unary(2), location);
             return;
         }
+        if name == "REPEAT" {
+            let counter = self
+                .context
+                .program
+                .variables
+                .iter()
+                .find(|variable| {
+                    variable.owner.is_none() && variable.name.eq_ignore_ascii_case("COUNT")
+                })
+                .and_then(|variable| self.context.variable_keys.get(&variable.id))
+                .copied();
+            let Some(counter) = counter else {
+                self.emit(
+                    EncodedInstruction::new(
+                        Opcode::Trap,
+                        b"REPEAT COUNT variable is missing".to_vec(),
+                    ),
+                    location,
+                );
+                return;
+            };
+            let Some(end) = arguments.first() else {
+                self.emit(
+                    EncodedInstruction::new(Opcode::Trap, b"REPEAT has no count".to_vec()),
+                    location,
+                );
+                return;
+            };
+            // Emuera defines REPEAT as FOR COUNT:0, 0, count, 1. Reuse the
+            // validated FOR state machine so REND, CONTINUE and BREAK share the
+            // same counter lifetime and termination rules.
+            self.emit(opcode::push_integer(0), location);
+            self.emit(opcode::variable(Opcode::MakePlace, counter, 1, 0), location);
+            self.emit(opcode::push_integer(0), location);
+            self.lower_argument(end, location);
+            self.emit(opcode::push_integer(1), location);
+            self.emit(
+                EncodedInstruction::new(Opcode::ForStart, Vec::new()),
+                location,
+            );
+            return;
+        }
         if name == "FOR" {
             let Some(HirArgument::Place(counter)) = arguments.first() else {
                 self.emit(
@@ -497,7 +539,7 @@ impl<'a> Builder<'a> {
             );
             return;
         }
-        if name == "NEXT" {
+        if matches!(name, "NEXT" | "REND") {
             self.emit(
                 EncodedInstruction::new(Opcode::ForNext, Vec::new()),
                 location,
@@ -592,8 +634,6 @@ impl<'a> Builder<'a> {
                     | "SIF"
                     | "WHILE"
                     | "WEND"
-                    | "REPEAT"
-                    | "REND"
                     | "TRYC"
                     | "CATCH"
                     | "ENDCATCH"
