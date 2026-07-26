@@ -54,6 +54,7 @@ RustyEra 只接受 UTF-8 源码和配置内容，不负责识别或转换 Shift-
 | `era-debug-protocol` | 独立版本、按能力授权的调试协议。 |
 | `era-runtime-save` | 不执行文件 I/O 的传统存档编解码、迁移与恢复。 |
 | `era-runtime` | caller-pumped 权威 runtime，驱动 VM 并持有游戏、展示、交互和存档状态。 |
+| `era-source-extractor` | 从 runtime 项目编译缓存中精确提取嵌入的 UTF-8 源码快照。 |
 | `era-runtime-ffi` | 安全 Rust FFI 函数表与经过检查的结构声明。 |
 | `era-runtime-capi` | C ABI 动态库实现；这是 workspace 中唯一包含原始指针 `unsafe` 边界的 crate。 |
 
@@ -172,6 +173,27 @@ uv --project frontends/era-tui run rustyera-tui /path/to/resource-directory
 
 TUI 的功能、按键和存储约定见
 [TUI 说明](frontends/era-tui/README.md)。
+
+### 项目源码提取器
+
+成功编译的项目缓存内包含前端提交的完整 UTF-8 源码快照。源码提取器直接恢复该快照，
+不会从字节码反推源码，因此不属于传统意义上的反编译器：
+
+```sh
+cargo run -p era-source-extractor -- \
+  /path/to/compiled-project-v4.bin.zst [/path/to/output]
+```
+
+省略输出目录时写入当前工作目录。默认拒绝覆盖已有文件；显式传入 `--force` 才会覆盖
+普通文件。工具恢复 CSV、ERH、ERB、配置和 UTF-8 资源清单并保留相对目录，跳过图片、
+音频等二进制资源。它不支持旧版项目缓存或通用 `.erbc` 字节码容器。
+
+仓库维护者可构建提取器后，对 `reference/` 下发现的全部 Era 游戏执行编译缓存往返：
+
+```sh
+cargo build -p era-source-extractor
+cargo run --manifest-path tools/runtime-tester/Cargo.toml -- source-extractor-all
+```
 
 ### 作为 Rust 库使用
 

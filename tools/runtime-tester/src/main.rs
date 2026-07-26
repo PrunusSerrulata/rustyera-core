@@ -24,6 +24,8 @@ use era_runtime_protocol::{
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_compiler::{ExecutionBinding, default_host_registry};
 
+mod source_extractor;
+
 fn decode_project_text(bytes: &[u8]) -> Option<String> {
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
     if let Ok(text) = std::str::from_utf8(bytes) {
@@ -91,6 +93,7 @@ fn main() {
         "csv" => audit_csv(),
         "analyzer" => audit_analyzer(false),
         "compile" => audit_analyzer(true),
+        "source-extractor-all" => source_extractor::audit_all_reference_games(),
         other => panic!("unknown command {other}"),
     }
 }
