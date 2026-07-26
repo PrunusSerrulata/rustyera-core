@@ -2,6 +2,8 @@ use era_protocol::{ProtocolBytes, ProtocolError, ProtocolErrorCode};
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
+use crate::RuntimeLogLevel;
+
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]
@@ -110,18 +112,6 @@ pub struct ProjectLoadRequest {
     pub compiled_cache_transfer_id: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
-#[cbor(index_only)]
-#[serde(rename_all = "snake_case")]
-pub enum DiagnosticSeverity {
-    #[n(0)]
-    Information,
-    #[n(1)]
-    Warning,
-    #[n(2)]
-    Error,
-}
-
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct SourceLocation {
@@ -143,7 +133,7 @@ pub struct ProtocolDiagnostic {
     #[n(0)]
     pub code: String,
     #[n(1)]
-    pub severity: DiagnosticSeverity,
+    pub level: RuntimeLogLevel,
     #[n(2)]
     pub message: String,
     #[n(3)]

@@ -114,6 +114,13 @@ fn handshake_selects_only_implemented_features() {
     assert!(hello.features.contains(&RuntimeFeature::TimedInput));
     assert!(!hello.features.contains(&RuntimeFeature::Audio));
     assert_eq!(hello.selected_capabilities.storage, capabilities().storage);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::Log(RuntimeLog {
+            level: RuntimeLogLevel::Debug,
+            message,
+        }) if message.contains("handshake complete")
+    )));
 }
 
 #[test]
@@ -4015,10 +4022,10 @@ fn active_session_rejects_stale_epochs_and_acknowledges_journal_entries() {
     );
     session.drive(RuntimeDriveBudget::default()).expect("hello");
     drain(&mut session);
-    assert_eq!(session.outbound_journal.len(), 1);
+    assert_eq!(session.outbound_journal.len(), 2);
 
     let ack = RuntimeMessage::Acknowledge(era_runtime_protocol::SequenceAcknowledgement {
-        through_sequence: 0,
+        through_sequence: 1,
     });
     submit(&mut session, 1, ack);
     session.drive(RuntimeDriveBudget::default()).expect("ack");
@@ -5041,6 +5048,18 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
     };
     let mut initial = crate::project::build_project(&manifest, None);
     assert!(initial.report.success, "{:?}", initial.report.diagnostics);
+    initial.report.diagnostics.push(ProtocolDiagnostic {
+        code: "compiler.cached_warning".into(),
+        level: RuntimeLogLevel::Warning,
+        message: "warning retained with compiled output".into(),
+        source: Some(era_runtime_protocol::SourceLocation {
+            relative_path: "main.erb".into(),
+            byte_start: 0,
+            byte_end: 13,
+            line: Some(0),
+            byte_column: Some(0),
+        }),
+    });
     initial.incremental.compact();
     let cache = crate::compiled_cache::encode(
         &manifest,
@@ -5048,6 +5067,7 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
         initial.artifact.as_ref().unwrap(),
         &initial.incremental,
         initial.snapshot.as_ref().unwrap(),
+        &initial.report.diagnostics,
     )
     .unwrap();
     let mut identity = crate::compiled_cache::project_identity(&manifest);
@@ -5068,5 +5088,17 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
     assert!(cached.report.success);
     assert!(!cached.report.payload_required);
     assert_eq!(cached.report.project_revision, 8);
+    let replayed = cached
+        .report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "compiler.cached_warning")
+        .expect("cached compiler warning is replayed");
+    assert_eq!(replayed.level, RuntimeLogLevel::Warning);
+    assert_eq!(
+        replayed.message,
+        "[cached] warning retained with compiled output"
+    );
+    assert_eq!(replayed.source.as_ref().unwrap().byte_end, 13);
     assert_eq!(cached.snapshot.unwrap().manifest.project_revision, 8);
 }

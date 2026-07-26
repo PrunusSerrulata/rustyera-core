@@ -46,7 +46,7 @@ impl RuntimeSession {
             self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                     code: "runtime.input_undo_invalidated".into(),
-                    severity: DiagnosticSeverity::Warning,
+                    level: RuntimeLogLevel::Warning,
                     message: message.into(),
                     source: None,
                 }),

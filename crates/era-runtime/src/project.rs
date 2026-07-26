@@ -1,6 +1,6 @@
 use era_runtime_protocol::{
-    DiagnosticSeverity, FileCategory, FileChange, FilePayload, ProjectAnalysisReport,
-    ProjectAnalysisRequest, ProjectLoadReport, ProjectManifest, ProtocolDiagnostic, ReloadProject,
+    FileCategory, FileChange, FilePayload, ProjectAnalysisReport, ProjectAnalysisRequest,
+    ProjectLoadReport, ProjectManifest, ProtocolDiagnostic, ReloadProject, RuntimeLogLevel,
     SourceLocation, validate_relative_path,
 };
 use erabasic_analyzer::{
@@ -230,7 +230,7 @@ fn build_project_inner_with_extensions(
             Err(error) => {
                 diagnostics.push(project_diagnostic(
                     "runtime.invalid_path",
-                    DiagnosticSeverity::Error,
+                    RuntimeLogLevel::Error,
                     error.message,
                     Some(SourceLocation {
                         relative_path: file.relative_path,
@@ -247,7 +247,7 @@ fn build_project_inner_with_extensions(
         if !seen.insert((file.category as u8, path.to_ascii_lowercase())) {
             diagnostics.push(project_diagnostic(
                 "runtime.duplicate_path",
-                DiagnosticSeverity::Error,
+                RuntimeLogLevel::Error,
                 "duplicate normalized project path",
                 Some(SourceLocation {
                     relative_path: path,
@@ -265,7 +265,7 @@ fn build_project_inner_with_extensions(
         {
             diagnostics.push(project_diagnostic(
                 "runtime.content_hash_mismatch",
-                DiagnosticSeverity::Error,
+                RuntimeLogLevel::Error,
                 "submitted content hash does not match the payload",
                 Some(SourceLocation {
                     relative_path: path.clone(),
@@ -308,12 +308,10 @@ fn build_project_inner_with_extensions(
     let csv = load_project(&csv_files, &config.csv);
     diagnostics.extend(csv.diagnostics.iter().map(|diagnostic| ProtocolDiagnostic {
         code: format!("csv.{:?}", diagnostic.code).to_ascii_lowercase(),
-        severity: match diagnostic.severity {
-            CsvDiagnosticSeverity::Notice => DiagnosticSeverity::Information,
-            CsvDiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
-            CsvDiagnosticSeverity::Error | CsvDiagnosticSeverity::Fatal => {
-                DiagnosticSeverity::Error
-            }
+        level: match diagnostic.severity {
+            CsvDiagnosticSeverity::Notice => RuntimeLogLevel::Info,
+            CsvDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
+            CsvDiagnosticSeverity::Error | CsvDiagnosticSeverity::Fatal => RuntimeLogLevel::Error,
         },
         message: diagnostic.message.clone(),
         source: diagnostic.source.as_ref().map(|source| SourceLocation {
@@ -363,11 +361,11 @@ fn build_project_inner_with_extensions(
         });
         ProtocolDiagnostic {
             code: format!("analyzer.{:?}", diagnostic.code).to_ascii_lowercase(),
-            severity: match diagnostic.severity {
-                AnalyzerDiagnosticSeverity::Notice => DiagnosticSeverity::Information,
-                AnalyzerDiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
+            level: match diagnostic.severity {
+                AnalyzerDiagnosticSeverity::Notice => RuntimeLogLevel::Info,
+                AnalyzerDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
                 AnalyzerDiagnosticSeverity::Error | AnalyzerDiagnosticSeverity::Fatal => {
-                    DiagnosticSeverity::Error
+                    RuntimeLogLevel::Error
                 }
             },
             message: diagnostic.message.clone(),
@@ -380,7 +378,7 @@ fn build_project_inner_with_extensions(
     if analysis_selection.is_some() {
         let success = !diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
+            .any(|diagnostic| diagnostic.level == RuntimeLogLevel::Error);
         return ProjectBuild {
             artifact: None,
             incremental: IncrementalState::default(),
@@ -421,14 +419,10 @@ fn build_project_inner_with_extensions(
         });
         ProtocolDiagnostic {
             code: format!("compiler.{:?}", diagnostic.code).to_ascii_lowercase(),
-            severity: match diagnostic.severity {
-                erabasic_compiler::CompilerDiagnosticSeverity::Notice => {
-                    DiagnosticSeverity::Information
-                }
-                erabasic_compiler::CompilerDiagnosticSeverity::Warning => {
-                    DiagnosticSeverity::Warning
-                }
-                erabasic_compiler::CompilerDiagnosticSeverity::Error => DiagnosticSeverity::Error,
+            level: match diagnostic.severity {
+                erabasic_compiler::CompilerDiagnosticSeverity::Notice => RuntimeLogLevel::Info,
+                erabasic_compiler::CompilerDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
+                erabasic_compiler::CompilerDiagnosticSeverity::Error => RuntimeLogLevel::Error,
             },
             message: diagnostic.message.clone(),
             source,
@@ -447,7 +441,7 @@ fn build_project_inner_with_extensions(
     diagnostics.extend(validation.diagnostics.iter().map(|diagnostic| {
         project_diagnostic(
             &format!("validator.{:?}", diagnostic.code).to_ascii_lowercase(),
-            DiagnosticSeverity::Error,
+            RuntimeLogLevel::Error,
             diagnostic.message.clone(),
             None,
         )
@@ -457,7 +451,7 @@ fn build_project_inner_with_extensions(
     };
     let success = !diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
+        .any(|diagnostic| diagnostic.level == RuntimeLogLevel::Error);
     if !success {
         return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
     }
@@ -471,9 +465,9 @@ fn build_project_inner_with_extensions(
         project_diagnostic(
             diagnostic.code,
             if diagnostic.error {
-                DiagnosticSeverity::Error
+                RuntimeLogLevel::Error
             } else {
-                DiagnosticSeverity::Warning
+                RuntimeLogLevel::Warning
             },
             diagnostic.message,
             Some(SourceLocation {
@@ -487,7 +481,7 @@ fn build_project_inner_with_extensions(
     }));
     let success = !diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
+        .any(|diagnostic| diagnostic.level == RuntimeLogLevel::Error);
     if !success {
         return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
     }
@@ -593,7 +587,7 @@ fn prepare_extensions(
         if invalid {
             diagnostics.push(project_diagnostic(
                 "runtime.invalid_extension_declaration",
-                DiagnosticSeverity::Error,
+                RuntimeLogLevel::Error,
                 format!(
                     "extension declaration {:?} is empty, duplicated, or conflicts with a built-in",
                     declaration.id
@@ -662,7 +656,7 @@ fn prepare_extensions(
         if !registered {
             diagnostics.push(project_diagnostic(
                 "runtime.duplicate_extension_name",
-                DiagnosticSeverity::Error,
+                RuntimeLogLevel::Error,
                 format!("duplicate extension callable {name}"),
                 None,
             ));
@@ -744,7 +738,7 @@ fn normalize_resource(
         FilePayload::Bytes(_) if category == FileCategory::ResourceManifest => {
             diagnostics.push(project_diagnostic(
                 "runtime.expected_utf8",
-                DiagnosticSeverity::Error,
+                RuntimeLogLevel::Error,
                 "resource manifests must be submitted as UTF-8",
                 location,
             ));
@@ -754,7 +748,7 @@ fn normalize_resource(
         FilePayload::IoError(error) => {
             diagnostics.push(project_diagnostic(
                 "runtime.frontend_io_error",
-                DiagnosticSeverity::Error,
+                RuntimeLogLevel::Error,
                 format!("frontend resource read failed: {:?}", error.kind),
                 location,
             ));
@@ -838,19 +832,19 @@ fn inspect_deferred_file(
     match payload {
         FilePayload::IoError(error) => diagnostics.push(project_diagnostic(
             "runtime.frontend_io_error",
-            DiagnosticSeverity::Error,
+            RuntimeLogLevel::Error,
             error.message.clone(),
             Some(location()),
         )),
         FilePayload::Bytes(_) if require_utf8 => diagnostics.push(project_diagnostic(
             "runtime.expected_utf8",
-            DiagnosticSeverity::Error,
+            RuntimeLogLevel::Error,
             "configuration and resource manifests must be submitted as UTF-8",
             Some(location()),
         )),
         FilePayload::Utf8(_) | FilePayload::Bytes(_) => diagnostics.push(project_diagnostic(
             code,
-            DiagnosticSeverity::Warning,
+            RuntimeLogLevel::Warning,
             message,
             Some(location()),
         )),
@@ -933,7 +927,7 @@ fn parse_configuration(
             let Some((name, value)) = line.split_once(':') else {
                 diagnostics.push(project_diagnostic(
                     "runtime.invalid_configuration",
-                    DiagnosticSeverity::Warning,
+                    RuntimeLogLevel::Warning,
                     "configuration line has no ':' separator",
                     Some(SourceLocation {
                         relative_path: file.relative_path.clone(),
@@ -962,7 +956,7 @@ fn parse_configuration(
                             "runtime.invalid_configuration"
                         }
                     },
-                    DiagnosticSeverity::Warning,
+                    RuntimeLogLevel::Warning,
                     format!("configuration assignment {name:?} was not applied"),
                     Some(SourceLocation {
                         relative_path: file.relative_path.clone(),
@@ -1085,7 +1079,7 @@ fn parse_configuration(
     if config.use_new_random {
         diagnostics.push(project_diagnostic(
             "runtime.use_new_random_ignored",
-            DiagnosticSeverity::Warning,
+            RuntimeLogLevel::Warning,
             "UseNewRandom=true is ignored; the pinned SFMT implementation is always used",
             None,
         ));
@@ -1260,7 +1254,7 @@ fn parse_json_configuration(
         }
         Err(error) => diagnostics.push(project_diagnostic(
             "runtime.invalid_json_configuration",
-            DiagnosticSeverity::Warning,
+            RuntimeLogLevel::Warning,
             error.to_string(),
             Some(SourceLocation {
                 relative_path: path.into(),
@@ -1481,13 +1475,13 @@ fn project_source_location(
 
 fn project_diagnostic(
     code: &str,
-    severity: DiagnosticSeverity,
+    level: RuntimeLogLevel,
     message: impl Into<String>,
     source: Option<SourceLocation>,
 ) -> ProtocolDiagnostic {
     ProtocolDiagnostic {
         code: code.into(),
-        severity,
+        level,
         message: message.into(),
         source,
     }

@@ -52,7 +52,8 @@ runtime-message =
   [94, resynchronize-request] /
   [95, command-rejected] /
   [96, runtime-resynchronized] /
-  [97, protocol-diagnostic]
+  [97, protocol-diagnostic] /
+  [98, runtime-log]
 
 client-hello = { 0: any, 1: tstr, 2: [* uint], 3: runtime-limits, 4: any, 5: [* tstr] }
 server-hello = { 0: any, 1: any, 2: [* uint], 3: runtime-limits, 4: uint, 5: any, 6: tstr }
@@ -130,8 +131,9 @@ storage-operation =
 storage-precondition = [0] / [1] / [2, tstr]
 service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr, 5: uint / null }
 service-response = { 0: uint, 1: any }
-; Protocol 23 adds explicit normal/debug/diagnosis VM snapshot export purposes.
-; It retains Protocol 22 source-identity-first project loading, bounded storage range reads,
+; Protocol 24 makes runtime log levels authoritative and adds structured runtime logs.
+; It retains Protocol 23 snapshot purposes, source-identity-first project loading,
+; bounded storage range reads,
 ; and runtime-owned physical-history trimming.
 ; It retains the typed Protocol 19 service payloads and complete Protocol 20 presentation deltas.
 ; These include typed HTML, physical-history serialization,
@@ -157,4 +159,7 @@ runtime-resynchronized = {
   5: tstr, 6: input-undo-state, 7: key-macro-state
 }
 command-rejected = { 0: uint, 1: tstr, 2: bool, 3: any / null }
-protocol-diagnostic = { 0: tstr, 1: uint, 2: tstr, 3: any / null }
+; Runtime protocol 24 makes log severity backend-authoritative.
+runtime-log-level = 0..3 ; Debug, Info, Warning, Error
+protocol-diagnostic = { 0: tstr, 1: runtime-log-level, 2: tstr, 3: any / null }
+runtime-log = { 0: runtime-log-level, 1: tstr }

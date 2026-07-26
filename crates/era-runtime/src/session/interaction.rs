@@ -52,7 +52,7 @@ impl RuntimeSession {
                 pending.report.success = false;
                 pending.report.diagnostics.push(ProtocolDiagnostic {
                     code: "runtime.invalid_image_metadata".into(),
-                    severity: DiagnosticSeverity::Error,
+                    level: RuntimeLogLevel::Error,
                     message,
                     source: Some(era_runtime_protocol::SourceLocation {
                         relative_path,
@@ -99,7 +99,7 @@ impl RuntimeSession {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                         code: "runtime.platform_effect_failed".into(),
-                        severity: DiagnosticSeverity::Warning,
+                        level: RuntimeLogLevel::Warning,
                         message,
                         source: None,
                     }),
@@ -856,7 +856,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                     code: "runtime.system_command_during_timed_wait".into(),
-                    severity: DiagnosticSeverity::Warning,
+                    level: RuntimeLogLevel::Warning,
                     message: "system commands cannot be entered during a timed wait".into(),
                     source: None,
                 }),
@@ -892,7 +892,7 @@ impl RuntimeSession {
                     return self.emit(
                         RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                             code: "runtime.system_output_unavailable".into(),
-                            severity: DiagnosticSeverity::Warning,
+                            level: RuntimeLogLevel::Warning,
                             message: "@OUTPUT requires negotiated frontend storage".into(),
                             source: None,
                         }),
@@ -918,7 +918,7 @@ impl RuntimeSession {
             "DEBUG" => self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                     code: "runtime.debug_command_requires_debug_channel".into(),
-                    severity: DiagnosticSeverity::Warning,
+                    level: RuntimeLogLevel::Warning,
                     message: "@DEBUG is available only through the granted debug protocol".into(),
                     source: None,
                 }),
@@ -927,7 +927,7 @@ impl RuntimeSession {
             _ => self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                     code: "runtime.debug_command_requires_debug_channel".into(),
-                    severity: DiagnosticSeverity::Warning,
+                    level: RuntimeLogLevel::Warning,
                     message: "arbitrary input debug commands are available only through the granted debug protocol".into(),
                     source: None,
                 }),

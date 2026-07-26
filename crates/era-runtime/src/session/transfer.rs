@@ -158,6 +158,10 @@ impl RuntimeSession {
                     if !unrestricted_snapshot
                         && !matches!(vm.snapshot_eligibility(), SnapshotEligibility::Eligible)
                     {
+                        self.emit_log(
+                            RuntimeLogLevel::Warning,
+                            "state export is ineligible: SnapshotStateUnavailable",
+                        )?;
                         return self.emit(
                             RuntimeMessage::StateExportReady(StateExportReady {
                                 kind: request.kind,
@@ -271,6 +275,10 @@ impl RuntimeSession {
                 transfer: descriptor,
             }
         } else {
+            self.emit_log(
+                RuntimeLogLevel::Warning,
+                format!("state export is ineligible: {reasons:?}"),
+            )?;
             StateExportResult::Ineligible { reasons }
         };
         self.emit(
@@ -296,6 +304,7 @@ impl RuntimeSession {
             crate::resource::ResourceGraph::from_manifest(&snapshot.manifest).0;
         let extensions = self.extension_declarations.clone();
         let incremental = self.incremental.clone();
+        let diagnostics = self.compiled_cache_diagnostics.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
         let handle = std::thread::Builder::new()
@@ -307,6 +316,7 @@ impl RuntimeSession {
                     &artifact,
                     &incremental,
                     &snapshot,
+                    &diagnostics,
                     &worker_cancelled,
                 )
             })
@@ -340,7 +350,7 @@ impl RuntimeSession {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                         code: "runtime.compiled_cache_ready".into(),
-                        severity: DiagnosticSeverity::Information,
+                        level: RuntimeLogLevel::Info,
                         message: "compiled project cache is ready for frontend persistence".into(),
                         source: None,
                     }),
@@ -352,7 +362,7 @@ impl RuntimeSession {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                         code: "runtime.compiled_cache_failed".into(),
-                        severity: DiagnosticSeverity::Warning,
+                        level: RuntimeLogLevel::Warning,
                         message: error,
                         source: None,
                     }),
@@ -365,7 +375,7 @@ impl RuntimeSession {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                         code: "runtime.compiled_cache_failed".into(),
-                        severity: DiagnosticSeverity::Warning,
+                        level: RuntimeLogLevel::Warning,
                         message: error,
                         source: None,
                     }),
@@ -767,6 +777,10 @@ impl RuntimeSession {
                 epoch: self.epoch.0,
             }),
             None,
+        )?;
+        self.emit_log(
+            RuntimeLogLevel::Debug,
+            format!("Runtime phase -> {phase:?}"),
         )
     }
 
@@ -784,7 +798,16 @@ impl RuntimeSession {
                 source: None,
             }),
             (correlation_id != 0).then_some(correlation_id),
-        )
+        )?;
+        let level = if message.starts_with("compiled project cache preparation")
+            || message == "projection environment revision is not newer"
+            || message == "projection observation does not match the canonical presentation"
+        {
+            RuntimeLogLevel::Debug
+        } else {
+            RuntimeLogLevel::Warning
+        };
+        self.emit_log(level, format!("command rejected [{code:?}]: {message}"))
     }
 
     pub(super) fn fault(
@@ -793,6 +816,10 @@ impl RuntimeSession {
         message: &str,
         origin: Option<erabasic_vm::VmExecutionOrigin>,
     ) -> Result<(), RuntimeError> {
+        self.emit_log(
+            RuntimeLogLevel::Error,
+            format!("runtime fault [{code:?}]: {message}"),
+        )?;
         self.emit(
             RuntimeMessage::Fault(RuntimeFault {
                 code,
@@ -802,6 +829,20 @@ impl RuntimeSession {
             None,
         )?;
         self.set_phase(RuntimePhase::Faulted)
+    }
+
+    pub(super) fn emit_log(
+        &mut self,
+        level: RuntimeLogLevel,
+        message: impl Into<String>,
+    ) -> Result<(), RuntimeError> {
+        self.emit(
+            RuntimeMessage::Log(RuntimeLog {
+                level,
+                message: message.into(),
+            }),
+            None,
+        )
     }
 
     // Taking ownership prevents callers from accidentally retaining a message they
@@ -875,7 +916,7 @@ impl RuntimeSession {
         self.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                 code: "runtime.audio_device_unavailable".into(),
-                severity: DiagnosticSeverity::Warning,
+                level: RuntimeLogLevel::Warning,
                 message: "audio intent was retained but no frontend audio device is available"
                     .into(),
                 source: None,
@@ -907,7 +948,7 @@ impl RuntimeSession {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                         code: "runtime.device_effect_failed".into(),
-                        severity: DiagnosticSeverity::Warning,
+                        level: RuntimeLogLevel::Warning,
                         message: outcome.message.unwrap_or_else(|| {
                             format!(
                                 "frontend reported {:?} for effect {}",

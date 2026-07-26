@@ -21,7 +21,7 @@ impl RuntimeSession {
                     self.emit(
                         RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                             code: "runtime.candidate_save_failed".into(),
-                            severity: DiagnosticSeverity::Warning,
+                            level: RuntimeLogLevel::Warning,
                             message:
                                 "frontend storage cannot provide revision-checked atomic writes"
                                     .into(),
@@ -280,7 +280,7 @@ impl RuntimeSession {
         self.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                 code: "runtime.candidate_save_failed".into(),
-                severity: DiagnosticSeverity::Warning,
+                level: RuntimeLogLevel::Warning,
                 message: message.into(),
                 source: None,
             }),
@@ -388,7 +388,7 @@ impl RuntimeSession {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                         code: "runtime.key_macro_persistence_failed".into(),
-                        severity: DiagnosticSeverity::Warning,
+                        level: RuntimeLogLevel::Warning,
                         message: format!("macro.txt write failed: {error:?}"),
                         source: None,
                     }),
@@ -400,7 +400,7 @@ impl RuntimeSession {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                         code: "runtime.system_output_failed".into(),
-                        severity: DiagnosticSeverity::Warning,
+                        level: RuntimeLogLevel::Warning,
                         message: format!("emuera.log write failed: {error:?}"),
                         source: None,
                     }),

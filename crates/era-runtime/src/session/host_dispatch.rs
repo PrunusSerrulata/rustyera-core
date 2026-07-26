@@ -3482,7 +3482,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                     code: "runtime.platform_capability_unavailable".into(),
-                    severity: DiagnosticSeverity::Warning,
+                    level: RuntimeLogLevel::Warning,
                     message: format!("frontend did not negotiate service {kind:?}/{operation}"),
                     source: None,
                 }),
