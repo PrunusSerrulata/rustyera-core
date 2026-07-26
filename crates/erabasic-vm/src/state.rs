@@ -400,24 +400,29 @@ impl Vm {
     pub fn variable_dimensions(&self, fiber: FiberId, name: &str) -> Option<Vec<u64>> {
         let fiber = self.fibers.get(&fiber)?;
         let frame = fiber.frames.last()?;
-        let artifact = &self.generations.get(&frame.generation)?.artifact;
-        if let Some(definition) = artifact.globals.iter().find(|definition| {
-            definition.storage == BytecodeStorage::FunctionLocal
-                && definition.owner == Some(frame.function)
-                && definition.name.eq_ignore_ascii_case(name)
-        }) {
+        let program = self.generations.get(&frame.generation)?;
+        if let Some(definition) = program
+            .function_locals(frame.function)
+            .find(|definition| definition.name.eq_ignore_ascii_case(name))
+        {
             let cell = frame.locals.get(&definition.key)?;
             if let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = cell.first() {
                 return self.place_dimensions(fiber, &place).ok();
             }
             return Some(cell.dimensions.clone());
         }
-        artifact
+        if let Some(definition) = program
+            .function_statics(frame.function)
+            .find(|definition| definition.name.eq_ignore_ascii_case(name))
+        {
+            return Some(definition.dimensions.clone());
+        }
+        program
+            .artifact
             .globals
             .iter()
             .find(|definition| {
-                definition.storage != BytecodeStorage::FunctionLocal
-                    && definition.name.eq_ignore_ascii_case(name)
+                definition.owner.is_none() && definition.name.eq_ignore_ascii_case(name)
             })
             .map(|definition| definition.dimensions.clone())
     }
