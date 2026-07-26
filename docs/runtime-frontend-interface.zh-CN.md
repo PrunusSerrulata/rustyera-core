@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.0`、公共信封 `2.0`、Runtime 协议 `22.0`。源码入口：
+> C ABI `3.0`、公共信封 `2.0`、Runtime 协议 `23.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.0 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 22.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、I/O 和状态传输 |
+| Runtime 协议 23.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -263,7 +263,7 @@ UTF-8 文本、最大嵌套 128；禁止浮点和 indefinite-length。JSON 只�
 | 键 | 字段 | 类型/可空性 | 语义 |
 | --- | --- | --- | --- |
 | 0 | `wire_version` | `{0:major,1:minor}` | 当前 2.0；主版本必须匹配 |
-| 1 | `channel_version` | 同上 | Runtime 22.0 或 Debug 4.0 |
+| 1 | `channel_version` | 同上 | Runtime 23.0 或 Debug 4.0 |
 | 2 | `channel` | `0 Runtime` / `1 Debug` | 决定序号空间和 payload 解码器 |
 | 3 | `session` | 可空 `{0:high,1:low}` | 128 位 session 标识 |
 | 4 | `sequence` | `u64` | 同方向、同 channel 从 0 严格递增 |
@@ -635,9 +635,12 @@ kind：TraditionalSave、VmSnapshot、CompiledProjectCache。完整描述符是
 Commit → runtime 校验大小/digest/artifact → Ready → `Start` 引用已提交 ID。session
 同时只允许一个同方向传输，大小受 `maximum_transfer_bytes` 限制。
 
-Traditional/VM snapshot 只可在没有 deadline 的稳定输入 wait、没有外部请求和短暂
-effect 时精确导出。VM snapshot 还绑定字节码 artifact、项目资源、locale/culture 和
-wait。CompiledProjectCache 是 runtime 产生的 opaque、版本化字节；前端只存取。
+Traditional save 与普通 VM snapshot 只可在没有 deadline 的稳定输入 wait、没有外部
+请求和短暂 effect 时精确导出。VM snapshot 的 `snapshot_purpose` 为 Normal、Debug 或
+Diagnosis；后两者可在任意执行状态捕获，并在快照中保留不同来源标记，但该标记不放宽
+恢复规则。恢复仍完整校验字节码 artifact、项目资源、locale/culture、runtime wait 和
+VM fiber 状态；状态确实可恢复时，Debug/Diagnosis 来源会产生稳定代码的 warning
+diagnostic，交由前端明确呈现。CompiledProjectCache 是 runtime 产生的 opaque、版本化字节；前端只存取。
 缓存准备异步，首次请求可能被可恢复地拒绝为“已开始/仍在准备”，稍后再请求。
 
 ### 9.4 其余公开结构字段速查
@@ -664,7 +667,8 @@ wait。CompiledProjectCache 是 runtime 产生的 opaque、版本化字节；前
 
 状态传输结构按键完整字段：
 
-- `StateExportRequest {kind}`；
+- `StateExportRequest {kind,snapshot_purpose}`；`snapshot_purpose` 为
+  `Normal|Debug|Diagnosis`，非 VM snapshot 必须使用 Normal；
   `StateExportReady {kind,result}`；result 是
   `Ready{transfer}` 或 `Ineligible{reasons[]}`；
 - `StateImportBegin {kind,total_bytes,digest,artifact_id?}`；

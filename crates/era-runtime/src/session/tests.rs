@@ -2951,6 +2951,7 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
         4,
         RuntimeMessage::StateExportRequest(StateExportRequest {
             kind: StateExportKind::TraditionalSave,
+            snapshot_purpose: SnapshotExportPurpose::Normal,
         }),
     );
     source.drive(RuntimeDriveBudget::default()).unwrap();
@@ -3051,6 +3052,7 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
     // gameplay wait together with a stale LoadSlots marker.
     source.system_menu = SystemMenuState::LoadSlots;
     source.controller.flow = Some(SystemFlow::Shop);
+    source.phase = RuntimePhase::Faulted;
     let old_wait = source
         .operations
         .active_input()
@@ -3062,6 +3064,7 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
         6,
         RuntimeMessage::StateExportRequest(StateExportRequest {
             kind: StateExportKind::VmSnapshot,
+            snapshot_purpose: SnapshotExportPurpose::Diagnosis,
         }),
     );
     source.drive(RuntimeDriveBudget::default()).unwrap();
@@ -3101,6 +3104,12 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
             break;
         }
     }
+    let marked = runtime_snapshot::decode(
+        &snapshot_bytes,
+        usize::try_from(source.options.limits.maximum_transfer_bytes).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(marked.origin, RuntimeSnapshotOrigin::Diagnosis);
 
     let mut exact = prepare();
     submit(
@@ -3150,6 +3159,12 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
         }),
     );
     exact.drive(RuntimeDriveBudget::default()).unwrap();
+    let restore_messages = drain(&mut exact);
+    assert!(restore_messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::Diagnostic(ProtocolDiagnostic { code, .. })
+            if code == "runtime.snapshot_restored_from_diagnosis"
+    )));
     let restored_wait = exact.operations.active_input().expect("restored wait");
     assert_eq!(exact.phase(), RuntimePhase::WaitingInput);
     assert_eq!(exact.system_menu, SystemMenuState::Title);
@@ -3380,6 +3395,7 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
             99,
             StateExportRequest {
                 kind: StateExportKind::VmSnapshot,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
             },
         )
         .unwrap();
@@ -3590,6 +3606,7 @@ fn vm_snapshot_export_accepts_a_runtime_owned_system_wait() {
         3,
         RuntimeMessage::StateExportRequest(StateExportRequest {
             kind: StateExportKind::VmSnapshot,
+            snapshot_purpose: SnapshotExportPurpose::Normal,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -4867,6 +4884,7 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
             100,
             StateExportRequest {
                 kind: StateExportKind::CompiledProjectCache,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
             },
         )
         .unwrap();
@@ -4902,6 +4920,7 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
             101,
             StateExportRequest {
                 kind: StateExportKind::CompiledProjectCache,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
             },
         )
         .unwrap();
@@ -4924,6 +4943,7 @@ fn compiled_cache_export_does_not_retry_a_failed_background_build() {
             100,
             StateExportRequest {
                 kind: StateExportKind::CompiledProjectCache,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
             },
         )
         .unwrap();

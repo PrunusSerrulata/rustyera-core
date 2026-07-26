@@ -217,6 +217,13 @@ pub trait VmRuntimePort {
     ///
     /// Returns an error unless the VM is stable and all state can be serialized.
     fn encode_snapshot(&self) -> Result<Vec<u8>, VmError>;
+    /// Encode the current VM state for debugging or diagnosis without requiring a stable point.
+    /// Restore still performs the complete stable-state and artifact validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if native state cannot be captured or state cannot be serialized.
+    fn encode_unrestricted_snapshot(&self) -> Result<Vec<u8>, VmError>;
     /// # Errors
     ///
     /// Returns an error for incompatible storage or generation/resource limits.

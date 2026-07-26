@@ -16,10 +16,10 @@ use era_runtime_protocol::{
     LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment, LocalDateTimeResponse, PresentationOperation,
     ProjectManifest, ProjectionStringIndexRequest, ProjectionStringResponse,
     RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeMessage, SequenceAcknowledgement,
-    ServiceCapability, ServiceKind, ServiceResponse, ServiceResult, ShutdownRequest, StartMode,
-    StartRequest, StateExportKind, StateExportRequest, StateExportResult, StateImportBegin,
-    StateImportChunk, StateImportCommit, StorageCapabilities, StorageNamespace, StorageOperation,
-    StorageResponse, StorageResult, SubmittedFile, WaitChange,
+    ServiceCapability, ServiceKind, ServiceResponse, ServiceResult, ShutdownRequest,
+    SnapshotExportPurpose, StartMode, StartRequest, StateExportKind, StateExportRequest,
+    StateExportResult, StateImportBegin, StateImportChunk, StateImportCommit, StorageCapabilities,
+    StorageNamespace, StorageOperation, StorageResponse, StorageResult, SubmittedFile, WaitChange,
 };
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_compiler::{ExecutionBinding, default_host_registry};
@@ -972,6 +972,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
             sequence,
             RuntimeMessage::StateExportRequest(StateExportRequest {
                 kind: StateExportKind::VmSnapshot,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
             }),
         );
         drive(&mut session);

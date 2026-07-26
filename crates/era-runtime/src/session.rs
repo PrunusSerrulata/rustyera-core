@@ -43,14 +43,14 @@ use era_runtime_protocol::{
     SERIALIZE_PHYSICAL_HISTORY_OPERATION, SERIALIZE_PHYSICAL_HISTORY_OPERATION_VERSION,
     SerializePhysicalHistoryRequest, SerializePhysicalHistoryResponse, ServerHello,
     ServiceCapability, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady,
-    SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk, StateExportChunkRequest,
-    StateExportKind, StateExportReady, StateExportRequest, StateExportResult, StateImportAccepted,
-    StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
-    StateTransferDescriptor, StorageCapabilities, StorageEntry, StorageNamespace, StorageOperation,
-    StoragePrecondition, StorageRequest, StorageResponse, StorageResult, SystemTextArgument,
-    SystemTextKey, TextBoxLayout, TextExtentRequest, TextExtentResponse, UPDATE_CHECK_OPERATION,
-    UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest, UpdateCheckResponse, VersionRejected,
-    WaitChange, WaitKind, WaitStability,
+    SnapshotExportPurpose, SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk,
+    StateExportChunkRequest, StateExportKind, StateExportReady, StateExportRequest,
+    StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit,
+    StateImportReady, StateTransferCancel, StateTransferDescriptor, StorageCapabilities,
+    StorageEntry, StorageNamespace, StorageOperation, StoragePrecondition, StorageRequest,
+    StorageResponse, StorageResult, SystemTextArgument, SystemTextKey, TextBoxLayout,
+    TextExtentRequest, TextExtentResponse, UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION,
+    UpdateCheckRequest, UpdateCheckResponse, VersionRejected, WaitChange, WaitKind, WaitStability,
 };
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
@@ -81,7 +81,8 @@ use crate::project::{
     NormalizedProjectSnapshot, ProjectBuild, apply_project_delta, build_project_with_extensions,
 };
 use crate::runtime_snapshot::{
-    self, CULTURE_TABLE_VERSION, RUNTIME_SNAPSHOT_FORMAT_VERSION, RuntimeSnapshotPayload,
+    self, CULTURE_TABLE_VERSION, RUNTIME_SNAPSHOT_FORMAT_VERSION, RuntimeSnapshotOrigin,
+    RuntimeSnapshotPayload,
 };
 use crate::save_adapter::{
     decode_era_save, decode_scoped_save, encode_era_save, encode_scoped_save,

@@ -2226,6 +2226,28 @@ fn transient_qte_wait_cannot_be_snapshotted() {
         SnapshotEligibility::Ineligible(ref blockers)
             if blockers.contains(&SnapshotBlocker::TransientHostWait(fiber))
     ));
+    assert!(vm.encode_snapshot(&natives).is_err());
+
+    let diagnostic_bytes = vm.encode_unrestricted_snapshot(&natives).unwrap();
+    let diagnostic = VmSnapshot::decode(&diagnostic_bytes, diagnostic_bytes.len() * 2).unwrap();
+    let mut restore_host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let error = Vm::restore_snapshot(
+        validated(&artifact),
+        VmConfig::default(),
+        diagnostic,
+        &mut restore_host,
+        &mut natives,
+    )
+    .err()
+    .expect("an unrestricted transient snapshot must remain unrestorable");
+    assert!(
+        error
+            .to_string()
+            .contains("stable or quiescent primary fiber")
+    );
 }
 
 #[test]

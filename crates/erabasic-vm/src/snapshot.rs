@@ -324,6 +324,21 @@ impl Vm {
                 "VM is not at a stable snapshot point: {blockers:?}"
             )));
         }
+        self.encode_unrestricted_snapshot(natives)
+    }
+
+    /// Encode the current VM state for debugging or diagnosis, even when it cannot be restored.
+    ///
+    /// This deliberately bypasses capture-time stability checks so a faulting or runnable VM can
+    /// be inspected. [`Vm::restore_snapshot`] still applies all artifact and state validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when native state cannot be captured or serialization fails.
+    pub fn encode_unrestricted_snapshot(
+        &self,
+        natives: &NativeServiceRegistry,
+    ) -> Result<Vec<u8>, VmError> {
         let native_states = natives
             .snapshots()
             .map_err(VmError::Snapshot)?

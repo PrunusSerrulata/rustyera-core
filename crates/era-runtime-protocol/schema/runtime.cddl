@@ -130,13 +130,14 @@ storage-operation =
 storage-precondition = [0] / [1] / [2, tstr]
 service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr, 5: uint / null }
 service-response = { 0: uint, 1: any }
-; Protocol 22 adds source-identity-first project loading, bounded storage range reads,
+; Protocol 23 adds explicit normal/debug/diagnosis VM snapshot export purposes.
+; It retains Protocol 22 source-identity-first project loading, bounded storage range reads,
 ; and runtime-owned physical-history trimming.
 ; It retains the typed Protocol 19 service payloads and complete Protocol 20 presentation deltas.
 ; These include typed HTML, physical-history serialization,
 ; canvas image decode/PNG encode, ProjectionQueryContext, HTML measurement,
 ; TextExtent and CanvasPixel request/response maps.
-state-export-request = { 0: uint }
+state-export-request = { 0: uint, 1: uint }
 state-export-ready = { 0: uint, 1: any }
 state-import-begin = { 0: uint, 1: uint, 2: bstr, 3: bstr / null }
 state-import-accepted = { 0: uint }
