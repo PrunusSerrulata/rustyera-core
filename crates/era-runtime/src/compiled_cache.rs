@@ -23,7 +23,7 @@ const MAGIC: &[u8; 8] = b"RERACACH";
 // This is a semantic epoch as well as a wire-format version. Increment it whenever
 // compiler, analyzer or project-loading behavior can change an unchanged source's
 // artifact; an older artifact is not safe even as an incremental compilation seed.
-const VERSION: u32 = 6;
+const VERSION: u32 = 7;
 const COMPRESSION_LEVEL: i32 = 3;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -1216,7 +1216,7 @@ mod tests {
     }
 
     #[test]
-    fn v6_sharded_binary_cache_bounds_small_project_parallel_overhead() {
+    fn sharded_binary_cache_bounds_small_project_parallel_overhead() {
         #[derive(Serialize)]
         struct V2PayloadRef<'a> {
             artifact: &'a BytecodeArtifact,
@@ -1249,7 +1249,7 @@ mod tests {
         let mut writer = CountingWriter::new(encoder, None);
         serde_json::to_writer(&mut writer, &payload).unwrap();
         let v2_payload = writer.into_inner().finish().unwrap();
-        let v6 = encode(
+        let cache_bytes = encode(
             &project,
             &[],
             build.artifact.as_ref().unwrap(),
@@ -1260,9 +1260,9 @@ mod tests {
         .unwrap();
 
         assert!(
-            v6.len() <= v2_payload.len() + MAXIMUM_PARALLEL_SECTION_OVERHEAD,
-            "v6={} v2={}",
-            v6.len(),
+            cache_bytes.len() <= v2_payload.len() + MAXIMUM_PARALLEL_SECTION_OVERHEAD,
+            "encoded={} v2={}",
+            cache_bytes.len(),
             v2_payload.len()
         );
     }

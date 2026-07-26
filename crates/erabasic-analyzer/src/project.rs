@@ -1615,10 +1615,25 @@ fn collect_expression_calls(expression: &Expr, calls: &mut Vec<String>) {
 }
 
 fn uses_dynamic_call(statement: &Statement) -> bool {
+    // Emuera parses every function once a runtime-resolved call target is reachable.
+    // Keep this list aligned with the cross-function dynamic lowering paths so the
+    // IgnoreUncalledFunction optimization cannot discard a possible target body.
     matches!(
         &statement.kind,
         StatementKind::Instruction { name, .. }
-            if matches!(name.as_str(), "CALLFORM" | "CALLFORMF" | "JUMPFORM" | "TRYCALLFORM" | "TRYJUMPFORM")
+            if matches!(
+                name.as_str(),
+                "CALLFORM"
+                    | "CALLFORMF"
+                    | "JUMPFORM"
+                    | "TRYCALLFORM"
+                    | "TRYCALLFORMF"
+                    | "TRYJUMPFORM"
+                    | "TRYCCALL"
+                    | "TRYCCALLFORM"
+                    | "TRYCJUMP"
+                    | "TRYCJUMPFORM"
+            )
     )
 }
 
