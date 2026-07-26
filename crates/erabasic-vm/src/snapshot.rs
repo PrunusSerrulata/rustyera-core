@@ -435,11 +435,24 @@ fn validate_snapshot(
             "stable snapshots cannot contain legacy-generation storage".into(),
         ));
     }
-    if !has_snapshot_stable_root(snapshot.primary_fiber, &snapshot.fibers)
-        || snapshot.fibers.len() > config.maximum_fibers
-    {
+    if !has_snapshot_stable_root(snapshot.primary_fiber, &snapshot.fibers) {
         return Err(VmError::Snapshot(
             "snapshot does not have a stable or quiescent primary fiber".into(),
+        ));
+    }
+    let live_fibers = snapshot
+        .fibers
+        .values()
+        .filter(|fiber| {
+            !matches!(
+                fiber.state,
+                FiberState::Completed(_) | FiberState::Cancelled | FiberState::Faulted(_)
+            )
+        })
+        .count();
+    if live_fibers > config.maximum_fibers {
+        return Err(VmError::Snapshot(
+            "snapshot exceeds the configured live fiber limit".into(),
         ));
     }
     let mut frame_ids = std::collections::BTreeSet::new();
