@@ -1,3 +1,4 @@
+use std::fmt;
 use std::io::{Read, Write};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -77,6 +78,26 @@ pub(crate) struct DecodedCompiledCache {
     pub(crate) artifact: ValidatedArtifact,
     pub(crate) incremental: IncrementalState,
     pub(crate) snapshot: NormalizedProjectSnapshot,
+}
+
+/// Error returned when a compiled-project cache cannot expose its source manifest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompiledProjectCacheError {
+    message: String,
+}
+
+impl fmt::Display for CompiledProjectCacheError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CompiledProjectCacheError {}
+
+impl From<String> for CompiledProjectCacheError {
+    fn from(message: String) -> Self {
+        Self { message }
+    }
 }
 
 pub(crate) fn project_key(
@@ -296,6 +317,26 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<DecodedCompil
         incremental: parts.incremental,
         snapshot: parts.snapshot,
     })
+}
+
+/// Decode the exact frontend-submitted project manifest embedded in a compiled cache.
+///
+/// This source-only projection reuses the runtime cache parser but deliberately avoids
+/// decoding or validating bytecode sections that an extraction tool does not consume.
+///
+/// # Errors
+///
+/// Returns an error when the cache is over the caller's limit, corrupt, unsupported, or
+/// does not contain a decodable project snapshot.
+pub fn decode_compiled_project_manifest(
+    bytes: &[u8],
+    maximum_bytes: usize,
+) -> Result<ProjectManifest, CompiledProjectCacheError> {
+    let sections =
+        parse_cache_sections(bytes, maximum_bytes).map_err(CompiledProjectCacheError::from)?;
+    let snapshot = decode_section::<NormalizedProjectSnapshot>(&sections.snapshot)
+        .map_err(CompiledProjectCacheError::from)?;
+    Ok(snapshot.manifest)
 }
 
 fn parse_cache_sections(
@@ -1025,8 +1066,10 @@ mod tests {
         )
         .unwrap();
         let decoded = decode(&bytes, 64 * 1024 * 1024).unwrap();
+        let decoded_manifest = decode_compiled_project_manifest(&bytes, 64 * 1024 * 1024).unwrap();
 
         assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
+        assert_eq!(decoded_manifest, project);
         assert_eq!(
             decoded.artifact.artifact(),
             build.artifact.as_ref().unwrap().artifact()
@@ -1054,6 +1097,35 @@ mod tests {
     #[test]
     fn compiled_project_cache_rejects_corruption() {
         assert!(decode(b"not a compiled cache", 1024).is_err());
+        assert!(decode_compiled_project_manifest(b"not a compiled cache", 1024).is_err());
+    }
+
+    #[test]
+    fn source_manifest_projection_honors_limits_and_cache_version() {
+        let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+        let mut build = crate::project::build_project(&project, None);
+        assert!(build.report.success, "{:?}", build.report.diagnostics);
+        build.incremental.compact();
+        let mut bytes = encode(
+            &project,
+            &[],
+            build.artifact.as_ref().unwrap(),
+            &build.incremental,
+            build.snapshot.as_ref().unwrap(),
+        )
+        .unwrap();
+
+        assert!(decode_compiled_project_manifest(&bytes, bytes.len() - 1).is_err());
+        bytes[8..12].copy_from_slice(&5_u32.to_le_bytes());
+        let digest_offset = bytes.len() - 32;
+        let digest = blake3::hash(&bytes[..digest_offset]);
+        bytes[digest_offset..].copy_from_slice(digest.as_bytes());
+        assert!(
+            decode_compiled_project_manifest(&bytes, 64 * 1024 * 1024)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported compiled project cache version 5")
+        );
     }
 
     #[test]
