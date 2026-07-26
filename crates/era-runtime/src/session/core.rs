@@ -103,6 +103,7 @@ impl RuntimeSession {
             pending_candidate_commit: None,
             candidate_clock: None,
             compiled_project_cache: None,
+            compiled_cache_diagnostics: Vec::new(),
             compiled_cache_task: None,
             compiled_cache_failure: None,
         }
@@ -471,7 +472,8 @@ impl RuntimeSession {
             | RuntimeMessage::Fault(_)
             | RuntimeMessage::CommandRejected(_)
             | RuntimeMessage::RuntimeResynchronized(_)
-            | RuntimeMessage::Diagnostic(_) => self.reject(
+            | RuntimeMessage::Diagnostic(_)
+            | RuntimeMessage::Log(_) => self.reject(
                 message_id,
                 CommandErrorCode::InvalidValue,
                 "message direction is frontend-incompatible",
@@ -543,10 +545,14 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         let supported = VersionRange::exact(RUNTIME_PROTOCOL_VERSION);
         let Some(selected) = negotiate_version(hello.runtime_versions, supported) else {
+            self.emit_log(
+                RuntimeLogLevel::Error,
+                "runtime protocol negotiation failed: runtime protocol 24.0 is required",
+            )?;
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 23.0 is required".into(),
+                    message: "runtime protocol 24.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -612,6 +618,10 @@ impl RuntimeSession {
                 selected_locale: self.selected_locale.clone(),
             }),
             Some(message_id),
+        )?;
+        self.emit_log(
+            RuntimeLogLevel::Debug,
+            format!("runtime handshake complete (epoch {})", self.epoch.0),
         )
     }
 
@@ -750,7 +760,7 @@ impl RuntimeSession {
         self.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                 code: "runtime.extension_registry_accepted".into(),
-                severity: DiagnosticSeverity::Information,
+                level: RuntimeLogLevel::Info,
                 message: format!(
                     "accepted {} portable Host extension declarations",
                     self.extension_declarations.len()
@@ -813,7 +823,7 @@ impl RuntimeSession {
         self.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                 code: "runtime.key_macro_not_persisted".into(),
-                severity: DiagnosticSeverity::Information,
+                level: RuntimeLogLevel::Info,
                 message: "key macro state changed in memory; frontend storage was not negotiated"
                     .into(),
                 source: None,
@@ -879,6 +889,13 @@ impl RuntimeSession {
             // and must not add a multi-second zstd pass to the cold-start critical path.
             None
         };
+        self.compiled_cache_diagnostics = build
+            .report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| !diagnostic.code.starts_with("runtime.compiled_cache_"))
+            .cloned()
+            .collect();
         self.incremental = build.incremental;
         self.artifact = build.artifact;
         self.project_snapshot = build.snapshot;
@@ -907,7 +924,7 @@ impl RuntimeSession {
             report.success = false;
             report.diagnostics.push(ProtocolDiagnostic {
                 code: "runtime.missing_image_metadata_service".into(),
-                severity: DiagnosticSeverity::Error,
+                level: RuntimeLogLevel::Error,
                 message: "resource sprites require the negotiated image_metadata service".into(),
                 source: None,
             });
@@ -970,24 +987,8 @@ impl RuntimeSession {
         let expected_key =
             crate::compiled_cache::project_key(&request.identity, &self.extension_declarations);
         let mut build = match cached {
-            Some(mut exact) if exact.key == expected_key => {
-                exact.snapshot.manifest.project_revision = request.identity.project_revision;
-                ProjectBuild {
-                    artifact: Some(exact.artifact),
-                    incremental: exact.incremental,
-                    report: ProjectLoadReport {
-                        project_revision: request.identity.project_revision,
-                        success: true,
-                        diagnostics: vec![ProtocolDiagnostic {
-                            code: "runtime.compiled_cache_hit".into(),
-                            severity: DiagnosticSeverity::Information,
-                            message: "loaded the exact compiled project cache".into(),
-                            source: None,
-                        }],
-                        payload_required: false,
-                    },
-                    snapshot: Some(exact.snapshot),
-                }
+            Some(exact) if exact.key == expected_key => {
+                exact_cached_project(exact, request.identity.project_revision)
             }
             cached => {
                 let Some(manifest) = request.manifest.as_ref() else {
@@ -995,14 +996,14 @@ impl RuntimeSession {
                     if let Some(error) = cache_warning.take() {
                         diagnostics.push(ProtocolDiagnostic {
                             code: "runtime.compiled_cache_ignored".into(),
-                            severity: DiagnosticSeverity::Warning,
+                            level: RuntimeLogLevel::Warning,
                             message: error,
                             source: None,
                         });
                     }
                     diagnostics.push(ProtocolDiagnostic {
                         code: "runtime.project_payload_required".into(),
-                        severity: DiagnosticSeverity::Information,
+                        level: RuntimeLogLevel::Info,
                         message: "compiled cache is missing or does not match the project".into(),
                         source: None,
                     });
@@ -1020,7 +1021,7 @@ impl RuntimeSession {
                         success: false,
                         diagnostics: vec![ProtocolDiagnostic {
                             code: "runtime.project_identity_mismatch".into(),
-                            severity: DiagnosticSeverity::Error,
+                            level: RuntimeLogLevel::Error,
                             message: "submitted project payload differs from its source identity"
                                 .into(),
                             source: None,
@@ -1047,7 +1048,7 @@ impl RuntimeSession {
         if let Some(error) = cache_warning {
             build.report.diagnostics.push(ProtocolDiagnostic {
                 code: "runtime.compiled_cache_ignored".into(),
-                severity: DiagnosticSeverity::Warning,
+                level: RuntimeLogLevel::Warning,
                 message: error,
                 source: None,
             });
@@ -1172,7 +1173,7 @@ impl RuntimeSession {
                 build.report.success = false;
                 build.report.diagnostics.push(ProtocolDiagnostic {
                     code: "runtime.missing_image_metadata_service".into(),
-                    severity: DiagnosticSeverity::Error,
+                    level: RuntimeLogLevel::Error,
                     message:
                         "changed image resources require the negotiated image_metadata service"
                             .into(),
@@ -1242,7 +1243,7 @@ impl RuntimeSession {
             build.report.success = false;
             build.report.diagnostics.push(ProtocolDiagnostic {
                 code: "runtime.hot_reload_incompatible".into(),
-                severity: DiagnosticSeverity::Error,
+                level: RuntimeLogLevel::Error,
                 message: error.to_string(),
                 source: None,
             });
@@ -1261,6 +1262,13 @@ impl RuntimeSession {
         build.incremental.compact();
         self.incremental = build.incremental;
         self.project_snapshot = build.snapshot;
+        self.compiled_cache_diagnostics = build
+            .report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| !diagnostic.code.starts_with("runtime.compiled_cache_"))
+            .cloned()
+            .collect();
         self.compiled_project_cache = None;
         self.compiled_cache_task = None;
         self.compiled_cache_failure = None;
@@ -1644,7 +1652,7 @@ impl RuntimeSession {
             self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                     code: code.into(),
-                    severity: DiagnosticSeverity::Warning,
+                    level: RuntimeLogLevel::Warning,
                     message: message.into(),
                     source: None,
                 }),
@@ -1951,5 +1959,32 @@ impl RuntimeSession {
             VmPortEvent::FiberYielded(_) => Ok(()),
             VmPortEvent::DebugStopped(stop) => self.enter_debug_stop(stop, None),
         }
+    }
+}
+
+fn exact_cached_project(
+    mut exact: crate::compiled_cache::DecodedCompiledCache,
+    project_revision: u64,
+) -> ProjectBuild {
+    exact.snapshot.manifest.project_revision = project_revision;
+    for diagnostic in &mut exact.diagnostics {
+        diagnostic.message = format!("[cached] {}", diagnostic.message);
+    }
+    exact.diagnostics.push(ProtocolDiagnostic {
+        code: "runtime.compiled_cache_hit".into(),
+        level: RuntimeLogLevel::Debug,
+        message: "loaded the exact compiled project cache".into(),
+        source: None,
+    });
+    ProjectBuild {
+        artifact: Some(exact.artifact),
+        incremental: exact.incremental,
+        report: ProjectLoadReport {
+            project_revision,
+            success: true,
+            diagnostics: exact.diagnostics,
+            payload_required: false,
+        },
+        snapshot: Some(exact.snapshot),
     }
 }

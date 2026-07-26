@@ -4,7 +4,9 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use era_protocol::ProtocolBytes;
-use era_runtime_protocol::{ExtensionDeclaration, FilePayload, ProjectIdentity, ProjectManifest};
+use era_runtime_protocol::{
+    ExtensionDeclaration, FilePayload, ProjectIdentity, ProjectManifest, ProtocolDiagnostic,
+};
 use erabasic_bytecode::{
     ArtifactManifest, BytecodeArtifact, BytecodeCallCompatibility, BytecodeEventGroup,
     BytecodeFunction, BytecodeGlobal, Digest, HostImport, NativeImport, SourceMap, SourceMapEntry,
@@ -21,7 +23,7 @@ const MAGIC: &[u8; 8] = b"RERACACH";
 // This is a semantic epoch as well as a wire-format version. Increment it whenever
 // compiler, analyzer or project-loading behavior can change an unchanged source's
 // artifact; an older artifact is not safe even as an incremental compilation seed.
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const COMPRESSION_LEVEL: i32 = 3;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -60,6 +62,7 @@ struct CompiledCacheSections<'a> {
     sources: EncodedSectionRef<'a>,
     fingerprints: EncodedSectionRef<'a>,
     snapshot: EncodedSectionRef<'a>,
+    diagnostics: EncodedSectionRef<'a>,
     functions: Vec<EncodedSectionRef<'a>>,
     source_entries: Vec<EncodedSectionRef<'a>>,
 }
@@ -72,6 +75,7 @@ struct DecodedCacheParts {
     sources: Vec<SourceRecord>,
     fingerprints: Vec<Digest>,
     snapshot: NormalizedProjectSnapshot,
+    diagnostics: Vec<ProtocolDiagnostic>,
     functions: Vec<BytecodeFunction>,
     source_entries: Vec<SourceMapEntry>,
 }
@@ -81,6 +85,7 @@ pub(crate) struct DecodedCompiledCache {
     pub(crate) artifact: ValidatedArtifact,
     pub(crate) incremental: IncrementalState,
     pub(crate) snapshot: NormalizedProjectSnapshot,
+    pub(crate) diagnostics: Vec<ProtocolDiagnostic>,
 }
 
 /// Error returned when a compiled-project cache cannot expose its source manifest.
@@ -158,8 +163,17 @@ pub(crate) fn encode(
     artifact: &ValidatedArtifact,
     incremental: &IncrementalState,
     snapshot: &NormalizedProjectSnapshot,
+    diagnostics: &[ProtocolDiagnostic],
 ) -> Result<Vec<u8>, String> {
-    encode_inner(manifest, extensions, artifact, incremental, snapshot, None)
+    encode_inner(
+        manifest,
+        extensions,
+        artifact,
+        incremental,
+        snapshot,
+        diagnostics,
+        None,
+    )
 }
 
 pub(crate) fn encode_cancellable(
@@ -168,6 +182,7 @@ pub(crate) fn encode_cancellable(
     artifact: &ValidatedArtifact,
     incremental: &IncrementalState,
     snapshot: &NormalizedProjectSnapshot,
+    diagnostics: &[ProtocolDiagnostic],
     cancelled: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
     encode_inner(
@@ -176,6 +191,7 @@ pub(crate) fn encode_cancellable(
         artifact,
         incremental,
         snapshot,
+        diagnostics,
         Some(cancelled),
     )
 }
@@ -186,6 +202,7 @@ fn encode_inner(
     artifact: &ValidatedArtifact,
     incremental: &IncrementalState,
     snapshot: &NormalizedProjectSnapshot,
+    diagnostics: &[ProtocolDiagnostic],
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, String> {
     if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
@@ -239,6 +256,7 @@ fn encode_inner(
     let sources = sources?;
     let fingerprints = fingerprints?;
     let snapshot = snapshot?;
+    let diagnostics = encode_section(diagnostics, cancelled)?;
     let function_sections = function_ranges
         .par_iter()
         .map(|range| encode_section(&artifact.functions[range.clone()], cancelled))
@@ -254,6 +272,7 @@ fn encode_inner(
         + sources.len()
         + fingerprints.len()
         + snapshot.len()
+        + diagnostics.len()
         + function_sections.iter().map(Vec::len).sum::<usize>()
         + source_sections.iter().map(Vec::len).sum::<usize>();
     let mut output = Vec::with_capacity(
@@ -279,6 +298,7 @@ fn encode_inner(
     output.extend_from_slice(&sources);
     output.extend_from_slice(&fingerprints);
     output.extend_from_slice(&snapshot);
+    output.extend_from_slice(&diagnostics);
     for section in function_sections.iter().chain(&source_sections) {
         output.extend_from_slice(section);
     }
@@ -319,6 +339,7 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<DecodedCompil
         artifact,
         incremental: parts.incremental,
         snapshot: parts.snapshot,
+        diagnostics: parts.diagnostics,
     })
 }
 
@@ -349,7 +370,7 @@ fn parse_cache_sections(
     if bytes.len() > maximum_bytes {
         return Err("compiled project cache exceeds the transfer limit".into());
     }
-    let minimum = MAGIC.len() + 4 + 32 + 4 + 4 + 7 * 16 + 32;
+    let minimum = MAGIC.len() + 4 + 32 + 4 + 4 + 8 * 16 + 32;
     if bytes.len() < minimum || &bytes[..MAGIC.len()] != MAGIC {
         return Err("compiled project cache has an invalid header".into());
     }
@@ -386,6 +407,7 @@ fn parse_cache_sections(
     let sources = read_section(bytes, &mut cursor, digest_offset)?;
     let fingerprints = read_section(bytes, &mut cursor, digest_offset)?;
     let snapshot = read_section(bytes, &mut cursor, digest_offset)?;
+    let diagnostics = read_section(bytes, &mut cursor, digest_offset)?;
     let mut functions = Vec::with_capacity(function_section_count);
     for _ in 0..function_section_count {
         functions.push(read_section(bytes, &mut cursor, digest_offset)?);
@@ -405,6 +427,7 @@ fn parse_cache_sections(
         &sources,
         &fingerprints,
         &snapshot,
+        &diagnostics,
     ]
     .into_iter()
     .chain(&functions)
@@ -425,12 +448,14 @@ fn parse_cache_sections(
         sources,
         fingerprints,
         snapshot,
+        diagnostics,
         functions,
         source_entries,
     })
 }
 
 fn decode_cache_parts(sections: &CompiledCacheSections<'_>) -> Result<DecodedCacheParts, String> {
+    let diagnostics = decode_section::<Vec<ProtocolDiagnostic>>(&sections.diagnostics)?;
     let (
         (metadata, (globals, incremental)),
         (project_data, (sources, (fingerprints, (snapshot, (function_chunks, source_chunks))))),
@@ -502,6 +527,7 @@ fn decode_cache_parts(sections: &CompiledCacheSections<'_>) -> Result<DecodedCac
         sources,
         fingerprints,
         snapshot,
+        diagnostics,
         functions,
         source_entries: entries,
     })
@@ -1066,6 +1092,7 @@ mod tests {
             build.artifact.as_ref().unwrap(),
             &build.incremental,
             build.snapshot.as_ref().unwrap(),
+            &build.report.diagnostics,
         )
         .unwrap();
         let decoded = decode(&bytes, 64 * 1024 * 1024).unwrap();
@@ -1073,6 +1100,7 @@ mod tests {
 
         assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
         assert_eq!(decoded_manifest, project);
+        assert_eq!(decoded.diagnostics, build.report.diagnostics);
         assert_eq!(
             decoded.artifact.artifact(),
             build.artifact.as_ref().unwrap().artifact()
@@ -1115,6 +1143,7 @@ mod tests {
             build.artifact.as_ref().unwrap(),
             &build.incremental,
             build.snapshot.as_ref().unwrap(),
+            &build.report.diagnostics,
         )
         .unwrap();
 
@@ -1145,6 +1174,7 @@ mod tests {
             build.artifact.as_ref().unwrap(),
             &build.incremental,
             build.snapshot.as_ref().unwrap(),
+            &build.report.diagnostics,
             &cancelled,
         )
         .unwrap_err();
@@ -1186,12 +1216,13 @@ mod tests {
     }
 
     #[test]
-    fn v5_sharded_binary_cache_bounds_small_project_parallel_overhead() {
+    fn v6_sharded_binary_cache_bounds_small_project_parallel_overhead() {
         #[derive(Serialize)]
         struct V2PayloadRef<'a> {
             artifact: &'a BytecodeArtifact,
             incremental: &'a IncrementalState,
             snapshot: &'a NormalizedProjectSnapshot,
+            diagnostics: &'a [ProtocolDiagnostic],
         }
 
         const MAXIMUM_PARALLEL_SECTION_OVERHEAD: usize = 16 * 1024;
@@ -1212,24 +1243,26 @@ mod tests {
             artifact: build.artifact.as_ref().unwrap().artifact(),
             incremental: &build.incremental,
             snapshot: build.snapshot.as_ref().unwrap(),
+            diagnostics: &build.report.diagnostics,
         };
         let encoder = zstd::stream::Encoder::new(Vec::new(), 7).unwrap();
         let mut writer = CountingWriter::new(encoder, None);
         serde_json::to_writer(&mut writer, &payload).unwrap();
         let v2_payload = writer.into_inner().finish().unwrap();
-        let v5 = encode(
+        let v6 = encode(
             &project,
             &[],
             build.artifact.as_ref().unwrap(),
             &build.incremental,
             build.snapshot.as_ref().unwrap(),
+            &build.report.diagnostics,
         )
         .unwrap();
 
         assert!(
-            v5.len() <= v2_payload.len() + MAXIMUM_PARALLEL_SECTION_OVERHEAD,
-            "v5={} v2={}",
-            v5.len(),
+            v6.len() <= v2_payload.len() + MAXIMUM_PARALLEL_SECTION_OVERHEAD,
+            "v6={} v2={}",
+            v6.len(),
             v2_payload.len()
         );
     }

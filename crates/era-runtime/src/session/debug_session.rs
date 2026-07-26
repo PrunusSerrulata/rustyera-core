@@ -20,7 +20,7 @@ use erabasic_vm::{
     VmResolvedBreakpoint, VmRuntimePort, VmStepKind, VmStopToken, VmValue, evaluate_pure_native,
 };
 
-use super::{ActiveDebugGrant, RuntimeError, RuntimePhase, RuntimeSession};
+use super::{ActiveDebugGrant, RuntimeError, RuntimeLogLevel, RuntimePhase, RuntimeSession};
 
 const DEBUG_REQUEST_REJECTED: &str = "debug request rejected";
 
@@ -82,7 +82,7 @@ impl RuntimeSession {
         if negotiate_version(hello.versions, supported).is_none() {
             return self.emit_debug_error(
                 DebugErrorCode::InvalidState,
-                "debug protocol 3.0 is required",
+                "debug protocol 4.0 is required",
                 Some(message_id),
             );
         }
@@ -585,10 +585,12 @@ impl RuntimeSession {
             self.debug_resume_phase = Some(self.phase);
         }
         self.set_phase(RuntimePhase::DebugPaused)?;
-        self.emit_debug(
-            DebugMessage::Stopped(self.protocol_stop(stop)),
-            correlation_id,
-        )
+        let stop = self.protocol_stop(stop);
+        self.emit_log(
+            RuntimeLogLevel::Debug,
+            format!("debug stopped: {:?}", stop.reason),
+        )?;
+        self.emit_debug(DebugMessage::Stopped(stop), correlation_id)
     }
 
     /// Re-issue an existing grant after an epoch/generation transition. The
@@ -742,6 +744,10 @@ impl RuntimeSession {
         message: &str,
         correlation_id: Option<u64>,
     ) -> Result<(), RuntimeError> {
+        self.emit_log(
+            RuntimeLogLevel::Error,
+            format!("debug request failed [{code:?}]: {message}"),
+        )?;
         self.emit_debug(
             DebugMessage::Error(DebugError {
                 code,

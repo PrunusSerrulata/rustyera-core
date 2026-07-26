@@ -8,6 +8,7 @@ mod extension;
 mod input;
 mod key_macro;
 mod lifecycle;
+mod log;
 mod message;
 mod presentation;
 mod project;
@@ -47,6 +48,7 @@ pub use lifecycle::{
     StateImportCommit, StateImportReady, StateTransferCancel, StateTransferDescriptor,
     TextBoxLayout, VersionRejected,
 };
+pub use log::{RuntimeLog, RuntimeLogLevel};
 pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage, RuntimeResynchronized};
 pub use presentation::{
     AudioState, CanvasPoint, CanvasRect, CanvasReplay, CanvasReplayCommand, CanvasSize,
@@ -58,10 +60,10 @@ pub use presentation::{
     TooltipFormatFlag, TooltipSettings,
 };
 pub use project::{
-    DiagnosticSeverity, FileCategory, FileChange, FilePayload, FrontendIoError,
-    FrontendIoErrorKind, ProjectAnalysisReport, ProjectAnalysisRequest, ProjectIdentity,
-    ProjectLoadReport, ProjectLoadRequest, ProjectManifest, ProtocolDiagnostic, ReloadProject,
-    SourceLocation, SubmittedFile, validate_relative_path,
+    FileCategory, FileChange, FilePayload, FrontendIoError, FrontendIoErrorKind,
+    ProjectAnalysisReport, ProjectAnalysisRequest, ProjectIdentity, ProjectLoadReport,
+    ProjectLoadRequest, ProjectManifest, ProtocolDiagnostic, ReloadProject, SourceLocation,
+    SubmittedFile, validate_relative_path,
 };
 pub use service::{
     CancelExternalRequest, CanvasPixelRequest, CanvasPixelResponse, DECODE_CANVAS_IMAGE_OPERATION,

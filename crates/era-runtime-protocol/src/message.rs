@@ -12,15 +12,15 @@ use crate::{
     KeyMacroState, PresentationDelta, PresentationSnapshot, ProjectAnalysisReport,
     ProjectAnalysisRequest, ProjectLoadReport, ProjectLoadRequest, ProjectManifest,
     ProjectionObservation, ProjectionState, ProtocolDiagnostic, ReloadProject,
-    ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault, RuntimePhase, RuntimeStateChanged,
-    SequenceAcknowledgement, ServerHello, ServiceRequest, ServiceResponse, ShutdownReady,
-    ShutdownRequest, StartRequest, StateExportChunk, StateExportChunkRequest, StateExportReady,
-    StateExportRequest, StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit,
-    StateImportReady, StateTransferCancel, StorageRequest, StorageResponse, VersionRejected,
-    WaitChange,
+    ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault, RuntimeLog, RuntimePhase,
+    RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceRequest, ServiceResponse,
+    ShutdownReady, ShutdownRequest, StartRequest, StateExportChunk, StateExportChunkRequest,
+    StateExportReady, StateExportRequest, StateImportAccepted, StateImportBegin, StateImportChunk,
+    StateImportCommit, StateImportReady, StateTransferCancel, StorageRequest, StorageResponse,
+    VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(23, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(24, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -154,6 +154,8 @@ pub enum RuntimeMessage {
     RuntimeResynchronized(#[n(0)] RuntimeResynchronized),
     #[n(97)]
     Diagnostic(#[n(0)] ProtocolDiagnostic),
+    #[n(98)]
+    Log(#[n(0)] RuntimeLog),
 }
 
 impl RuntimeMessage {
@@ -213,6 +215,7 @@ impl RuntimeMessage {
             Self::CommandRejected(_) => 95,
             Self::RuntimeResynchronized(_) => 96,
             Self::Diagnostic(_) => 97,
+            Self::Log(_) => 98,
         }
     }
 
