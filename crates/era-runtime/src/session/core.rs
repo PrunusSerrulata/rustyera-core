@@ -545,7 +545,7 @@ impl RuntimeSession {
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 22.0 is required".into(),
+                    message: "runtime protocol 23.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -1628,6 +1628,28 @@ impl RuntimeSession {
         self.undo_checkpoint = payload.undo_checkpoint;
         self.undo_replay = payload.undo_replay;
         self.undo_token = None;
+        let origin_warning = match payload.origin {
+            RuntimeSnapshotOrigin::Normal => None,
+            RuntimeSnapshotOrigin::Debug => Some((
+                "runtime.snapshot_restored_from_debug",
+                "restored a VM snapshot captured in debug mode",
+            )),
+            RuntimeSnapshotOrigin::Diagnosis => Some((
+                "runtime.snapshot_restored_from_diagnosis",
+                "restored a VM snapshot captured for diagnosis",
+            )),
+        };
+        if let Some((code, message)) = origin_warning {
+            self.emit(
+                RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    code: code.into(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: message.into(),
+                    source: None,
+                }),
+                Some(message_id),
+            )?;
+        }
         if matches!(
             self.system_menu,
             SystemMenuState::LoadSlots | SystemMenuState::SaveSlots

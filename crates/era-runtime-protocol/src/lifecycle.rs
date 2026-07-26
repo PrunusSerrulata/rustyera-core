@@ -439,11 +439,27 @@ pub enum SnapshotIneligibleReason {
     SnapshotStateUnavailable,
 }
 
+/// Declares why a VM snapshot is being captured. Relaxed captures remain subject to the
+/// same validation as ordinary snapshots when a frontend later tries to restore them.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotExportPurpose {
+    #[n(0)]
+    Normal,
+    #[n(1)]
+    Debug,
+    #[n(2)]
+    Diagnosis,
+}
+
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct StateExportRequest {
     #[n(0)]
     pub kind: StateExportKind,
+    #[n(1)]
+    pub snapshot_purpose: SnapshotExportPurpose,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

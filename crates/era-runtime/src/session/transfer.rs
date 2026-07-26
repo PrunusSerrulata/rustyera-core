@@ -11,6 +11,24 @@ impl RuntimeSession {
         message_id: u64,
         request: StateExportRequest,
     ) -> Result<(), RuntimeError> {
+        if request.kind != StateExportKind::VmSnapshot
+            && request.snapshot_purpose != SnapshotExportPurpose::Normal
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "snapshot purpose is only valid for VM snapshot exports",
+            );
+        }
+        if request.snapshot_purpose == SnapshotExportPurpose::Debug
+            && self.active_debug_grant.is_none()
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "debug snapshot export requires an active debug session",
+            );
+        }
         if request.kind == StateExportKind::CompiledProjectCache {
             if self.outbound_transfer.is_some() {
                 return self.reject(
@@ -79,24 +97,35 @@ impl RuntimeSession {
                 Some(message_id),
             );
         }
+        let unrestricted_snapshot = request.kind == StateExportKind::VmSnapshot
+            && request.snapshot_purpose != SnapshotExportPurpose::Normal;
         let stable_wait = self.operations.active_input().is_some_and(|pending| {
             pending.wait.stability == WaitStability::StableInput
                 && pending.wait.deadline_ns.is_none()
         });
         let mut reasons = Vec::new();
-        if self.phase != RuntimePhase::WaitingInput || !stable_wait {
-            reasons.push(SnapshotIneligibleReason::StableWaitRequired);
+        if !unrestricted_snapshot {
+            if self.phase != RuntimePhase::WaitingInput || !stable_wait {
+                reasons.push(SnapshotIneligibleReason::StableWaitRequired);
+            }
+            if self.operations.has_transient_external() || !self.effect_journal.is_empty() {
+                reasons.push(SnapshotIneligibleReason::ExternalOperationPending);
+            }
+            if request.kind == StateExportKind::VmSnapshot && !self.operations.is_snapshot_stable()
+            {
+                reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
+            }
+            if request.kind == StateExportKind::VmSnapshot && self.undo_replay.is_some() {
+                reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
+            }
+            if request.kind == StateExportKind::VmSnapshot && !self.queued_input.is_empty() {
+                reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
+            }
         }
-        if self.operations.has_transient_external() || !self.effect_journal.is_empty() {
-            reasons.push(SnapshotIneligibleReason::ExternalOperationPending);
+        if request.kind == StateExportKind::VmSnapshot && self.vm.is_none() {
+            reasons.push(SnapshotIneligibleReason::VmSnapshotUnavailable);
         }
-        if request.kind == StateExportKind::VmSnapshot && !self.operations.is_snapshot_stable() {
-            reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
-        }
-        if request.kind == StateExportKind::VmSnapshot && self.undo_replay.is_some() {
-            reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
-        }
-        if request.kind == StateExportKind::VmSnapshot && !self.queued_input.is_empty() {
+        if request.kind == StateExportKind::VmSnapshot && self.project_snapshot.is_none() {
             reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
         }
         let result = if reasons.is_empty() {
@@ -126,7 +155,9 @@ impl RuntimeSession {
                 )
                 .map_err(|error| RuntimeError::Internal(error.to_string()))?,
                 StateExportKind::VmSnapshot => {
-                    if !matches!(vm.snapshot_eligibility(), SnapshotEligibility::Eligible) {
+                    if !unrestricted_snapshot
+                        && !matches!(vm.snapshot_eligibility(), SnapshotEligibility::Eligible)
+                    {
                         return self.emit(
                             RuntimeMessage::StateExportReady(StateExportReady {
                                 kind: request.kind,
@@ -139,7 +170,12 @@ impl RuntimeSession {
                             Some(message_id),
                         );
                     }
-                    let vm_snapshot = vm.encode_snapshot().map_err(|error| {
+                    let vm_snapshot = if unrestricted_snapshot {
+                        vm.encode_unrestricted_snapshot()
+                    } else {
+                        vm.encode_snapshot()
+                    }
+                    .map_err(|error| {
                         RuntimeError::Internal(format!("VM snapshot encode failed: {error}"))
                     })?;
                     let project = self.project_snapshot.as_ref().ok_or_else(|| {
@@ -147,6 +183,11 @@ impl RuntimeSession {
                     })?;
                     runtime_snapshot::encode(&RuntimeSnapshotPayload {
                         format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
+                        origin: match request.snapshot_purpose {
+                            SnapshotExportPurpose::Normal => RuntimeSnapshotOrigin::Normal,
+                            SnapshotExportPurpose::Debug => RuntimeSnapshotOrigin::Debug,
+                            SnapshotExportPurpose::Diagnosis => RuntimeSnapshotOrigin::Diagnosis,
+                        },
                         artifact_id: vm.artifact_id(),
                         project_identity: project.project_identity,
                         resource_count: u64::try_from(project.resources.len()).unwrap_or(u64::MAX),

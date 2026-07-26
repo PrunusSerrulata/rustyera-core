@@ -13,9 +13,10 @@ use era_runtime_protocol::{
     ProjectLoadRequest, ProjectManifest, ProjectionLength, ProjectionObservation,
     ProjectionQueryContext, ProjectionSize, ProjectionTransform, RUNTIME_PROTOCOL_VERSION,
     RedrawState, ResourceReplay, ReturnToTitleRequest, RuntimeMessage,
-    SAMPLE_CANVAS_PIXEL_OPERATION, ServiceKind, ServiceRequest, StateExportChunkRequest,
-    StateExportKind, StateImportBegin, StorageNamespace, StorageOperation, StorageRequest,
-    TextExtentRequest, parse_document, validate_relative_path,
+    SAMPLE_CANVAS_PIXEL_OPERATION, ServiceKind, ServiceRequest, SnapshotExportPurpose,
+    StateExportChunkRequest, StateExportKind, StateExportRequest, StateImportBegin,
+    StorageNamespace, StorageOperation, StorageRequest, TextExtentRequest, parse_document,
+    validate_relative_path,
 };
 
 #[test]
@@ -96,7 +97,7 @@ fn checked_runtime_schema_covers_lifecycle_control_messages() {
 }
 
 #[test]
-fn protocol_22_carries_compiled_cache_loads_and_in_session_title_returns() {
+fn protocol_23_carries_compiled_cache_loads_and_in_session_title_returns() {
     let load = RuntimeMessage::ProjectLoad(ProjectLoadRequest {
         identity: era_runtime_protocol::ProjectIdentity {
             project_revision: 7,
@@ -121,7 +122,7 @@ fn protocol_22_carries_compiled_cache_loads_and_in_session_title_returns() {
 }
 
 #[test]
-fn protocol_22_retains_analysis_key_macros_and_extension_registration() {
+fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
     let macro_command = RuntimeMessage::KeyMacroCommand(KeyMacroCommand::Store {
         group: 2,
         slot: 3,
@@ -132,7 +133,7 @@ fn protocol_22_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(22, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(23, 0));
 }
 
 #[test]
@@ -141,7 +142,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(22, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(23, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -307,7 +308,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(22, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(23, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -346,7 +347,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(22, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(23, 0));
 }
 
 #[test]
@@ -375,6 +376,13 @@ fn protocol_21_round_trips_complete_presentation_deltas() {
 
 #[test]
 fn state_transfers_are_versioned_and_chunked() {
+    let request = RuntimeMessage::StateExportRequest(StateExportRequest {
+        kind: StateExportKind::VmSnapshot,
+        snapshot_purpose: SnapshotExportPurpose::Diagnosis,
+    });
+    let encoded = request.encode_payload().expect("encode state export");
+    assert_eq!(RuntimeMessage::decode_payload(60, &encoded), Ok(request));
+
     let begin = RuntimeMessage::StateImportBegin(StateImportBegin {
         kind: StateExportKind::TraditionalSave,
         total_bytes: 4096,

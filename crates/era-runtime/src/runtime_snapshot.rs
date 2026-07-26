@@ -11,16 +11,24 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 16;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 17;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 60;
 const COMPRESSION_LEVEL: i32 = 1;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) enum RuntimeSnapshotOrigin {
+    Normal,
+    Debug,
+    Diagnosis,
+}
+
 #[derive(Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) format_version: u32,
+    pub(crate) origin: RuntimeSnapshotOrigin,
     pub(crate) artifact_id: Digest,
     pub(crate) project_identity: [u8; 32],
     pub(crate) resource_count: u64,
@@ -286,6 +294,7 @@ mod tests {
         assert_eq!(resource_graph.create_canvas(7, 20, 10), Ok(true));
         let payload = RuntimeSnapshotPayload {
             format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
+            origin: RuntimeSnapshotOrigin::Normal,
             artifact_id: Digest([1; 32]),
             project_identity: [2; 32],
             resource_count: 0,
@@ -341,6 +350,7 @@ mod tests {
         resource_graph.create_canvas(7, 20, 10).unwrap();
         let payload = RuntimeSnapshotPayload {
             format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
+            origin: RuntimeSnapshotOrigin::Debug,
             artifact_id: Digest([1; 32]),
             project_identity: [2; 32],
             resource_count: 0,
@@ -391,6 +401,7 @@ mod tests {
         understated[20..28].copy_from_slice(&((uncompressed.len() as u64) - 1).to_le_bytes());
         assert!(decode(&understated, uncompressed.len()).is_err());
         let decoded = decode(&encoded, uncompressed.len()).unwrap();
+        assert_eq!(decoded.origin, RuntimeSnapshotOrigin::Debug);
         assert_eq!(decoded.resource_graph.canvas_state(7), Some((20, 10)));
         assert_eq!(decoded.selected_locale, "ja");
         assert_eq!(decoded.culture_table_version, CULTURE_TABLE_VERSION);
