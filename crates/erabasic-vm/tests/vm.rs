@@ -688,6 +688,93 @@ fn findelement_uses_the_verified_regex_subset() {
 }
 
 #[test]
+fn one_dimensional_array_operations_accept_an_indexed_reference() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         RELATION:0:0 = 4\n\
+         RELATION:0:1 = 8\n\
+         RELATION:0:2 = 12\n\
+         RELATION:0:3 = 16\n\
+         RESULT:0 = FINDELEMENT(RELATION:0:0, 12, 0, 4)\n\
+         ARRAYREMOVE RELATION:0:0, 1, 1\n\
+         RESULT:1 = RELATION:0:1\n\
+         RETURN\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None).unwrap(),
+        VmValue::Integer(2)
+    );
+    assert_eq!(
+        vm.read_variable(result, &[1], None).unwrap(),
+        VmValue::Integer(12)
+    );
+}
+
+#[test]
+fn conditional_form_trims_branch_edge_whitespace() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         RESULTS:0 = \\@ 0 ? unused # %\"魔力\"% \\@\n\
+         RESULTS:1 = \\@ 1 ? \tkept\t # unused \\@\n\
+         RETURN\n",
+    );
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .unwrap()
+        .key;
+    let entry = artifact.functions[0].key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(results, &[0], None).unwrap(),
+        VmValue::String("魔力".into())
+    );
+    assert_eq!(
+        vm.read_variable(results, &[1], None).unwrap(),
+        VmValue::String("kept".into())
+    );
+}
+
+#[test]
 fn arraysort_accepts_reference_forward_back_keywords() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nFLAG:0 = 2\nFLAG:1 = 4\nFLAG:2 = 1\nFLAG:3 = 3\nARRAYSORT FLAG, BACK, 0, 4\nARRAYCOPY FLAG, FLAG\nRETURN\n",
@@ -3011,6 +3098,28 @@ fn dynamic_try_resolves_before_arguments_and_form_call_invokes_target() {
         report.events
     );
     assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(4)));
+}
+
+#[test]
+fn formatted_try_call_resolves_a_unicode_function_before_catch() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         RESULT = 0\n\
+         TRYCCALLFORM IRAI_一般{6}(107, 107006, \"依頼実行時\")\n\
+         CATCH\n\
+         RESULT = -1\n\
+         ENDCATCH\n\
+         RETURN\n\
+         @IRAI_一般6(CHARA, IRAI_ID, SCENE)\n\
+         #DIM CHARA\n\
+         #DIM IRAI_ID\n\
+         #DIMS SCENE\n\
+         RESULT = CHARA + IRAI_ID + STRLENS(SCENE)\n\
+         RETURN\n",
+    );
+    // STRLENS follows Emuera's UTF-8 byte-count mode, so five CJK characters
+    // contribute 15 here.
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(107_128));
 }
 
 #[test]
