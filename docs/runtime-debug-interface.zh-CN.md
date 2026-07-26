@@ -197,6 +197,8 @@ effect ACK、Runtime ACK/resync 和 shutdown 等仍按源码分发。
 `FiberSummary` 是 `fiber_id,state,primary,frame_count`。state 枚举定义了 Runnable、
 WaitingHost、WaitingResume、Completed、Faulted、Cancelled、DebugPaused；当前 VM 转换
 只产生前六类，暂停是 VM 的全局 debugger 状态，不把各 fiber 映射为 `DebugPaused`。
+Completed/Cancelled 只在终止事件尚未消费或完成 stop 仍受保护时短暂出现，不构成历史
+记录；终止回收后 fiber ID 可在后续 stop 中复用，调试客户端不得跨 stop 缓存 ID。
 
 `FrameSummary` 是 `frame_id,generation,function_key(16 bytes),function_name,instruction,
 source?`。call stack 顺序从最新 frame 到最旧 frame。operand value 是

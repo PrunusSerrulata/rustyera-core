@@ -60,6 +60,7 @@ impl RuntimeVm {
         vm.fibers.clear();
         vm.runnable.clear();
         vm.primary_fiber = None;
+        vm.next_fiber = 1;
         vm.pending_reload = None;
         vm.debug = DebugState::default();
         let natives = self
@@ -322,6 +323,7 @@ impl VmRuntimePort for RuntimeVm {
     }
 
     fn drive(&mut self, budget: RunBudget, mode: VmDriveMode) -> VmPortDriveReport {
+        self.vm.retire_terminal_fibers();
         if matches!(mode, VmDriveMode::SelectedFiber(_)) {
             return VmPortDriveReport {
                 stop: VmPortStop::DebugStopped,
@@ -389,6 +391,10 @@ impl VmRuntimePort for RuntimeVm {
             instructions: report.instructions,
             events,
         }
+    }
+
+    fn retire_terminal_fibers(&mut self) -> usize {
+        self.vm.retire_terminal_fibers()
     }
 
     fn validate_host_completion(

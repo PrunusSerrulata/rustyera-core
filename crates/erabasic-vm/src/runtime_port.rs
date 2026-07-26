@@ -174,6 +174,8 @@ pub trait VmRuntimePort {
     ) -> Result<FiberId, VmError>;
     fn fiber_status(&self, fiber: FiberId) -> Option<FiberStatus>;
     fn drive(&mut self, budget: RunBudget, mode: VmDriveMode) -> VmPortDriveReport;
+    /// Retire completed and cancelled fibers after their terminal events have been consumed.
+    fn retire_terminal_fibers(&mut self) -> usize;
 
     /// Validate types, places and request freshness without mutating VM state.
     ///

@@ -220,6 +220,7 @@ impl RuntimeSession {
                 for event in report.events {
                     self.handle_vm_event(&mut vm, event)?;
                 }
+                vm.retire_terminal_fibers();
                 if self.operations.active_input().is_some()
                     && !vm.has_runnable_fibers()
                     && self.phase == RuntimePhase::Running

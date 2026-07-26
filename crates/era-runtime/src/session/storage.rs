@@ -186,6 +186,7 @@ impl RuntimeSession {
                         | VmPortEvent::FiberFaulted(_, _) => {}
                     }
                 }
+                candidate.retire_terminal_fibers();
                 if completed {
                     return Ok(());
                 }

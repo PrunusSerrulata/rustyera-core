@@ -16,11 +16,12 @@ use erabasic_csv::{
 };
 use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode};
 use erabasic_vm::{
-    EraSaveScope, FiberStatus, HostCallRequest, HostCallResult, HostReady, HostRebindRequest,
-    HostWaitStability, NativeServiceRegistry, RunBudget, RuntimeVm, SnapshotBlocker,
-    SnapshotEligibility, Vm, VmBreakpoint, VmBreakpointLocation, VmConfig, VmDebugControl,
-    VmDebugInspect, VmDebugVariableWrite, VmEvent, VmFaultCode, VmHost, VmRuntimeFill,
-    VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction, VmSnapshot, VmStepKind, VmValue,
+    EraSaveScope, FiberId, FiberStatus, HostCallRequest, HostCallResult, HostReady,
+    HostRebindRequest, HostWaitStability, NativeServiceRegistry, RunBudget, RuntimeVm,
+    SnapshotBlocker, SnapshotEligibility, Vm, VmBreakpoint, VmBreakpointLocation, VmConfig,
+    VmDebugControl, VmDebugInspect, VmDebugVariableWrite, VmEvent, VmFaultCode, VmHost,
+    VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction, VmSnapshot,
+    VmStepKind, VmValue,
 };
 
 fn project_data() -> erabasic_data::ProjectData {
@@ -2034,6 +2035,101 @@ fn cooperative_fibers_are_round_robin_and_complete_independently() {
     );
 }
 
+#[test]
+fn terminal_fibers_retire_and_reuse_the_smallest_available_id() {
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN 7\n");
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let first = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let second = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = ReadyHost::default();
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+
+    assert_eq!(first, FiberId(1));
+    assert_eq!(second, FiberId(2));
+    assert_eq!(
+        report
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                VmEvent::FiberCompleted { value, .. } => value.clone(),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![VmValue::Integer(7), VmValue::Integer(7)]
+    );
+    assert_eq!(vm.retire_terminal_fibers(), 2);
+    assert_eq!(vm.fiber_status(first), None);
+    assert_eq!(vm.fiber_status(second), None);
+    assert_eq!(vm.spawn_entry(entry, Vec::new()).unwrap(), FiberId(1));
+}
+
+#[test]
+fn cancelled_fibers_release_frames_before_id_retirement() {
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+
+    assert_eq!(vm.fiber_frame_count(fiber), Some(1));
+    vm.cancel_fiber(fiber).unwrap();
+    assert_eq!(vm.fiber_frame_count(fiber), Some(0));
+    assert_eq!(vm.retire_terminal_fibers(), 1);
+    assert_eq!(vm.fiber_status(fiber), None);
+    assert_eq!(vm.spawn_entry(entry, Vec::new()).unwrap(), fiber);
+}
+
+#[test]
+fn debugger_completion_stop_protects_terminal_fiber_until_continue() {
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let pause = vm.request_pause().unwrap();
+    vm.step(pause.token, fiber, VmStepKind::Instruction)
+        .unwrap();
+    let mut host = ReadyHost::default();
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    let completed_stop = report
+        .events
+        .iter()
+        .find_map(|event| match event {
+            VmEvent::DebugStopped(stop)
+                if matches!(stop.reason, erabasic_vm::VmDebugStopReason::FiberCompleted) =>
+            {
+                Some(stop.clone())
+            }
+            _ => None,
+        })
+        .expect("completion step should establish a debugger stop");
+
+    assert_eq!(vm.retire_terminal_fibers(), 0);
+    assert!(matches!(
+        vm.fiber_status(fiber),
+        Some(FiberStatus::Completed(None))
+    ));
+    vm.continue_execution(completed_stop.token).unwrap();
+    assert_eq!(vm.retire_terminal_fibers(), 1);
+    assert_eq!(vm.fiber_status(fiber), None);
+}
+
 struct PendingHost {
     stability: HostWaitStability,
     rebound: Vec<HostRebindRequest>,
@@ -2051,6 +2147,30 @@ impl VmHost for PendingHost {
         self.rebound = requests.to_vec();
         Ok(())
     }
+}
+
+#[test]
+fn cancelled_host_wait_rejects_late_completion_before_reusing_id() {
+    let (artifact, entry) = host_artifact(HostSnapshotCapability::StableWait);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let mut natives = NativeServiceRegistry::default();
+    vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    let Some(FiberStatus::WaitingHost(request)) = vm.fiber_status(fiber) else {
+        panic!("fiber should be waiting for its host request");
+    };
+
+    vm.cancel_fiber(fiber).unwrap();
+    assert!(matches!(
+        vm.resume_host(request, HostReady::empty()),
+        Err(erabasic_vm::VmError::StaleHostRequest(id)) if id == request
+    ));
+    assert_eq!(vm.retire_terminal_fibers(), 1);
+    assert_eq!(vm.spawn_entry(entry, Vec::new()).unwrap(), fiber);
 }
 
 #[test]
@@ -2145,6 +2265,8 @@ fn quiescent_vm_snapshot_round_trips_without_host_wait_rebinding() {
         vm.fiber_status(fiber),
         Some(FiberStatus::Completed(_))
     ));
+    assert_eq!(vm.retire_terminal_fibers(), 1);
+    assert_eq!(vm.fiber_status(fiber), None);
     assert_eq!(
         vm.snapshot_eligibility(&natives),
         SnapshotEligibility::Eligible
@@ -2164,14 +2286,44 @@ fn quiescent_vm_snapshot_round_trips_without_host_wait_rebinding() {
     )
     .unwrap();
     assert!(restore_host.rebound.is_empty());
-    assert!(matches!(
-        restored.fiber_status(fiber),
-        Some(FiberStatus::Completed(_))
-    ));
+    assert_eq!(restored.fiber_status(fiber), None);
 }
 
 #[test]
-fn snapshot_restore_does_not_count_completed_fiber_history_against_live_limit() {
+fn retired_fiber_history_does_not_grow_quiescent_snapshots() {
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let mut host = ReadyHost::default();
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    vm.retire_terminal_fibers();
+    let baseline = vm.encode_snapshot(&natives).unwrap();
+    for _ in 0..512 {
+        assert_eq!(vm.spawn_entry(entry, Vec::new()).unwrap(), FiberId(1));
+        vm.run_slice(&mut host, &mut natives, RunBudget::default());
+        assert_eq!(vm.retire_terminal_fibers(), 1);
+    }
+    let after = vm.encode_snapshot(&natives).unwrap();
+
+    assert_eq!(vm.fiber_ids().count(), 0);
+    assert!(
+        after.len() <= baseline.len().saturating_add(64),
+        "retired fiber history grew the snapshot from {} to {} bytes",
+        baseline.len(),
+        after.len()
+    );
+}
+
+#[test]
+fn snapshot_restore_retires_completed_fiber_history_and_normalizes_ids() {
     let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
     let entry = artifact
         .functions
@@ -2200,7 +2352,7 @@ fn snapshot_restore_does_not_count_completed_fiber_history_against_live_limit() 
         stability: HostWaitStability::StableInput,
         rebound: Vec::new(),
     };
-    Vm::restore_snapshot(
+    let mut restored = Vm::restore_snapshot(
         validated(&artifact),
         config,
         snapshot,
@@ -2208,6 +2360,8 @@ fn snapshot_restore_does_not_count_completed_fiber_history_against_live_limit() 
         &mut natives,
     )
     .unwrap();
+    assert_eq!(restored.fiber_ids().count(), 0);
+    assert_eq!(restored.spawn_entry(entry, Vec::new()).unwrap(), FiberId(1));
 }
 
 #[test]
@@ -2488,6 +2642,18 @@ fn debugger_pause_step_and_variable_batch_are_coherent_and_atomic() {
     let mut vm = Vm::new(validated(&artifact), VmConfig::default());
     let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
     let stop = vm.request_pause().unwrap();
+    let frame = vm
+        .call_stack(stop.token, fiber)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("root frame");
+    assert!(
+        vm.operand_stack(stop.token, fiber, frame.id, None, 32)
+            .unwrap()
+            .values
+            .is_empty()
+    );
     let page = vm.variables(stop.token, None, 32).unwrap();
     let variable = page.values.first().expect("project variable").clone();
     let mut invalid_target = variable.target.clone();

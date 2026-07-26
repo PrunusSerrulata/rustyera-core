@@ -64,6 +64,10 @@ impl Vm {
         self.debug.step.as_ref().map(|step| step.fiber)
     }
 
+    pub(crate) fn debug_retained_terminal_fiber(&self) -> Option<FiberId> {
+        self.debug.paused.then_some(self.debug.selected).flatten()
+    }
+
     pub(crate) fn debug_stop_before(&mut self, fiber: &Fiber) -> Option<VmDebugStop> {
         let frame = fiber.frames.last()?;
         let position = (
