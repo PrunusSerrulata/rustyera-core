@@ -96,7 +96,7 @@ flowchart LR
 
 | 类型/字段 | 含义与约束 | 默认/可空 |
 | --- | --- | --- |
-| `FiberId(pub u64)` | VM 内 fiber 标识；只在所属 VM 时间线内有意义 | `0` 可由 `Default` 构造，但不应虚构有效 ID |
+| `FiberId(pub u64)` | VM 内 fiber 标识；只在所属 VM 时间线及该 fiber 生命周期内有意义，终止回收后可复用 | `0` 可由 `Default` 构造，但不应虚构有效 ID |
 | `FrameId(pub u64)` | frame 标识；与 fiber、generation 联合定位局部状态 | 同上 |
 | `GenerationId(pub u64)` | 程序代际；reload 后变化 | 同上 |
 | `HostRequestId(pub u64)` | VM 生成的 Host 等待标识 | 同上 |
@@ -235,6 +235,7 @@ pub trait VmRuntimePort {
         -> Result<FiberId, VmError>;
     fn fiber_status(&self, fiber: FiberId) -> Option<FiberStatus>;
     fn drive(&mut self, budget: RunBudget, mode: VmDriveMode) -> VmPortDriveReport;
+    fn retire_terminal_fibers(&mut self) -> usize;
     fn validate_host_completion(&self, request: HostRequestId, completion: VmHostCompletion)
         -> Result<Self::PreparedCompletion, VmError>;
     fn commit_host_completion(&mut self, completion: Self::PreparedCompletion)
@@ -259,6 +260,9 @@ pub trait VmRuntimePort {
 - `fiber_status`：未知 ID 返回 `None`；状态为 `Runnable`、`WaitingHost(request)`、
   `WaitingResume`、`Completed(value)`、`Faulted(fault)` 或 `Cancelled`。
 - `cancel_fiber`：未知 fiber 返回 `UnknownFiber`；成功后不可再作为正常执行目标。
+- `retire_terminal_fibers`：调用方消费完一批终止事件后删除 Completed/Cancelled；当前
+  debugger stop 选中的终止 fiber 暂缓删除，Faulted 始终保留用于诊断。删除后旧 ID 可由
+  `spawn_entry` 作为最小空闲正整数再次分配，旧 ID 不得再用于查询或控制。
 
 runtime 的系统控制器顺序分派 root，因此不要把 `spawn_entry` 当作应用线程创建 API。
 
@@ -469,8 +473,10 @@ pub fn VmSnapshot::decode(
 - `NativeService(message)`。
 
 `VmSnapshot` 内部字段私有；公开查询只有 `program_version()`、`artifact_id()`、
-`encode()`。容器包含版本、精确 artifact、memory、fibers、primary fiber、下一个 ID
-计数和按 key 排序的 Native state。`decode` 校验大小、header、格式版本、压缩长度、
+`encode()`。容器包含版本、精确 artifact、memory、非回收 fiber、primary fiber、ID
+分配状态和按 key 排序的 Native state。稳定 Host wait 要求 primary 指向等待 fiber；完全
+静止且 fiber 集合为空也可做 snapshot。恢复旧 v9 终止历史后会回收 Completed/Cancelled
+并把 fiber 分配提示规范化为最小空闲 ID。`decode` 校验大小、header、格式版本、压缩长度、
 checksum 和序列化数据。
 
 ### 8.3 两阶段恢复
@@ -642,7 +648,7 @@ scope 与 EraBasic 控制台语义见 [Runtime 调试接口文档](runtime-debug
 2. `RuntimeVm::new_for_title_with_seed`；
 3. `spawn_entry(SYSTEM_TITLE, [])`；
 4. 循环 `drive(RunBudget, Normal)`；
-5. 顺序处理所有事件；
+5. 顺序处理所有事件，随后调用 `retire_terminal_fibers`；
 6. 对每个 Host call 执行 `validate_host_completion` 后再
    `commit_host_completion`；
 7. 等待外部结果时停止驱动可运行 fiber；结果到达后再提交；

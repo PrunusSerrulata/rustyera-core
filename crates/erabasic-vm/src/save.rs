@@ -156,6 +156,7 @@ impl Vm {
         self.fibers.clear();
         self.runnable.clear();
         self.primary_fiber = None;
+        self.next_fiber = 1;
         self.reclaim_generations();
     }
 }

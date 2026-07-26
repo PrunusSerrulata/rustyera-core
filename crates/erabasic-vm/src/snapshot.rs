@@ -420,7 +420,7 @@ impl Vm {
 
         let artifact = artifact.into_shared();
         let generation = snapshot.current_generation;
-        Ok(Self {
+        let mut vm = Self {
             config,
             generations: BTreeMap::from([(generation, Arc::new(ProgramGeneration::new(artifact)))]),
             current_generation: generation,
@@ -435,7 +435,9 @@ impl Vm {
             pending_reload: None,
             debug: crate::debug::DebugState::default(),
             regex_cache: crate::regex_compat::RegexCache::default(),
-        })
+        };
+        vm.retire_terminal_fibers();
+        Ok(vm)
     }
 }
 
@@ -586,10 +588,10 @@ fn validate_snapshot(
             validate_cell(cell, definition)?;
         }
     }
-    let maximum_fiber = snapshot.fibers.keys().map(|id| id.0).max().unwrap_or(0);
     let maximum_frame = frame_ids.iter().map(|id| id.0).max().unwrap_or(0);
     let maximum_request = request_ids.iter().map(|id| id.0).max().unwrap_or(0);
-    if snapshot.next_fiber <= maximum_fiber
+    if snapshot.next_fiber == 0
+        || snapshot.fibers.contains_key(&FiberId(snapshot.next_fiber))
         || snapshot.next_frame <= maximum_frame
         || snapshot.next_request <= maximum_request
         || snapshot.next_generation <= snapshot.current_generation.0
@@ -602,6 +604,9 @@ fn validate_snapshot(
 }
 
 fn has_snapshot_stable_root(primary: Option<FiberId>, fibers: &BTreeMap<FiberId, Fiber>) -> bool {
+    if fibers.is_empty() {
+        return primary.is_none();
+    }
     let Some(primary) = primary.and_then(|id| fibers.get(&id)) else {
         return false;
     };

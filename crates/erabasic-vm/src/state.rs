@@ -597,8 +597,7 @@ impl Vm {
             program,
             &arguments,
         )?;
-        let fiber_id = FiberId(self.next_fiber);
-        self.next_fiber = self.next_fiber.saturating_add(1);
+        let fiber_id = self.next_available_fiber_id();
         let frame_id = FrameId(self.next_frame);
         self.next_frame = self.next_frame.saturating_add(1);
         let frame = make_frame(
@@ -620,6 +619,7 @@ impl Vm {
                 consecutive_budget_exhaustions: 0,
             },
         );
+        self.next_fiber = self.next_available_fiber_id().0;
         self.runnable.push_back(fiber_id);
         if self.primary_fiber.is_none() {
             self.primary_fiber = Some(fiber_id);
@@ -650,8 +650,39 @@ impl Vm {
             .fibers
             .get_mut(&fiber)
             .ok_or(VmError::UnknownFiber(fiber))?;
+        fiber.frames.clear();
         fiber.state = FiberState::Cancelled;
         Ok(())
+    }
+
+    /// Retire terminal fibers after their events have been consumed by the caller.
+    ///
+    /// A terminal fiber selected by the current debugger stop remains available until
+    /// that stop is continued. Faulted fibers are retained for diagnosis.
+    pub fn retire_terminal_fibers(&mut self) -> usize {
+        let protected = self.debug_retained_terminal_fiber();
+        let retired = self
+            .fibers
+            .iter()
+            .filter_map(|(id, fiber)| {
+                (Some(*id) != protected
+                    && matches!(
+                        fiber.state,
+                        FiberState::Completed(_) | FiberState::Cancelled
+                    ))
+                .then_some(*id)
+            })
+            .collect::<BTreeSet<_>>();
+        for id in &retired {
+            self.fibers.remove(id);
+        }
+        self.runnable.retain(|id| !retired.contains(id));
+        if self.primary_fiber.is_some_and(|id| retired.contains(&id)) {
+            self.primary_fiber = None;
+        }
+        self.next_fiber = self.next_available_fiber_id().0;
+        self.reclaim_generations();
+        retired.len()
     }
 
     #[must_use]
@@ -984,6 +1015,22 @@ impl Vm {
         let id = HostRequestId(self.next_request);
         self.next_request = self.next_request.saturating_add(1);
         id
+    }
+
+    fn next_available_fiber_id(&self) -> FiberId {
+        let mut candidate = 1_u64;
+        for id in self.fibers.keys() {
+            if id.0 < candidate {
+                continue;
+            }
+            if id.0 != candidate {
+                break;
+            }
+            candidate = candidate
+                .checked_add(1)
+                .expect("the fiber map cannot contain every positive u64 id");
+        }
+        FiberId(candidate)
     }
 
     pub(crate) fn live_fiber_count(&self) -> usize {
