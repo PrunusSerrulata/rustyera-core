@@ -3045,7 +3045,12 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
     let shop = display.find("shop").expect("SHOW_SHOP output");
     assert!(loadend < eventload && eventload < shop, "{display}");
     assert!(!display.contains("unexpected-autosave"), "{display}");
+    assert_eq!(restored.system_menu, SystemMenuState::Title);
 
+    // Snapshots written before the load-menu state was reset can contain a
+    // gameplay wait together with a stale LoadSlots marker.
+    source.system_menu = SystemMenuState::LoadSlots;
+    source.controller.flow = Some(SystemFlow::Shop);
     let old_wait = source
         .operations
         .active_input()
@@ -3147,6 +3152,7 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
     exact.drive(RuntimeDriveBudget::default()).unwrap();
     let restored_wait = exact.operations.active_input().expect("restored wait");
     assert_eq!(exact.phase(), RuntimePhase::WaitingInput);
+    assert_eq!(exact.system_menu, SystemMenuState::Title);
     assert_ne!(restored_wait.wait.wait_id, old_wait.wait_id);
     assert_ne!(
         restored_wait.wait.submission_token,

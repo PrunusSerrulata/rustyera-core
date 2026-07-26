@@ -7,8 +7,8 @@ use super::{
     HirFormattedString, HirStatementKind, HostImport, ImportKind, InstructionTarget, LineId,
     LoweringContext, NATIVE_ABI_VERSION, NativeImport, Opcode, SemanticType, SourceLocation,
     SymbolKey, TryListBlock, argument_place, assign_tag, binary_tag, bytecode_type,
-    compiler_native_contract, extension_binding, formatted_constant, opcode, postfix_tag,
-    runtime_import, unary_tag,
+    compiler_native_contract, compiler_variable_mutation_contract, extension_binding,
+    formatted_constant, opcode, runtime_import, unary_tag,
 };
 
 pub(super) struct Builder<'a> {
@@ -1456,12 +1456,28 @@ impl<'a> Builder<'a> {
                 }
             }
             HirExprKind::Unary { op, operand } => {
-                self.lower_expression(operand, fallback);
-                self.emit(opcode::unary(unary_tag(*op)), location);
+                if matches!(
+                    op,
+                    erabasic_ast::UnaryOp::PreIncrement | erabasic_ast::UnaryOp::PreDecrement
+                ) {
+                    self.lower_increment_expression(
+                        operand,
+                        matches!(op, erabasic_ast::UnaryOp::PreIncrement),
+                        false,
+                        fallback,
+                    );
+                } else {
+                    self.lower_expression(operand, fallback);
+                    self.emit(opcode::unary(unary_tag(*op)), location);
+                }
             }
             HirExprKind::Postfix { op, operand } => {
-                self.lower_expression(operand, fallback);
-                self.emit(opcode::unary(postfix_tag(*op)), location);
+                self.lower_increment_expression(
+                    operand,
+                    matches!(op, erabasic_ast::PostfixOp::Increment),
+                    true,
+                    fallback,
+                );
             }
             HirExprKind::Binary { op, left, right } => {
                 if matches!(
@@ -1554,6 +1570,46 @@ impl<'a> Builder<'a> {
             ),
         }
         result
+    }
+
+    fn lower_increment_expression(
+        &mut self,
+        operand: &HirExpr,
+        increment: bool,
+        postfix: bool,
+        fallback: SourceLocation,
+    ) {
+        let HirExprKind::Variable { place } = &operand.kind else {
+            self.diagnostics.push(CompilerDiagnostic::at(
+                CompilerDiagnosticCode::InvalidHir,
+                operand.location,
+                "increment operand is not a mutable variable",
+            ));
+            self.lower_expression(operand, fallback);
+            return;
+        };
+        let value_type = self.lower_argument(&HirArgument::Place(place.clone()), fallback);
+        if value_type != BytecodeType::IntegerPlace {
+            self.diagnostics.push(CompilerDiagnostic::at(
+                CompilerDiagnosticCode::InvalidHir,
+                operand.location,
+                "increment operand is not an integer place",
+            ));
+        }
+        let mode = match (increment, postfix) {
+            (true, false) => 0,
+            (false, false) => 1,
+            (true, true) => 2,
+            (false, true) => 3,
+        };
+        self.emit(opcode::push_integer(mode), operand.location);
+        self.emit_native_call(
+            "__mutate_integer",
+            &[BytecodeType::IntegerPlace, BytecodeType::Integer],
+            Some(BytecodeType::Integer),
+            compiler_variable_mutation_contract(),
+            operand.location,
+        );
     }
 
     pub(super) fn lower_formatted(

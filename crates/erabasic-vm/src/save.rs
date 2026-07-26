@@ -212,6 +212,7 @@ pub(crate) fn prepare_ordinary_memory(
             &mut report,
         );
     }
+    memory.refresh_character_count(artifact);
     report.restored_characters = state.characters.len();
     Ok((memory, report))
 }
@@ -252,6 +253,7 @@ pub(crate) fn prepare_appended_characters(
             &mut report,
         );
     }
+    memory.refresh_character_count(artifact);
     report.restored_characters = state.characters.len();
     Ok((memory, report))
 }

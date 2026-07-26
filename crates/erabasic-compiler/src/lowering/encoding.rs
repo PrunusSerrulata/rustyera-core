@@ -1,8 +1,6 @@
 //! Stable mappings from semantic operations to bytecode and Host ABI values.
 
-use super::{
-    AssignOp, BinaryOp, BytecodeType, PostfixOp, RuntimeImport, SemanticType, SymbolKey, UnaryOp,
-};
+use super::{AssignOp, BinaryOp, BytecodeType, RuntimeImport, SemanticType, SymbolKey, UnaryOp};
 
 pub(super) fn compiler_native_contract(pure: bool) -> erabasic_bytecode::OperationContract {
     use erabasic_bytecode::{
@@ -24,6 +22,26 @@ pub(super) fn compiler_native_contract(pure: bool) -> erabasic_bytecode::Operati
         wait: OperationWaitPolicy::Immediate,
         capability_fallback: CapabilityFallback::NotApplicable,
         debug: OperationDebugPolicy::Pure,
+        portability: erabasic_bytecode::OperationPortability::Portable,
+    }
+}
+
+pub(super) fn compiler_variable_mutation_contract() -> erabasic_bytecode::OperationContract {
+    use erabasic_bytecode::{
+        CandidatePolicy, CapabilityFallback, OperationContract, OperationDebugPolicy,
+        OperationHotReloadPolicy, OperationPersistence, OperationSnapshotPolicy, OperationState,
+        OperationWaitPolicy, TransactionPolicy,
+    };
+    OperationContract {
+        state: OperationState::Vm,
+        transaction: TransactionPolicy::CloneCommit,
+        candidate: CandidatePolicy::CloneCommit,
+        persistence: OperationPersistence::VariableScoped,
+        snapshot: OperationSnapshotPolicy::Included,
+        hot_reload: OperationHotReloadPolicy::Preserve,
+        wait: OperationWaitPolicy::Immediate,
+        capability_fallback: CapabilityFallback::NotApplicable,
+        debug: OperationDebugPolicy::Transactional,
         portability: erabasic_bytecode::OperationPortability::Portable,
     }
 }
@@ -79,13 +97,6 @@ pub(super) fn unary_tag(operation: UnaryOp) -> u8 {
         UnaryOp::BitNot => 3,
         UnaryOp::PreIncrement => 4,
         UnaryOp::PreDecrement => 5,
-    }
-}
-
-pub(super) fn postfix_tag(operation: PostfixOp) -> u8 {
-    match operation {
-        PostfixOp::Increment => 6,
-        PostfixOp::Decrement => 7,
     }
 }
 

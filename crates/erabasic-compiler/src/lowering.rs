@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use erabasic_ast::{AssignOp, BinaryOp, PostfixOp, UnaryOp};
+use erabasic_ast::{AssignOp, BinaryOp, UnaryOp};
 use erabasic_bytecode::{
     BytecodeFunction, BytecodeFunctionKind, BytecodeLabel, BytecodeParameter, BytecodeType, Digest,
     EncodedInstruction, FunctionImport, HostImport, ImportKind, NATIVE_ABI_VERSION, NativeImport,
@@ -23,7 +23,8 @@ mod planning;
 
 use builder::Builder;
 use encoding::{
-    assign_tag, binary_tag, compiler_native_contract, postfix_tag, runtime_import, unary_tag,
+    assign_tag, binary_tag, compiler_native_contract, compiler_variable_mutation_contract,
+    runtime_import, unary_tag,
 };
 use planning::{
     DataBlock, TryListBlock, add_control_flow, argument_place, collect_data_blocks,

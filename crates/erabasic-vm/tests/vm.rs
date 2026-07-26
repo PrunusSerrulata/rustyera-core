@@ -2587,6 +2587,46 @@ fn traditional_state_overlay_restores_persistent_arrays_without_stacks() {
 }
 
 #[test]
+fn traditional_state_restore_refreshes_calculated_character_count() {
+    let artifact =
+        compile_source("@SYSTEM_TITLE\nADDVOIDCHARA\nADDVOIDCHARA\nADDVOIDCHARA\nRETURN\n");
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let charanum = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "CHARANUM")
+        .expect("CHARANUM")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { value: None, .. }))
+    );
+
+    let save = vm.export_era_state();
+    let saved_character_count = i64::try_from(save.characters.len()).unwrap();
+    vm.reset_with_era_state(&save).unwrap();
+    assert_eq!(
+        vm.read_variable(charanum, &[], None),
+        Ok(VmValue::Integer(saved_character_count))
+    );
+}
+
+#[test]
 fn ordinary_save_excludes_and_restore_preserves_global_save_variables() {
     let ordinary = SymbolKey::derive("test.variable", b"ordinary");
     let global_key = SymbolKey::derive("test.variable", b"global");
@@ -2996,6 +3036,51 @@ fn dynamic_statement_calls_enforce_method_and_normal_function_kinds() {
         event,
         VmEvent::FiberFaulted { fault, .. } if fault.code == VmFaultCode::TypeMismatch
     )));
+}
+
+#[test]
+fn nested_method_character_selector_preserves_the_returned_character() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         ADDVOIDCHARA\n\
+         ADDVOIDCHARA\n\
+         MASTER = 0\n\
+         CFLAG:MASTER:300 = 260\n\
+         CFLAG:1:300 = 260\n\
+         TCVAR:1:30 = 2\n\
+         RESULT = TCVAR:(IN_ROOM_MEMBER(260)):30\n\
+         RETURN\n\
+         @IN_ROOM_MEMBER(ARG)\n\
+         #FUNCTION\n\
+         VARSET LOCAL, 0\n\
+         FOR LOCAL, 1, CHARANUM\n\
+             SIF CFLAG:LOCAL:300 != ARG\n\
+                 CONTINUE\n\
+             IF LOCAL:3++ == 0\n\
+                 LOCAL:1 = TCVAR:LOCAL:30\n\
+                 LOCAL:2 = LOCAL\n\
+             ELSEIF LOCAL:1 > TCVAR:LOCAL:30\n\
+                 LOCAL:1 = TCVAR:LOCAL:30\n\
+                 LOCAL:2 = LOCAL\n\
+             ENDIF\n\
+         NEXT\n\
+         RETURNF LOCAL:2\n",
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(2));
+}
+
+#[test]
+fn increment_expressions_mutate_their_place_and_return_reference_values() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         LOCAL = 4\n\
+         LOCAL:1 = LOCAL++\n\
+         LOCAL:2 = ++LOCAL\n\
+         LOCAL:3 = LOCAL--\n\
+         LOCAL:4 = --LOCAL\n\
+         RETURN LOCAL:1 * 1000 + LOCAL:2 * 100 + LOCAL:3 * 10 + LOCAL:4\n",
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(4664));
 }
 
 #[test]
