@@ -846,12 +846,16 @@ impl Memory {
         // Calculated variables are materialized as cells so bytecode can load
         // them normally. Initialization must therefore refresh CHARANUM just as
         // the native character mutation service does after ADDCHARA.
-        result.set_named_integer(
+        result.refresh_character_count(artifact);
+        result
+    }
+
+    pub(crate) fn refresh_character_count(&mut self, artifact: &BytecodeArtifact) {
+        self.set_named_integer(
             artifact,
             "CHARANUM",
-            i64::try_from(result.characters.len()).unwrap_or(i64::MAX),
+            i64::try_from(self.characters.len()).unwrap_or(i64::MAX),
         );
-        result
     }
 
     pub fn empty(artifact: &BytecodeArtifact) -> Self {

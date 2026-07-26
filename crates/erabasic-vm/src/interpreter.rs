@@ -28,9 +28,9 @@ use extended_ops::{
 use native_ops::{
     array_place, array_snapshot, execute_array_mutation, execute_array_query, execute_bit_mutation,
     execute_encode_to_uni_result, execute_find_element, execute_get_var, execute_getnum,
-    execute_index_by_name, execute_set_var, execute_split_transaction, execute_strjoin,
-    execute_swap_transaction, execute_variable_fill, integer_argument, native_implicit_place_views,
-    native_place_views, optional_index, validate_native_ready,
+    execute_index_by_name, execute_integer_mutation, execute_set_var, execute_split_transaction,
+    execute_strjoin, execute_swap_transaction, execute_variable_fill, integer_argument,
+    native_implicit_place_views, native_place_views, optional_index, validate_native_ready,
 };
 use operand::{
     assign_binary_tag, binary_value, exact, map_vm_error, pop, pop_arguments, pop_indices,
@@ -1051,6 +1051,11 @@ impl Vm {
                             )
                             .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
                             NativeReady::default()
+                        } else if native_name == "__mutate_integer" {
+                            NativeReady::value(
+                                execute_integer_mutation(self, fiber, &arguments)
+                                    .map_err(map_vm_error)?,
+                            )
                         } else if matches!(native_name, "swap" | "swapvar") {
                             execute_swap_transaction(self, fiber, &arguments)
                                 .map_err(map_vm_error)?;

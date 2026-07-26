@@ -1435,6 +1435,14 @@ impl RuntimeSession {
         }
         self.sync_resource_replay();
         self.advance_epoch();
+        self.system_menu = SystemMenuState::Title;
+        self.system_menu_host_request = None;
+        self.load_slot_paths.clear();
+        self.occupied_slot_paths.clear();
+        self.slot_change_tokens.clear();
+        self.slot_labels.clear();
+        self.invalid_slot_paths.clear();
+        self.system_menu_page = 0;
         self.set_phase(RuntimePhase::Starting)?;
         self.controller.flow = Some(SystemFlow::Shop);
         self.controller.step = SystemStep::PostLoadShop;
@@ -1487,7 +1495,7 @@ impl RuntimeSession {
                 "runtime snapshot does not match the exact project or stable-wait contract",
             );
         }
-        let system_menu = match payload.system_menu {
+        let mut system_menu = match payload.system_menu {
             0 => SystemMenuState::Title,
             1 => SystemMenuState::LoadSlots,
             2 => SystemMenuState::SaveSlots,
@@ -1504,6 +1512,19 @@ impl RuntimeSession {
                 );
             }
         };
+        if matches!(
+            system_menu,
+            SystemMenuState::LoadSlots
+                | SystemMenuState::SaveSlots
+                | SystemMenuState::ConfirmOverwrite { .. }
+        ) && payload.system_menu_host_request.is_none()
+            && payload.controller.flow != Some(SystemFlow::Title)
+        {
+            // Older snapshots could retain the built-in load menu after a save
+            // had already entered gameplay. The presentation and stable VM wait
+            // are authoritative here; reopening that stale menu discards them.
+            system_menu = SystemMenuState::Title;
+        }
         let vm_snapshot = match VmSnapshot::decode(&payload.vm_snapshot, maximum) {
             Ok(snapshot) => snapshot,
             Err(error) => {

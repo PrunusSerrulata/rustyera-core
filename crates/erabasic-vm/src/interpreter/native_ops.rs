@@ -35,6 +35,39 @@ pub(super) fn execute_swap_transaction(
     vm.write_place(fiber, right, left_value)
 }
 
+pub(super) fn execute_integer_mutation(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    arguments: &[VmValue],
+) -> Result<VmValue, VmError> {
+    let Some(VmValue::IntegerPlace(place)) = arguments.first() else {
+        return Err(VmError::InvalidArguments(
+            "integer mutation requires a mutable integer place".into(),
+        ));
+    };
+    let Some(VmValue::Integer(mode @ 0..=3)) = arguments.get(1) else {
+        return Err(VmError::InvalidArguments(
+            "integer mutation mode is invalid".into(),
+        ));
+    };
+    let VmValue::Integer(previous) = vm.read_place(fiber, place)? else {
+        return Err(VmError::InvalidArguments(
+            "integer mutation target has a different type".into(),
+        ));
+    };
+    let updated = if mode % 2 == 0 {
+        previous.wrapping_add(1)
+    } else {
+        previous.wrapping_sub(1)
+    };
+    vm.write_place(fiber, place, VmValue::Integer(updated))?;
+    Ok(VmValue::Integer(if *mode >= 2 {
+        previous
+    } else {
+        updated
+    }))
+}
+
 pub(super) fn native_place_views(
     vm: &Vm,
     fiber: &Fiber,
