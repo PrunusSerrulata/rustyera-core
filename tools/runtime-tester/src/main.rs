@@ -10,21 +10,31 @@ use era_protocol::{
 };
 use era_runtime::{RuntimeDriveBudget, RuntimeOptions, RuntimeSession};
 use era_runtime_protocol::{
-    ClientCapabilities, ClientHello, DiagnosticSeverity, DisplayLine, FileCategory, FilePayload,
-    FrontendInput, FrontendIoError, FrontendIoErrorKind, HTML_GET_PRINTED_STR_OPERATION,
+    ClientCapabilities, ClientHello, DisplayLine, FileCategory, FilePayload, FrontendInput,
+    FrontendIoError, FrontendIoErrorKind, HTML_GET_PRINTED_STR_OPERATION,
     HTML_GET_PRINTED_STR_OPERATION_VERSION, InputIntent, InputModality, LOCAL_DATE_TIME_OPERATION,
     LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment, LocalDateTimeResponse, PresentationOperation,
-    ProjectManifest, ProjectionStringIndexRequest, ProjectionStringResponse,
-    RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeMessage, SequenceAcknowledgement,
-    ServiceCapability, ServiceKind, ServiceResponse, ServiceResult, ShutdownRequest,
-    SnapshotExportPurpose, StartMode, StartRequest, StateExportKind, StateExportRequest,
-    StateExportResult, StateImportBegin, StateImportChunk, StateImportCommit, StorageCapabilities,
-    StorageNamespace, StorageOperation, StorageResponse, StorageResult, SubmittedFile, WaitChange,
+    ProjectManifest, ProjectionStringIndexRequest, ProjectionStringResponse, ProtocolDiagnostic,
+    RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeLogLevel, RuntimeMessage,
+    SequenceAcknowledgement, ServiceCapability, ServiceKind, ServiceResponse, ServiceResult,
+    ShutdownRequest, SnapshotExportPurpose, StartMode, StartRequest, StateExportKind,
+    StateExportRequest, StateExportResult, StateImportBegin, StateImportChunk, StateImportCommit,
+    StorageCapabilities, StorageNamespace, StorageOperation, StorageResponse, StorageResult,
+    SubmittedFile, WaitChange,
 };
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_compiler::{ExecutionBinding, default_host_registry};
 
 mod source_extractor;
+
+fn diagnostics_with_level(
+    diagnostics: &[ProtocolDiagnostic],
+    level: RuntimeLogLevel,
+) -> impl Iterator<Item = &ProtocolDiagnostic> {
+    diagnostics
+        .iter()
+        .filter(move |diagnostic| diagnostic.level == level)
+}
 
 fn decode_project_text(bytes: &[u8]) -> Option<String> {
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
@@ -597,16 +607,10 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                 if !benchmark {
                     println!("load_success={}", report.success);
                 }
-                let errors = report
-                    .diagnostics
-                    .iter()
-                    .filter(|d| d.severity == DiagnosticSeverity::Error)
-                    .count();
-                let warnings = report
-                    .diagnostics
-                    .iter()
-                    .filter(|d| d.severity == DiagnosticSeverity::Warning)
-                    .count();
+                let errors =
+                    diagnostics_with_level(&report.diagnostics, RuntimeLogLevel::Error).count();
+                let warnings =
+                    diagnostics_with_level(&report.diagnostics, RuntimeLogLevel::Warning).count();
                 if !benchmark {
                     println!(
                         "diagnostics={} errors={} warnings={}",
@@ -617,10 +621,8 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                 }
                 let mut by_code = std::collections::BTreeMap::<String, usize>::new();
                 let mut by_file = std::collections::BTreeMap::<String, usize>::new();
-                for diagnostic in report
-                    .diagnostics
-                    .iter()
-                    .filter(|d| d.severity == DiagnosticSeverity::Error)
+                for diagnostic in
+                    diagnostics_with_level(&report.diagnostics, RuntimeLogLevel::Error)
                 {
                     *by_code.entry(diagnostic.code.clone()).or_default() += 1;
                     *by_file
@@ -662,7 +664,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                     {
                         println!(
                             "{:?}\t{}\t{}:{}:{}\t{}",
-                            diagnostic.severity,
+                            diagnostic.level,
                             diagnostic.code,
                             diagnostic
                                 .source
@@ -1529,8 +1531,14 @@ fn audit_wire_limits() -> WireLimits {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_project_files, decode_project_text, headless_html_printed_str};
-    use era_runtime_protocol::{Color, DisplayLine, DisplayRun, LineAlignment, TextStyle};
+    use super::{
+        collect_project_files, decode_project_text, diagnostics_with_level,
+        headless_html_printed_str,
+    };
+    use era_runtime_protocol::{
+        Color, DisplayLine, DisplayRun, LineAlignment, ProtocolDiagnostic, RuntimeLogLevel,
+        TextStyle,
+    };
     use std::fs;
 
     fn text_line(
@@ -1567,6 +1575,27 @@ mod tests {
         assert_eq!(
             decode_project_text(b"\xEF\xBB\xBFPRINTL \xE4\xBD\xA0\xE5\xA5\xBD").as_deref(),
             Some("PRINTL 你好")
+        );
+    }
+
+    #[test]
+    fn protocol_diagnostics_are_filtered_by_runtime_log_level() {
+        let diagnostic = |code: &str, level| ProtocolDiagnostic {
+            code: code.into(),
+            level,
+            message: String::new(),
+            source: None,
+        };
+        let diagnostics = [
+            diagnostic("warning", RuntimeLogLevel::Warning),
+            diagnostic("error", RuntimeLogLevel::Error),
+        ];
+
+        assert_eq!(
+            diagnostics_with_level(&diagnostics, RuntimeLogLevel::Error)
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>(),
+            ["error"]
         );
     }
 
