@@ -7,6 +7,9 @@
 /target
 Cargo.lock
 
+/frontends/era-tui/build
+/frontends/era-tui/dist
+
 /reference
 !/reference/emuera.em
 /reference/**/bin
