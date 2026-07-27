@@ -21,7 +21,7 @@ use erabasic_vm::{
     SnapshotBlocker, SnapshotEligibility, Vm, VmBreakpoint, VmBreakpointLocation, VmConfig,
     VmDebugControl, VmDebugInspect, VmDebugVariableWrite, VmDriveMode, VmEvent, VmFaultCode,
     VmHost, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction,
-    VmSnapshot, VmStepKind, VmValue,
+    VmSnapshot, VmStepKind, VmValue, inspect_snapshot,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -2344,6 +2344,19 @@ fn stable_wait_snapshot_round_trips_and_requires_exact_artifact() {
     let snapshot = vm.snapshot(&natives).unwrap();
     let bytes = snapshot.encode().unwrap();
     assert_eq!(direct, bytes);
+    let inspection = inspect_snapshot(&bytes, VmConfig::default().maximum_snapshot_bytes).unwrap();
+    assert_eq!(inspection.container.magic, "RERAVMS\\0");
+    assert_eq!(inspection.container.file_bytes, bytes.len() as u64);
+    assert_eq!(inspection.state["format_version"], 9);
+    assert_eq!(
+        inspection.state["artifact_id"],
+        artifact.manifest.artifact_id.to_string()
+    );
+    let inspection_json = serde_json::to_string(&inspection).unwrap();
+    assert!(inspection_json.contains("rebind_payload"));
+    assert!(inspection_json.contains("byte_length"));
+    assert!(inspection_json.contains("blake3"));
+    assert!(!inspection_json.contains("105,110,112,117,116,45,108,105,110,101"));
     let uncompressed_len =
         usize::try_from(u64::from_le_bytes(bytes[20..28].try_into().unwrap())).unwrap();
     assert!(

@@ -50,7 +50,8 @@ pub use runtime_vm::{
 };
 pub use save::{EraSaveScope, EraState, EraStateReport, EraVariableState};
 pub use snapshot::{
-    SNAPSHOT_FORMAT_VERSION, SNAPSHOT_MAGIC, SnapshotBlocker, SnapshotEligibility, VmSnapshot,
+    SNAPSHOT_FORMAT_VERSION, SNAPSHOT_MAGIC, SnapshotBlocker, SnapshotContainerInspection,
+    SnapshotEligibility, SnapshotInspection, VmSnapshot, inspect_snapshot,
 };
 pub use state::Vm;
 pub use structured::{StructuredExtension, StructuredScope};

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use erabasic_bytecode::{Digest, ProgramVersion};
 use erabasic_validator::ValidatedArtifact;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     Fiber, FiberId, FiberState, GenerationId, HostRebindRequest, HostWaitStability, Memory,
@@ -15,6 +16,24 @@ pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
 pub const SNAPSHOT_FORMAT_VERSION: u32 = 9;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
+
+/// Container metadata and decoded state from a validated execution snapshot.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SnapshotInspection {
+    pub container: SnapshotContainerInspection,
+    pub state: Value,
+}
+
+/// Header information from a validated execution snapshot container.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SnapshotContainerInspection {
+    pub magic: String,
+    pub format_version: u32,
+    pub file_bytes: u64,
+    pub compressed_payload_bytes: u64,
+    pub uncompressed_payload_bytes: u64,
+    pub payload_blake3: String,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SnapshotBlocker {
@@ -166,6 +185,119 @@ impl VmSnapshot {
         }
         Ok(snapshot)
     }
+}
+
+/// Validate and project an execution snapshot into a serialization-friendly tree.
+///
+/// Opaque byte payloads are represented by their length and BLAKE3 digest. This
+/// keeps inspection output useful without copying native or host-owned data into
+/// logs. Artifact-dependent restore checks remain the caller's responsibility.
+///
+/// # Errors
+///
+/// Returns the same errors as [`VmSnapshot::decode`], or an error if the decoded
+/// state cannot be projected as JSON.
+pub fn inspect_snapshot(bytes: &[u8], maximum_bytes: usize) -> Result<SnapshotInspection, VmError> {
+    let snapshot = VmSnapshot::decode(bytes, maximum_bytes)?;
+    let mut state = serde_json::to_value(&snapshot)
+        .map_err(|error| VmError::Snapshot(format!("cannot inspect snapshot state: {error}")))?;
+    normalize_digest_field(&mut state, "artifact_id");
+    normalize_named_binary_fields(&mut state);
+    normalize_native_states(&mut state);
+    Ok(SnapshotInspection {
+        container: SnapshotContainerInspection {
+            magic: "RERAVMS\\0".into(),
+            format_version: SNAPSHOT_FORMAT_VERSION,
+            file_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            compressed_payload_bytes: read_header_u64(bytes, 12),
+            uncompressed_payload_bytes: read_header_u64(bytes, 20),
+            payload_blake3: hex_bytes(&bytes[28..SNAPSHOT_HEADER_BYTES]),
+        },
+        state,
+    })
+}
+
+fn read_header_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(
+        bytes[offset..offset + 8]
+            .try_into()
+            .expect("validated snapshot header contains this field"),
+    )
+}
+
+fn normalize_digest_field(value: &mut Value, field: &str) {
+    let Some(value) = value.get_mut(field) else {
+        return;
+    };
+    if let Some(bytes) = json_bytes(value) {
+        *value = Value::String(hex_bytes(&bytes));
+    }
+}
+
+fn normalize_named_binary_fields(value: &mut Value) {
+    match value {
+        Value::Object(fields) => {
+            for (name, value) in fields {
+                if matches!(
+                    name.as_str(),
+                    "rebind_payload" | "structured_state" | "Bytes"
+                ) && let Some(bytes) = json_bytes(value)
+                {
+                    *value = binary_summary(&bytes);
+                } else {
+                    normalize_named_binary_fields(value);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                normalize_named_binary_fields(value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn normalize_native_states(state: &mut Value) {
+    let Some(Value::Array(states)) = state.get_mut("native_states") else {
+        return;
+    };
+    for state in states {
+        let Value::Array(pair) = state else {
+            continue;
+        };
+        let Some(value) = pair.get_mut(1) else {
+            continue;
+        };
+        if let Some(bytes) = json_bytes(value) {
+            *value = binary_summary(&bytes);
+        }
+    }
+}
+
+fn json_bytes(value: &Value) -> Option<Vec<u8>> {
+    value
+        .as_array()?
+        .iter()
+        .map(|value| value.as_u64().and_then(|value| u8::try_from(value).ok()))
+        .collect()
+}
+
+fn binary_summary(bytes: &[u8]) -> Value {
+    serde_json::json!({
+        "byte_length": u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        "blake3": blake3::hash(bytes).to_hex().to_string(),
+    })
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
 }
 
 fn encode_snapshot_payload<T: Serialize + ?Sized>(snapshot: &T) -> Result<Vec<u8>, VmError> {

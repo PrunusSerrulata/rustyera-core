@@ -648,6 +648,14 @@ diagnostic，交由前端明确呈现。CompiledProjectCache 是 runtime 产生�
 缓存同时保留成功构建产生的项目诊断；精确命中时重放原等级、code 和 source，并在
 正文前添加 `[cached] `。缓存准备异步，首次请求可能被可恢复地拒绝为“已开始/仍在准备”，稍后再请求。
 
+开发和诊断工具可调用
+`inspect_runtime_snapshot(bytes, maximum_bytes) -> RuntimeSnapshotInspection`，复用正式
+恢复路径的容器、版本、大小、BLAKE3、zstd 和 MessagePack 解码检查，并递归解析内嵌
+执行快照。结果的 `inspection_schema_version` 当前为 1，包含 `container`、`payload` 和
+`validation`；不透明 bytes 只投影为长度及 BLAKE3。该接口没有加载 bytecode artifact，
+所以 `artifact_compatibility` 与 `restore_semantics` 明确为 `not_checked`，不能用分析成功
+代替实际恢复成功。命令行入口和输出约定见 README 的“Runtime 快照分析器”。
+
 ### 9.4 其余公开结构字段速查
 
 本节补齐前述流程中只简述过的结构。空结构 `ReturnToTitleRequest`、
