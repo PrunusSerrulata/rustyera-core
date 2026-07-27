@@ -3858,7 +3858,7 @@ fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
                     relative_path: "candidate.erb".into(),
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\nWAIT\nRETURN\n@SAVEINFO\nRESULT = 99\nRESULT:1 = GETCONFIG(\"Font size\")\nRESULTS:1 = %BARSTR(2, 4, 4)%\nPUTFORM suffix\nRETURN\n"
+                        "@SYSTEM_TITLE\nWAIT\nRETURN\n@SAVEINFO\nRESULT = 99\nRESULT:1 = GETCONFIG(\"Font size\")\nRESULTS:1 = %BARSTR(2, 4, 4)%\nPUTFORM %TOSTR(12345, \"0克尔\")%\nRETURN\n"
                             .into(),
                     ),
                     content_hash: None,
@@ -3962,7 +3962,7 @@ fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
         era_runtime_save::SaveFileKind::Normal,
     )
     .unwrap();
-    assert_eq!(decoded.description, "2026/07/17 12:34:56 suffix");
+    assert_eq!(decoded.description, "2026/07/17 12:34:56 12345克尔");
     assert_eq!(
         read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
         0,
@@ -4152,6 +4152,9 @@ fn deterministic_width_and_integer_format_tables_cover_era_usage() {
     assert_eq!(format_era_integer(12_345, "#,##0"), Ok("12,345".into()));
     assert_eq!(format_era_integer(-7, "D3"), Ok("-007".into()));
     assert_eq!(format_era_integer(255, "X4"), Ok("00FF".into()));
+    assert_eq!(format_era_integer(12_345, "0克尔"), Ok("12345克尔".into()));
+    assert_eq!(format_era_integer(-7, "0克尔"), Ok("-7克尔".into()));
+    assert_eq!(format_era_integer(0, "0克尔"), Ok("0克尔".into()));
 }
 
 #[test]

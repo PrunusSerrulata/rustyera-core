@@ -1520,25 +1520,46 @@ pub(super) fn format_era_integer(value: i64, format: &str) -> Result<String, &'s
                 format!("{grouped}.{}", "0".repeat(decimals))
             })
         }
-        _ if format
-            .chars()
-            .all(|character| matches!(character, '#' | '0' | ','))
-            && format.contains('0') =>
-        {
-            let minimum = format.chars().filter(|character| *character == '0').count();
+        _ => {
+            let Some((numeric_format, literal_suffix)) = custom_decimal_format(format) else {
+                return Err("unsupported integer format");
+            };
+            let minimum = numeric_format
+                .chars()
+                .filter(|character| *character == '0')
+                .count();
             let magnitude = value.unsigned_abs().to_string();
             let mut digits = format!("{magnitude:0>minimum$}");
-            if format.contains(',') {
+            if numeric_format.contains(',') {
                 digits = group_unsigned_decimal(&digits);
             }
-            Ok(if value < 0 {
+            let formatted = if value < 0 {
                 format!("-{digits}")
             } else {
                 digits
-            })
+            };
+            Ok(format!("{formatted}{literal_suffix}"))
         }
-        _ => Err("unsupported integer format"),
     }
+}
+
+fn custom_decimal_format(format: &str) -> Option<(&str, &str)> {
+    let suffix_start = format
+        .char_indices()
+        .find_map(|(index, character)| (!matches!(character, '#' | '0' | ',')).then_some(index))
+        .unwrap_or(format.len());
+    let (numeric_format, literal_suffix) = format.split_at(suffix_start);
+    if !numeric_format.contains('0')
+        || literal_suffix.chars().any(|character| {
+            matches!(
+                character,
+                '#' | '0' | ',' | '.' | '%' | '‰' | 'E' | 'e' | '\\' | '\'' | '"' | ';'
+            )
+        })
+    {
+        return None;
+    }
+    Some((numeric_format, literal_suffix))
 }
 
 pub(super) fn group_decimal(value: i64) -> String {
