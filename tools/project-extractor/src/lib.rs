@@ -1,4 +1,4 @@
-//! Exact extraction of source snapshots embedded in compiled `RustyEra` project caches.
+//! Exact extraction of project files embedded in compiled `RustyEra` project caches.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -14,7 +14,7 @@ pub const MAXIMUM_CACHE_BYTES: usize = 1024 * 1024 * 1024;
 
 /// Command-line usage shown by the standalone extractor.
 pub const USAGE: &str =
-    "Usage: rustyera-source-extractor [--force] <compiled-project-v5.bin.zst> [OUTPUT_DIR]";
+    "Usage: rustyera-project-extractor [--force] <compiled-project-v8.bin.zst> [OUTPUT_DIR]";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExtractOptions {
@@ -26,7 +26,7 @@ pub struct ExtractOptions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExtractSummary {
     pub extracted_files: usize,
-    pub skipped_resources: usize,
+    pub extracted_binary_assets: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,9 +57,10 @@ impl fmt::Display for ExtractError {
 impl std::error::Error for ExtractError {}
 
 #[derive(Clone, Debug)]
-struct PreparedSource {
+struct PreparedFile {
     relative_path: String,
-    contents: String,
+    contents: Vec<u8>,
+    binary_asset: bool,
 }
 
 /// Parse command-line arguments after the executable name.
@@ -104,7 +105,7 @@ pub fn parse_arguments(
     }))
 }
 
-/// Decode one compiled-project cache and extract every embedded textual project input.
+/// Decode one compiled-project cache and extract every embedded project input.
 ///
 /// # Errors
 ///
@@ -134,7 +135,7 @@ pub fn extract_cache(options: &ExtractOptions) -> Result<ExtractSummary, Extract
     extract_manifest(&manifest, &options.output, options.force)
 }
 
-/// Extract textual project files from an already decoded project manifest.
+/// Extract project files from an already decoded project manifest.
 ///
 /// # Errors
 ///
@@ -144,72 +145,77 @@ pub fn extract_manifest(
     output: &Path,
     force: bool,
 ) -> Result<ExtractSummary, ExtractError> {
-    let (sources, skipped_resources) = prepare_sources(manifest)?;
+    let files = prepare_files(manifest)?;
     prepare_output_root(output)?;
-    preflight_destinations(output, &sources, force)?;
-    for source in &sources {
-        write_source(output, source, force)?;
+    preflight_destinations(output, &files, force)?;
+    for file in &files {
+        write_project_file(output, file, force)?;
     }
     Ok(ExtractSummary {
-        extracted_files: sources.len(),
-        skipped_resources,
+        extracted_files: files.len(),
+        extracted_binary_assets: files.iter().filter(|file| file.binary_asset).count(),
     })
 }
 
-fn prepare_sources(
-    manifest: &ProjectManifest,
-) -> Result<(Vec<PreparedSource>, usize), ExtractError> {
-    let mut sources = Vec::new();
+fn prepare_files(manifest: &ProjectManifest) -> Result<Vec<PreparedFile>, ExtractError> {
+    let mut files = Vec::new();
     let mut normalized_paths = BTreeSet::new();
-    let mut skipped_resources = 0;
     for file in &manifest.files {
-        if file.category == FileCategory::Resource {
-            skipped_resources += 1;
-            continue;
-        }
-        if !matches!(
-            file.category,
-            FileCategory::Csv
-                | FileCategory::Erh
-                | FileCategory::Erb
-                | FileCategory::Configuration
-                | FileCategory::ResourceManifest
-        ) {
-            continue;
-        }
         let relative_path = validate_relative_path(&file.relative_path).map_err(|_| {
-            ExtractError::new(format!(
-                "unsafe project source path {:?}",
-                file.relative_path
-            ))
+            ExtractError::new(format!("unsafe project file path {:?}", file.relative_path))
         })?;
         let collision_key = relative_path.to_lowercase();
         if !normalized_paths.insert(collision_key) {
             return Err(ExtractError::new(format!(
-                "duplicate project source destination {relative_path:?}"
+                "duplicate project file destination {relative_path:?}"
             )));
         }
-        let FilePayload::Utf8(contents) = &file.payload else {
-            return Err(ExtractError::new(format!(
-                "project source {relative_path:?} does not contain UTF-8 text"
-            )));
+        let (contents, binary_asset) = match (&file.category, &file.payload) {
+            (FileCategory::Resource, FilePayload::Bytes(contents)) => {
+                (contents.as_slice().to_vec(), true)
+            }
+            (
+                FileCategory::Resource
+                | FileCategory::Csv
+                | FileCategory::Erh
+                | FileCategory::Erb
+                | FileCategory::Configuration
+                | FileCategory::ResourceManifest,
+                FilePayload::Utf8(contents),
+            ) => (contents.as_bytes().to_vec(), false),
+            (FileCategory::Resource, FilePayload::IoError(_)) => {
+                return Err(ExtractError::new(format!(
+                    "project asset {relative_path:?} contains an I/O error"
+                )));
+            }
+            (_, FilePayload::Bytes(_)) => {
+                return Err(ExtractError::new(format!(
+                    "project source {relative_path:?} does not contain UTF-8 text"
+                )));
+            }
+            (_, FilePayload::IoError(_)) => {
+                return Err(ExtractError::new(format!(
+                    "project source {relative_path:?} contains an I/O error"
+                )));
+            }
         };
         if let Some(expected) = &file.content_hash
-            && expected.as_slice() != blake3::hash(contents.as_bytes()).as_bytes()
+            && expected.as_slice() != blake3::hash(&contents).as_bytes()
         {
             return Err(ExtractError::new(format!(
-                "project source {relative_path:?} does not match its content hash"
+                "project file {relative_path:?} does not match its content hash"
             )));
         }
-        sources.push(PreparedSource {
+        files.push(PreparedFile {
             relative_path,
-            contents: contents.clone(),
+            contents,
+            binary_asset,
         });
     }
-    sources.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    let paths = sources
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    let paths = files
         .iter()
-        .map(|source| source.relative_path.as_str())
+        .map(|file| file.relative_path.as_str())
         .collect::<BTreeSet<_>>();
     for path in &paths {
         let mut prefix = String::new();
@@ -223,12 +229,12 @@ fn prepare_sources(
             prefix.push_str(part);
             if paths.contains(prefix.as_str()) {
                 return Err(ExtractError::new(format!(
-                    "project source path {path:?} is nested below file {prefix:?}"
+                    "project file path {path:?} is nested below file {prefix:?}"
                 )));
             }
         }
     }
-    Ok((sources, skipped_resources))
+    Ok(files)
 }
 
 fn prepare_output_root(output: &Path) -> Result<(), ExtractError> {
@@ -258,12 +264,12 @@ fn prepare_output_root(output: &Path) -> Result<(), ExtractError> {
 
 fn preflight_destinations(
     output: &Path,
-    sources: &[PreparedSource],
+    files: &[PreparedFile],
     force: bool,
 ) -> Result<(), ExtractError> {
-    for source in sources {
-        let target = output.join(&source.relative_path);
-        inspect_existing_ancestors(output, Path::new(&source.relative_path))?;
+    for file in files {
+        let target = output.join(&file.relative_path);
+        inspect_existing_ancestors(output, Path::new(&file.relative_path))?;
         match fs::symlink_metadata(&target) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(ExtractError::new(format!(
@@ -304,7 +310,7 @@ fn inspect_existing_ancestors(output: &Path, relative: &Path) -> Result<(), Extr
     for component in parent.components() {
         let Component::Normal(part) = component else {
             return Err(ExtractError::new(
-                "normalized source path has an invalid component",
+                "normalized project path has an invalid component",
             ));
         };
         current.push(part);
@@ -334,14 +340,18 @@ fn inspect_existing_ancestors(output: &Path, relative: &Path) -> Result<(), Extr
     Ok(())
 }
 
-fn write_source(output: &Path, source: &PreparedSource, force: bool) -> Result<(), ExtractError> {
-    let relative = Path::new(&source.relative_path);
+fn write_project_file(
+    output: &Path,
+    project_file: &PreparedFile,
+    force: bool,
+) -> Result<(), ExtractError> {
+    let relative = Path::new(&project_file.relative_path);
     let parent = relative.parent().unwrap_or_else(|| Path::new(""));
     let mut current = output.to_owned();
     for component in parent.components() {
         let Component::Normal(part) = component else {
             return Err(ExtractError::new(
-                "normalized source path has an invalid component",
+                "normalized project path has an invalid component",
             ));
         };
         current.push(part);
@@ -383,7 +393,7 @@ fn write_source(output: &Path, source: &PreparedSource, force: bool) -> Result<(
             target.display()
         ))
     })?;
-    file.write_all(source.contents.as_bytes()).map_err(|error| {
+    file.write_all(&project_file.contents).map_err(|error| {
         ExtractError::new(format!(
             "cannot write output file {}: {error}",
             target.display()
@@ -408,7 +418,7 @@ mod tests {
         fn new(name: &str) -> Self {
             let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "rustyera-source-extractor-{}-{name}-{sequence}",
+                "rustyera-project-extractor-{}-{name}-{sequence}",
                 std::process::id()
             ));
             fs::create_dir(&path).unwrap();
@@ -461,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_all_text_categories_exactly_and_skips_binary_resources() {
+    fn extracts_text_and_binary_project_files_exactly() {
         let directory = TestDirectory::new("exact");
         let text = "  ; comment\r\n@TEST\r\n\tPRINTL 界\r\n";
         let manifest = ProjectManifest {
@@ -493,22 +503,25 @@ mod tests {
                     FilePayload::Utf8("sprite,image.png\n".into()),
                 ),
                 submitted(
-                    "resources/image.png",
+                    "resources/nested/image.png",
                     FileCategory::Resource,
-                    FilePayload::Bytes(ProtocolBytes::new(vec![0, 1, 2])),
+                    FilePayload::Bytes(ProtocolBytes::new(vec![0, 0xff, 1, 2])),
                 ),
             ],
         };
 
         let summary = extract_manifest(&manifest, &directory.0, false).unwrap();
 
-        assert_eq!(summary.extracted_files, 5);
-        assert_eq!(summary.skipped_resources, 1);
+        assert_eq!(summary.extracted_files, 6);
+        assert_eq!(summary.extracted_binary_assets, 1);
         assert_eq!(
             fs::read(directory.0.join("ERB/nested/main.erb")).unwrap(),
             text.as_bytes()
         );
-        assert!(!directory.0.join("resources/image.png").exists());
+        assert_eq!(
+            fs::read(directory.0.join("resources/nested/image.png")).unwrap(),
+            vec![0, 0xff, 1, 2]
+        );
     }
 
     #[test]
@@ -529,6 +542,11 @@ mod tests {
                     FileCategory::Erb,
                     FilePayload::Utf8("new".into()),
                 ),
+                submitted(
+                    "resources/icon.png",
+                    FileCategory::Resource,
+                    FilePayload::Bytes(ProtocolBytes::new(vec![1, 2, 3])),
+                ),
             ],
         };
 
@@ -538,15 +556,20 @@ mod tests {
             "old"
         );
         assert!(!directory.0.join("CSV/new.csv").exists());
+        assert!(!directory.0.join("resources/icon.png").exists());
         extract_manifest(&manifest, &directory.0, true).unwrap();
         assert_eq!(
             fs::read_to_string(directory.0.join("ERB/main.erb")).unwrap(),
             "new"
         );
+        assert_eq!(
+            fs::read(directory.0.join("resources/icon.png")).unwrap(),
+            vec![1, 2, 3]
+        );
     }
 
     #[test]
-    fn rejects_unsafe_duplicate_and_hash_mismatched_sources() {
+    fn rejects_unsafe_duplicate_and_hash_mismatched_project_files() {
         let directory = TestDirectory::new("invalid");
         let invalid_path = ProjectManifest {
             project_revision: 1,
@@ -586,6 +609,18 @@ mod tests {
             files: vec![mismatched],
         };
         assert!(extract_manifest(&mismatched, &directory.0, false).is_err());
+
+        let mut mismatched_asset = submitted(
+            "resources/image.png",
+            FileCategory::Resource,
+            FilePayload::Bytes(ProtocolBytes::new(vec![1, 2, 3])),
+        );
+        mismatched_asset.content_hash = Some(ProtocolBytes::new(vec![0; 32]));
+        let mismatched_asset = ProjectManifest {
+            project_revision: 1,
+            files: vec![mismatched_asset],
+        };
+        assert!(extract_manifest(&mismatched_asset, &directory.0, false).is_err());
 
         let non_text = ProjectManifest {
             project_revision: 1,

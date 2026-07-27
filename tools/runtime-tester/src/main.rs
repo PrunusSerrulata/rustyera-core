@@ -25,7 +25,7 @@ use era_runtime_protocol::{
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_compiler::{ExecutionBinding, default_host_registry};
 
-mod source_extractor;
+mod project_extractor;
 
 fn diagnostics_with_level(
     diagnostics: &[ProtocolDiagnostic],
@@ -103,7 +103,7 @@ fn main() {
         "csv" => audit_csv(),
         "analyzer" => audit_analyzer(false),
         "compile" => audit_analyzer(true),
-        "source-extractor-all" => source_extractor::audit_all_reference_games(),
+        "project-extractor-all" => project_extractor::audit_all_reference_games(),
         other => panic!("unknown command {other}"),
     }
 }
@@ -1524,8 +1524,8 @@ fn drain_with_last_sequence(session: &mut RuntimeSession) -> (Vec<RuntimeMessage
 
 fn audit_wire_limits() -> WireLimits {
     WireLimits {
-        maximum_envelope_bytes: 128 * 1024 * 1024,
-        maximum_payload_bytes: 127 * 1024 * 1024,
+        maximum_envelope_bytes: 1024 * 1024 * 1024,
+        maximum_payload_bytes: 1023 * 1024 * 1024,
     }
 }
 
