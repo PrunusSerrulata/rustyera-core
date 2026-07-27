@@ -10,7 +10,6 @@ use erabasic_vm::VmValue;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 const fn dirty_line_count() -> bool {
@@ -1961,33 +1960,7 @@ pub(crate) fn display_value(value: &VmValue) -> String {
 
 /// Repeat a pattern to a deterministic logical-column limit without splitting graphemes.
 pub(crate) fn logical_line_string(pattern: &str, columns: usize) -> Result<String, &'static str> {
-    if pattern.is_empty() {
-        return Err("GETLINESTR pattern must not be empty");
-    }
-    let graphemes: Vec<_> = pattern.graphemes(true).collect();
-    let widths: Vec<_> = graphemes
-        .iter()
-        .map(|grapheme| UnicodeWidthStr::width(*grapheme))
-        .collect();
-    if widths.iter().all(|width| *width == 0) {
-        return Err("GETLINESTR pattern must have positive logical width");
-    }
-    let mut result = String::new();
-    let mut used: usize = 0;
-    'fill: loop {
-        let before = used;
-        for (grapheme, width) in graphemes.iter().zip(&widths) {
-            if used.saturating_add(*width) > columns {
-                break 'fill;
-            }
-            result.push_str(grapheme);
-            used = used.saturating_add(*width);
-        }
-        if used == before || used >= columns {
-            break;
-        }
-    }
-    Ok(result)
+    erabasic_vm::logical_line_string(pattern, columns)
 }
 
 fn default_style() -> TextStyle {

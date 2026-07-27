@@ -56,11 +56,11 @@ use era_runtime_protocol::{
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
 use erabasic_vm::{
-    EraSaveScope, EraState, HostReady, HostWaitStability, HostWrite, PlaceDescriptor,
-    PreparedCandidateState, RunBudget, RuntimeVm, SnapshotEligibility, StructuredScope, VmConfig,
-    VmDriveMode, VmHostCompletion, VmHostRequest, VmPortEvent, VmPortStop, VmRestorePort,
-    VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite,
-    VmSnapshot, VmValue,
+    DEFAULT_LINE_COLUMNS, EraSaveScope, EraState, HostReady, HostWaitStability, HostWrite,
+    PlaceDescriptor, PreparedCandidateState, RunBudget, RuntimeVm, SnapshotEligibility,
+    StructuredScope, VmConfig, VmDriveMode, VmHostCompletion, VmHostRequest, VmPortEvent,
+    VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
+    VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot, VmValue,
 };
 use serde::{Deserialize, Serialize};
 

@@ -537,6 +537,15 @@ impl Vm {
             .artifact
     }
 
+    pub(crate) fn set_runtime_calculated_string(&mut self, name: &str, value: &str) {
+        let program = self
+            .generations
+            .get(&self.current_generation)
+            .expect("the current generation is always retained");
+        self.memory
+            .set_runtime_calculated_string(&program.artifact, name, value);
+    }
+
     pub(crate) fn target_character_for_generation(&self, generation: GenerationId) -> usize {
         self.generations.get(&generation).map_or(0, |program| {
             self.memory

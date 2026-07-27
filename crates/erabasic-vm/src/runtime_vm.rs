@@ -1,5 +1,7 @@
 use erabasic_bytecode::{Digest, HostSnapshotCapability, SymbolKey};
 use erabasic_validator::ValidatedArtifact;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::structured::{StructuredExtension, StructuredScope};
 use crate::{
@@ -20,6 +22,45 @@ pub struct RuntimeVm {
     vm: Vm,
     natives: NativeServiceRegistry,
     pending_natives: Option<NativeServiceRegistry>,
+    line_columns: u32,
+}
+
+/// Stable logical width used until a frontend reports its projection dimensions.
+pub const DEFAULT_LINE_COLUMNS: u32 = 75;
+
+/// Repeat a pattern to a deterministic logical-column limit without splitting graphemes.
+///
+/// # Errors
+///
+/// Returns an error when the pattern is empty or has no positive logical width.
+pub fn logical_line_string(pattern: &str, columns: usize) -> Result<String, &'static str> {
+    if pattern.is_empty() {
+        return Err("GETLINESTR pattern must not be empty");
+    }
+    let graphemes: Vec<_> = pattern.graphemes(true).collect();
+    let widths: Vec<_> = graphemes
+        .iter()
+        .map(|grapheme| UnicodeWidthStr::width(*grapheme))
+        .collect();
+    if widths.iter().all(|width| *width == 0) {
+        return Err("GETLINESTR pattern must have positive logical width");
+    }
+    let mut result = String::new();
+    let mut used: usize = 0;
+    'fill: loop {
+        let before = used;
+        for (grapheme, width) in graphemes.iter().zip(&widths) {
+            if used.saturating_add(*width) > columns {
+                break 'fill;
+            }
+            result.push_str(grapheme);
+            used = used.saturating_add(*width);
+        }
+        if used == before || used >= columns {
+            break;
+        }
+    }
+    Ok(result)
 }
 
 /// Opaque candidate state prepared against one exact artifact generation.
@@ -71,6 +112,7 @@ impl RuntimeVm {
             vm,
             natives,
             pending_natives: None,
+            line_columns: self.line_columns,
         })
     }
 
@@ -100,27 +142,34 @@ impl RuntimeVm {
         }
         self.vm.memory = candidate.memory;
         self.natives = candidate.natives;
+        self.refresh_draw_line_string();
         Ok(())
     }
 
     #[must_use]
     pub fn new(artifact: ValidatedArtifact, config: VmConfig) -> Self {
         let natives = NativeServiceRegistry::for_artifact(artifact.artifact());
-        Self {
+        let mut runtime = Self {
             vm: Vm::new(artifact, config),
             natives,
             pending_natives: None,
-        }
+            line_columns: DEFAULT_LINE_COLUMNS,
+        };
+        runtime.refresh_draw_line_string();
+        runtime
     }
 
     #[must_use]
     pub fn new_with_seed(artifact: ValidatedArtifact, config: VmConfig, seed: u64) -> Self {
         let natives = NativeServiceRegistry::for_artifact_with_seed(artifact.artifact(), seed);
-        Self {
+        let mut runtime = Self {
             vm: Vm::new(artifact, config),
             natives,
             pending_natives: None,
-        }
+            line_columns: DEFAULT_LINE_COLUMNS,
+        };
+        runtime.refresh_draw_line_string();
+        runtime
     }
 
     /// Construct the pre-title state used by the runtime system flow.
@@ -135,11 +184,37 @@ impl RuntimeVm {
         seed: u64,
     ) -> Self {
         let natives = NativeServiceRegistry::for_artifact_with_seed(artifact.artifact(), seed);
-        Self {
+        let mut runtime = Self {
             vm: Vm::new_for_title(artifact, config),
             natives,
             pending_natives: None,
-        }
+            line_columns: DEFAULT_LINE_COLUMNS,
+        };
+        runtime.refresh_draw_line_string();
+        runtime
+    }
+
+    /// Synchronize calculated line-width state with the current frontend projection.
+    pub fn set_line_columns(&mut self, columns: u32) {
+        self.line_columns = columns.max(1);
+        self.refresh_draw_line_string();
+    }
+
+    fn refresh_draw_line_string(&mut self) {
+        let pattern = self
+            .vm
+            .artifact()
+            .project_data
+            .static_data
+            .replace
+            .draw_line_string
+            .clone();
+        let value = logical_line_string(
+            &pattern,
+            usize::try_from(self.line_columns).unwrap_or(usize::MAX),
+        )
+        .unwrap_or(pattern);
+        self.vm.set_runtime_calculated_string("DRAWLINESTR", &value);
     }
 
     #[must_use]
@@ -272,7 +347,9 @@ impl VmRuntimeStatePort for RuntimeVm {
                 .commit_structured_state(structured_state)
                 .map_err(VmError::InvalidState)?;
         }
-        self.vm.commit_runtime_state(prepared)
+        self.vm.commit_runtime_state(prepared)?;
+        self.refresh_draw_line_string();
+        Ok(())
     }
 }
 
@@ -505,7 +582,9 @@ impl VmRuntimePort for RuntimeVm {
     }
 
     fn restore_era_state(&mut self, state: &EraState) -> Result<EraStateReport, VmError> {
-        self.vm.reset_with_era_state(state)
+        let report = self.vm.reset_with_era_state(state)?;
+        self.refresh_draw_line_string();
+        Ok(report)
     }
 
     fn snapshot_eligibility(&self) -> SnapshotEligibility {
@@ -540,6 +619,7 @@ impl VmRuntimePort for RuntimeVm {
             .pending_natives
             .take()
             .ok_or_else(|| VmError::InvalidState("prepared native migration is missing".into()))?;
+        self.refresh_draw_line_string();
         Ok(report)
     }
 }
@@ -670,12 +750,16 @@ impl VmRestorePort for RuntimeVm {
         let mut natives = NativeServiceRegistry::for_artifact(artifact.artifact());
         let mut host = RestoreCaptureHost::default();
         let vm = Vm::restore_snapshot(artifact, config, snapshot, &mut host, &mut natives)?;
+        // Preserve the captured calculated value until the runtime supplies its
+        // current frontend projection after committing the restore.
+        let runtime = Self {
+            vm,
+            natives,
+            pending_natives: None,
+            line_columns: DEFAULT_LINE_COLUMNS,
+        };
         Ok(PreparedVmRestore {
-            runtime: Self {
-                vm,
-                natives,
-                pending_natives: None,
-            },
+            runtime,
             waits: host.waits,
         })
     }

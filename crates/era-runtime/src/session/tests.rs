@@ -5,7 +5,7 @@ use era_debug_protocol::{
 use era_protocol::{Channel, Envelope, ProtocolBytes, decode_envelope, encode_envelope};
 use era_runtime_protocol::{
     DisplayRun, FileCategory, FileChange, FilePayload, ProjectIdentity, ProjectManifest,
-    SubmittedFile,
+    ProjectionLength, ProjectionSize, ProjectionTransform, SubmittedFile,
 };
 use erabasic_vm::VmDebugInspect;
 
@@ -47,6 +47,68 @@ fn capabilities() -> ClientCapabilities {
             delete: true,
         },
     }
+}
+
+#[test]
+fn projection_observation_updates_draw_line_string_width() {
+    let build = build_project(
+        &ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                content_hash: None,
+            }],
+        },
+        None,
+    );
+    let artifact = build.artifact.expect("valid project");
+    let draw_line = artifact
+        .artifact()
+        .globals
+        .iter()
+        .find(|global| global.name == "DRAWLINESTR")
+        .expect("DRAWLINESTR")
+        .key;
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.vm = Some(RuntimeVm::new(artifact, VmConfig::default()));
+
+    session
+        .observe_projection(
+            1,
+            ProjectionObservation {
+                environment_revision: 1,
+                presentation_revision: session.presentation.revision(),
+                client_size: ProjectionSize {
+                    width: ProjectionLength(1_395),
+                    height: ProjectionLength(768),
+                },
+                projection_space_revision: 1,
+                line_columns: 198,
+                text_box: String::new(),
+                transform: ProjectionTransform {
+                    x_numerator: 1,
+                    x_denominator: 1,
+                    y_numerator: 1,
+                    y_denominator: 1,
+                    origin_x: ProjectionLength(0),
+                    origin_y: ProjectionLength(0),
+                },
+            },
+        )
+        .unwrap();
+
+    assert_eq!(session.line_columns, 198);
+    assert_eq!(
+        session
+            .vm
+            .as_ref()
+            .unwrap()
+            .vm()
+            .read_variable(draw_line, &[], None),
+        Ok(VmValue::String("-".repeat(198)))
+    );
 }
 
 #[allow(clippy::needless_pass_by_value)]
