@@ -1,0 +1,20 @@
+[package]
+name = "project-extractor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rustyera-project-extractor"
+path = "src/main.rs"
+
+[dependencies]
+blake3.workspace = true
+era-runtime = { path = "../../crates/era-runtime" }
+era-runtime-protocol = { path = "../../crates/era-runtime-protocol" }
+
+[dev-dependencies]
+era-protocol = { path = "../../crates/era-protocol" }
+
+[lints]
+workspace = true

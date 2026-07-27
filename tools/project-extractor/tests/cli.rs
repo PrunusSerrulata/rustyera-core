@@ -1,17 +1,17 @@
 use std::process::Command;
 
 fn extractor() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_rustyera-source-extractor"))
+    Command::new(env!("CARGO_BIN_EXE_rustyera-project-extractor"))
 }
 
 #[test]
-fn help_describes_source_extraction_and_succeeds() {
+fn help_describes_project_extraction_and_succeeds() {
     let output = extractor().arg("--help").output().unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("rustyera-source-extractor"));
-    assert!(stdout.contains("embedded UTF-8 project sources"));
+    assert!(stdout.contains("rustyera-project-extractor"));
+    assert!(stdout.contains("project sources and binary assets"));
 }
 
 #[test]
@@ -22,6 +22,6 @@ fn missing_input_is_a_usage_error() {
     assert!(
         String::from_utf8(output.stderr)
             .unwrap()
-            .contains("Usage: rustyera-source-extractor")
+            .contains("Usage: rustyera-project-extractor")
     );
 }

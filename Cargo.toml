@@ -7,7 +7,6 @@ members = [
     "crates/era-runtime-protocol",
     "crates/era-runtime-save",
     "crates/era-runtime",
-    "crates/era-source-extractor",
     "crates/erabasic-config",
     "crates/erabasic-ast",
     "crates/erabasic-bytecode",
@@ -22,6 +21,7 @@ members = [
     "crates/erabasic-repl",
     "crates/erabasic-validator",
     "crates/erabasic-vm",
+    "tools/project-extractor",
 ]
 resolver = "2"
 

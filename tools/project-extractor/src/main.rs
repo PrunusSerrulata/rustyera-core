@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use era_source_extractor::{Command, USAGE, extract_cache, parse_arguments};
+use project_extractor::{Command, USAGE, extract_cache, parse_arguments};
 
 fn main() -> ExitCode {
     let current_directory = match std::env::current_dir() {
@@ -19,21 +19,21 @@ fn main() -> ExitCode {
     };
     let Command::Extract(options) = command else {
         println!("{USAGE}");
-        println!("Extracts embedded UTF-8 project sources; binary resources are omitted.");
+        println!("Extracts embedded project sources and binary assets.");
         return ExitCode::SUCCESS;
     };
     match extract_cache(&options) {
         Ok(summary) => {
             println!(
-                "extracted {} source files to {} (skipped {} binary resources)",
+                "extracted {} project files to {} ({} binary assets)",
                 summary.extracted_files,
                 options.output.display(),
-                summary.skipped_resources
+                summary.extracted_binary_assets
             );
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("source extraction failed: {error}");
+            eprintln!("project extraction failed: {error}");
             ExitCode::FAILURE
         }
     }
