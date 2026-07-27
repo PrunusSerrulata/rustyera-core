@@ -4772,6 +4772,137 @@ fn project_resource_metadata_is_frontend_decoded_before_load_commit() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn project_resource_metadata_requests_respect_pending_request_backpressure() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    let mut client = capabilities();
+    client.graphics = true;
+    client.services.push(ServiceCapability {
+        kind: ServiceKind::Image,
+        operation: IMAGE_METADATA_OPERATION.into(),
+        versions: VersionRange::exact(IMAGE_METADATA_OPERATION_VERSION),
+    });
+    let mut requested_limits = RuntimeOptions::default().limits;
+    requested_limits.maximum_pending_requests = 2;
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "resource-backpressure-test".into(),
+            features: Vec::new(),
+            requested_limits,
+            capabilities: client,
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let _ = drain(&mut session);
+    let mut files = vec![
+        SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+            content_hash: None,
+        },
+        SubmittedFile {
+            relative_path: "resources/sprites.csv".into(),
+            category: FileCategory::ResourceManifest,
+            payload: FilePayload::Utf8("A,a.png\nB,b.png\nC,c.png".into()),
+            content_hash: None,
+        },
+    ];
+    files.extend(
+        ["a.png", "b.png", "c.png"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| SubmittedFile {
+                relative_path: format!("resources/{name}"),
+                category: FileCategory::Resource,
+                payload: FilePayload::Bytes(ProtocolBytes::new(vec![u8::try_from(index).unwrap()])),
+                content_hash: None,
+            }),
+    );
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let first = drain(&mut session);
+    let mut outstanding = first
+        .iter()
+        .filter_map(|message| match message {
+            RuntimeMessage::ServiceRequest(request)
+                if request.operation == IMAGE_METADATA_OPERATION =>
+            {
+                Some(request.request_id)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(outstanding.len(), 2);
+
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::ServiceResponse(ServiceResponse {
+            request_id: outstanding.remove(0),
+            result: ServiceResult::Ready {
+                payload: ProtocolBytes::new(
+                    encode_canonical(&ImageMetadataResponse {
+                        width: 1,
+                        height: 1,
+                        format: "png".into(),
+                        animated: false,
+                    })
+                    .unwrap(),
+                ),
+            },
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let second = drain(&mut session);
+    outstanding.extend(second.iter().filter_map(|message| match message {
+        RuntimeMessage::ServiceRequest(request)
+            if request.operation == IMAGE_METADATA_OPERATION =>
+        {
+            Some(request.request_id)
+        }
+        _ => None,
+    }));
+    assert_eq!(outstanding.len(), 2);
+
+    for (offset, request_id) in outstanding.into_iter().enumerate() {
+        submit(
+            &mut session,
+            3 + offset as u64,
+            RuntimeMessage::ServiceResponse(ServiceResponse {
+                request_id,
+                result: ServiceResult::Ready {
+                    payload: ProtocolBytes::new(
+                        encode_canonical(&ImageMetadataResponse {
+                            width: 1,
+                            height: 1,
+                            format: "png".into(),
+                            animated: false,
+                        })
+                        .unwrap(),
+                    ),
+                },
+            }),
+        );
+    }
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().any(|message| {
+        matches!(message, RuntimeMessage::ProjectLoadReport(report) if report.success)
+    }));
+}
+
+#[test]
 fn font_profile_is_session_fixed_case_insensitive_and_deterministic() {
     let mut requested = capabilities();
     requested.available_fonts = vec!["Zeta".into(), "alpha".into(), "ALPHA".into()];

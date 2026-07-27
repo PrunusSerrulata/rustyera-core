@@ -938,9 +938,32 @@ impl RuntimeSession {
             message_id,
             report,
             remaining_metadata,
+            queued_metadata: metadata.into(),
             reload: None,
         });
-        for (relative_path, digest) in metadata {
+        self.emit_project_image_metadata_requests()
+    }
+
+    pub(super) fn emit_project_image_metadata_requests(&mut self) -> Result<(), RuntimeError> {
+        let maximum = self.options.limits.maximum_pending_requests as usize;
+        if maximum == 0
+            && self
+                .pending_project_load
+                .as_ref()
+                .is_some_and(|pending| !pending.queued_metadata.is_empty())
+        {
+            return Err(RuntimeError::ResourceLimit(
+                "too many pending service requests",
+            ));
+        }
+        while self.operations.total_count() < maximum {
+            let Some((relative_path, digest)) = self
+                .pending_project_load
+                .as_mut()
+                .and_then(|pending| pending.queued_metadata.pop_front())
+            else {
+                break;
+            };
             let request_id = self.allocate_request()?;
             self.operations.insert_service(
                 request_id,
@@ -1194,35 +1217,13 @@ impl RuntimeSession {
                 message_id,
                 report,
                 remaining_metadata,
+                queued_metadata: metadata.into(),
                 reload: Some(PendingProjectReload {
                     build,
                     previous_phase,
                 }),
             });
-            for (relative_path, digest) in metadata {
-                let request_id = self.allocate_request()?;
-                self.operations.insert_service(
-                    request_id,
-                    PendingService::ProjectImageMetadata {
-                        relative_path: relative_path.clone(),
-                    },
-                );
-                self.emit(
-                    RuntimeMessage::ServiceRequest(ServiceRequest {
-                        request_id,
-                        kind: ServiceKind::Image,
-                        operation: IMAGE_METADATA_OPERATION.into(),
-                        operation_version: IMAGE_METADATA_OPERATION_VERSION,
-                        payload: ProtocolBytes::new(encode_canonical(&ImageMetadataRequest {
-                            resource_id: relative_path,
-                            content_digest: ProtocolBytes::new(digest),
-                        })?),
-                        deadline_ns: None,
-                    }),
-                    None,
-                )?;
-            }
-            return Ok(());
+            return self.emit_project_image_metadata_requests();
         }
         self.commit_project_reload(message_id, build, previous_phase)
     }
