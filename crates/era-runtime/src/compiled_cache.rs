@@ -23,7 +23,7 @@ const MAGIC: &[u8; 8] = b"RERACACH";
 // This is a semantic epoch as well as a wire-format version. Increment it whenever
 // compiler, analyzer or project-loading behavior can change an unchanged source's
 // artifact; an older artifact is not safe even as an incremental compilation seed.
-const VERSION: u32 = 7;
+const VERSION: u32 = 8;
 const COMPRESSION_LEVEL: i32 = 3;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;

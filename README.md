@@ -181,7 +181,7 @@ TUI 的功能、按键和存储约定见
 
 ```sh
 cargo run -p era-source-extractor -- \
-  /path/to/compiled-project-v7.bin.zst [/path/to/output]
+  /path/to/compiled-project-v8.bin.zst [/path/to/output]
 ```
 
 省略输出目录时写入当前工作目录。默认拒绝覆盖已有文件；显式传入 `--force` 才会覆盖
