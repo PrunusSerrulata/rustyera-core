@@ -1346,6 +1346,21 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         10,
         false,
     );
+    add(
+        "GDRAWSPRITE",
+        IntType,
+        &[
+            Integer,
+            String,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            ReferenceAny,
+        ],
+        2,
+        false,
+    );
     add("MOVETEXTBOX", IntType, &[Integer; 3], 3, false);
     add("RESUMETEXTBOX", IntType, &[Integer; 3], 3, false);
     add("BITMAP_CACHE_ENABLE", IntType, &[Integer], 1, false);

@@ -56,6 +56,37 @@ fn frontend_observation_calls_emit_nonfatal_source_notices() {
 }
 
 #[test]
+fn gdrawsprite_preserves_the_color_matrix_array_place() {
+    let artifact = compile_project(
+        &analyze(
+            "@SYSTEM_TITLE\n#DIM MATRIX, 5, 5\nGDRAWSPRITE 1, \"sprite\", 0, 0, 1, 1, MATRIX:0:0\nRETURN\n",
+        ),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .expect("GDRAWSPRITE with a color matrix should compile");
+    let import = artifact
+        .host_imports
+        .iter()
+        .find(|import| import.import.name == "gdrawsprite")
+        .expect("GDRAWSPRITE host import");
+    assert_eq!(
+        import.import.parameters,
+        [
+            BytecodeType::Integer,
+            BytecodeType::String,
+            BytecodeType::Integer,
+            BytecodeType::Integer,
+            BytecodeType::Integer,
+            BytecodeType::Integer,
+            BytecodeType::IntegerPlace,
+        ]
+    );
+}
+
+#[test]
 fn static_call_ignores_a_final_argument_separator() {
     let report = compile_project(
         &analyze("@SYSTEM_TITLE\nCALL TARGET,\nRETURN\n@TARGET\nRETURN\n"),
