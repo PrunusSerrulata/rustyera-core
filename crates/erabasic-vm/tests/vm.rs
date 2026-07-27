@@ -19,10 +19,11 @@ use erabasic_vm::{
     EraSaveScope, FiberId, FiberStatus, HostCallRequest, HostCallResult, HostReady,
     HostRebindRequest, HostWaitStability, NativeServiceRegistry, RunBudget, RuntimeVm,
     SnapshotBlocker, SnapshotEligibility, Vm, VmBreakpoint, VmBreakpointLocation, VmConfig,
-    VmDebugControl, VmDebugInspect, VmDebugVariableWrite, VmEvent, VmFaultCode, VmHost,
-    VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction, VmSnapshot,
-    VmStepKind, VmValue,
+    VmDebugControl, VmDebugInspect, VmDebugVariableWrite, VmDriveMode, VmEvent, VmFaultCode,
+    VmHost, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction,
+    VmSnapshot, VmStepKind, VmValue,
 };
+use unicode_width::UnicodeWidthStr;
 
 fn project_data() -> erabasic_data::ProjectData {
     load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
@@ -3794,6 +3795,91 @@ fn legacy_string_width_keeps_narrow_formcell_text_out_of_the_truncation_path() {
         vm.read_variable(results, &[1], None),
         Ok(VmValue::String("甲乙".into()))
     );
+}
+
+#[test]
+fn runtime_draw_line_width_prevents_formcell_from_truncating_to_a_negative_count() {
+    let mut data = project_data();
+    data.static_data.legacy_encoding = erabasic_data::LegacyEncoding::ChineseHans;
+    data.static_data.replace.draw_line_string = "-".into();
+    let artifact = compile_source_with_data(
+        "@SYSTEM_TITLE\n\
+         RESULT:0 = STRLENS(DRAWLINESTR)\n\
+         RESULTS:0 = %FORMCELL(\"温馨提示：选择物品时，按住空格可以临时进入多选模式。\", MAXWIDTH(), \"LEFT\")%\n\
+         RETURN\n\
+         @MAXWIDTH\n\
+         #FUNCTION\n\
+         RETURNF STRLENS(DRAWLINESTR)\n\
+         @FORMCELL(ARGS, ARG = -1, ARGS:1 = \"LEFT\", ARG:1 = 0)\n\
+         #FUNCTIONS\n\
+         #DIMS DYNAMIC LOCALSTR,1\n\
+         #DIM DYNAMIC FORMCELLTEMP,3\n\
+         FORMCELLTEMP = STRLENS(ARGS)\n\
+         IF ARG > 0 && FORMCELLTEMP > ARG\n\
+             IF ARG:1\n\
+                 LOCALSTR = %SUBSTRING(ARGS, 0, ARG)%\n\
+             ELSE\n\
+                 LOCALSTR = %SUBSTRING(ARGS, 0, ARG - 3)%\n\
+                 FORMCELLTEMP = STRLENS(LOCALSTR)\n\
+                 LOCALSTR += \".\" * (ARG - FORMCELLTEMP)\n\
+             ENDIF\n\
+             FORMCELLTEMP = STRLENS(LOCALSTR)\n\
+         ELSE\n\
+             LOCALSTR = %ARGS%\n\
+             SIF ARG < 0\n\
+                 ARG = 0\n\
+         ENDIF\n\
+         RETURNF @\"%LOCALSTR,ARG,LEFT%\"\n",
+        data,
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .unwrap()
+        .key;
+    let mut vm = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    vm.set_line_columns(198);
+    let prepared = vm
+        .prepare_runtime_state(VmRuntimeStateTransaction::ResetGameData)
+        .unwrap();
+    vm.commit_runtime_state(prepared).unwrap();
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.drive(RunBudget::default(), VmDriveMode::Normal);
+
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, erabasic_vm::VmPortEvent::FiberFaulted(..))),
+        "{:#?}",
+        report.events
+    );
+    assert!(matches!(
+        vm.fiber_status(fiber),
+        Some(FiberStatus::Completed(_))
+    ));
+    assert_eq!(
+        vm.vm().read_variable(result, &[0], None),
+        Ok(VmValue::Integer(198))
+    );
+    let VmValue::String(cell) = vm.vm().read_variable(results, &[0], None).unwrap() else {
+        panic!("FORMCELL must return a string");
+    };
+    assert!(cell.starts_with("温馨提示：选择物品时，按住空格可以临时进入多选模式。"));
+    assert_eq!(UnicodeWidthStr::width(cell.as_str()), 198);
 }
 
 #[test]

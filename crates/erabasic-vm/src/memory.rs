@@ -989,6 +989,25 @@ impl Memory {
         }
     }
 
+    pub(crate) fn set_runtime_calculated_string(
+        &mut self,
+        artifact: &BytecodeArtifact,
+        name: &str,
+        value: &str,
+    ) {
+        let Some(definition) = find_definition(artifact, name) else {
+            return;
+        };
+        if definition.storage != BytecodeStorage::Calculated
+            || definition.value_type != BytecodeType::String
+        {
+            return;
+        }
+        if let Some(cell) = self.shared.get_mut(&definition.key) {
+            let _ = cell.set(0, VmValue::String(value.into()));
+        }
+    }
+
     fn set_named_string(&mut self, artifact: &BytecodeArtifact, name: &str, value: &str) {
         if let Some(definition) = find_definition(artifact, name)
             && let Some(cell) = self.shared.get_mut(&definition.key)

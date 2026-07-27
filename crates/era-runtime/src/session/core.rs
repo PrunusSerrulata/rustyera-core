@@ -63,7 +63,7 @@ impl RuntimeSession {
             projection_space_revision: 0,
             client_width: 760,
             client_height: 480,
-            line_columns: 75,
+            line_columns: DEFAULT_LINE_COLUMNS,
             message_skip: false,
             skip_print: false,
             user_defined_skip: false,
@@ -521,6 +521,9 @@ impl RuntimeSession {
         self.client_width = width.expect("validated projection width");
         self.client_height = height.expect("validated projection height");
         self.line_columns = observation.line_columns;
+        if let Some(vm) = &mut self.vm {
+            vm.set_line_columns(self.line_columns);
+        }
         self.text_box = observation.text_box;
         Ok(())
     }
@@ -1412,6 +1415,7 @@ impl RuntimeSession {
                 .ok_or_else(|| RuntimeError::Internal("loaded artifact is missing".into()))?,
             self.options.vm_config,
         );
+        vm.set_line_columns(self.line_columns);
         let version = decoded.state.version;
         let description = decoded.description.clone();
         let prepared = match vm.prepare_runtime_state_with_extensions(
@@ -1571,8 +1575,9 @@ impl RuntimeSession {
                 "runtime and VM snapshot waits do not correspond",
             );
         }
-        let vm = RuntimeVm::commit_restore(prepared)
+        let mut vm = RuntimeVm::commit_restore(prepared)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        vm.set_line_columns(self.line_columns);
 
         let new_epoch = self.epoch.0.max(payload.epoch).saturating_add(1);
         let mut operations = payload.operations;
@@ -1706,6 +1711,7 @@ impl RuntimeSession {
             .clone();
         self.presentation.set_title(title);
         let mut vm = RuntimeVm::new_for_title_with_seed(artifact, self.options.vm_config, seed);
+        vm.set_line_columns(self.line_columns);
         self.controller.flow = Some(SystemFlow::Title);
         let result = if self
             .controller
