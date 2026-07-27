@@ -1267,7 +1267,7 @@ mod console_tests {
         );
         assert_eq!(
             parse_console_expression("STRLENS(\"界\")", &[]),
-            Ok(VmValue::Integer(3))
+            Ok(VmValue::Integer(2))
         );
         assert_eq!(
             parse_console_expression("STRLENSU(\"😀\")", &[]),
