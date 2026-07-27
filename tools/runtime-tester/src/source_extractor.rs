@@ -9,15 +9,16 @@ use std::time::{Duration, Instant};
 use era_protocol::{ProtocolBytes, VersionRange};
 use era_runtime::{RuntimeOptions, RuntimeSession};
 use era_runtime_protocol::{
-    ClientCapabilities, ClientHello, DiagnosticSeverity, FileCategory, FilePayload, InputModality,
-    ProjectManifest, RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeMessage,
+    ClientCapabilities, ClientHello, FileCategory, FilePayload, InputModality, ProjectManifest,
+    RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeLogLevel, RuntimeMessage,
     SnapshotExportPurpose, StateExportChunkRequest, StateExportKind, StateExportRequest,
     StateExportResult, StorageCapabilities, SubmittedFile,
 };
 
 use super::{
-    audit_service_capabilities, audit_wire_limits, collect_project_files, drain, drive,
-    has_direct_child_directory, read_project_text, repository_root, submit, submit_with_epoch,
+    audit_service_capabilities, audit_wire_limits, collect_project_files, diagnostics_with_level,
+    drain, drive, has_direct_child_directory, read_project_text, repository_root, submit,
+    submit_with_epoch,
 };
 
 const CACHE_BUILD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -214,11 +215,8 @@ fn compile_and_export(manifest: ProjectManifest) -> Vec<u8> {
         Some(report)
     });
     let report = report.expect("runtime did not return a project load report");
-    let errors = report
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
-        .collect::<Vec<_>>();
+    let errors =
+        diagnostics_with_level(&report.diagnostics, RuntimeLogLevel::Error).collect::<Vec<_>>();
     assert!(report.success, "project compilation failed: {errors:#?}");
 
     submit_with_epoch(
