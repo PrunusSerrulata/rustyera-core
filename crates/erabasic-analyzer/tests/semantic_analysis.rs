@@ -729,6 +729,54 @@ fn rand_accepts_reference_one_or_two_argument_forms_only() {
 }
 
 #[test]
+fn omitted_for_start_counts_as_a_supplied_argument_slot() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "main.erb",
+                "@SYSTEM_TITLE\n#DIM INDEX\nFOR INDEX, , 2\nNEXT\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn full_width_directive_separator_and_enumfiles_return_type_are_accepted() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "main.erb",
+                "@SYSTEM_TITLE\n#DIM\u{3000}FILE_COUNT\nFILE_COUNT = ENUMFILES(\"data\", \"*.erb\")\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn accepts_reference_dim_comments_continuations_and_sign_bit_masks() {
     let report = analyze_project(
         AnalysisInput {
@@ -736,7 +784,7 @@ fn accepts_reference_dim_comments_continuations_and_sign_bit_masks() {
             sources: vec![
                 source(
                     "vars.erh",
-                    "#DIM COMMENTED; no separating whitespace\n#DIM CONST SIZE = 2,; a trailing comma is accepted\n#DIM CONST HIGH_BIT = 1p63\n{\n#DIMS CONST VALUES, 2 = @\"%UNICODE(0x2660)%\",\n\"C\"\n}\n",
+                    "#DIM COMMENTED; no separating whitespace\n#DIM CONST SIZE = 2,; a trailing comma is accepted\n#DIM CONST HIGH_BIT = 1p63\n#DIMS CONST PADDING = \" \" * 3\n{\n#DIMS CONST VALUES, 2 = @\"%UNICODE(0x2660)%\",\n\"C\"\n}\n",
                 ),
                 source(
                     "main.erb",
@@ -761,6 +809,16 @@ fn accepts_reference_dim_comments_continuations_and_sign_bit_masks() {
     assert_eq!(
         project.data.schema.variable("VALUES").unwrap().dimensions,
         [2]
+    );
+    let padding = project
+        .program
+        .variables
+        .iter()
+        .find(|variable| variable.name == "PADDING")
+        .unwrap();
+    assert_eq!(
+        padding.initial_values,
+        [erabasic_hir::ConstantValue::String("   ".into())]
     );
     let local = project
         .program
@@ -855,6 +913,59 @@ fn registers_private_variables_and_function_parameter_places() {
             .iter()
             .any(|edge| edge.kind == erabasic_hir::ControlFlowKind::LoopBack)
     );
+}
+
+#[test]
+fn scoped_variable_instructions_register_and_initialize_frame_locals() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "main.erb",
+                "@SYSTEM_TITLE(ARG:0 = 2)\nVARI WIDTH = ARG:0 + 1\nVARS TEXT = \"ok\"\nVARI ITEMS, 3\nVARI WIDTH = 7\nTEXT += \"!\"\nITEMS:2 = WIDTH\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let project = report.project.expect("scoped declarations should analyze");
+    let function = &project.program.functions[0];
+    let locals = project
+        .program
+        .variables
+        .iter()
+        .filter(|variable| variable.owner == Some(function.id))
+        .map(|variable| (variable.name.as_str(), variable.dimensions.as_slice()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(locals.get("WIDTH"), Some(&[1].as_slice()));
+    assert_eq!(locals.get("TEXT"), Some(&[1].as_slice()));
+    assert_eq!(locals.get("ITEMS"), Some(&[3].as_slice()));
+    assert!(matches!(
+        function.lines[0].kind,
+        HirStatementKind::Assignment { .. }
+    ));
+    assert!(matches!(
+        function.lines[1].kind,
+        HirStatementKind::Assignment { .. }
+    ));
+    assert!(matches!(
+        &function.lines[2].kind,
+        HirStatementKind::Instruction { target, arguments }
+            if target.name() == "VARI" && arguments.is_empty()
+    ));
+    assert!(matches!(
+        function.lines[3].kind,
+        HirStatementKind::Assignment { .. }
+    ));
 }
 
 #[test]

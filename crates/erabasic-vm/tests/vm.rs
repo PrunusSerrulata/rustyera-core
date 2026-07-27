@@ -3535,6 +3535,103 @@ fn getnum_resolves_the_referenced_builtin_name_table_at_runtime() {
 }
 
 #[test]
+fn erdname_resolves_a_user_defined_index_name_at_runtime() {
+    let mut data = project_data();
+    data.static_data.deferred_indices.resolved.insert(
+        "CUSTOM_NAMES".into(),
+        erabasic_data::ResolvedUserIndex {
+            variable_name: "CUSTOM_NAMES".into(),
+            entries: [("zero".into(), 0), ("second".into(), 1)]
+                .into_iter()
+                .collect(),
+        },
+    );
+    let artifact = compile_source_with_data(
+        "@SYSTEM_TITLE\n#DIMS CUSTOM_NAMES, 2\nRESULT = ERDNAME(CUSTOM_NAMES, 1) == \"second\"\nRETURN\n",
+        data,
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(1));
+}
+
+#[test]
+fn erafl_compatibility_fixture_compiles_and_matches_the_reference_result() {
+    const SOURCE: &str = "@ERAFL_COMPAT\n#DIM\u{3000}OUT\n#DIMS CONST PAD = \" \" * 3\nVARI COUNT = 2\nVARS WORD = \"xy\"\nVARI ITEMS, 3\n{\t\nCOUNT += 1\n}\t\nFOR LOCAL, , 2\nITEMS:LOCAL = COUNT\nNEXT\nIF 0\nOUT = ENUMFILES(\"missing-directory\", \"*.none\")\nCALLSHARP MISSING_PLUGIN()\nENDIF\nRESULT = COUNT * 10000 + (WORD == \"xy\") * 1000 + (ITEMS:1 == 3) * 100 + (PAD == \"   \") * 10 + (ERDNAME(CUSTOM_NAMES, 2) == \"later\")\nRETURN RESULT\n";
+    let mut data = project_data();
+    data.static_data.deferred_indices.resolved.insert(
+        "CUSTOM_NAMES".into(),
+        erabasic_data::ResolvedUserIndex {
+            variable_name: "CUSTOM_NAMES".into(),
+            entries: [("zero".into(), 0), ("later".into(), 2)]
+                .into_iter()
+                .collect(),
+        },
+    );
+    let analysis = analyze_project(
+        AnalysisInput {
+            project_data: data,
+            sources: vec![
+                ProjectSource {
+                    relative_path: "custom-names.erh".into(),
+                    payload: SourcePayload::Utf8("#DIMS CUSTOM_NAMES, 3\n".into()),
+                },
+                ProjectSource {
+                    relative_path: "erafl-compat.erb".into(),
+                    payload: SourcePayload::Utf8(SOURCE.into()),
+                },
+            ],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(analysis.project.is_some(), "{:#?}", analysis.diagnostics);
+    let compilation = compile_project(
+        &analysis.project.unwrap(),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = compilation
+        .artifact
+        .unwrap_or_else(|| panic!("{:#?}", compilation.diagnostics));
+    assert!(artifact.host_imports.iter().any(|import| {
+        import.import.namespace == "rustyera.extension" && import.import.name == "callsharp"
+    }));
+
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "ERAFL_COMPAT")
+        .unwrap()
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(31_111))
+    );
+}
+
+#[test]
 fn runtime_string_indices_use_strict_name_resolution() {
     let mut data = project_data();
     data.static_data

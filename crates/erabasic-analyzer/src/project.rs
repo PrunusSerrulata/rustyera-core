@@ -21,7 +21,10 @@ use crate::{
     catalog::Catalog,
     context::AnalysisParserContext,
     control_flow::build_control_flow,
-    declarations::{DeclarationInput, analyze_global_declarations, parse_private_declaration},
+    declarations::{
+        DeclarationInput, analyze_global_declarations, parse_private_declaration,
+        parse_scoped_declaration,
+    },
     expression::{ExpressionAnalyzer, IndexResolver},
     symbols::{Symbols, is_reserved},
 };
@@ -315,6 +318,9 @@ fn analyze_with_context(
 
     let reachable = reachable_functions(sources, &definitions, &symbols, options);
     for definition in &definitions {
+        if !should_analyze_function(definition, &reachable, options) {
+            continue;
+        }
         let source = &sources[definition.source_index];
         let function = &source.script.functions[definition.function_index];
         symbols.prepare_function_locals(definition.id, &function.name);
@@ -340,9 +346,7 @@ fn analyze_with_context(
             // A same-name normal function after the first one can never be selected
             // by Emuera's non-event dictionary. Keep its identity for deterministic
             // source ordering, but do not lower an unreachable replacement body.
-            let should_analyze = options.analysis_mode
-                || (!definition.shadowed
-                    && (!options.ignore_uncalled_functions || reachable.contains(&definition.id)));
+            let should_analyze = should_analyze_function(definition, &reachable, options);
             let hir = if should_analyze {
                 analyze_function(
                     definition.id,
@@ -436,6 +440,16 @@ struct FunctionDefinition {
     return_type: SemanticType,
     shadowed: bool,
     definition_order: u32,
+}
+
+fn should_analyze_function(
+    definition: &FunctionDefinition,
+    reachable: &BTreeSet<FunctionId>,
+    options: &AnalyzerOptions,
+) -> bool {
+    options.analysis_mode
+        || (!definition.shadowed
+            && (!options.ignore_uncalled_functions || reachable.contains(&definition.id)))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -884,6 +898,21 @@ fn analyze_instruction(
         .is_none()
         .then(|| catalog.functions.get(&key))
         .flatten();
+    if matches!(key.as_str(), "VARI" | "VARS") {
+        return analyze_scoped_declaration_statement(
+            function,
+            source,
+            statement,
+            &key,
+            raw_arguments,
+            symbols,
+            catalog,
+            context,
+            index_resolver,
+            options,
+            diagnostics,
+        );
+    }
     if signature.is_none() && method_signature.is_none() {
         diagnostics.push(AnalyzerDiagnostic::at(
             AnalyzerDiagnosticCode::UnknownInstruction,
@@ -1178,6 +1207,143 @@ fn analyze_instruction(
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn analyze_scoped_declaration_statement(
+    function: FunctionId,
+    source: &ParsedProjectSource,
+    statement: &Statement,
+    name: &str,
+    raw_arguments: &str,
+    symbols: &Symbols,
+    catalog: &Catalog,
+    context: &AnalysisParserContext,
+    index_resolver: &IndexResolver,
+    options: &AnalyzerOptions,
+    diagnostics: &mut Vec<AnalyzerDiagnostic>,
+) -> HirStatementKind {
+    let constants = symbols.constant_values();
+    let dimensions = symbols.variable_dimensions(function);
+    let Ok(scoped) = parse_scoped_declaration(
+        source.source.id,
+        &source.source.relative_path,
+        &source.text,
+        name,
+        raw_arguments,
+        statement.span,
+        context,
+        &constants,
+        &dimensions,
+        index_resolver,
+        options,
+    ) else {
+        return HirStatementKind::Error;
+    };
+    let variable_name = scoped.declaration.schema.id.name();
+    let target_expression = Expr {
+        kind: ExprKind::Variable {
+            name: variable_name.to_owned(),
+            indices: Vec::new(),
+        },
+        span: statement.span,
+    };
+    let target = ExpressionAnalyzer {
+        symbols,
+        catalog,
+        options,
+        function,
+        source: source.source.id,
+        path: &source.source.relative_path,
+        text: &source.text,
+        diagnostics,
+        index_resolver,
+    }
+    .analyze(&target_expression);
+    let HirExprKind::Variable { place } = target.kind else {
+        return HirStatementKind::Error;
+    };
+    // The reference declaration instruction initializes only scalars. Array
+    // storage is zero-filled when the function frame is created.
+    let scalar = symbols
+        .variables
+        .get(place.variable.0 as usize)
+        .is_some_and(|variable| variable.dimensions == [1]);
+    if !scalar {
+        return HirStatementKind::Instruction {
+            target: InstructionTarget::Builtin(name.to_owned()),
+            arguments: Vec::new(),
+        };
+    }
+    let value = if let Some(initializer) = scoped.initializer {
+        let statement_text = &source.text[statement.span.start..statement.span.end];
+        let raw_offset = statement_text.find(raw_arguments).unwrap_or(0);
+        let base =
+            statement.span.start + raw_offset + scoped.initializer_offset.unwrap_or_default();
+        let mut parsed = erabasic_parser::parse_expression_list_at(&initializer, base, context);
+        for diagnostic in parsed.diagnostics.drain(..) {
+            diagnostics.push(map_parser_diagnostic(
+                source.source.id,
+                &source.source.relative_path,
+                &source.text,
+                &diagnostic,
+            ));
+        }
+        parsed
+            .value
+            .and_then(|mut values| (values.len() == 1).then(|| values.remove(0)))
+    } else {
+        Some(Expr {
+            kind: if name == "VARS" {
+                ExprKind::String(String::new())
+            } else {
+                ExprKind::Integer(0)
+            },
+            span: statement.span,
+        })
+    };
+    let Some(value) = value else {
+        diagnostics.push(AnalyzerDiagnostic::at(
+            AnalyzerDiagnosticCode::InvalidInitializer,
+            AnalyzerDiagnosticSeverity::Error,
+            2,
+            source.source.id,
+            &source.source.relative_path,
+            &source.text,
+            statement.span,
+            "scoped variable initializer must contain exactly one expression",
+        ));
+        return HirStatementKind::Error;
+    };
+    let value = ExpressionAnalyzer {
+        symbols,
+        catalog,
+        options,
+        function,
+        source: source.source.id,
+        path: &source.source.relative_path,
+        text: &source.text,
+        diagnostics,
+        index_resolver,
+    }
+    .analyze(&value);
+    if place.value_type != value.value_type && value.value_type != SemanticType::Error {
+        diagnostics.push(AnalyzerDiagnostic::at(
+            AnalyzerDiagnosticCode::TypeMismatch,
+            AnalyzerDiagnosticSeverity::Error,
+            2,
+            source.source.id,
+            &source.source.relative_path,
+            &source.text,
+            value.location.span,
+            "scoped variable initializer type does not match its declaration",
+        ));
+    }
+    HirStatementKind::Assignment {
+        target: place,
+        op: erabasic_ast::AssignOp::Assign,
+        value,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn analyze_case_arguments(
     function: FunctionId,
@@ -1418,7 +1584,7 @@ fn source_file(id: SourceId, relative_path: String, kind: SourceKind, text: &str
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn register_private_variables(
     function_id: FunctionId,
     source: &ParsedProjectSource,
@@ -1434,7 +1600,22 @@ fn register_private_variables(
         .iter()
         .filter(|directive| matches!(directive.name.as_str(), "DIM" | "DIMS"))
         .collect();
-    if private_directives.is_empty() {
+    let scoped_statements = function.body.iter().filter_map(|statement| {
+        let StatementKind::Instruction {
+            name,
+            raw_arguments,
+            ..
+        } = &statement.kind
+        else {
+            return None;
+        };
+        matches!(name.as_str(), "VARI" | "VARS").then_some((
+            statement,
+            name.as_str(),
+            raw_arguments.as_str(),
+        ))
+    });
+    if private_directives.is_empty() && scoped_statements.clone().next().is_none() {
         return;
     }
 
@@ -1491,6 +1672,42 @@ fn register_private_variables(
                 &source.source.relative_path,
                 &source.text,
                 directive.span,
+                message,
+            )),
+        }
+    }
+    for (statement, name, raw_arguments) in scoped_statements {
+        match parse_scoped_declaration(
+            source.source.id,
+            &source.source.relative_path,
+            &source.text,
+            name,
+            raw_arguments,
+            statement.span,
+            context,
+            &constants,
+            &variable_dimensions,
+            index_resolver,
+            options,
+        ) {
+            Ok(scoped) => {
+                let declaration = scoped.declaration;
+                // Emuera.NET keeps the first scoped declaration with a given
+                // function-local name and permits later declaration statements
+                // to reinitialize that same scalar.
+                if symbols.register_private(function_id, &declaration).is_ok() {
+                    let key = key(declaration.schema.id.name(), options.ignore_case);
+                    variable_dimensions.insert(key, declaration.schema.dimensions.clone());
+                }
+            }
+            Err(message) => diagnostics.push(AnalyzerDiagnostic::at(
+                AnalyzerDiagnosticCode::InvalidDeclaration,
+                AnalyzerDiagnosticSeverity::Error,
+                2,
+                source.source.id,
+                &source.source.relative_path,
+                &source.text,
+                statement.span,
                 message,
             )),
         }

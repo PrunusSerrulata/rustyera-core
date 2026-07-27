@@ -603,6 +603,12 @@ fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     // Raw is used only for host/plugin statements whose grammar is intentionally
     // opaque to the core analyzer.
     add("CALLSHARP", Raw, &[], 0, false, true);
+    // Emuera.NET scoped declarations have their own `name[, sizes][ = value]`
+    // grammar. Keeping the tail raw prevents the ordinary expression parser from
+    // treating the declaration name as a variable use or rejecting its `=`.
+    for name in ["VARI", "VARS"] {
+        add(name, Raw, &[ArgumentConstraint::Raw], 1, false, false);
+    }
 
     // Keep the complete pinned instruction namespace even where the first HIR
     // version represents a specialized ArgumentBuilder as variadic expressions.
@@ -950,6 +956,13 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "GETNUM",
         IntType,
         &[ReferenceAny, String, Integer],
+        2,
+        false,
+    );
+    add(
+        "ERDNAME",
+        StrType,
+        &[ReferenceAny, Integer, Integer],
         2,
         false,
     );
@@ -1442,6 +1455,7 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "DT_ROW_LENGTH",
         "DT_ROW_REMOVE",
         "DT_ROW_SET",
+        "ENUMFILES",
         "EXISTFILE",
         "FIND_CHARADATA",
         "EXISTFUNCTION",
@@ -1597,7 +1611,6 @@ fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         "DT_SELECT",
         "DT_TOXML",
         "ENCODETOUNI",
-        "ENUMFILES",
         "ENUMFUNCBEGINSWITH",
         "ENUMFUNCENDSWITH",
         "ENUMFUNCWITH",

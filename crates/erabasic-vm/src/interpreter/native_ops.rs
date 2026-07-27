@@ -287,6 +287,70 @@ pub(super) fn execute_getnum(
     Ok(VmValue::Integer(value.unwrap_or(-1)))
 }
 
+pub(super) fn execute_erdname(
+    vm: &Vm,
+    fiber: &Fiber,
+    arguments: &[VmValue],
+) -> Result<VmValue, VmError> {
+    let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = arguments.first() else {
+        return Err(VmError::InvalidArguments(
+            "ERDNAME argument 1 is not a variable reference".into(),
+        ));
+    };
+    let Some(VmValue::Integer(index)) = arguments.get(1) else {
+        return Err(VmError::InvalidArguments(
+            "ERDNAME argument 2 is not an integer".into(),
+        ));
+    };
+    let Ok(index) = usize::try_from(*index) else {
+        return Ok(VmValue::String(String::new()));
+    };
+    let selector = match arguments.get(2) {
+        None | Some(VmValue::Integer(i64::MIN)) => None,
+        Some(VmValue::Integer(value)) => Some(*value),
+        Some(_) => {
+            return Err(VmError::InvalidArguments(
+                "ERDNAME argument 3 is not an integer".into(),
+            ));
+        }
+    };
+    let generation = fiber.frames.last().expect("frame exists").generation;
+    let program = vm
+        .generations
+        .get(&generation)
+        .ok_or_else(|| VmError::InvalidState("ERDNAME generation is missing".into()))?;
+    let variable = program.global(place.variable).ok_or_else(|| {
+        VmError::InvalidArguments("ERDNAME variable is not project-visible".into())
+    })?;
+    let project_data = &program.artifact.project_data;
+    let key = selector.map_or_else(
+        || variable.name.clone(),
+        |selector| format!("{}@{selector}", variable.name),
+    );
+    let value = project_data
+        .static_data
+        .deferred_indices
+        .resolved
+        .get(&key)
+        .or_else(|| {
+            project_data
+                .static_data
+                .deferred_indices
+                .resolved
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&key))
+                .map(|(_, table)| table)
+        })
+        .and_then(|table| {
+            table
+                .entries
+                .iter()
+                .find_map(|(name, value)| (*value == index).then(|| name.clone()))
+        })
+        .unwrap_or_default();
+    Ok(VmValue::String(value))
+}
+
 pub(super) fn execute_index_by_name(
     vm: &Vm,
     fiber: &Fiber,

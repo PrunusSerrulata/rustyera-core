@@ -332,6 +332,11 @@ impl<'a> Builder<'a> {
         location: SourceLocation,
     ) {
         let name = target.name();
+        if matches!(name, "VARI" | "VARS") {
+            // Scoped array declarations only allocate frame storage. The
+            // enclosing lowering loop emits a source-mapped NOP for this line.
+            return;
+        }
         if let InstructionTarget::BuiltinMethod { return_type, .. } = target {
             let parameter_types = arguments
                 .iter()
@@ -524,8 +529,14 @@ impl<'a> Builder<'a> {
                 return;
             };
             self.lower_argument(&HirArgument::Place(counter.clone()), location);
-            for argument in arguments.iter().skip(1).take(2) {
-                self.lower_argument(argument, location);
+            match arguments.get(1) {
+                Some(HirArgument::Omitted) | None => self.emit(opcode::push_integer(0), location),
+                Some(start) => {
+                    self.lower_argument(start, location);
+                }
+            }
+            if let Some(end) = arguments.get(2) {
+                self.lower_argument(end, location);
             }
             match arguments.get(3) {
                 Some(HirArgument::Omitted) | None => self.emit(opcode::push_integer(1), location),

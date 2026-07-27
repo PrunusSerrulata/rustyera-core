@@ -660,11 +660,7 @@ impl ExpressionAnalyzer<'_> {
         allow_omitted: bool,
         location: SourceLocation,
     ) {
-        let supplied = arguments
-            .iter()
-            .filter(|argument| argument.is_some())
-            .count();
-        if supplied < minimum || (!variadic && arguments.len() > constraints.len()) {
+        if arguments.len() < minimum || (!variadic && arguments.len() > constraints.len()) {
             self.diagnostic(
                 AnalyzerDiagnosticCode::InvalidArgumentCount,
                 location,

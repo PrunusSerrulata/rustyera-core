@@ -60,8 +60,9 @@ fn parse_script(
             continue;
         }
 
+        let delimiter = trimmed.trim_end_matches([' ', '\t']);
         let mut continued = String::new();
-        if trimmed == "{" {
+        if delimiter == "{" {
             let opener = Span::new(base, base + 1);
             let mut first_offset = None;
             let mut closed = false;
@@ -71,11 +72,15 @@ fn parse_script(
                 let part = raw_part.trim_end_matches('\r');
                 let part_trimmed =
                     trim_line_start(part, context.lexer_config().allow_full_width_space);
-                if part_trimmed == "}" {
+                // EraStreamReader accepts horizontal whitespace after a
+                // continuation terminator. Keep the original line intact when
+                // joining content, but normalize both ends for delimiter tests.
+                let part_delimiter = part_trimmed.trim_end_matches([' ', '\t']);
+                if part_delimiter == "}" {
                     closed = true;
                     break;
                 }
-                if part_trimmed == "{" {
+                if part_delimiter == "{" {
                     diagnostics.push(Diagnostic::error(
                         DiagnosticCode::UnexpectedToken,
                         Span::new(part_offset, part_offset + part.len()),
@@ -95,7 +100,7 @@ fn parse_script(
             }
             offset = first_offset.unwrap_or(offset);
             line = &continued;
-        } else if trimmed == "}" {
+        } else if delimiter == "}" {
             diagnostics.push(Diagnostic::error(
                 DiagnosticCode::UnexpectedToken,
                 Span::new(base, base + 1),

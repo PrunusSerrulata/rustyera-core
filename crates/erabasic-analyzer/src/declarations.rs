@@ -29,6 +29,12 @@ pub(crate) struct DeclaredVariable {
     pub static_lifetime: bool,
 }
 
+pub(crate) struct ScopedDeclaration {
+    pub declaration: DeclaredVariable,
+    pub initializer: Option<String>,
+    pub initializer_offset: Option<usize>,
+}
+
 #[derive(Default)]
 pub(crate) struct DeclarationOutput {
     pub variables: BTreeMap<String, DeclaredVariable>,
@@ -145,6 +151,60 @@ pub(crate) fn parse_private_declaration(
         options,
     )
     .map_err(|error| error.to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn parse_scoped_declaration(
+    source: SourceId,
+    path: &str,
+    text: &str,
+    instruction: &str,
+    raw_arguments: &str,
+    span: erabasic_ast::Span,
+    context: &dyn ParserContext,
+    constants: &BTreeMap<String, ConstantValue>,
+    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    index_resolver: &IndexResolver,
+    options: &AnalyzerOptions,
+) -> Result<ScopedDeclaration, String> {
+    let raw = strip_declaration_comment(raw_arguments);
+    let assignment = find_top_level(raw, '=');
+    let declaration_arguments = assignment.map_or(raw, |index| &raw[..index]);
+    let initializer = assignment.and_then(|index| {
+        let tail = &raw[index + 1..];
+        let leading = tail.len().saturating_sub(tail.trim_start().len());
+        let value = tail.trim();
+        (!value.is_empty()).then(|| (value.to_owned(), index + 1 + leading))
+    });
+    let directive = Directive {
+        name: if instruction.eq_ignore_ascii_case("VARS") {
+            "DIMS".into()
+        } else {
+            "DIM".into()
+        },
+        arguments: Vec::new(),
+        raw_arguments: format!("DYNAMIC {declaration_arguments}"),
+        span,
+    };
+    let input = DeclarationInput {
+        source,
+        path,
+        text,
+        directive: &directive,
+    };
+    let declaration = parse_private_declaration(
+        &input,
+        context,
+        constants,
+        variable_dimensions,
+        index_resolver,
+        options,
+    )?;
+    Ok(ScopedDeclaration {
+        declaration,
+        initializer: initializer.as_ref().map(|(value, _)| value.clone()),
+        initializer_offset: initializer.map(|(_, offset)| offset),
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -829,6 +889,24 @@ fn evaluate_binary(
             BinaryOp::GreaterEqual => Ok(ConstantValue::Integer(i64::from(left >= right))),
             _ => Err(DimError::Invalid("invalid string constant operator".into())),
         };
+    }
+    if op == BinaryOp::Multiply {
+        let repeated = match (&left, &right) {
+            (ConstantValue::String(value), ConstantValue::Integer(count))
+            | (ConstantValue::Integer(count), ConstantValue::String(value)) => {
+                Some((value, *count))
+            }
+            _ => None,
+        };
+        if let Some((value, count)) = repeated {
+            let count = usize::try_from(count)
+                .ok()
+                .filter(|count| *count < 10_000)
+                .ok_or_else(|| {
+                    DimError::Invalid("string repeat count must be between 0 and 9999".into())
+                })?;
+            return Ok(ConstantValue::String(value.repeat(count)));
+        }
     }
     let (ConstantValue::Integer(left), ConstantValue::Integer(right)) = (left, right) else {
         return Err(DimError::Invalid("constant operand types differ".into()));

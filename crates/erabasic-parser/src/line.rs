@@ -858,10 +858,18 @@ pub(crate) fn parse_directive(
     base: usize,
     context: &dyn ParserContext,
 ) -> ParseOutput<Directive> {
-    let rest = source.strip_prefix('#').unwrap_or(source).trim_start();
-    let name_end = rest.find([' ', '\t']).unwrap_or(rest.len());
+    let allow_full_width_space = context.lexer_config().allow_full_width_space;
+    let rest = trim_line_start(
+        source.strip_prefix('#').unwrap_or(source),
+        allow_full_width_space,
+    );
+    let name_end = rest
+        .find(|character| {
+            matches!(character, ' ' | '\t') || (allow_full_width_space && character == '\u{3000}')
+        })
+        .unwrap_or(rest.len());
     let name = rest[..name_end].to_uppercase();
-    let args_text = rest[name_end..].trim_start();
+    let args_text = trim_line_start(&rest[name_end..], allow_full_width_space);
     let offset = base + source.find(args_text).unwrap_or(source.len());
     // Declaration grammars contain keywords, dimensions and initializers that are
     // not one normal expression. Preserve them verbatim for the semantic pass.

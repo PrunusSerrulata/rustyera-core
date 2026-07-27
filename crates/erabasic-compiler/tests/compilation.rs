@@ -56,6 +56,41 @@ fn frontend_observation_calls_emit_nonfatal_source_notices() {
 }
 
 #[test]
+fn scoped_scalar_initializers_and_array_declarations_compile() {
+    let report = compile_project(
+        &analyze(
+            "@SYSTEM_TITLE(ARG:0 = 2)\nVARI VALUE = ARG:0 + 1\nVARS TEXT = \"ok\"\nVARI ITEMS, 3\nITEMS:2 = VALUE\nRETURN\n",
+        ),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+
+    assert!(report.artifact.is_some(), "{:#?}", report.diagnostics);
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == CompilerDiagnosticSeverity::Error),
+        "{:#?}",
+        report.diagnostics
+    );
+    let artifact = report.artifact.expect("scoped declarations should compile");
+    let function = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("entry function");
+    assert!(
+        function
+            .code
+            .iter()
+            .any(|instruction| instruction.opcode == Opcode::Nop as u16),
+        "the scoped array declaration should retain a source-mapped NOP"
+    );
+}
+
+#[test]
 fn gdrawsprite_preserves_the_color_matrix_array_place() {
     let artifact = compile_project(
         &analyze(
@@ -462,8 +497,57 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
     ));
     assert!(matches!(
         registry.classification("CALLSHARP"),
-        Some(ExecutionBinding::Unsupported { .. })
+        Some(ExecutionBinding::Host(binding))
+            if binding.namespace == "rustyera.extension" && binding.name == "callsharp"
     ));
+}
+
+#[test]
+fn callsharp_compiles_to_the_versioned_extension_host_abi() {
+    let report = compile_project(
+        &analyze("@SYSTEM_TITLE\nCALLSHARP LAUNCH_BROWSER(\"https://example.invalid\")\nRETURN\n"),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+
+    let artifact = report.artifact.expect("CALLSHARP should compile");
+    assert!(artifact.host_imports.iter().any(|import| {
+        import.import.namespace == "rustyera.extension"
+            && import.import.name == "callsharp"
+            && import.import.abi_version == 1
+            && import.import.parameters == [erabasic_bytecode::BytecodeType::String]
+    }));
+}
+
+#[test]
+fn ignored_shadow_function_does_not_emit_unbound_reference_storage() {
+    let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+        .data
+        .expect("default project data should load");
+    let analysis = analyze_project(
+        AnalysisInput {
+            project_data: data,
+            sources: vec![ProjectSource {
+                relative_path: "main.erb".into(),
+                payload: SourcePayload::Utf8(
+                    "@SYSTEM_TITLE\n#DIM VALUES, 2\nCALL DUP(VALUES)\nRETURN\n@DUP(VALUES)\n#DIM REF VALUES, 0\nRETURN\n@DUP(VALUES)\n#DIM REF VALUES, 0\nRETURN\n"
+                        .into(),
+                ),
+            }],
+        },
+        &AnalyzerOptions::default(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(analysis.project.is_some(), "{:#?}", analysis.diagnostics);
+
+    let report = compile_project(
+        &analysis.project.unwrap(),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.artifact.is_some(), "{:#?}", report.diagnostics);
 }
 
 #[test]

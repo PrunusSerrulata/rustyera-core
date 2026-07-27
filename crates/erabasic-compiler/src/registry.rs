@@ -146,13 +146,12 @@ pub fn default_host_registry() -> HostRegistry {
         HostCapability::Network,
         true,
     );
+    // Preserve CALLSHARP as an external extension intent without embedding the
+    // reference runtime's CLR plugin loader. The raw call expression is the
+    // single ABI argument, so frontends can provide an explicit adapter.
     registry.register_execution(
         "CALLSHARP",
-        ExecutionBinding::Unsupported {
-            reason:
-                "CLR plugins are intentionally unsupported; use the versioned Host extension ABI"
-                    .into(),
-        },
+        ExecutionBinding::Host(extension_binding("CALLSHARP")),
     );
     registry
 }
@@ -218,6 +217,7 @@ const IMPLEMENTED_NATIVE_NAMES: &[&str] = &[
     "invertbit",
     "split",
     "getnum",
+    "erdname",
     "strjoin",
     "arrayremove",
     "arrayshift",

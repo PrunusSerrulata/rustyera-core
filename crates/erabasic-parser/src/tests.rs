@@ -412,6 +412,14 @@ fn joins_braced_physical_lines_and_consumes_utf8_bom() {
 }
 
 #[test]
+fn continuation_delimiters_allow_trailing_horizontal_whitespace() {
+    let source = "@TEST\n{\t\nPRINTFORM value={LOCAL}\n}\t \nRETURN\n";
+    let output = parse_erb(source, &mut DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    assert_eq!(output.value.unwrap().functions[0].body.len(), 2);
+}
+
+#[test]
 fn standalone_carriage_return_starts_a_new_physical_line() {
     let source = "@SYSTEM_TITLE\nIF 1\nELSE\r      IF 1\nPRINTL nested\nENDIF\nENDIF\nRETURN\n";
     let output = parse_erb(source, &mut DefaultParserContext::default());

@@ -27,10 +27,11 @@ use extended_ops::{
 };
 use native_ops::{
     array_place, array_snapshot, execute_array_mutation, execute_array_query, execute_bit_mutation,
-    execute_encode_to_uni_result, execute_find_element, execute_get_var, execute_getnum,
-    execute_index_by_name, execute_integer_mutation, execute_set_var, execute_split_transaction,
-    execute_strjoin, execute_swap_transaction, execute_variable_fill, integer_argument,
-    native_implicit_place_views, native_place_views, optional_index, validate_native_ready,
+    execute_encode_to_uni_result, execute_erdname, execute_find_element, execute_get_var,
+    execute_getnum, execute_index_by_name, execute_integer_mutation, execute_set_var,
+    execute_split_transaction, execute_strjoin, execute_swap_transaction, execute_variable_fill,
+    integer_argument, native_implicit_place_views, native_place_views, optional_index,
+    validate_native_ready,
 };
 use operand::{
     assign_binary_tag, binary_value, exact, map_vm_error, pop, pop_arguments, pop_indices,
@@ -1092,6 +1093,10 @@ impl Vm {
                         } else if native_name == "getnum" {
                             NativeReady::value(
                                 execute_getnum(self, fiber, &arguments).map_err(map_vm_error)?,
+                            )
+                        } else if native_name == "erdname" {
+                            NativeReady::value(
+                                execute_erdname(self, fiber, &arguments).map_err(map_vm_error)?,
                             )
                         } else if native_name == "__indexbyname" {
                             NativeReady::value(
