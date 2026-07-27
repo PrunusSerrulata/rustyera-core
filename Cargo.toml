@@ -22,6 +22,7 @@ members = [
     "crates/erabasic-validator",
     "crates/erabasic-vm",
     "tools/project-extractor",
+    "tools/snapshot-analyzer",
 ]
 resolver = "2"
 

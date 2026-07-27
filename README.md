@@ -66,6 +66,7 @@ RustyEra 只接受 UTF-8 源码和配置内容，不负责识别或转换 Shift-
 | `reference/emuera.em/emuera-reference-cli` | 无窗口 NDJSON oracle，用于差分测试。 |
 | `reference/eraTW` | 真实游戏 eraTW 的 CSV、ERH 与 ERB 输入；不纳入版本控制。 |
 | `tools/project-extractor` | 项目解包器，从 runtime 编译缓存中按原目录层级恢复 UTF-8 源码和二进制资产。 |
+| `tools/snapshot-analyzer` | Runtime 快照分析器，校验完整快照并以文本或 JSON 展开其中的全部状态。 |
 | `tools/runtime-tester` | runtime、C ABI 与 TUI 的人工/长流程测试工具。 |
 | `tools/protocol-smoke.ps1`、`tools/test-macos-wine.sh` | Windows 与 macOS/Wine 参考 CLI 冒烟测试。 |
 
@@ -195,6 +196,22 @@ cargo run -p project-extractor -- \
 cargo build -p project-extractor
 cargo run --manifest-path tools/runtime-tester/Cargo.toml -- project-extractor-all
 ```
+
+### Runtime 快照分析器
+
+`tools/snapshot-analyzer` 读取 runtime 导出的完整快照，校验外层容器及其中嵌入的执行状态，
+并输出快照内保存的项目身份、资源、展示、交互、控制器、存档、撤销、内存和 fiber 等状态：
+
+```sh
+cargo run -p snapshot-analyzer -- /path/to/runtime-snapshot.bin
+cargo run -p snapshot-analyzer -- --json /path/to/runtime-snapshot.bin
+```
+
+默认输出按 section 和字段路径展开的文本，`--json` 输出带版本号的格式化 JSON；快照路径
+是唯一位置参数，结果写入标准输出。图片、存档扩展、Host 重新绑定数据等不透明二进制内容
+只输出字节长度和 BLAKE3 摘要。分析不需要项目目录，但也因此不能把 `SymbolKey` 还原成
+源码名称，或执行依赖原字节码 artifact 的兼容性及最终恢复语义校验。工具只接受
+`RERARTS` 完整 runtime 快照，不接受单独的 `RERAVMS` 内层容器。
 
 ### 作为 Rust 库使用
 

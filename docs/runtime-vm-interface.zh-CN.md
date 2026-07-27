@@ -459,6 +459,11 @@ pub fn VmSnapshot::decode(
     bytes: &[u8],
     maximum_bytes: usize,
 ) -> Result<VmSnapshot, VmError>
+
+pub fn inspect_snapshot(
+    bytes: &[u8],
+    maximum_bytes: usize,
+) -> Result<SnapshotInspection, VmError>
 ```
 
 `SnapshotEligibility` 为 `Eligible` 或 `Ineligible(Vec<SnapshotBlocker>)`。blocker：
@@ -478,6 +483,11 @@ pub fn VmSnapshot::decode(
 静止且 fiber 集合为空也可做 snapshot。恢复旧 v9 终止历史后会回收 Completed/Cancelled
 并把 fiber 分配提示规范化为最小空闲 ID。`decode` 校验大小、header、格式版本、压缩长度、
 checksum 和序列化数据。
+
+`inspect_snapshot` 与 `decode` 使用同一套验证逻辑，将容器元数据和全部序列化执行状态
+投影为可序列化的检查结果。不透明 Native state 与稳定 Host wait 的重新绑定 payload
+只包含字节长度和 BLAKE3，不输出原始内容。该低层接口供 runtime 的完整快照分析复用；
+它不持有原 bytecode artifact，不能解析符号名称或执行最终恢复兼容性检查。
 
 ### 8.3 两阶段恢复
 
@@ -690,7 +700,7 @@ scope 与 EraBasic 控制台语义见 [Runtime 调试接口文档](runtime-debug
 | 主 port | `VmRuntimePort` 全部 14 个方法 |
 | 状态事务 | `VmRuntimeStatePort::{read_runtime_state,prepare_runtime_state,commit_runtime_state}` |
 | 恢复 | `VmRestorePort::{prepare_restore,restore_waits,commit_restore}` |
-| snapshot | `VmSnapshot::{program_version,artifact_id,encode,decode}`、`SNAPSHOT_MAGIC`、`SNAPSHOT_FORMAT_VERSION` |
+| snapshot | `VmSnapshot::{program_version,artifact_id,encode,decode}`、`inspect_snapshot`、`SnapshotInspection`、`SNAPSHOT_MAGIC`、`SNAPSHOT_FORMAT_VERSION` |
 | 低层 Host | `VmHost::{call,rebind_snapshot}` |
 | Native | `NativeService`、`NativeServiceRegistry::{for_artifact,for_artifact_with_seed,register}`、`evaluate_pure_native` |
 | 调试 | `VmDebugInspect`、`VmDebugControl` 及其 stop/page/variable/breakpoint 类型；第 9.3 节 |

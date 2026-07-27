@@ -3193,6 +3193,20 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
     )
     .unwrap();
     assert_eq!(marked.origin, RuntimeSnapshotOrigin::Diagnosis);
+    let inspection = crate::inspect_runtime_snapshot(
+        &snapshot_bytes,
+        usize::try_from(source.options.limits.maximum_transfer_bytes).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(inspection.container.magic, "RERARTS\\0");
+    assert_eq!(inspection.payload["origin"], "Diagnosis");
+    assert_eq!(inspection.payload["system_menu_name"], "load_slots");
+    assert_eq!(
+        inspection.payload["execution_state"]["container"]["magic"],
+        "RERAVMS\\0"
+    );
+    assert_eq!(inspection.validation.runtime_container, "valid");
+    assert_eq!(inspection.validation.artifact_compatibility, "not_checked");
 
     let mut exact = prepare();
     submit(

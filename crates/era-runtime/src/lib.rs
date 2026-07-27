@@ -17,6 +17,11 @@ mod save_adapter;
 mod session;
 
 pub use compiled_cache::{CompiledProjectCacheError, decode_compiled_project_manifest};
+pub use runtime_snapshot::{
+    RUNTIME_SNAPSHOT_INSPECTION_SCHEMA_VERSION, RuntimeSnapshotContainerInspection,
+    RuntimeSnapshotInspection, RuntimeSnapshotInspectionError, RuntimeSnapshotValidation,
+    inspect_runtime_snapshot,
+};
 pub use session::{
     RuntimeDriveBudget, RuntimeDriveReport, RuntimeDriveState, RuntimeError, RuntimeOptions,
     RuntimeSession,

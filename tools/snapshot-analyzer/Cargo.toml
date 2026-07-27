@@ -1,0 +1,16 @@
+[package]
+name = "snapshot-analyzer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rustyera-snapshot-analyzer"
+path = "src/main.rs"
+
+[dependencies]
+era-runtime = { path = "../../crates/era-runtime" }
+serde_json = "1.0.112"
+
+[lints]
+workspace = true
