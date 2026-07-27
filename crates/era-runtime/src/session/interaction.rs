@@ -42,27 +42,31 @@ impl RuntimeSession {
                 }
                 ServiceResult::Error { error } => Err(format!("{}: {}", error.code, error.message)),
             };
-            let pending = self.pending_project_load.as_mut().ok_or_else(|| {
-                RuntimeError::Internal("image metadata completion has no load report".into())
-            })?;
-            pending
-                .remaining_metadata
-                .remove(&relative_path.to_ascii_lowercase());
-            if let Err(message) = result {
-                pending.report.success = false;
-                pending.report.diagnostics.push(ProtocolDiagnostic {
-                    code: "runtime.invalid_image_metadata".into(),
-                    level: RuntimeLogLevel::Error,
-                    message,
-                    source: Some(era_runtime_protocol::SourceLocation {
-                        relative_path,
-                        byte_start: 0,
-                        byte_end: 0,
-                        line: None,
-                        byte_column: None,
-                    }),
-                });
+            {
+                let pending = self.pending_project_load.as_mut().ok_or_else(|| {
+                    RuntimeError::Internal("image metadata completion has no load report".into())
+                })?;
+                pending
+                    .remaining_metadata
+                    .remove(&relative_path.to_ascii_lowercase());
+                if let Err(message) = result {
+                    pending.report.success = false;
+                    pending.report.diagnostics.push(ProtocolDiagnostic {
+                        code: "runtime.invalid_image_metadata".into(),
+                        level: RuntimeLogLevel::Error,
+                        message,
+                        source: Some(era_runtime_protocol::SourceLocation {
+                            relative_path,
+                            byte_start: 0,
+                            byte_end: 0,
+                            line: None,
+                            byte_column: None,
+                        }),
+                    });
+                }
             }
+            self.emit_project_image_metadata_requests()?;
+            let pending = self.pending_project_load.as_mut().expect("checked above");
             if pending.remaining_metadata.is_empty() {
                 let mut pending = self.pending_project_load.take().expect("checked above");
                 if let Some(mut reload) = pending.reload.take() {
