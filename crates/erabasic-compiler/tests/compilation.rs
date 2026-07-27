@@ -91,6 +91,50 @@ fn scoped_scalar_initializers_and_array_declarations_compile() {
 }
 
 #[test]
+fn continuation_replacement_keeps_compiler_source_maps_in_bounds() {
+    let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+        .data
+        .expect("default project data should load");
+    let source = "@SYSTEM_TITLE\n{\nRESULT += 1\n    + 2\n    + 3\n}\n";
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.continuation_separator = " \t".into();
+    let analysis = analyze_project(
+        AnalysisInput {
+            project_data: data,
+            sources: vec![ProjectSource {
+                relative_path: "main.erb".into(),
+                payload: SourcePayload::Utf8(source.into()),
+            }],
+        },
+        &options,
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !analysis
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        analysis.diagnostics
+    );
+    let report = compile_project(
+        &analysis.project.expect("analysis should produce a project"),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.artifact.is_some(), "{:#?}", report.diagnostics);
+    assert!(
+        !report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == CompilerDiagnosticCode::Validation
+                && diagnostic.message.contains("source-map entry is outside")
+        }),
+        "{:#?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn gdrawsprite_preserves_the_color_matrix_array_place() {
     let artifact = compile_project(
         &analyze(

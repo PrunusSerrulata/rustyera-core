@@ -5,6 +5,7 @@
 //! to complete ERH/ERB scripts.
 
 mod context;
+mod continuation;
 mod expression;
 mod formatted;
 mod line;

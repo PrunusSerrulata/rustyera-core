@@ -5,6 +5,9 @@ use erabasic_ast::{
 use erabasic_lexer::{LexEnd, LexFlags, MacroTable, Operator, Token, TokenKind, lex_with};
 
 use crate::context::ParserContext;
+use crate::continuation::{
+    ContinuationSourceMap, remap_directive_output, remap_function_output, remap_statement_output,
+};
 use crate::expression::ExpressionParser;
 use crate::line::{parse_directive, parse_line_at};
 use crate::preprocessor::{PreprocessorFrame, handle_preprocessor};
@@ -62,10 +65,12 @@ fn parse_script(
 
         let delimiter = trimmed.trim_end_matches([' ', '\t']);
         let mut continued = String::new();
+        let mut continuation_source_map = None;
         if delimiter == "{" {
             let opener = Span::new(base, base + 1);
             let mut first_offset = None;
             let mut closed = false;
+            let mut source_map = ContinuationSourceMap::default();
             while line_index < lines.len() {
                 let (part_offset, raw_part) = lines[line_index];
                 line_index += 1;
@@ -88,8 +93,20 @@ fn parse_script(
                     ));
                 }
                 first_offset.get_or_insert(part_offset);
+                let logical_start = continued.len();
                 continued.push_str(part);
+                source_map.push_source(logical_start, part.len(), part_offset);
+                let replacement_start = continued.len();
                 continued.push_str(context.continuation_separator());
+                let next_offset = lines
+                    .get(line_index)
+                    .map_or(source.len(), |(offset, _)| *offset);
+                source_map.push_replacement(
+                    replacement_start,
+                    context.continuation_separator().len(),
+                    part_offset + part.len(),
+                    next_offset,
+                );
             }
             if !closed {
                 diagnostics.push(Diagnostic::error(
@@ -100,6 +117,7 @@ fn parse_script(
             }
             offset = first_offset.unwrap_or(offset);
             line = &continued;
+            continuation_source_map = Some(source_map);
         } else if delimiter == "}" {
             diagnostics.push(Diagnostic::error(
                 DiagnosticCode::UnexpectedToken,
@@ -120,7 +138,11 @@ fn parse_script(
             if let Some(function) = current.take() {
                 functions.push(function);
             }
-            let mut header = parse_function_header(trimmed, base, context);
+            let parse_base = continuation_source_map.as_ref().map_or(base, |_| 0);
+            let mut header = parse_function_header(trimmed, parse_base, context);
+            if let Some(source_map) = &continuation_source_map {
+                remap_function_output(&mut header, source_map, leading);
+            }
             diagnostics.append(&mut header.diagnostics);
             current = header.value;
             blocks.clear();
@@ -128,7 +150,11 @@ fn parse_script(
         }
 
         if trimmed.starts_with('#') {
-            let mut directive_output = parse_directive(trimmed, base, context);
+            let parse_base = continuation_source_map.as_ref().map_or(base, |_| 0);
+            let mut directive_output = parse_directive(trimmed, parse_base, context);
+            if let Some(source_map) = &continuation_source_map {
+                remap_directive_output(&mut directive_output, source_map, leading);
+            }
             diagnostics.append(&mut directive_output.diagnostics);
             if let Some(directive) = directive_output.value {
                 if kind == SourceKind::Erh {
@@ -143,7 +169,11 @@ fn parse_script(
             continue;
         }
 
-        let mut parsed = parse_line_at(trimmed, base, context);
+        let parse_base = continuation_source_map.as_ref().map_or(base, |_| 0);
+        let mut parsed = parse_line_at(trimmed, parse_base, context);
+        if let Some(source_map) = &continuation_source_map {
+            remap_statement_output(&mut parsed, source_map, leading);
+        }
         diagnostics.append(&mut parsed.diagnostics);
         if let Some(statement) = parsed.value {
             check_structure(&statement, &mut blocks, &mut diagnostics);

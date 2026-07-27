@@ -420,6 +420,50 @@ fn continuation_delimiters_allow_trailing_horizontal_whitespace() {
 }
 
 #[test]
+fn continuation_spans_map_back_to_physical_utf8_offsets() {
+    struct TwoByteSeparatorContext(DefaultParserContext);
+
+    impl ParserContext for TwoByteSeparatorContext {
+        fn lexer_config(&self) -> &erabasic_lexer::LexerConfig {
+            self.0.lexer_config()
+        }
+
+        fn macros(&self) -> &erabasic_lexer::MacroTable {
+            self.0.macros()
+        }
+
+        fn macros_mut(&mut self) -> &mut erabasic_lexer::MacroTable {
+            self.0.macros_mut()
+        }
+
+        fn instruction(&self, name: &str) -> Option<InstructionSpec> {
+            self.0.instruction(name)
+        }
+
+        fn continuation_separator(&self) -> &'static str {
+            " \t"
+        }
+    }
+
+    let source = "@TEST\n{\nRESULT += 1\n    + 2\n    + 3\n}\n";
+    let output = parse_erb(
+        source,
+        &mut TwoByteSeparatorContext(DefaultParserContext::default()),
+    );
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let statement = &output.value.unwrap().functions[0].body[0];
+    let StatementKind::Assignment { target, value, .. } = &statement.kind else {
+        panic!("expected assignment");
+    };
+    assert_eq!(statement.span.start, source.find("RESULT").unwrap());
+    assert_eq!(statement.span.end, source.find("}\n").unwrap());
+    assert_eq!(target.span.start, source.find("RESULT").unwrap());
+    assert_eq!(value.span.start, source.find('1').unwrap());
+    assert_eq!(value.span.end, source.rfind('3').unwrap() + 1);
+    assert!(statement.span.end <= source.len());
+}
+
+#[test]
 fn standalone_carriage_return_starts_a_new_physical_line() {
     let source = "@SYSTEM_TITLE\nIF 1\nELSE\r      IF 1\nPRINTL nested\nENDIF\nENDIF\nRETURN\n";
     let output = parse_erb(source, &mut DefaultParserContext::default());
