@@ -99,24 +99,7 @@ impl IndexResolver {
     }
 
     pub(crate) fn legacy_encoded_len(&self, value: &str) -> usize {
-        if value.is_ascii() {
-            return value.len();
-        }
-        let encoding = match self.legacy_encoding {
-            LegacyEncoding::Japanese => encoding_rs::SHIFT_JIS,
-            LegacyEncoding::Korean => encoding_rs::EUC_KR,
-            LegacyEncoding::ChineseHans => encoding_rs::GBK,
-            LegacyEncoding::ChineseHant => encoding_rs::BIG5,
-        };
-        value
-            .chars()
-            .map(|character| {
-                let mut utf8 = [0; 4];
-                let encoded = character.encode_utf8(&mut utf8);
-                let (bytes, _, had_errors) = encoding.encode(encoded);
-                if had_errors { 1 } else { bytes.len() }
-            })
-            .sum()
+        self.legacy_encoding.encoded_len(value)
     }
 }
 

@@ -3672,7 +3672,7 @@ fn native_tail_matches_the_reference_oracle_fixture() {
 }
 
 #[test]
-fn unicode_u_positions_use_scalars_but_lengths_match_dotnet_utf16_units() {
+fn unicode_positions_and_lengths_follow_reference_encodings() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nRESULT:0 = STRLENSU(\"A😀\")\nRESULT:1 = STRFINDU(\"A😀B\", \"B\")\nRESULT:2 = STRLENS(\"Aé\")\nRESULTS:0 = %CHARATU(\"A😀B\", 1)%\nRETURN\n",
     );
@@ -3715,11 +3715,84 @@ fn unicode_u_positions_use_scalars_but_lengths_match_dotnet_utf16_units() {
     );
     assert_eq!(
         vm.read_variable(result, &[2], None),
-        Ok(VmValue::Integer(3))
+        Ok(VmValue::Integer(2))
     );
     assert_eq!(
         vm.read_variable(results, &[0], None),
         Ok(VmValue::String("😀".into()))
+    );
+}
+
+#[test]
+fn legacy_string_width_keeps_narrow_formcell_text_out_of_the_truncation_path() {
+    let mut data = project_data();
+    data.static_data.legacy_encoding = erabasic_data::LegacyEncoding::ChineseHans;
+    let artifact = compile_source_with_data(
+        "@SYSTEM_TITLE\n\
+         RESULT:0 = STRLENS(\"们\")\n\
+         RESULTS:0 = %FORMCELL(\"们\", 2)%\n\
+         RESULTS:1 = %SUBSTRING(\"甲乙\", 0, 3)%\n\
+         RETURN\n\
+         @FORMCELL(ARGS, ARG = -1)\n\
+         #FUNCTIONS\n\
+         #DIMS DYNAMIC LOCALSTR\n\
+         #DIM DYNAMIC WIDTH\n\
+         WIDTH = STRLENS(ARGS)\n\
+         IF ARG > 0 && WIDTH > ARG\n\
+             LOCALSTR = %SUBSTRING(ARGS, 0, ARG - 3)%\n\
+             WIDTH = STRLENS(LOCALSTR)\n\
+             LOCALSTR += \".\" * (ARG - WIDTH)\n\
+         ELSE\n\
+             LOCALSTR = %ARGS%\n\
+         ENDIF\n\
+         RETURNF LOCALSTR\n",
+        data,
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(2))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[0], None),
+        Ok(VmValue::String("们".into()))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[1], None),
+        Ok(VmValue::String("甲乙".into()))
     );
 }
 

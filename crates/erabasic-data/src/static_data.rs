@@ -310,6 +310,37 @@ pub enum LegacyEncoding {
     ChineseHant,
 }
 
+impl LegacyEncoding {
+    /// Return the byte width exposed by Emuera's selected legacy ANSI encoding.
+    #[must_use]
+    pub fn encoded_len(self, value: &str) -> usize {
+        if value.is_ascii() {
+            return value.len();
+        }
+        value
+            .chars()
+            .map(|character| self.encoded_char_len(character))
+            .sum()
+    }
+
+    /// Return the encoded width of one Unicode scalar, using Emuera's one-byte fallback.
+    #[must_use]
+    pub fn encoded_char_len(self, character: char) -> usize {
+        if character.is_ascii() {
+            return 1;
+        }
+        let encoding = match self {
+            Self::Japanese => encoding_rs::SHIFT_JIS,
+            Self::Korean => encoding_rs::EUC_KR,
+            Self::ChineseHans => encoding_rs::GBK,
+            Self::ChineseHant => encoding_rs::BIG5,
+        };
+        let mut utf8 = [0; 4];
+        let (bytes, _, had_errors) = encoding.encode(character.encode_utf8(&mut utf8));
+        if had_errors { 1 } else { bytes.len() }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProjectStaticData {
     pub legacy_encoding: LegacyEncoding,

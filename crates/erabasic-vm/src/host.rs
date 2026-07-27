@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use erabasic_bytecode::{BytecodeArtifact, RuntimeImport, SymbolKey};
+use erabasic_data::LegacyEncoding;
 use serde::{Deserialize, Serialize};
 use unicode_width::UnicodeWidthStr;
 
@@ -250,7 +251,13 @@ impl NativeServiceRegistry {
                     | "tolower"
                     | "toupper"
             ) {
-                registry.register(native.import.key, CoreNative { name: name.into() });
+                registry.register(
+                    native.import.key,
+                    CoreNative {
+                        name: name.into(),
+                        legacy_encoding: artifact.project_data.static_data.legacy_encoding,
+                    },
+                );
             }
         }
         registry
@@ -485,6 +492,7 @@ impl NativeServiceRegistry {
 
 struct CoreNative {
     name: String,
+    legacy_encoding: LegacyEncoding,
 }
 
 /// Evaluate a side-effect-free core native through the same implementation used by bytecode.
@@ -556,10 +564,13 @@ pub fn evaluate_pure_native(name: &str, arguments: Vec<VmValue>) -> Result<VmVal
         places: Vec::new(),
         implicit_places: BTreeMap::new(),
     };
-    CoreNative { name }
-        .call(request)?
-        .value
-        .ok_or_else(|| "pure core-native service returned no value".into())
+    CoreNative {
+        name,
+        legacy_encoding: LegacyEncoding::default(),
+    }
+    .call(request)?
+    .value
+    .ok_or_else(|| "pure core-native service returned no value".into())
 }
 
 impl NativeService for CoreNative {
@@ -630,9 +641,9 @@ impl NativeService for CoreNative {
                 })
             }
             "bitcount" => VmValue::Integer(i64::from(integer(0)?.count_ones())),
-            "strlen" | "strlens" => {
-                VmValue::Integer(i64::try_from(string(0)?.len()).unwrap_or(i64::MAX))
-            }
+            "strlen" | "strlens" => VmValue::Integer(
+                i64::try_from(self.legacy_encoding.encoded_len(string(0)?)).unwrap_or(i64::MAX),
+            ),
             "strlenu" | "strlensu" => {
                 // Emuera runs on .NET, so the U variants count UTF-16 code units rather than
                 // Unicode scalar values. This remains observable for supplementary characters.
@@ -735,7 +746,12 @@ impl NativeService for CoreNative {
                     None | Some(VmValue::Integer(i64::MIN)) => None,
                     Some(_) => Some(integer(2)?),
                 };
-                VmValue::String(substring_utf8_bytes(string(0)?, start, length))
+                VmValue::String(substring_legacy_bytes(
+                    string(0)?,
+                    start,
+                    length,
+                    self.legacy_encoding,
+                ))
             }
             "substringu" => {
                 let start = match args.get(1) {
@@ -1002,21 +1018,46 @@ fn parse_era_numeric(value: &str, numeric_check: bool) -> Result<Option<i64>, St
     Ok((index == bytes.len()).then_some(result))
 }
 
-fn substring_utf8_bytes(value: &str, start: i64, length: Option<i64>) -> String {
-    let start = if start <= 0 {
+fn substring_legacy_bytes(
+    value: &str,
+    start: i64,
+    length: Option<i64>,
+    encoding: LegacyEncoding,
+) -> String {
+    let total = encoding.encoded_len(value);
+    let start = usize::try_from(start.max(0)).unwrap_or(usize::MAX);
+    if start >= total || length == Some(0) {
+        return String::new();
+    }
+    let requested = length
+        .and_then(|length| usize::try_from(length).ok())
+        .filter(|length| *length <= total)
+        .unwrap_or(total);
+
+    let mut characters = value.char_indices();
+    let byte_start = if start == 0 {
         0
     } else {
-        usize::try_from(start).unwrap_or(usize::MAX)
-    };
-    let start = utf8_boundary_at_or_after(value, start.min(value.len()));
-    let requested_end = match length {
-        Some(length) if length >= 0 => {
-            start.saturating_add(usize::try_from(length).unwrap_or(usize::MAX))
+        let mut consumed: usize = 0;
+        loop {
+            let Some((index, character)) = characters.next() else {
+                return String::new();
+            };
+            consumed = consumed.saturating_add(encoding.encoded_char_len(character));
+            if consumed >= start {
+                break index + character.len_utf8();
+            }
         }
-        _ => value.len(),
     };
-    let end = utf8_boundary_at_or_after(value, requested_end.min(value.len()));
-    value[start..end].into()
+    let mut consumed: usize = 0;
+    let byte_length = value[byte_start..]
+        .char_indices()
+        .find_map(|(index, character)| {
+            consumed = consumed.saturating_add(encoding.encoded_char_len(character));
+            (consumed >= requested).then_some(index + character.len_utf8())
+        })
+        .unwrap_or(value.len() - byte_start);
+    value[byte_start..byte_start + byte_length].into()
 }
 
 fn substring_scalars(value: &str, start: i64, length: Option<i64>) -> String {
@@ -1247,13 +1288,25 @@ mod tests {
     }
 
     #[test]
-    fn non_u_substring_uses_utf8_bytes_and_advances_to_boundaries() {
-        assert_eq!(substring_utf8_bytes("A界B", 1, Some(1)), "界");
-        assert_eq!(substring_utf8_bytes("A界B", 2, Some(1)), "B");
+    fn non_u_substring_uses_legacy_bytes_and_advances_to_boundaries() {
+        assert_eq!(
+            substring_legacy_bytes("A界B", 1, Some(1), LegacyEncoding::ChineseHans),
+            "界"
+        );
+        assert_eq!(
+            substring_legacy_bytes("A界B", 2, Some(1), LegacyEncoding::ChineseHans),
+            "B"
+        );
         assert_eq!(substring_scalars("A界B", 1, Some(1)), "界");
-        assert_eq!(substring_utf8_bytes("abcdef", 2, Some(-1)), "cdef");
+        assert_eq!(
+            substring_legacy_bytes("abcdef", 2, Some(-1), LegacyEncoding::ChineseHans),
+            "cdef"
+        );
         assert_eq!(substring_scalars("abcdef", 2, Some(-1)), "cdef");
-        assert_eq!(substring_utf8_bytes("abcdef", -1, Some(2)), "ab");
+        assert_eq!(
+            substring_legacy_bytes("abcdef", -1, Some(2), LegacyEncoding::ChineseHans),
+            "ab"
+        );
         assert_eq!(substring_scalars("abcdef", -1, Some(2)), "ab");
     }
 
@@ -1383,6 +1436,7 @@ mod tests {
         };
         let mut count = CoreNative {
             name: "strcount".into(),
+            legacy_encoding: LegacyEncoding::default(),
         };
         assert_eq!(
             count
@@ -1399,6 +1453,7 @@ mod tests {
         );
         let mut escape = CoreNative {
             name: "escape".into(),
+            legacy_encoding: LegacyEncoding::default(),
         };
         assert_eq!(
             escape
