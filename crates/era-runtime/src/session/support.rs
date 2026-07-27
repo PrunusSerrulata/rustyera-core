@@ -506,6 +506,34 @@ pub(super) fn text_storage_target(
     }
 }
 
+pub(super) fn decode_load_text(bytes: &[u8]) -> Option<String> {
+    // LOADTEXT operates on project/user text assets rather than submitted EraBasic
+    // sources. Match the reference runtime's BOM-aware Unicode decoding without
+    // introducing locale-dependent legacy code pages.
+    let text = if let Some(bytes) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        std::str::from_utf8(bytes).ok().map(ToOwned::to_owned)
+    } else if let Some(bytes) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        decode_utf16_bytes(bytes, u16::from_le_bytes)
+    } else if let Some(bytes) = bytes.strip_prefix(&[0xfe, 0xff]) {
+        decode_utf16_bytes(bytes, u16::from_be_bytes)
+    } else {
+        std::str::from_utf8(bytes).ok().map(ToOwned::to_owned)
+    }?;
+    Some(text.replace('\r', ""))
+}
+
+fn decode_utf16_bytes(bytes: &[u8], decode: fn([u8; 2]) -> u16) -> Option<String> {
+    let mut chunks = bytes.chunks_exact(2);
+    let units = chunks
+        .by_ref()
+        .map(|chunk| decode([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    chunks
+        .remainder()
+        .is_empty()
+        .then(|| String::from_utf16(&units).ok())?
+}
+
 pub(super) fn read_runtime_integer(
     vm: &RuntimeVm,
     name: &str,

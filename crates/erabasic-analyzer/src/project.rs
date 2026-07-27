@@ -1040,7 +1040,8 @@ fn analyze_instruction(
                                 | crate::ArgumentConstraint::ReferenceAny
                                 | crate::ArgumentConstraint::ReferenceOrString
                                 | crate::ArgumentConstraint::MutableReferenceOrString
-                        )
+                        ) || *constraint == crate::ArgumentConstraint::IntegerOrMutableString
+                            && expression.value_type == SemanticType::String
                     });
                     if mutable {
                         if let HirExprKind::Variable { place } = expression.kind {

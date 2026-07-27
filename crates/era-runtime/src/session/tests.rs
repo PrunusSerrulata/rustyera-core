@@ -738,6 +738,108 @@ fn portable_graphics_and_textbox_compatibility_paths_are_runtime_owned() {
 }
 
 #[test]
+fn invalid_host_file_paths_return_reference_failure_values() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "invalid-host-file-path-test".into(),
+            features: vec![RuntimeFeature::Storage],
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "invalid-path.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nRESULT:10 = SAVETEXT(\"x\", \"\")\nRESULTS:10 = %LOADTEXT(\"\")%\nRESULT:11 = EXISTFILE(\"\")\nRESULT:12 = ENUMFILES(\"../outside\")\nWAIT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let load_messages = drain(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::Ready, "{load_messages:#?}");
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let mut messages = Vec::new();
+    for _ in 0..16 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        messages.extend(drain(&mut session));
+        if session.phase() == RuntimePhase::WaitingInput {
+            break;
+        }
+    }
+
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::StorageRequest(_)))
+    );
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "RESULT", &[10], None).unwrap(), 0);
+    assert_eq!(read_runtime_integer(vm, "RESULT", &[11], None).unwrap(), 0);
+    assert_eq!(read_runtime_integer(vm, "RESULT", &[12], None).unwrap(), -1);
+    let results = runtime_variable_key(vm, "RESULTS").unwrap();
+    assert_eq!(
+        vm.vm().read_variable(results, &[10], None),
+        Ok(VmValue::String(String::new()))
+    );
+}
+
+#[test]
+fn loadtext_decodes_bom_marked_unicode_assets_and_removes_carriage_returns() {
+    let source = "<data>温柔</data>\r\n";
+    let mut little_endian = vec![0xff, 0xfe];
+    little_endian.extend(
+        source
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    let mut big_endian = vec![0xfe, 0xff];
+    big_endian.extend(
+        source
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>(),
+    );
+
+    assert_eq!(
+        decode_load_text(&little_endian),
+        Some("<data>温柔</data>\n".into())
+    );
+    assert_eq!(
+        decode_load_text(&big_endian),
+        Some("<data>温柔</data>\n".into())
+    );
+    assert_eq!(
+        decode_load_text(b"\xef\xbb\xbf<data>ok</data>\r\n"),
+        Some("<data>ok</data>\n".into())
+    );
+    assert_eq!(decode_load_text(&[0xff, 0xfe, 0x3c]), None);
+}
+
+#[test]
 fn html_pop_matches_the_reference_fixture_and_writes_the_string_result() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(

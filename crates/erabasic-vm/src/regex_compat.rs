@@ -39,6 +39,146 @@ pub(crate) fn compile(pattern: &str) -> Result<Regex, String> {
     Regex::new(&translated).map_err(|error| format!("unsupported or invalid regex: {error}"))
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PositiveBoundaryCaptures {
+    pub(crate) captures_len: usize,
+    pub(crate) matches: Vec<Vec<String>>,
+}
+
+/// Match the portable leading-positive-lookbehind/trailing-positive-lookahead shape.
+///
+/// Rust's linear regex engine deliberately omits lookaround. Era games commonly use
+/// `(?<=prefix)body(?=suffix)` only to exclude fixed delimiters from `REGEXPMATCH`
+/// output. Splitting those boundaries keeps matching linear and, unlike consuming a
+/// translated wrapper, lets one match's suffix serve as the next match's prefix.
+pub(crate) fn capture_positive_boundaries(
+    pattern: &str,
+    input: &str,
+) -> Result<Option<PositiveBoundaryCaptures>, String> {
+    let Some((prefix, body, suffix)) = split_positive_boundaries(pattern) else {
+        return Ok(None);
+    };
+    if contains_capturing_group(prefix) || contains_capturing_group(suffix) {
+        return Err(
+            "captures inside REGEXPMATCH positive boundaries are not supported by the portable subset"
+                .into(),
+        );
+    }
+    let prefix = compile(prefix)?;
+    let tail = compile(&format!("^({body})(?:{suffix})"))?;
+    let captures_len = tail.captures_len().saturating_sub(1);
+    let mut matches = Vec::new();
+    let mut search = 0;
+    while search <= input.len() {
+        let Some(boundary) = prefix.find_at(input, search) else {
+            break;
+        };
+        let body_start = boundary.end();
+        if let Some(captures) = tail.captures(&input[body_start..]) {
+            let body_match = captures.get(1).expect("the body wrapper always captures");
+            matches.push(
+                (1..tail.captures_len())
+                    .map(|index| {
+                        captures
+                            .get(index)
+                            .map_or_else(String::new, |value| value.as_str().to_owned())
+                    })
+                    .collect(),
+            );
+            let next = body_start.saturating_add(body_match.end());
+            if next > search {
+                search = next;
+            } else if let Some(next) = next_char_boundary(input, search) {
+                search = next;
+            } else {
+                break;
+            }
+        } else if let Some(next) = next_char_boundary(input, boundary.start()) {
+            search = next;
+        } else {
+            break;
+        }
+    }
+    Ok(Some(PositiveBoundaryCaptures {
+        captures_len,
+        matches,
+    }))
+}
+
+fn split_positive_boundaries(pattern: &str) -> Option<(&str, &str, &str)> {
+    pattern.strip_prefix("(?<=")?;
+    let lookbehind_end = group_end(pattern, 0)?;
+    let remainder = &pattern[lookbehind_end + 1..];
+    let relative_lookahead = remainder.rfind("(?=")?;
+    let lookahead = lookbehind_end + 1 + relative_lookahead;
+    if is_escaped(pattern, lookahead) || group_end(pattern, lookahead)? + 1 != pattern.len() {
+        return None;
+    }
+    Some((
+        &pattern[4..lookbehind_end],
+        &pattern[lookbehind_end + 1..lookahead],
+        &pattern[lookahead + 3..pattern.len() - 1],
+    ))
+}
+
+fn group_end(pattern: &str, start: usize) -> Option<usize> {
+    let bytes = pattern.as_bytes();
+    (bytes.get(start) == Some(&b'(')).then_some(())?;
+    let mut depth = 1usize;
+    let mut index = start + 1;
+    let mut in_class = false;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index = index.saturating_add(2),
+            b'[' => {
+                in_class = true;
+                index += 1;
+            }
+            b']' => {
+                in_class = false;
+                index += 1;
+            }
+            b'(' if !in_class => {
+                depth += 1;
+                index += 1;
+            }
+            b')' if !in_class => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+fn contains_capturing_group(pattern: &str) -> bool {
+    pattern
+        .match_indices('(')
+        .any(|(index, _)| !is_escaped(pattern, index) && !pattern[index..].starts_with("(?:"))
+}
+
+fn is_escaped(pattern: &str, index: usize) -> bool {
+    pattern.as_bytes()[..index]
+        .iter()
+        .rev()
+        .take_while(|value| **value == b'\\')
+        .count()
+        % 2
+        == 1
+}
+
+fn next_char_boundary(input: &str, index: usize) -> Option<usize> {
+    input
+        .get(index..)?
+        .chars()
+        .next()
+        .map(|character| index + character.len_utf8())
+}
+
 /// Match the portable subset `(<one character atom>)\1{N}`.
 ///
 /// Rust's linear-time regex engine deliberately omits backreferences. Era games
@@ -237,6 +377,19 @@ mod tests {
     fn rejects_backtracking_only_constructs() {
         assert!(compile(r"(a)\1").is_err());
         assert!(compile(r"a(?=b)").is_err());
+    }
+
+    #[test]
+    fn captures_adjacent_values_between_positive_boundaries() {
+        let captures =
+            capture_positive_boundaries(r"(?<=\[\$TOKEN:).*?(?=\])", "[$TOKEN:A][$TOKEN:B]")
+                .unwrap()
+                .unwrap();
+        assert_eq!(captures.captures_len, 1);
+        assert_eq!(
+            captures.matches,
+            vec![vec!["A".to_owned()], vec!["B".to_owned()]]
+        );
     }
 
     #[test]

@@ -1303,12 +1303,14 @@ impl RuntimeSession {
         }
         if name == "SAVETEXT" {
             let text = string_argument_value(&request.arguments, 0, "SAVETEXT")?;
-            let (namespace, path) = text_storage_target(
+            let Ok((namespace, path)) = text_storage_target(
                 request
                     .arguments
                     .get(1)
                     .ok_or_else(|| RuntimeError::Internal("SAVETEXT target is missing".into()))?,
-            )?;
+            ) else {
+                return commit_integer_result(vm, request.id, 0);
+            };
             return self.issue_host_storage(
                 vm,
                 request,
@@ -1325,12 +1327,21 @@ impl RuntimeSession {
             );
         }
         if name == "LOADTEXT" {
-            let (namespace, path) = text_storage_target(
+            let Ok((namespace, path)) = text_storage_target(
                 request
                     .arguments
                     .first()
                     .ok_or_else(|| RuntimeError::Internal("LOADTEXT target is missing".into()))?,
-            )?;
+            ) else {
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady {
+                        value: Some(VmValue::String(String::new())),
+                        writes: Vec::new(),
+                    }),
+                );
+            };
             return self.issue_host_storage(
                 vm,
                 request,
@@ -1343,8 +1354,11 @@ impl RuntimeSession {
             );
         }
         if name == "EXISTFILE" {
-            let path =
-                safe_relative_path(string_argument_value(&request.arguments, 0, "EXISTFILE")?)?;
+            let Ok(path) =
+                safe_relative_path(string_argument_value(&request.arguments, 0, "EXISTFILE")?)
+            else {
+                return commit_integer_result(vm, request.id, 0);
+            };
             return self.issue_host_storage(
                 vm,
                 request,
@@ -1357,11 +1371,11 @@ impl RuntimeSession {
             );
         }
         if name == "ENUMFILES" {
-            let directory = safe_relative_directory(string_argument_value(
-                &request.arguments,
-                0,
-                "ENUMFILES",
-            )?)?;
+            let Ok(directory) =
+                safe_relative_directory(string_argument_value(&request.arguments, 0, "ENUMFILES")?)
+            else {
+                return commit_integer_result(vm, request.id, -1);
+            };
             let pattern = request.arguments.get(1).and_then(|value| match value {
                 VmValue::String(value) => Some(value.clone()),
                 _ => None,

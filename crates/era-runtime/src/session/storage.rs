@@ -460,9 +460,7 @@ impl RuntimeSession {
                 self.resume_storage_host_value(request, VmValue::Integer(0), Vec::new())
             }
             (PendingStorage::HostReadText { request }, StorageResult::Read { data, .. }) => {
-                let text = std::str::from_utf8(data.as_slice())
-                    .map(|value| value.trim_start_matches('\u{feff}').replace('\r', ""))
-                    .unwrap_or_default();
+                let text = decode_load_text(data.as_slice()).unwrap_or_default();
                 self.resume_storage_host_value(request, VmValue::String(text), Vec::new())
             }
             (PendingStorage::HostReadText { request }, StorageResult::Error { .. }) => {

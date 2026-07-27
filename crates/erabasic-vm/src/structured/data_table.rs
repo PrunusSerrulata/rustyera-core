@@ -478,6 +478,10 @@ pub(super) fn data_table_pairs(
 
 pub(super) fn cell_for_column(column: &Column, value: &VmValue) -> Result<Cell, String> {
     match (column.value_type, value) {
+        // Native-call lowering reserves i64::MIN for an omitted EraBasic operand.
+        // The reference DataTable APIs store such values as DBNull regardless of
+        // the destination column's value type.
+        (_, VmValue::Integer(i64::MIN)) => Ok(Cell::Null),
         (DataType::String, VmValue::String(value)) => Ok(Cell::String(value.clone())),
         (DataType::String, _) => Err("string DataTable column requires a string".into()),
         (_, VmValue::Integer(value)) => {

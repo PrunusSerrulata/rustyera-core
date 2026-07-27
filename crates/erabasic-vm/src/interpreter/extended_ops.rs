@@ -26,23 +26,7 @@ pub(super) fn execute_regex_match(
             "REGEXPMATCH pattern must be a string".into(),
         ));
     };
-    let regex = vm
-        .compile_regex(pattern)
-        .map_err(VmError::InvalidArguments)?;
-    let captures = regex
-        .captures_iter(input)
-        .map(|captures| {
-            (0..regex.captures_len())
-                .map(|index| {
-                    VmValue::String(
-                        captures
-                            .get(index)
-                            .map_or_else(String::new, |value| value.as_str().to_owned()),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let (captures_len, captures) = regex_captures(vm, pattern, input)?;
     let count = i64::try_from(captures.len()).unwrap_or(i64::MAX);
     match arguments.len() {
         2 => {}
@@ -57,7 +41,7 @@ pub(super) fn execute_regex_match(
                 let results = global_unindexed_place(vm, fiber, "RESULTS")?;
                 let mut writes = vec![(
                     indexed_place(&result, 1),
-                    VmValue::Integer(i64::try_from(regex.captures_len()).unwrap_or(i64::MAX)),
+                    VmValue::Integer(i64::try_from(captures_len).unwrap_or(i64::MAX)),
                 )];
                 if count > 0 {
                     writes.extend(
@@ -90,7 +74,7 @@ pub(super) fn execute_regex_match(
             };
             let mut writes = vec![(
                 group_count,
-                VmValue::Integer(i64::try_from(regex.captures_len()).unwrap_or(i64::MAX)),
+                VmValue::Integer(i64::try_from(captures_len).unwrap_or(i64::MAX)),
             )];
             if count > 0 {
                 writes.extend(
@@ -110,6 +94,43 @@ pub(super) fn execute_regex_match(
         }
     }
     Ok(VmValue::Integer(count))
+}
+
+fn regex_captures(
+    vm: &mut Vm,
+    pattern: &str,
+    input: &str,
+) -> Result<(usize, Vec<Vec<VmValue>>), VmError> {
+    if let Some(captures) = crate::regex_compat::capture_positive_boundaries(pattern, input)
+        .map_err(VmError::InvalidArguments)?
+    {
+        return Ok((
+            captures.captures_len,
+            captures
+                .matches
+                .into_iter()
+                .map(|values| values.into_iter().map(VmValue::String).collect())
+                .collect(),
+        ));
+    }
+    let regex = vm
+        .compile_regex(pattern)
+        .map_err(VmError::InvalidArguments)?;
+    let captures = regex
+        .captures_iter(input)
+        .map(|captures| {
+            (0..regex.captures_len())
+                .map(|index| {
+                    VmValue::String(
+                        captures
+                            .get(index)
+                            .map_or_else(String::new, |value| value.as_str().to_owned()),
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    Ok((regex.captures_len(), captures))
 }
 
 pub(super) fn global_unindexed_place(
@@ -433,7 +454,8 @@ pub(super) fn array_copy_place(
     role: &str,
     destination: bool,
 ) -> Result<(PlaceDescriptor, BytecodeType, Vec<u64>), VmError> {
-    let generation = fiber.frames.last().expect("frame exists").generation;
+    let frame = fiber.frames.last().expect("frame exists");
+    let generation = frame.generation;
     let program = vm
         .generations
         .get(&generation)
@@ -442,14 +464,29 @@ pub(super) fn array_copy_place(
         Some(VmValue::IntegerPlace(place)) => (place.as_ref().clone(), BytecodeType::Integer),
         Some(VmValue::StringPlace(place)) => (place.as_ref().clone(), BytecodeType::String),
         Some(VmValue::String(name)) => {
-            let definition = program.global_by_name(name).ok_or_else(|| {
-                VmError::InvalidArguments(format!(
-                    "ARRAYCOPY {role} variable {name:?} does not exist"
-                ))
-            })?;
+            // Era variable-name strings are resolved in the active function scope. A
+            // project can contain many same-named dynamic locals, so the generation-wide
+            // name index can otherwise select a caller's or unrelated function's array.
+            let definition = program
+                .function_locals(frame.function)
+                .chain(program.function_statics(frame.function))
+                .find(|definition| definition.name.eq_ignore_ascii_case(name))
+                .or_else(|| {
+                    program.artifact.globals.iter().find(|definition| {
+                        definition.owner.is_none() && definition.name.eq_ignore_ascii_case(name)
+                    })
+                })
+                .ok_or_else(|| {
+                    VmError::InvalidArguments(format!(
+                        "ARRAYCOPY {role} variable {name:?} does not exist"
+                    ))
+                })?;
             (
                 PlaceDescriptor {
                     variable: definition.key,
+                    fiber: Some(fiber.id),
+                    frame: (definition.storage == BytecodeStorage::FunctionLocal)
+                        .then_some(frame.id),
                     ..PlaceDescriptor::default()
                 },
                 definition.value_type,

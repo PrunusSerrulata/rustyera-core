@@ -140,7 +140,6 @@ impl XmlDocument {
                 "native.xpath.unsupported: namespace and union expressions are unsupported".into(),
             );
         }
-        let absolute = path.starts_with('/') && !path.starts_with("//");
         let marked = path.replace("//", "/__DESCENDANT__/");
         let mut descendant = path.starts_with("//");
         let mut steps = Vec::new();
@@ -160,41 +159,34 @@ impl XmlDocument {
             return Ok(Vec::new());
         }
 
-        let mut current = vec![Vec::<usize>::new()];
-        let mut offset = 0;
-        if absolute
-            && matches!(&steps[0].1.test, XPathTest::Element(name) if name == "*" || name == &self.root.name)
-            && !steps[0].0
-        {
-            if !predicate_matches(&self.root, steps[0].1.predicate.as_ref()) {
-                return Ok(Vec::new());
-            }
-            offset = 1;
-        }
-        for (descendant, step) in &steps[offset..] {
+        // XmlDocument evaluates the first location step against its logical
+        // document node. This model stores only the document element, so the
+        // first step is handled specially to keep root-element selection exact.
+        let mut current = Vec::<Vec<usize>>::new();
+        for (step_index, (descendant, step)) in steps.iter().enumerate() {
             if let XPathTest::Attribute(name) = &step.test {
-                if *descendant || step.predicate.is_some() {
-                    return Err(
-                        "native.xpath.unsupported: attribute axes cannot have predicates".into(),
-                    );
-                }
-                let mut output = Vec::new();
-                for path in current {
-                    let element = self.element(&path)?;
-                    for (index, (candidate, _)) in element.attributes.iter().enumerate() {
-                        if name == "*" || candidate == name {
-                            output.push(XmlSelection {
-                                element_path: path.clone(),
-                                attribute: Some(index),
-                            });
-                        }
-                    }
-                }
-                return Ok(output);
+                return self.select_attributes(
+                    &current,
+                    step_index,
+                    *descendant,
+                    name,
+                    step.predicate.as_ref(),
+                );
             }
             let XPathTest::Element(name) = &step.test else {
                 unreachable!()
             };
+            if step_index == 0 {
+                if *descendant {
+                    self.descendant_or_self_paths(&[], name, &mut current)?;
+                    apply_xpath_predicate(self, &mut current, step.predicate.as_ref());
+                } else if (name == "*" || self.root.name == *name)
+                    && predicate_matches(&self.root, step.predicate.as_ref())
+                {
+                    current.push(Vec::new());
+                }
+                continue;
+            }
             let mut next = Vec::new();
             for path in current {
                 let mut candidates = Vec::new();
@@ -222,6 +214,50 @@ impl XmlDocument {
             .map(|element_path| XmlSelection {
                 element_path,
                 attribute: None,
+            })
+            .collect())
+    }
+
+    fn select_attributes(
+        &self,
+        current: &[Vec<usize>],
+        step_index: usize,
+        descendant: bool,
+        name: &str,
+        predicate: Option<&XPathPredicate>,
+    ) -> Result<Vec<XmlSelection>, String> {
+        if predicate.is_some() {
+            return Err("native.xpath.unsupported: attribute steps cannot have predicates".into());
+        }
+        let mut output = std::collections::BTreeSet::new();
+        if step_index > 0 || descendant {
+            let roots = if step_index == 0 {
+                vec![Vec::new()]
+            } else {
+                current.to_vec()
+            };
+            for path in roots {
+                let mut elements = Vec::new();
+                if descendant {
+                    self.descendant_or_self_paths(&path, "*", &mut elements)?;
+                } else {
+                    elements.push(path);
+                }
+                for element_path in elements {
+                    let element = self.element(&element_path)?;
+                    for (index, (candidate, _)) in element.attributes.iter().enumerate() {
+                        if name == "*" || candidate == name {
+                            output.insert((element_path.clone(), index));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(output
+            .into_iter()
+            .map(|(element_path, attribute)| XmlSelection {
+                element_path,
+                attribute: Some(attribute),
             })
             .collect())
     }
@@ -278,14 +314,31 @@ impl XmlDocument {
         output: &mut Vec<Vec<usize>>,
     ) -> Result<(), String> {
         let element = self.element(start)?;
-        if (name == "*" || element.name == name) && !start.is_empty() {
+        for (index, child) in element.children.iter().enumerate() {
+            if matches!(child, XmlChild::Element(_)) {
+                let mut path = start.to_vec();
+                path.push(index);
+                self.descendant_or_self_paths(&path, name, output)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn descendant_or_self_paths(
+        &self,
+        start: &[usize],
+        name: &str,
+        output: &mut Vec<Vec<usize>>,
+    ) -> Result<(), String> {
+        let element = self.element(start)?;
+        if name == "*" || element.name == name {
             output.push(start.to_vec());
         }
         for (index, child) in element.children.iter().enumerate() {
             if matches!(child, XmlChild::Element(_)) {
                 let mut path = start.to_vec();
                 path.push(index);
-                self.descendant_paths(&path, name, output)?;
+                self.descendant_or_self_paths(&path, name, output)?;
             }
         }
         Ok(())
