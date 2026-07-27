@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{self, Write as _};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::Ordering;
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread::JoinHandle;
 
 use era_debug_protocol::{DebugMessage, DebugResponse, DebugScope, GrantToken, ScriptOutputChunk};
@@ -230,10 +233,15 @@ struct OutboundStateTransfer {
 }
 
 struct CompiledCacheTask {
+    #[cfg(not(target_arch = "wasm32"))]
     cancelled: Arc<AtomicBool>,
+    #[cfg(not(target_arch = "wasm32"))]
     handle: Option<JoinHandle<Result<Vec<u8>, String>>>,
+    #[cfg(target_arch = "wasm32")]
+    result: Option<Result<Vec<u8>, String>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for CompiledCacheTask {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Relaxed);

@@ -9,6 +9,13 @@ Cargo.lock
 
 /frontends/era-tui/build
 /frontends/era-tui/dist
+/frontends/era-web/node_modules
+/frontends/era-web/dist
+/frontends/era-web/public/wasm
+/frontends/era-web/playwright-report
+/frontends/era-web/test-results
+/frontends/era-web/src-tauri/gen
+/frontends/era-web/*.tsbuildinfo
 
 /reference
 !/reference/emuera.em

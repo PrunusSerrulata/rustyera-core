@@ -36,6 +36,11 @@ renderer。当脚本显式请求依赖字体、viewport 或 raster 的结果时�
 排版、启动耗时或渲染吞吐不能代表 runtime 的规范化语义质量，也不能作为其他前端的
 性能基线。
 
+reference CLI 的 `load` 响应会把 `Now Loading...`、CSV 协调警告和依赖机器时钟的
+`Elapsed time` 行混入 console output。RustyEra 有意不把这些宿主加载进度写入可恢复的
+规范化展示历史；诊断通过日志/诊断事件投影，计时留在客户端遥测。固定 fixture 的差分
+因此分别核对终止原因与进入 `SYSTEM_TITLE` 后的脚本输出，并保留原始加载输出差异记录。
+
 FORM/PRINTFORM 的字符串字段宽度按 Unicode 终端显示列计算。固定参考实现会按
 `useLanguage` 选择的 ANSI code page 字节数填充；这会让不可编码字符与同为全角的
 可编码字符落在不同列。RustyEra 在这里采用跨客户端一致的显示列语义；`STRLENS` 等

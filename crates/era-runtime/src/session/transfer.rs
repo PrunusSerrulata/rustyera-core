@@ -306,45 +306,82 @@ impl RuntimeSession {
         let incremental = self.incremental.clone();
         let diagnostics = self.compiled_cache_diagnostics.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
-        let worker_cancelled = Arc::clone(&cancelled);
-        let handle = std::thread::Builder::new()
-            .name("rustyera-compiled-cache".into())
-            .spawn(move || {
-                crate::compiled_cache::encode_cancellable(
-                    &snapshot.manifest,
-                    &extensions,
-                    &artifact,
-                    &incremental,
-                    &snapshot,
-                    &diagnostics,
-                    &worker_cancelled,
-                )
-            })
-            .map_err(|error| format!("cannot start compiled cache worker: {error}"))?;
-        self.compiled_cache_task = Some(CompiledCacheTask {
-            cancelled,
-            handle: Some(handle),
-        });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let worker_cancelled = Arc::clone(&cancelled);
+            let handle = std::thread::Builder::new()
+                .name("rustyera-compiled-cache".into())
+                .spawn(move || {
+                    crate::compiled_cache::encode_cancellable(
+                        &snapshot.manifest,
+                        &extensions,
+                        &artifact,
+                        &incremental,
+                        &snapshot,
+                        &diagnostics,
+                        &worker_cancelled,
+                    )
+                })
+                .map_err(|error| format!("cannot start compiled cache worker: {error}"))?;
+            self.compiled_cache_task = Some(CompiledCacheTask {
+                cancelled,
+                handle: Some(handle),
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Browser sessions already run inside a dedicated Web Worker. Building here
+            // keeps the runtime free of unavailable native thread APIs while isolating the
+            // expensive compression step from Vue's rendering thread.
+            let result = crate::compiled_cache::encode_cancellable(
+                &snapshot.manifest,
+                &extensions,
+                &artifact,
+                &incremental,
+                &snapshot,
+                &diagnostics,
+                &cancelled,
+            );
+            self.compiled_cache_task = Some(CompiledCacheTask {
+                result: Some(result),
+            });
+        }
         Ok(())
     }
 
     pub(super) fn poll_compiled_cache_task(&mut self) -> Result<(), RuntimeError> {
-        let Some(task) = self.compiled_cache_task.as_ref() else {
-            return Ok(());
+        #[cfg(target_arch = "wasm32")]
+        let result = {
+            let Some(mut task) = self.compiled_cache_task.take() else {
+                return Ok(());
+            };
+            task.result
+                .take()
+                .expect("WebAssembly compiled cache task retains its result")
         };
-        if !task.handle.as_ref().is_some_and(JoinHandle::is_finished) {
-            return Ok(());
-        }
-        let mut task = self
-            .compiled_cache_task
-            .take()
-            .expect("finished compiled cache task exists");
-        let handle = task
-            .handle
-            .take()
-            .expect("finished compiled cache task has a join handle");
-        match handle.join() {
-            Ok(Ok(bytes)) => {
+        #[cfg(not(target_arch = "wasm32"))]
+        let result = {
+            let Some(task) = self.compiled_cache_task.as_ref() else {
+                return Ok(());
+            };
+            if !task.handle.as_ref().is_some_and(JoinHandle::is_finished) {
+                return Ok(());
+            }
+            let mut task = self
+                .compiled_cache_task
+                .take()
+                .expect("finished compiled cache task exists");
+            let handle = task
+                .handle
+                .take()
+                .expect("finished compiled cache task has a join handle");
+            match handle.join() {
+                Ok(result) => result,
+                Err(_) => Err("compiled cache worker panicked".to_owned()),
+            }
+        };
+        match result {
+            Ok(bytes) => {
                 self.compiled_cache_failure = None;
                 self.compiled_project_cache = Some(bytes.into());
                 self.emit(
@@ -357,20 +394,7 @@ impl RuntimeSession {
                     None,
                 )
             }
-            Ok(Err(error)) => {
-                self.compiled_cache_failure = Some(error.clone());
-                self.emit(
-                    RuntimeMessage::Diagnostic(ProtocolDiagnostic {
-                        code: "runtime.compiled_cache_failed".into(),
-                        level: RuntimeLogLevel::Warning,
-                        message: error,
-                        source: None,
-                    }),
-                    None,
-                )
-            }
-            Err(_) => {
-                let error = "compiled cache worker panicked".to_owned();
+            Err(error) => {
                 self.compiled_cache_failure = Some(error.clone());
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
