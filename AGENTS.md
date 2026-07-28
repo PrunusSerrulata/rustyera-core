@@ -125,95 +125,20 @@ WinForms/GDI 的实现细节引入 runtime。
 - 避免无关重构、批量格式化和跨 crate 的非必要 API 变化。
 - 保持确定性：测试用 JSON、诊断顺序、集合遍历和 AST 输出不得依赖随机哈希顺序。
 
-若本任务修改了 Rust 实现，主 agent 必须先完成代码格式化。随后由下文指定的测试
-子 agent 依次确认格式、处理编译器错误和 Clippy warning；只有这些步骤全部通过后，
-才能运行全量 Rust 测试：
-
-```sh
-cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
-
-若本任务只修改 C# reference CLI 实现而未修改 Rust 实现，也应在参考实现冒烟测试
-之前确认现有 Rust workspace 能通过上述检查；全量测试仍必须放在格式、编译器
-和 Clippy 检查之后。
-
 ## 测试要求
 
-每一个开发任务都必须包含与改动对应的测试用例。任务不能仅以“可以编译”作为
-完成标准。
+每个开发任务都必须包含与改动对应的最小测试，不能仅以“可以编译”作为完成标准。
+修复 bug 时先添加稳定复现问题的回归用例；测试数据应尽可能小，并明确体现所验证
+的 Emuera 行为。
 
 - lexer 修改应覆盖 token 类型、内容、终止位置、UTF-8 span 和错误路径。
 - parser 修改应覆盖 AST 形状、优先级、恢复行为和诊断。
 - analyzer、compiler、VM 或 runtime 修改应覆盖状态变化、输出、输入等待、限制条件
   及错误终止；不得用 C# oracle 测试冒充 Rust 实现测试。
-- 修复 bug 时先添加能够稳定复现问题的回归用例。
-- 测试数据应尽可能小，并明确体现所验证的 Emuera 行为。
 
-所有测试任务必须交由运行 **gpt-5.6-terra low** 模型的测试子 agent 执行。该测试
-子 agent 只能运行测试并向主 agent 返回命令、退出码和测试结果，不得修改、格式化或
-提交仓库中的任何代码、测试夹具、文档或配置。测试命令自身可以在临时目录或已忽略
-目录生成测试所需的产物。测试失败时，测试子 agent 只负责报告可复现信息，修复必须
-由主 agent 完成。
-
-主 agent 负责为改动编写最小单元/集成测试并决定需要执行的测试范围，但不得代替
-测试子 agent 运行测试。若测试开始后又修改了与当前测试项目有关的实现、测试或构建
-输入，必须立即通知测试子 agent，并要求其重新构建所需产物、使用新代码产物重跑受
-影响的测试；旧产物或旧结果不得作为最终验证依据。
-
-仅当本任务修改了 Rust 实现或 C# reference CLI 实现时，才运行 Rust workspace
-检查、全量测试、对应平台的 reference CLI 冒烟测试，以及使用相同输入的 Rust/C#
-差分测试。顺序必须为：
-
-1. 主 agent 完成代码格式化并编写最小回归测试；
-2. 测试子 agent 运行 `cargo fmt --all -- --check`；
-3. 测试子 agent 运行 `cargo check --workspace --all-targets`，确认所有编译器错误已处理；
-4. 测试子 agent 运行 `cargo clippy --workspace --all-targets -- -D warnings`，确认所有
-   Clippy error/warning 已处理；
-5. 运行最小 Rust 回归测试；
-6. 只有前述步骤全部通过后，运行 `cargo test --workspace`；
-7. 运行当前平台参考脚本确认 oracle 可用；
-8. 最后比较相同输入的 Rust 与 C# 输出。
-
-平台冒烟测试不能代替真正的差分比较。若 Rust 实现和 C# reference CLI 实现均未
-修改，不得仅为例行验证运行 Rust 全量测试或 C# reference CLI 差分测试；文档、其他
-语言、前端或工具改动仍应由上述测试子 agent 运行与其直接相关的检查。
-
-### Windows
-
-在 Windows 上运行：
-
-```powershell
-tools/protocol-smoke.ps1
-```
-
-### macOS
-
-在 macOS 上运行：
-
-```sh
-tools/test-macos-wine.sh
-```
-
-macOS 脚本使用项目内固定的 `.wine-prefix/emuera-reference-cli`，并将临时请求、
-日志和 NDJSON 输出写入 `.wine-tmp/emuera-reference-cli`。这些本地工具和产物已被
-`.gitignore` 忽略。
-
-平台脚本成功只表示参考 oracle 能正常工作；还必须把参考 NDJSON 与本次修改对应
-的 Rust 结果进行比较。新增语法或执行路径时，应同时扩充相关 fixture、请求集合
-和 Rust 测试，使双方接收相同输入。比较时可以忽略请求 ID、绝对路径等明确的环境
-元数据，但 token、AST/语义结构、诊断、输出、变量值和终止原因必须一致。任何有意
-差异都需要在测试和交付说明中明确记录。
-
-如果平台脚本超时、无输出、进程提前退出或返回协议错误，应将其视为
-`emuera-reference-cli` 缺陷并优先修复。修复后必须重新运行导致故障的请求以及完整
-平台冒烟测试；若触碰参考目录，还要验证普通 Emuera 项目仍可编译，并在
-`REFERENCE_CHANGES.md` 记录隔离方式和正常游戏链路为何不受影响。
-
-如果当前机器无法运行目标平台脚本，不得把它描述为已验证；应说明阻塞原因，并给
-出需要在对应平台执行的准确命令。
+所有验证必须使用仓库 skill `$test-rustyera-core`（位于
+`.agents/skills/test-rustyera-core/`）。该 skill 规定测试子 agent、命令顺序、按改动
+范围选择测试、reference oracle 与差分测试，以及结果报告要求；不得绕过或改序。
 
 ## 工作区与 Git 安全
 
@@ -226,13 +151,7 @@ macOS 脚本使用项目内固定的 `.wine-prefix/emuera-reference-cli`，并�
 
 ## 任务交付
 
-最终说明应简要列出：
-
-1. 实现或修复的行为；
-2. 修改和新增的测试；
-3. 执行过的 Rust 验证命令；
-4. 执行过的 Windows 或 macOS 参考脚本及比较结果；
-5. 尚未验证的内容、已知差异或平台限制；
-6. 本任务对 `../emuera.em` 的全部修改（若无则明确写“无”），包括每个
-   文件、headless 隔离条件和正常游戏语义不受影响的依据。
-7. 本次任务的commit message。
+最终说明应简要列出实现行为、测试变更、`$test-rustyera-core` 要求的验证结果、尚未
+验证的内容或已知差异、commit message，以及对 `../emuera.em` 的全部修改。若未修改
+参考仓库，应明确写“无”；若有修改，应逐文件说明目的、headless 隔离条件及正常游戏
+语义不受影响的依据。

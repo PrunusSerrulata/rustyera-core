@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test RustyEra Core"
+  short_description: "Run the required RustyEra Core validation workflow"
+  default_prompt: "Use $test-rustyera-core to validate the current rustyera-core changes."
