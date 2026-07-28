@@ -14,6 +14,7 @@ Cargo.lock
 /frontends/era-web/public/wasm
 /frontends/era-web/playwright-report
 /frontends/era-web/test-results
+/frontends/era-web/.playwright-browsers/
 /frontends/era-web/src-tauri/gen
 /frontends/era-web/*.tsbuildinfo
 
