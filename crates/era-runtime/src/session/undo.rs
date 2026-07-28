@@ -235,6 +235,7 @@ impl RuntimeSession {
 
     fn reset_input_undo_presentation(&mut self) {
         self.presentation = PresentationModel::default();
+        self.pending_presentation_update = false;
         if let Some(project) = &self.project_snapshot {
             self.presentation.configure_project(project);
         }

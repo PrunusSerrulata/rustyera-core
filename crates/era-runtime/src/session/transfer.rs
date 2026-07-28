@@ -737,6 +737,7 @@ impl RuntimeSession {
     pub(super) fn resynchronize(&mut self, message_id: u64) -> Result<(), RuntimeError> {
         let input_undo = self.input_undo_state();
         let presentation = self.presentation.snapshot_for_delivery();
+        self.pending_presentation_update = false;
         self.emit(
             RuntimeMessage::RuntimeResynchronized(RuntimeResynchronized {
                 epoch: self.epoch.0,
@@ -761,14 +762,27 @@ impl RuntimeSession {
         Ok(())
     }
 
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "callers retain the fallible presentation-delivery contract; encoding now occurs at the drive boundary"
+    )]
     pub(super) fn emit_presentation(&mut self) -> Result<(), RuntimeError> {
+        self.pending_presentation_update = true;
+        Ok(())
+    }
+
+    pub(super) fn flush_presentation(&mut self) -> Result<(), RuntimeError> {
+        if !self.pending_presentation_update {
+            return Ok(());
+        }
+        self.pending_presentation_update = false;
         let message = match self.presentation.next_update() {
             PresentationUpdate::Snapshot(snapshot) => {
                 RuntimeMessage::PresentationSnapshot(*snapshot)
             }
             PresentationUpdate::Delta(delta) => RuntimeMessage::PresentationDelta(delta),
         };
-        self.emit(message, None)
+        self.emit_immediate(message, None)
     }
 
     pub(super) fn sync_resource_replay(&mut self) {
@@ -873,6 +887,22 @@ impl RuntimeSession {
     // believe has been queued, even though encoding itself only borrows it.
     #[allow(clippy::needless_pass_by_value)]
     pub(super) fn emit(
+        &mut self,
+        message: RuntimeMessage,
+        correlation_id: Option<u64>,
+    ) -> Result<(), RuntimeError> {
+        // Presentation calls can occur hundreds of times while one VM slice constructs a
+        // line. Serialize the authoritative result once at the caller boundary, but flush it
+        // before any subsequent non-presentation message to preserve protocol ordering.
+        self.flush_presentation()?;
+        self.emit_immediate(message, correlation_id)
+    }
+
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "the outbound journal takes sole ownership after encoding"
+    )]
+    fn emit_immediate(
         &mut self,
         message: RuntimeMessage,
         correlation_id: Option<u64>,

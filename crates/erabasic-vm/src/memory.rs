@@ -44,7 +44,7 @@ enum VariableValues {
 }
 
 impl VariableValues {
-    const SPARSE_DEFAULT_MINIMUM_LENGTH: usize = 64 * 1024;
+    const SPARSE_DEFAULT_MINIMUM_LENGTH: usize = 256;
 
     fn with_default(value_type: BytecodeType, length: usize) -> Self {
         match value_type {
@@ -549,15 +549,18 @@ fn validate_sparse_entries<T>(length: usize, entries: &[(usize, T)]) -> Result<(
 impl VariableCell {
     pub fn new(definition: &BytecodeGlobal) -> Self {
         let length = element_count(&definition.dimensions).unwrap_or(0);
-        let mut values = if matches!(
-            definition.storage,
-            BytecodeStorage::FunctionLocal
-                | BytecodeStorage::FunctionStatic
-                | BytecodeStorage::FunctionPersistent
-        ) {
-            VariableValues::with_lazy_default(definition.value_type, length)
-        } else {
+        // Era projects declare many large arrays whose initial state is almost entirely the
+        // language default. Keeping those arrays sparse is important for project and character
+        // storage too: eagerly allocating every zero or empty string can consume gigabytes before
+        // the title script executes. Dense initialization remains preferable for tables that are
+        // already at least half populated, and RANDDATA must expose a contiguous integer slice to
+        // the random-state native service.
+        let densely_initialized = definition.initial_values.len().saturating_mul(2) >= length;
+        let requires_contiguous_storage = definition.name.eq_ignore_ascii_case("RANDDATA");
+        let mut values = if densely_initialized || requires_contiguous_storage {
             VariableValues::with_default(definition.value_type, length)
+        } else {
+            VariableValues::with_lazy_default(definition.value_type, length)
         };
         for (index, value) in definition.initial_values.iter().enumerate() {
             let value = match value {
@@ -1396,10 +1399,8 @@ mod tests {
     }
 
     #[test]
-    fn large_function_cells_keep_default_storage_sparse_during_point_updates() {
-        let mut integer_definition = global(BytecodeType::Integer, vec![1_000_000]);
-        integer_definition.storage = BytecodeStorage::FunctionPersistent;
-        integer_definition.owner = Some(SymbolKey::derive("memory.test", b"function"));
+    fn large_cells_keep_default_storage_sparse_during_point_updates() {
+        let integer_definition = global(BytecodeType::Integer, vec![1_000_000]);
         let mut integer = VariableCell::new(&integer_definition);
         assert!(matches!(
             integer.values,
@@ -1421,9 +1422,7 @@ mod tests {
             VariableValues::SparseIntegers { ref entries, .. } if entries.is_empty()
         ));
 
-        let mut string_definition = global(BytecodeType::String, vec![1_000_000]);
-        string_definition.storage = BytecodeStorage::FunctionPersistent;
-        string_definition.owner = Some(SymbolKey::derive("memory.test", b"function"));
+        let string_definition = global(BytecodeType::String, vec![1_000_000]);
         let mut string = VariableCell::new(&string_definition);
         string
             .set(750_000, VmValue::String("value".into()))
@@ -1437,6 +1436,19 @@ mod tests {
     }
 
     #[test]
+    fn dense_initial_values_and_randdata_keep_contiguous_storage() {
+        let mut initialized = global(BytecodeType::Integer, vec![256]);
+        initialized.initial_values = vec![BytecodeConstant::Integer(1); 128];
+        let initialized = VariableCell::new(&initialized);
+        assert!(matches!(initialized.values, VariableValues::Integers(_)));
+
+        let mut randdata = global(BytecodeType::Integer, vec![625]);
+        randdata.name = "RANDDATA".into();
+        let randdata = VariableCell::new(&randdata);
+        assert!(randdata.integers().is_some());
+    }
+
+    #[test]
     fn snapshot_cells_use_sparse_round_trippable_storage() {
         let mut integer = VariableCell::new(&global(BytecodeType::Integer, vec![1_000_000]));
         integer.set(999_999, VmValue::Integer(42)).unwrap();
@@ -1444,6 +1456,7 @@ mod tests {
         assert!(encoded.len() < 128);
         let mut decoded = rmp_serde::from_slice::<VariableCell>(&encoded).unwrap();
         decoded.materialize_snapshot().unwrap();
+        integer.materialize_snapshot().unwrap();
         assert_eq!(decoded, integer);
 
         let mut string = VariableCell::new(&global(BytecodeType::String, vec![8]));

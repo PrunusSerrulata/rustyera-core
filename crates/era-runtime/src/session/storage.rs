@@ -142,6 +142,7 @@ impl RuntimeSession {
         let original_outbound = std::mem::take(&mut self.outbound);
         let original_outbound_journal = std::mem::take(&mut self.outbound_journal);
         let original_effect_journal = std::mem::take(&mut self.effect_journal);
+        let original_pending_presentation = self.pending_presentation_update;
         let original_sequence = self.outbound_sequence;
         let original_message = self.next_message_id;
         let original_effect = self.next_effect_id;
@@ -219,6 +220,7 @@ impl RuntimeSession {
             .map(|event| event.kind.clone())
             .collect();
         self.presentation = original_presentation;
+        self.pending_presentation_update = original_pending_presentation;
         self.project_snapshot = original_project;
         (
             self.message_skip,
@@ -308,6 +310,7 @@ impl RuntimeSession {
             .commit_candidate_state(candidate.state)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         self.presentation = candidate.presentation;
+        self.pending_presentation_update = false;
         self.project_snapshot = candidate.project_snapshot;
         self.message_skip = candidate.message_skip;
         self.skip_print = candidate.skip_print;

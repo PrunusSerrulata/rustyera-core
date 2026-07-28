@@ -282,10 +282,15 @@ fn build_project_inner_with_extensions(
                 .csv
                 .push(csv_file(category_relative_path(&path, "CSV"), file.payload)),
             FileCategory::Erh | FileCategory::Erb => {
-                csv_files.erb.push(csv_file(
-                    category_relative_path(&path, "ERB"),
-                    file.payload.clone(),
-                ));
+                // The CSV loader consults the ERB root only for ERD deferred-index files.
+                // Copying every ordinary script here doubled the resident source payload for
+                // large projects before the analyzer had even started.
+                if is_deferred_index_source(&path) {
+                    csv_files.erb.push(csv_file(
+                        category_relative_path(&path, "ERB"),
+                        file.payload.clone(),
+                    ));
+                }
                 if file.category == FileCategory::Erh
                     || analysis_selection.is_none_or(|selection| {
                         selection.is_empty() || selection.contains(&path.to_ascii_lowercase())
@@ -532,6 +537,12 @@ fn category_relative_path(path: &str, category: &str) -> String {
     } else {
         path.to_owned()
     }
+}
+
+fn is_deferred_index_source(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("erd"))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1497,6 +1508,14 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn only_erd_sources_are_forwarded_to_the_deferred_index_loader() {
+        assert!(is_deferred_index_source("ERB/index.ERD"));
+        assert!(is_deferred_index_source("nested/index.erd"));
+        assert!(!is_deferred_index_source("ERB/main.ERB"));
+        assert!(!is_deferred_index_source("ERB/header.ERH"));
+    }
 
     fn configuration(text: &str) -> SubmittedFile {
         SubmittedFile {

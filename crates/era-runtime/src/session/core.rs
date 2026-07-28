@@ -6,6 +6,10 @@ use super::*;
 
 impl RuntimeSession {
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the actor constructor explicitly initializes every protocol state field"
+    )]
     pub fn new(options: RuntimeOptions) -> Self {
         Self {
             options,
@@ -42,6 +46,7 @@ impl RuntimeSession {
             extension_declarations: Vec::new(),
             vm: None,
             presentation: PresentationModel::default(),
+            pending_presentation_update: false,
             operations: PendingOperations::default(),
             key_toggle_state: [0; 256],
             hotkey_state: Vec::new(),
@@ -247,6 +252,7 @@ impl RuntimeSession {
             }
             break;
         }
+        self.flush_presentation()?;
         let state = if self.phase == RuntimePhase::Faulted {
             RuntimeDriveState::Faulted
         } else if self.phase == RuntimePhase::Stopped {
@@ -1601,6 +1607,7 @@ impl RuntimeSession {
         self.accepted_message_ids.clear();
         self.vm = Some(vm);
         self.presentation = presentation;
+        self.pending_presentation_update = false;
         self.operations = operations;
         self.project_snapshot
             .as_mut()
@@ -1776,6 +1783,7 @@ impl RuntimeSession {
         self.vm = None;
         self.controller = SystemController::default();
         self.presentation = PresentationModel::default();
+        self.pending_presentation_update = false;
         if let Some(project) = &self.project_snapshot {
             self.presentation.configure_project(project);
         }

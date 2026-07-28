@@ -302,6 +302,7 @@ pub struct RuntimeSession {
     extension_declarations: Vec<ExtensionDeclaration>,
     vm: Option<RuntimeVm>,
     presentation: PresentationModel,
+    pending_presentation_update: bool,
     operations: PendingOperations,
     key_toggle_state: [u8; 256],
     hotkey_state: Vec<i64>,

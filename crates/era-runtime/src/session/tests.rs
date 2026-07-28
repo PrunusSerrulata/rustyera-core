@@ -138,6 +138,48 @@ fn drain(session: &mut RuntimeSession) -> Vec<RuntimeMessage> {
     messages
 }
 
+#[test]
+fn presentation_updates_are_coalesced_until_the_drive_boundary() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+
+    for fragment in ["first", "second", "third"] {
+        session
+            .presentation
+            .append_print_text(fragment.into(), false, false);
+        session.emit_presentation().unwrap();
+    }
+
+    assert!(
+        session.outbound.is_empty(),
+        "intermediate current-line projections must not be serialized"
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let messages = drain(&mut session);
+    let updates = messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message,
+                RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+            )
+        })
+        .count();
+
+    assert_eq!(updates, 1);
+    let snapshot = session.presentation.snapshot();
+    let text = snapshot
+        .history
+        .logical_lines
+        .iter()
+        .flat_map(|line| &line.runs)
+        .filter_map(|run| match run {
+            DisplayRun::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(text, "firstsecondthird");
+}
+
 fn submit_debug(session: &mut RuntimeSession, sequence: u64, message: &DebugMessage) {
     let envelope = message
         .envelope(

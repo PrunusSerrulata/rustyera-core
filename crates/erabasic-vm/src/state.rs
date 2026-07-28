@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use erabasic_bytecode::{
     BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeFunctionKind, BytecodeStorage,
-    BytecodeType, Digest, SymbolKey,
+    BytecodeType, Digest, SourceMapEntry, SymbolKey,
 };
 use erabasic_validator::ValidatedArtifact;
 use serde::{Deserialize, Serialize};
@@ -35,8 +35,10 @@ pub(crate) struct ProgramGeneration {
     normalized_native_names: Vec<Arc<str>>,
     function_static_indices: BTreeMap<SymbolKey, Vec<usize>>,
     function_local_indices: BTreeMap<SymbolKey, Vec<usize>>,
-    instruction_source_indices: BTreeMap<SymbolKey, Vec<Option<usize>>>,
+    instruction_source_indices: BTreeMap<SymbolKey, Vec<u32>>,
 }
+
+const NO_SOURCE_MAP_ENTRY: u32 = u32::MAX;
 
 impl ProgramGeneration {
     #[allow(clippy::too_many_lines)]
@@ -128,7 +130,19 @@ impl ProgramGeneration {
                 function_local_indices.entry(owner).or_default().push(index);
             }
         }
-        let instruction_offsets: BTreeMap<SymbolKey, Vec<u64>> = artifact
+        // Resolve serialized source-map precedence once per generation. Filling only empty
+        // instruction slots preserves `SourceMap::resolve`'s first-matching-entry behavior.
+        // A u32 sentinel is sufficient for the validator's source-map limit and is one quarter
+        // the size of `Option<usize>` on 64-bit targets. Offsets are built one function at a time
+        // so startup does not retain another project-wide index beside the permanent projection.
+        let mut source_entries = BTreeMap::<SymbolKey, Vec<(u32, &SourceMapEntry)>>::new();
+        for (index, entry) in artifact.source_map.entries.iter().enumerate() {
+            source_entries.entry(entry.function).or_default().push((
+                u32::try_from(index).expect("validated source-map index fits u32"),
+                entry,
+            ));
+        }
+        let instruction_source_indices = artifact
             .functions
             .iter()
             .map(|function| {
@@ -141,30 +155,14 @@ impl ProgramGeneration {
                         offset = offset.saturating_add(instruction.encoded_len());
                         current
                     })
-                    .collect();
-                (function.key, offsets)
+                    .collect::<Vec<_>>();
+                let indices = index_source_entries(
+                    &offsets,
+                    source_entries.get(&function.key).map_or(&[], Vec::as_slice),
+                );
+                (function.key, indices)
             })
             .collect();
-        // Resolve serialized source-map precedence once per generation. Filling only empty
-        // instruction slots preserves `SourceMap::resolve`'s first-matching-entry behavior even
-        // for a validated third-party artifact with overlapping entries.
-        let mut instruction_source_indices = instruction_offsets
-            .iter()
-            .map(|(function, offsets)| (*function, vec![None; offsets.len()]))
-            .collect::<BTreeMap<_, _>>();
-        for (index, entry) in artifact.source_map.entries.iter().enumerate() {
-            let Some(offsets) = instruction_offsets.get(&entry.function) else {
-                continue;
-            };
-            let Some(indices) = instruction_source_indices.get_mut(&entry.function) else {
-                continue;
-            };
-            let start = offsets.partition_point(|offset| *offset < entry.code_start);
-            let end = offsets.partition_point(|offset| *offset < entry.code_end);
-            for slot in &mut indices[start..end] {
-                slot.get_or_insert(index);
-            }
-        }
         Self {
             artifact,
             function_indices,
@@ -258,10 +256,24 @@ impl ProgramGeneration {
             .get(&function)?
             .get(instruction)
             .copied()
-            .flatten()
-            .and_then(|index| self.artifact.source_map.entries.get(index))?;
+            .filter(|index| *index != NO_SOURCE_MAP_ENTRY)
+            .and_then(|index| self.artifact.source_map.entries.get(index as usize))?;
         self.artifact.source_map.resolve_entry(entry)
     }
+}
+
+fn index_source_entries(offsets: &[u64], entries: &[(u32, &SourceMapEntry)]) -> Vec<u32> {
+    let mut indices = vec![NO_SOURCE_MAP_ENTRY; offsets.len()];
+    for (index, entry) in entries {
+        let start = offsets.partition_point(|offset| *offset < entry.code_start);
+        let end = offsets.partition_point(|offset| *offset < entry.code_end);
+        for slot in &mut indices[start..end] {
+            if *slot == NO_SOURCE_MAP_ENTRY {
+                *slot = *index;
+            }
+        }
+    }
+    indices
 }
 
 fn case_insensitive_index<'a>(
@@ -286,6 +298,30 @@ mod program_index_tests {
         assert_eq!(case_insensitive_index(&indices, "mixed_name"), Some(&7));
         assert_eq!(case_insensitive_index(&indices, "Mixed_Name"), Some(&7));
         assert_eq!(case_insensitive_index(&indices, "missing"), None);
+    }
+
+    #[test]
+    fn compact_source_index_preserves_first_matching_entry() {
+        let function = SymbolKey::derive("source-index-test", b"function");
+        let broad = SourceMapEntry {
+            function,
+            code_start: 2,
+            code_end: 10,
+            byte_start: 1,
+            byte_end: 2,
+            statement_fingerprint: 0,
+            origin_chain: None,
+            source_index: 0,
+        };
+        let overlapping = SourceMapEntry {
+            code_start: 5,
+            code_end: 7,
+            ..broad.clone()
+        };
+        let indices = index_source_entries(&[0, 2, 5, 7, 10], &[(3, &broad), (4, &overlapping)]);
+
+        assert_eq!(indices, [NO_SOURCE_MAP_ENTRY, 3, 3, 3, NO_SOURCE_MAP_ENTRY]);
+        assert_eq!(std::mem::size_of_val(&indices[0]), 4);
     }
 }
 
@@ -496,9 +532,10 @@ impl Vm {
             Memory::new_game(&artifact)
         };
         let generation = GenerationId(1);
+        let program = Arc::new(ProgramGeneration::new(artifact));
         Self {
             config,
-            generations: BTreeMap::from([(generation, Arc::new(ProgramGeneration::new(artifact)))]),
+            generations: BTreeMap::from([(generation, program)]),
             current_generation: generation,
             memory,
             fibers: BTreeMap::new(),
