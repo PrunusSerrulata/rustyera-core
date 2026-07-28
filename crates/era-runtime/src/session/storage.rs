@@ -1034,21 +1034,6 @@ impl RuntimeSession {
                 token,
             );
             choices.insert(token, VmValue::Integer(i64::from(slot)));
-            if occupied && self.storage_capabilities.delete && self.storage_capabilities.revisions {
-                let delete = self.allocate_interaction();
-                self.presentation.append_system_button(
-                    format!("Delete {}", self.load_slot_paths[index]),
-                    SystemTextKey::SaveSlot,
-                    vec![SystemTextArgument::String(
-                        self.load_slot_paths[index].clone(),
-                    )],
-                    delete,
-                );
-                choices.insert(
-                    delete,
-                    VmValue::Integer(-1_000 - i64::try_from(index).unwrap_or(i64::MAX)),
-                );
-            }
         }
         let back = self.allocate_interaction();
         self.presentation.append_system_button(

@@ -3484,6 +3484,43 @@ fn empty_storage_listing_opens_a_fixed_runtime_tokenized_page() {
 }
 
 #[test]
+fn occupied_save_slots_do_not_expose_delete_actions() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::WaitingExternal;
+    session.epoch = SessionEpoch(1);
+    session.selected_locale = "en".into();
+    session.storage_capabilities = StorageCapabilities {
+        revisions: true,
+        atomic_replace: true,
+        missing_precondition: true,
+        delete: true,
+    };
+    session.occupied_slot_paths.insert("save00.sav".into());
+    session
+        .slot_labels
+        .insert("save00.sav".into(), "occupied".into());
+
+    session.render_slot_menu(false).unwrap();
+
+    let wait = session.operations.active_input().expect("load slot wait");
+    assert!(
+        wait.choices
+            .values()
+            .all(|value| { matches!(value, VmValue::Integer(selection) if *selection >= 0) })
+    );
+    let snapshot = session.presentation.snapshot();
+    assert!(snapshot.history.logical_lines.iter().all(|line| {
+        line.runs.iter().all(|run| match run {
+            DisplayRun::Button { runs, .. } => runs.iter().all(
+                |run| !matches!(run, DisplayRun::Text { text, .. } if text.starts_with("Delete ")),
+            ),
+            _ => true,
+        })
+    }));
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
@@ -3652,62 +3689,8 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
         pending
             .choices
             .values()
-            .any(|value| value == &VmValue::Integer(-1_001))
+            .all(|value| matches!(value, VmValue::Integer(selection) if *selection >= 0))
     );
-    session
-        .finish_system_input(pending, &VmValue::Integer(-1_001))
-        .unwrap();
-    let stat = drain(&mut session)
-        .into_iter()
-        .find_map(|message| match message {
-            RuntimeMessage::StorageRequest(request) => Some(request),
-            _ => None,
-        })
-        .expect("slot delete stat");
-    assert_eq!(stat.relative_path, "save01.sav");
-    assert_eq!(stat.operation, StorageOperation::Stat);
-    session
-        .complete_storage(
-            4,
-            StorageResponse {
-                request_id: stat.request_id,
-                result: StorageResult::Metadata(era_runtime_protocol::StorageMetadata {
-                    byte_length: 3,
-                    revision: Some("r1".into()),
-                }),
-            },
-        )
-        .unwrap();
-    let delete = drain(&mut session)
-        .into_iter()
-        .find_map(|message| match message {
-            RuntimeMessage::StorageRequest(request) => Some(request),
-            _ => None,
-        })
-        .expect("revision-bound slot delete");
-    assert!(matches!(
-        delete.operation,
-        StorageOperation::Delete {
-            precondition: StoragePrecondition::Revision(ref revision),
-        } if revision == "r1"
-    ));
-    session
-        .complete_storage(
-            5,
-            StorageResponse {
-                request_id: delete.request_id,
-                result: StorageResult::Error {
-                    error: era_runtime_protocol::FrontendIoError {
-                        kind: FrontendIoErrorKind::Conflict,
-                        message: "changed".into(),
-                        platform_code: None,
-                    },
-                },
-            },
-        )
-        .unwrap();
-    assert!(session.operations.active_input().is_some());
-    let pending = session.operations.take_active_input().unwrap();
     session
         .finish_system_input(pending, &VmValue::Integer(100))
         .unwrap();
