@@ -57,17 +57,17 @@ RustyEra 只接受 UTF-8 源码和配置内容，不负责识别或转换 Shift-
 | `era-runtime-ffi` | 安全 Rust FFI 函数表与经过检查的结构声明。 |
 | `era-runtime-capi` | C ABI 动态库实现；这是 workspace 中唯一包含原始指针 `unsafe` 边界的 crate。 |
 
-### 前端、参考实现与工具
+### 外部前端、参考实现与工具
 
-| 路径 | 用途 |
+| 项目或路径 | 用途 |
 | --- | --- |
-| `frontends/era-tui` | Python 3.12/Textual TUI，通过公共 C ABI 驱动 runtime。主要用于验证参考行为、真实游戏脚本和 C ABI 可用性，不是排版或性能标杆。 |
-| `reference/emuera.em` | 固定版本的 C# Emuera 兼容性参考实现。 |
-| `reference/emuera.em/emuera-reference-cli` | 无窗口 NDJSON oracle，用于差分测试。 |
-| `reference/eraTW` | 真实游戏 eraTW 的 CSV、ERH 与 ERB 输入；不纳入版本控制。 |
+| [rustyera-tui](https://github.com/PrunusSerrulata/rustyera-tui) | Python 3.12/Textual 前端，通过公共 C ABI 驱动 runtime。 |
+| [rustyera-web](https://github.com/PrunusSerrulata/rustyera-web) | Vue、WebAssembly 和 Tauri 前端；包含 `era-web-bridge`。 |
+| [emuera.em](https://github.com/PrunusSerrulata/emuera.em) | 固定版本的 C# 兼容性参考实现及 NDJSON oracle。 |
+| `../eraTW`（仅本地） | 真实游戏 eraTW 的 CSV、ERH 与 ERB 输入；不纳入版本控制。 |
 | `tools/project-extractor` | 项目解包器，从 runtime 编译缓存中按原目录层级恢复 UTF-8 源码和二进制资产。 |
 | `tools/snapshot-analyzer` | Runtime 快照分析器，校验完整快照并以文本或 JSON 展开其中的全部状态。 |
-| `tools/runtime-tester` | runtime、C ABI 与 TUI 的人工/长流程测试工具。 |
+| `tools/runtime-tester` | runtime 与 C ABI 的人工/长流程测试工具。TUI 审计脚本位于 `rustyera-tui`。 |
 | `tools/protocol-smoke.ps1`、`tools/test-macos-wine.sh` | Windows 与 macOS/Wine 参考 CLI 冒烟测试。 |
 
 ## 模块关系
@@ -123,7 +123,8 @@ cargo build --workspace
 cargo build --release -p era-runtime-capi
 ```
 
-动态库位于 `target/release/`，文件名分别为：
+单独检出时动态库位于 `target/release/`；本文约定的四仓本地布局通过外层 Cargo 配置
+统一写入 `../target/release/`。文件名分别为：
 
 - macOS：`libera_runtime_capi.dylib`
 - Linux：`libera_runtime_capi.so`
@@ -152,28 +153,12 @@ REPL 支持：
 `:file` 将 `.erh` 作为声明头处理，其他文件作为 ERB 处理。REPL 会保留同一个 parser
 上下文，因此先加载的宏和声明会影响后续输入。它只是开发检查工具，不是游戏运行前端。
 
-### Python TUI
+### 应用前端
 
-先安装依赖：
-
-```sh
-uv sync --project frontends/era-tui
-```
-
-TUI 接收一个可选资源目录，默认使用当前工作目录。资源目录中应包含 `CSV/`、`ERB/`
-以及当前平台的 `era-runtime-capi` release 动态库；存档、日志、快照和编译缓存默认也
-写入该目录。
-
-```sh
-uv --project frontends/era-tui run rustyera-tui /path/to/resource-directory
-```
-
-也可通过 `--runtime-library PATH` 或 `ERA_RUNTIME_LIBRARY=PATH` 单独指定动态库。
-仓库开发环境可以在 `frontends/era-tui` 下建立指向 `reference/eraTW/{CSV,ERB}` 和
-`target/release` 动态库的相对符号链接；这些本地链接已被 `.gitignore` 排除。
-
-TUI 的功能、按键和存储约定见
-[TUI 说明](frontends/era-tui/README.md)。
+TUI 和 Web 前端已拆分为独立仓库。TUI 使用发布的 C ABI 动态库；Web 仓库通过固定的
+core Git revision 构建原生及 WebAssembly runtime。用法和发布说明分别见
+[rustyera-tui](https://github.com/PrunusSerrulata/rustyera-tui) 与
+[rustyera-web](https://github.com/PrunusSerrulata/rustyera-web)。
 
 ### 项目解包器
 
@@ -274,15 +259,16 @@ tools/test-macos-wine.sh
 - [设计原则](docs/design-principles.zh-CN.md)
 - [输入与等待兼容性](docs/input-wait-compatibility.zh-CN.md)
 - [Emuera runtime 参考映射](docs/runtime-reference-mapping.zh-CN.md)
-- [参考 CLI](reference/emuera.em/emuera-reference-cli/README.md)
-- [参考实现 headless 修改记录](reference/emuera.em/emuera-reference-cli/REFERENCE_CHANGES.md)
+- [参考 CLI](https://github.com/PrunusSerrulata/emuera.em/tree/master/emuera-reference-cli)
+- [TUI 前端](https://github.com/PrunusSerrulata/rustyera-tui)
+- [Web/Tauri 前端](https://github.com/PrunusSerrulata/rustyera-web)
 - [运行时测试工具](tools/runtime-tester/AGENTS.md)
 
 ## 许可证
 
 RustyEra 自有代码和文档采用
 [GNU 通用公共许可证第 3 版](LICENSE)（SPDX：`GPL-3.0-only`）。
-`reference/emuera.em` 及其他第三方内容仍分别遵循其随附许可证，GPLv3 不改变这些
+`emuera.em` 参考实现及其他第三方内容仍分别遵循其随附许可证，GPLv3 不改变这些
 第三方材料的原有授权条款。
 
 ## 致谢
@@ -290,14 +276,14 @@ RustyEra 自有代码和文档采用
 RustyEra 受益于 era 生态长期积累的工具、实现和创作内容，谨向下列作者与贡献者致谢：
 
 - **佐藤敏**（サークル獏）：eramaker 的开发者
-- **MinorShift** 与 **妊）|дﾟ)の中の人**：Emuera 的著作者。RustyEra 以仓库中固定版本的
+- **MinorShift** 与 **妊）|дﾟ)の中の人**：Emuera 的著作者。RustyEra 以独立 `emuera.em` 仓库中的固定版本
   Emuera 为兼容性参考实现。
 - **まだ名前は無い人**：`eraThe World`（eraTW）项目在 `GameBase.csv` 中署名的修改／制作
   者；以及该项目列出的咨询协作者 **哆来咪**。
 - **eraTW 的口上与内容作者、改编者**：所有为角色口上、事件、数据与文档作出贡献的
   创作者。完整署名、改编记录与各自的使用条件均保留在
-  `reference/eraTW/ERB/口上・メッセージ関連/個人口上/` 的随附说明和许可文件中。
+  `eraTW/ERB/口上・メッセージ関連/個人口上/` 的随附说明和许可文件中。
 - **所有开源依赖、工具维护者和 era 社区的脚本／内容作者**。
 
-本项目的致谢不改变 `reference/` 内第三方材料的著作权、署名、许可或使用条件；使用或再分发
+本项目的致谢不改变外部第三方材料的著作权、署名、许可或使用条件；使用或再分发
 这些材料时，请以其随附文件为准。

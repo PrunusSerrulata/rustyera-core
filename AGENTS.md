@@ -40,13 +40,12 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
   caller-pumped runtime。
 - `crates/era-runtime-ffi`、`crates/era-runtime-capi`：安全 Rust FFI 契约及唯一包含
   `unsafe` 指针边界的 C ABI 动态库实现。
-- `reference/emuera.em`：固定版本的 C# Emuera 参考实现。
-- `reference/eraTW`：真实游戏eraTW中使用的完整脚本集，包含csv、erh和erb。
-- `reference/emuera.em/emuera-reference-cli`：绕过 UI 调用参考实现的 NDJSON 测试工具；
+- `../emuera.em`：独立 Git 仓库中的固定版本 C# Emuera 参考实现。
+- `../eraTW`：本地真实游戏 eraTW 脚本集，不纳入版本控制。
+- `../emuera.em/emuera-reference-cli`：绕过 UI 调用参考实现的 NDJSON 测试工具；
   平台测试脚本位于 `tools/`。
-- `frontends/era-tui`：通过公共 C ABI 驱动 runtime 的 Python/Textual TUI，主要用于
-  验证参考实现、真实游戏脚本和 C ABI 可用性。
-- `tools/runtime-tester`：runtime、C ABI 和 TUI 的人工/长流程测试工具。
+- `rustyera-tui` 与 `rustyera-web` 是独立前端仓库；本仓库不得重新引入具体应用前端。
+- `tools/runtime-tester`：runtime 与 C ABI 的人工/长流程测试工具。
 
 保持各 crate 的职责边界。较大的实现应合理拆分为 module，不要堆积至单个源文件中。
 公共类型应尽量由 crate 根模块稳定地重新导出。
@@ -60,12 +59,9 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
 reference CLI 能够调用参考实现的 evaluator、VM 和 runtime，也不代表 Rust 侧已实现
 参考 runtime 的全部能力。未实现组件的说明只记录范围和状态，不预先承诺具体内部架构。
 
-本仓库包含一个具体应用前端：`frontends/era-tui` 下的 Python/Textual TUI。它通过
-公共 C ABI 使用 runtime，并负责项目文件扫描、终端渲染、输入采集和平台 I/O。该
-实现的主要目的，是对照参考实现、运行真实游戏脚本并验证 `era-runtime-capi` 的端到端
-可用性；它不是排版质量、字体兼容性或性能表现的标杆，也不限制未来 GUI、Web 或其他
-前端的架构。本文所说的“应用前端”与 EraBasic“语言前端”（lexer/parser）不是同一
-概念。
+具体应用前端位于独立的 `rustyera-tui` 与 `rustyera-web` 仓库。它们只通过公共协议、
+C ABI 或固定 Git revision 使用本仓库，不得让 runtime 反向依赖具体前端。本文所说的
+“应用前端”与 EraBasic“语言前端”（lexer/parser）不是同一概念。
 
 项目边界是 runtime 库及其与外部应用前端之间的公共接口。应用前端负责文件 I/O，
 并向 Rust 库提交相对路径、解码后的 UTF-8 内容或对应 I/O 错误。runtime 通过公共
@@ -90,25 +86,25 @@ reference CLI 能够调用参考实现的 evaluator、VM 和 runtime，也不代
 
 ## C# 参考实现边界
 
-`reference/emuera.em` 是可移植语言与运行行为的兼容性标准，默认视为只读第三方代码。
+兄弟仓库 `../emuera.em` 是可移植语言与运行行为的兼容性标准，默认视为只读第三方代码。
 若其行为依赖特定客户端或平台，应按最高设计准则提炼语义并记录有意差异，而不是把
 WinForms/GDI 的实现细节引入 runtime。
 
 - 除非用户明确要求修改 C# 参考实现，否则不允许修改、格式化、重构或自动修复
-  `reference/emuera.em` 中的任何代码。
+  `../emuera.em` 中的任何代码。
 - 不要为了让 Rust 实现更容易而改变参考实现的语义。
 - 可以只读搜索和调试参考源码，以确认行为、错误条件和内部执行顺序。
 - 若任务明确授权修改参考实现，改动必须最小化，并使用仅在 headless/reference
   模式启用的隔离入口；同时单独报告所有参考目录内的改动。
 - 若 `emuera-reference-cli` 无法启动、提前退出或卡住，不得跳过 oracle 测试并把
   任务描述为已验证。应先定位并修复 reference CLI。为恢复 CLI 而确有必要时，
-  可以修改 `reference/emuera.em` 中仅供 reference/headless 路径使用的接入点，
+  可以修改 `../emuera.em` 中仅供 reference/headless 路径使用的接入点，
   无需改动正常游戏入口。
 - reference CLI 修复绝不得改变正常游戏链路的后端执行语义，也不得为迁就 Rust
   结果而改变 parser、数据加载、验证、执行或状态转移规则。正常模式必须继续调用
   原有逻辑；headless 分支只能隔离 UI、暴露只读状态或施加测试安全限制。
-- 所有 `reference/emuera.em` 内的 oracle 相关修改都必须逐文件、逐目的追加到
-  `reference/emuera.em/emuera-reference-cli/REFERENCE_CHANGES.md`，并在最终交付中另设清单报告。
+- 所有 `../emuera.em` 内的 oracle 相关修改都必须逐文件、逐目的追加到
+  `../emuera.em/emuera-reference-cli/REFERENCE_CHANGES.md`，并在最终交付中另设清单报告。
   不得只用“修复了 reference CLI”概括参考目录改动。
 - 不要更新参考实现版本或 commit，除非用户明确要求。兼容基准固定为项目文档中
   记录的 commit。
@@ -237,6 +233,6 @@ macOS 脚本使用项目内固定的 `.wine-prefix/emuera-reference-cli`，并�
 3. 执行过的 Rust 验证命令；
 4. 执行过的 Windows 或 macOS 参考脚本及比较结果；
 5. 尚未验证的内容、已知差异或平台限制；
-6. 本任务对 `reference/emuera.em` 的全部修改（若无则明确写“无”），包括每个
+6. 本任务对 `../emuera.em` 的全部修改（若无则明确写“无”），包括每个
    文件、headless 隔离条件和正常游戏语义不受影响的依据。
 7. 本次任务的commit message。

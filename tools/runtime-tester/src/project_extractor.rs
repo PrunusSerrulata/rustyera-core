@@ -19,6 +19,7 @@ use era_runtime_protocol::{
 use super::{
     audit_service_capabilities, audit_wire_limits, diagnostics_with_level, drain, drive,
     has_direct_child_directory, read_project_text, repository_root, submit, submit_with_epoch,
+    target_directory,
 };
 
 const CACHE_BUILD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -27,7 +28,7 @@ const EXPORT_CHUNK_BYTES: u32 = 16 * 1024 * 1024;
 pub(super) fn audit_all_reference_games() {
     let extractor = env::args().nth(2).map_or_else(
         || {
-            repository_root().join("target/debug").join(format!(
+            target_directory().join("debug").join(format!(
                 "rustyera-project-extractor{}",
                 env::consts::EXE_SUFFIX
             ))

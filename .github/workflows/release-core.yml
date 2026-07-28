@@ -1,0 +1,74 @@
+name: Build and publish core runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_type:
+        description: Release type
+        required: true
+        default: prerelease
+        type: choice
+        options: [release, prerelease, none]
+      tag_name:
+        description: Tag to create when publishing (for example, v0.1.0)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  runtime:
+    name: Runtime (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x86_64, runner: windows-latest, library: era_runtime_capi.dll }
+          - { name: linux-x86_64, runner: ubuntu-latest, library: libera_runtime_capi.so }
+          - { name: linux-aarch64, runner: ubuntu-24.04-arm, library: libera_runtime_capi.so }
+          - { name: macos-x86_64, runner: macos-15-intel, library: libera_runtime_capi.dylib }
+          - { name: macos-arm64, runner: macos-latest, library: libera_runtime_capi.dylib }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify workspace
+        run: cargo check --workspace --all-targets --locked
+      - name: Build C API
+        run: cargo build --package era-runtime-capi --release --locked
+      - name: Assemble runtime archive
+        shell: pwsh
+        run: |
+          $package = "rustyera-core-${{ matrix.name }}"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item "target/release/${{ matrix.library }}" $package
+          Copy-Item "crates/era-runtime-ffi/include/era_runtime.h" $package
+          Compress-Archive -Path $package -DestinationPath "$package.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rustyera-core-${{ matrix.name }}
+          path: rustyera-core-${{ matrix.name }}.zip
+          archive: false
+          if-no-files-found: error
+
+  publish:
+    if: inputs.publish_type != 'none'
+    needs: runtime
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require tag
+        if: inputs.tag_name == ''
+        run: exit 1
+      - uses: actions/download-artifact@v8
+        with:
+          path: packages
+          merge-multiple: true
+          skip-decompress: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag_name }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ inputs.publish_type == 'prerelease' }}
+          generate_release_notes: true
+          files: packages/*.zip

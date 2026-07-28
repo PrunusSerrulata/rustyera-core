@@ -10,7 +10,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$cliDirectory = Join-Path $repositoryRoot "reference/emuera.em/emuera-reference-cli"
+$workspaceRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot ".."))
+$referenceRoot = if ($env:EMUERA_REFERENCE_ROOT) {
+    [System.IO.Path]::GetFullPath($env:EMUERA_REFERENCE_ROOT)
+} else {
+    Join-Path $workspaceRoot "emuera.em"
+}
+$cliDirectory = Join-Path $referenceRoot "emuera-reference-cli"
 $fixtureDirectory = Join-Path $cliDirectory "tests"
 $project = Join-Path $cliDirectory "Emuera.ReferenceCli.csproj"
 if ([string]::IsNullOrWhiteSpace($Executable)) {
@@ -28,7 +34,7 @@ if ([string]::IsNullOrWhiteSpace($Executable)) {
     $Executable = Join-Path $cliDirectory "bin/x64/Debug-NAudio/net10.0-windows/win-x64/publish/Emuera.ReferenceCli.exe"
 }
 if ([string]::IsNullOrWhiteSpace($OutputFile)) {
-    $OutputFile = Join-Path $repositoryRoot ".wine-tmp/emuera-reference-cli/windows-smoke.ndjson"
+    $OutputFile = Join-Path $workspaceRoot ".wine-tmp/emuera-reference-cli/windows-smoke.ndjson"
 }
 $executablePath = [System.IO.Path]::GetFullPath($Executable)
 if (-not [System.IO.File]::Exists($executablePath)) {

@@ -802,7 +802,7 @@ enum tag 列表和 `unknown_bits`，不是平台 flags 对象。
 以下是源码中的实际不一致或未落实字段，不应被前端当作能力：
 
 1. [`era-runtime-protocol/src/lib.rs`](../crates/era-runtime-protocol/src/lib.rs) 的模块注释
-   仍写“在前端存在之前不承诺兼容”，但仓库已有 `frontends/era-tui`。需确认该注释的
+   仍写“在前端存在之前不承诺兼容”，但已有独立 `rustyera-tui` 前端。需确认该注释的
    准确措辞；当前按 AGENTS.md 的“开发期公共接口默认不向后兼容”执行。
 2. C 头注释表达可按 `struct_size` 接受较短旧结构，但
    [`valid_header`](../crates/era-runtime-capi/src/lib.rs) 要求至少为当前完整 Rust 类型
@@ -836,8 +836,8 @@ enum tag 列表和 `unknown_bits`，不是平台 flags 对象。
 
 ```sh
 cargo build -p era-runtime-capi --release
-uv sync --project frontends/era-tui
-export ERA_RUNTIME_LIBRARY="$PWD/target/release/libera_runtime_capi.dylib"  # Linux 改 .so
+uv sync --project ../rustyera-tui
+export ERA_RUNTIME_LIBRARY="$PWD/../target/release/libera_runtime_capi.dylib"  # Linux 改 .so
 ```
 
 保存为 `/tmp/minimal_runtime_frontend.py`：
@@ -943,7 +943,7 @@ except (AbiError, ValueError, RuntimeError) as error:
 运行：
 
 ```sh
-uv --project frontends/era-tui run python /tmp/minimal_runtime_frontend.py
+uv --project ../rustyera-tui run python /tmp/minimal_runtime_frontend.py
 ```
 
 Rust 的等价端到端路径是：用 `RuntimeMessage::{ClientHello,ProjectManifest,Start,

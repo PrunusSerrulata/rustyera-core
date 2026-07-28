@@ -504,8 +504,8 @@ client.request_debug(variant(1, stop), grant)            # Continue
 
 ```sh
 cargo build -p era-runtime-capi --release
-uv sync --project frontends/era-tui
-export ERA_RUNTIME_LIBRARY="$PWD/target/release/libera_runtime_capi.dylib"  # Linux 改 .so
+uv sync --project ../rustyera-tui
+export ERA_RUNTIME_LIBRARY="$PWD/../target/release/libera_runtime_capi.dylib"  # Linux 改 .so
 ```
 
 保存为 `/tmp/minimal_runtime_debugger.py`：
@@ -642,7 +642,7 @@ except (AbiError, ValueError, RuntimeError, StopIteration) as error:
 运行：
 
 ```sh
-uv --project frontends/era-tui run python /tmp/minimal_runtime_debugger.py
+uv --project ../rustyera-tui run python /tmp/minimal_runtime_debugger.py
 ```
 
 ## 15. 接口索引

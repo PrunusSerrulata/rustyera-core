@@ -73,7 +73,29 @@ fn tool_root() -> PathBuf {
 }
 
 fn default_project() -> PathBuf {
-    repository_root().join("reference/eraTW")
+    repository_root()
+        .parent()
+        .expect("core repository has a workspace parent")
+        .join("eraTW")
+}
+
+fn target_directory() -> PathBuf {
+    if let Some(path) = env::var_os("ERA_TARGET_DIR") {
+        return PathBuf::from(path);
+    }
+    let repository = repository_root();
+    let workspace_target = repository
+        .parent()
+        .expect("core repository has a workspace parent")
+        .join("target");
+    if repository
+        .parent()
+        .is_some_and(|parent| parent.join(".cargo/config.toml").is_file())
+    {
+        workspace_target
+    } else {
+        repository.join("target")
+    }
 }
 
 fn project_argument(index: usize) -> PathBuf {

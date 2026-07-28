@@ -5,31 +5,15 @@
 .rustyera/
 
 /target
-Cargo.lock
-
-/frontends/era-tui/build
-/frontends/era-tui/dist
-/frontends/era-web/node_modules
-/frontends/era-web/dist
-/frontends/era-web/public/wasm
-/frontends/era-web/playwright-report
-/frontends/era-web/test-results
-/frontends/era-web/.playwright-browsers/
-/frontends/era-web/src-tauri/gen
-/frontends/era-web/*.tsbuildinfo
 
 /reference
-!/reference/emuera.em
 /reference/**/bin
 /reference/**/obj
-/reference/eraTW
 /reference/*.png
 
 # Local Emuera reference oracle, its platform harnesses, and generated output.
 /tools/**/bin
 /tools/**/obj
-/.wine-prefix/
-/.wine-tmp/
 
 # Local, reproducible audit harnesses and their generated oracle output.
 /.audit/

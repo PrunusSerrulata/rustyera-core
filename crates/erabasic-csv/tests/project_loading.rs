@@ -327,62 +327,46 @@ fn reference_cli_fixture_has_the_same_rust_projection() {
         csv: vec![
             file(
                 "GAMEBASE.CSV",
-                include_str!(
-                    "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/csv/GAMEBASE.CSV"
-                ),
+                include_str!("../../../tools/runtime-tester/fixture-declaration/csv/GAMEBASE.CSV"),
             ),
             file(
                 "VariableSize.CSV",
                 include_str!(
-                    "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/csv/VariableSize.CSV"
+                    "../../../tools/runtime-tester/fixture-declaration/csv/VariableSize.CSV"
                 ),
             ),
             file(
                 "ABL.CSV",
-                include_str!(
-                    "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/csv/ABL.CSV"
-                ),
+                include_str!("../../../tools/runtime-tester/fixture-declaration/csv/ABL.CSV"),
             ),
             file(
                 "ABL.als",
-                include_str!(
-                    "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/csv/ABL.als"
-                ),
+                include_str!("../../../tools/runtime-tester/fixture-declaration/csv/ABL.als"),
             ),
             file(
                 "ITEM.CSV",
-                include_str!(
-                    "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/csv/ITEM.CSV"
-                ),
+                include_str!("../../../tools/runtime-tester/fixture-declaration/csv/ITEM.CSV"),
             ),
             file(
                 "STR.CSV",
-                include_str!(
-                    "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/csv/STR.CSV"
-                ),
+                include_str!("../../../tools/runtime-tester/fixture-declaration/csv/STR.CSV"),
             ),
             file(
                 "CSTR.CSV",
-                include_str!(
-                    "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/csv/CSTR.CSV"
-                ),
+                include_str!("../../../tools/runtime-tester/fixture-declaration/csv/CSTR.CSV"),
             ),
             file(
                 "CHARA0.CSV",
-                include_str!(
-                    "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/csv/CHARA0.CSV"
-                ),
+                include_str!("../../../tools/runtime-tester/fixture-declaration/csv/CHARA0.CSV"),
             ),
             file(
                 "_Replace.csv",
-                include_str!(
-                    "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/csv/_Replace.csv"
-                ),
+                include_str!("../../../tools/runtime-tester/fixture-declaration/csv/_Replace.csv"),
             ),
             file(
                 "VarExt-oracle.csv",
                 include_str!(
-                    "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/csv/VarExt-oracle.csv"
+                    "../../../tools/runtime-tester/fixture-declaration/csv/VarExt-oracle.csv"
                 ),
             ),
         ],

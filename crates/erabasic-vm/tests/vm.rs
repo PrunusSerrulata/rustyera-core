@@ -1728,10 +1728,8 @@ fn dynamic_variable_string_oracle_matches_reference_fixture() {
          RESULT:54 = RESULT:0\n\
          RETURN\n";
     assert!(
-        include_str!(
-            "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/erb/oracle.erb"
-        )
-        .contains(source),
+        include_str!("../../../tools/runtime-tester/fixture-reference/erb/oracle.erb")
+            .contains(source),
         "Rust and reference oracle bodies differ"
     );
     let artifact = compile_source(source);
@@ -3594,7 +3592,7 @@ fn dynamic_calls_apply_omission_conversion_and_event_compatibility_options() {
 #[test]
 fn compatibility_rest_matches_the_reference_oracle_fixture() {
     let artifact = compile_source(include_str!(
-        "../../../reference/emuera.em/emuera-reference-cli/tests/fixture/erb/oracle.erb"
+        "../../../tools/runtime-tester/fixture-reference/erb/oracle.erb"
     ));
     let entry = artifact
         .functions
