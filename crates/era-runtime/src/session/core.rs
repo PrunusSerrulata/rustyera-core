@@ -1782,7 +1782,7 @@ impl RuntimeSession {
         self.outbound_transfer = None;
         self.vm = None;
         self.controller = SystemController::default();
-        self.presentation = PresentationModel::default();
+        self.presentation.reset_preserving_projection();
         self.pending_presentation_update = false;
         if let Some(project) = &self.project_snapshot {
             self.presentation.configure_project(project);

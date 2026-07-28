@@ -927,6 +927,25 @@ impl PresentationModel {
         self.delivery.dirty.force_snapshot = true;
     }
 
+    /// Clear runtime-owned content without forgetting capabilities negotiated by the client.
+    pub(crate) fn reset_preserving_projection(&mut self) {
+        let projection = (
+            self.project_column_cells,
+            self.project_separators,
+            self.project_html,
+            self.project_graphics,
+            self.project_audio,
+        );
+        *self = Self::default();
+        self.set_projection(
+            projection.0,
+            projection.1,
+            projection.2,
+            projection.3,
+            projection.4,
+        );
+    }
+
     pub(crate) fn configure_project(
         &mut self,
         project: &crate::project::NormalizedProjectSnapshot,
@@ -2113,6 +2132,23 @@ mod tests {
         assert_eq!(committed.history.logical_lines.len(), 1);
         assert!(committed.history.logical_lines[0].line_end);
         assert_eq!(committed.history.logical_lines[0].runs.len(), 3);
+    }
+
+    #[test]
+    fn content_reset_preserves_negotiated_html_projection() {
+        let mut model = PresentationModel::default();
+        model.set_projection(true, true, true, true, true);
+        model.append_print_text("old".into(), false, true);
+
+        model.reset_preserving_projection();
+        model.append_html(
+            erabasic_html::parse_document("<p align='center'><img src='title'></p>").unwrap(),
+        );
+
+        assert!(matches!(
+            &model.snapshot().history.logical_lines[0].runs[0],
+            DisplayRun::HtmlDocument { .. }
+        ));
     }
 
     #[test]
