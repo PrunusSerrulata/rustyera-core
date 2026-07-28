@@ -91,7 +91,8 @@ try {
 
     $caps = Invoke-Oracle @{ id = 2; op = "capabilities" }
     Assert-True $caps.ok "process did not survive the failed request"
-    Assert-True ($caps.schemaVersion -eq 1) "unexpected schema version"
+    Assert-True ($caps.schemaVersion -eq 2) "unexpected schema version"
+    Assert-True ($caps.result.operations -contains "loadSave") "loadSave capability is missing"
 
     $lex = Invoke-Oracle @{ id = 3; op = "lex"; source = "1 + 2" }
     Assert-True $lex.ok "lex failed"
@@ -103,10 +104,25 @@ try {
     $tempGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-oracle-" + [guid]::NewGuid())
     Copy-Item (Join-Path $fixtureDirectory "fixture") $tempGame -Recurse
 
-    $load = Invoke-Oracle @{ id = 6; op = "load"; gameDir = $tempGame }
+    $load = Invoke-Oracle @{ id = 6; op = "load"; gameDir = $tempGame; seed = 123456 }
     Assert-True $load.ok "fixture game failed to load"
     Assert-True ($load.result.termination -eq "waitingInput") "fixture title did not request input"
     Assert-True ($load.result.output -contains "TITLE_CHARANUM=0") "SYSTEM_TITLE observed initialized characters"
+    Assert-True ($load.result.randomSeed -eq 123456) "load did not report the requested random seed"
+    Assert-True ($load.result.randomAlgorithm -in @("sfmt19937", "dotnet")) "unknown random algorithm"
+
+    $seededRandom = Invoke-Oracle @{ id = "seeded-random"; op = "execute"; statement = "RESULT = RAND:1000000"; watch = @("RESULT") }
+    Assert-True $seededRandom.ok "seeded random execution failed"
+    $saved = Invoke-Oracle @{ id = "save"; op = "execute"; statement = 'SAVEDATA 0, "ORACLE_SAVE"' }
+    Assert-True $saved.ok "fixture save failed"
+    $loadedSave = Invoke-Oracle @{
+        id = "load-save"
+        op = "loadSave"
+        savePath = Join-Path $tempGame "save00.sav"
+        watch = @("RESULT")
+    }
+    Assert-True ($loadedSave.ok -and $loadedSave.result.termination -eq "waitingInput") "fixture save failed to load"
+    Assert-True ($null -eq $loadedSave.result.randomSeed) "loadSave should report RNG state as save-owned"
 
     $timedOneInput = Invoke-Oracle @{
         id = "toneinput"
@@ -409,6 +425,11 @@ try {
     Assert-True ($stopCallTrain.ok -and $stopCallTrain.result.termination -eq "error") "STOPCALLTRAIN reference termination differs"
     Assert-True (($stopCallTrain.result.watches.'RESULT:30' -eq 0) -and
         ($stopCallTrain.result.watches.'RESULT:31' -eq 1)) "STOPCALLTRAIN did not discard its caller before CALLTRAINEND"
+
+    $seedReload = Invoke-Oracle @{ id = "seed-reload"; op = "load"; gameDir = $tempGame; seed = 123456 }
+    Assert-True $seedReload.ok "seeded fixture reload failed"
+    $seededRandomRepeat = Invoke-Oracle @{ id = "seeded-random-repeat"; op = "execute"; statement = "RESULT = RAND:1000000"; watch = @("RESULT") }
+    Assert-True ($seededRandom.result.watches.RESULT -eq $seededRandomRepeat.result.watches.RESULT) "same seed produced a different random result"
 
     $reset = Invoke-Oracle @{ id = 11; op = "reset" }
     Assert-True $reset.ok "reset failed"

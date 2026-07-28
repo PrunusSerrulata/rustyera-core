@@ -57,6 +57,7 @@ FIXTURE_WINDOWS_PATH="$(winepath -w "$FIXTURE_DIR")"
 SYSTEM_FIXTURE_WINDOWS_PATH="$(winepath -w "$SYSTEM_FIXTURE_DIR")"
 ONEINPUT_FIXTURE_WINDOWS_PATH="$(winepath -w "$ONEINPUT_FIXTURE_DIR")"
 ONEINPUT_LONG_FIXTURE_WINDOWS_PATH="$(winepath -w "$ONEINPUT_LONG_FIXTURE_DIR")"
+SAVE_WINDOWS_PATH="$(winepath -w "$FIXTURE_DIR/save00.sav")"
 
 # A framework-dependent build cannot locate macOS's .NET installation from
 # inside Wine, so publish the Windows runtime beside the executable.
@@ -75,7 +76,13 @@ printf '%s\n' \
     '{"id":"wine-expression","op":"parseExpression","source":"1 + 2 * 3"}' \
     >"$REQUEST_FILE"
 jq -nc --arg gameDir "$FIXTURE_WINDOWS_PATH" \
-    '{id:"wine-load",op:"load",gameDir:$gameDir}' >>"$REQUEST_FILE"
+    '{id:"wine-load",op:"load",gameDir:$gameDir,seed:123456}' >>"$REQUEST_FILE"
+printf '%s\n' \
+    '{"id":"wine-seeded-random","op":"execute","statement":"RESULT = RAND:1000000","watch":["RESULT"]}' \
+    '{"id":"wine-save","op":"execute","statement":"SAVEDATA 0, \"ORACLE_SAVE\"","watch":["RESULT"]}' \
+    >>"$REQUEST_FILE"
+jq -nc --arg savePath "$SAVE_WINDOWS_PATH" \
+    '{id:"wine-load-save",op:"loadSave",savePath:$savePath,watch:["RESULT"]}' >>"$REQUEST_FILE"
 printf '%s\n' \
     '{"id":"wine-toneinput","op":"execute","statement":"TONEINPUTS 1000, \"DEFAULT\", 1, \"timeout\", 0, 0"}' \
     '{"id":"wine-tooltip-delay","op":"execute","statement":"TOOLTIP_SETDELAY 0"}' \
@@ -130,6 +137,11 @@ jq -nc --arg gameDir "$SYSTEM_FIXTURE_WINDOWS_PATH" \
     '{id:"wine-system-load",op:"load",gameDir:$gameDir}' >>"$REQUEST_FILE"
 printf '%s\n' \
     '{"id":"wine-stopcalltrain","op":"run","watch":["RESULT:30","RESULT:31"]}' \
+    >>"$REQUEST_FILE"
+jq -nc --arg gameDir "$FIXTURE_WINDOWS_PATH" \
+    '{id:"wine-seed-reload",op:"load",gameDir:$gameDir,seed:123456}' >>"$REQUEST_FILE"
+printf '%s\n' \
+    '{"id":"wine-seeded-random-repeat","op":"execute","statement":"RESULT = RAND:1000000","watch":["RESULT"]}' \
     '{"id":"wine-reset","op":"reset"}' \
     >>"$REQUEST_FILE"
 
@@ -142,19 +154,27 @@ perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 49 and
+    length == 54 and
     map(.id) == [
-        "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-toneinput",
+        "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-seeded-random",
+        "wine-save", "wine-load-save", "wine-toneinput",
         "wine-tooltip-delay",
         "wine-config-drawing", "wine-config-font-size", "wine-config-fore-color", "wine-config-stain-list",
         "wine-getmillisecond", "wine-getsecond", "wine-project",
         "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
         "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
         "wine-putform", "wine-savenos",
-        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-dynamic-variables", "wine-reflection", "wine-map", "wine-presentation", "wine-print-family", "wine-linecount", "wine-html-pop", "wine-presentation-23", "wine-structured", "wine-compat-12", "wine-presentation-3", "wine-input", "wine-restart", "wine-pending-auto-button", "wine-oneinput-load", "wine-oneinput-text", "wine-oneinput-mouse-default", "wine-oneinput-long-load", "wine-oneinput-mouse-long", "wine-system-load", "wine-stopcalltrain", "wine-reset"
+        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-dynamic-variables", "wine-reflection", "wine-map", "wine-presentation", "wine-print-family", "wine-linecount", "wine-html-pop", "wine-presentation-23", "wine-structured", "wine-compat-12", "wine-presentation-3", "wine-input", "wine-restart", "wine-pending-auto-button", "wine-oneinput-load", "wine-oneinput-text", "wine-oneinput-mouse-default", "wine-oneinput-long-load", "wine-oneinput-mouse-long", "wine-system-load", "wine-stopcalltrain", "wine-seed-reload", "wine-seeded-random-repeat", "wine-reset"
     ] and
     all(.[]; .ok == true) and
+    (map(select(.id == "wine-capabilities"))[0].schemaVersion == 2) and
+    (map(select(.id == "wine-capabilities"))[0].result.operations | contains(["loadSave"])) and
     (map(select(.id == "wine-load"))[0].result.termination == "waitingInput") and
+    (map(select(.id == "wine-load"))[0].result.randomSeed == 123456) and
+    (map(select(.id == "wine-load"))[0].result.randomAlgorithm | IN("sfmt19937", "dotnet")) and
+    (map(select(.id == "wine-load-save"))[0].result.randomSeed == null) and
+    (map(select(.id == "wine-load-save"))[0].result.termination == "waitingInput") and
+    (map(select(.id == "wine-seeded-random"))[0].result.watches.RESULT == map(select(.id == "wine-seeded-random-repeat"))[0].result.watches.RESULT) and
     (map(select(.id == "wine-tooltip-delay"))[0].result.termination == "waitingInput") and
     (map(select(.id == "wine-load"))[0].result.output | contains(["TITLE_CHARANUM=0"])) and
     (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["EVENTFIRST", "ORACLE_COMPAT", "ORACLE_COMPAT_12", "ORACLE_COMPAT_REST", "ORACLE_DYNAMIC_1", "ORACLE_DYNAMIC_VARIABLES", "ORACLE_HTML_POP", "ORACLE_INPUT", "ORACLE_LINECOUNT", "ORACLE_LIST_TARGET", "ORACLE_MAP", "ORACLE_NATIVE", "ORACLE_PENDING_AUTO_BUTTON", "ORACLE_PRESENTATION", "ORACLE_PRESENTATION_23", "ORACLE_PRESENTATION_3", "ORACLE_PRINT_FAMILY", "ORACLE_REFLECTION", "ORACLE_RESTART_ABILITY", "ORACLE_RESTART_FLOW", "ORACLE_RESTART_MOVE", "ORACLE_STRUCTURED", "ORACLE_TEST", "SYSTEM_TITLE"]) and
