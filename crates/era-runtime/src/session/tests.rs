@@ -660,6 +660,71 @@ fn ggetcolor_rejects_negative_y_without_frontend_raster_observation() {
 }
 
 #[test]
+fn gsave_without_canvas_encoder_returns_failure_and_continues() {
+    let mut client_capabilities = capabilities();
+    client_capabilities.graphics = true;
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "canvas-save-fallback-test".into(),
+            features: vec![RuntimeFeature::Graphics],
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: client_capabilities,
+            preferred_locales: vec!["en".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "canvas-save.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nRESULT = GCREATE(1, 2, 2)\nRESULT = GSAVE(1, 0)\nWAIT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let mut messages = Vec::new();
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        messages.extend(drain(&mut session));
+        if session.phase() == RuntimePhase::WaitingInput {
+            break;
+        }
+    }
+
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    assert!(!messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ServiceRequest(request)
+            if request.operation == ENCODE_CANVAS_PNG_OPERATION
+    )));
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+        0
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn portable_graphics_and_textbox_compatibility_paths_are_runtime_owned() {
     let mut client_capabilities = capabilities();

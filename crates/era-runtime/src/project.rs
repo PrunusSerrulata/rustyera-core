@@ -1671,7 +1671,8 @@ mod tests {
 
     #[test]
     fn focused_eratw_system_slices_exercise_runtime_owned_save_flows() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../eraTW/ERB");
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games/eraTW/ERB");
         for (relative, required) in [
             ("TITLE.ERB", &["@SYSTEM_TITLE", "LOADGAME"][..]),
             ("SHOP関連/SHOP.ERB", &["SAVEGAME", "LOADGAME"]),

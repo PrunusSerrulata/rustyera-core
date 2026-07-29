@@ -2387,6 +2387,16 @@ impl RuntimeSession {
             if !(0..=i64::from(i32::MAX)).contains(&file_no) {
                 return commit_integer_result(vm, request.id, 0);
             }
+            // PNG encoding is an optional frontend raster capability. Emuera reports
+            // GSAVE failure to the script when the image cannot be encoded; a text-only
+            // client must not fault the whole session merely because it lacks a renderer.
+            if self
+                .service_capabilities
+                .get(&(ServiceKind::Canvas, ENCODE_CANVAS_PNG_OPERATION.to_owned()))
+                != Some(&ENCODE_CANVAS_PNG_OPERATION_VERSION)
+            {
+                return commit_integer_result(vm, request.id, 0);
+            }
             return self.issue_host_service(
                 vm,
                 request,

@@ -969,6 +969,45 @@ fn scoped_variable_instructions_register_and_initialize_frame_locals() {
 }
 
 #[test]
+fn scoped_declaration_keyword_can_be_a_private_assignment_target() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "main.erb",
+                "@SYSTEM_TITLE\n#DIMS VARS\nVARS = CFLAG\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let project = report
+        .project
+        .expect("private VARS assignment should analyze");
+    let function = &project.program.functions[0];
+    assert!(
+        project
+            .program
+            .variables
+            .iter()
+            .any(|variable| { variable.name == "VARS" && variable.owner == Some(function.id) })
+    );
+    assert!(matches!(
+        function.lines[0].kind,
+        HirStatementKind::Assignment { .. }
+    ));
+}
+
+#[test]
 fn private_dimensions_can_still_resolve_project_constants() {
     let report = analyze_project(
         AnalysisInput {

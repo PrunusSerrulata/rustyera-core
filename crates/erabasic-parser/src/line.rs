@@ -61,14 +61,27 @@ pub(crate) fn parse_line_at(
     );
     let mut diagnostics = shift_diagnostics(lexed.diagnostics, line_base);
     let tokens = shift_tokens(lexed.tokens, line_base);
+    let assignment_index = top_level_assignment(&tokens);
+    // VARI/VARS declarations require a name after the keyword. When an assignment
+    // operator follows immediately, Emuera instead treats the keyword as a variable
+    // name; real projects use `#DIMS VARS` followed by `VARS = ...`.
+    let scoped_keyword_assignment = assignment_index == Some(1)
+        && tokens.first().is_some_and(|token| {
+            matches!(
+                &token.kind,
+                TokenKind::Identifier(name)
+                    if matches!(name.to_ascii_uppercase().as_str(), "VARI" | "VARS")
+            )
+        });
     let dedicated_instruction_grammar = tokens
         .first()
         .and_then(|token| match &token.kind {
             TokenKind::Identifier(name) => context.instruction(name),
             _ => None,
         })
-        .is_some_and(|spec| spec.argument_style != ArgumentStyle::Expressions);
-    if !dedicated_instruction_grammar && let Some(index) = top_level_assignment(&tokens) {
+        .is_some_and(|spec| spec.argument_style != ArgumentStyle::Expressions)
+        && !scoped_keyword_assignment;
+    if !dedicated_instruction_grammar && let Some(index) = assignment_index {
         let mut left_parser = ExpressionParser::new(&tokens[..index]);
         let left = left_parser.parse();
         let op_token = &tokens[index];
