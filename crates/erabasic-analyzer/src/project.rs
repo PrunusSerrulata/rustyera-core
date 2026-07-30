@@ -14,6 +14,7 @@ use erabasic_hir::{
     Program, SemanticType, SourceFile, SourceId, SourceLocation,
 };
 use erabasic_parser::{parse_erb, parse_erh};
+#[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 

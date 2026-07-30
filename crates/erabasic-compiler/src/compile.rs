@@ -15,6 +15,7 @@ use erabasic_hir::{
     VariableScope,
 };
 use erabasic_validator::{ValidationContext, validate_compiler_output, validate_hir};
+#[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -357,6 +358,7 @@ fn compile_project_inner(
     // Cache hashing and lowering are both function-local. Running them in one
     // indexed parallel iterator preserves deterministic input order while
     // avoiding a serial hashing pass before worker threads can start lowering.
+    #[cfg(not(target_arch = "wasm32"))]
     let function_builds = if let Some(jobs) = options.jobs {
         match rayon::ThreadPoolBuilder::new()
             .num_threads(jobs.max(1))
@@ -379,6 +381,8 @@ fn compile_project_inner(
     } else {
         compile_functions()
     };
+    #[cfg(target_arch = "wasm32")]
+    let function_builds = compile_functions();
     let mut materialized = Vec::with_capacity(function_builds.len());
     let mut lowered_count = 0usize;
     let mut diagnostics = Vec::new();
