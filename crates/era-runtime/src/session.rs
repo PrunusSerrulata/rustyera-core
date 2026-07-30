@@ -162,6 +162,40 @@ pub enum RuntimeDriveState {
     Faulted,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraditionalSaveInspection {
+    pub description: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TraditionalSaveValidationError {
+    ProjectUnavailable,
+    Invalid(String),
+    DifferentGame,
+    DifferentVersion,
+    Incompatible(String),
+}
+
+impl fmt::Display for TraditionalSaveValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ProjectUnavailable => formatter.write_str("no compiled project is available"),
+            Self::Invalid(message) => write!(formatter, "traditional save is invalid: {message}"),
+            Self::DifferentGame => {
+                formatter.write_str("traditional save belongs to a different game")
+            }
+            Self::DifferentVersion => {
+                formatter.write_str("traditional save belongs to an incompatible game version")
+            }
+            Self::Incompatible(message) => {
+                write!(formatter, "traditional save is incompatible: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TraditionalSaveValidationError {}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeDriveReport {
     pub state: RuntimeDriveState,

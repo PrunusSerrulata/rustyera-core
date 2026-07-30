@@ -24,5 +24,5 @@ pub use runtime_snapshot::{
 };
 pub use session::{
     RuntimeDriveBudget, RuntimeDriveReport, RuntimeDriveState, RuntimeError, RuntimeOptions,
-    RuntimeSession,
+    RuntimeSession, TraditionalSaveInspection, TraditionalSaveValidationError,
 };

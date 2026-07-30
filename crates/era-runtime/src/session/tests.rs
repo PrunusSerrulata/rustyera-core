@@ -3279,6 +3279,19 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
         })
         .expect("traditional save bytes");
 
+    assert_eq!(source.traditional_save_slot_count(), Some(20));
+    assert_eq!(
+        source.inspect_traditional_save(&bytes).unwrap(),
+        TraditionalSaveInspection {
+            description: String::new(),
+        }
+    );
+    assert!(matches!(
+        source.inspect_traditional_save(b"not a save"),
+        Err(TraditionalSaveValidationError::Invalid(_))
+    ));
+    assert_eq!(source.phase(), RuntimePhase::WaitingInput);
+
     let mut restored = prepare();
     submit(
         &mut restored,

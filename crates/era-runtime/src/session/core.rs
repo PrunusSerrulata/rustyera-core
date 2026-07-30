@@ -5,6 +5,54 @@
 use super::*;
 
 impl RuntimeSession {
+    /// Return the current project's selectable traditional-save slot count.
+    #[must_use]
+    pub fn traditional_save_slot_count(&self) -> Option<u32> {
+        self.project_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.save_slot_count.max(20))
+    }
+
+    /// Fully validate an ordinary save against the active compiled project without mutating it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a categorized error when no project is ready, the save is malformed, belongs to a
+    /// different game/version, or cannot be restored with the active project schema.
+    pub fn inspect_traditional_save(
+        &self,
+        bytes: &[u8],
+    ) -> Result<TraditionalSaveInspection, TraditionalSaveValidationError> {
+        let artifact = self
+            .artifact
+            .as_ref()
+            .ok_or(TraditionalSaveValidationError::ProjectUnavailable)?;
+        let decoded = decode_era_save(bytes, artifact.artifact())
+            .map_err(|error| TraditionalSaveValidationError::Invalid(error.to_string()))?;
+        let project_data = &artifact.artifact().project_data;
+        let game = &project_data.static_data.game_base;
+        if decoded.state.unique_code != game.unique_code {
+            return Err(TraditionalSaveValidationError::DifferentGame);
+        }
+        if !project_data
+            .save_load_context()
+            .compatibility
+            .accepts(decoded.state.unique_code, decoded.state.version)
+        {
+            return Err(TraditionalSaveValidationError::DifferentVersion);
+        }
+        let vm = RuntimeVm::new(artifact.clone(), self.options.vm_config);
+        vm.prepare_runtime_state_with_extensions(
+            VmRuntimeStateTransaction::RestoreOrdinary(Box::new(decoded.state)),
+            StructuredScope::Ordinary,
+            &decoded.structured_extensions,
+        )
+        .map_err(|error| TraditionalSaveValidationError::Incompatible(error.to_string()))?;
+        Ok(TraditionalSaveInspection {
+            description: decoded.description,
+        })
+    }
+
     #[must_use]
     #[allow(
         clippy::too_many_lines,
