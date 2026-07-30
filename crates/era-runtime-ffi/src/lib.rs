@@ -5,7 +5,7 @@
 
 use std::ffi::{c_char, c_void};
 
-pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 0 };
+pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 1 };
 pub const ERA_RUNTIME_GET_API_SYMBOL: &str = "era_runtime_get_api";
 
 pub const ERA_DEBUG_SCOPE_VARIABLES_READ: u64 = 1 << 0;
@@ -142,6 +142,27 @@ pub struct EraDriveResult {
     pub queued_envelopes: u32,
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EraProjectProgressStage {
+    Scanning = 0,
+    Normalizing = 1,
+    LoadingData = 2,
+    Parsing = 3,
+    Analyzing = 4,
+    Compiling = 5,
+    Validating = 6,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EraProjectProgress {
+    pub header: EraCallHeader,
+    pub stage: EraProjectProgressStage,
+    pub completed: u64,
+    pub total: u64,
+}
+
 impl Default for EraDriveResult {
     fn default() -> Self {
         Self {
@@ -160,7 +181,9 @@ impl Default for EraDriveResult {
 pub type EraFunctionPointer = *const c_void;
 
 /// Versioned function table returned by the `era_runtime_get_api` symbol.
-/// No callback into the frontend appears here; all communication uses submit/poll.
+/// `reserved[0]` in ABI 3.1 is an optional `EraSessionSetProjectProgressFn` extension.
+/// Authoritative runtime communication continues to use submit/poll; this callback carries only
+/// read-only workload telemetry and must never re-enter the session.
 #[repr(C)]
 pub struct EraRuntimeApi {
     pub struct_size: u32,

@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use erabasic_analyzer::AnalyzedProject;
 use erabasic_bytecode::{
@@ -133,6 +135,24 @@ pub struct CompileReport {
     pub stats: CompileStats,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompileProgress {
+    pub completed: usize,
+    pub total: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub trait CompileProgressCallback: Fn(CompileProgress) + Sync {}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> CompileProgressCallback for T where T: Fn(CompileProgress) + Sync {}
+
+#[cfg(target_arch = "wasm32")]
+pub trait CompileProgressCallback: Fn(CompileProgress) {}
+
+#[cfg(target_arch = "wasm32")]
+impl<T> CompileProgressCallback for T where T: Fn(CompileProgress) {}
+
 #[must_use]
 #[allow(clippy::too_many_lines)]
 /// Compile one analyzed, in-memory project into a self-contained artifact.
@@ -147,7 +167,7 @@ pub fn compile_project(
     host_registry: &HostRegistry,
     previous: Option<&IncrementalState>,
 ) -> CompileReport {
-    compile_project_inner(project, options, host_registry, previous, None, false)
+    compile_project_inner(project, options, host_registry, previous, None, false, None)
 }
 
 /// Compile with an exact previous artifact backing a compact incremental cache.
@@ -170,6 +190,27 @@ pub fn compile_project_with_artifact(
         previous,
         previous_artifact,
         true,
+        None,
+    )
+}
+
+#[must_use]
+pub fn compile_project_with_artifact_and_progress(
+    project: &AnalyzedProject,
+    options: &CompilerOptions,
+    host_registry: &HostRegistry,
+    previous: Option<&IncrementalState>,
+    previous_artifact: Option<&BytecodeArtifact>,
+    progress: &dyn CompileProgressCallback,
+) -> CompileReport {
+    compile_project_inner(
+        project,
+        options,
+        host_registry,
+        previous,
+        previous_artifact,
+        true,
+        Some(progress),
     )
 }
 
@@ -181,7 +222,15 @@ fn compile_project_inner(
     previous: Option<&IncrementalState>,
     previous_artifact: Option<&BytecodeArtifact>,
     compact_cache: bool,
+    progress: Option<&dyn CompileProgressCallback>,
 ) -> CompileReport {
+    let total_functions = project.program.functions.len();
+    if let Some(progress) = progress {
+        progress(CompileProgress {
+            completed: 0,
+            total: total_functions,
+        });
+    }
     let hir_report = validate_hir(&project.program, &project.data);
     if !hir_report.is_valid() {
         return CompileReport {
@@ -238,36 +287,72 @@ fn compile_project_inner(
         previous.and_then(IncrementalState::base_artifact_id) == Some(artifact.manifest.artifact_id)
     });
     let previous_artifact_index = previous_artifact.map(PreviousArtifactIndex::new);
+    let completed_functions = AtomicUsize::new(0);
+    let reported_percent = AtomicUsize::new(0);
+    let progress_callback_lock = Mutex::new(());
+    let compile_one = |function: &Function| {
+        let build = {
+            let key = function_keys[&function.id];
+            let function_digest = canonical_digest("rustyera.compiler.hir-function.v3", function);
+            let cache_key = Digest::hash(
+                "rustyera.compiler.function.v3",
+                &[
+                    &function_digest.0,
+                    &shared_dependencies.0,
+                    &compiler_options.0,
+                ],
+            );
+            if let Some(entry) = previous_functions
+                .and_then(|functions| functions.get(&key))
+                .filter(|entry| entry.cache_key == cache_key)
+                .and_then(|entry| {
+                    materialize_cached_function(entry, previous_artifact_index.as_ref())
+                })
+            {
+                FunctionBuild::Cached(entry)
+            } else {
+                FunctionBuild::Lowered(lower_function(function, key, cache_key, &context))
+            }
+        };
+        let completed = completed_functions.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(progress) = progress {
+            let percent = completed
+                .saturating_mul(100)
+                .checked_div(total_functions)
+                .unwrap_or(100);
+            let _guard = progress_callback_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let previous = reported_percent.load(Ordering::Relaxed);
+            if percent > previous || completed == total_functions {
+                reported_percent.store(percent, Ordering::Relaxed);
+                progress(CompileProgress {
+                    completed,
+                    total: total_functions,
+                });
+            }
+        }
+        build
+    };
     let compile_functions = || {
-        project
-            .program
-            .functions
-            .par_iter()
-            .map(|function| {
-                let key = function_keys[&function.id];
-                let function_digest =
-                    canonical_digest("rustyera.compiler.hir-function.v3", function);
-                let cache_key = Digest::hash(
-                    "rustyera.compiler.function.v3",
-                    &[
-                        &function_digest.0,
-                        &shared_dependencies.0,
-                        &compiler_options.0,
-                    ],
-                );
-                if let Some(entry) = previous_functions
-                    .and_then(|functions| functions.get(&key))
-                    .filter(|entry| entry.cache_key == cache_key)
-                    .and_then(|entry| {
-                        materialize_cached_function(entry, previous_artifact_index.as_ref())
-                    })
-                {
-                    FunctionBuild::Cached(entry)
-                } else {
-                    FunctionBuild::Lowered(lower_function(function, key, cache_key, &context))
-                }
-            })
-            .collect::<Vec<_>>()
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            project
+                .program
+                .functions
+                .par_iter()
+                .map(compile_one)
+                .collect::<Vec<_>>()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            project
+                .program
+                .functions
+                .iter()
+                .map(compile_one)
+                .collect::<Vec<_>>()
+        }
     };
     // Cache hashing and lowering are both function-local. Running them in one
     // indexed parallel iterator preserves deterministic input order while

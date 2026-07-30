@@ -27,5 +27,7 @@ pub use diagnostic::{
 pub use input::{AnalysisInput, ProjectSource, SourceIoError, SourceIoErrorKind, SourcePayload};
 pub use options::{AnalyzerOptions, WarningPolicy};
 pub use project::{
-    AnalysisReport, AnalyzedProject, ParsedProjectSource, analyze_parsed_project, analyze_project,
+    AnalysisProgress, AnalysisProgressCallback, AnalysisProgressStage, AnalysisReport,
+    AnalyzedProject, ParsedProjectSource, analyze_parsed_project, analyze_project,
+    analyze_project_with_progress,
 };

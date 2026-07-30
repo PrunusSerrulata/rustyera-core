@@ -82,7 +82,8 @@ use crate::presentation::{
 #[cfg(test)]
 use crate::project::build_project;
 use crate::project::{
-    NormalizedProjectSnapshot, ProjectBuild, apply_project_delta, build_project_with_extensions,
+    NormalizedProjectSnapshot, ProjectBuild, apply_project_delta,
+    build_project_with_extensions_and_progress,
 };
 use crate::runtime_snapshot::{
     self, CULTURE_TABLE_VERSION, RUNTIME_SNAPSHOT_FORMAT_VERSION, RuntimeSnapshotOrigin,
@@ -114,6 +115,56 @@ pub struct RuntimeOptions {
     pub vm_config: VmConfig,
     /// Creator-owned upper bound for [`DebugScope`] discriminants.
     pub debug_scope_mask: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectProgressStage {
+    Scanning,
+    Normalizing,
+    LoadingData,
+    Parsing,
+    Analyzing,
+    Compiling,
+    Validating,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectProgress {
+    pub stage: ProjectProgressStage,
+    pub completed: u64,
+    pub total: u64,
+}
+
+#[derive(Clone)]
+pub struct ProjectProgressReporter {
+    #[cfg(not(target_arch = "wasm32"))]
+    callback: Arc<dyn Fn(ProjectProgress) + Send + Sync>,
+    #[cfg(target_arch = "wasm32")]
+    callback: std::rc::Rc<dyn Fn(ProjectProgress)>,
+}
+
+impl ProjectProgressReporter {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn new(callback: impl Fn(ProjectProgress) + Send + Sync + 'static) -> Self {
+        Self {
+            callback: Arc::new(callback),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[must_use]
+    pub fn new(callback: impl Fn(ProjectProgress) + 'static) -> Self {
+        Self {
+            callback: std::rc::Rc::new(callback),
+        }
+    }
+
+    pub(crate) fn report(&self, progress: ProjectProgress) {
+        (self.callback)(progress);
+    }
 }
 
 #[cfg(test)]
@@ -303,6 +354,7 @@ struct ActiveDebugGrant {
 #[allow(clippy::struct_excessive_bools)]
 pub struct RuntimeSession {
     options: RuntimeOptions,
+    project_progress_reporter: Option<ProjectProgressReporter>,
     state: SessionState,
     phase: RuntimePhase,
     revision: u64,

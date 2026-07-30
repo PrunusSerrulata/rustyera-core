@@ -23,6 +23,7 @@ pub use runtime_snapshot::{
     inspect_runtime_snapshot,
 };
 pub use session::{
-    RuntimeDriveBudget, RuntimeDriveReport, RuntimeDriveState, RuntimeError, RuntimeOptions,
-    RuntimeSession, TraditionalSaveInspection, TraditionalSaveValidationError,
+    ProjectProgress, ProjectProgressReporter, ProjectProgressStage, RuntimeDriveBudget,
+    RuntimeDriveReport, RuntimeDriveState, RuntimeError, RuntimeOptions, RuntimeSession,
+    TraditionalSaveInspection, TraditionalSaveValidationError,
 };

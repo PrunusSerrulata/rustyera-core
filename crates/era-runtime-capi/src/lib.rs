@@ -11,11 +11,14 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Mutex, OnceLock};
 
 use era_protocol::SessionId;
-use era_runtime::{RuntimeDriveBudget, RuntimeDriveState, RuntimeOptions, RuntimeSession};
+use era_runtime::{
+    ProjectProgressReporter, ProjectProgressStage, RuntimeDriveBudget, RuntimeDriveState,
+    RuntimeOptions, RuntimeSession,
+};
 use era_runtime_ffi::{
     ERA_DEBUG_SCOPE_ALL, ERA_RUNTIME_ABI_VERSION, EraAbiVersion, EraByteSlice, EraCallHeader,
     EraCreateOptions, EraDriveOptions, EraDriveResult, EraDriveState, EraOwnedBuffer,
-    EraRuntimeApi, EraSessionHandle, EraStatus,
+    EraProjectProgress, EraProjectProgressStage, EraRuntimeApi, EraSessionHandle, EraStatus,
 };
 
 static IMPLEMENTATION_NAME: &[u8] = b"RustyEra runtime\0";
@@ -61,6 +64,8 @@ pub unsafe extern "C" fn era_runtime_get_api(
         if requested.major != ERA_RUNTIME_ABI_VERSION.major || out_api.is_null() {
             return EraStatus::AbiMismatch;
         }
+        let mut reserved = [std::ptr::null_mut(); 8];
+        reserved[0] = session_set_project_progress as *const () as *mut c_void;
         let api = EraRuntimeApi {
             struct_size: u32::try_from(std::mem::size_of::<EraRuntimeApi>()).unwrap_or(u32::MAX),
             abi_version: ERA_RUNTIME_ABI_VERSION,
@@ -73,13 +78,60 @@ pub unsafe extern "C" fn era_runtime_get_api(
             session_destroy: session_destroy as *const () as *const c_void,
             release_buffer: release_buffer as *const () as *const c_void,
             last_error: last_error as *const () as *const c_void,
-            reserved: [std::ptr::null_mut(); 8],
+            reserved,
         };
         // SAFETY: null was rejected and the caller contract requires writable storage
         // for one complete EraRuntimeApi value.
         unsafe { out_api.write(api) };
         EraStatus::Ok
     })
+}
+
+type ProjectProgressCallback = extern "C" fn(*mut c_void, EraProjectProgress);
+
+extern "C" fn session_set_project_progress(
+    header: EraCallHeader,
+    handle: EraSessionHandle,
+    callback: Option<ProjectProgressCallback>,
+    context: *mut c_void,
+) -> EraStatus {
+    ffi_status(|| {
+        if !valid_header::<EraCallHeader>(header) {
+            return EraStatus::AbiMismatch;
+        }
+        let mut registry = lock_registry();
+        let Some(record) = registry.sessions.get_mut(&handle.value) else {
+            return EraStatus::InvalidHandle;
+        };
+        let reporter = callback.map(|callback| {
+            let context = context as usize;
+            ProjectProgressReporter::new(move |progress| {
+                callback(
+                    context as *mut c_void,
+                    EraProjectProgress {
+                        header: EraCallHeader::for_type::<EraProjectProgress>(),
+                        stage: project_progress_stage(progress.stage),
+                        completed: progress.completed,
+                        total: progress.total,
+                    },
+                );
+            })
+        });
+        record.runtime.set_project_progress_reporter(reporter);
+        EraStatus::Ok
+    })
+}
+
+const fn project_progress_stage(stage: ProjectProgressStage) -> EraProjectProgressStage {
+    match stage {
+        ProjectProgressStage::Scanning => EraProjectProgressStage::Scanning,
+        ProjectProgressStage::Normalizing => EraProjectProgressStage::Normalizing,
+        ProjectProgressStage::LoadingData => EraProjectProgressStage::LoadingData,
+        ProjectProgressStage::Parsing => EraProjectProgressStage::Parsing,
+        ProjectProgressStage::Analyzing => EraProjectProgressStage::Analyzing,
+        ProjectProgressStage::Compiling => EraProjectProgressStage::Compiling,
+        ProjectProgressStage::Validating => EraProjectProgressStage::Validating,
+    }
 }
 
 extern "C" fn session_create(
@@ -335,6 +387,7 @@ mod tests {
         assert!(!api.session_poll.is_null());
         assert!(!api.session_destroy.is_null());
         assert!(!api.release_buffer.is_null());
+        assert!(!api.reserved[0].is_null());
     }
 
     #[test]

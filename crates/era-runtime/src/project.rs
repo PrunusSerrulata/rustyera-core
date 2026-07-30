@@ -4,15 +4,15 @@ use era_runtime_protocol::{
     SourceLocation, validate_relative_path,
 };
 use erabasic_analyzer::{
-    AnalysisInput, AnalyzerDiagnosticSeverity, AnalyzerOptions, ArgumentConstraint,
-    CallableSignature, ExtensionRegistry, InstructionSignature, ProjectSource, SourceIoError,
-    SourceIoErrorKind, SourcePayload, WarningPolicy, analyze_project, builtin_function_names,
-    builtin_instruction_names,
+    AnalysisInput, AnalysisProgressStage, AnalyzerDiagnosticSeverity, AnalyzerOptions,
+    ArgumentConstraint, CallableSignature, ExtensionRegistry, InstructionSignature, ProjectSource,
+    SourceIoError, SourceIoErrorKind, SourcePayload, WarningPolicy, analyze_project,
+    analyze_project_with_progress, builtin_function_names, builtin_instruction_names,
 };
 use erabasic_bytecode::BytecodeArtifact;
 use erabasic_compiler::{
-    CompilerOptions, IncrementalState, compile_project_with_artifact, default_host_registry,
-    extension_binding,
+    CompilerOptions, IncrementalState, compile_project_with_artifact,
+    compile_project_with_artifact_and_progress, default_host_registry, extension_binding,
 };
 use erabasic_config::{ConfigStore, ConfigValue};
 use erabasic_csv::{
@@ -27,6 +27,7 @@ use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_compiler
 use serde::{Deserialize, Serialize};
 
 use crate::resource::ResourceGraph;
+use crate::{ProjectProgress, ProjectProgressReporter, ProjectProgressStage};
 
 pub(crate) struct ProjectBuild {
     pub(crate) artifact: Option<ValidatedArtifact>,
@@ -135,11 +136,28 @@ pub(crate) fn build_project(
     build_project_inner(manifest, previous, None)
 }
 
+#[cfg(test)]
 pub(crate) fn build_project_with_extensions(
     manifest: &ProjectManifest,
     previous: Option<&IncrementalState>,
     previous_artifact: Option<&BytecodeArtifact>,
     extensions: &[era_runtime_protocol::ExtensionDeclaration],
+) -> ProjectBuild {
+    build_project_with_extensions_and_progress(
+        manifest,
+        previous,
+        previous_artifact,
+        extensions,
+        None,
+    )
+}
+
+pub(crate) fn build_project_with_extensions_and_progress(
+    manifest: &ProjectManifest,
+    previous: Option<&IncrementalState>,
+    previous_artifact: Option<&BytecodeArtifact>,
+    extensions: &[era_runtime_protocol::ExtensionDeclaration],
+    progress: Option<&ProjectProgressReporter>,
 ) -> ProjectBuild {
     build_project_inner_with_extensions(
         manifest,
@@ -148,6 +166,7 @@ pub(crate) fn build_project_with_extensions(
         None,
         false,
         extensions,
+        progress,
     )
 }
 
@@ -168,6 +187,7 @@ pub(crate) fn analyze_submitted_project_with_extensions(
         Some(&selected),
         request.debug_mode,
         extensions,
+        None,
     );
     let mut analyzed_erb_paths = request
         .manifest
@@ -192,7 +212,15 @@ fn build_project_inner(
     previous: Option<&IncrementalState>,
     analysis_selection: Option<&std::collections::BTreeSet<String>>,
 ) -> ProjectBuild {
-    build_project_inner_with_extensions(manifest, previous, None, analysis_selection, false, &[])
+    build_project_inner_with_extensions(
+        manifest,
+        previous,
+        None,
+        analysis_selection,
+        false,
+        &[],
+        None,
+    )
 }
 
 #[allow(clippy::too_many_lines)]
@@ -203,8 +231,15 @@ fn build_project_inner_with_extensions(
     analysis_selection: Option<&std::collections::BTreeSet<String>>,
     analysis_debug_mode: bool,
     extension_declarations: &[era_runtime_protocol::ExtensionDeclaration],
+    progress: Option<&ProjectProgressReporter>,
 ) -> ProjectBuild {
     let mut diagnostics = Vec::new();
+    report_progress(
+        progress,
+        ProjectProgressStage::Normalizing,
+        0,
+        manifest.files.len(),
+    );
     let source_texts = manifest_source_texts(manifest);
     let (extensions, host_registry, extension_map) =
         prepare_extensions(extension_declarations, &mut diagnostics);
@@ -224,7 +259,8 @@ fn build_project_inner_with_extensions(
     let mut sources = Vec::new();
     let mut resources = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for mut file in files {
+    let file_count = files.len();
+    for (file_index, mut file) in files.into_iter().enumerate() {
         let path = match validate_relative_path(&file.relative_path) {
             Ok(path) => path,
             Err(error) => {
@@ -240,6 +276,12 @@ fn build_project_inner_with_extensions(
                         byte_column: None,
                     }),
                 ));
+                report_fraction(
+                    progress,
+                    ProjectProgressStage::Normalizing,
+                    file_index + 1,
+                    file_count,
+                );
                 continue;
             }
         };
@@ -257,6 +299,12 @@ fn build_project_inner_with_extensions(
                     byte_column: None,
                 }),
             ));
+            report_fraction(
+                progress,
+                ProjectProgressStage::Normalizing,
+                file_index + 1,
+                file_count,
+            );
             continue;
         }
         if let (Some(expected), Some(actual)) =
@@ -275,6 +323,12 @@ fn build_project_inner_with_extensions(
                     byte_column: None,
                 }),
             ));
+            report_fraction(
+                progress,
+                ProjectProgressStage::Normalizing,
+                file_index + 1,
+                file_count,
+            );
             continue;
         }
         match file.category {
@@ -308,9 +362,17 @@ fn build_project_inner_with_extensions(
                 }
             }
         }
+        report_fraction(
+            progress,
+            ProjectProgressStage::Normalizing,
+            file_index + 1,
+            file_count,
+        );
     }
 
+    report_progress(progress, ProjectProgressStage::LoadingData, 0, 1);
     let csv = load_project(&csv_files, &config.csv);
+    report_progress(progress, ProjectProgressStage::LoadingData, 1, 1);
     diagnostics.extend(csv.diagnostics.iter().map(|diagnostic| ProtocolDiagnostic {
         code: format!("csv.{:?}", diagnostic.code).to_ascii_lowercase(),
         level: match diagnostic.severity {
@@ -343,14 +405,31 @@ fn build_project_inner_with_extensions(
         analyzer_options.debug_mode = analysis_debug_mode;
         analyzer_options.ignore_uncalled_functions = false;
     }
-    let analysis = analyze_project(
-        AnalysisInput {
-            project_data: data,
-            sources,
-        },
-        &analyzer_options,
-        &extensions,
-    );
+    let analysis_input = AnalysisInput {
+        project_data: data,
+        sources,
+    };
+    let analysis_progress = |event: erabasic_analyzer::AnalysisProgress| {
+        report_progress(
+            progress,
+            match event.stage {
+                AnalysisProgressStage::Parsing => ProjectProgressStage::Parsing,
+                AnalysisProgressStage::Analyzing => ProjectProgressStage::Analyzing,
+            },
+            event.completed,
+            event.total,
+        );
+    };
+    let analysis = if progress.is_some() {
+        analyze_project_with_progress(
+            analysis_input,
+            &analyzer_options,
+            &extensions,
+            &analysis_progress,
+        )
+    } else {
+        analyze_project(analysis_input, &analyzer_options, &extensions)
+    };
     diagnostics.extend(analysis.diagnostics.iter().map(|diagnostic| {
         let source = diagnostic.source.as_ref().map(|source| {
             let text = source_texts
@@ -396,13 +475,32 @@ fn build_project_inner_with_extensions(
             snapshot: None,
         };
     }
-    let compile = compile_project_with_artifact(
-        &project,
-        &CompilerOptions::default(),
-        &host_registry,
-        previous,
-        previous_artifact,
-    );
+    let compile_progress = |event: erabasic_compiler::CompileProgress| {
+        report_progress(
+            progress,
+            ProjectProgressStage::Compiling,
+            event.completed,
+            event.total,
+        );
+    };
+    let compile = if progress.is_some() {
+        compile_project_with_artifact_and_progress(
+            &project,
+            &CompilerOptions::default(),
+            &host_registry,
+            previous,
+            previous_artifact,
+            &compile_progress,
+        )
+    } else {
+        compile_project_with_artifact(
+            &project,
+            &CompilerOptions::default(),
+            &host_registry,
+            previous,
+            previous_artifact,
+        )
+    };
     diagnostics.extend(compile.diagnostics.iter().map(|diagnostic| {
         let source = diagnostic.location.map(|location| {
             let relative_path = project
@@ -441,8 +539,10 @@ fn build_project_inner_with_extensions(
     // artifact. Re-run structural checks at the runtime boundary, but do not
     // serialize the entire artifact again solely to verify compiler-owned IDs.
     // Decoded or externally supplied bytecode still uses `validate_bytecode`.
+    report_progress(progress, ProjectProgressStage::Validating, 0, 1);
     let validation_context = ValidationContext::for_artifact(&artifact);
     let validation = validate_compiler_output(artifact, &validation_context);
+    report_progress(progress, ProjectProgressStage::Validating, 1, 1);
     diagnostics.extend(validation.diagnostics.iter().map(|diagnostic| {
         project_diagnostic(
             &format!("validator.{:?}", diagnostic.code).to_ascii_lowercase(),
@@ -525,6 +625,37 @@ fn build_project_inner_with_extensions(
             configuration: config.values,
             extensions: extension_map,
         }),
+    }
+}
+
+fn report_progress(
+    reporter: Option<&ProjectProgressReporter>,
+    stage: ProjectProgressStage,
+    completed: usize,
+    total: usize,
+) {
+    if let Some(reporter) = reporter {
+        reporter.report(ProjectProgress {
+            stage,
+            completed: u64::try_from(completed).unwrap_or(u64::MAX),
+            total: u64::try_from(total).unwrap_or(u64::MAX),
+        });
+    }
+}
+
+fn report_fraction(
+    reporter: Option<&ProjectProgressReporter>,
+    stage: ProjectProgressStage,
+    completed: usize,
+    total: usize,
+) {
+    let percent = completed.saturating_mul(100).checked_div(total);
+    let previous_percent = completed
+        .saturating_sub(1)
+        .saturating_mul(100)
+        .checked_div(total);
+    if total == 0 || completed == total || percent > previous_percent {
+        report_progress(reporter, stage, completed, total);
     }
 }
 
@@ -1914,5 +2045,59 @@ mod tests {
         let encoded = String::from_utf8(encoded).unwrap();
         assert!(!encoded.contains("\"opcode\""));
         assert!(!encoded.contains("\"project_data\""));
+    }
+
+    #[test]
+    fn project_build_reports_real_workload_progress() {
+        use std::sync::{Arc, Mutex};
+
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&observed);
+        let reporter = ProjectProgressReporter::new(move |progress| {
+            sink.lock().unwrap().push(progress);
+        });
+        let build = build_project_with_extensions_and_progress(
+            &ProjectManifest {
+                project_revision: 1,
+                files: vec![SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                    content_hash: None,
+                }],
+            },
+            None,
+            None,
+            &[],
+            Some(&reporter),
+        );
+        assert!(build.report.success, "{:?}", build.report.diagnostics);
+        let observed = observed.lock().unwrap();
+        for stage in [
+            ProjectProgressStage::Normalizing,
+            ProjectProgressStage::LoadingData,
+            ProjectProgressStage::Parsing,
+            ProjectProgressStage::Analyzing,
+            ProjectProgressStage::Compiling,
+            ProjectProgressStage::Validating,
+        ] {
+            let values = observed
+                .iter()
+                .filter(|progress| progress.stage == stage)
+                .collect::<Vec<_>>();
+            assert!(!values.is_empty(), "missing {stage:?} progress");
+            assert_eq!(values[0].completed, 0, "{stage:?} did not start at zero");
+            let final_value = values.last().unwrap();
+            assert_eq!(
+                final_value.completed, final_value.total,
+                "{stage:?} did not complete"
+            );
+            assert!(
+                values
+                    .windows(2)
+                    .all(|pair| pair[0].completed <= pair[1].completed),
+                "{stage:?} regressed"
+            );
+        }
     }
 }

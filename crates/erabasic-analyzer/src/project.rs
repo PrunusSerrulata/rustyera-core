@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use erabasic_ast::{
     Argument, Diagnostic, Expr, ExprKind, FormPart, FormattedString, Function as AstFunction,
@@ -48,11 +50,112 @@ pub struct AnalysisReport {
     pub diagnostics: Vec<AnalyzerDiagnostic>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AnalysisProgressStage {
+    Parsing,
+    Analyzing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AnalysisProgress {
+    pub stage: AnalysisProgressStage,
+    pub completed: usize,
+    pub total: usize,
+}
+
+struct ProgressCounter<'a> {
+    stage: AnalysisProgressStage,
+    total: usize,
+    completed: AtomicUsize,
+    reported_percent: AtomicUsize,
+    callback_lock: Mutex<()>,
+    callback: Option<&'a dyn AnalysisProgressCallback>,
+}
+
+impl<'a> ProgressCounter<'a> {
+    fn new(
+        stage: AnalysisProgressStage,
+        total: usize,
+        callback: Option<&'a dyn AnalysisProgressCallback>,
+    ) -> Self {
+        if let Some(callback) = callback {
+            callback(AnalysisProgress {
+                stage,
+                completed: 0,
+                total,
+            });
+        }
+        Self {
+            stage,
+            total,
+            completed: AtomicUsize::new(0),
+            reported_percent: AtomicUsize::new(0),
+            callback_lock: Mutex::new(()),
+            callback,
+        }
+    }
+
+    fn advance(&self) {
+        let completed = self.completed.fetch_add(1, Ordering::Relaxed) + 1;
+        let Some(callback) = self.callback else {
+            return;
+        };
+        let percent = completed
+            .saturating_mul(100)
+            .checked_div(self.total)
+            .unwrap_or(100);
+        let _guard = self
+            .callback_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = self.reported_percent.load(Ordering::Relaxed);
+        if percent > previous || completed == self.total {
+            self.reported_percent.store(percent, Ordering::Relaxed);
+            callback(AnalysisProgress {
+                stage: self.stage,
+                completed,
+                total: self.total,
+            });
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub trait AnalysisProgressCallback: Fn(AnalysisProgress) + Sync {}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> AnalysisProgressCallback for T where T: Fn(AnalysisProgress) + Sync {}
+
+#[cfg(target_arch = "wasm32")]
+pub trait AnalysisProgressCallback: Fn(AnalysisProgress) {}
+
+#[cfg(target_arch = "wasm32")]
+impl<T> AnalysisProgressCallback for T where T: Fn(AnalysisProgress) {}
+
 #[must_use]
 pub fn analyze_project(
     input: AnalysisInput,
     options: &AnalyzerOptions,
     extensions: &ExtensionRegistry,
+) -> AnalysisReport {
+    analyze_project_inner(input, options, extensions, None)
+}
+
+#[must_use]
+pub fn analyze_project_with_progress(
+    input: AnalysisInput,
+    options: &AnalyzerOptions,
+    extensions: &ExtensionRegistry,
+    progress: &dyn AnalysisProgressCallback,
+) -> AnalysisReport {
+    analyze_project_inner(input, options, extensions, Some(progress))
+}
+
+fn analyze_project_inner(
+    input: AnalysisInput,
+    options: &AnalyzerOptions,
+    extensions: &ExtensionRegistry,
+    progress: Option<&dyn AnalysisProgressCallback>,
 ) -> AnalysisReport {
     let mut diagnostics = Vec::new();
     if !validate_extensions(extensions, &mut diagnostics) {
@@ -77,7 +180,10 @@ pub fn analyze_project(
     let mut indexed = indexed;
     let first_erb = indexed.partition_point(|source| source.kind == SourceKind::Erh);
     let erb_sources = indexed.split_off(first_erb);
-    let mut parsed = Vec::with_capacity(indexed.len() + erb_sources.len());
+    let source_count = indexed.len() + erb_sources.len();
+    let parsing_progress =
+        ProgressCounter::new(AnalysisProgressStage::Parsing, source_count, progress);
+    let mut parsed = Vec::with_capacity(source_count);
     for source in indexed {
         let output = parse_erh(&source.text, &mut context);
         append_parser_diagnostics(
@@ -95,15 +201,28 @@ pub fn analyze_project(
                 script,
             });
         }
+        parsing_progress.advance();
     }
     // ERH parsing above establishes the shared macro and variable environment.
     // ERB parsing never mutates it, so each worker receives a cheap copy-on-write
     // context and indexed collection preserves the source/diagnostic order.
+    #[cfg(not(target_arch = "wasm32"))]
     let erb_outputs = erb_sources
         .into_par_iter()
         .map(|source| {
             let mut local_context = context.clone();
             let output = parse_erb(&source.text, &mut local_context);
+            parsing_progress.advance();
+            (source, output)
+        })
+        .collect::<Vec<_>>();
+    #[cfg(target_arch = "wasm32")]
+    let erb_outputs = erb_sources
+        .into_iter()
+        .map(|source| {
+            let mut local_context = context.clone();
+            let output = parse_erb(&source.text, &mut local_context);
+            parsing_progress.advance();
             (source, output)
         })
         .collect::<Vec<_>>();
@@ -132,6 +251,7 @@ pub fn analyze_project(
         &catalog,
         &context,
         diagnostics,
+        progress,
     )
 }
 
@@ -175,10 +295,11 @@ pub fn analyze_parsed_project(
         &catalog,
         &context,
         diagnostics,
+        None,
     )
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn analyze_with_context(
     mut project_data: ProjectData,
     sources: &[ParsedProjectSource],
@@ -187,6 +308,7 @@ fn analyze_with_context(
     catalog: &Catalog,
     context: &AnalysisParserContext,
     mut diagnostics: Vec<AnalyzerDiagnostic>,
+    progress: Option<&dyn AnalysisProgressCallback>,
 ) -> AnalysisReport {
     let declarations: Vec<_> = sources
         .iter()
@@ -337,46 +459,59 @@ fn analyze_with_context(
     }
     // Function bodies only read the completed symbol table. Indexed Rayon collection keeps
     // HIR ordering deterministic while large projects analyze independent bodies in parallel.
+    let analyzing_progress = ProgressCounter::new(
+        AnalysisProgressStage::Analyzing,
+        definitions.len(),
+        progress,
+    );
+    let analyze_definition = |definition: &FunctionDefinition| {
+        let source = &sources[definition.source_index];
+        let function = &source.script.functions[definition.function_index];
+        let mut function_diagnostics = Vec::new();
+        // A same-name normal function after the first one can never be selected
+        // by Emuera's non-event dictionary. Keep its identity for deterministic
+        // source ordering, but do not lower an unreachable replacement body.
+        let should_analyze = should_analyze_function(definition, &reachable, options);
+        let hir = if should_analyze {
+            analyze_function(
+                definition.id,
+                definition.kind,
+                definition.return_type,
+                definition.definition_order,
+                source,
+                function,
+                &symbols,
+                catalog,
+                context,
+                &index_resolver,
+                options,
+                &mut function_diagnostics,
+            )
+        } else {
+            uncalled_function(
+                definition.id,
+                definition.kind,
+                definition.return_type,
+                definition.definition_order,
+                source,
+                function,
+            )
+        };
+        if !reachable.contains(&definition.id) {
+            report_uncalled(source, function, options, &mut function_diagnostics);
+        }
+        analyzing_progress.advance();
+        (hir, function_diagnostics)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let analyzed_functions = definitions
         .par_iter()
-        .map(|definition| {
-            let source = &sources[definition.source_index];
-            let function = &source.script.functions[definition.function_index];
-            let mut function_diagnostics = Vec::new();
-            // A same-name normal function after the first one can never be selected
-            // by Emuera's non-event dictionary. Keep its identity for deterministic
-            // source ordering, but do not lower an unreachable replacement body.
-            let should_analyze = should_analyze_function(definition, &reachable, options);
-            let hir = if should_analyze {
-                analyze_function(
-                    definition.id,
-                    definition.kind,
-                    definition.return_type,
-                    definition.definition_order,
-                    source,
-                    function,
-                    &symbols,
-                    catalog,
-                    context,
-                    &index_resolver,
-                    options,
-                    &mut function_diagnostics,
-                )
-            } else {
-                uncalled_function(
-                    definition.id,
-                    definition.kind,
-                    definition.return_type,
-                    definition.definition_order,
-                    source,
-                    function,
-                )
-            };
-            if !reachable.contains(&definition.id) {
-                report_uncalled(source, function, options, &mut function_diagnostics);
-            }
-            (hir, function_diagnostics)
-        })
+        .map(analyze_definition)
+        .collect::<Vec<_>>();
+    #[cfg(target_arch = "wasm32")]
+    let analyzed_functions = definitions
+        .iter()
+        .map(analyze_definition)
         .collect::<Vec<_>>();
     let mut functions = Vec::with_capacity(analyzed_functions.len());
     for (function, function_diagnostics) in analyzed_functions {

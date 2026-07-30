@@ -7,7 +7,8 @@ mod options;
 mod registry;
 
 pub use compile::{
-    CompileReport, CompileStats, IncrementalState, compile_project, compile_project_with_artifact,
+    CompileProgress, CompileProgressCallback, CompileReport, CompileStats, IncrementalState,
+    compile_project, compile_project_with_artifact, compile_project_with_artifact_and_progress,
 };
 pub use diagnostic::{CompilerDiagnostic, CompilerDiagnosticCode, CompilerDiagnosticSeverity};
 pub use options::{CompilerOptions, OptimizationLevel};

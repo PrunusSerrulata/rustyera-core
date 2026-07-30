@@ -61,6 +61,7 @@ impl RuntimeSession {
     pub fn new(options: RuntimeOptions) -> Self {
         Self {
             options,
+            project_progress_reporter: None,
             state: SessionState::Negotiating,
             phase: RuntimePhase::Negotiating,
             revision: 0,
@@ -160,6 +161,13 @@ impl RuntimeSession {
             compiled_cache_task: None,
             compiled_cache_failure: None,
         }
+    }
+
+    /// Install or clear a side-effect-free project workload progress observer.
+    ///
+    /// The observer can run from compiler worker threads and must not re-enter this session.
+    pub fn set_project_progress_reporter(&mut self, reporter: Option<ProjectProgressReporter>) {
+        self.project_progress_reporter = reporter;
     }
 
     /// Decode and queue one frontend envelope without executing runtime work.
@@ -1117,11 +1125,12 @@ impl RuntimeSession {
                     .map(|value| value.artifact.artifact())
                     .or_else(|| self.vm.as_ref().map(|vm| vm.vm().artifact()))
                     .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
-                build_project_with_extensions(
+                build_project_with_extensions_and_progress(
                     manifest,
                     Some(previous_incremental),
                     previous_artifact,
                     &self.extension_declarations,
+                    self.project_progress_reporter.as_ref(),
                 )
             }
         };
@@ -1220,11 +1229,12 @@ impl RuntimeSession {
             .as_ref()
             .map(|vm| vm.vm().artifact())
             .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
-        let mut build = build_project_with_extensions(
+        let mut build = build_project_with_extensions_and_progress(
             &manifest,
             Some(&self.incremental),
             previous_artifact,
             &self.extension_declarations,
+            self.project_progress_reporter.as_ref(),
         );
         if !build.report.success {
             self.emit(

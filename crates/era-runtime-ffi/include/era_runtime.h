@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define ERA_RUNTIME_ABI_MAJOR 3u
-#define ERA_RUNTIME_ABI_MINOR 0u
+#define ERA_RUNTIME_ABI_MINOR 1u
 
 #define ERA_DEBUG_SCOPE_VARIABLES_READ (UINT64_C(1) << 0)
 #define ERA_DEBUG_SCOPE_VARIABLES_WRITE (UINT64_C(1) << 1)
@@ -69,6 +69,27 @@ typedef struct EraDriveResult {
     uint32_t queued_envelopes;
 } EraDriveResult;
 
+typedef enum EraProjectProgressStage {
+    ERA_PROJECT_PROGRESS_SCANNING = 0,
+    ERA_PROJECT_PROGRESS_NORMALIZING = 1,
+    ERA_PROJECT_PROGRESS_LOADING_DATA = 2,
+    ERA_PROJECT_PROGRESS_PARSING = 3,
+    ERA_PROJECT_PROGRESS_ANALYZING = 4,
+    ERA_PROJECT_PROGRESS_COMPILING = 5,
+    ERA_PROJECT_PROGRESS_VALIDATING = 6
+} EraProjectProgressStage;
+
+typedef struct EraProjectProgress {
+    EraCallHeader header;
+    EraProjectProgressStage stage;
+    uint64_t completed;
+    uint64_t total;
+} EraProjectProgress;
+
+typedef void (*EraProjectProgressCallback)(void *context, EraProjectProgress progress);
+typedef EraStatus (*EraSessionSetProjectProgressFn)(EraCallHeader, EraSessionHandle,
+                                                     EraProjectProgressCallback, void *);
+
 typedef EraStatus (*EraSessionCreateFn)(EraCallHeader, const EraCreateOptions *, EraSessionHandle *);
 typedef EraStatus (*EraSessionSubmitFn)(EraCallHeader, EraSessionHandle, EraByteSlice);
 typedef EraStatus (*EraSessionDriveFn)(EraCallHeader, EraSessionHandle, const EraDriveOptions *, EraDriveResult *);
@@ -89,6 +110,7 @@ typedef struct EraRuntimeApi {
     EraSessionDestroyFn session_destroy;
     EraReleaseBufferFn release_buffer;
     EraLastErrorFn last_error;
+    /* ABI 3.1: reserved[0] is EraSessionSetProjectProgressFn. */
     void *reserved[8];
 } EraRuntimeApi;
 
