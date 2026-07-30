@@ -172,6 +172,61 @@ pub(crate) struct ResourceDiagnostic {
 }
 
 impl ResourceGraph {
+    /// Copy runtime resource state without duplicating immutable project files.
+    ///
+    /// The exact project identity is part of every runtime snapshot, so the
+    /// original file bytes can be restored from the already loaded project.
+    pub(crate) fn compact_snapshot(&self) -> Self {
+        let images = self
+            .images
+            .iter()
+            .map(|(key, image)| {
+                (
+                    key.clone(),
+                    ResourceImage {
+                        relative_path: image.relative_path.clone(),
+                        digest: image.digest,
+                        metadata: image.metadata.clone(),
+                        bytes: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+        Self {
+            images,
+            sprites: self.sprites.clone(),
+            canvases: self.canvases.clone(),
+            animation_timer_ms: self.animation_timer_ms,
+            canvas_defaults: self.canvas_defaults.clone(),
+        }
+    }
+
+    /// Restore immutable file bytes after the snapshot's project identity has
+    /// been matched against the currently loaded project.
+    pub(crate) fn restore_project_bytes(&mut self, project: &Self) -> Result<(), String> {
+        if self.images.len() != project.images.len() {
+            return Err("runtime snapshot resource list differs from the loaded project".into());
+        }
+        for (key, image) in &mut self.images {
+            let source = project.images.get(key).ok_or_else(|| {
+                format!("runtime snapshot resource {key} is absent from the loaded project")
+            })?;
+            if image.relative_path != source.relative_path || image.digest != source.digest {
+                return Err(format!(
+                    "runtime snapshot resource {} differs from the loaded project",
+                    image.relative_path
+                ));
+            }
+            image.bytes.clone_from(&source.bytes);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn embedded_project_bytes(&self) -> usize {
+        self.images.values().map(|image| image.bytes.len()).sum()
+    }
+
     pub(crate) fn from_manifest(manifest: &ProjectManifest) -> (Self, Vec<ResourceDiagnostic>) {
         let mut graph = Self::default();
         let mut diagnostics = Vec::new();
@@ -1255,6 +1310,27 @@ fn resource_warning(
 mod tests {
     use era_protocol::ProtocolBytes;
     use era_runtime_protocol::{ProjectManifest, SubmittedFile};
+
+    #[test]
+    fn compact_snapshot_restores_immutable_project_bytes_from_the_loaded_graph() {
+        let manifest = ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "resources/opaque.bin".into(),
+                category: FileCategory::Resource,
+                payload: FilePayload::Bytes(ProtocolBytes::new(vec![1, 2, 3, 4])),
+                content_hash: None,
+            }],
+        };
+        let (project, diagnostics) = ResourceGraph::from_manifest(&manifest);
+        assert!(diagnostics.is_empty());
+        assert_eq!(project.embedded_project_bytes(), 4);
+
+        let mut snapshot = project.compact_snapshot();
+        assert_eq!(snapshot.embedded_project_bytes(), 0);
+        snapshot.restore_project_bytes(&project).unwrap();
+        assert_eq!(snapshot.embedded_project_bytes(), 4);
+    }
 
     use super::*;
 

@@ -3193,6 +3193,12 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
                             ),
                             content_hash: None,
                         },
+                        SubmittedFile {
+                            relative_path: "resources/opaque.bin".into(),
+                            category: FileCategory::Resource,
+                            payload: FilePayload::Bytes(ProtocolBytes::new(vec![7; 4096])),
+                            content_hash: None,
+                        },
                     ],
                 }),
             );
@@ -3400,6 +3406,7 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
     )
     .unwrap();
     assert_eq!(marked.origin, RuntimeSnapshotOrigin::Diagnosis);
+    assert_eq!(marked.resource_graph.embedded_project_bytes(), 0);
     let inspection = crate::inspect_runtime_snapshot(
         &snapshot_bytes,
         usize::try_from(source.options.limits.maximum_transfer_bytes).unwrap(),

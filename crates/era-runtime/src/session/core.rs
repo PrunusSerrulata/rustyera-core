@@ -1484,7 +1484,7 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         let maximum =
             usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
-        let payload = match runtime_snapshot::decode(bytes, maximum) {
+        let mut payload = match runtime_snapshot::decode(bytes, maximum) {
             Ok(payload) => payload,
             Err(error) => {
                 return self.reject(
@@ -1513,6 +1513,16 @@ impl RuntimeSession {
                 message_id,
                 CommandErrorCode::VersionMismatch,
                 "runtime snapshot does not match the exact project or stable-wait contract",
+            );
+        }
+        if let Err(error) = payload
+            .resource_graph
+            .restore_project_bytes(&project.resource_graph)
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::VersionMismatch,
+                &format!("runtime snapshot resources do not match the loaded project: {error}"),
             );
         }
         let mut system_menu = match payload.system_menu {

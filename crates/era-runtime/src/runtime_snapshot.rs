@@ -12,7 +12,8 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 17;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 18;
+const LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 17;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 60;
@@ -204,6 +205,16 @@ pub(crate) mod token_value_map {
 }
 
 pub(crate) fn encode(payload: &RuntimeSnapshotPayload) -> Result<Vec<u8>, String> {
+    if payload.format_version != RUNTIME_SNAPSHOT_FORMAT_VERSION {
+        return Err("runtime snapshot payload does not use the current format".into());
+    }
+    encode_container(payload, RUNTIME_SNAPSHOT_FORMAT_VERSION)
+}
+
+fn encode_container(
+    payload: &RuntimeSnapshotPayload,
+    format_version: u32,
+) -> Result<Vec<u8>, String> {
     let encoder = zstd::stream::Encoder::new(Vec::new(), COMPRESSION_LEVEL)
         .map_err(|error| error.to_string())?;
     let mut writer = CountingWriter::new(encoder);
@@ -215,7 +226,7 @@ pub(crate) fn encode(payload: &RuntimeSnapshotPayload) -> Result<Vec<u8>, String
         .map_err(|error| error.to_string())?;
     let mut output = Vec::with_capacity(HEADER_BYTES + payload.len());
     output.extend_from_slice(&MAGIC);
-    output.extend_from_slice(&RUNTIME_SNAPSHOT_FORMAT_VERSION.to_le_bytes());
+    output.extend_from_slice(&format_version.to_le_bytes());
     output.extend_from_slice(&(payload.len() as u64).to_le_bytes());
     output.extend_from_slice(&uncompressed_len.to_le_bytes());
     output.extend_from_slice(blake3::hash(&payload).as_bytes());
@@ -235,7 +246,10 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<RuntimeSnapsh
             .try_into()
             .map_err(|_| "truncated runtime snapshot version")?,
     );
-    if version != RUNTIME_SNAPSHOT_FORMAT_VERSION {
+    if !matches!(
+        version,
+        LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION | RUNTIME_SNAPSHOT_FORMAT_VERSION
+    ) {
         return Err(format!("unsupported runtime snapshot format {version}"));
     }
     let length = u64::from_le_bytes(
@@ -275,7 +289,7 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<RuntimeSnapsh
     {
         return Err("runtime snapshot raw length is inconsistent".into());
     }
-    if snapshot.format_version != RUNTIME_SNAPSHOT_FORMAT_VERSION {
+    if snapshot.format_version != version {
         return Err("runtime snapshot payload version differs from its container".into());
     }
     Ok(snapshot)
@@ -296,6 +310,7 @@ pub fn inspect_runtime_snapshot(
     maximum_bytes: usize,
 ) -> Result<RuntimeSnapshotInspection, RuntimeSnapshotInspectionError> {
     let snapshot = decode(bytes, maximum_bytes).map_err(inspection_error)?;
+    let format_version = snapshot.format_version;
     let execution = erabasic_vm::inspect_snapshot(&snapshot.vm_snapshot, maximum_bytes)
         .map_err(|error| inspection_error(format!("invalid embedded snapshot: {error}")))?;
     let mut payload = serde_json::to_value(&snapshot)
@@ -316,7 +331,7 @@ pub fn inspect_runtime_snapshot(
         inspection_schema_version: RUNTIME_SNAPSHOT_INSPECTION_SCHEMA_VERSION,
         container: RuntimeSnapshotContainerInspection {
             magic: "RERARTS\\0".into(),
-            format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
+            format_version,
             file_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             compressed_payload_bytes: read_header_u64(bytes, 12),
             uncompressed_payload_bytes: read_header_u64(bytes, 20),
@@ -479,7 +494,7 @@ mod tests {
     fn checksum_rejects_mutated_payload() {
         let mut resource_graph = ResourceGraph::default();
         assert_eq!(resource_graph.create_canvas(7, 20, 10), Ok(true));
-        let payload = RuntimeSnapshotPayload {
+        let mut payload = RuntimeSnapshotPayload {
             format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
             origin: RuntimeSnapshotOrigin::Normal,
             artifact_id: Digest([1; 32]),
@@ -529,6 +544,14 @@ mod tests {
         let last = encoded.last_mut().unwrap();
         *last ^= 1;
         assert!(decode(&encoded, encoded.len()).is_err());
+
+        payload.format_version = LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION;
+        let legacy = encode_container(&payload, LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION).unwrap();
+        let decoded = decode(&legacy, usize::MAX).unwrap();
+        assert_eq!(
+            decoded.format_version,
+            LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION
+        );
     }
 
     #[test]

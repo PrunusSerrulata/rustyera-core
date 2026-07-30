@@ -195,7 +195,7 @@ impl RuntimeSession {
                         artifact_id: vm.artifact_id(),
                         project_identity: project.project_identity,
                         resource_count: u64::try_from(project.resources.len()).unwrap_or(u64::MAX),
-                        resource_graph: project.resource_graph.clone(),
+                        resource_graph: project.resource_graph.compact_snapshot(),
                         epoch: self.epoch.0,
                         vm_snapshot,
                         presentation: self.presentation.clone(),
