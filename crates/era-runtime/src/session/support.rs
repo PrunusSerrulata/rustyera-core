@@ -1013,11 +1013,7 @@ pub(super) fn print_uses_default_color(name: &str) -> bool {
 pub(super) fn is_input_command(name: &str) -> bool {
     matches!(
         name,
-        "WAIT"
-            | "WAITANYKEY"
-            | "FORCEWAIT"
-            | "TWAIT"
-            | "INPUT"
+        "INPUT"
             | "INPUTS"
             | "ONEINPUT"
             | "ONEINPUTS"
@@ -1039,7 +1035,11 @@ pub(super) fn is_runtime_print_command(name: &str) -> bool {
         || is_input_command(name)
         || matches!(
             name,
-            "DRAWLINE"
+            "WAIT"
+                | "WAITANYKEY"
+                | "FORCEWAIT"
+                | "TWAIT"
+                | "DRAWLINE"
                 | "CLEARLINE"
                 | "HTML_PRINT"
                 | "HTML_PRINT_ISLAND"

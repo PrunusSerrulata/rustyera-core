@@ -2832,6 +2832,215 @@ fn inputs_accepts_an_automatic_button_from_the_pending_print_buffer() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
+fn visible_buttons_from_an_earlier_wait_remain_usable_until_breakbutton() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "visible-old-button-test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["ja".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).expect("hello");
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "old-button.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nPRINTBUTTON \"[阿燐]\", 1036\nPRINTL\nINPUT\nPRINT [100] - 返回\nINPUT\nPRINTFORML selected={RESULT}\nWAIT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).expect("load");
+    let loaded = drain(&mut session);
+    assert!(
+        loaded.iter().any(
+            |message| matches!(message, RuntimeMessage::ProjectLoadReport(report) if report.success)
+        ),
+        "project load failed: {loaded:?}"
+    );
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    for _ in 0..8 {
+        session
+            .drive(RuntimeDriveBudget::default())
+            .expect("first input");
+        if session.operations.active_input().is_some() {
+            break;
+        }
+    }
+    let (first_wait, first_submission, character_button) = {
+        let pending = session.operations.active_input().expect("first wait");
+        let button = pending
+            .choices
+            .iter()
+            .find_map(|(token, value)| (*value == VmValue::Integer(1036)).then_some(*token))
+            .expect("character button");
+        (pending.wait.wait_id, pending.wait.submission_token, button)
+    };
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id: first_wait,
+            token: first_submission,
+            monotonic_time_ns: 0,
+            intent: InputIntent::Activate(character_button),
+            message_skip: false,
+        }),
+    );
+    for _ in 0..8 {
+        session
+            .drive(RuntimeDriveBudget::default())
+            .expect("second input");
+        if session
+            .operations
+            .active_input()
+            .is_some_and(|pending| pending.wait.wait_id != first_wait)
+        {
+            break;
+        }
+    }
+    let (second_wait, second_submission) = {
+        let pending = session.operations.active_input().expect("second wait");
+        assert!(
+            !pending.choices.contains_key(&character_button),
+            "the earlier token must exercise visible-history fallback"
+        );
+        (pending.wait.wait_id, pending.wait.submission_token)
+    };
+    submit(
+        &mut session,
+        4,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id: second_wait,
+            token: second_submission,
+            monotonic_time_ns: 1,
+            intent: InputIntent::Activate(character_button),
+            message_skip: false,
+        }),
+    );
+    for _ in 0..8 {
+        session
+            .drive(RuntimeDriveBudget::default())
+            .expect("accept earlier button");
+    }
+    let visible = session
+        .presentation
+        .snapshot()
+        .history
+        .logical_lines
+        .iter()
+        .flat_map(|line| &line.runs)
+        .filter_map(|run| match run {
+            DisplayRun::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(visible.contains("selected=1036"), "{visible}");
+}
+
+#[test]
+fn skipdisp_silently_skips_wait_commands_like_the_reference() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "skipdisp-wait-test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["ja".into()],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).expect("hello");
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "skipdisp.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nSKIPDISP 1\nWAIT\nWAITANYKEY\nFORCEWAIT\nTWAIT 1, 0\nSKIPDISP 0\nPRINTL visible\nWAIT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).expect("load");
+    let loaded = drain(&mut session);
+    assert!(
+        loaded.iter().any(
+            |message| matches!(message, RuntimeMessage::ProjectLoadReport(report) if report.success)
+        ),
+        "project load failed: {loaded:?}"
+    );
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).expect("run");
+        if session.operations.active_input().is_some() || session.phase == RuntimePhase::Faulted {
+            break;
+        }
+    }
+    assert_ne!(session.phase, RuntimePhase::Faulted);
+    assert_eq!(
+        session
+            .operations
+            .active_input()
+            .expect("only the final WAIT should open")
+            .wait
+            .kind,
+        WaitKind::EnterKey
+    );
+    let visible = session
+        .presentation
+        .snapshot()
+        .history
+        .logical_lines
+        .iter()
+        .flat_map(|line| &line.runs)
+        .filter_map(|run| match run {
+            DisplayRun::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(visible.contains("visible"), "{visible}");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
 fn input_undo_records_only_accepted_scalar_input_after_a_checkpoint() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(

@@ -184,6 +184,21 @@ impl PresentationModel {
         auto_button_values(&self.pending_runs, &self.pending_plain_runs)
     }
 
+    pub(crate) fn enabled_button_value(&self, token: InteractionToken) -> Option<VmValue> {
+        self.pending_runs
+            .iter()
+            .rev()
+            .find_map(|run| enabled_button_value(run, token))
+            .or_else(|| {
+                self.lines.iter().rev().find_map(|line| {
+                    line.runs
+                        .iter()
+                        .rev()
+                        .find_map(|run| enabled_button_value(run, token))
+                })
+            })
+    }
+
     pub(crate) fn bind_last_line_auto_buttons(
         &mut self,
         tokens: &[InteractionToken],
@@ -1581,6 +1596,65 @@ fn disable_old_buttons(runs: &mut [DisplayRun], generation: u64) {
             _ => {}
         }
     }
+}
+
+fn enabled_button_value(run: &DisplayRun, token: InteractionToken) -> Option<VmValue> {
+    match run {
+        DisplayRun::Button {
+            runs,
+            token: button_token,
+            value,
+            enabled,
+            ..
+        } => {
+            if *enabled && *button_token == token {
+                return Some(match value {
+                    ProtocolValue::Integer(value) => VmValue::Integer(*value),
+                    ProtocolValue::String(value) => VmValue::String(value.clone()),
+                    ProtocolValue::Boolean(value) => VmValue::Integer(i64::from(*value)),
+                    ProtocolValue::Bytes(_) => VmValue::String(String::new()),
+                });
+            }
+            runs.iter()
+                .rev()
+                .find_map(|run| enabled_button_value(run, token))
+        }
+        DisplayRun::ColumnCell { content, .. } => content
+            .iter()
+            .rev()
+            .find_map(|run| enabled_button_value(run, token)),
+        DisplayRun::HtmlDocument { document } => enabled_html_button_value(&document.nodes, token),
+        _ => None,
+    }
+}
+
+fn enabled_html_button_value(
+    nodes: &[erabasic_html::HtmlNode],
+    token: InteractionToken,
+) -> Option<VmValue> {
+    nodes.iter().rev().find_map(|node| {
+        let erabasic_html::HtmlNode::Element {
+            interaction,
+            children,
+            ..
+        } = node
+        else {
+            return None;
+        };
+        if let Some(interaction) = interaction
+            && interaction.enabled
+            && interaction.epoch == token.epoch
+            && interaction.id == token.id
+        {
+            return interaction.integer_value.map(VmValue::Integer).or_else(|| {
+                interaction
+                    .string_value
+                    .as_ref()
+                    .map(|value| VmValue::String(value.clone()))
+            });
+        }
+        enabled_html_button_value(children, token)
+    })
 }
 
 fn disable_old_html_buttons(nodes: &mut [erabasic_html::HtmlNode], generation: u64) {

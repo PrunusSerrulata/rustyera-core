@@ -804,8 +804,12 @@ impl RuntimeSession {
             .project_snapshot
             .as_ref()
             .is_some_and(|project| project.allow_long_input_by_activation);
-        let Some(submission) = input_value(pending, input.token, intent, allow_long_activation)
-        else {
+        let Some(submission) = self.input_value_with_visible_button(
+            pending,
+            input.token,
+            intent,
+            allow_long_activation,
+        ) else {
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidValue,
@@ -813,6 +817,31 @@ impl RuntimeSession {
             );
         };
         self.finish_input(submission, false)
+    }
+
+    fn input_value_with_visible_button(
+        &self,
+        pending: &PendingInput,
+        submission_token: InteractionToken,
+        intent: InputIntent,
+        allow_long_activation: bool,
+    ) -> Option<InputSubmission> {
+        let fallback_choice = match &intent {
+            InputIntent::Activate(token) if !pending.choices.contains_key(token) => {
+                self.presentation.enabled_button_value(*token)
+            }
+            _ => None,
+        };
+        let mut pending_with_fallback;
+        let pending =
+            if let (InputIntent::Activate(token), Some(value)) = (&intent, fallback_choice) {
+                pending_with_fallback = pending.clone();
+                pending_with_fallback.choices.insert(*token, value);
+                &pending_with_fallback
+            } else {
+                pending
+            };
+        input_value(pending, submission_token, intent, allow_long_activation)
     }
 
     /// Feed the next expanded keyboard-input segment into the next wait without
