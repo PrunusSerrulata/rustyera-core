@@ -77,6 +77,7 @@ pub fn decode_binary(data: &[u8], limits: SaveCodecLimits) -> Result<SaveDocumen
         description: reader.string()?,
     };
     let mut characters = Vec::new();
+    let mut character_user_defined_starts = Vec::new();
     if matches!(kind, SaveFileKind::Normal | SaveFileKind::Character) {
         let count = usize::try_from(reader.i64()?)
             .map_err(|_| SaveCodecError::InvalidFormat("negative character count".into()))?;
@@ -84,7 +85,9 @@ pub fn decode_binary(data: &[u8], limits: SaveCodecLimits) -> Result<SaveDocumen
             return Err(SaveCodecError::LimitExceeded("maximum characters"));
         }
         for _ in 0..count {
-            characters.push(reader.entries(EOC)?);
+            let (entries, user_defined_start) = reader.character_entries()?;
+            characters.push(entries);
+            character_user_defined_starts.push(user_defined_start);
         }
     }
     let variables = if reader.remaining().is_empty() {
@@ -143,6 +146,7 @@ pub fn decode_binary(data: &[u8], limits: SaveCodecLimits) -> Result<SaveDocumen
         kind,
         metadata,
         characters,
+        character_user_defined_starts,
         variables,
         opaque_extensions,
         text_payload: None,
@@ -162,6 +166,11 @@ pub fn encode_binary(
     if document.characters.len() > limits.maximum_characters {
         return Err(SaveCodecError::LimitExceeded("maximum characters"));
     }
+    if document.character_user_defined_starts.len() != document.characters.len() {
+        return Err(SaveCodecError::InvalidFormat(
+            "character section offsets differ from character count".into(),
+        ));
+    }
     let mut body = Vec::new();
     body.push(document.kind as u8);
     body.extend(document.metadata.unique_code.to_le_bytes());
@@ -174,8 +183,12 @@ pub fn encode_binary(
         let count = i64::try_from(document.characters.len())
             .map_err(|_| SaveCodecError::LimitExceeded("maximum characters"))?;
         body.extend(count.to_le_bytes());
-        for character in &document.characters {
-            write_entries(&mut body, character, limits)?;
+        for (character, user_defined_start) in document
+            .characters
+            .iter()
+            .zip(&document.character_user_defined_starts)
+        {
+            write_character_entries(&mut body, character, *user_defined_start, limits)?;
             body.push(EOC);
         }
     }
@@ -338,6 +351,25 @@ fn write_entries(
     Ok(())
 }
 
+fn write_character_entries(
+    output: &mut Vec<u8>,
+    entries: &[SaveEntry],
+    user_defined_start: Option<usize>,
+    limits: SaveCodecLimits,
+) -> Result<(), SaveCodecError> {
+    let Some(start) = user_defined_start else {
+        return write_entries(output, entries, limits);
+    };
+    if start > entries.len() {
+        return Err(SaveCodecError::InvalidFormat(
+            "character user-defined section exceeds entry count".into(),
+        ));
+    }
+    write_entries(output, &entries[..start], limits)?;
+    output.push(SEPARATOR);
+    write_entries(output, &entries[start..], limits)
+}
+
 fn integer_tag(dimensions: usize) -> Result<u8, SaveCodecError> {
     match dimensions {
         1 => Ok(1),
@@ -389,12 +421,16 @@ fn write_integer_array(
         ));
     }
     write_dimensions(output, dimensions);
-    for (index, value) in values.iter().enumerate() {
-        write_packed_integer(output, *value);
-        write_boundaries(output, dimensions, index + 1);
-    }
-    output.push(0xFF);
-    Ok(())
+    write_sparse_array(
+        output,
+        dimensions,
+        values,
+        |value| *value == 0,
+        |output, value| {
+            write_packed_integer(output, *value);
+            Ok(())
+        },
+    )
 }
 
 fn write_string_array(
@@ -410,34 +446,80 @@ fn write_string_array(
         ));
     }
     write_dimensions(output, dimensions);
-    for (index, value) in values.iter().enumerate() {
-        if value.is_empty() {
-            // String arrays use the explicit zero-run token. A literal zero is an integer-array
-            // token and is not accepted by the reference string-array reader.
-            output.push(0xF0);
-            write_packed_integer(output, 1);
-        } else {
+    write_sparse_array(
+        output,
+        dimensions,
+        values,
+        String::is_empty,
+        |output, value| {
             output.push(0xD8);
-            write_string(output, value, limits)?;
+            write_string(output, value, limits)
+        },
+    )
+}
+
+fn write_sparse_array<T>(
+    output: &mut Vec<u8>,
+    dimensions: &[u32],
+    values: &[T],
+    is_zero: impl Fn(&T) -> bool,
+    mut write_value: impl FnMut(&mut Vec<u8>, &T) -> Result<(), SaveCodecError>,
+) -> Result<(), SaveCodecError> {
+    let row_length = dimensions.last().copied().unwrap_or(1) as usize;
+    let rows_per_plane = dimensions.get(1).copied().unwrap_or(1) as usize;
+    let plane_length = if dimensions.len() == 3 {
+        row_length.saturating_mul(rows_per_plane)
+    } else {
+        values.len()
+    };
+
+    let mut zero_planes = 0usize;
+    for plane in values.chunks(plane_length) {
+        if dimensions.len() == 3 && plane.iter().all(&is_zero) {
+            zero_planes += 1;
+            continue;
         }
-        write_boundaries(output, dimensions, index + 1);
+        write_zero_run(output, 0xF2, zero_planes);
+        zero_planes = 0;
+
+        let mut zero_rows = 0usize;
+        for row in plane.chunks(row_length) {
+            if dimensions.len() >= 2 && row.iter().all(&is_zero) {
+                zero_rows += 1;
+                continue;
+            }
+            write_zero_run(output, 0xF1, zero_rows);
+            zero_rows = 0;
+
+            let mut zeroes = 0usize;
+            for value in row {
+                if is_zero(value) {
+                    zeroes += 1;
+                } else {
+                    write_zero_run(output, 0xF0, zeroes);
+                    zeroes = 0;
+                    write_value(output, value)?;
+                }
+            }
+            if dimensions.len() >= 2 {
+                output.push(0xE0);
+            }
+        }
+        if dimensions.len() == 3 {
+            output.push(0xE1);
+        }
     }
     output.push(0xFF);
     Ok(())
 }
 
-fn write_boundaries(output: &mut Vec<u8>, dimensions: &[u32], next: usize) {
-    let last = usize::try_from(dimensions.last().copied().unwrap_or(1)).unwrap_or(usize::MAX);
-    if dimensions.len() >= 2 && next.is_multiple_of(last) {
-        output.push(0xE0);
-    }
-    if dimensions.len() == 3 {
-        let plane = usize::try_from(dimensions[1])
-            .unwrap_or(usize::MAX)
-            .saturating_mul(usize::try_from(dimensions[2]).unwrap_or(usize::MAX));
-        if next.is_multiple_of(plane) {
-            output.push(0xE1);
-        }
+fn write_zero_run(output: &mut Vec<u8>, tag: u8, count: usize) {
+    if count != 0 {
+        output.push(tag);
+        write_packed_integer(
+            output,
+            i64::try_from(count).expect("validated array element count fits i64"),
+        );
     }
 }
 
@@ -577,13 +659,29 @@ impl<'a> Cursor<'a> {
             .map_err(|_| SaveCodecError::InvalidFormat("invalid UTF-16 string".into()))
     }
     fn entries(&mut self, terminator: u8) -> Result<Vec<SaveEntry>, SaveCodecError> {
+        self.entries_with_separator(terminator)
+            .map(|(entries, _)| entries)
+    }
+    fn character_entries(&mut self) -> Result<(Vec<SaveEntry>, Option<usize>), SaveCodecError> {
+        self.entries_with_separator(EOC)
+    }
+    fn entries_with_separator(
+        &mut self,
+        terminator: u8,
+    ) -> Result<(Vec<SaveEntry>, Option<usize>), SaveCodecError> {
         let mut result = Vec::new();
+        let mut separator = None;
         loop {
             let tag = self.u8()?;
             if tag == terminator {
                 break;
             }
             if tag == SEPARATOR {
+                if separator.replace(result.len()).is_some() {
+                    return Err(SaveCodecError::InvalidFormat(
+                        "duplicate character section separator".into(),
+                    ));
+                }
                 continue;
             }
             if tag == EOF || tag == EOC {
@@ -609,7 +707,7 @@ impl<'a> Cursor<'a> {
             };
             result.push(SaveEntry { name, value });
         }
-        Ok(result)
+        Ok((result, separator))
     }
     fn array(&mut self, rank: usize, strings: bool) -> Result<SaveValue, SaveCodecError> {
         let mut dimensions = Vec::with_capacity(rank);
@@ -624,7 +722,16 @@ impl<'a> Cursor<'a> {
             let tag = self.u8()?;
             match tag {
                 0xFF => break,
-                0xE0 | 0xE1 => {}
+                0xE0 => {
+                    let row = *dimensions.last().unwrap_or(&1) as usize;
+                    index = align_to_next_boundary(index, row);
+                }
+                0xE1 => {
+                    let plane = dimensions.iter().skip(1).fold(1usize, |value, dimension| {
+                        value.saturating_mul(*dimension as usize)
+                    });
+                    index = align_to_next_boundary(index, plane);
+                }
                 0xF0 => {
                     let zeroes = usize::try_from(self.packed_integer(None)?)
                         .map_err(|_| SaveCodecError::InvalidFormat("negative zero run".into()))?;
@@ -685,5 +792,140 @@ impl<'a> Cursor<'a> {
                 values: ints,
             }
         })
+    }
+}
+
+fn align_to_next_boundary(index: usize, boundary: usize) -> usize {
+    let remainder = index % boundary.max(1);
+    if remainder == 0 {
+        index
+    } else {
+        index.saturating_add(boundary - remainder)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arrays_use_reference_zero_run_row_and_plane_encoding() {
+        let limits = SaveCodecLimits::default();
+
+        let mut one_dimension = Vec::new();
+        write_integer_array(&mut one_dimension, &[8], &[0, 0, 5, 0, 0, 0, 7, 0], limits).unwrap();
+        assert_eq!(one_dimension, [8, 0, 0, 0, 0xF0, 2, 5, 0xF0, 3, 7, 0xFF]);
+
+        let mut two_dimensions = Vec::new();
+        write_integer_array(
+            &mut two_dimensions,
+            &[3, 4],
+            &[0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0],
+            limits,
+        )
+        .unwrap();
+        assert_eq!(
+            two_dimensions,
+            [3, 0, 0, 0, 4, 0, 0, 0, 0xF1, 1, 0xF0, 1, 2, 0xE0, 0xFF]
+        );
+
+        let mut three_dimensions = Vec::new();
+        let mut values = vec![String::new(); 2 * 2 * 3];
+        values[8] = "x".into();
+        write_string_array(&mut three_dimensions, &[2, 2, 3], &values, limits).unwrap();
+        assert_eq!(
+            three_dimensions,
+            [
+                2, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0xF2, 1, 0xF0, 2, 0xD8, 2, b'x', 0, 0xE0, 0xE1,
+                0xFF,
+            ]
+        );
+    }
+
+    #[test]
+    fn binary_character_separator_round_trips_at_an_empty_section_boundary() {
+        let document = SaveDocument {
+            format: SaveFormat::Binary1808,
+            kind: SaveFileKind::Normal,
+            metadata: SaveMetadata {
+                unique_code: 1,
+                version: 2,
+                description: String::new(),
+            },
+            characters: vec![vec![SaveEntry {
+                name: "NO".into(),
+                value: SaveValue::Integer(7),
+            }]],
+            character_user_defined_starts: vec![Some(1)],
+            variables: Vec::new(),
+            opaque_extensions: Vec::new(),
+            text_payload: None,
+        };
+        let bytes = encode_binary(
+            &document,
+            SaveFormat::Binary1808,
+            SaveCodecLimits::default(),
+        )
+        .unwrap();
+
+        assert_eq!(&bytes[bytes.len() - 5..], &[7, SEPARATOR, EOC, EOF, EOF]);
+        assert_eq!(
+            decode_binary(&bytes, SaveCodecLimits::default()).unwrap(),
+            document
+        );
+    }
+
+    #[test]
+    fn sparse_multidimensional_arrays_round_trip_without_shifting_values() {
+        let document = SaveDocument {
+            format: SaveFormat::Binary1808,
+            kind: SaveFileKind::Normal,
+            metadata: SaveMetadata {
+                unique_code: 1,
+                version: 2,
+                description: String::new(),
+            },
+            characters: Vec::new(),
+            character_user_defined_starts: Vec::new(),
+            variables: vec![
+                SaveEntry {
+                    name: "TWO_D".into(),
+                    value: SaveValue::Integers {
+                        dimensions: vec![4, 5],
+                        values: vec![
+                            0, 0, 0, 0, 0, //
+                            0, 7, 0, 0, 0, //
+                            0, 0, 0, 0, 0, //
+                            0, 0, 0, 9, 0,
+                        ],
+                    },
+                },
+                SaveEntry {
+                    name: "THREE_D".into(),
+                    value: SaveValue::Strings {
+                        dimensions: vec![3, 3, 4],
+                        values: {
+                            let mut values = vec![String::new(); 36];
+                            values[5] = "first".into();
+                            values[32] = "last".into();
+                            values
+                        },
+                    },
+                },
+            ],
+            opaque_extensions: Vec::new(),
+            text_payload: None,
+        };
+
+        let encoded = encode_binary(
+            &document,
+            SaveFormat::Binary1808,
+            SaveCodecLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            decode_binary(&encoded, SaveCodecLimits::default()).unwrap(),
+            document
+        );
     }
 }

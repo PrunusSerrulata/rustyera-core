@@ -8,6 +8,7 @@ use erabasic_analyzer::{
     ArgumentConstraint, CallableSignature, ExtensionRegistry, InstructionSignature, ProjectSource,
     SourceIoError, SourceIoErrorKind, SourcePayload, WarningPolicy, analyze_project,
     analyze_project_with_progress, builtin_function_names, builtin_instruction_names,
+    compare_reference_file_paths,
 };
 use erabasic_bytecode::BytecodeArtifact;
 use erabasic_compiler::{
@@ -246,13 +247,13 @@ fn build_project_inner_with_extensions(
     let mut files = manifest.files.clone();
     let mut config = parse_configuration(&files, &mut diagnostics);
     if config.csv.sort_with_filename {
-        files.sort_by_key(|file| {
-            (
-                !path_has_priority_directory(&file.relative_path),
-                file.relative_path.to_ascii_lowercase(),
-                file.relative_path.clone(),
-                file.category as u8,
-            )
+        files.sort_by(|left, right| {
+            (!path_has_priority_directory(&left.relative_path))
+                .cmp(&(!path_has_priority_directory(&right.relative_path)))
+                .then_with(|| {
+                    compare_reference_file_paths(&left.relative_path, &right.relative_path)
+                })
+                .then_with(|| (left.category as u8).cmp(&(right.category as u8)))
         });
     }
     let mut csv_files = ProjectFiles::default();
@@ -1726,6 +1727,28 @@ mod tests {
         assert!(path_has_priority_directory("ERB/a#early/first.erb"));
         assert!(!path_has_priority_directory("ERB/ordinary/#function.erb"));
         assert!(!path_has_priority_directory("root.erb"));
+    }
+
+    #[test]
+    fn reference_file_order_places_parent_files_before_child_directories() {
+        let mut paths = [
+            "ERB/events/diary/DIARY.ERH",
+            "ERB/COLOREDMAPS/COLOREDOPTION.ERH",
+            "ERB/DIM.ERH",
+            "ERB/A.ERH",
+            "ERB/events/ROOT.ERH",
+        ];
+        paths.sort_by(|left, right| compare_reference_file_paths(left, right));
+        assert_eq!(
+            paths,
+            [
+                "ERB/A.ERH",
+                "ERB/DIM.ERH",
+                "ERB/COLOREDMAPS/COLOREDOPTION.ERH",
+                "ERB/events/ROOT.ERH",
+                "ERB/events/diary/DIARY.ERH",
+            ]
+        );
     }
 
     #[test]

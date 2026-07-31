@@ -29,5 +29,5 @@ pub use options::{AnalyzerOptions, WarningPolicy};
 pub use project::{
     AnalysisProgress, AnalysisProgressCallback, AnalysisProgressStage, AnalysisReport,
     AnalyzedProject, ParsedProjectSource, analyze_parsed_project, analyze_project,
-    analyze_project_with_progress,
+    analyze_project_with_progress, compare_reference_file_paths,
 };

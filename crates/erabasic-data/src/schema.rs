@@ -88,6 +88,9 @@ pub struct IndexSpaceSchema {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProjectSchema {
     pub variables: BTreeMap<String, VariableSchema>,
+    /// Reference declaration order for project-defined variables.
+    #[serde(default)]
+    pub user_variable_order: Vec<String>,
     pub index_spaces: BTreeMap<NameTableKind, IndexSpaceSchema>,
 }
 
@@ -109,7 +112,10 @@ impl ProjectSchema {
     /// Registering an ERH variable is intentionally separate from CSV loading: Emuera
     /// does not know a user variable's dimensions until its `#DIM` line is analyzed.
     pub fn register_user_variable(&mut self, variable: VariableSchema) -> Option<VariableSchema> {
-        self.variables
-            .insert(variable.id.name().to_ascii_uppercase(), variable)
+        let key = variable.id.name().to_ascii_uppercase();
+        if !self.variables.contains_key(&key) {
+            self.user_variable_order.push(key.clone());
+        }
+        self.variables.insert(key, variable)
     }
 }

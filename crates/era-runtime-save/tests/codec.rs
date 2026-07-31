@@ -18,6 +18,7 @@ fn binary_document(format: SaveFormat) -> SaveDocument {
             name: "NO".into(),
             value: SaveValue::Integer(3),
         }]],
+        character_user_defined_starts: vec![None],
         variables: vec![
             SaveEntry {
                 name: "MONEY".into(),
@@ -87,7 +88,10 @@ fn all_current_binary_file_kinds_round_trip() {
         let mut document = binary_document(SaveFormat::Binary1808);
         document.kind = kind;
         match kind {
-            SaveFileKind::Global | SaveFileKind::Variable => document.characters.clear(),
+            SaveFileKind::Global | SaveFileKind::Variable => {
+                document.characters.clear();
+                document.character_user_defined_starts.clear();
+            }
             SaveFileKind::Normal | SaveFileKind::Character => {}
         }
         if kind == SaveFileKind::Character {
@@ -196,6 +200,7 @@ fn schema_aware_text_round_trip_uses_reference_bom_crlf_and_groups() {
                 value: SaveValue::String("A".into()),
             },
         ]],
+        character_user_defined_starts: vec![None],
         variables: vec![
             SaveEntry {
                 name: "DAY".into(),

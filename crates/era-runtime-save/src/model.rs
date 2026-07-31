@@ -104,6 +104,11 @@ pub struct SaveDocument {
     pub kind: SaveFileKind,
     pub metadata: SaveMetadata,
     pub characters: Vec<Vec<SaveEntry>>,
+    /// Entry offset of the binary 1813 user-defined section in each character.
+    ///
+    /// Emuera writes a separator even when the section is empty. Keeping the offset separate
+    /// from the entries preserves that case as well as exact binary round trips.
+    pub character_user_defined_starts: Vec<Option<usize>>,
     pub variables: Vec<SaveEntry>,
     pub opaque_extensions: Vec<OpaqueSaveExtension>,
     /// Current text saves retain their positional eramaker prefix losslessly.

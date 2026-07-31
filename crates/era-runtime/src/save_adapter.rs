@@ -10,6 +10,108 @@ use erabasic_bytecode::{BytecodeArtifact, BytecodePersistence, BytecodeStorage, 
 use erabasic_data::VariableId;
 use erabasic_vm::{EraState, EraVariableState, StructuredExtension, VmValue};
 
+// VariableData constructs this dictionary in a fixed order, then appends project-defined
+// variables in declaration order. Its binary writer enumerates the same dictionary.
+const REFERENCE_VARIABLE_ORDER: &[&str] = &[
+    "DAY",
+    "MONEY",
+    "ITEM",
+    "FLAG",
+    "TFLAG",
+    "UP",
+    "PALAMLV",
+    "EXPLV",
+    "EJAC",
+    "DOWN",
+    "RESULT",
+    "COUNT",
+    "TARGET",
+    "ASSI",
+    "MASTER",
+    "NOITEM",
+    "LOSEBASE",
+    "SELECTCOM",
+    "ASSIPLAY",
+    "PREVCOM",
+    "TIME",
+    "ITEMSALES",
+    "PLAYER",
+    "NEXTCOM",
+    "PBAND",
+    "BOUGHT",
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "GLOBAL",
+    "RANDDATA",
+    "SAVESTR",
+    "TSTR",
+    "STR",
+    "RESULTS",
+    "GLOBALS",
+    "SAVEDATA_TEXT",
+    "ISASSI",
+    "NO",
+    "BASE",
+    "MAXBASE",
+    "ABL",
+    "TALENT",
+    "EXP",
+    "MARK",
+    "PALAM",
+    "SOURCE",
+    "EX",
+    "CFLAG",
+    "JUEL",
+    "RELATION",
+    "EQUIP",
+    "TEQUIP",
+    "STAIN",
+    "GOTJUEL",
+    "NOWEX",
+    "DOWNBASE",
+    "CUP",
+    "CDOWN",
+    "TCVAR",
+    "NAME",
+    "CALLNAME",
+    "NICKNAME",
+    "MASTERNAME",
+    "CSTR",
+    "CDFLAG",
+    "DITEMTYPE",
+    "DA",
+    "DB",
+    "DC",
+    "DD",
+    "DE",
+    "TA",
+    "TB",
+];
+
 pub(crate) struct DecodedEraSave {
     pub(crate) state: EraState,
     pub(crate) description: String,
@@ -166,6 +268,19 @@ pub(crate) fn encode_era_save(
     opaque_extensions: Vec<OpaqueSaveExtension>,
     format: SaveFormat,
 ) -> Result<Vec<u8>, SaveCodecError> {
+    let encoded_characters = state
+        .characters
+        .iter()
+        .map(|variables| encode_entries(variables, artifact, true))
+        .collect::<Result<Vec<_>, _>>()?;
+    let character_user_defined_starts = encoded_characters
+        .iter()
+        .map(|encoded| encoded.user_defined_start)
+        .collect();
+    let characters = encoded_characters
+        .into_iter()
+        .map(|encoded| encoded.entries)
+        .collect();
     let document = SaveDocument {
         format,
         kind: SaveFileKind::Normal,
@@ -174,12 +289,9 @@ pub(crate) fn encode_era_save(
             version: state.version,
             description,
         },
-        characters: state
-            .characters
-            .iter()
-            .map(|variables| encode_entries(variables.values()))
-            .collect::<Result<Vec<_>, _>>()?,
-        variables: encode_entries(state.variables.values())?,
+        characters,
+        character_user_defined_starts,
+        variables: encode_entries(&state.variables, artifact, false)?.entries,
         opaque_extensions,
         text_payload: None,
     };
@@ -202,6 +314,19 @@ pub(crate) fn encode_scoped_save(
     opaque_extensions: Vec<OpaqueSaveExtension>,
     format: SaveFormat,
 ) -> Result<Vec<u8>, SaveCodecError> {
+    let encoded_characters = state
+        .characters
+        .iter()
+        .map(|variables| encode_entries(variables, artifact, true))
+        .collect::<Result<Vec<_>, _>>()?;
+    let character_user_defined_starts = encoded_characters
+        .iter()
+        .map(|encoded| encoded.user_defined_start)
+        .collect();
+    let characters = encoded_characters
+        .into_iter()
+        .map(|encoded| encoded.entries)
+        .collect();
     let document = SaveDocument {
         format,
         kind,
@@ -210,12 +335,9 @@ pub(crate) fn encode_scoped_save(
             version: state.version,
             description,
         },
-        characters: state
-            .characters
-            .iter()
-            .map(|variables| encode_entries(variables.values()))
-            .collect::<Result<Vec<_>, _>>()?,
-        variables: encode_entries(state.variables.values())?,
+        characters,
+        character_user_defined_starts,
+        variables: encode_entries(&state.variables, artifact, false)?.entries,
         opaque_extensions,
         text_payload: None,
     };
@@ -400,48 +522,94 @@ fn decode_value(value: &SaveValue) -> (BytecodeType, Vec<u64>, Vec<VmValue>) {
     }
 }
 
-fn encode_entries<'a>(
-    variables: impl Iterator<Item = &'a EraVariableState>,
-) -> Result<Vec<SaveEntry>, SaveCodecError> {
-    variables
-        .map(|variable| {
-            let dimensions = variable
-                .dimensions
-                .iter()
-                .map(|value| {
-                    u32::try_from(*value)
-                        .map_err(|_| SaveCodecError::LimitExceeded("array dimension"))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let value = match (variable.value_type, dimensions.is_empty()) {
-                (BytecodeType::Integer, true) => SaveValue::Integer(integer_at(variable, 0)?),
-                (BytecodeType::String, true) => {
-                    SaveValue::String(string_at(variable, 0)?.to_owned())
-                }
-                (BytecodeType::Integer, false) => SaveValue::Integers {
-                    dimensions,
-                    values: (0..variable.values.len())
-                        .map(|index| integer_at(variable, index))
-                        .collect::<Result<_, _>>()?,
-                },
-                (BytecodeType::String, false) => SaveValue::Strings {
-                    dimensions,
-                    values: (0..variable.values.len())
-                        .map(|index| string_at(variable, index).map(str::to_owned))
-                        .collect::<Result<_, _>>()?,
-                },
-                (BytecodeType::IntegerPlace | BytecodeType::StringPlace, _) => {
-                    return Err(SaveCodecError::InvalidFormat(
-                        "a saved variable cannot contain places".into(),
-                    ));
-                }
-            };
-            Ok(SaveEntry {
-                name: variable.name.clone(),
-                value,
-            })
+struct EncodedEntries {
+    entries: Vec<SaveEntry>,
+    user_defined_start: Option<usize>,
+}
+
+fn encode_entries(
+    variables: &BTreeMap<erabasic_bytecode::SymbolKey, EraVariableState>,
+    artifact: &BytecodeArtifact,
+    character: bool,
+) -> Result<EncodedEntries, SaveCodecError> {
+    let mut by_name = BTreeMap::new();
+    for (key, variable) in variables {
+        by_name.insert(variable.name.to_ascii_uppercase(), (*key, variable));
+    }
+    let mut ordered = Vec::with_capacity(variables.len());
+    let mut seen = BTreeSet::new();
+    for name in REFERENCE_VARIABLE_ORDER {
+        if let Some((key, variable)) = by_name.get(*name)
+            && seen.insert(*key)
+        {
+            ordered.push(*variable);
+        }
+    }
+
+    let user_defined_start = (character
+        && artifact
+            .project_data
+            .schema
+            .user_variable_order
+            .iter()
+            .filter_map(|name| artifact.project_data.schema.variables.get(name))
+            .any(|schema| schema.storage == erabasic_data::StorageScope::Character))
+    .then_some(ordered.len());
+    for name in &artifact.project_data.schema.user_variable_order {
+        if let Some((key, variable)) = by_name.get(name)
+            && seen.insert(*key)
+        {
+            ordered.push(*variable);
+        }
+    }
+    for (key, variable) in variables {
+        if seen.insert(*key) {
+            ordered.push(variable);
+        }
+    }
+
+    Ok(EncodedEntries {
+        entries: ordered
+            .into_iter()
+            .map(encode_entry)
+            .collect::<Result<_, _>>()?,
+        user_defined_start,
+    })
+}
+
+fn encode_entry(variable: &EraVariableState) -> Result<SaveEntry, SaveCodecError> {
+    let dimensions = variable
+        .dimensions
+        .iter()
+        .map(|value| {
+            u32::try_from(*value).map_err(|_| SaveCodecError::LimitExceeded("array dimension"))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let value = match (variable.value_type, dimensions.is_empty()) {
+        (BytecodeType::Integer, true) => SaveValue::Integer(integer_at(variable, 0)?),
+        (BytecodeType::String, true) => SaveValue::String(string_at(variable, 0)?.to_owned()),
+        (BytecodeType::Integer, false) => SaveValue::Integers {
+            dimensions,
+            values: (0..variable.values.len())
+                .map(|index| integer_at(variable, index))
+                .collect::<Result<_, _>>()?,
+        },
+        (BytecodeType::String, false) => SaveValue::Strings {
+            dimensions,
+            values: (0..variable.values.len())
+                .map(|index| string_at(variable, index).map(str::to_owned))
+                .collect::<Result<_, _>>()?,
+        },
+        (BytecodeType::IntegerPlace | BytecodeType::StringPlace, _) => {
+            return Err(SaveCodecError::InvalidFormat(
+                "a saved variable cannot contain places".into(),
+            ));
+        }
+    };
+    Ok(SaveEntry {
+        name: variable.name.clone(),
+        value,
+    })
 }
 
 fn integer_at(variable: &EraVariableState, index: usize) -> Result<i64, SaveCodecError> {
@@ -466,6 +634,14 @@ fn string_at(variable: &EraVariableState, index: usize) -> Result<&str, SaveCode
 
 #[cfg(test)]
 mod tests {
+    use erabasic_bytecode::{
+        ArtifactManifest, BytecodeCallCompatibility, Digest, SourceMap, SymbolKey,
+    };
+    use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
+    use erabasic_data::{
+        Persistence, StorageScope, ValueType, VariableId as DataVariableId, VariableSchema,
+    };
+
     use super::*;
 
     #[test]
@@ -505,5 +681,61 @@ mod tests {
                 entries: vec![("new".into(), "value".into())],
             }
         );
+    }
+
+    #[test]
+    fn binary_entries_follow_reference_and_user_declaration_order() {
+        let mut project_data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+            .data
+            .unwrap();
+        for name in ["Z_USER", "A_USER"] {
+            project_data.schema.register_user_variable(VariableSchema {
+                id: DataVariableId::user(name),
+                value_type: ValueType::Integer,
+                storage: StorageScope::Character,
+                dimensions: Vec::new(),
+                mutable: true,
+                persistence: Persistence::GameSave,
+                can_forbid: false,
+            });
+        }
+        let artifact = BytecodeArtifact {
+            manifest: ArtifactManifest::new(Digest::default()),
+            call_compatibility: BytecodeCallCompatibility::default(),
+            project_data,
+            globals: Vec::new(),
+            native_imports: Vec::new(),
+            host_imports: Vec::new(),
+            functions: Vec::new(),
+            event_groups: Vec::new(),
+            source_map: SourceMap::default(),
+        };
+        let mut variables = BTreeMap::new();
+        for (name, value) in [("A_USER", 4), ("CFLAG", 3), ("Z_USER", 2), ("NO", 1)] {
+            let key = SymbolKey::derive("save-order-test", name.as_bytes());
+            variables.insert(
+                key,
+                EraVariableState {
+                    name: name.into(),
+                    value_type: BytecodeType::Integer,
+                    dimensions: Vec::new(),
+                    persistence: BytecodePersistence::GameSave,
+                    storage: BytecodeStorage::Character,
+                    values: vec![VmValue::Integer(value)],
+                },
+            );
+        }
+
+        let encoded = encode_entries(&variables, &artifact, true).unwrap();
+
+        assert_eq!(
+            encoded
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["NO", "CFLAG", "Z_USER", "A_USER"]
+        );
+        assert_eq!(encoded.user_defined_start, Some(2));
     }
 }

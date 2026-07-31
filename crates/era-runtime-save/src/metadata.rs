@@ -284,6 +284,7 @@ mod tests {
                 description: "slot description".into(),
             },
             characters: Vec::new(),
+            character_user_defined_starts: Vec::new(),
             variables: Vec::new(),
             opaque_extensions: Vec::new(),
             text_payload: None,

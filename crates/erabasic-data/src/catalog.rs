@@ -116,6 +116,11 @@ pub fn builtin_schema() -> ProjectSchema {
     ];
     for name in GAME_INT_1D {
         let length = if *name == "FLAG" { 10_000 } else { 1_000 };
+        let persistence = if name.starts_with("NOTUSE_") {
+            Persistence::None
+        } else {
+            Persistence::GameSave
+        };
         add(
             &mut variables,
             name,
@@ -123,7 +128,7 @@ pub fn builtin_schema() -> ProjectSchema {
             StorageScope::Normal,
             &[length],
             true,
-            Persistence::GameSave,
+            persistence,
             !NOT_FORBIDDABLE_GAME_ARRAYS.contains(name),
         );
     }
@@ -465,6 +470,7 @@ pub fn builtin_schema() -> ProjectSchema {
 
     ProjectSchema {
         variables,
+        user_variable_order: Vec::new(),
         index_spaces,
     }
 }
