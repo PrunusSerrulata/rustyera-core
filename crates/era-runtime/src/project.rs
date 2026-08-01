@@ -1,3 +1,5 @@
+mod frontend;
+
 use era_runtime_protocol::{
     FileCategory, FileChange, FilePayload, ProjectAnalysisReport, ProjectAnalysisRequest,
     ProjectLoadReport, ProjectManifest, ProtocolDiagnostic, ReloadProject, RuntimeLogLevel,
@@ -5,10 +7,9 @@ use era_runtime_protocol::{
 };
 use erabasic_analyzer::{
     AnalysisInput, AnalysisProgressStage, AnalyzerDiagnosticSeverity, AnalyzerOptions,
-    ArgumentConstraint, CallableSignature, ExtensionRegistry, InstructionSignature, ProjectSource,
-    SourceIoError, SourceIoErrorKind, SourcePayload, WarningPolicy, analyze_project,
-    analyze_project_with_progress, builtin_function_names, builtin_instruction_names,
-    compare_reference_file_paths,
+    ArgumentConstraint, CallableSignature, ExtensionRegistry, InstructionSignature, WarningPolicy,
+    analyze_project, analyze_project_with_progress, builtin_function_names,
+    builtin_instruction_names, compare_reference_file_paths,
 };
 use erabasic_bytecode::BytecodeArtifact;
 use erabasic_compiler::{
@@ -16,11 +17,7 @@ use erabasic_compiler::{
     compile_project_with_artifact_and_progress, default_host_registry, extension_binding,
 };
 use erabasic_config::{ConfigStore, ConfigValue};
-use erabasic_csv::{
-    CsvDiagnosticSeverity, CsvLoadOptions, FilePayload as CsvFilePayload,
-    FrontendFile as CsvFrontendFile, FrontendIoError as CsvIoError,
-    FrontendIoErrorKind as CsvIoErrorKind, ProjectFiles, load_project,
-};
+use erabasic_csv::{CsvDiagnosticSeverity, CsvLoadOptions, ProjectFiles, load_project};
 use erabasic_data::LegacyEncoding;
 use erabasic_hir::SemanticType;
 use erabasic_parser::ArgumentStyle;
@@ -29,6 +26,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::resource::ResourceGraph;
 use crate::{ProjectProgress, ProjectProgressReporter, ProjectProgressStage};
+
+use self::frontend::{
+    analyzer_source, csv_file, manifest_source_texts, payload_hash, project_diagnostic,
+    project_source_location,
+};
 
 pub(crate) struct ProjectBuild {
     pub(crate) artifact: Option<ValidatedArtifact>,
@@ -1496,137 +1498,6 @@ fn parse_bool(value: &str) -> Option<bool> {
         "YES" | "TRUE" | "1" => Some(true),
         "NO" | "FALSE" | "0" => Some(false),
         _ => None,
-    }
-}
-
-fn csv_file(path: String, payload: FilePayload) -> CsvFrontendFile {
-    CsvFrontendFile {
-        relative_path: path,
-        payload: match payload {
-            FilePayload::Utf8(value) => CsvFilePayload::Utf8(value),
-            FilePayload::Bytes(_) => CsvFilePayload::IoError(CsvIoError {
-                kind: CsvIoErrorKind::InvalidData,
-                message: "CSV and EraBasic sources must be submitted as UTF-8".into(),
-            }),
-            FilePayload::IoError(error) => CsvFilePayload::IoError(CsvIoError {
-                kind: csv_error_kind(error.kind),
-                message: error.message,
-            }),
-        },
-    }
-}
-
-fn analyzer_source(path: String, payload: FilePayload) -> ProjectSource {
-    ProjectSource {
-        relative_path: path,
-        payload: match payload {
-            FilePayload::Utf8(value) => SourcePayload::Utf8(value),
-            FilePayload::Bytes(_) => SourcePayload::IoError(SourceIoError {
-                kind: SourceIoErrorKind::InvalidData,
-                message: "EraBasic sources must be submitted as UTF-8".into(),
-            }),
-            FilePayload::IoError(error) => SourcePayload::IoError(SourceIoError {
-                kind: analyzer_error_kind(error.kind),
-                message: error.message,
-            }),
-        },
-    }
-}
-
-fn csv_error_kind(kind: era_runtime_protocol::FrontendIoErrorKind) -> CsvIoErrorKind {
-    match kind {
-        era_runtime_protocol::FrontendIoErrorKind::NotFound => CsvIoErrorKind::NotFound,
-        era_runtime_protocol::FrontendIoErrorKind::PermissionDenied => {
-            CsvIoErrorKind::PermissionDenied
-        }
-        era_runtime_protocol::FrontendIoErrorKind::InvalidData => CsvIoErrorKind::InvalidData,
-        era_runtime_protocol::FrontendIoErrorKind::Interrupted => CsvIoErrorKind::Interrupted,
-        era_runtime_protocol::FrontendIoErrorKind::ReadOnly
-        | era_runtime_protocol::FrontendIoErrorKind::AlreadyExists
-        | era_runtime_protocol::FrontendIoErrorKind::Conflict
-        | era_runtime_protocol::FrontendIoErrorKind::Other => CsvIoErrorKind::Other,
-    }
-}
-
-fn analyzer_error_kind(kind: era_runtime_protocol::FrontendIoErrorKind) -> SourceIoErrorKind {
-    match kind {
-        era_runtime_protocol::FrontendIoErrorKind::NotFound => SourceIoErrorKind::NotFound,
-        era_runtime_protocol::FrontendIoErrorKind::PermissionDenied => {
-            SourceIoErrorKind::PermissionDenied
-        }
-        era_runtime_protocol::FrontendIoErrorKind::InvalidData => SourceIoErrorKind::InvalidData,
-        era_runtime_protocol::FrontendIoErrorKind::Interrupted => SourceIoErrorKind::Interrupted,
-        era_runtime_protocol::FrontendIoErrorKind::ReadOnly
-        | era_runtime_protocol::FrontendIoErrorKind::AlreadyExists
-        | era_runtime_protocol::FrontendIoErrorKind::Conflict
-        | era_runtime_protocol::FrontendIoErrorKind::Other => SourceIoErrorKind::Other,
-    }
-}
-
-fn payload_hash(payload: &FilePayload) -> Option<blake3::Hash> {
-    match payload {
-        FilePayload::Utf8(value) => Some(blake3::hash(value.as_bytes())),
-        FilePayload::Bytes(value) => Some(blake3::hash(value.as_slice())),
-        FilePayload::IoError(_) => None,
-    }
-}
-
-fn manifest_source_texts(manifest: &ProjectManifest) -> std::collections::BTreeMap<String, &str> {
-    manifest
-        .files
-        .iter()
-        .filter_map(|file| {
-            let FilePayload::Utf8(text) = &file.payload else {
-                return None;
-            };
-            let path = validate_relative_path(&file.relative_path).ok()?;
-            Some((path.to_ascii_lowercase(), text.as_str()))
-        })
-        .collect()
-}
-
-fn project_source_location(
-    relative_path: String,
-    byte_start: usize,
-    byte_end: usize,
-    fallback_line: Option<u64>,
-    text: Option<&str>,
-) -> SourceLocation {
-    let (line, byte_column) = text.map_or((fallback_line, None), |text| {
-        let clamped_start = byte_start.min(text.len());
-        let prefix = &text.as_bytes()[..clamped_start];
-        let line_start = prefix
-            .iter()
-            .rposition(|byte| *byte == b'\n')
-            .map_or(0, |index| index + 1);
-        let line = prefix
-            .iter()
-            .fold(0u64, |count, byte| count + u64::from(*byte == b'\n'));
-        (
-            Some(line),
-            Some(u64::try_from(clamped_start - line_start).unwrap_or(u64::MAX)),
-        )
-    });
-    SourceLocation {
-        relative_path,
-        byte_start: u64::try_from(byte_start).unwrap_or(u64::MAX),
-        byte_end: u64::try_from(byte_end).unwrap_or(u64::MAX),
-        line,
-        byte_column,
-    }
-}
-
-fn project_diagnostic(
-    code: &str,
-    level: RuntimeLogLevel,
-    message: impl Into<String>,
-    source: Option<SourceLocation>,
-) -> ProtocolDiagnostic {
-    ProtocolDiagnostic {
-        code: code.into(),
-        level,
-        message: message.into(),
-        source,
     }
 }
 
