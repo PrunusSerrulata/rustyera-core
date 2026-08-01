@@ -286,14 +286,8 @@ pub(crate) fn lower_function(
         }
     }
     let function_end = builder.code.len();
-    if builder.code.is_empty() {
-        if function.return_type == SemanticType::Void {
-            builder.emit(opcode::return_value(false), function.location);
-        } else {
-            builder.emit_default_method_value(function.location);
-            builder.emit(opcode::return_value(true), function.location);
-        }
-    } else if !pending_function_end_jumps.is_empty()
+    if builder.code.is_empty()
+        || !pending_function_end_jumps.is_empty()
         || !matches!(
             builder
                 .code
@@ -302,14 +296,7 @@ pub(crate) fn lower_function(
             Some(Opcode::Return | Opcode::Trap | Opcode::Jump)
         )
     {
-        if function.return_type == SemanticType::Void {
-            builder.emit(opcode::return_value(false), function.location);
-        } else {
-            // Emuera maps a method that reaches the next label without RETURNF
-            // to the type's default value (0 or the empty string).
-            builder.emit_default_method_value(function.location);
-            builder.emit(opcode::return_value(true), function.location);
-        }
+        builder.lower_era_fallthrough(function.location);
     }
     for (instruction, target, use_entry) in pending_jumps {
         let locations = if use_entry {

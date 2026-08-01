@@ -723,6 +723,30 @@ fn era_function_local_persists_across_calls() {
 }
 
 #[test]
+fn era_function_fallthrough_resets_result_zero() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULT = 9\nCALL FALLTHROUGH\nFLAG:0 = RESULT\nRETURN RESULT\n@FALLTHROUGH\nLOCAL = 1\n",
+    );
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .expect("FLAG")
+        .key;
+    let entry = artifact.functions[0].key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+
+    assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(0)));
+}
+
+#[test]
 fn swap_native_commits_both_places() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nFLAG:0 = 10\nFLAG:1 = 20\nSWAP FLAG:0, FLAG:1\nRESULT = FLAG:0 * 100 + FLAG:1\nRETURN RESULT\n",

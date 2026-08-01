@@ -849,25 +849,11 @@ impl<'a> Builder<'a> {
     }
 
     fn lower_era_return(&mut self, arguments: &[HirArgument], location: SourceLocation) {
-        let result = self
-            .context
-            .program
-            .variables
-            .iter()
-            .find(|variable| variable.name.eq_ignore_ascii_case("RESULT"))
-            .and_then(|variable| self.context.variable_keys.get(&variable.id))
-            .copied();
+        let result = self.era_result_key();
         if arguments.is_empty() {
             // Emuera treats an omitted RETURN value as zero. Only RESULT:0 is
             // overwritten; the remaining legacy RESULT entries stay unchanged.
-            if let Some(result) = result {
-                self.emit(opcode::push_integer(0), location);
-                self.emit(opcode::push_integer(0), location);
-                self.emit(
-                    opcode::variable(Opcode::StoreVariable, result, 1, 0),
-                    location,
-                );
-            }
+            self.reset_era_result(location);
             if self.hir_function.kind == FunctionKind::Method {
                 self.emit_default_method_value(location);
                 self.emit(opcode::return_value(true), location);
@@ -910,6 +896,38 @@ impl<'a> Builder<'a> {
             SemanticType::Integer | SemanticType::Void | SemanticType::Error => {
                 self.emit(opcode::push_integer(0), location);
             }
+        }
+    }
+
+    pub(super) fn lower_era_fallthrough(&mut self, location: SourceLocation) {
+        if self.hir_function.kind == FunctionKind::Method {
+            self.emit_default_method_value(location);
+            self.emit(opcode::return_value(true), location);
+        } else {
+            // Reaching the next label is an implicit `RETURN 0` in Emuera.
+            self.reset_era_result(location);
+            self.emit(opcode::return_value(false), location);
+        }
+    }
+
+    fn era_result_key(&self) -> Option<SymbolKey> {
+        self.context
+            .program
+            .variables
+            .iter()
+            .find(|variable| variable.name.eq_ignore_ascii_case("RESULT"))
+            .and_then(|variable| self.context.variable_keys.get(&variable.id))
+            .copied()
+    }
+
+    fn reset_era_result(&mut self, location: SourceLocation) {
+        if let Some(result) = self.era_result_key() {
+            self.emit(opcode::push_integer(0), location);
+            self.emit(opcode::push_integer(0), location);
+            self.emit(
+                opcode::variable(Opcode::StoreVariable, result, 1, 0),
+                location,
+            );
         }
     }
 
