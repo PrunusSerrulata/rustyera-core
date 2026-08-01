@@ -883,6 +883,10 @@ impl RuntimeSession {
                 .map_err(|error| RuntimeError::Internal(error.to_string()))?;
             self.controller.clear();
             self.controller.clear_continuous_train();
+            // STOPCALLTRAIN discards the active COM caller. Resume at the
+            // post-command source-check phase explicitly instead of depending
+            // on whichever value CALLTRAINEND leaves in RESULT:0.
+            self.controller.step = SystemStep::TrainSourceCheck;
             self.skip_print = false;
             if !self.dispatch_system_function(vm, "CALLTRAINEND", false)? {
                 return self.continue_system_flow(vm);

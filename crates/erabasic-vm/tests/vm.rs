@@ -184,14 +184,14 @@ fn run_compiled_result(artifact: &BytecodeArtifact) -> VmValue {
 
 #[test]
 fn power_statement_writes_the_destination_instead_of_passing_its_place_as_an_operand() {
-    let artifact = compile_source("@SYSTEM_TITLE\nPOWER RESULT, 2, 3\nRETURN\n");
+    let artifact = compile_source("@SYSTEM_TITLE\nPOWER RESULT, 2, 3\nRETURN RESULT\n");
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(8));
 }
 
 #[test]
 fn static_call_target_with_an_inline_comment_executes_in_the_vm() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nCALL TARGET; inline comment\nRETURN\n@TARGET\nRESULT = 42\nRETURN\n",
+        "@SYSTEM_TITLE\nCALL TARGET; inline comment\nRETURN RESULT\n@TARGET\nRESULT = 42\nRETURN RESULT\n",
     );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(42));
 }
@@ -199,7 +199,7 @@ fn static_call_target_with_an_inline_comment_executes_in_the_vm() {
 #[test]
 fn scalar_ref_parameters_store_aliases_and_mutate_the_callers_arrays() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\n#DIM VALUES, 3\nVALUES:1 = 3\nCALL MUTATE_REF(VALUES)\nRETURN\n@MUTATE_REF(NUMBERS)\n#DIM REF NUMBERS\nNUMBERS:1 = 7\nRETURN\n",
+        "@SYSTEM_TITLE\n#DIM VALUES, 3\nVALUES:1 = 3\nCALL MUTATE_REF(VALUES)\nRETURN RESULT\n@MUTATE_REF(NUMBERS)\n#DIM REF NUMBERS\nNUMBERS:1 = 7\nRETURN RESULT\n",
     );
     let entry = artifact
         .functions
@@ -238,7 +238,7 @@ fn scalar_ref_parameters_store_aliases_and_mutate_the_callers_arrays() {
 #[test]
 fn dynamic_calls_bind_variable_arguments_as_refs_or_values_from_the_target_signature() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\n#DIM VALUES, 3\nVALUES:1 = 3\nCALLFORM MUTATE_{1}(VALUES)\nCALLFORM READ_{1}(VALUES:1)\nRETURN\n@MUTATE_1(NUMBERS)\n#DIM REF NUMBERS\nNUMBERS:1 = 7\nRETURN\n@READ_1(VALUE)\n#DIM VALUE\nRESULT:1 = VALUE\nRETURN\n",
+        "@SYSTEM_TITLE\n#DIM VALUES, 3\nVALUES:1 = 3\nCALLFORM MUTATE_{1}(VALUES)\nCALLFORM READ_{1}(VALUES:1)\nRETURN RESULT\n@MUTATE_1(NUMBERS)\n#DIM REF NUMBERS\nNUMBERS:1 = 7\nRETURN RESULT\n@READ_1(VALUE)\n#DIM VALUE\nRESULT:1 = VALUE\nRETURN RESULT\n",
     );
     let entry = artifact
         .functions
@@ -293,9 +293,11 @@ fn while_false_branch_skips_past_wend_and_finite_loops_terminate() {
 }
 
 #[test]
-fn bare_return_preserves_the_legacy_result_array() {
-    let artifact = compile_source("@SYSTEM_TITLE\nRESULT = 99\nRETURN\n");
-    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(99));
+fn bare_return_zeros_result_zero_and_preserves_the_remaining_result_array() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULT:1 = 7\nCALL HELPER\nRETURN (RESULT:0 == 0) && (RESULT:1 == 7)\n@HELPER\nRESULT = 99\nRETURN\n",
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(1));
 }
 
 #[test]
@@ -338,7 +340,7 @@ fn repeat_updates_count_and_continue_runs_rend_increment() {
              RESULT += COUNT + 1\n\
          REND\n\
          RESULT = RESULT * 10 + COUNT\n\
-         RETURN\n",
+         RETURN RESULT\n",
     );
 
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(84));
@@ -354,7 +356,7 @@ fn break_advances_repeat_count_before_leaving_the_loop() {
              BREAK\n\
          REND\n\
          RESULT += COUNT\n\
-         RETURN\n",
+         RETURN RESULT\n",
     );
 
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(11));
@@ -366,7 +368,7 @@ fn selectcase_loop_rejects_the_previous_string_tip() {
         "@SYSTEM_TITLE\n\
          RESULTS '= GET_TIP(0)\n\
          RESULT = RESULTS != \"zero\" && RESULTS != \"\"\n\
-         RETURN\n\
+         RETURN RESULT\n\
          @GET_TIP(ARG)\n\
          #FUNCTIONS\n\
          #DIM INDEX\n\
@@ -389,7 +391,7 @@ fn selectcase_loop_rejects_the_previous_string_tip() {
 #[test]
 fn structured_map_native_preserves_order_and_commits_array_outputs() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\n#DIMS KEYS, 4\nRESULT:0 = MAP_CREATE(\"m\")\nRESULT:1 = MAP_SET(\"m\", \"b\", \"1\")\nRESULT:2 = MAP_SET(\"m\", \"a\", \"2\")\nRESULT:3 = MAP_SET(\"m\", \"b\", \"3\")\nRESULTS:0 = %MAP_GET(\"m\", \"b\")%\nRESULTS:1 = %MAP_GETKEYS(\"m\")%\nRESULTS:2 = %MAP_GETKEYS(\"m\", KEYS, 1)%\nRETURN\n",
+        "@SYSTEM_TITLE\n#DIMS KEYS, 4\nRESULT:0 = MAP_CREATE(\"m\")\nRESULT:1 = MAP_SET(\"m\", \"b\", \"1\")\nRESULT:2 = MAP_SET(\"m\", \"a\", \"2\")\nRESULT:3 = MAP_SET(\"m\", \"b\", \"3\")\nRESULTS:0 = %MAP_GET(\"m\", \"b\")%\nRESULTS:1 = %MAP_GETKEYS(\"m\")%\nRESULTS:2 = %MAP_GETKEYS(\"m\", KEYS, 1)%\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -451,7 +453,7 @@ fn structured_map_native_preserves_order_and_commits_array_outputs() {
 #[test]
 fn structured_data_table_uses_deterministic_ids_and_updates_rows() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULT:0 = DT_CREATE(\"t\")\nRESULT:1 = DT_COLUMN_ADD(\"t\", \"score\", \"int32\", 0)\nRESULT:2 = DT_ROW_ADD(\"t\", \"score\", 7)\nRESULT:3 = DT_ROW_SET(\"t\", RESULT:2, \"score\", 9)\nRESULT:4 = DT_CELL_GET(\"t\", RESULT:2, \"score\", 1)\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULT:0 = DT_CREATE(\"t\")\nRESULT:1 = DT_COLUMN_ADD(\"t\", \"score\", \"int32\", 0)\nRESULT:2 = DT_ROW_ADD(\"t\", \"score\", 7)\nRESULT:3 = DT_ROW_SET(\"t\", RESULT:2, \"score\", 9)\nRESULT:4 = DT_CELL_GET(\"t\", RESULT:2, \"score\", 1)\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -493,7 +495,7 @@ fn structured_data_table_uses_deterministic_ids_and_updates_rows() {
 #[test]
 fn structured_data_table_treats_omitted_values_as_null_cells() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nDT_CREATE \"t\"\nDT_COLUMN_ADD \"t\", \"name\", \"string\"\nDT_COLUMN_ADD \"t\", \"score\", \"int32\"\nDT_ROW_ADD \"t\", \"name\",, \"score\",\nRESULT:0 = RESULT\nRESULT:1 = DT_CELL_ISNULL(\"t\", RESULT:0, \"name\", 1)\nRESULT:2 = DT_CELL_ISNULL(\"t\", RESULT:0, \"score\", 1)\nRESULT:3 = DT_CELL_SET(\"t\", RESULT:0, \"name\", \"filled\", 1)\nRESULT:4 = DT_CELL_SET(\"t\", RESULT:0, \"name\",, 1)\nRESULT:5 = DT_CELL_ISNULL(\"t\", RESULT:0, \"name\", 1)\nRETURN\n",
+        "@SYSTEM_TITLE\nDT_CREATE \"t\"\nDT_COLUMN_ADD \"t\", \"name\", \"string\"\nDT_COLUMN_ADD \"t\", \"score\", \"int32\"\nDT_ROW_ADD \"t\", \"name\",, \"score\",\nRESULT:0 = RESULT\nRESULT:1 = DT_CELL_ISNULL(\"t\", RESULT:0, \"name\", 1)\nRESULT:2 = DT_CELL_ISNULL(\"t\", RESULT:0, \"score\", 1)\nRESULT:3 = DT_CELL_SET(\"t\", RESULT:0, \"name\", \"filled\", 1)\nRESULT:4 = DT_CELL_SET(\"t\", RESULT:0, \"name\",, 1)\nRESULT:5 = DT_CELL_ISNULL(\"t\", RESULT:0, \"name\", 1)\nRETURN RESULT\n",
     );
     let entry = artifact
         .functions
@@ -535,7 +537,7 @@ fn structured_data_table_treats_omitted_values_as_null_cells() {
 #[test]
 fn structured_xml_mutations_match_the_reference_fixture_subset() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULT:0 = XML_DOCUMENT(1, \"<root><item id='a'>one</item><item id='b'>two</item></root>\")\nRESULTS:0 = %XML_TOSTR(1)%\nRESULT:1 = XML_SET(RESULTS:0, \"//item[@id='b']\", \"changed\", 0, 1)\nRESULT:2 = XML_ADDATTRIBUTE(RESULTS:0, \"//item[@id='a']\", \"kind\", \"first\")\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULT:0 = XML_DOCUMENT(1, \"<root><item id='a'>one</item><item id='b'>two</item></root>\")\nRESULTS:0 = %XML_TOSTR(1)%\nRESULT:1 = XML_SET(RESULTS:0, \"//item[@id='b']\", \"changed\", 0, 1)\nRESULT:2 = XML_ADDATTRIBUTE(RESULTS:0, \"//item[@id='a']\", \"kind\", \"first\")\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -586,7 +588,7 @@ fn structured_xml_mutations_match_the_reference_fixture_subset() {
 #[test]
 fn xml_get_instruction_writes_selected_nodes_to_a_local_string_array() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nCALL LOAD_ITEMS\nRETURN\n@LOAD_ITEMS\n#DIMS DYNAMIC ITEMS, 4\nXML_DOCUMENT 1, \"<root><item id='a'>one</item><item id='b'>two</item></root>\"\nXML_GET 1, \"//item\", ITEMS, 3\nRESULTS:10 '= ITEMS:0\nRESULTS:11 '= ITEMS:1\nRETURN\n",
+        "@SYSTEM_TITLE\nCALL LOAD_ITEMS\nRETURN RESULT\n@LOAD_ITEMS\n#DIMS DYNAMIC ITEMS, 4\nXML_DOCUMENT 1, \"<root><item id='a'>one</item><item id='b'>two</item></root>\"\nXML_GET 1, \"//item\", ITEMS, 3\nRESULTS:10 '= ITEMS:0\nRESULTS:11 '= ITEMS:1\nRETURN RESULT\n",
     );
     let entry = artifact
         .functions
@@ -631,7 +633,7 @@ fn xml_get_instruction_writes_selected_nodes_to_a_local_string_array() {
 #[test]
 fn structured_xml_descendant_axes_include_root_elements_and_attributes() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\n#DIMS VALUES, 4\nRESULT:0 = XML_DOCUMENT(1, \"<unicodeIcon unicode='A'><layer unicode='B'/></unicodeIcon>\")\nRESULT:1 = XML_GET(1, \"//@unicode\", VALUES, 1)\nRESULTS:10 '= VALUES:0\nRESULTS:11 '= VALUES:1\nRESULT:2 = XML_GET(\"<enemy_data name='rabbit'/>\", \"//enemy_data/@name\", VALUES, 1)\nRESULTS:12 '= VALUES:0\nRESULT:3 = XML_GET(\"<rooted code='ok'/>\", \"rooted/@code\", VALUES, 1)\nRESULTS:13 '= VALUES:0\nRETURN\n",
+        "@SYSTEM_TITLE\n#DIMS VALUES, 4\nRESULT:0 = XML_DOCUMENT(1, \"<unicodeIcon unicode='A'><layer unicode='B'/></unicodeIcon>\")\nRESULT:1 = XML_GET(1, \"//@unicode\", VALUES, 1)\nRESULTS:10 '= VALUES:0\nRESULTS:11 '= VALUES:1\nRESULT:2 = XML_GET(\"<enemy_data name='rabbit'/>\", \"//enemy_data/@name\", VALUES, 1)\nRESULTS:12 '= VALUES:0\nRESULT:3 = XML_GET(\"<rooted code='ok'/>\", \"rooted/@code\", VALUES, 1)\nRESULTS:13 '= VALUES:0\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -687,7 +689,7 @@ fn structured_xml_descendant_axes_include_root_elements_and_attributes() {
 
 #[test]
 fn era_function_local_persists_across_calls() {
-    let artifact = compile_source("@COUNTER\nLOCAL:0 += 1\nRESULT = LOCAL:0\nRETURN\n");
+    let artifact = compile_source("@COUNTER\nLOCAL:0 += 1\nRESULT = LOCAL:0\nRETURN RESULT\n");
     let entry = artifact.functions[0].key;
     let result = artifact
         .globals
@@ -723,7 +725,7 @@ fn era_function_local_persists_across_calls() {
 #[test]
 fn swap_native_commits_both_places() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nFLAG:0 = 10\nFLAG:1 = 20\nSWAP FLAG:0, FLAG:1\nRESULT = FLAG:0 * 100 + FLAG:1\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:0 = 10\nFLAG:1 = 20\nSWAP FLAG:0, FLAG:1\nRESULT = FLAG:0 * 100 + FLAG:1\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let mut natives = NativeServiceRegistry::for_artifact(&artifact);
@@ -755,7 +757,7 @@ fn swap_native_commits_both_places() {
 #[test]
 fn array_shift_and_remove_commit_after_validating_the_whole_array() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nFLAG:0 = 1\nFLAG:1 = 2\nFLAG:2 = 3\nFLAG:3 = 4\nARRAYSHIFT FLAG, 1, 9, 0, 4\nARRAYREMOVE FLAG, 1, 2\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:0 = 1\nFLAG:1 = 2\nFLAG:2 = 3\nFLAG:3 = 4\nARRAYSHIFT FLAG, 1, 9, 0, 4\nARRAYREMOVE FLAG, 1, 2\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let flag = artifact
@@ -797,24 +799,24 @@ fn array_shift_and_remove_commit_after_validating_the_whole_array() {
 #[test]
 fn findelement_uses_the_verified_regex_subset() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULTS:0 '= \"zz\"\nRESULTS:1 '= \"abc\"\nRESULTS:2 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"^ab$\", 0, 3, 1)\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"zz\"\nRESULTS:1 '= \"abc\"\nRESULTS:2 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"^ab$\", 0, 3, 1)\nRETURN RESULT\n",
     );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(2));
 
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULTS:0 '= \"<p>----------------</p>\"\nRESULT = FINDELEMENT(RESULTS, \"([^ ])\\\\1{15}\", 0, 1, 0)\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"<p>----------------</p>\"\nRESULT = FINDELEMENT(RESULTS, \"([^ ])\\\\1{15}\", 0, 1, 0)\nRETURN RESULT\n",
     );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(0));
 
     // An empty range never inspects an element, so even an invalid pattern is
     // intentionally not compiled and the query returns the not-found sentinel.
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"a(?=b)\", 0, 0, 0)\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"a(?=b)\", 0, 0, 0)\nRETURN RESULT\n",
     );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(-1));
 
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"a(?=b)\", 0, 1, 0)\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"a(?=b)\", 0, 1, 0)\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let mut natives = NativeServiceRegistry::for_artifact(&artifact);
@@ -835,7 +837,7 @@ fn findelement_uses_the_verified_regex_subset() {
 #[test]
 fn regexpmatch_supports_positive_boundaries_without_consuming_adjacent_tokens() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\n#DIM GROUP_COUNT\n#DIMS MATCHES, 4\nRESULT:0 = REGEXPMATCH(\"[$TOKEN:A][$TOKEN:B]\", \"(?<=\\\\[\\\\$TOKEN:).*?(?=\\\\])\", GROUP_COUNT, MATCHES)\nRESULT:1 = GROUP_COUNT\nRESULTS:10 '= MATCHES:0\nRESULTS:11 '= MATCHES:1\nRETURN\n",
+        "@SYSTEM_TITLE\n#DIM GROUP_COUNT\n#DIMS MATCHES, 4\nRESULT:0 = REGEXPMATCH(\"[$TOKEN:A][$TOKEN:B]\", \"(?<=\\\\[\\\\$TOKEN:).*?(?=\\\\])\", GROUP_COUNT, MATCHES)\nRESULT:1 = GROUP_COUNT\nRESULTS:10 '= MATCHES:0\nRESULTS:11 '= MATCHES:1\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -896,7 +898,7 @@ fn one_dimensional_array_operations_accept_an_indexed_reference() {
          RESULT:0 = FINDELEMENT(RELATION:0:0, 12, 0, 4)\n\
          ARRAYREMOVE RELATION:0:0, 1, 1\n\
          RESULT:1 = RELATION:0:1\n\
-         RETURN\n",
+         RETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -937,7 +939,7 @@ fn conditional_form_trims_branch_edge_whitespace() {
         "@SYSTEM_TITLE\n\
          RESULTS:0 = \\@ 0 ? unused # %\"魔力\"% \\@\n\
          RESULTS:1 = \\@ 1 ? \tkept\t # unused \\@\n\
-         RETURN\n",
+         RETURN RESULT\n",
     );
     let results = artifact
         .globals
@@ -975,7 +977,7 @@ fn conditional_form_trims_branch_edge_whitespace() {
 #[test]
 fn arraysort_accepts_reference_forward_back_keywords() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nFLAG:0 = 2\nFLAG:1 = 4\nFLAG:2 = 1\nFLAG:3 = 3\nARRAYSORT FLAG, BACK, 0, 4\nARRAYCOPY FLAG, FLAG\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:0 = 2\nFLAG:1 = 4\nFLAG:2 = 1\nFLAG:3 = 3\nARRAYSORT FLAG, BACK, 0, 4\nARRAYCOPY FLAG, FLAG\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let flag = artifact
@@ -1016,7 +1018,7 @@ fn arraysort_accepts_reference_forward_back_keywords() {
 #[test]
 fn arraycopy_resolves_runtime_variable_names_and_array_queries_keep_places() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 3\nARRAYCOPY \"FLAG\", \"FLAG\"\nRESULT:0 = SUMARRAY(FLAG, 0, 3)\nRESULT:1 = MATCH(FLAG, 3, 0, 3)\nRESULT:2 = INRANGEARRAY(FLAG, 2, 3, 0, 3)\nRESULT:3 = GROUPMATCH(3, FLAG:0, FLAG:1, FLAG:2)\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 3\nARRAYCOPY \"FLAG\", \"FLAG\"\nRESULT:0 = SUMARRAY(FLAG, 0, 3)\nRESULT:1 = MATCH(FLAG, 3, 0, 3)\nRESULT:2 = INRANGEARRAY(FLAG, 2, 3, 0, 3)\nRESULT:3 = GROUPMATCH(3, FLAG:0, FLAG:1, FLAG:2)\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -1057,7 +1059,7 @@ fn arraycopy_resolves_runtime_variable_names_and_array_queries_keep_places() {
 #[test]
 fn arraycopy_copies_the_shared_extent_when_array_lengths_differ() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\n#DIM TARGET_LIST, 3\nTARGET:0 = 7\nTARGET:1 = 8\nTARGET:2 = 9\nTARGET:3 = 10\nARRAYCOPY \"TARGET\", \"TARGET_LIST\"\nRESULT:0 = TARGET_LIST:0\nRESULT:1 = TARGET_LIST:1\nRESULT:2 = TARGET_LIST:2\nRETURN\n",
+        "@SYSTEM_TITLE\n#DIM TARGET_LIST, 3\nTARGET:0 = 7\nTARGET:1 = 8\nTARGET:2 = 9\nTARGET:3 = 10\nARRAYCOPY \"TARGET\", \"TARGET_LIST\"\nRESULT:0 = TARGET_LIST:0\nRESULT:1 = TARGET_LIST:1\nRESULT:2 = TARGET_LIST:2\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -1097,7 +1099,7 @@ fn arraycopy_copies_the_shared_extent_when_array_lengths_differ() {
 #[test]
 fn arraycopy_variable_names_prefer_the_active_function_local() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\n#DIMS DYNAMIC DOCS, 3\nDOCS:0 '= \"caller\"\nRESULTS:0 '= \"first\"\nRESULTS:1 '= \"second\"\nCALL COPY_RESULTS\nRESULTS:12 '= DOCS:0\nRETURN\n@COPY_RESULTS\n#DIMS DYNAMIC DOCS, 3\nARRAYCOPY \"RESULTS\", \"DOCS\"\nRESULTS:10 '= DOCS:0\nRESULTS:11 '= DOCS:1\nRETURN\n",
+        "@SYSTEM_TITLE\n#DIMS DYNAMIC DOCS, 3\nDOCS:0 '= \"caller\"\nRESULTS:0 '= \"first\"\nRESULTS:1 '= \"second\"\nCALL COPY_RESULTS\nRESULTS:12 '= DOCS:0\nRETURN RESULT\n@COPY_RESULTS\n#DIMS DYNAMIC DOCS, 3\nARRAYCOPY \"RESULTS\", \"DOCS\"\nRESULTS:10 '= DOCS:0\nRESULTS:11 '= DOCS:1\nRETURN RESULT\n",
     );
     let entry = artifact
         .functions
@@ -1143,7 +1145,7 @@ fn arraycopy_variable_names_prefer_the_active_function_local() {
 #[test]
 fn arraycopy_intersects_each_dimension_and_preserves_other_destination_cells() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\n#DIM SOURCE_VALUES, 2, 3\n#DIM DESTINATION_VALUES, 3, 2\nSOURCE_VALUES:0:0 = 1\nSOURCE_VALUES:0:1 = 2\nSOURCE_VALUES:0:2 = 3\nSOURCE_VALUES:1:0 = 4\nSOURCE_VALUES:1:1 = 5\nSOURCE_VALUES:1:2 = 6\nDESTINATION_VALUES:2:0 = 9\nDESTINATION_VALUES:2:1 = 9\nARRAYCOPY \"SOURCE_VALUES\", \"DESTINATION_VALUES\"\nRESULT:10 = DESTINATION_VALUES:0:0\nRESULT:11 = DESTINATION_VALUES:0:1\nRESULT:12 = DESTINATION_VALUES:1:0\nRESULT:13 = DESTINATION_VALUES:1:1\nRESULT:14 = DESTINATION_VALUES:2:0\nRESULT:15 = DESTINATION_VALUES:2:1\nRETURN\n",
+        "@SYSTEM_TITLE\n#DIM SOURCE_VALUES, 2, 3\n#DIM DESTINATION_VALUES, 3, 2\nSOURCE_VALUES:0:0 = 1\nSOURCE_VALUES:0:1 = 2\nSOURCE_VALUES:0:2 = 3\nSOURCE_VALUES:1:0 = 4\nSOURCE_VALUES:1:1 = 5\nSOURCE_VALUES:1:2 = 6\nDESTINATION_VALUES:2:0 = 9\nDESTINATION_VALUES:2:1 = 9\nARRAYCOPY \"SOURCE_VALUES\", \"DESTINATION_VALUES\"\nRESULT:10 = DESTINATION_VALUES:0:0\nRESULT:11 = DESTINATION_VALUES:0:1\nRESULT:12 = DESTINATION_VALUES:1:0\nRESULT:13 = DESTINATION_VALUES:1:1\nRESULT:14 = DESTINATION_VALUES:2:0\nRESULT:15 = DESTINATION_VALUES:2:1\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -1186,7 +1188,7 @@ fn arraycopy_intersects_each_dimension_and_preserves_other_destination_cells() {
 #[test]
 fn printsingleforms_expands_a_constant_template_in_the_current_function_scope() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nCALL DRAW_INFORMATIONLINE, \"地图\"\nRETURN\n@DRAW_INFORMATIONLINE(ARGS)\n#DIMS EQUAL\nEQUAL = =\nPRINTSINGLEFORMS \"== %ARGS% \" + \"%(EQUAL * 3)%\"\nRETURN\n",
+        "@SYSTEM_TITLE\nCALL DRAW_INFORMATIONLINE, \"地图\"\nRETURN RESULT\n@DRAW_INFORMATIONLINE(ARGS)\n#DIMS EQUAL\nEQUAL = =\nPRINTSINGLEFORMS \"== %ARGS% \" + \"%(EQUAL * 3)%\"\nRETURN RESULT\n",
     );
     let entry = artifact
         .functions
@@ -1213,7 +1215,7 @@ fn printsingleforms_expands_a_constant_template_in_the_current_function_scope() 
 #[test]
 fn arraymsort_reorders_complete_rows_before_committing() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nRESULT:0 = 30\nRESULT:1 = 10\nRESULT:2 = 20\nRESULT:9 = ARRAYMSORT(FLAG, RESULT)\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nRESULT:0 = 30\nRESULT:1 = 10\nRESULT:2 = 20\nRESULT:9 = ARRAYMSORT(FLAG, RESULT)\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -1257,7 +1259,7 @@ fn arraymsort_reorders_complete_rows_before_committing() {
 #[test]
 fn arraymsortex_resolves_target_names_at_runtime() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nTFLAG:0 = 30\nTFLAG:1 = 10\nTFLAG:2 = 20\nRESULTS:0 '= \"TFLAG\"\nRESULTS:1 '= \"\"\nRESULT:9 = ARRAYMSORTEX(FLAG, RESULTS, 1, -1)\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nTFLAG:0 = 30\nTFLAG:1 = 10\nTFLAG:2 = 20\nRESULTS:0 '= \"TFLAG\"\nRESULTS:1 '= \"\"\nRESULT:9 = ARRAYMSORTEX(FLAG, RESULTS, 1, -1)\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let tflag = artifact
@@ -1297,7 +1299,7 @@ fn arraymsortex_resolves_target_names_at_runtime() {
 #[test]
 fn arraymsortex_rolls_back_when_a_later_dynamic_target_is_invalid() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nTFLAG:0 = 30\nTFLAG:1 = 10\nTFLAG:2 = 20\nRESULTS:0 '= \"TFLAG\"\nRESULTS:1 '= \"MISSING\"\nRESULT:9 = ARRAYMSORTEX(FLAG, RESULTS, 1, -1)\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:0 = 3\nFLAG:1 = 1\nFLAG:2 = 2\nFLAG:3 = 0\nTFLAG:0 = 30\nTFLAG:1 = 10\nTFLAG:2 = 20\nRESULTS:0 '= \"TFLAG\"\nRESULTS:1 '= \"MISSING\"\nRESULT:9 = ARRAYMSORTEX(FLAG, RESULTS, 1, -1)\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let tflag = artifact
@@ -1333,7 +1335,7 @@ fn arraymsortex_rolls_back_when_a_later_dynamic_target_is_invalid() {
 #[test]
 fn character_mutations_commit_as_one_memory_transaction() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nADDVOIDCHARA\nADDCOPYCHARA 0\nSWAPCHARA 0, 1\nDELCHARA 1\nRESULT = CHARANUM\nRETURN\n",
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nADDCOPYCHARA 0\nSWAPCHARA 0, 1\nDELCHARA 1\nRESULT = CHARANUM\nRETURN RESULT\n",
     );
     assert!(
         artifact
@@ -1375,7 +1377,7 @@ fn character_mutations_commit_as_one_memory_transaction() {
 #[test]
 fn varset_fills_only_the_validated_half_open_range() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nFLAG:0 = 1\nFLAG:1 = 2\nFLAG:2 = 3\nFLAG:3 = 4\nVARSET FLAG, 9, 1, 3\nRESULTS:0 '= \"a\"\nRESULTS:1 '= \"b\"\nRESULTS:2 '= \"c\"\nRESULTS:3 '= \"d\"\nVARSET RESULTS, \"x\", 3, 1\nRESULT = FLAG:1\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:0 = 1\nFLAG:1 = 2\nFLAG:2 = 3\nFLAG:3 = 4\nVARSET FLAG, 9, 1, 3\nRESULTS:0 '= \"a\"\nRESULTS:1 '= \"b\"\nRESULTS:2 '= \"c\"\nRESULTS:3 '= \"d\"\nVARSET RESULTS, \"x\", 3, 1\nRESULT = FLAG:1\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -1472,7 +1474,7 @@ fn omitted_varset_values_use_the_destination_type_default() {
          WORDS:1:0 '= \"two\"\n\
          WORDS:1:1 '= \"three\"\n\
          VARSET WORDS, 0\n\
-         RETURN\n",
+         RETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let results = artifact
@@ -1573,7 +1575,7 @@ fn dynamic_variable_methods_resolve_local_global_and_named_places() {
          RESULT:13 = COLOR_FROMNAME(\"not-a-color\")\n\
          RESULTS:13 = %GETVARS(\"HTMLS\")%\n\
          RESULTS:14 = %GETVARS(\"SAVESTR:portrait\")%\n\
-         RETURN\n",
+         RETURN RESULT\n",
         data,
     );
     let entry = artifact.functions[0].key;
@@ -1656,7 +1658,7 @@ fn omitted_substring_and_statement_encodetouni_match_reference_results() {
          RESULTS:14 = %SUBSTRINGU(\"aβcd\", 2, -1)%\n\
          RESULTS:20 '= \"A界\"\n\
          ENCODETOUNI %RESULTS:20%\n\
-         RETURN\n",
+         RETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -1790,7 +1792,7 @@ fn dynamic_variable_string_oracle_matches_reference_fixture() {
 
 #[test]
 fn direct_runtime_fills_validate_the_complete_batch_before_mutation() {
-    let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN RESULT\n");
     let flag = artifact
         .globals
         .iter()
@@ -1829,7 +1831,7 @@ fn direct_runtime_fills_validate_the_complete_batch_before_mutation() {
 #[test]
 fn cvarset_prevalidates_and_fills_the_character_range() {
     let artifact =
-        compile_source("@SYSTEM_TITLE\nADDVOIDCHARA\nCVARSET CFLAG, 1, 7, 0, 2\nRETURN\n");
+        compile_source("@SYSTEM_TITLE\nADDVOIDCHARA\nCVARSET CFLAG, 1, 7, 0, 2\nRETURN RESULT\n");
     let entry = artifact.functions[0].key;
     let cflag = artifact
         .globals
@@ -1864,7 +1866,7 @@ fn cvarset_prevalidates_and_fills_the_character_range() {
 #[test]
 fn script_can_address_character_storage_explicitly_or_through_target() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nADDVOIDCHARA\nCFLAG:0:1 = 3\nCFLAG:1:1 = 4\nTARGET = 1\nRESULT:0 = CFLAG:1\nRESULT:1 = CFLAG:0:1\nRETURN\n",
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nCFLAG:0:1 = 3\nCFLAG:1:1 = 4\nTARGET = 1\nRESULT:0 = CFLAG:1\nRESULT:1 = CFLAG:0:1\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let cflag = artifact
@@ -1916,7 +1918,7 @@ fn script_can_address_character_storage_explicitly_or_through_target() {
 #[test]
 fn cvarset_invalid_range_does_not_write_any_character() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nADDVOIDCHARA\nTARGET = 0\nCFLAG:1 = 3\nTARGET = 1\nCFLAG:1 = 4\nCVARSET CFLAG, 1, 7, 0, 3\nRETURN\n",
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nTARGET = 0\nCFLAG:1 = 3\nTARGET = 1\nCFLAG:1 = 4\nCVARSET CFLAG, 1, 7, 0, 3\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let cflag = artifact
@@ -1948,7 +1950,7 @@ fn cvarset_invalid_range_does_not_write_any_character() {
 #[test]
 fn sortchara_reorders_characters_and_remaps_target() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nADDVOIDCHARA\nADDVOIDCHARA\nTARGET = 0\nNO = 30\nTARGET = 1\nNO = 10\nTARGET = 2\nNO = 20\nMASTER = -1\nSORTCHARA NO, FORWARD\nRETURN\n",
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nADDVOIDCHARA\nTARGET = 0\nNO = 30\nTARGET = 1\nNO = 10\nTARGET = 2\nNO = 20\nMASTER = -1\nSORTCHARA NO, FORWARD\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let no = artifact
@@ -2002,7 +2004,7 @@ fn cmatch_counts_an_indexed_character_field_across_the_requested_range() {
 
 #[test]
 fn failed_character_mutation_rolls_back_the_complete_candidate() {
-    let artifact = compile_source("@SYSTEM_TITLE\nADDVOIDCHARA\nDELCHARA 0, 99\nRETURN\n");
+    let artifact = compile_source("@SYSTEM_TITLE\nADDVOIDCHARA\nDELCHARA 0, 99\nRETURN RESULT\n");
     let entry = artifact.functions[0].key;
     let mut natives = NativeServiceRegistry::for_artifact(&artifact);
     let mut vm = Vm::new(validated(&artifact), VmConfig::default());
@@ -2036,7 +2038,7 @@ fn character_csv_queries_use_loaded_templates_and_character_lookup() {
     .data
     .expect("character CSV should load");
     let artifact = compile_source_with_data(
-        "@SYSTEM_TITLE\nRESULT:0 = GETCHARA(10)\nRESULT:1 = CSVBASE(10, 0)\nRESULT:2 = CSVCFLAG(10, 1)\nRESULT:3 = CSVNAME(10) == \"Alice\"\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULT:0 = GETCHARA(10)\nRESULT:1 = CSVBASE(10, 0)\nRESULT:2 = CSVCFLAG(10, 1)\nRESULT:3 = CSVNAME(10) == \"Alice\"\nRETURN RESULT\n",
         loaded,
     );
     let entry = artifact.functions[0].key;
@@ -2093,7 +2095,7 @@ fn title_memory_initializes_gamebase_and_replace_calculated_variables() {
     data.static_data.replace.money_label = "円".into();
     data.static_data.replace.draw_line_string = "=".into();
 
-    let artifact = compile_source_with_data("@SYSTEM_TITLE\nRETURN\n", data);
+    let artifact = compile_source_with_data("@SYSTEM_TITLE\nRETURN RESULT\n", data);
     let vm = Vm::new(validated(&artifact), VmConfig::default());
     let read = |name: &str| {
         let key = artifact
@@ -2146,7 +2148,7 @@ fn normal_addchara_accepts_nonzero_cflag_zero_when_sp_compatibility_is_disabled(
     .data
     .expect("character CSV should load");
     let artifact = compile_source_with_data(
-        "@SYSTEM_TITLE\nADDCHARA 0\nRESULT = CHARANUM\nRETURN\n",
+        "@SYSTEM_TITLE\nADDCHARA 0\nRESULT = CHARANUM\nRETURN RESULT\n",
         loaded,
     );
 
@@ -2170,7 +2172,7 @@ fn resetdata_clears_initial_characters_before_script_insertion() {
     )
     .data
     .expect("character CSV should load");
-    let artifact = compile_source_with_data("@SYSTEM_TITLE\nRETURN\n", loaded);
+    let artifact = compile_source_with_data("@SYSTEM_TITLE\nRETURN RESULT\n", loaded);
     let mut vm = RuntimeVm::new(validated(&artifact), VmConfig::default());
     assert_eq!(vm.export_era_state().characters.len(), 1);
 
@@ -2184,8 +2186,9 @@ fn resetdata_clears_initial_characters_before_script_insertion() {
 
 #[test]
 fn duplicate_event_handlers_share_persistent_era_locals() {
-    let artifact =
-        compile_source("@EVENTTRAIN\nVARSET LOCAL\nRETURN\n@EVENTTRAIN\nLOCAL:0 = 1\nRETURN\n");
+    let artifact = compile_source(
+        "@EVENTTRAIN\nVARSET LOCAL\nRETURN RESULT\n@EVENTTRAIN\nLOCAL:0 = 1\nRETURN RESULT\n",
+    );
     let entries = artifact
         .functions
         .iter()
@@ -2217,7 +2220,7 @@ fn duplicate_event_handlers_share_persistent_era_locals() {
 #[test]
 fn regexpmatch_writes_reference_capture_outputs_atomically() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULT:0 = REGEXPMATCH(\"ab ac\", \"a(.)\", 1)\nRESULT:2 = REGEXPMATCH(\"az\", \"a(.)\", RESULT:5, RESULTS)\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULT:0 = REGEXPMATCH(\"ab ac\", \"a(.)\", 1)\nRESULT:2 = REGEXPMATCH(\"az\", \"a(.)\", RESULT:5, RESULTS)\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -2277,7 +2280,7 @@ fn regexpmatch_writes_reference_capture_outputs_atomically() {
 #[test]
 fn initrand_and_dumprand_exchange_all_randdata_state_atomically() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nDUMPRAND\nRESULT:0 = RAND:1000000\nINITRAND\nRESULT:1 = RAND:1000000\nRETURN\n",
+        "@SYSTEM_TITLE\nDUMPRAND\nRESULT:0 = RAND:1000000\nINITRAND\nRESULT:1 = RAND:1000000\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -2460,7 +2463,7 @@ fn terminal_fibers_retire_and_reuse_the_smallest_available_id() {
 
 #[test]
 fn cancelled_fibers_release_frames_before_id_retirement() {
-    let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN RESULT\n");
     let entry = artifact
         .functions
         .iter()
@@ -2490,8 +2493,7 @@ fn debugger_completion_stop_protects_terminal_fiber_until_continue() {
     let mut vm = Vm::new(validated(&artifact), VmConfig::default());
     let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
     let pause = vm.request_pause().unwrap();
-    vm.step(pause.token, fiber, VmStepKind::Instruction)
-        .unwrap();
+    vm.step(pause.token, fiber, VmStepKind::SourceLine).unwrap();
     let mut host = ReadyHost::default();
     let mut natives = NativeServiceRegistry::for_artifact(&artifact);
     let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
@@ -2650,7 +2652,7 @@ fn stable_wait_snapshot_round_trips_and_requires_exact_artifact() {
 
 #[test]
 fn quiescent_vm_snapshot_round_trips_without_host_wait_rebinding() {
-    let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN RESULT\n");
     let entry = artifact
         .functions
         .iter()
@@ -2692,7 +2694,7 @@ fn quiescent_vm_snapshot_round_trips_without_host_wait_rebinding() {
 
 #[test]
 fn retired_fiber_history_does_not_grow_quiescent_snapshots() {
-    let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN RESULT\n");
     let entry = artifact
         .functions
         .iter()
@@ -2725,7 +2727,7 @@ fn retired_fiber_history_does_not_grow_quiescent_snapshots() {
 
 #[test]
 fn snapshot_restore_retires_completed_fiber_history_and_normalizes_ids() {
-    let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN RESULT\n");
     let entry = artifact
         .functions
         .iter()
@@ -3307,7 +3309,7 @@ fn isolated_fork_copies_memory_without_copying_live_execution() {
 
 #[test]
 fn compiled_arithmetic_executes_and_updates_project_storage() {
-    let artifact = compile_source("@SYSTEM_TITLE\nRESULT = (2 + 3) * 4\nRETURN\n");
+    let artifact = compile_source("@SYSTEM_TITLE\nRESULT = (2 + 3) * 4\nRETURN RESULT\n");
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(20));
 }
 
@@ -3315,14 +3317,14 @@ fn compiled_arithmetic_executes_and_updates_project_storage() {
 fn compiled_assignment_matches_reference_smoke_input() {
     // The macOS/Windows reference smoke suite executes the exact `RESULT = 9`
     // statement and observes RESULT=9 through the C# VM watch projection.
-    let artifact = compile_source("@SYSTEM_TITLE\nRESULT = 9\nRETURN\n");
+    let artifact = compile_source("@SYSTEM_TITLE\nRESULT = 9\nRETURN RESULT\n");
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(9));
 }
 
 #[test]
 fn dynamic_try_resolves_before_arguments_and_form_call_invokes_target() {
     let artifact = compile_source(
-        "@ORACLE_COMPAT\nRESULT = 0\nTRYCALLFORM ORACLE_MISSING(1 / LOCAL)\nCALLFORM ORACLE_DYNAMIC_{1}(4)\nRETURN\n@ORACLE_DYNAMIC_1(ARG)\nFLAG:0 = ARG\nRETURN\n",
+        "@ORACLE_COMPAT\nRESULT = 0\nTRYCALLFORM ORACLE_MISSING(1 / LOCAL)\nCALLFORM ORACLE_DYNAMIC_{1}(4)\nRETURN RESULT\n@ORACLE_DYNAMIC_1(ARG)\nFLAG:0 = ARG\nRETURN RESULT\n",
     );
     let entry = artifact
         .functions
@@ -3367,13 +3369,13 @@ fn formatted_try_call_resolves_a_unicode_function_before_catch() {
          CATCH\n\
          FLAG:0 = -1\n\
          ENDCATCH\n\
-         RETURN\n\
+         RETURN RESULT\n\
          @IRAI_一般5(CHARA, IRAI_ID, SCENE)\n\
          #DIM CHARA\n\
          #DIM IRAI_ID\n\
          #DIMS SCENE\n\
          FLAG:0 = CHARA + IRAI_ID + (SCENE == \"依頼実行時\")\n\
-         RETURN\n",
+         RETURN RESULT\n",
         &AnalyzerOptions::default(),
     );
     assert!(
@@ -3430,7 +3432,7 @@ fn formatted_try_call_resolves_a_unicode_function_before_catch() {
 #[test]
 fn indexed_data_targets_dynamic_labels_and_try_lists_execute_lazily() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nPRINTDATA RESULT:2\nDATA chosen\nENDDATA\nSTRDATA RESULTS:3\nDATA stored\nENDDATA\nTRYCALLLIST\nFUNC MISSING, 1 / LOCAL\nFUNC LIST_TARGET, 7\nENDFUNC\nRESULTS:11 = %\"MISSING_LABEL\"%\nTRYCGOTOFORM %RESULTS:11%\nCATCH\nRESULT:3 = 3\nENDCATCH\nTRYGOTOLIST\nFUNC MISSING_LABEL\nFUNC FOUND_LABEL\nENDFUNC\nRESULT:4 = 99\n$FOUND_LABEL\nRESULT:4 = 4\nRETURN\n@LIST_TARGET(ARG)\nFLAG:0 = ARG\nRETURN\n",
+        "@SYSTEM_TITLE\nPRINTDATA RESULT:2\nDATA chosen\nENDDATA\nSTRDATA RESULTS:3\nDATA stored\nENDDATA\nTRYCALLLIST\nFUNC MISSING, 1 / LOCAL\nFUNC LIST_TARGET, 7\nENDFUNC\nRESULTS:11 = %\"MISSING_LABEL\"%\nTRYCGOTOFORM %RESULTS:11%\nCATCH\nRESULT:3 = 3\nENDCATCH\nTRYGOTOLIST\nFUNC MISSING_LABEL\nFUNC FOUND_LABEL\nENDFUNC\nRESULT:4 = 99\n$FOUND_LABEL\nRESULT:4 = 4\nRETURN RESULT\n@LIST_TARGET(ARG)\nFLAG:0 = ARG\nRETURN RESULT\n",
     );
     let entry = artifact
         .functions
@@ -3494,7 +3496,7 @@ fn indexed_data_targets_dynamic_labels_and_try_lists_execute_lazily() {
 #[test]
 fn callevent_runs_the_reference_event_group_inside_the_calling_fiber() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULT = 0\nCALLEVENT EVENTFIRST\nRESULT:3 = 9\nRETURN\n@EVENTFIRST\n#PRI\nRESULT:0 += 1\nRETURN\n@EVENTFIRST\nRESULT:1 += 2\nRETURN\n@EVENTFIRST\n#LATER\nRESULT:2 += 4\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULT = 0\nCALLEVENT EVENTFIRST\nRESULT:3 = 9\nRETURN RESULT\n@EVENTFIRST\n#PRI\nRESULT:0 += 1\nRETURN RESULT\n@EVENTFIRST\nRESULT:1 += 2\nRETURN RESULT\n@EVENTFIRST\n#LATER\nRESULT:2 += 4\nRETURN RESULT\n",
     );
     let entry = artifact
         .functions
@@ -3539,7 +3541,7 @@ fn dynamic_calls_apply_omission_conversion_and_event_compatibility_options() {
     options.compatible_function_argument_auto_convert = true;
     options.compatible_call_event = true;
     let artifact = compile_source_with_options(
-        "@SYSTEM_TITLE\nCALLFORM STRING_TARGET()\nCALLFORM STRING_TARGET(7)\nCALLFORM EVENTFIRST\nRETURN\n@STRING_TARGET(ARGS)\nRESULTS:0 = %ARGS%\nRETURN\n@EVENTFIRST\nRESULT:0 = 8\nRETURN\n",
+        "@SYSTEM_TITLE\nCALLFORM STRING_TARGET()\nCALLFORM STRING_TARGET(7)\nCALLFORM EVENTFIRST\nRETURN RESULT\n@STRING_TARGET(ARGS)\nRESULTS:0 = %ARGS%\nRETURN RESULT\n@EVENTFIRST\nRESULT:0 = 8\nRETURN RESULT\n",
         &options,
     );
     assert!(artifact.call_compatibility.allow_omitted_arguments);
@@ -3651,7 +3653,7 @@ fn compatibility_rest_matches_the_reference_oracle_fixture() {
 #[test]
 fn dynamic_statement_calls_enforce_method_and_normal_function_kinds() {
     let valid = compile_source(
-        "@SYSTEM_TITLE\nCALLFORMF METHOD_TARGET(3)\nRETURN\n@METHOD_TARGET(ARG)\n#FUNCTION\nRETURNF ARG + 1\n",
+        "@SYSTEM_TITLE\nCALLFORMF METHOD_TARGET(3)\nRETURN RESULT\n@METHOD_TARGET(ARG)\n#FUNCTION\nRETURNF ARG + 1\n",
     );
     let entry = valid
         .functions
@@ -3677,7 +3679,7 @@ fn dynamic_statement_calls_enforce_method_and_normal_function_kinds() {
     );
 
     let invalid = compile_source(
-        "@SYSTEM_TITLE\nCALLFORM METHOD_TARGET(3)\nRETURN\n@METHOD_TARGET(ARG)\n#FUNCTION\nRETURNF ARG + 1\n",
+        "@SYSTEM_TITLE\nCALLFORM METHOD_TARGET(3)\nRETURN RESULT\n@METHOD_TARGET(ARG)\n#FUNCTION\nRETURNF ARG + 1\n",
     );
     let entry = invalid
         .functions
@@ -3710,7 +3712,7 @@ fn nested_method_character_selector_preserves_the_returned_character() {
          CFLAG:1:300 = 260\n\
          TCVAR:1:30 = 2\n\
          RESULT = TCVAR:(IN_ROOM_MEMBER(260)):30\n\
-         RETURN\n\
+         RETURN RESULT\n\
          @IN_ROOM_MEMBER(ARG)\n\
          #FUNCTION\n\
          VARSET LOCAL, 0\n\
@@ -3747,15 +3749,16 @@ fn increment_expressions_mutate_their_place_and_return_reference_values() {
 #[test]
 fn compiled_bit_mutations_prevalidate_and_update_the_target() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULT = 0\nSETBIT RESULT, 1, 3\nINVERTBIT RESULT, 1\nCLEARBIT RESULT, 3\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULT = 0\nSETBIT RESULT, 1, 3\nINVERTBIT RESULT, 1\nCLEARBIT RESULT, 3\nRETURN RESULT\n",
     );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(0));
 }
 
 #[test]
 fn compiled_split_preserves_empty_fields_and_reports_the_full_count() {
-    let artifact =
-        compile_source("@SYSTEM_TITLE\n#DIMS TEMP, 4\nSPLIT \"a//b/\", \"/\", TEMP\nRETURN\n");
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n#DIMS TEMP, 4\nSPLIT \"a//b/\", \"/\", TEMP\nRETURN RESULT\n",
+    );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(4));
 }
 
@@ -3769,7 +3772,7 @@ fn getnum_resolves_the_referenced_builtin_name_table_at_runtime() {
         .lookup
         .insert("dynamic-key".into(), 17);
     let artifact = compile_source_with_data(
-        "@SYSTEM_TITLE\nRESULT = GETNUM(CFLAG, \"dynamic-key\")\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULT = GETNUM(CFLAG, \"dynamic-key\")\nRETURN RESULT\n",
         data,
     );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(17));
@@ -3788,7 +3791,7 @@ fn erdname_resolves_a_user_defined_index_name_at_runtime() {
         },
     );
     let artifact = compile_source_with_data(
-        "@SYSTEM_TITLE\n#DIMS CUSTOM_NAMES, 2\nRESULT = ERDNAME(CUSTOM_NAMES, 1) == \"second\"\nRETURN\n",
+        "@SYSTEM_TITLE\n#DIMS CUSTOM_NAMES, 2\nRESULT = ERDNAME(CUSTOM_NAMES, 1) == \"second\"\nRETURN RESULT\n",
         data,
     );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(1));
@@ -3882,13 +3885,13 @@ fn runtime_string_indices_use_strict_name_resolution() {
         .lookup
         .insert("dynamic-key".into(), 17);
     let artifact = compile_source_with_data(
-        "@SYSTEM_TITLE\nFLAG:17 = 9\nRESULTS:0 '= \"dynamic-key\"\nRESULT = FLAG:(RESULTS:0)\nRETURN\n",
+        "@SYSTEM_TITLE\nFLAG:17 = 9\nRESULTS:0 '= \"dynamic-key\"\nRESULT = FLAG:(RESULTS:0)\nRETURN RESULT\n",
         data,
     );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(9));
 
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULTS:0 '= \"missing-key\"\nRESULT = FLAG:(RESULTS:0)\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"missing-key\"\nRESULT = FLAG:(RESULTS:0)\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let mut natives = NativeServiceRegistry::for_artifact(&artifact);
@@ -3916,7 +3919,7 @@ fn break_at_the_end_of_a_selected_branch_does_not_enter_else() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\n\
          RESULT:0 = BREAK_BRANCH()\n\
-         RETURN\n\
+         RETURN RESULT\n\
          @BREAK_BRANCH()\n\
          #FUNCTION\n\
          #DIM LCOUNT\n\
@@ -3936,7 +3939,7 @@ fn break_at_the_end_of_a_selected_branch_does_not_enter_else() {
 #[test]
 fn native_tail_matches_the_reference_oracle_fixture() {
     let artifact = compile_source(
-        "@ORACLE_NATIVE\n#DIMS PARTS, 4\n#DIMS JOINED, 4\n#DIMS REPEATED, 1\nRESULT:0 = 0\nSETBIT RESULT:0, 1, 3\nINVERTBIT RESULT:0, 1\nCLEARBIT RESULT:0, 3\nSPLIT \"a//b/\", \"/\", PARTS, RESULT:1\nRESULT:2 = STRCOUNT(\"ababa\", \"aba\")\nRESULT:3 = GETPALAMLV(499, 5)\nRESULTS:0 = %ESCAPE(\"a+b\")%\nJOINED:0 = %\"a\"%\nJOINED:1 = %\"b\"%\nJOINED:2 = %\"c\"%\nRESULT:4 = STRLENS(\"Ab\")\nRESULT:5 = STRLENSU(\"Aé\")\nRESULT:12 = STRLENSU(\"😀\")\nRESULT:6 = STRFINDU(\"aβc\", \"β\")\nRESULT:7 = ENCODETOUNI(\"β\")\nRESULT:8 = UNICODEBYTE(\"β\")\nRESULTS:1 = %CHARATU(\"aβ\", 1)%\nRESULTS:2 = %TOUPPER(\"Abc\")%\nRESULTS:3 = %TOLOWER(\"AbC\")%\nRESULTS:4 = %STRJOIN(JOINED, \"/\", 1, 2)%\nRESULTS:5 = %STRJOIN(JOINED)%\nRESULTS:6 = %UNICODE(946)%\nRESULT:9 = TOINT(\"12.9\")\nRESULT:10 = ISNUMERIC(\"0x10\")\nRESULT:11 = COLOR_FROMRGB(1, 2, 3)\nRESULTS:7 = %CONVERT(255, 16)%\nREPEATED:0 '= \"<p>----------------</p>\"\nRESULT:13 = FINDELEMENT(REPEATED, \"([^ ])\\\\1{15}\", 0, 1, 0)\nRETURN\n",
+        "@ORACLE_NATIVE\n#DIMS PARTS, 4\n#DIMS JOINED, 4\n#DIMS REPEATED, 1\nRESULT:0 = 0\nSETBIT RESULT:0, 1, 3\nINVERTBIT RESULT:0, 1\nCLEARBIT RESULT:0, 3\nSPLIT \"a//b/\", \"/\", PARTS, RESULT:1\nRESULT:2 = STRCOUNT(\"ababa\", \"aba\")\nRESULT:3 = GETPALAMLV(499, 5)\nRESULTS:0 = %ESCAPE(\"a+b\")%\nJOINED:0 = %\"a\"%\nJOINED:1 = %\"b\"%\nJOINED:2 = %\"c\"%\nRESULT:4 = STRLENS(\"Ab\")\nRESULT:5 = STRLENSU(\"Aé\")\nRESULT:12 = STRLENSU(\"😀\")\nRESULT:6 = STRFINDU(\"aβc\", \"β\")\nRESULT:7 = ENCODETOUNI(\"β\")\nRESULT:8 = UNICODEBYTE(\"β\")\nRESULTS:1 = %CHARATU(\"aβ\", 1)%\nRESULTS:2 = %TOUPPER(\"Abc\")%\nRESULTS:3 = %TOLOWER(\"AbC\")%\nRESULTS:4 = %STRJOIN(JOINED, \"/\", 1, 2)%\nRESULTS:5 = %STRJOIN(JOINED)%\nRESULTS:6 = %UNICODE(946)%\nRESULT:9 = TOINT(\"12.9\")\nRESULT:10 = ISNUMERIC(\"0x10\")\nRESULT:11 = COLOR_FROMRGB(1, 2, 3)\nRESULTS:7 = %CONVERT(255, 16)%\nREPEATED:0 '= \"<p>----------------</p>\"\nRESULT:13 = FINDELEMENT(REPEATED, \"([^ ])\\\\1{15}\", 0, 1, 0)\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -4026,7 +4029,7 @@ fn native_tail_matches_the_reference_oracle_fixture() {
 #[test]
 fn unicode_positions_and_lengths_follow_reference_encodings() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULT:0 = STRLENSU(\"A😀\")\nRESULT:1 = STRFINDU(\"A😀B\", \"B\")\nRESULT:2 = STRLENS(\"Aé\")\nRESULTS:0 = %CHARATU(\"A😀B\", 1)%\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULT:0 = STRLENSU(\"A😀\")\nRESULT:1 = STRFINDU(\"A😀B\", \"B\")\nRESULT:2 = STRLENS(\"Aé\")\nRESULTS:0 = %CHARATU(\"A😀B\", 1)%\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -4084,7 +4087,7 @@ fn legacy_string_width_keeps_narrow_formcell_text_out_of_the_truncation_path() {
          RESULT:0 = STRLENS(\"们\")\n\
          RESULTS:0 = %FORMCELL(\"们\", 2)%\n\
          RESULTS:1 = %SUBSTRING(\"甲乙\", 0, 3)%\n\
-         RETURN\n\
+         RETURN RESULT\n\
          @FORMCELL(ARGS, ARG = -1)\n\
          #FUNCTIONS\n\
          #DIMS DYNAMIC LOCALSTR\n\
@@ -4157,7 +4160,7 @@ fn runtime_draw_line_width_prevents_formcell_from_truncating_to_a_negative_count
         "@SYSTEM_TITLE\n\
          RESULT:0 = STRLENS(DRAWLINESTR)\n\
          RESULTS:0 = %FORMCELL(\"温馨提示：选择物品时，按住空格可以临时进入多选模式。\", MAXWIDTH(), \"LEFT\")%\n\
-         RETURN\n\
+         RETURN RESULT\n\
          @MAXWIDTH\n\
          #FUNCTION\n\
          RETURNF STRLENS(DRAWLINESTR)\n\

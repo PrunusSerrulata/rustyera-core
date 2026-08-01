@@ -849,13 +849,6 @@ impl<'a> Builder<'a> {
     }
 
     fn lower_era_return(&mut self, arguments: &[HirArgument], location: SourceLocation) {
-        if arguments.is_empty() {
-            // Bare RETURN exits without changing the legacy RESULT array. Runtime
-            // controllers and SAVEINFO observe values assigned immediately before
-            // RETURN, so synthesizing RESULT:0 = 0 here is externally visible.
-            self.emit(opcode::return_value(false), location);
-            return;
-        }
         let result = self
             .context
             .program
@@ -864,6 +857,25 @@ impl<'a> Builder<'a> {
             .find(|variable| variable.name.eq_ignore_ascii_case("RESULT"))
             .and_then(|variable| self.context.variable_keys.get(&variable.id))
             .copied();
+        if arguments.is_empty() {
+            // Emuera treats an omitted RETURN value as zero. Only RESULT:0 is
+            // overwritten; the remaining legacy RESULT entries stay unchanged.
+            if let Some(result) = result {
+                self.emit(opcode::push_integer(0), location);
+                self.emit(opcode::push_integer(0), location);
+                self.emit(
+                    opcode::variable(Opcode::StoreVariable, result, 1, 0),
+                    location,
+                );
+            }
+            if self.hir_function.kind == FunctionKind::Method {
+                self.emit_default_method_value(location);
+                self.emit(opcode::return_value(true), location);
+            } else {
+                self.emit(opcode::return_value(false), location);
+            }
+            return;
+        }
         let values: &[HirArgument] = arguments;
         if let Some(result) = result {
             for (index, argument) in values.iter().enumerate() {

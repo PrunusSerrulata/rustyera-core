@@ -1523,7 +1523,7 @@ fn train_controller_consumes_runtime_button_intent_and_loops_after_eventcomend()
     drain(&mut session);
     // RESETDATA removes every character in the reference runtime, so a standalone
     // SYSTEM_TITLE fixture must explicitly create the character used by training.
-    let source = "@SYSTEM_TITLE\nRESETDATA\nADDVOIDCHARA\nBEGIN TRAIN\n@EVENTTRAIN\nRETURN\n@SHOW_STATUS\nPRINT 抑鬱\nRETURN\n@COM_ABLE0\nRESULT = 1\nRETURN\n@SHOW_USERCOM\nPRINT ▼[－][Look]----------\nRETURN\n@EVENTCOM\nRETURN\n@COM0\nFLAG:0 += 1\nRESULT = 1\nRETURN\n@SOURCE_CHECK\nRETURN\n@EVENTCOMEND\nRETURN\n";
+    let source = "@SYSTEM_TITLE\nRESETDATA\nADDVOIDCHARA\nBEGIN TRAIN\n@EVENTTRAIN\nRETURN\n@SHOW_STATUS\nPRINT 抑鬱\nRETURN\n@COM_ABLE0\nRETURN 1\n@SHOW_USERCOM\nPRINT ▼[－][Look]----------\nRETURN\n@EVENTCOM\nRETURN\n@COM0\nFLAG:0 += 1\nRETURN 1\n@SOURCE_CHECK\nRETURN\n@EVENTCOMEND\nRETURN\n";
     submit(
         &mut session,
         1,
@@ -2040,7 +2040,7 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
                     relative_path: "metadata.erb".into(),
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\n#DIMS VALUES, 3, 4\n#DIMS CHOICES, 5\nVARSIZE VALUES\nPRINTFORML statement={RESULT},{RESULT:1}\nCALL SIZE_OF, CHOICES\nPRINTFORML meta={VARSIZE(\"VALUES\")},{EXISTFUNCTION(\"SYSTEM_TITLE\")},{EXISTVAR(\"VALUES\")},%GETDOINGFUNCTION()%,{RESULT},%CHOICES:2%\nPRINTFORML funcs={ENUMFUNCWITH(\"SIZE\", CHOICES)},%CHOICES:0%\nPRINTFORML vars={ENUMVARWITH(\"SAVEDATA_TEXT\", CHOICES)},%CHOICES:0%\nCALL ORACLE_REFLECTION\nPRINTFORML reflection={RESULT:12},{RESULT:13},%RESULTS:8%,%RESULTS:9%\nCALL SHORT_SCOPE\nPRINTFORML scoped={RESULT:14},{RESULT:15}\nRETURN\n@SIZE_OF(refChoices)\n#DIMS REF refChoices, 0\nrefChoices:2 '= \"bound\"\nRESULT = VARSIZE(\"refChoices\")\nRETURN\n@ORACLE_REFLECTION\n#DIMS NAMES, 4\nRESULT:12 = ENUMFUNCWITH(\"ORACLE_REFLECTION\", NAMES)\nRESULTS:8 = %NAMES:0%\nRESULT:13 = ENUMVARWITH(\"SAVEDATA_TEXT\", NAMES)\nRESULTS:9 = %NAMES:0%\nRETURN\n@LONG_SCOPE\n#DIM CONST PAIRS = 1, 2, 3, 4, 5, 6\nRETURN\n@SHORT_SCOPE\n#DIM CONST PAIRS = 1, 2, 3, 4\nRESULT:14 = VARSIZE(\"PAIRS\")\nFOR LOCAL, 0, VARSIZE(\"PAIRS\") / 2\nRESULT:15 += PAIRS:(LOCAL * 2)\nNEXT\nRETURN\n"
+                        "@SYSTEM_TITLE\n#DIMS VALUES, 3, 4\n#DIMS CHOICES, 5\nVARSIZE VALUES\nPRINTFORML statement={RESULT},{RESULT:1}\nCALL SIZE_OF, CHOICES\nPRINTFORML meta={VARSIZE(\"VALUES\")},{EXISTFUNCTION(\"SYSTEM_TITLE\")},{EXISTVAR(\"VALUES\")},%GETDOINGFUNCTION()%,{RESULT},%CHOICES:2%\nPRINTFORML funcs={ENUMFUNCWITH(\"SIZE\", CHOICES)},%CHOICES:0%\nPRINTFORML vars={ENUMVARWITH(\"SAVEDATA_TEXT\", CHOICES)},%CHOICES:0%\nCALL ORACLE_REFLECTION\nPRINTFORML reflection={RESULT:12},{RESULT:13},%RESULTS:8%,%RESULTS:9%\nCALL SHORT_SCOPE\nPRINTFORML scoped={RESULT:14},{RESULT:15}\nWAIT\nRETURN\n@SIZE_OF(refChoices)\n#DIMS REF refChoices, 0\nrefChoices:2 '= \"bound\"\nRESULT = VARSIZE(\"refChoices\")\nRETURN RESULT\n@ORACLE_REFLECTION\n#DIMS NAMES, 4\nRESULT:12 = ENUMFUNCWITH(\"ORACLE_REFLECTION\", NAMES)\nRESULTS:8 = %NAMES:0%\nRESULT:13 = ENUMVARWITH(\"SAVEDATA_TEXT\", NAMES)\nRESULTS:9 = %NAMES:0%\nRETURN\n@LONG_SCOPE\n#DIM CONST PAIRS = 1, 2, 3, 4, 5, 6\nRETURN\n@SHORT_SCOPE\n#DIM CONST PAIRS = 1, 2, 3, 4\nRESULT:14 = VARSIZE(\"PAIRS\")\nFOR LOCAL, 0, VARSIZE(\"PAIRS\") / 2\nRESULT:15 += PAIRS:(LOCAL * 2)\nNEXT\nRETURN\n"
                             .into(),
                     ),
                     content_hash: None,
@@ -4476,7 +4476,7 @@ fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
         .unwrap();
     assert_eq!(
         read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
-        99
+        0
     );
     assert_eq!(
         read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[1], None).unwrap(),
