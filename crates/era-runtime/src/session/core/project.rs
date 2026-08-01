@@ -855,7 +855,7 @@ fn exact_cached_project(
     mut exact: crate::compiled_cache::DecodedCompiledCache,
     project_revision: u64,
 ) -> ProjectBuild {
-    exact.snapshot.manifest.project_revision = project_revision;
+    Arc::make_mut(&mut exact.snapshot.manifest).project_revision = project_revision;
     for diagnostic in &mut exact.diagnostics {
         diagnostic.message = format!("[cached] {}", diagnostic.message);
     }

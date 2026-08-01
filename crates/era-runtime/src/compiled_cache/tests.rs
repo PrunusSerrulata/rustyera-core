@@ -35,11 +35,12 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
 
     assert_eq!(&bytes[..8], b"RERAPROJ");
-    assert_eq!(bytes[8], 1);
+    assert_eq!(bytes[8], 2);
     assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
     assert_eq!(decoded_file.identity, project_identity(&project));
     assert_eq!(decoded_file.manifest, project);
     assert_eq!(decoded.diagnostics, build.report.diagnostics);
+    assert_eq!(decoded.incremental, build.incremental);
     assert_eq!(
         decoded.artifact.artifact(),
         build.artifact.as_ref().unwrap().artifact()
@@ -47,6 +48,15 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     assert_eq!(
         decoded.artifact.artifact().manifest.artifact_id,
         build.artifact.unwrap().artifact().manifest.artifact_id
+    );
+    assert!(
+        decoded
+            .artifact
+            .artifact()
+            .source_map
+            .statement_fingerprints
+            .iter()
+            .all(|fingerprint| fingerprint.0[16..] == [0; 16])
     );
     assert_eq!(
         project_key(&project_identity(&project), &[]),
@@ -62,6 +72,49 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
             &[]
         )
     );
+}
+
+#[test]
+fn project_file_stores_manifest_payload_once_and_extracts_it_exactly() {
+    let resource = (0..=u8::MAX).cycle().take(128 * 1024).collect::<Vec<_>>();
+    let resource_hash = ProtocolBytes::new(blake3::hash(&resource).as_bytes().to_vec());
+    let source_file = manifest("@SYSTEM_TITLE\nRETURN\n", 7)
+        .files
+        .into_iter()
+        .next()
+        .unwrap();
+    let project = ProjectManifest {
+        project_revision: 7,
+        files: vec![
+            source_file,
+            SubmittedFile {
+                relative_path: "resources/payload.bin".into(),
+                category: FileCategory::Resource,
+                payload: FilePayload::Bytes(ProtocolBytes::new(resource.clone())),
+                content_hash: Some(resource_hash),
+            },
+        ],
+    };
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let bytes = encode(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
+    let extracted = decode_project_file(&bytes, bytes.len()).unwrap();
+
+    assert_eq!(extracted.manifest, project);
+    assert!(sections.snapshot.decoded_length < resource.len() as u64);
+    let resource_length = u64::try_from(resource.len()).unwrap();
+    assert!(sections.manifest.decoded_length > resource_length);
+    assert!(sections.manifest.decoded_length < resource_length + 1024);
 }
 
 #[test]
@@ -90,7 +143,7 @@ fn project_file_projection_honors_limits_and_version() {
     .unwrap();
 
     assert!(decode_project_file(&bytes, bytes.len() - 1).is_err());
-    bytes[8] = 2;
+    bytes[8] = 1;
     let digest_offset = bytes.len() - 32;
     let digest = blake3::hash(&bytes[..digest_offset]);
     bytes[digest_offset..].copy_from_slice(digest.as_bytes());
@@ -98,7 +151,7 @@ fn project_file_projection_honors_limits_and_version() {
         decode_project_file(&bytes, 64 * 1024 * 1024)
             .unwrap_err()
             .to_string()
-            .contains("unsupported project file version 02")
+            .contains("unsupported project file version 01")
     );
 }
 
@@ -109,13 +162,18 @@ fn compiled_project_cache_encoding_honors_cancellation() {
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
     let cancelled = AtomicBool::new(true);
+    let cache_keys = build
+        .incremental
+        .compact_cache_keys(build.artifact.as_ref().unwrap().artifact())
+        .unwrap();
 
+    let snapshot = CompiledSnapshotMetadata::from(build.snapshot.as_ref().unwrap());
     let error = encode_cancellable(
         &project,
         &[],
         build.artifact.as_ref().unwrap(),
-        &build.incremental,
-        build.snapshot.as_ref().unwrap(),
+        &cache_keys,
+        &snapshot,
         &build.report.diagnostics,
         &cancelled,
     )
@@ -149,26 +207,31 @@ fn compact_source_section_preserves_none_and_empty_origin_chains() {
             source_index: 9,
         },
     ];
-    let encoded = encode_source_section(&entries, None).unwrap();
+    let function_indices = [(function, 0)].into_iter().collect();
+    let functions = vec![BytecodeFunction {
+        key: function,
+        name: "test".into(),
+        kind: erabasic_bytecode::BytecodeFunctionKind::Normal,
+        parameters: Vec::new(),
+        result: None,
+        labels: Vec::new(),
+        imports: Vec::new(),
+        code: Vec::new(),
+        max_stack: 0,
+    }];
+    let encoded = encode_source_section(&entries, &function_indices, None).unwrap();
     let mut cursor = 0;
     let section = read_section(&encoded, &mut cursor, encoded.len()).unwrap();
 
-    assert_eq!(decode_source_section(&section).unwrap(), entries);
+    assert_eq!(
+        decode_source_section(&section, &functions).unwrap(),
+        entries
+    );
     assert_eq!(cursor, encoded.len());
 }
 
 #[test]
-fn sharded_binary_cache_bounds_small_project_parallel_overhead() {
-    #[derive(Serialize)]
-    struct V2PayloadRef<'a> {
-        artifact: &'a BytecodeArtifact,
-        incremental: &'a IncrementalState,
-        snapshot: &'a NormalizedProjectSnapshot,
-        diagnostics: &'a [ProtocolDiagnostic],
-    }
-
-    const MAXIMUM_PARALLEL_SECTION_OVERHEAD: usize = 16 * 1024;
-
+fn sharded_binary_cache_is_deterministic() {
     let mut source = "@SYSTEM_TITLE\nRETURN\n".to_owned();
     for index in 0..256 {
         write!(
@@ -181,17 +244,7 @@ fn sharded_binary_cache_bounds_small_project_parallel_overhead() {
     let mut build = crate::project::build_project(&project, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
-    let payload = V2PayloadRef {
-        artifact: build.artifact.as_ref().unwrap().artifact(),
-        incremental: &build.incremental,
-        snapshot: build.snapshot.as_ref().unwrap(),
-        diagnostics: &build.report.diagnostics,
-    };
-    let encoder = zstd::stream::Encoder::new(Vec::new(), 7).unwrap();
-    let mut writer = CountingWriter::new(encoder, None);
-    serde_json::to_writer(&mut writer, &payload).unwrap();
-    let v2_payload = writer.into_inner().finish().unwrap();
-    let cache_bytes = encode(
+    let first = encode(
         &project,
         &[],
         build.artifact.as_ref().unwrap(),
@@ -201,10 +254,15 @@ fn sharded_binary_cache_bounds_small_project_parallel_overhead() {
     )
     .unwrap();
 
-    assert!(
-        cache_bytes.len() <= v2_payload.len() + MAXIMUM_PARALLEL_SECTION_OVERHEAD,
-        "encoded={} v2={}",
-        cache_bytes.len(),
-        v2_payload.len()
-    );
+    let second = encode(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+
+    assert_eq!(first, second);
 }

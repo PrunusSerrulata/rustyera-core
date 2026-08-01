@@ -12,7 +12,13 @@ pub(super) fn statement_fingerprint(kind: &HirStatementKind) -> Digest {
     // not break a breakpoint anchor for an otherwise identical typed statement.
     strip_source_locations(&mut value);
     let bytes = serde_json::to_vec(&value).expect("normalized statements are serializable");
-    Digest::hash("rustyera.bytecode.source-statement.v1", &[&bytes])
+    let mut digest = Digest::hash("rustyera.bytecode.source-statement.v1", &[&bytes]);
+    // Breakpoint relocation only needs a stable statement identity, not the
+    // collision resistance of an artifact identity. Keeping the value in the
+    // existing Digest type preserves all public interfaces while allowing the
+    // project-file representation to store the meaningful 128 bits only.
+    digest.0[16..].fill(0);
+    digest
 }
 
 pub(super) fn strip_source_locations(value: &mut serde_json::Value) {

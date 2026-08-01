@@ -344,10 +344,11 @@ pub(crate) fn lower_function(
             )
         })
         .collect();
-    let fallback_fingerprint = Digest::hash(
+    let mut fallback_fingerprint = Digest::hash(
         "rustyera.bytecode.source-statement.v1",
         &[function.name.as_bytes()],
     );
+    fallback_fingerprint.0[16..].fill(0);
     let mut offset = 0u64;
     let mut source_entries = Vec::<LoweredSourceMapEntry>::with_capacity(builder.code.len());
     for (instruction, location) in builder.code.iter().zip(&builder.locations) {

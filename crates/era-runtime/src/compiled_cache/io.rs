@@ -7,12 +7,36 @@ use serde::de::DeserializeOwned;
 
 use super::{EncodedSectionRef, TARGET_PARALLEL_SECTIONS};
 
-pub(super) fn append_varint(output: &mut Vec<u8>, mut value: u64) {
+pub(super) fn write_varint(writer: &mut dyn Write, mut value: u64) -> Result<(), String> {
+    let mut bytes = [0_u8; 10];
+    let mut length = 0;
     while value >= 0x80 {
-        output.push(u8::try_from(value & 0x7f).expect("masked varint byte fits in u8") | 0x80);
+        bytes[length] = u8::try_from(value & 0x7f).expect("masked varint byte fits in u8") | 0x80;
         value >>= 7;
+        length += 1;
     }
-    output.push(u8::try_from(value).expect("final varint byte fits in u8"));
+    bytes[length] = u8::try_from(value).expect("final varint byte fits in u8");
+    writer
+        .write_all(&bytes[..=length])
+        .map_err(|error| error.to_string())
+}
+
+pub(super) fn read_stream_varint(reader: &mut dyn Read) -> Result<u64, String> {
+    let mut value = 0_u64;
+    for index in 0..10 {
+        let mut byte = [0_u8; 1];
+        reader
+            .read_exact(&mut byte)
+            .map_err(|error| error.to_string())?;
+        if index == 9 && byte[0] > 1 {
+            return Err("compiled cache varint overflows u64".into());
+        }
+        value |= u64::from(byte[0] & 0x7f) << (index * 7);
+        if byte[0] & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    Err("compiled cache varint is too long".into())
 }
 
 pub(super) fn read_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64, String> {
@@ -58,10 +82,43 @@ pub(super) fn read_section<'a>(
 pub(super) fn decode_section<T: DeserializeOwned>(
     section: &EncodedSectionRef<'_>,
 ) -> Result<T, String> {
+    decode_raw_section(section, |reader| {
+        rmp_serde::from_read(reader).map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn encode_raw_section(
+    cancelled: Option<&AtomicBool>,
+    encode: impl FnOnce(&mut dyn Write) -> Result<(), String>,
+) -> Result<Vec<u8>, String> {
+    let encoder = zstd::stream::Encoder::new(Vec::new(), super::COMPRESSION_LEVEL)
+        .map_err(|error| error.to_string())?;
+    let mut writer = CountingWriter::new(encoder, cancelled);
+    encode(&mut writer)?;
+    let decoded_length = writer.bytes;
+    let compressed = writer
+        .into_inner()
+        .finish()
+        .map_err(|error| error.to_string())?;
+    let mut output = Vec::with_capacity(16 + compressed.len());
+    output.extend_from_slice(&decoded_length.to_le_bytes());
+    output.extend_from_slice(
+        &u64::try_from(compressed.len())
+            .map_err(|_| "compiled cache section is too large")?
+            .to_le_bytes(),
+    );
+    output.extend_from_slice(&compressed);
+    Ok(output)
+}
+
+pub(super) fn decode_raw_section<T>(
+    section: &EncodedSectionRef<'_>,
+    decode: impl FnOnce(&mut dyn Read) -> Result<T, String>,
+) -> Result<T, String> {
     let decoder =
         zstd::stream::read::Decoder::new(section.compressed).map_err(|error| error.to_string())?;
     let mut reader = CountingReader::new(decoder.take(section.decoded_length.saturating_add(1)));
-    let value = rmp_serde::from_read(&mut reader).map_err(|error| error.to_string())?;
+    let value = decode(&mut reader)?;
     let mut tail = [0_u8; 1];
     if reader.read(&mut tail).map_err(|error| error.to_string())? != 0
         || reader.bytes != section.decoded_length

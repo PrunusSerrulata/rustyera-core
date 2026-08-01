@@ -293,14 +293,14 @@ impl RuntimeSession {
             .clone()
             .ok_or_else(|| "compiled cache build has no loaded artifact".to_owned())?;
         self.compiled_cache_failure = None;
-        let mut snapshot = self
+        let snapshot = self
             .project_snapshot
-            .clone()
+            .as_ref()
             .ok_or_else(|| "compiled cache build has no project snapshot".to_owned())?;
-        snapshot.resource_graph =
-            crate::resource::ResourceGraph::from_manifest(&snapshot.manifest).0;
+        let manifest = Arc::clone(&snapshot.manifest);
+        let snapshot = crate::compiled_cache::CompiledSnapshotMetadata::from(snapshot);
         let extensions = self.extension_declarations.clone();
-        let incremental = self.incremental.clone();
+        let cache_keys = self.incremental.compact_cache_keys(artifact.artifact())?;
         let diagnostics = self.compiled_cache_diagnostics.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         #[cfg(not(target_arch = "wasm32"))]
@@ -310,10 +310,10 @@ impl RuntimeSession {
                 .name("rustyera-compiled-cache".into())
                 .spawn(move || {
                     crate::compiled_cache::encode_cancellable(
-                        &snapshot.manifest,
+                        &manifest,
                         &extensions,
                         &artifact,
-                        &incremental,
+                        &cache_keys,
                         &snapshot,
                         &diagnostics,
                         &worker_cancelled,
@@ -331,10 +331,10 @@ impl RuntimeSession {
             // keeps the runtime free of unavailable native thread APIs while isolating the
             // expensive compression step from Vue's rendering thread.
             let result = crate::compiled_cache::encode_cancellable(
-                &snapshot.manifest,
+                &manifest,
                 &extensions,
                 &artifact,
-                &incremental,
+                &cache_keys,
                 &snapshot,
                 &diagnostics,
                 &cancelled,

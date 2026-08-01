@@ -23,6 +23,7 @@ use erabasic_csv::{CsvDiagnosticSeverity, CsvLoadOptions, ProjectFiles, load_pro
 use erabasic_data::LegacyEncoding;
 use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_compiler_output};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::resource::ResourceGraph;
 use crate::{ProjectProgress, ProjectProgressReporter, ProjectProgressStage};
@@ -41,10 +42,10 @@ pub(crate) struct ProjectBuild {
     pub(crate) snapshot: Option<NormalizedProjectSnapshot>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct NormalizedProjectSnapshot {
-    pub(crate) manifest: ProjectManifest,
+    pub(crate) manifest: Arc<ProjectManifest>,
     pub(crate) project_identity: [u8; 32],
     pub(crate) resources: Vec<NormalizedResourceIdentity>,
     pub(crate) resource_graph: ResourceGraph,
@@ -60,7 +61,7 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) money_first: bool,
     pub(crate) maximum_shop_items: u32,
     pub(crate) viewport_width: u32,
-    pub(crate) _viewport_height: u32,
+    pub(crate) viewport_height: u32,
     pub(crate) font_size: u32,
     pub(crate) line_height: u32,
     pub(crate) print_c_per_line: u32,
@@ -605,7 +606,7 @@ fn build_project_inner_with_extensions(
             payload_required: false,
         },
         snapshot: Some(NormalizedProjectSnapshot {
-            manifest: manifest.clone(),
+            manifest: Arc::new(manifest.clone()),
             project_identity,
             resources,
             resource_graph,
@@ -621,7 +622,7 @@ fn build_project_inner_with_extensions(
             money_first: config.money_first,
             maximum_shop_items: config.maximum_shop_items,
             viewport_width: config.viewport_width,
-            _viewport_height: config.viewport_height,
+            viewport_height: config.viewport_height,
             font_size: config.font_size,
             line_height: config.line_height,
             print_c_per_line: config.print_c_per_line,

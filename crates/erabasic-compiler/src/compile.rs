@@ -118,6 +118,78 @@ impl IncrementalState {
             base.metadata = None;
         }
     }
+
+    /// Return compact cache keys in the artifact's canonical function order.
+    ///
+    /// Project files already contain the complete artifact, so serializing the
+    /// symbol-keyed map and its duplicate function keys only wastes space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the state is not the compact cache for the exact
+    /// supplied artifact and current compiler ABI.
+    pub fn compact_cache_keys(&self, artifact: &BytecodeArtifact) -> Result<Vec<Digest>, String> {
+        if self.compiler_abi != erabasic_bytecode::COMPILER_ABI_VERSION {
+            return Err("incremental cache compiler ABI differs from the artifact".into());
+        }
+        if self.base_artifact_id() != Some(artifact.manifest.artifact_id) {
+            return Err("incremental cache base differs from the artifact".into());
+        }
+        if self.functions.len() != artifact.functions.len() {
+            return Err("incremental cache function count differs from the artifact".into());
+        }
+        artifact
+            .functions
+            .iter()
+            .map(|function| {
+                let cached = self.functions.get(&function.key).ok_or_else(|| {
+                    "incremental cache is missing an artifact function".to_owned()
+                })?;
+                if cached.function_key != function.key {
+                    return Err("incremental cache function key is inconsistent".into());
+                }
+                Ok(cached.cache_key)
+            })
+            .collect()
+    }
+
+    /// Rebuild a compact incremental cache from canonical artifact function keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the cache-key count differs from the artifact's
+    /// canonical function count.
+    pub fn from_compact_cache_keys(
+        artifact: &BytecodeArtifact,
+        cache_keys: Vec<Digest>,
+    ) -> Result<Self, String> {
+        if cache_keys.len() != artifact.functions.len() {
+            return Err("incremental cache key count differs from the artifact".into());
+        }
+        let functions = artifact
+            .functions
+            .iter()
+            .zip(cache_keys)
+            .map(|(function, cache_key)| {
+                (
+                    function.key,
+                    CachedFunction {
+                        cache_key,
+                        function_key: function.key,
+                        function: None,
+                        source_entries: Vec::new(),
+                        native_imports: Vec::new(),
+                        host_imports: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+        Ok(Self {
+            compiler_abi: erabasic_bytecode::COMPILER_ABI_VERSION,
+            functions,
+            base: Some(IncrementalBase::from_artifact(artifact, false)),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
