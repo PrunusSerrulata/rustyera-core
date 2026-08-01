@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "era-debug-protocol"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "era-protocol",
  "minicbor",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "era-protocol"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "minicbor",
  "serde",
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "era-runtime"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "era-debug-protocol",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "era-runtime-capi"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "era-protocol",
  "era-runtime",
@@ -191,14 +191,14 @@ dependencies = [
 
 [[package]]
 name = "era-runtime-ffi"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "era-protocol",
 ]
 
 [[package]]
 name = "era-runtime-protocol"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "era-protocol",
  "erabasic-html",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "era-runtime-save"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "flate2",
  "serde",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "erabasic-analyzer"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "erabasic-ast",
@@ -233,14 +233,14 @@ dependencies = [
 
 [[package]]
 name = "erabasic-ast"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "erabasic-bytecode"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "erabasic-csv",
@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "erabasic-compiler"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "erabasic-analyzer",
@@ -270,14 +270,14 @@ dependencies = [
 
 [[package]]
 name = "erabasic-config"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "erabasic-csv"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "erabasic-data",
  "serde",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "erabasic-data"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "encoding_rs",
  "serde",
@@ -295,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "erabasic-hir"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "erabasic-ast",
  "erabasic-data",
@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "erabasic-html"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "minicbor",
  "serde",
@@ -312,14 +312,14 @@ dependencies = [
 
 [[package]]
 name = "erabasic-lexer"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "erabasic-ast",
 ]
 
 [[package]]
 name = "erabasic-parser"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "erabasic-ast",
  "erabasic-lexer",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "erabasic-repl"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "erabasic-analyzer",
  "erabasic-ast",
@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "erabasic-validator"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "erabasic-bytecode",
  "erabasic-csv",
@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "erabasic-vm"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "erabasic-analyzer",
@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "project-extractor"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "era-protocol",
@@ -640,7 +640,7 @@ checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "snapshot-analyzer"
-version = "0.0.3-alpha.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "era-runtime",
  "serde_json",
