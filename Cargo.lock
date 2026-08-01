@@ -187,6 +187,7 @@ dependencies = [
  "era-protocol",
  "era-runtime",
  "era-runtime-ffi",
+ "minicbor",
 ]
 
 [[package]]

@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define ERA_RUNTIME_ABI_MAJOR 3u
-#define ERA_RUNTIME_ABI_MINOR 1u
+#define ERA_RUNTIME_ABI_MINOR 2u
 
 #define ERA_DEBUG_SCOPE_VARIABLES_READ (UINT64_C(1) << 0)
 #define ERA_DEBUG_SCOPE_VARIABLES_WRITE (UINT64_C(1) << 1)
@@ -89,6 +89,8 @@ typedef struct EraProjectProgress {
 typedef void (*EraProjectProgressCallback)(void *context, EraProjectProgress progress);
 typedef EraStatus (*EraSessionSetProjectProgressFn)(EraCallHeader, EraSessionHandle,
                                                      EraProjectProgressCallback, void *);
+typedef EraStatus (*EraSessionDecodeProjectFileFn)(EraCallHeader, EraSessionHandle,
+                                                    EraByteSlice, EraOwnedBuffer *);
 
 typedef EraStatus (*EraSessionCreateFn)(EraCallHeader, const EraCreateOptions *, EraSessionHandle *);
 typedef EraStatus (*EraSessionSubmitFn)(EraCallHeader, EraSessionHandle, EraByteSlice);
@@ -110,7 +112,8 @@ typedef struct EraRuntimeApi {
     EraSessionDestroyFn session_destroy;
     EraReleaseBufferFn release_buffer;
     EraLastErrorFn last_error;
-    /* ABI 3.1: reserved[0] is EraSessionSetProjectProgressFn. */
+    /* ABI 3.1: reserved[0] is EraSessionSetProjectProgressFn.
+       ABI 3.2: reserved[1] is EraSessionDecodeProjectFileFn. */
     void *reserved[8];
 } EraRuntimeApi;
 

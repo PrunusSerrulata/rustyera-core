@@ -14,7 +14,7 @@ pub const MAXIMUM_CACHE_BYTES: usize = 1024 * 1024 * 1024;
 
 /// Command-line usage shown by the standalone extractor.
 pub const USAGE: &str =
-    "Usage: rustyera-project-extractor [--force] <compiled-project-v8.bin.zst> [OUTPUT_DIR]";
+    "Usage: rustyera-project-extractor [--force] <PROJECT.reraproj> [OUTPUT_DIR]";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExtractOptions {
@@ -128,10 +128,11 @@ pub fn extract_cache(options: &ExtractOptions) -> Result<ExtractSummary, Extract
             options.input.display()
         ))
     })?;
-    let manifest = era_runtime::decode_compiled_project_manifest(&bytes, MAXIMUM_CACHE_BYTES)
+    let manifest = era_runtime::decode_project_file(&bytes, MAXIMUM_CACHE_BYTES)
         .map_err(|error| {
-            ExtractError::new(format!("cannot decode compiled project cache: {error}"))
-        })?;
+            ExtractError::new(format!("cannot decode RustyEra project file: {error}"))
+        })?
+        .manifest;
     extract_manifest(&manifest, &options.output, options.force)
 }
 

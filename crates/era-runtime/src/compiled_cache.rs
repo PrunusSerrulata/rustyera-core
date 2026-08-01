@@ -17,11 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::project::NormalizedProjectSnapshot;
 
-const MAGIC: &[u8; 8] = b"RERACACH";
-// This is a semantic epoch as well as a wire-format version. Increment it whenever
-// compiler, analyzer or project-loading behavior can change an unchanged source's
-// artifact; an older artifact is not safe even as an incremental compilation seed.
-const VERSION: u32 = 8;
+const MAGIC: &[u8; 8] = b"RERAPROJ";
+// Project files use a compact byte-sized format version. This is also a semantic epoch:
+// increment it whenever compiler, analyzer or project-loading behavior can change an
+// unchanged source's artifact. Older project files are then rejected instead of being used
+// as an incremental compilation seed.
+const VERSION: u8 = 1;
 const COMPRESSION_LEVEL: i32 = 3;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -52,6 +53,7 @@ struct EncodedSectionRef<'a> {
 }
 
 struct CompiledCacheSections<'a> {
+    identity: ProjectIdentity,
     key: [u8; 32],
     metadata: EncodedSectionRef<'a>,
     globals: EncodedSectionRef<'a>,
@@ -86,24 +88,31 @@ pub(crate) struct DecodedCompiledCache {
     pub(crate) diagnostics: Vec<ProtocolDiagnostic>,
 }
 
-/// Error returned when a compiled-project cache cannot expose its source manifest.
+/// Error returned when a `RustyEra` project file cannot be decoded.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompiledProjectCacheError {
+pub struct ProjectFileError {
     message: String,
 }
 
-impl fmt::Display for CompiledProjectCacheError {
+impl fmt::Display for ProjectFileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.message)
     }
 }
 
-impl std::error::Error for CompiledProjectCacheError {}
+impl std::error::Error for ProjectFileError {}
 
-impl From<String> for CompiledProjectCacheError {
+impl From<String> for ProjectFileError {
     fn from(message: String) -> Self {
         Self { message }
     }
+}
+
+/// Frontend-facing data embedded in a self-contained `RustyEra` project file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedProjectFile {
+    pub identity: ProjectIdentity,
+    pub manifest: ProjectManifest,
 }
 
 pub(crate) fn project_key(
@@ -273,22 +282,17 @@ fn encode_inner(
         + diagnostics.len()
         + function_sections.iter().map(Vec::len).sum::<usize>()
         + source_sections.iter().map(Vec::len).sum::<usize>();
+    let identity = project_identity(manifest);
     let mut output = Vec::with_capacity(
-        MAGIC.len() + 4 + 32 + 4 + 4 + section_bytes + std::mem::size_of::<Digest>(),
+        MAGIC.len() + 1 + 8 + 32 + 32 + 4 + 4 + section_bytes + std::mem::size_of::<Digest>(),
     );
-    output.extend_from_slice(MAGIC);
-    output.extend_from_slice(&VERSION.to_le_bytes());
-    output.extend_from_slice(&project_key(&project_identity(manifest), extensions));
-    output.extend_from_slice(
-        &u32::try_from(function_sections.len())
-            .map_err(|_| "compiled cache has too many function sections")?
-            .to_le_bytes(),
-    );
-    output.extend_from_slice(
-        &u32::try_from(source_sections.len())
-            .map_err(|_| "compiled cache has too many source sections")?
-            .to_le_bytes(),
-    );
+    encode_project_file_header(
+        &mut output,
+        &identity,
+        extensions,
+        function_sections.len(),
+        source_sections.len(),
+    )?;
     output.extend_from_slice(&metadata);
     output.extend_from_slice(&globals);
     output.extend_from_slice(&incremental);
@@ -303,6 +307,36 @@ fn encode_inner(
     let digest = blake3::hash(&output);
     output.extend_from_slice(digest.as_bytes());
     Ok(output)
+}
+
+fn encode_project_file_header(
+    output: &mut Vec<u8>,
+    identity: &ProjectIdentity,
+    extensions: &[ExtensionDeclaration],
+    function_sections: usize,
+    source_sections: usize,
+) -> Result<(), String> {
+    let source_digest: [u8; 32] = identity
+        .source_digest
+        .as_slice()
+        .try_into()
+        .map_err(|_| "project identity digest is not 32 bytes")?;
+    output.extend_from_slice(MAGIC);
+    output.push(VERSION);
+    output.extend_from_slice(&identity.project_revision.to_le_bytes());
+    output.extend_from_slice(&source_digest);
+    output.extend_from_slice(&project_key(identity, extensions));
+    output.extend_from_slice(
+        &u32::try_from(function_sections)
+            .map_err(|_| "compiled cache has too many function sections")?
+            .to_le_bytes(),
+    );
+    output.extend_from_slice(
+        &u32::try_from(source_sections)
+            .map_err(|_| "compiled cache has too many source sections")?
+            .to_le_bytes(),
+    );
+    Ok(())
 }
 
 pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<DecodedCompiledCache, String> {
@@ -341,7 +375,7 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<DecodedCompil
     })
 }
 
-/// Decode the exact frontend-submitted project manifest embedded in a compiled cache.
+/// Decode the identity and exact frontend-submitted manifest embedded in a project file.
 ///
 /// This source-only projection reuses the runtime cache parser but deliberately avoids
 /// decoding or validating bytecode sections that an extraction tool does not consume.
@@ -350,15 +384,23 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<DecodedCompil
 ///
 /// Returns an error when the cache is over the caller's limit, corrupt, unsupported, or
 /// does not contain a decodable project snapshot.
-pub fn decode_compiled_project_manifest(
+pub fn decode_project_file(
     bytes: &[u8],
     maximum_bytes: usize,
-) -> Result<ProjectManifest, CompiledProjectCacheError> {
-    let sections =
-        parse_cache_sections(bytes, maximum_bytes).map_err(CompiledProjectCacheError::from)?;
+) -> Result<DecodedProjectFile, ProjectFileError> {
+    let sections = parse_cache_sections(bytes, maximum_bytes).map_err(ProjectFileError::from)?;
     let snapshot = decode_section::<NormalizedProjectSnapshot>(&sections.snapshot)
-        .map_err(CompiledProjectCacheError::from)?;
-    Ok(snapshot.manifest)
+        .map_err(ProjectFileError::from)?;
+    let actual_identity = project_identity(&snapshot.manifest);
+    if actual_identity != sections.identity {
+        return Err(ProjectFileError::from(
+            "project file identity does not match its embedded manifest".to_owned(),
+        ));
+    }
+    Ok(DecodedProjectFile {
+        identity: sections.identity,
+        manifest: snapshot.manifest,
+    })
 }
 
 fn parse_cache_sections(
@@ -368,21 +410,32 @@ fn parse_cache_sections(
     if bytes.len() > maximum_bytes {
         return Err("compiled project cache exceeds the transfer limit".into());
     }
-    let minimum = MAGIC.len() + 4 + 32 + 4 + 4 + 8 * 16 + 32;
+    let minimum = MAGIC.len() + 1 + 8 + 32 + 32 + 4 + 4 + 8 * 16 + 32;
     if bytes.len() < minimum || &bytes[..MAGIC.len()] != MAGIC {
-        return Err("compiled project cache has an invalid header".into());
+        return Err("project file has an invalid header".into());
     }
     let digest_offset = bytes.len() - 32;
     if blake3::hash(&bytes[..digest_offset]).as_bytes() != &bytes[digest_offset..] {
         return Err("compiled project cache digest mismatch".into());
     }
     let mut cursor = MAGIC.len();
-    let version = read_u32(bytes, &mut cursor)?;
+    let version = *bytes
+        .get(cursor)
+        .ok_or("project file version is truncated")?;
+    cursor += 1;
     if version != VERSION {
-        return Err(format!(
-            "unsupported compiled project cache version {version}"
-        ));
+        return Err(format!("unsupported project file version {version:02x}"));
     }
+    let project_revision = read_u64(bytes, &mut cursor)?;
+    let source_digest = bytes
+        .get(cursor..cursor + 32)
+        .ok_or("project file source identity is truncated")?
+        .to_vec();
+    cursor += 32;
+    let identity = ProjectIdentity {
+        project_revision,
+        source_digest: ProtocolBytes::new(source_digest),
+    };
     let key: [u8; 32] = bytes
         .get(cursor..cursor + 32)
         .ok_or("compiled project cache key is truncated")?
@@ -438,6 +491,7 @@ fn parse_cache_sections(
         return Err("compiled cache decoded sections exceed their limit".into());
     }
     Ok(CompiledCacheSections {
+        identity,
         key,
         metadata,
         globals,

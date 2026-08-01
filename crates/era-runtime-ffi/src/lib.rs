@@ -5,7 +5,7 @@
 
 use std::ffi::{c_char, c_void};
 
-pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 1 };
+pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 2 };
 pub const ERA_RUNTIME_GET_API_SYMBOL: &str = "era_runtime_get_api";
 
 pub const ERA_DEBUG_SCOPE_VARIABLES_READ: u64 = 1 << 0;
@@ -182,6 +182,7 @@ pub type EraFunctionPointer = *const c_void;
 
 /// Versioned function table returned by the `era_runtime_get_api` symbol.
 /// `reserved[0]` in ABI 3.1 is an optional `EraSessionSetProjectProgressFn` extension.
+/// `reserved[1]` in ABI 3.2 is an optional `EraSessionDecodeProjectFileFn` extension.
 /// Authoritative runtime communication continues to use submit/poll; this callback carries only
 /// read-only workload telemetry and must never re-enter the session.
 #[repr(C)]

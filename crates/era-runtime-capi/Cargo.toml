@@ -11,3 +11,4 @@ crate-type = ["cdylib", "rlib"]
 era-protocol = { path = "../era-protocol" }
 era-runtime = { path = "../era-runtime" }
 era-runtime-ffi = { path = "../era-runtime-ffi" }
+minicbor.workspace = true

@@ -644,9 +644,10 @@ Traditional save 与普通 VM snapshot 只可在没有 deadline 的稳定输入 
 Diagnosis；后两者可在任意执行状态捕获，并在快照中保留不同来源标记，但该标记不放宽
 恢复规则。恢复仍完整校验字节码 artifact、项目资源、locale/culture、runtime wait 和
 VM fiber 状态；状态确实可恢复时，Debug/Diagnosis 来源会产生稳定代码的 warning
-diagnostic，交由前端明确呈现。CompiledProjectCache 是 runtime 产生的 opaque、版本化字节；前端只存取。
-缓存同时保留成功构建产生的项目诊断；精确命中时重放原等级、code 和 source，并在
-正文前添加 `[cached] `。缓存准备异步，首次请求可能被可恢复地拒绝为“已开始/仍在准备”，稍后再请求。
+diagnostic，交由前端明确呈现。CompiledProjectCache 传输承载可持久化的 `.reraproj`
+项目文件：文件头 magic 为 `RERAPROJ`，其后单字节格式版本从 `01` 开始，payload 继续
+使用 zstd 压缩。旧 `RERACACH` 编译缓存不再兼容。项目文件同时保留成功构建产生的项目诊断；精确命中时重放原等级、code 和 source，并在
+正文前添加 `[cached] `。项目文件准备异步，首次请求可能被可恢复地拒绝为“已开始/仍在准备”，稍后再请求。
 
 开发和诊断工具可调用
 `inspect_runtime_snapshot(bytes, maximum_bytes) -> RuntimeSnapshotInspection`，复用正式

@@ -32,10 +32,13 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     )
     .unwrap();
     let decoded = decode(&bytes, 64 * 1024 * 1024).unwrap();
-    let decoded_manifest = decode_compiled_project_manifest(&bytes, 64 * 1024 * 1024).unwrap();
+    let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
 
+    assert_eq!(&bytes[..8], b"RERAPROJ");
+    assert_eq!(bytes[8], 1);
     assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
-    assert_eq!(decoded_manifest, project);
+    assert_eq!(decoded_file.identity, project_identity(&project));
+    assert_eq!(decoded_file.manifest, project);
     assert_eq!(decoded.diagnostics, build.report.diagnostics);
     assert_eq!(
         decoded.artifact.artifact(),
@@ -64,11 +67,14 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
 #[test]
 fn compiled_project_cache_rejects_corruption() {
     assert!(decode(b"not a compiled cache", 1024).is_err());
-    assert!(decode_compiled_project_manifest(b"not a compiled cache", 1024).is_err());
+    assert!(decode_project_file(b"not a project file", 1024).is_err());
+    let mut obsolete = vec![0_u8; 512];
+    obsolete[..8].copy_from_slice(b"RERACACH");
+    assert!(decode_project_file(&obsolete, obsolete.len()).is_err());
 }
 
 #[test]
-fn source_manifest_projection_honors_limits_and_cache_version() {
+fn project_file_projection_honors_limits_and_version() {
     let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
     let mut build = crate::project::build_project(&project, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
@@ -83,16 +89,16 @@ fn source_manifest_projection_honors_limits_and_cache_version() {
     )
     .unwrap();
 
-    assert!(decode_compiled_project_manifest(&bytes, bytes.len() - 1).is_err());
-    bytes[8..12].copy_from_slice(&4_u32.to_le_bytes());
+    assert!(decode_project_file(&bytes, bytes.len() - 1).is_err());
+    bytes[8] = 2;
     let digest_offset = bytes.len() - 32;
     let digest = blake3::hash(&bytes[..digest_offset]);
     bytes[digest_offset..].copy_from_slice(digest.as_bytes());
     assert!(
-        decode_compiled_project_manifest(&bytes, 64 * 1024 * 1024)
+        decode_project_file(&bytes, 64 * 1024 * 1024)
             .unwrap_err()
             .to_string()
-            .contains("unsupported compiled project cache version 4")
+            .contains("unsupported project file version 02")
     );
 }
 

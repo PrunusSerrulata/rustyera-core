@@ -66,6 +66,7 @@ pub unsafe extern "C" fn era_runtime_get_api(
         }
         let mut reserved = [std::ptr::null_mut(); 8];
         reserved[0] = session_set_project_progress as *const () as *mut c_void;
+        reserved[1] = session_decode_project_file as *const () as *mut c_void;
         let api = EraRuntimeApi {
             struct_size: u32::try_from(std::mem::size_of::<EraRuntimeApi>()).unwrap_or(u32::MAX),
             abi_version: ERA_RUNTIME_ABI_VERSION,
@@ -84,6 +85,56 @@ pub unsafe extern "C" fn era_runtime_get_api(
         // for one complete EraRuntimeApi value.
         unsafe { out_api.write(api) };
         EraStatus::Ok
+    })
+}
+
+extern "C" fn session_decode_project_file(
+    header: EraCallHeader,
+    handle: EraSessionHandle,
+    input: EraByteSlice,
+    out_buffer: *mut EraOwnedBuffer,
+) -> EraStatus {
+    ffi_status(|| {
+        if !valid_header::<EraOwnedBuffer>(header)
+            || out_buffer.is_null()
+            || (input.data.is_null() && input.len != 0)
+        {
+            return EraStatus::InvalidArgument;
+        }
+        let bytes = if input.len == 0 {
+            &[]
+        } else {
+            // SAFETY: the non-empty pointer/length pair was validated and is borrowed only
+            // for this call.
+            unsafe { std::slice::from_raw_parts(input.data, input.len) }
+        };
+        let mut registry = lock_registry();
+        if !registry.sessions.contains_key(&handle.value) {
+            return EraStatus::InvalidHandle;
+        }
+        let manifest = match era_runtime::decode_project_file(bytes, input.len) {
+            Ok(decoded) => decoded.manifest,
+            Err(error) => {
+                registry
+                    .sessions
+                    .get_mut(&handle.value)
+                    .expect("session presence checked")
+                    .last_error = error.to_string();
+                return EraStatus::InvalidArgument;
+            }
+        };
+        let encoded = match minicbor::to_vec(manifest) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                registry
+                    .sessions
+                    .get_mut(&handle.value)
+                    .expect("session presence checked")
+                    .last_error = error.to_string();
+                return EraStatus::InternalError;
+            }
+        };
+        write_owned_buffer(&mut registry, encoded, out_buffer)
     })
 }
 
@@ -388,6 +439,7 @@ mod tests {
         assert!(!api.session_destroy.is_null());
         assert!(!api.release_buffer.is_null());
         assert!(!api.reserved[0].is_null());
+        assert!(!api.reserved[1].is_null());
     }
 
     #[test]

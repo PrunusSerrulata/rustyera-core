@@ -65,7 +65,7 @@ RustyEra 只接受 UTF-8 源码和配置内容，不负责识别或转换 Shift-
 | [rustyera-web](https://github.com/PrunusSerrulata/rustyera-web) | Vue、WebAssembly 和 Tauri 前端；包含 `era-web-bridge`。 |
 | [emuera.em](https://github.com/PrunusSerrulata/emuera.em) | 固定版本的 C# 兼容性参考实现及 NDJSON oracle。 |
 | `../eraTW`（仅本地） | 真实游戏 eraTW 的 CSV、ERH 与 ERB 输入；不纳入版本控制。 |
-| `tools/project-extractor` | 项目解包器，从 runtime 编译缓存中按原目录层级恢复 UTF-8 源码和二进制资产。 |
+| `tools/project-extractor` | 项目解包器，从 `.reraproj` 中按原目录层级恢复 UTF-8 源码和二进制资产。 |
 | `tools/snapshot-analyzer` | Runtime 快照分析器，校验完整快照并以文本或 JSON 展开其中的全部状态。 |
 | `tools/runtime-tester` | runtime 与 C ABI 的人工/长流程测试工具。TUI 审计脚本位于 `rustyera-tui`。 |
 | `tools/protocol-smoke.ps1`、`tools/test-macos-wine.sh` | Windows 与 macOS/Wine 参考 CLI 冒烟测试。 |
@@ -162,12 +162,12 @@ core Git revision 构建原生及 WebAssembly runtime。用法和发布说明分
 
 ### 项目解包器
 
-成功编译的项目缓存内包含前端提交的完整项目快照。`tools/project-extractor` 直接恢复
+成功编译的 `.reraproj` 项目文件包含前端提交的完整项目快照。`tools/project-extractor` 直接恢复
 UTF-8 源码和图片等二进制资产，不会从字节码反推源码，因此不属于传统意义上的反编译器：
 
 ```sh
 cargo run -p project-extractor -- \
-  /path/to/compiled-project-v8.bin.zst [/path/to/output]
+  /path/to/project.reraproj [/path/to/output]
 ```
 
 省略输出目录时写入当前工作目录。默认拒绝覆盖已有文件；显式传入 `--force` 才会覆盖
