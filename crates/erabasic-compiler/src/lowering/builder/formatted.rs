@@ -1,0 +1,134 @@
+use super::super::{
+    BytecodeType, EncodedInstruction, HirFormPart, HirFormattedString, Opcode, SourceLocation,
+    compiler_native_contract, opcode,
+};
+use super::Builder;
+
+impl Builder<'_> {
+    pub(in super::super) fn lower_formatted(
+        &mut self,
+        formatted: &HirFormattedString,
+        fallback: SourceLocation,
+    ) -> BytecodeType {
+        let mut parts = 0u16;
+        for part in &formatted.parts {
+            match part {
+                HirFormPart::Text { value } => {
+                    self.emit(opcode::push_string(value), formatted.location);
+                }
+                HirFormPart::Interpolation {
+                    expression,
+                    width,
+                    alignment,
+                    integer,
+                    location,
+                } => {
+                    let mut parameters = vec![self.lower_expression(expression, fallback)];
+                    if let Some(width) = width {
+                        parameters.push(self.lower_expression(width, fallback));
+                        self.emit(
+                            opcode::push_integer(i64::from(matches!(
+                                alignment,
+                                Some(erabasic_ast::Alignment::Left)
+                            ))),
+                            *location,
+                        );
+                        parameters.push(BytecodeType::Integer);
+                    }
+                    self.emit_native_call(
+                        if *integer {
+                            "format_integer"
+                        } else {
+                            "format_string"
+                        },
+                        &parameters,
+                        Some(BytecodeType::String),
+                        compiler_native_contract(true),
+                        *location,
+                    );
+                }
+                HirFormPart::Conditional {
+                    condition,
+                    then_value,
+                    else_value,
+                    location,
+                } => {
+                    self.lower_expression(condition, fallback);
+                    let false_jump = self.code.len();
+                    self.emit(opcode::jump(Opcode::JumpIfFalse, 0), *location);
+                    self.lower_formatted(then_value, fallback);
+                    let end_jump = self.code.len();
+                    self.emit(opcode::jump(Opcode::Jump, 0), *location);
+                    self.code[false_jump].payload = u32::try_from(self.code.len())
+                        .unwrap_or(u32::MAX)
+                        .to_le_bytes()
+                        .to_vec()
+                        .into();
+                    if let Some(else_value) = else_value {
+                        self.lower_formatted(else_value, fallback);
+                    } else {
+                        self.emit(opcode::push_string(""), *location);
+                    }
+                    self.code[end_jump].payload = u32::try_from(self.code.len())
+                        .unwrap_or(u32::MAX)
+                        .to_le_bytes()
+                        .to_vec()
+                        .into();
+                }
+                HirFormPart::Triple { symbol, location } => {
+                    self.lower_form_triple(*symbol, *location);
+                }
+            }
+            parts = parts.saturating_add(1);
+        }
+        if parts == 0 {
+            self.emit(opcode::push_string(""), formatted.location);
+        } else if parts > 1 {
+            self.emit(opcode::concat(parts), formatted.location);
+        }
+        BytecodeType::String
+    }
+
+    fn lower_form_triple(&mut self, symbol: char, location: SourceLocation) {
+        let (value_name, index_name) = match symbol {
+            '*' => ("NAME", "TARGET"),
+            '+' => ("CALLNAME", "MASTER"),
+            '=' => ("CALLNAME", "PLAYER"),
+            '/' => ("NAME", "ASSI"),
+            '$' => ("CALLNAME", "TARGET"),
+            _ => {
+                self.emit(opcode::push_string(&symbol.to_string()), location);
+                return;
+            }
+        };
+        let variable_key = |name: &str| {
+            self.context
+                .program
+                .variables
+                .iter()
+                .find(|variable| variable.name.eq_ignore_ascii_case(name))
+                .and_then(|variable| self.context.variable_keys.get(&variable.id))
+                .copied()
+        };
+        let (Some(index), Some(value)) = (variable_key(index_name), variable_key(value_name))
+        else {
+            self.emit(
+                EncodedInstruction::new(
+                    Opcode::Trap,
+                    format!("FORM triple {symbol}{symbol}{symbol} variables are missing")
+                        .into_bytes(),
+                ),
+                location,
+            );
+            return;
+        };
+        self.emit(
+            opcode::variable(Opcode::LoadVariable, index, 0, 0),
+            location,
+        );
+        self.emit(
+            opcode::variable(Opcode::LoadVariable, value, 1, 0),
+            location,
+        );
+    }
+}
