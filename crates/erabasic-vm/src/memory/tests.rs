@@ -1,0 +1,183 @@
+use erabasic_bytecode::{BytecodePersistence, BytecodeStorage};
+
+use super::*;
+
+fn global(value_type: BytecodeType, dimensions: Vec<u64>) -> BytecodeGlobal {
+    BytecodeGlobal {
+        key: SymbolKey::derive("memory.test", format!("{value_type:?}").as_bytes()),
+        name: "VALUE".into(),
+        value_type,
+        dimensions,
+        mutable: true,
+        storage: BytecodeStorage::Project,
+        persistence: BytecodePersistence::GameSave,
+        initial_values: Vec::new(),
+        owner: None,
+    }
+}
+
+#[test]
+fn dense_integer_cell_preserves_public_vm_value_behavior() {
+    let mut cell = VariableCell::new(&global(BytecodeType::Integer, vec![4]));
+    cell.write(&[2], VmValue::Integer(41)).unwrap();
+    cell.set(3, VmValue::Integer(42)).unwrap();
+
+    assert_eq!(cell.read(&[2]).unwrap(), VmValue::Integer(41));
+    assert_eq!(
+        cell.to_values(),
+        vec![
+            VmValue::Integer(0),
+            VmValue::Integer(0),
+            VmValue::Integer(41),
+            VmValue::Integer(42),
+        ]
+    );
+    assert!(cell.set(0, VmValue::String("wrong".into())).is_err());
+    assert_eq!(cell.read(&[0]).unwrap(), VmValue::Integer(0));
+}
+
+#[test]
+fn dense_place_cell_boxes_only_values_crossing_the_vm_boundary() {
+    let mut cell = VariableCell::new(&global(BytecodeType::IntegerPlace, vec![1]));
+    let place = PlaceDescriptor {
+        variable: SymbolKey::derive("memory.test", b"target"),
+        indices: vec![2, 3],
+        ..PlaceDescriptor::default()
+    };
+    cell.set(0, VmValue::IntegerPlace(Box::new(place.clone())))
+        .unwrap();
+
+    assert_eq!(cell.first(), Some(VmValue::IntegerPlace(Box::new(place))));
+    assert!(cell.storage_is_valid());
+}
+
+#[test]
+fn large_cells_keep_default_storage_sparse_during_point_updates() {
+    let integer_definition = global(BytecodeType::Integer, vec![1_000_000]);
+    let mut integer = VariableCell::new(&integer_definition);
+    assert!(matches!(
+        integer.values,
+        VariableValues::SparseIntegers { ref entries, .. } if entries.is_empty()
+    ));
+    assert_eq!(integer.read(&[999_999]).unwrap(), VmValue::Integer(0));
+    integer.set(999_999, VmValue::Integer(42)).unwrap();
+    integer.set(10, VmValue::Integer(11)).unwrap();
+    integer.fill_range(0, 100, VmValue::Integer(0)).unwrap();
+    assert_eq!(integer.get(10), Some(VmValue::Integer(0)));
+    assert_eq!(integer.get(999_999), Some(VmValue::Integer(42)));
+    assert!(matches!(
+        integer.values,
+        VariableValues::SparseIntegers { ref entries, .. } if entries.len() == 1
+    ));
+    integer.set(999_999, VmValue::Integer(0)).unwrap();
+    assert!(matches!(
+        integer.values,
+        VariableValues::SparseIntegers { ref entries, .. } if entries.is_empty()
+    ));
+
+    let string_definition = global(BytecodeType::String, vec![1_000_000]);
+    let mut string = VariableCell::new(&string_definition);
+    string
+        .set(750_000, VmValue::String("value".into()))
+        .unwrap();
+    string.fill(VmValue::String(String::new())).unwrap();
+    assert_eq!(string.get(750_000), Some(VmValue::String(String::new())));
+    assert!(matches!(
+        string.values,
+        VariableValues::SparseStrings { ref entries, .. } if entries.is_empty()
+    ));
+}
+
+#[test]
+fn dense_initial_values_and_randdata_keep_contiguous_storage() {
+    let mut initialized = global(BytecodeType::Integer, vec![256]);
+    initialized.initial_values = vec![BytecodeConstant::Integer(1); 128];
+    let initialized = VariableCell::new(&initialized);
+    assert!(matches!(initialized.values, VariableValues::Integers(_)));
+
+    let mut randdata = global(BytecodeType::Integer, vec![625]);
+    randdata.name = "RANDDATA".into();
+    let randdata = VariableCell::new(&randdata);
+    assert!(randdata.integers().is_some());
+}
+
+#[test]
+fn snapshot_cells_use_sparse_round_trippable_storage() {
+    let mut integer = VariableCell::new(&global(BytecodeType::Integer, vec![1_000_000]));
+    integer.set(999_999, VmValue::Integer(42)).unwrap();
+    let encoded = rmp_serde::to_vec(&integer).unwrap();
+    assert!(encoded.len() < 128);
+    let mut decoded = rmp_serde::from_slice::<VariableCell>(&encoded).unwrap();
+    decoded.materialize_snapshot().unwrap();
+    integer.materialize_snapshot().unwrap();
+    assert_eq!(decoded, integer);
+
+    let mut string = VariableCell::new(&global(BytecodeType::String, vec![8]));
+    string.set(5, VmValue::String("preserved".into())).unwrap();
+    let encoded = rmp_serde::to_vec(&string).unwrap();
+    let mut decoded = rmp_serde::from_slice::<VariableCell>(&encoded).unwrap();
+    decoded.materialize_snapshot().unwrap();
+    assert_eq!(decoded, string);
+
+    let mut place = VariableCell::new(&global(BytecodeType::IntegerPlace, vec![3]));
+    place
+        .set(
+            2,
+            VmValue::IntegerPlace(Box::new(PlaceDescriptor {
+                variable: SymbolKey::derive("memory.test", b"snapshot-place"),
+                indices: vec![4],
+                ..PlaceDescriptor::default()
+            })),
+        )
+        .unwrap();
+    let encoded = rmp_serde::to_vec(&place).unwrap();
+    let mut decoded = rmp_serde::from_slice::<VariableCell>(&encoded).unwrap();
+    decoded.materialize_snapshot().unwrap();
+    assert_eq!(decoded, place);
+
+    for malformed in [
+        SparseVariableValues::Integers(vec![(1, 1), (1, 2)]),
+        SparseVariableValues::Integers(vec![(2, 1)]),
+        SparseVariableValues::Strings(vec![(1, "wrong type".into())]),
+    ] {
+        let encoded = rmp_serde::to_vec(&(BytecodeType::Integer, vec![2], malformed)).unwrap();
+        assert!(rmp_serde::from_slice::<VariableCell>(&encoded).is_err());
+    }
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn sparse_snapshot_decode_defers_untrusted_dense_allocation() {
+    let encoded = rmp_serde::to_vec(&(
+        BytecodeType::Integer,
+        vec![u64::MAX],
+        SparseVariableValues::Integers(Vec::new()),
+    ))
+    .unwrap();
+    let decoded = rmp_serde::from_slice::<VariableCell>(&encoded).unwrap();
+    assert_eq!(decoded.len(), usize::MAX);
+    assert!(decoded.values.get(usize::MAX - 1).is_some());
+}
+
+#[test]
+fn common_variable_shapes_preserve_flattening_and_bounds() {
+    assert_eq!(flatten(&[], &[]).unwrap(), 0);
+    assert_eq!(flatten(&[8], &[]).unwrap(), 0);
+    assert_eq!(flatten(&[8], &[7]).unwrap(), 7);
+    assert_eq!(flatten(&[2, 3], &[1, 2]).unwrap(), 5);
+    assert_eq!(
+        flatten(&[8], &[8]).unwrap_err(),
+        "index 8 is outside dimension 0 of length 8"
+    );
+    assert_eq!(
+        flatten(&[8], &[1, 0]).unwrap_err(),
+        "too many variable indices"
+    );
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn public_vm_value_stays_small_enough_for_transient_stacks() {
+    assert_eq!(std::mem::size_of::<VmValue>(), 24);
+    assert_eq!(std::mem::size_of::<i64>(), 8);
+}
