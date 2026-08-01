@@ -5,20 +5,6 @@ description: Validate changes in the rustyera-core repository with scope-appropr
 
 # Test RustyEra Core
 
-## Assign testing
-
-Delegate every test command to a sub-agent running **gpt-5.6-terra low**. Instruct it to run
-tests only and return each command, exit code, and relevant output. Do not allow it to edit,
-format, or commit code, fixtures, documentation, or configuration. Permit test-generated files
-only in temporary or ignored directories.
-
-Keep implementation, formatting, test authoring, failure diagnosis, and fixes with the main
-agent. Never substitute a main-agent test run for the testing sub-agent.
-
-If any implementation, test, fixture, dependency, or build input changes after a relevant test
-starts, immediately tell the testing sub-agent what changed. Require it to rebuild as needed and
-rerun every affected check; discard stale results.
-
 ## Select the scope
 
 - For Rust implementation changes, run the complete ordered workflow below.
@@ -31,9 +17,8 @@ rerun every affected check; discard stale results.
 
 ## Run the Rust workflow
 
-Require the main agent to format changed Rust code and write the smallest useful unit or
-integration test first. Then have the testing sub-agent run these gates in order, stopping at the
-first failure:
+Format changed Rust code and write the smallest useful unit or integration test first. Then run
+these gates in order, stopping at the first failure:
 
 1. `cargo fmt --all -- --check`
 2. `cargo check --workspace --all-targets`
@@ -42,8 +27,8 @@ first failure:
 5. `cargo test --workspace`
 
 Do not run the full workspace tests until formatting, compilation, Clippy, and the minimal
-regression test pass. Report failures without editing anything; let the main agent fix them and
-then rerun affected gates through the testing sub-agent.
+regression test pass. Report failures without editing anything; fix them separately and then rerun
+the affected gates.
 
 Do not use a C# oracle test as a replacement for a Rust implementation test.
 

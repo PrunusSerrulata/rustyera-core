@@ -146,8 +146,15 @@ WinForms/GDI 的实现细节引入 runtime。
   及错误终止；不得用 C# oracle 测试冒充 Rust 实现测试。
 
 所有验证必须使用仓库 skill `$test-rustyera-core`（位于
-`.agents/skills/test-rustyera-core/`）。该 skill 规定测试子 agent、命令顺序、按改动
-范围选择测试、reference oracle 与差分测试，以及结果报告要求；不得绕过或改序。
+`.agents/skills/test-rustyera-core/`）。该 skill 规定命令顺序、按改动范围选择测试、
+reference oracle 与差分测试，以及结果报告要求；不得绕过或改序。
+
+每条测试命令必须委派给运行 **gpt-5.6-luna high** 的子智能体。该子智能体只能执行测试
+并返回各命令、退出码和相关输出，不得编辑、格式化或提交代码、fixture、文档及配置；
+测试生成文件只能写入临时目录或已忽略目录。实现、格式化、测试编写、失败诊断和修复仍
+由主智能体负责，不得用主智能体亲自运行测试替代测试子智能体。相关测试开始后若实现、
+测试、fixture、依赖或构建输入发生变化，必须立即告知测试子智能体，要求其按需重建并
+重跑所有受影响检查；旧结果一律作废。
 
 ## 工作区与 Git 安全
 
