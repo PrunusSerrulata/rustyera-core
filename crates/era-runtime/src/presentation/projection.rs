@@ -633,6 +633,6 @@ pub(super) fn default_style() -> TextStyle {
         underline: false,
         strikeout: false,
         font_family: Some("ＭＳ ゴシック".into()),
-        font_millipoints: 18_000,
+        font_millipixels: 18_000,
     }
 }

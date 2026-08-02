@@ -21,6 +21,29 @@ pub enum ConfigValue {
 }
 
 impl ConfigValue {
+    /// Render the value using the canonical syntax accepted by Emuera config files.
+    #[must_use]
+    pub fn config_text(&self) -> String {
+        match self {
+            Self::Boolean(value) => if *value { "YES" } else { "NO" }.into(),
+            Self::Integer(value) => value.to_string(),
+            Self::String(value) | Self::Enum { value, .. } => value.clone(),
+            Self::Color(value) => format!(
+                "{},{},{}",
+                (value >> 16) & 0xff,
+                (value >> 8) & 0xff,
+                value & 0xff
+            ),
+            Self::Character(value) => value.to_string(),
+            Self::IntegerList(values) => values
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join("/"),
+            Self::StringList(values) => values.join(","),
+        }
+    }
+
     /// Convert to the exact scalar family exposed by GETCONFIG/GETCONFIGS.
     #[must_use]
     pub fn script_value(&self) -> ScriptConfigValue {
@@ -55,6 +78,14 @@ pub enum ConfigEffect {
     UnsupportedPlatformIntegration,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfigClient {
+    Runtime,
+    Tui,
+    Browser,
+    Tauri,
+}
+
 #[derive(Clone, Debug)]
 pub struct ConfigSpec {
     pub code: &'static str,
@@ -62,32 +93,33 @@ pub struct ConfigSpec {
     pub english: &'static str,
     pub default: ConfigValue,
     pub effect: ConfigEffect,
+    pub clients: &'static [ConfigClient],
 }
 
 macro_rules! spec {
     ($code:ident, $jp:literal, $en:literal, b $value:expr, $effect:ident) => {
-        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::Boolean($value), effect: ConfigEffect::$effect }
+        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::Boolean($value), effect: ConfigEffect::$effect, clients: &[] }
     };
     ($code:ident, $jp:literal, $en:literal, i $value:expr, $effect:ident) => {
-        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::Integer($value), effect: ConfigEffect::$effect }
+        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::Integer($value), effect: ConfigEffect::$effect, clients: &[] }
     };
     ($code:ident, $jp:literal, $en:literal, s $value:literal, $effect:ident) => {
-        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::String($value.into()), effect: ConfigEffect::$effect }
+        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::String($value.into()), effect: ConfigEffect::$effect, clients: &[] }
     };
     ($code:ident, $jp:literal, $en:literal, e $value:literal [$($allowed:literal),+ $(,)?], $effect:ident) => {
-        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::Enum { value: $value.into(), allowed: vec![$($allowed.into()),+] }, effect: ConfigEffect::$effect }
+        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::Enum { value: $value.into(), allowed: vec![$($allowed.into()),+] }, effect: ConfigEffect::$effect, clients: &[] }
     };
     ($code:ident, $jp:literal, $en:literal, c $value:expr, $effect:ident) => {
-        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::Color($value), effect: ConfigEffect::$effect }
+        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::Color($value), effect: ConfigEffect::$effect, clients: &[] }
     };
     ($code:ident, $jp:literal, $en:literal, ch $value:literal, $effect:ident) => {
-        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::Character($value), effect: ConfigEffect::$effect }
+        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::Character($value), effect: ConfigEffect::$effect, clients: &[] }
     };
     ($code:ident, $jp:literal, $en:literal, il [$($value:expr),* $(,)?], $effect:ident) => {
-        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::IntegerList(vec![$($value),*]), effect: ConfigEffect::$effect }
+        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::IntegerList(vec![$($value),*]), effect: ConfigEffect::$effect, clients: &[] }
     };
     ($code:ident, $jp:literal, $en:literal, sl [$($value:literal),* $(,)?], $effect:ident) => {
-        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::StringList(vec![$($value.into()),*]), effect: ConfigEffect::$effect }
+        ConfigSpec { code: stringify!($code), japanese: $jp, english: $en, default: ConfigValue::StringList(vec![$($value.into()),*]), effect: ConfigEffect::$effect, clients: &[] }
     };
 }
 
@@ -99,7 +131,7 @@ pub fn catalog() -> Vec<ConfigSpec> {
         PortableSemantic as P, QueryOnlyClientPreference as Q, UnsupportedPlatformIntegration as U,
     };
     let _ = (P, Q, U); // Keep the classification names visible in generated documentation.
-    vec![
+    let mut specs = vec![
         spec!(IgnoreCase, "大文字小文字の違いを無視する", "Ignore case", b true, PortableSemantic),
         spec!(UseRenameFile, "_Rename.csvを利用する", "Use _Rename.csv file", b false, PortableSemantic),
         spec!(UseReplaceFile, "_Replace.csvを利用する", "Use _Replace.csv file", b true, PortableSemantic),
@@ -229,7 +261,44 @@ pub fn catalog() -> Vec<ConfigSpec> {
         spec!(PalamLvDef, "PALAMLVの初期値", "Default PALAMLV", il [0, 100, 500, 3000, 10000, 30000, 60000, 100_000, 150_000, 250_000], PortableSemantic),
         spec!(pbandDef, "PBANDの初期値", "Default PBAND", i 4, PortableSemantic),
         spec!(RelationDef, "RELATIONの初期値", "Default RELATION", i 0, PortableSemantic),
-    ]
+    ];
+    for spec in &mut specs {
+        spec.clients = clients(spec.code, spec.effect);
+    }
+    specs
+}
+
+fn clients(code: &str, effect: ConfigEffect) -> &'static [ConfigClient] {
+    use ConfigClient::{Browser, Runtime, Tauri, Tui};
+    match effect {
+        ConfigEffect::PortableSemantic => &[Runtime, Tui, Browser, Tauri],
+        ConfigEffect::UnsupportedPlatformIntegration => &[],
+        ConfigEffect::QueryOnlyClientPreference => match code {
+            "WindowPosX" | "WindowPosY" | "SetWindowPos" | "WindowMaximixed" | "SizableWindow" => {
+                &[Tauri]
+            }
+            "UseMouse"
+            | "UseMenu"
+            | "WindowX"
+            | "WindowY"
+            | "MaxLog"
+            | "FontName"
+            | "FontSize"
+            | "LineHeight"
+            | "ForeColor"
+            | "BackColor"
+            | "FocusColor"
+            | "LogColor"
+            | "FPS"
+            | "SkipFrame"
+            | "ScrollHeight"
+            | "DisplayReport"
+            | "ButtonWrap"
+            | "UseSaveFolder"
+            | "EnglishConfigOutput" => &[Tui, Browser, Tauri],
+            _ => &[],
+        },
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -261,6 +330,14 @@ impl ConfigStore {
     #[must_use]
     pub fn get_code(&self, code: &str) -> Option<&ConfigValue> {
         self.values.get(&code.to_ascii_uppercase())
+    }
+
+    #[must_use]
+    pub fn is_fixed(&self, code: &str) -> bool {
+        self.fixed
+            .get(&code.to_ascii_uppercase())
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Apply one `name:value` assignment. Unknown keys and invalid values are rejected.
@@ -306,6 +383,36 @@ impl ConfigStore {
     pub fn iter(&self) -> impl Iterator<Item = (&str, &ConfigValue)> {
         self.values.iter().map(|(key, value)| (key.as_str(), value))
     }
+
+    /// Serialize the complete regular configuration in the pinned reference order.
+    #[must_use]
+    pub fn serialize_regular(&self) -> String {
+        let english = matches!(
+            self.get_code("EnglishConfigOutput"),
+            Some(ConfigValue::Boolean(true))
+        );
+        let mut output = String::new();
+        for spec in catalog() {
+            let code = spec.code.to_ascii_uppercase();
+            if is_replace_code(&code) || code.starts_with("DEBUG") {
+                continue;
+            }
+            let Some(value) = self.values.get(&code) else {
+                continue;
+            };
+            output.push_str(if english { spec.english } else { spec.japanese });
+            output.push(':');
+            output.push_str(&value.config_text());
+            output.push('\n');
+        }
+        output
+    }
+}
+
+#[must_use]
+pub fn is_regular_code(code: &str) -> bool {
+    let code = code.to_ascii_uppercase();
+    !is_replace_code(&code) && !code.starts_with("DEBUG")
 }
 
 fn is_replace_code(code: &str) -> bool {
@@ -478,5 +585,42 @@ mod tests {
         assert_eq!(store.get("BarChar1"), Some(&ConfigValue::Character('β')));
         let keys = store.iter().map(|(key, _)| key).collect::<Vec<_>>();
         assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]));
+        let font = catalog()
+            .into_iter()
+            .find(|spec| spec.code == "FontSize")
+            .unwrap();
+        assert_eq!(
+            font.clients,
+            &[
+                ConfigClient::Tui,
+                ConfigClient::Browser,
+                ConfigClient::Tauri
+            ]
+        );
+        let editor = catalog()
+            .into_iter()
+            .find(|spec| spec.code == "TextEditor")
+            .unwrap();
+        assert!(editor.clients.is_empty());
+    }
+
+    #[test]
+    fn regular_configuration_serialization_is_canonical_and_respects_language() {
+        let mut store = ConfigStore::default();
+        store.apply_regular("Font size", "22", false).unwrap();
+        store.apply_regular("Text color", "1,2,3", false).unwrap();
+        let japanese = store.serialize_regular();
+        assert!(japanese.contains("フォントサイズ:22\n"));
+        assert!(japanese.contains("文字色:1,2,3\n"));
+        assert!(!japanese.contains("デバッグウインドウ幅"));
+        assert!(!japanese.contains("DRAWLINE文字"));
+
+        store
+            .apply_regular("EnglishConfigOutput", "YES", false)
+            .unwrap();
+        let english = store.serialize_regular();
+        assert!(english.contains("Font size:22\n"));
+        assert!(english.contains("Text color:1,2,3\n"));
+        assert!(english.contains("Output English items in the config file:YES\n"));
     }
 }

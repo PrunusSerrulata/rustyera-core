@@ -105,6 +105,7 @@ impl Default for PresentationModel {
             line_count_dirty: true,
             settings: PresentationSettings {
                 drawable_width: LogicalLength(760_000),
+                drawable_height: LogicalLength(480_000),
                 line_height: LogicalLength(19_000),
                 background: Color {
                     red: 0,

@@ -7,20 +7,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AdvanceTime, CancelExternalRequest, ClientHello, ClientStateChanged, CommandRejected,
-    DeviceStateChanged, EffectAcknowledgement, EffectBatch, ExitRequested, ExtensionRegistrySubmit,
-    FrontendInput, InputUndoRequest, InputUndoState, KeyMacroCommand, KeyMacroProfileSubmit,
-    KeyMacroState, PresentationDelta, PresentationSnapshot, ProjectAnalysisReport,
-    ProjectAnalysisRequest, ProjectLoadReport, ProjectLoadRequest, ProjectManifest,
-    ProjectionObservation, ProjectionState, ProtocolDiagnostic, ReloadProject,
-    ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault, RuntimeLog, RuntimePhase,
-    RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceRequest, ServiceResponse,
-    ShutdownReady, ShutdownRequest, StartRequest, StateExportChunk, StateExportChunkRequest,
-    StateExportReady, StateExportRequest, StateImportAccepted, StateImportBegin, StateImportChunk,
-    StateImportCommit, StateImportReady, StateTransferCancel, StorageRequest, StorageResponse,
-    VersionRejected, WaitChange,
+    ConfigurationUpdatePrepared, DeviceStateChanged, EffectAcknowledgement, EffectBatch,
+    ExitRequested, ExtensionRegistrySubmit, FrontendInput, InputUndoRequest, InputUndoState,
+    KeyMacroCommand, KeyMacroProfileSubmit, KeyMacroState, PrepareConfigurationUpdate,
+    PresentationDelta, PresentationSnapshot, ProjectAnalysisReport, ProjectAnalysisRequest,
+    ProjectLoadReport, ProjectLoadRequest, ProjectManifest, ProjectionObservation, ProjectionState,
+    ProtocolDiagnostic, ReloadProject, ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault,
+    RuntimeLog, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello,
+    ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
+    StateExportChunk, StateExportChunkRequest, StateExportReady, StateExportRequest,
+    StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady,
+    StateTransferCancel, StorageRequest, StorageResponse, VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(24, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(25, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -41,6 +41,8 @@ pub struct RuntimeResynchronized {
     pub input_undo: InputUndoState,
     #[n(7)]
     pub key_macros: KeyMacroState,
+    #[n(8)]
+    pub configuration: Option<crate::ProjectConfigurationSnapshot>,
 }
 
 /// Stable runtime message variants. Numeric discriminants are wire IDs and must
@@ -82,6 +84,10 @@ pub enum RuntimeMessage {
     ExitRequested(#[n(0)] ExitRequested),
     #[n(23)]
     ReturnToTitle(#[n(0)] ReturnToTitleRequest),
+    #[n(24)]
+    PrepareConfigurationUpdate(#[n(0)] PrepareConfigurationUpdate),
+    #[n(25)]
+    ConfigurationUpdatePrepared(#[n(0)] ConfigurationUpdatePrepared),
     #[n(30)]
     Input(#[n(0)] FrontendInput),
     #[n(31)]
@@ -101,7 +107,7 @@ pub enum RuntimeMessage {
     #[n(38)]
     InputUndoStateChanged(#[n(0)] InputUndoState),
     #[n(40)]
-    PresentationSnapshot(#[n(0)] PresentationSnapshot),
+    PresentationSnapshot(#[n(0)] Box<PresentationSnapshot>),
     #[n(41)]
     PresentationDelta(#[n(0)] PresentationDelta),
     #[n(42)]
@@ -151,7 +157,7 @@ pub enum RuntimeMessage {
     #[n(95)]
     CommandRejected(#[n(0)] CommandRejected),
     #[n(96)]
-    RuntimeResynchronized(#[n(0)] RuntimeResynchronized),
+    RuntimeResynchronized(#[n(0)] Box<RuntimeResynchronized>),
     #[n(97)]
     Diagnostic(#[n(0)] ProtocolDiagnostic),
     #[n(98)]
@@ -179,6 +185,8 @@ impl RuntimeMessage {
             Self::StateChanged(_) => 21,
             Self::ExitRequested(_) => 22,
             Self::ReturnToTitle(_) => 23,
+            Self::PrepareConfigurationUpdate(_) => 24,
+            Self::ConfigurationUpdatePrepared(_) => 25,
             Self::Input(_) => 30,
             Self::AdvanceTime(_) => 31,
             Self::WaitChanged(_) => 32,

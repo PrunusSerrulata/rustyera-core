@@ -24,7 +24,7 @@ const MAGIC: &[u8; 8] = b"RERAPROJ";
 // increment it whenever compiler, analyzer or project-loading behavior can change an
 // unchanged source's artifact. Older project files are then rejected instead of being used
 // as an incremental compilation seed.
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
 const COMPRESSION_LEVEL: i32 = 3;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -96,6 +96,7 @@ pub(crate) struct CompiledSnapshotMetadata {
     print_c_per_line: u32,
     print_c_length: u32,
     configuration: erabasic_config::ConfigStore,
+    editable_configuration: erabasic_config::ConfigStore,
     extensions: std::collections::BTreeMap<String, ExtensionDeclaration>,
 }
 
@@ -122,6 +123,7 @@ impl From<&NormalizedProjectSnapshot> for CompiledSnapshotMetadata {
             print_c_per_line: snapshot.print_c_per_line,
             print_c_length: snapshot.print_c_length,
             configuration: snapshot.configuration.clone(),
+            editable_configuration: snapshot.editable_configuration.clone(),
             extensions: snapshot.extensions.clone(),
         }
     }
@@ -159,6 +161,7 @@ impl CompiledSnapshotMetadata {
             print_c_per_line: self.print_c_per_line,
             print_c_length: self.print_c_length,
             configuration: self.configuration,
+            editable_configuration: self.editable_configuration,
             extensions: self.extensions,
         })
     }

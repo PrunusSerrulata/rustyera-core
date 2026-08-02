@@ -102,7 +102,7 @@ fn pinned_reference_wait_and_output_are_losslessly_representable() {
                 underline: false,
                 strikeout: false,
                 font_family: None,
-                font_millipoints: 16_000,
+                font_millipixels: 16_000,
             },
         }],
     };

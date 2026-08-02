@@ -5,9 +5,10 @@ mod frontend;
 mod tests;
 
 use era_runtime_protocol::{
-    FileCategory, FileChange, FilePayload, ProjectAnalysisReport, ProjectAnalysisRequest,
-    ProjectLoadReport, ProjectManifest, ProtocolDiagnostic, ReloadProject, RuntimeLogLevel,
-    SourceLocation, validate_relative_path,
+    CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ConfigurationValueKind, FileCategory,
+    FileChange, FilePayload, ProjectAnalysisReport, ProjectAnalysisRequest,
+    ProjectConfigurationEntry, ProjectConfigurationSnapshot, ProjectLoadReport, ProjectManifest,
+    ProtocolDiagnostic, ReloadProject, RuntimeLogLevel, SourceLocation, validate_relative_path,
 };
 use erabasic_analyzer::{
     AnalysisInput, AnalysisProgressStage, AnalyzerDiagnosticSeverity, AnalyzerOptions,
@@ -68,8 +69,87 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) print_c_length: u32,
     /// Complete query-visible configuration, including client-only compatibility values.
     pub(crate) configuration: ConfigStore,
+    /// Regular default/user/fixed configuration, excluding Replace and debug values.
+    pub(crate) editable_configuration: ConfigStore,
     pub(crate) extensions:
         std::collections::BTreeMap<String, era_runtime_protocol::ExtensionDeclaration>,
+}
+
+impl NormalizedProjectSnapshot {
+    pub(crate) fn configuration_snapshot(&self) -> ProjectConfigurationSnapshot {
+        let source_digest = self
+            .manifest
+            .files
+            .iter()
+            .find(|file| {
+                file.category == FileCategory::Configuration
+                    && file
+                        .relative_path
+                        .replace('\\', "/")
+                        .eq_ignore_ascii_case("emuera.config")
+            })
+            .and_then(|file| match &file.payload {
+                FilePayload::Utf8(text) => Some(era_protocol::ProtocolBytes::new(
+                    blake3::hash(text.as_bytes()).as_bytes().to_vec(),
+                )),
+                _ => None,
+            })
+            .unwrap_or_else(|| era_protocol::ProtocolBytes::new(Vec::new()));
+        let entries = erabasic_config::catalog()
+            .into_iter()
+            .filter(|spec| erabasic_config::is_regular_code(spec.code))
+            .filter_map(|spec| {
+                let value = self.editable_configuration.get_code(spec.code)?;
+                let applicability = protocol_applicability(spec.clients);
+                (applicability != 0).then(|| ProjectConfigurationEntry {
+                    code: spec.code.into(),
+                    japanese: spec.japanese.into(),
+                    english: spec.english.into(),
+                    value: value.config_text(),
+                    kind: configuration_value_kind(value),
+                    allowed: match value {
+                        erabasic_config::ConfigValue::Enum { allowed, .. } => allowed.clone(),
+                        _ => Vec::new(),
+                    },
+                    fixed: self.editable_configuration.is_fixed(spec.code),
+                    applicability,
+                })
+            })
+            .collect();
+        ProjectConfigurationSnapshot {
+            project_revision: self.manifest.project_revision,
+            source_digest,
+            entries,
+        }
+    }
+}
+
+fn protocol_applicability(clients: &[erabasic_config::ConfigClient]) -> u32 {
+    use erabasic_config::ConfigClient;
+    let mut flags = 0;
+    for client in clients {
+        flags |= match client {
+            ConfigClient::Runtime => CONFIG_RUNTIME,
+            ConfigClient::Tui => CONFIG_TUI,
+            ConfigClient::Browser => CONFIG_BROWSER,
+            ConfigClient::Tauri => CONFIG_TAURI,
+        };
+    }
+    flags
+}
+
+fn configuration_value_kind(value: &erabasic_config::ConfigValue) -> ConfigurationValueKind {
+    use erabasic_config::ConfigValue;
+    match value {
+        ConfigValue::Boolean(_) => ConfigurationValueKind::Boolean,
+        ConfigValue::Integer(_) => ConfigurationValueKind::Integer,
+        ConfigValue::String(_) => ConfigurationValueKind::String,
+        ConfigValue::Enum { .. } => ConfigurationValueKind::Enum,
+        ConfigValue::Color(_) => ConfigurationValueKind::Color,
+        ConfigValue::Character(_) => ConfigurationValueKind::Character,
+        ConfigValue::IntegerList(_) => ConfigurationValueKind::IntegerList,
+        ConfigValue::StringList(_) => ConfigurationValueKind::StringList,
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -398,6 +478,7 @@ fn build_project_inner_with_extensions(
         return failed(manifest.project_revision, diagnostics, previous);
     };
     data.static_data.legacy_encoding = config.legacy_encoding;
+    let editable_configuration = config.values.clone();
     sync_replace_configuration(&mut config.values, &data.static_data.replace);
     config
         .money_label
@@ -476,6 +557,7 @@ fn build_project_inner_with_extensions(
                 success,
                 diagnostics,
                 payload_required: false,
+                configuration: None,
             },
             snapshot: None,
         };
@@ -604,6 +686,7 @@ fn build_project_inner_with_extensions(
             success,
             diagnostics,
             payload_required: false,
+            configuration: None,
         },
         snapshot: Some(NormalizedProjectSnapshot {
             manifest: Arc::new(manifest.clone()),
@@ -628,6 +711,7 @@ fn build_project_inner_with_extensions(
             print_c_per_line: config.print_c_per_line,
             print_c_length: config.print_c_length,
             configuration: config.values,
+            editable_configuration,
             extensions: extension_map,
         }),
     }
@@ -865,6 +949,7 @@ fn failed_with_incremental(
             success: false,
             diagnostics,
             payload_required: false,
+            configuration: None,
         },
         snapshot: None,
     }

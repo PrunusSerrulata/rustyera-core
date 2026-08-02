@@ -3,6 +3,59 @@
 use super::super::*;
 
 impl RuntimeSession {
+    pub(in super::super) fn prepare_configuration_update(
+        &mut self,
+        message_id: u64,
+        request: &PrepareConfigurationUpdate,
+    ) -> Result<(), RuntimeError> {
+        let Some(snapshot) = self.project_snapshot.as_ref() else {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "configuration update requires a loaded project",
+            );
+        };
+        let current = snapshot.configuration_snapshot();
+        if request.project_revision != current.project_revision
+            || request.expected_source_digest != current.source_digest
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "configuration source changed since the preferences dialog was opened",
+            );
+        }
+        let editable = current
+            .entries
+            .iter()
+            .map(|entry| entry.code.to_ascii_uppercase())
+            .collect::<BTreeSet<_>>();
+        let mut values = snapshot.editable_configuration.clone();
+        for change in &request.changes {
+            if !editable.contains(&change.code.to_ascii_uppercase())
+                || values.is_fixed(&change.code)
+                || values
+                    .apply_regular(&change.code, &change.value, false)
+                    .is_err()
+            {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "configuration update contains an unsupported, fixed, or invalid value",
+                );
+            }
+        }
+        self.emit(
+            RuntimeMessage::ConfigurationUpdatePrepared(ConfigurationUpdatePrepared {
+                project_revision: current.project_revision,
+                expected_source_digest: current.source_digest,
+                contents: values.serialize_regular(),
+                restart_required: true,
+            }),
+            Some(message_id),
+        )
+    }
+
     pub(in super::super) fn observe_projection(
         &mut self,
         message_id: u64,
@@ -72,12 +125,12 @@ impl RuntimeSession {
         let Some(selected) = negotiate_version(hello.runtime_versions, supported) else {
             self.emit_log(
                 RuntimeLogLevel::Error,
-                "runtime protocol negotiation failed: runtime protocol 24.0 is required",
+                "runtime protocol negotiation failed: runtime protocol 25.0 is required",
             )?;
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 24.0 is required".into(),
+                    message: "runtime protocol 25.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -562,6 +615,7 @@ impl RuntimeSession {
                         success: false,
                         diagnostics,
                         payload_required: true,
+                        configuration: None,
                     });
                 };
                 let actual_identity = crate::compiled_cache::project_identity(manifest);
@@ -577,6 +631,7 @@ impl RuntimeSession {
                             source: None,
                         }],
                         payload_required: false,
+                        configuration: None,
                     });
                 }
                 let previous_incremental = cached
@@ -610,13 +665,14 @@ impl RuntimeSession {
     pub(in super::super) fn finish_project_load(
         &mut self,
         message_id: u64,
-        report: ProjectLoadReport,
+        mut report: ProjectLoadReport,
     ) -> Result<(), RuntimeError> {
         if report.success {
             self.undo_checkpoint = None;
             self.undo_replay = None;
             self.undo_token = None;
             if let Some(snapshot) = &self.project_snapshot {
+                report.configuration = Some(snapshot.configuration_snapshot());
                 self.key_macros.set_enabled(matches!(
                     snapshot.configuration.get_code("UseKeyMacro"),
                     Some(erabasic_config::ConfigValue::Boolean(true))
@@ -873,6 +929,7 @@ fn exact_cached_project(
             success: true,
             diagnostics: exact.diagnostics,
             payload_required: false,
+            configuration: None,
         },
         snapshot: Some(exact.snapshot),
     }

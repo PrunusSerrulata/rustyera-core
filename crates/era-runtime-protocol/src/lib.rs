@@ -3,6 +3,7 @@
 //! This development protocol intentionally has no backward-compatibility promise until
 //! a frontend exists. Filesystem, clock, rendering and device work remain outside it.
 
+mod configuration;
 mod effect;
 mod extension;
 mod input;
@@ -15,6 +16,11 @@ mod project;
 mod service;
 mod value;
 
+pub use configuration::{
+    CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ConfigurationChange,
+    ConfigurationUpdatePrepared, ConfigurationValueKind, PrepareConfigurationUpdate,
+    ProjectConfigurationEntry, ProjectConfigurationSnapshot,
+};
 pub use effect::{
     AudioEffect, AudioEffectAction, EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind,
     EffectOutcome, EffectOutcomeStatus, VideoEffect,

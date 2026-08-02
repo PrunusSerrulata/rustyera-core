@@ -96,9 +96,9 @@ pub struct TextStyle {
     pub strikeout: bool,
     #[n(6)]
     pub font_family: Option<String>,
-    /// Font size in 1/1000 point units; the wire contract contains no floats.
+    /// Font size in 1/1000 logical pixel units; the wire contract contains no floats.
     #[n(7)]
-    pub font_millipoints: u32,
+    pub font_millipixels: u32,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -362,6 +362,8 @@ pub struct PresentationSettings {
     pub prevent_button_wrap: bool,
     #[n(6)]
     pub legacy_nonbutton_wrap: bool,
+    #[n(7)]
+    pub drawable_height: LogicalLength,
 }
 
 /// Ordered semantic edits from which a frontend derives physical console rows.

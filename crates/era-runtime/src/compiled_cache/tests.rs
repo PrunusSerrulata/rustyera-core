@@ -35,7 +35,7 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
 
     assert_eq!(&bytes[..8], b"RERAPROJ");
-    assert_eq!(bytes[8], 2);
+    assert_eq!(bytes[8], 3);
     assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
     assert_eq!(decoded_file.identity, project_identity(&project));
     assert_eq!(decoded_file.manifest, project);
@@ -143,7 +143,7 @@ fn project_file_projection_honors_limits_and_version() {
     .unwrap();
 
     assert!(decode_project_file(&bytes, bytes.len() - 1).is_err());
-    bytes[8] = 1;
+    bytes[8] = 2;
     let digest_offset = bytes.len() - 32;
     let digest = blake3::hash(&bytes[..digest_offset]);
     bytes[digest_offset..].copy_from_slice(digest.as_bytes());
@@ -151,7 +151,7 @@ fn project_file_projection_honors_limits_and_version() {
         decode_project_file(&bytes, 64 * 1024 * 1024)
             .unwrap_err()
             .to_string()
-            .contains("unsupported project file version 01")
+            .contains("unsupported project file version 02")
     );
 }
 

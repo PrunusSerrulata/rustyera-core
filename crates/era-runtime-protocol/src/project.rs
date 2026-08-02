@@ -152,6 +152,8 @@ pub struct ProjectLoadReport {
     /// The supplied cache was not exact and the frontend must retry with a full manifest.
     #[n(3)]
     pub payload_required: bool,
+    #[n(4)]
+    pub configuration: Option<crate::ProjectConfigurationSnapshot>,
 }
 
 /// One-shot project analysis that never replaces the active runtime project.

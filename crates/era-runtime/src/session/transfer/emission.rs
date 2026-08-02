@@ -64,7 +64,7 @@ impl RuntimeSession {
         let presentation = self.presentation.snapshot_for_delivery();
         self.pending_presentation_update = false;
         self.emit(
-            RuntimeMessage::RuntimeResynchronized(RuntimeResynchronized {
+            RuntimeMessage::RuntimeResynchronized(Box::new(RuntimeResynchronized {
                 epoch: self.epoch.0,
                 phase: self.phase,
                 runtime_revision: self.revision,
@@ -73,7 +73,11 @@ impl RuntimeSession {
                 selected_locale: self.selected_locale.clone(),
                 input_undo,
                 key_macros: self.key_macros.state(),
-            }),
+                configuration: self
+                    .project_snapshot
+                    .as_ref()
+                    .map(NormalizedProjectSnapshot::configuration_snapshot),
+            })),
             Some(message_id),
         )?;
         if !self.effect_journal.is_empty() {
@@ -103,7 +107,7 @@ impl RuntimeSession {
         self.pending_presentation_update = false;
         let message = match self.presentation.next_update() {
             PresentationUpdate::Snapshot(snapshot) => {
-                RuntimeMessage::PresentationSnapshot(*snapshot)
+                RuntimeMessage::PresentationSnapshot(snapshot)
             }
             PresentationUpdate::Delta(delta) => RuntimeMessage::PresentationDelta(delta),
         };

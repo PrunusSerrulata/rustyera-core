@@ -139,6 +139,103 @@ fn safe_at_commands_use_runtime_lifecycle_effects_and_keep_debug_separate() {
 }
 
 #[test]
+fn configuration_update_is_validated_and_serialized_by_the_runtime() {
+    let build = build_project(
+        &ProjectManifest {
+            project_revision: 7,
+            files: vec![
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "emuera.config".into(),
+                    category: FileCategory::Configuration,
+                    payload: FilePayload::Utf8("フォントサイズ:18\n".into()),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "_fixed.config".into(),
+                    category: FileCategory::Configuration,
+                    payload: FilePayload::Utf8("ウィンドウ幅:900\n".into()),
+                    content_hash: None,
+                },
+            ],
+        },
+        None,
+    );
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::Ready;
+    session.epoch = SessionEpoch(1);
+    session.project_snapshot = build.snapshot;
+    let configuration = session
+        .project_snapshot
+        .as_ref()
+        .unwrap()
+        .configuration_snapshot();
+    assert!(
+        configuration
+            .entries
+            .iter()
+            .any(|entry| entry.code == "WindowX" && entry.fixed)
+    );
+    assert!(
+        configuration
+            .entries
+            .iter()
+            .all(|entry| entry.code != "DebugWindowWidth" && entry.code != "DrawLineString")
+    );
+
+    session
+        .handle_message(
+            1,
+            RuntimeMessage::PrepareConfigurationUpdate(PrepareConfigurationUpdate {
+                project_revision: 7,
+                expected_source_digest: configuration.source_digest,
+                changes: vec![era_runtime_protocol::ConfigurationChange {
+                    code: "FontSize".into(),
+                    value: "22".into(),
+                }],
+            }),
+        )
+        .unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ConfigurationUpdatePrepared(prepared)
+            if prepared.contents.contains("フォントサイズ:22\n")
+                && prepared.contents.contains("ウィンドウ幅:900\n")
+                && prepared.restart_required
+    )));
+
+    session
+        .handle_message(
+            2,
+            RuntimeMessage::PrepareConfigurationUpdate(PrepareConfigurationUpdate {
+                project_revision: 7,
+                expected_source_digest: session
+                    .project_snapshot
+                    .as_ref()
+                    .unwrap()
+                    .configuration_snapshot()
+                    .source_digest,
+                changes: vec![era_runtime_protocol::ConfigurationChange {
+                    code: "WindowX".into(),
+                    value: "1000".into(),
+                }],
+            }),
+        )
+        .unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(rejected)
+            if rejected.code == CommandErrorCode::InvalidValue
+    )));
+}
+
+#[test]
 fn debug_channel_has_independent_sequence_and_cannot_widen_creator_policy() {
     let mut session = RuntimeSession::new(RuntimeOptions {
         debug_scope_mask: (1 << 2) | (1 << 5),

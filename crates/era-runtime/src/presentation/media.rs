@@ -222,6 +222,8 @@ impl PresentationModel {
         };
         self.settings.drawable_width =
             LogicalLength(i64::from(project.viewport_width).saturating_mul(1_000));
+        self.settings.drawable_height =
+            LogicalLength(i64::from(project.viewport_height).saturating_mul(1_000));
         self.settings.line_height =
             LogicalLength(i64::from(project.line_height).saturating_mul(1_000));
         self.settings.maximum_physical_lines = integer("MaxLog")
@@ -230,7 +232,7 @@ impl PresentationModel {
         self.settings.prevent_button_wrap = boolean("ButtonWrap").unwrap_or(false);
         self.settings.legacy_nonbutton_wrap = boolean("CompatiLinefeedAs1739").unwrap_or(false);
         self.default_style.font_family = font;
-        self.default_style.font_millipoints = project.font_size.saturating_mul(1_000);
+        self.default_style.font_millipixels = project.font_size.saturating_mul(1_000);
         self.default_style.foreground =
             rgb_color(i64::from(color("ForeColor").unwrap_or(0x00c0_c0c0)));
         self.default_background = rgb_color(i64::from(color("BackColor").unwrap_or(0)));

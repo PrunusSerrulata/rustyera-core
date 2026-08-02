@@ -499,6 +499,9 @@ impl RuntimeSession {
                 self.cancel_state_transfer(message_id, cancel)
             }
             RuntimeMessage::ReloadProject(reload) => self.reload_project(message_id, &reload),
+            RuntimeMessage::PrepareConfigurationUpdate(request) => {
+                self.prepare_configuration_update(message_id, &request)
+            }
             RuntimeMessage::ShutdownRequest(_) => self.shutdown(message_id),
             RuntimeMessage::Acknowledge(ack) => {
                 self.outbound_journal
@@ -514,6 +517,7 @@ impl RuntimeSession {
             | RuntimeMessage::VersionRejected(_)
             | RuntimeMessage::ProjectLoadReport(_)
             | RuntimeMessage::ProjectAnalysisReport(_)
+            | RuntimeMessage::ConfigurationUpdatePrepared(_)
             | RuntimeMessage::KeyMacroStateChanged(_)
             | RuntimeMessage::StateChanged(_)
             | RuntimeMessage::ExitRequested(_)

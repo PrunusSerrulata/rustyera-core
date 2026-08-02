@@ -63,6 +63,25 @@ pub(super) fn parse_configuration(
             };
             let name = name.trim();
             let value = value.trim();
+            if matches!(name, "UseNewRandom" | "新しい高速な乱数アルゴリズムを使う")
+            {
+                match parse_boolean(value) {
+                    Some(boolean) => config.use_new_random = boolean,
+                    None => diagnostics.push(project_diagnostic(
+                        "runtime.invalid_configuration",
+                        RuntimeLogLevel::Warning,
+                        "UseNewRandom must be a boolean value",
+                        Some(SourceLocation {
+                            relative_path: file.relative_path.clone(),
+                            byte_start: 0,
+                            byte_end: 0,
+                            line: Some(line_index as u64 + 1),
+                            byte_column: None,
+                        }),
+                    )),
+                }
+                continue;
+            }
             let applied = if debug_configuration {
                 config.values.apply(name, value, false)
             } else {
@@ -88,113 +107,6 @@ pub(super) fn parse_configuration(
                         byte_column: None,
                     }),
                 ));
-            }
-            match name {
-                "表示するセーブデータ数" | "Save data count per page" => {
-                    if let Ok(value) = value.parse::<u32>() {
-                        config.save_slot_count = value.clamp(20, 80);
-                    }
-                    continue;
-                }
-                "ウィンドウ幅" | "Window width" => {
-                    if let Ok(value) = value.parse::<u32>() {
-                        config.viewport_width = value.max(128);
-                    }
-                    continue;
-                }
-                "ウィンドウ高さ" | "Window height" => {
-                    if let Ok(value) = value.parse::<u32>() {
-                        config.viewport_height = value.max(128);
-                    }
-                    continue;
-                }
-                "フォントサイズ" | "Font size" => {
-                    if let Ok(value) = value.parse::<u32>() {
-                        config.font_size = value.max(8);
-                    }
-                    continue;
-                }
-                "一行の高さ" | "Line height" => {
-                    if let Ok(value) = value.parse::<u32>() {
-                        config.line_height = value.max(config.font_size);
-                    }
-                    continue;
-                }
-                "PRINTCを並べる数" | "Items per line for PRINTC" => {
-                    if let Ok(value) = value.parse::<u32>() {
-                        config.print_c_per_line = value.max(1);
-                    }
-                    continue;
-                }
-                "PRINTCの文字数" | "Number of Item characters for PRINTC" => {
-                    if let Ok(value) = value.parse::<u32>() {
-                        config.print_c_length = value.max(1);
-                    }
-                    continue;
-                }
-                _ => {}
-            }
-            let Some(boolean) = parse_bool(value) else {
-                continue;
-            };
-            match name {
-                "大文字小文字の違いを無視する" | "Ignore case" => {
-                    config.csv.ignore_case = boolean;
-                    config.analyzer.ignore_case = boolean;
-                }
-                "_Rename.csvを利用する" | "Use _Rename.csv file" => {
-                    config.csv.use_rename_file = boolean;
-                }
-                "_Replace.csvを利用する" | "Use _Replace.csv file" => {
-                    config.csv.use_replace_file = boolean;
-                }
-                "サブディレクトリを検索する" | "Search subfolders" => {
-                    config.csv.search_subdirectories = boolean;
-                }
-                "読み込み順をファイル名順にソートする" | "Sort filenames" => {
-                    config.csv.sort_with_filename = boolean;
-                    config.analyzer.sort_with_filename = boolean;
-                }
-                "全角スペースをホワイトスペースに含める"
-                | "Whitespace includes full-width space" => {
-                    config.csv.allow_full_width_space = boolean;
-                    config.analyzer.allow_full_width_space = boolean;
-                }
-                "SPキャラを使用する" | "Allow SP characters" => {
-                    config.csv.compatible_sp_character = boolean;
-                }
-                "ERD機能を利用する" | "Use ERD" => {
-                    config.csv.use_erd = boolean;
-                    config.analyzer.use_erd = boolean;
-                }
-                "イベント関数のCALLを許可する" | "Allow CALL on event functions" => {
-                    config.analyzer.compatible_call_event = boolean;
-                }
-                "ユーザー関数の全ての引数の省略を許可する"
-                | "Allow arguments omission for user functions" => {
-                    config.analyzer.compatible_function_argument_optional = boolean;
-                }
-                "ユーザー関数の引数に自動的にTOSTRを補完する"
-                | "Auto TOSTR conversion for user function arguments" => {
-                    config.analyzer.compatible_function_argument_auto_convert = boolean;
-                }
-                "UseNewRandom" | "新しい高速な乱数アルゴリズムを使う" => {
-                    config.use_new_random = boolean;
-                }
-                "オートセーブを行なう" | "Make autosaves" => config.auto_save = boolean,
-                "Ctrl-Zで元に戻す機能を有効にする" | "Enable undo with ctrl-z" => {
-                    config.ctrl_z_enabled = boolean;
-                }
-                "ONEINPUT系命令でマウスによる2文字以上の入力を許可する"
-                | "Allow long input by mouse for ONEINPUT" => {
-                    config.allow_long_input_by_activation = boolean;
-                }
-                "セーブデータをバイナリ形式で保存する"
-                | "Use the binary format for saving data" => config.save_in_binary = boolean,
-                "セーブデータを圧縮して保存する" | "Compress save data" => {
-                    config.compress_save = boolean;
-                }
-                _ => {}
             }
         }
     }
@@ -413,6 +325,14 @@ fn is_fixed_configuration(path: &str) -> bool {
     )
 }
 
+fn parse_boolean(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "YES" | "TRUE" | "1" => Some(true),
+        "NO" | "FALSE" | "0" => Some(false),
+        _ => None,
+    }
+}
+
 pub(super) fn sync_replace_configuration(
     store: &mut ConfigStore,
     replace: &erabasic_data::ReplaceSettings,
@@ -470,13 +390,5 @@ pub(super) fn sync_replace_configuration(
     ];
     for (name, value) in values {
         let _ = store.apply(name, &value, false);
-    }
-}
-
-fn parse_bool(value: &str) -> Option<bool> {
-    match value.to_ascii_uppercase().as_str() {
-        "YES" | "TRUE" | "1" => Some(true),
-        "NO" | "FALSE" | "0" => Some(false),
-        _ => None,
     }
 }
