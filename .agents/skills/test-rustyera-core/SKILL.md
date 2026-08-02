@@ -5,6 +5,21 @@ description: Validate changes in the rustyera-core repository with scope-appropr
 
 # Test RustyEra Core
 
+## Enforce the task budget
+
+- Start one shared 60-minute wall-clock budget when the task's first test command starts. Include
+  every later test, targeted rerun, end-to-end wait, and test-failure investigation in that budget;
+  no command timeout may exceed the remaining time.
+- Start each distinct full test suite at most once per task. If it exposes a failure, repair it and
+  rerun only the smallest directly affected test target, never the full suite again. Report the
+  original full-suite result separately from the targeted post-fix result.
+- Every end-to-end, long-running, and reference-oracle flow must emit a complete observable-state
+  snapshot every 5 seconds. Include every HTML element when an HTML client is involved. Compare
+  snapshots without timestamps and other reporting-only metadata; if two consecutive snapshots
+  are identical, immediately terminate the flow as stalled and report the error.
+- At the 60-minute deadline, terminate all test processes and report the active command, exact
+  case or stage, last snapshot, elapsed time, completed checks, and unverified checks.
+
 ## Select the scope
 
 - For Rust implementation changes, run the complete ordered workflow below.
@@ -24,11 +39,12 @@ these gates in order, stopping at the first failure:
 2. `cargo check --workspace --all-targets`
 3. `cargo clippy --workspace --all-targets -- -D warnings`
 4. The smallest Rust regression test that covers the change
-5. `cargo test --workspace`
+5. `cargo test --workspace` (once only)
 
 Do not run the full workspace tests until formatting, compilation, Clippy, and the minimal
-regression test pass. Report failures without editing anything; fix them separately and then rerun
-the affected gates.
+regression test pass. If the one full workspace run fails, report it, fix the problem separately,
+and rerun only the affected package, test binary, module, or named tests. Never rerun
+`cargo test --workspace` in the same task.
 
 Do not use a C# oracle test as a replacement for a Rust implementation test.
 
@@ -57,7 +73,8 @@ under `.wine-tmp/emuera-reference-cli`.
 
 Treat timeout, empty output, premature exit, and protocol errors as reference CLI defects. Do not
 skip the oracle and claim validation. Diagnose and repair the CLI first within the authorization
-in `AGENTS.md`, then rerun the failing request and the complete platform smoke test.
+in `AGENTS.md`, then rerun only the failing request or directly affected smoke case. The complete
+platform smoke test must not be run a second time in the same task.
 
 If the repair touches `../emuera.em`, also verify that a normal Emuera project still compiles and
 append the required entry to `emuera-reference-cli/REFERENCE_CHANGES.md`.
