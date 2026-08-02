@@ -7,6 +7,10 @@ description: Validate changes in the rustyera-core repository with scope-appropr
 
 ## Enforce the task budget
 
+- Before starting any test command, confirm that any required refactoring subagent has completed
+  its single permitted run and that every requirement it reported has been implemented. Refuse to
+  start testing while any refactoring requirement remains. Once the first test starts, never spawn,
+  resume, follow up with, or rerun a refactoring subagent during that task.
 - Start one shared 60-minute wall-clock budget when the task's first test command starts. Include
   every later test, targeted rerun, end-to-end wait, and test-failure investigation in that budget;
   no command timeout may exceed the remaining time.
