@@ -80,6 +80,7 @@ impl RuntimeSession {
             frontend_time_origin: None,
             random_seed: None,
             negotiated_features: BTreeSet::new(),
+            configuration_profile: ConfigurationClientProfile::Reference,
             inbound: VecDeque::new(),
             outbound: VecDeque::new(),
             outbound_journal: BTreeMap::new(),
@@ -133,6 +134,7 @@ impl RuntimeSession {
             undo_replay: None,
             undo_token: None,
             project_snapshot: None,
+            pending_configuration_update: None,
             selected_locale: "ja".into(),
             available_fonts: BTreeSet::new(),
             service_capabilities: BTreeMap::new(),
@@ -426,6 +428,21 @@ impl RuntimeSession {
                 "state-changing runtime messages are suspended by a debugger stop",
             );
         }
+        if self.pending_configuration_update.is_some()
+            && matches!(
+                &message,
+                RuntimeMessage::ProjectManifest(_)
+                    | RuntimeMessage::ProjectLoad(_)
+                    | RuntimeMessage::ReloadProject(_)
+                    | RuntimeMessage::ExtensionRegistrySubmit(_)
+            )
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "project mutation is suspended while a configuration update is pending",
+            );
+        }
         match message {
             RuntimeMessage::ProjectManifest(manifest) => {
                 let identity = crate::compiled_cache::project_identity(&manifest);
@@ -502,6 +519,9 @@ impl RuntimeSession {
             RuntimeMessage::PrepareConfigurationUpdate(request) => {
                 self.prepare_configuration_update(message_id, &request)
             }
+            RuntimeMessage::FinalizeConfigurationUpdate(request) => {
+                self.finalize_configuration_update(message_id, request)
+            }
             RuntimeMessage::ShutdownRequest(_) => self.shutdown(message_id),
             RuntimeMessage::Acknowledge(ack) => {
                 self.outbound_journal
@@ -518,6 +538,7 @@ impl RuntimeSession {
             | RuntimeMessage::ProjectLoadReport(_)
             | RuntimeMessage::ProjectAnalysisReport(_)
             | RuntimeMessage::ConfigurationUpdatePrepared(_)
+            | RuntimeMessage::ConfigurationUpdateCommitted(_)
             | RuntimeMessage::KeyMacroStateChanged(_)
             | RuntimeMessage::StateChanged(_)
             | RuntimeMessage::ExitRequested(_)

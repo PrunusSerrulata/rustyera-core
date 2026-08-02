@@ -228,7 +228,7 @@ impl PresentationModel {
             LogicalLength(i64::from(project.line_height).saturating_mul(1_000));
         self.settings.maximum_physical_lines = integer("MaxLog")
             .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(5_000);
+            .map_or(5_000, |value| value.max(500));
         self.settings.prevent_button_wrap = boolean("ButtonWrap").unwrap_or(false);
         self.settings.legacy_nonbutton_wrap = boolean("CompatiLinefeedAs1739").unwrap_or(false);
         self.default_style.font_family = font;
@@ -241,6 +241,7 @@ impl PresentationModel {
             rgb_color(i64::from(color("FocusColor").unwrap_or(0x00ff_ff00)));
         self.current_style = self.default_style.clone();
         self.print_c_length = project.print_c_length.max(1);
+        self.trim_physical_history();
         self.delivery.dirty.settings = true;
         self.bump();
     }

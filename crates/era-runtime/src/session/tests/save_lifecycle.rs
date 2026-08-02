@@ -15,6 +15,7 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
                 requested_limits: RuntimeOptions::default().limits,
                 capabilities: capabilities(),
                 preferred_locales: vec!["en-US".into()],
+                configuration_profile: None,
             }),
         );
         session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -464,6 +465,7 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -650,6 +652,7 @@ fn project_title_can_open_loadgame() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -713,6 +716,7 @@ fn vm_snapshot_export_accepts_a_runtime_owned_system_wait() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -791,6 +795,7 @@ fn savedata_uses_atomic_frontend_storage_and_resumes_only_after_completion() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();

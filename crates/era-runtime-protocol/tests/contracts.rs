@@ -4,15 +4,19 @@ use era_protocol::{
 };
 use era_runtime_protocol::{
     AdvanceTime, AudioEffect, AudioEffectAction, CanvasPixelRequest, CanvasReplay,
-    CanvasReplayCommand, CanvasSize, DisplayRun, EffectAcknowledgement, EffectBatch, EffectEvent,
-    EffectKind, EffectOutcome, EffectOutcomeStatus, ExitReason, ExitRequested, FrontendInput,
-    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
-    GetKeyStateResponse, InputIntent, InputUndoRequest, InputUndoState, InteractionToken,
-    KeyMacroCommand, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
-    PointerStateResponse, PresentationDelta, PresentationOperation, PrimitiveInput,
-    ProjectLoadRequest, ProjectManifest, ProjectionLength, ProjectionObservation,
-    ProjectionQueryContext, ProjectionSize, ProjectionTransform, RUNTIME_PROTOCOL_VERSION,
-    RedrawState, ResourceReplay, ReturnToTitleRequest, RuntimeLog, RuntimeLogLevel, RuntimeMessage,
+    CanvasReplayCommand, CanvasSize, ConfigurationApplication, ConfigurationChange,
+    ConfigurationClientProfile, ConfigurationUpdateCommitted, ConfigurationUpdateOutcome,
+    ConfigurationValueKind, DisplayRun, EffectAcknowledgement, EffectBatch, EffectEvent,
+    EffectKind, EffectOutcome, EffectOutcomeStatus, ExitReason, ExitRequested,
+    FinalizeConfigurationUpdate, FrontendInput, GET_KEY_STATE_OPERATION,
+    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
+    InputUndoRequest, InputUndoState, InteractionToken, KeyMacroCommand, POINTER_STATE_OPERATION,
+    POINTER_STATE_OPERATION_VERSION, PointerStateRequest, PointerStateResponse,
+    PrepareConfigurationUpdate, PresentationDelta, PresentationOperation, PrimitiveInput,
+    ProjectConfigurationEntry, ProjectConfigurationSnapshot, ProjectLoadRequest, ProjectManifest,
+    ProjectionLength, ProjectionObservation, ProjectionQueryContext, ProjectionSize,
+    ProjectionTransform, RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay,
+    ReturnToTitleRequest, RuntimeLog, RuntimeLogLevel, RuntimeMessage,
     SAMPLE_CANVAS_PIXEL_OPERATION, ServiceKind, ServiceRequest, SnapshotExportPurpose,
     StateExportChunkRequest, StateExportKind, StateExportRequest, StateImportBegin,
     StorageNamespace, StorageOperation, StorageRequest, TextExtentRequest, parse_document,
@@ -141,6 +145,66 @@ fn protocol_23_carries_compiled_cache_loads_and_in_session_title_returns() {
         23
     );
     assert_eq!(StateExportKind::CompiledProjectCache as u8, 2);
+}
+
+#[test]
+fn protocol_25_round_trips_configuration_profile_transactions() {
+    assert_eq!(
+        decode_canonical::<ConfigurationClientProfile>(
+            &encode_canonical(&ConfigurationClientProfile::Tui).unwrap()
+        ),
+        Ok(ConfigurationClientProfile::Tui)
+    );
+    let digest = ProtocolBytes::new(vec![7; 32]);
+    let prepare = RuntimeMessage::PrepareConfigurationUpdate(PrepareConfigurationUpdate {
+        project_revision: 9,
+        expected_source_digest: digest.clone(),
+        changes: vec![ConfigurationChange {
+            code: "MaxLog".into(),
+            value: "1200".into(),
+        }],
+    });
+    assert_eq!(prepare.tag(), 24);
+    assert_eq!(
+        RuntimeMessage::decode_payload(24, &prepare.encode_payload().unwrap()),
+        Ok(prepare)
+    );
+
+    let finalize = RuntimeMessage::FinalizeConfigurationUpdate(FinalizeConfigurationUpdate {
+        preparation_message_id: 10,
+        outcome: ConfigurationUpdateOutcome::Commit,
+    });
+    assert_eq!(finalize.tag(), 26);
+    assert_eq!(
+        RuntimeMessage::decode_payload(26, &finalize.encode_payload().unwrap()),
+        Ok(finalize)
+    );
+
+    let committed = RuntimeMessage::ConfigurationUpdateCommitted(ConfigurationUpdateCommitted {
+        configuration: ProjectConfigurationSnapshot {
+            project_revision: 9,
+            source_digest: digest,
+            entries: vec![ProjectConfigurationEntry {
+                code: "MaxLog".into(),
+                japanese: "履歴ログの行数".into(),
+                english: "Maximum log lines".into(),
+                value: "1200".into(),
+                kind: ConfigurationValueKind::Integer,
+                allowed: Vec::new(),
+                fixed: false,
+                applicability: 3,
+                default_value: "1000".into(),
+                effective_value: "1200".into(),
+                application: ConfigurationApplication::Hot,
+            }],
+            restart_pending: false,
+        },
+    });
+    assert_eq!(committed.tag(), 27);
+    assert_eq!(
+        RuntimeMessage::decode_payload(27, &committed.encode_payload().unwrap()),
+        Ok(committed)
+    );
 }
 
 #[test]

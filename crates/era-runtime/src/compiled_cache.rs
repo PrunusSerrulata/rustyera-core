@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use era_protocol::ProtocolBytes;
 use era_runtime_protocol::{
-    ExtensionDeclaration, FileCategory, FilePayload, ProjectIdentity, ProjectManifest,
-    ProtocolDiagnostic, SubmittedFile, validate_relative_path,
+    ConfigurationClientProfile, ExtensionDeclaration, FileCategory, FilePayload, ProjectIdentity,
+    ProjectManifest, ProtocolDiagnostic, SubmittedFile, validate_relative_path,
 };
 use erabasic_bytecode::{
     ArtifactManifest, BytecodeArtifact, BytecodeCallCompatibility, BytecodeEventGroup,
@@ -24,7 +24,7 @@ const MAGIC: &[u8; 8] = b"RERAPROJ";
 // increment it whenever compiler, analyzer or project-loading behavior can change an
 // unchanged source's artifact. Older project files are then rejected instead of being used
 // as an incremental compilation seed.
-const VERSION: u8 = 3;
+const VERSION: u8 = 4;
 const COMPRESSION_LEVEL: i32 = 3;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -95,6 +95,7 @@ pub(crate) struct CompiledSnapshotMetadata {
     line_height: u32,
     print_c_per_line: u32,
     print_c_length: u32,
+    configuration_profile: ConfigurationClientProfile,
     configuration: erabasic_config::ConfigStore,
     editable_configuration: erabasic_config::ConfigStore,
     extensions: std::collections::BTreeMap<String, ExtensionDeclaration>,
@@ -122,6 +123,7 @@ impl From<&NormalizedProjectSnapshot> for CompiledSnapshotMetadata {
             line_height: snapshot.line_height,
             print_c_per_line: snapshot.print_c_per_line,
             print_c_length: snapshot.print_c_length,
+            configuration_profile: snapshot.configuration_profile,
             configuration: snapshot.configuration.clone(),
             editable_configuration: snapshot.editable_configuration.clone(),
             extensions: snapshot.extensions.clone(),
@@ -160,6 +162,7 @@ impl CompiledSnapshotMetadata {
             line_height: self.line_height,
             print_c_per_line: self.print_c_per_line,
             print_c_length: self.print_c_length,
+            configuration_profile: self.configuration_profile,
             configuration: self.configuration,
             editable_configuration: self.editable_configuration,
             extensions: self.extensions,
@@ -218,11 +221,16 @@ pub struct DecodedProjectFile {
 pub(crate) fn project_key(
     identity: &ProjectIdentity,
     extensions: &[ExtensionDeclaration],
+    configuration_profile: ConfigurationClientProfile,
 ) -> [u8; 32] {
     let mut writer = HashWriter::new("rustyera.compiled-project-key.v2");
     serde_json::to_writer(
         &mut writer,
-        &(identity.source_digest.as_slice(), extensions),
+        &(
+            identity.source_digest.as_slice(),
+            extensions,
+            configuration_profile,
+        ),
     )
     .expect("project cache identity values are serializable");
     writer.finish()
@@ -318,6 +326,7 @@ fn encode_inner(
     if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return Err("compiled cache build cancelled".into());
     }
+    let configuration_profile = snapshot.configuration_profile;
     let artifact = artifact.artifact();
     let function_indices = artifact
         .functions
@@ -421,6 +430,7 @@ fn encode_inner(
         &mut output,
         &identity,
         extensions,
+        configuration_profile,
         function_sections.len(),
         source_sections.len(),
     )?;
@@ -445,6 +455,7 @@ fn encode_project_file_header(
     output: &mut Vec<u8>,
     identity: &ProjectIdentity,
     extensions: &[ExtensionDeclaration],
+    configuration_profile: ConfigurationClientProfile,
     function_sections: usize,
     source_sections: usize,
 ) -> Result<(), String> {
@@ -457,7 +468,7 @@ fn encode_project_file_header(
     output.push(VERSION);
     output.extend_from_slice(&identity.project_revision.to_le_bytes());
     output.extend_from_slice(&source_digest);
-    output.extend_from_slice(&project_key(identity, extensions));
+    output.extend_from_slice(&project_key(identity, extensions, configuration_profile));
     output.extend_from_slice(
         &u32::try_from(function_sections)
             .map_err(|_| "compiled cache has too many function sections")?

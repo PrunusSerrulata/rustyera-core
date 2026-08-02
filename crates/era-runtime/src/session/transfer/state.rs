@@ -297,6 +297,12 @@ impl RuntimeSession {
             .project_snapshot
             .as_ref()
             .ok_or_else(|| "compiled cache build has no project snapshot".to_owned())?;
+        if snapshot.configuration_snapshot().restart_pending {
+            return Err(
+                "compiled cache build requires restarting to apply pending configuration"
+                    .to_owned(),
+            );
+        }
         let manifest = Arc::clone(&snapshot.manifest);
         let snapshot = crate::compiled_cache::CompiledSnapshotMetadata::from(snapshot);
         let extensions = self.extension_declarations.clone();

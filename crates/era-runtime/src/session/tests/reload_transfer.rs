@@ -23,6 +23,7 @@ fn project_resource_metadata_requests_respect_pending_request_backpressure() {
             requested_limits,
             capabilities: client,
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();

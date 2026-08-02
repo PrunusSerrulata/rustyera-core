@@ -32,6 +32,7 @@ fn semantic_configuration_is_applied_and_new_random_warns_once() {
             "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nImitate ERD to VARSIZE dimension specification:YES\nText color:1,2,3\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
         )],
         &mut diagnostics,
+        ConfigurationClientProfile::Reference,
     );
     assert!(config.csv.sort_with_filename);
     assert!(!config.csv.ignore_case);
@@ -72,6 +73,7 @@ fn setting_json_only_applies_reference_setting_fields() {
             r#"{"UseNewRandom":true,"UseMouse":false,"AllowLongInputByMouse":true,"WindowWidth":1200,"FontSize":21,"LineHeight":19,"CompatiCallEvent":true,"CompatiFuncArgOptional":true,"CompatiFuncArgAutoConvert":true}"#,
         )],
         &mut diagnostics,
+        ConfigurationClientProfile::Reference,
     );
     assert!(config.use_new_random);
     assert!(!config.allow_long_input_by_activation);
@@ -285,6 +287,7 @@ fn analysis_selection_checks_unreachable_code_without_loading_a_project() {
             debug_mode: true,
         },
         &[],
+        ConfigurationClientProfile::Reference,
     );
     assert!(report.success, "{:?}", report.diagnostics);
     assert_eq!(report.analyzed_erb_paths, vec!["good.erb"]);
@@ -454,6 +457,7 @@ fn project_build_reports_real_workload_progress() {
         None,
         None,
         &[],
+        ConfigurationClientProfile::Reference,
         Some(&reporter),
     );
     assert!(build.report.success, "{:?}", build.report.diagnostics);

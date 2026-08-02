@@ -117,6 +117,7 @@ fn handshake_selects_only_implemented_features() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("drive");
@@ -298,6 +299,7 @@ fn portable_extension_service_validates_return_and_mutable_writes() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: client_capabilities,
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -423,6 +425,7 @@ fn html_layout_query_is_revision_bound_and_commits_after_service_response() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: client_capabilities,
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -519,6 +522,7 @@ fn ggetcolor_rejects_negative_y_without_frontend_raster_observation() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: client_capabilities,
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -584,6 +588,7 @@ fn gsave_without_canvas_encoder_returns_failure_and_continues() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: client_capabilities,
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -650,6 +655,7 @@ fn portable_graphics_and_textbox_compatibility_paths_are_runtime_owned() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: client_capabilities,
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -767,6 +773,7 @@ fn invalid_host_file_paths_return_reference_failure_values() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();

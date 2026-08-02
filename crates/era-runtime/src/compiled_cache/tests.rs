@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use era_runtime_protocol::{FileCategory, FilePayload, SubmittedFile};
+use era_runtime_protocol::{ConfigurationClientProfile, FileCategory, FilePayload, SubmittedFile};
 
 use super::*;
 
@@ -35,8 +35,15 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
 
     assert_eq!(&bytes[..8], b"RERAPROJ");
-    assert_eq!(bytes[8], 3);
-    assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
+    assert_eq!(bytes[8], 4);
+    assert_eq!(
+        decoded.key,
+        project_key(
+            &project_identity(&project),
+            &[],
+            ConfigurationClientProfile::Reference,
+        )
+    );
     assert_eq!(decoded_file.identity, project_identity(&project));
     assert_eq!(decoded_file.manifest, project);
     assert_eq!(decoded.diagnostics, build.report.diagnostics);
@@ -59,17 +66,39 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
             .all(|fingerprint| fingerprint.0[16..] == [0; 16])
     );
     assert_eq!(
-        project_key(&project_identity(&project), &[]),
+        project_key(
+            &project_identity(&project),
+            &[],
+            ConfigurationClientProfile::Reference,
+        ),
         project_key(
             &project_identity(&manifest("@SYSTEM_TITLE\nRETURN\n", 9)),
-            &[]
+            &[],
+            ConfigurationClientProfile::Reference,
         )
     );
     assert_ne!(
-        project_key(&project_identity(&project), &[]),
+        project_key(
+            &project_identity(&project),
+            &[],
+            ConfigurationClientProfile::Reference,
+        ),
         project_key(
             &project_identity(&manifest("@SYSTEM_TITLE\nPRINTL changed\nRETURN\n", 1)),
-            &[]
+            &[],
+            ConfigurationClientProfile::Reference,
+        )
+    );
+    assert_ne!(
+        project_key(
+            &project_identity(&project),
+            &[],
+            ConfigurationClientProfile::Reference,
+        ),
+        project_key(
+            &project_identity(&project),
+            &[],
+            ConfigurationClientProfile::Tui,
         )
     );
 }

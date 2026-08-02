@@ -25,15 +25,30 @@ impl RuntimeSession {
                 "configuration source changed since the preferences dialog was opened",
             );
         }
+        if self.pending_configuration_update.is_some() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "a configuration update is already pending",
+            );
+        }
+        let transactional = self.configuration_profile == ConfigurationClientProfile::Tui;
         let editable = current
             .entries
             .iter()
-            .map(|entry| entry.code.to_ascii_uppercase())
-            .collect::<BTreeSet<_>>();
+            .filter(|entry| !transactional || entry.applicability & CONFIG_TUI != 0)
+            .map(|entry| (entry.code.to_ascii_uppercase(), entry))
+            .collect::<BTreeMap<_, _>>();
         let mut values = snapshot.editable_configuration.clone();
         for change in &request.changes {
-            if !editable.contains(&change.code.to_ascii_uppercase())
-                || values.is_fixed(&change.code)
+            if !editable.contains_key(&change.code.to_ascii_uppercase()) {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "configuration update contains an unsupported, fixed, or invalid value",
+                );
+            }
+            if values.is_fixed(&change.code)
                 || values
                     .apply_regular(&change.code, &change.value, false)
                     .is_err()
@@ -45,15 +60,139 @@ impl RuntimeSession {
                 );
             }
         }
+        let changed_codes = editable
+            .values()
+            .filter(|entry| {
+                values
+                    .get_code(&entry.code)
+                    .is_some_and(|value| value.config_text() != entry.value)
+            })
+            .map(|entry| entry.code.clone())
+            .collect::<BTreeSet<_>>();
+        let restart_required = editable.values().any(|entry| {
+            changed_codes.contains(&entry.code)
+                && entry.application == ConfigurationApplication::Restart
+        });
+        let contents = values.serialize_regular();
+        let prepared_source_digest =
+            ProtocolBytes::new(blake3::hash(contents.as_bytes()).as_bytes().to_vec());
+        if transactional {
+            self.pending_configuration_update = Some(PendingConfigurationUpdate {
+                preparation_message_id: message_id,
+                project_revision: current.project_revision,
+                expected_source_digest: current.source_digest.clone(),
+                prepared_source_digest: prepared_source_digest.clone(),
+                contents: contents.clone(),
+                values,
+                changed_codes,
+            });
+        }
         self.emit(
             RuntimeMessage::ConfigurationUpdatePrepared(ConfigurationUpdatePrepared {
                 project_revision: current.project_revision,
                 expected_source_digest: current.source_digest,
-                contents: values.serialize_regular(),
-                restart_required: true,
+                contents,
+                restart_required: if transactional {
+                    restart_required
+                } else {
+                    true
+                },
+                prepared_source_digest,
             }),
             Some(message_id),
         )
+    }
+
+    pub(in super::super) fn finalize_configuration_update(
+        &mut self,
+        message_id: u64,
+        request: FinalizeConfigurationUpdate,
+    ) -> Result<(), RuntimeError> {
+        let Some(pending) = self.pending_configuration_update.take() else {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "configuration update finalization has no prepared transaction",
+            );
+        };
+        if pending.preparation_message_id != request.preparation_message_id {
+            self.pending_configuration_update = Some(pending);
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "configuration update finalization does not match the prepared transaction",
+            );
+        }
+        if request.outcome == ConfigurationUpdateOutcome::Abort {
+            let configuration = self
+                .project_snapshot
+                .as_ref()
+                .ok_or_else(|| RuntimeError::Internal("configuration project disappeared".into()))?
+                .configuration_snapshot();
+            return self.emit(
+                RuntimeMessage::ConfigurationUpdateCommitted(ConfigurationUpdateCommitted {
+                    configuration,
+                }),
+                Some(message_id),
+            );
+        }
+
+        let old_ctrl_z = self
+            .project_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.ctrl_z_enabled);
+        let current = self
+            .project_snapshot
+            .as_ref()
+            .ok_or_else(|| {
+                RuntimeError::Internal("configuration project disappeared before commit".into())
+            })?
+            .configuration_snapshot();
+        if current.project_revision != pending.project_revision
+            || current.source_digest != pending.expected_source_digest
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "configuration project changed before commit",
+            );
+        }
+        let configuration = {
+            let snapshot = self.project_snapshot.as_mut().ok_or_else(|| {
+                RuntimeError::Internal("configuration project disappeared before commit".into())
+            })?;
+            commit_configuration_manifest(
+                snapshot,
+                &pending.contents,
+                &pending.prepared_source_digest,
+            );
+            snapshot.editable_configuration = pending.values;
+            apply_hot_configuration(snapshot, &pending.changed_codes);
+            snapshot.configuration_snapshot()
+        };
+        self.presentation.configure_project(
+            self.project_snapshot
+                .as_ref()
+                .expect("configuration project remains loaded after commit"),
+        );
+        self.compiled_project_cache = None;
+        self.compiled_cache_task = None;
+        self.compiled_cache_failure = None;
+        if old_ctrl_z
+            && self
+                .project_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| !snapshot.ctrl_z_enabled)
+        {
+            self.invalidate_input_undo(Some("Ctrl-Z was disabled by a hot configuration update"))?;
+        }
+        self.emit(
+            RuntimeMessage::ConfigurationUpdateCommitted(ConfigurationUpdateCommitted {
+                configuration,
+            }),
+            Some(message_id),
+        )?;
+        self.emit_presentation()
     }
 
     pub(in super::super) fn observe_projection(
@@ -160,6 +299,12 @@ impl RuntimeSession {
             .filter(|feature| hello.features.contains(feature))
             .collect();
         self.negotiated_features = features.iter().copied().collect();
+        let configuration_profile = match hello.configuration_profile {
+            Some(ConfigurationClientProfile::Tui) => Some(ConfigurationClientProfile::Tui),
+            _ => None,
+        };
+        self.configuration_profile =
+            configuration_profile.unwrap_or(ConfigurationClientProfile::Reference);
         let selected_capabilities = selected_capabilities(&hello.capabilities);
         self.service_capabilities = selected_capabilities
             .services
@@ -194,6 +339,7 @@ impl RuntimeSession {
                 epoch: self.epoch.0,
                 selected_capabilities,
                 selected_locale: self.selected_locale.clone(),
+                configuration_profile,
             }),
             Some(message_id),
         )?;
@@ -233,6 +379,7 @@ impl RuntimeSession {
         let report = crate::project::analyze_submitted_project_with_extensions(
             request,
             &self.extension_declarations,
+            self.configuration_profile,
         );
         self.emit(
             RuntimeMessage::ProjectAnalysisReport(report),
@@ -587,8 +734,11 @@ impl RuntimeSession {
                     }
                 },
             );
-        let expected_key =
-            crate::compiled_cache::project_key(&request.identity, &self.extension_declarations);
+        let expected_key = crate::compiled_cache::project_key(
+            &request.identity,
+            &self.extension_declarations,
+            self.configuration_profile,
+        );
         let mut build = match cached {
             Some(exact) if exact.key == expected_key => {
                 exact_cached_project(exact, request.identity.project_revision)
@@ -647,6 +797,7 @@ impl RuntimeSession {
                     Some(previous_incremental),
                     previous_artifact,
                     &self.extension_declarations,
+                    self.configuration_profile,
                     self.project_progress_reporter.as_ref(),
                 )
             }
@@ -752,6 +903,7 @@ impl RuntimeSession {
             Some(&self.incremental),
             previous_artifact,
             &self.extension_declarations,
+            self.configuration_profile,
             self.project_progress_reporter.as_ref(),
         );
         if !build.report.success {
@@ -904,6 +1056,67 @@ impl RuntimeSession {
         self.set_phase(previous_phase)?;
         self.renew_debug_grant()?;
         self.emit_presentation()
+    }
+}
+
+fn commit_configuration_manifest(
+    snapshot: &mut NormalizedProjectSnapshot,
+    contents: &str,
+    digest: &ProtocolBytes,
+) {
+    let manifest = Arc::make_mut(&mut snapshot.manifest);
+    if let Some(file) = manifest
+        .files
+        .iter_mut()
+        .find(|file| crate::project::is_root_configuration_file(file))
+    {
+        file.payload = FilePayload::Utf8(contents.into());
+        file.content_hash = Some(digest.clone());
+    } else {
+        manifest.files.push(era_runtime_protocol::SubmittedFile {
+            relative_path: "emuera.config".into(),
+            category: FileCategory::Configuration,
+            payload: FilePayload::Utf8(contents.into()),
+            content_hash: Some(digest.clone()),
+        });
+    }
+}
+
+fn apply_hot_configuration(
+    snapshot: &mut NormalizedProjectSnapshot,
+    changed_codes: &BTreeSet<String>,
+) {
+    for code in changed_codes {
+        if erabasic_config::tui_application(code) != Some(erabasic_config::ConfigApplication::Hot) {
+            continue;
+        }
+        let value = snapshot
+            .editable_configuration
+            .get_code(code)
+            .expect("prepared configuration retained a changed value")
+            .config_text();
+        snapshot
+            .configuration
+            .apply_regular(code, &value, false)
+            .expect("a prepared configuration value remains valid");
+    }
+
+    let boolean = |code| match snapshot.configuration.get_code(code) {
+        Some(erabasic_config::ConfigValue::Boolean(value)) => Some(*value),
+        _ => None,
+    };
+    let integer = |code| match snapshot.configuration.get_code(code) {
+        Some(erabasic_config::ConfigValue::Integer(value)) => Some(*value),
+        _ => None,
+    };
+    snapshot.ctrl_z_enabled = boolean("Ctrl_Z_Enabled").unwrap_or(snapshot.ctrl_z_enabled);
+    snapshot.allow_long_input_by_activation =
+        boolean("AllowLongInputByMouse").unwrap_or(snapshot.allow_long_input_by_activation);
+    if let Some(value) = integer("PrintCPerLine").and_then(|value| u32::try_from(value).ok()) {
+        snapshot.print_c_per_line = value.max(1);
+    }
+    if let Some(value) = integer("PrintCLength").and_then(|value| u32::try_from(value).ok()) {
+        snapshot.print_c_length = value.max(1);
     }
 }
 

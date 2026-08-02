@@ -86,6 +86,12 @@ pub enum ConfigClient {
     Tauri,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfigApplication {
+    Hot,
+    Restart,
+}
+
 #[derive(Clone, Debug)]
 pub struct ConfigSpec {
     pub code: &'static str,
@@ -271,33 +277,87 @@ pub fn catalog() -> Vec<ConfigSpec> {
 fn clients(code: &str, effect: ConfigEffect) -> &'static [ConfigClient] {
     use ConfigClient::{Browser, Runtime, Tauri, Tui};
     match effect {
-        ConfigEffect::PortableSemantic => &[Runtime, Tui, Browser, Tauri],
+        ConfigEffect::PortableSemantic if tui_configurable(code) => &[Runtime, Tui, Browser, Tauri],
+        ConfigEffect::PortableSemantic => &[Runtime, Browser, Tauri],
         ConfigEffect::UnsupportedPlatformIntegration => &[],
         ConfigEffect::QueryOnlyClientPreference => match code {
             "WindowPosX" | "WindowPosY" | "SetWindowPos" | "WindowMaximixed" | "SizableWindow" => {
                 &[Tauri]
             }
             "UseMouse"
-            | "UseMenu"
-            | "WindowX"
-            | "WindowY"
-            | "MaxLog"
-            | "FontName"
-            | "FontSize"
-            | "LineHeight"
+            | "ButtonWrap"
             | "ForeColor"
             | "BackColor"
             | "FocusColor"
-            | "LogColor"
-            | "FPS"
-            | "SkipFrame"
-            | "ScrollHeight"
-            | "DisplayReport"
-            | "ButtonWrap"
-            | "UseSaveFolder"
             | "EnglishConfigOutput" => &[Tui, Browser, Tauri],
+            "UseMenu" | "WindowX" | "WindowY" | "FontName" | "FontSize" | "LineHeight"
+            | "LogColor" | "FPS" | "SkipFrame" | "ScrollHeight" | "DisplayReport"
+            | "UseSaveFolder" => &[Browser, Tauri],
             _ => &[],
         },
+    }
+}
+
+/// Whether the Textual frontend exposes this effective setting.
+#[must_use]
+pub fn tui_configurable(code: &str) -> bool {
+    tui_application(code).is_some()
+}
+
+/// Textual frontend defaults applied before project configuration files.
+#[must_use]
+pub fn tui_default(code: &str) -> Option<ConfigValue> {
+    match code {
+        "MaxLog" => Some(ConfigValue::Integer(1_000)),
+        "PrintCPerLine" => Some(ConfigValue::Integer(5)),
+        "PrintCLength" => Some(ConfigValue::Integer(24)),
+        _ => None,
+    }
+}
+
+/// Application policy for settings visible in the Textual frontend.
+#[must_use]
+pub fn tui_application(code: &str) -> Option<ConfigApplication> {
+    match code {
+        "UseMouse"
+        | "AllowLongInputByMouse"
+        | "Ctrl_Z_Enabled"
+        | "MaxLog"
+        | "ButtonWrap"
+        | "CompatiLinefeedAs1739"
+        | "PrintCPerLine"
+        | "PrintCLength"
+        | "ForeColor"
+        | "BackColor"
+        | "FocusColor" => Some(ConfigApplication::Hot),
+        "UseRenameFile"
+        | "UseReplaceFile"
+        | "SearchSubdirectory"
+        | "SortWithFilename"
+        | "CompatiCALLNAME"
+        | "CompatiSPChara"
+        | "UseERD"
+        | "VarsizeDimConfig"
+        | "SystemAllowFullSpace"
+        | "useLanguage"
+        | "ReplaceContinuationBR"
+        | "IgnoreCase"
+        | "IgnoreUncalledFunction"
+        | "AllowFunctionOverloading"
+        | "WarnFunctionOverloading"
+        | "DisplayWarningLevel"
+        | "FunctionNotFoundWarning"
+        | "FunctionNotCalledWarning"
+        | "CompatiCallEvent"
+        | "CompatiFuncArgOptional"
+        | "CompatiFuncArgAutoConvert"
+        | "SystemIgnoreTripleSymbol"
+        | "AutoSave"
+        | "SaveDataNos"
+        | "SystemSaveInBinary"
+        | "ZipSaveData"
+        | "EnglishConfigOutput" => Some(ConfigApplication::Restart),
+        _ => None,
     }
 }
 
@@ -321,6 +381,18 @@ impl Default for ConfigStore {
 }
 
 impl ConfigStore {
+    /// Construct the catalog with Textual-specific defaults before project files apply.
+    #[must_use]
+    pub fn with_tui_defaults() -> Self {
+        let mut store = Self::default();
+        for spec in catalog() {
+            if let Some(value) = tui_default(spec.code) {
+                store.values.insert(spec.code.to_ascii_uppercase(), value);
+            }
+        }
+        store
+    }
+
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&ConfigValue> {
         let code = resolve_code(name)?;
@@ -541,6 +613,7 @@ fn parse_like(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn catalog_aliases_types_and_fixed_precedence_are_deterministic() {
@@ -589,19 +662,82 @@ mod tests {
             .into_iter()
             .find(|spec| spec.code == "FontSize")
             .unwrap();
-        assert_eq!(
-            font.clients,
-            &[
-                ConfigClient::Tui,
-                ConfigClient::Browser,
-                ConfigClient::Tauri
-            ]
-        );
+        assert_eq!(font.clients, &[ConfigClient::Browser, ConfigClient::Tauri]);
         let editor = catalog()
             .into_iter()
             .find(|spec| spec.code == "TextEditor")
             .unwrap();
         assert!(editor.clients.is_empty());
+    }
+
+    #[test]
+    fn tui_profile_has_exact_surface_defaults_and_application_policies() {
+        let exposed = catalog()
+            .into_iter()
+            .filter(|spec| spec.clients.contains(&ConfigClient::Tui))
+            .map(|spec| spec.code)
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            "AllowFunctionOverloading",
+            "AllowLongInputByMouse",
+            "AutoSave",
+            "BackColor",
+            "ButtonWrap",
+            "CompatiCALLNAME",
+            "CompatiCallEvent",
+            "CompatiFuncArgAutoConvert",
+            "CompatiFuncArgOptional",
+            "CompatiLinefeedAs1739",
+            "CompatiSPChara",
+            "Ctrl_Z_Enabled",
+            "DisplayWarningLevel",
+            "EnglishConfigOutput",
+            "FocusColor",
+            "ForeColor",
+            "FunctionNotCalledWarning",
+            "FunctionNotFoundWarning",
+            "IgnoreCase",
+            "IgnoreUncalledFunction",
+            "MaxLog",
+            "PrintCLength",
+            "PrintCPerLine",
+            "ReplaceContinuationBR",
+            "SaveDataNos",
+            "SearchSubdirectory",
+            "SortWithFilename",
+            "SystemAllowFullSpace",
+            "SystemIgnoreTripleSymbol",
+            "SystemSaveInBinary",
+            "UseERD",
+            "UseMouse",
+            "UseRenameFile",
+            "UseReplaceFile",
+            "VarsizeDimConfig",
+            "WarnFunctionOverloading",
+            "ZipSaveData",
+            "useLanguage",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        assert_eq!(exposed, expected);
+
+        let store = ConfigStore::with_tui_defaults();
+        assert_eq!(store.get_code("MaxLog"), Some(&ConfigValue::Integer(1_000)));
+        assert_eq!(
+            store.get_code("PrintCPerLine"),
+            Some(&ConfigValue::Integer(5))
+        );
+        assert_eq!(
+            store.get_code("PrintCLength"),
+            Some(&ConfigValue::Integer(24))
+        );
+        assert_eq!(
+            expected
+                .iter()
+                .filter(|code| tui_application(code) == Some(ConfigApplication::Hot))
+                .count(),
+            11
+        );
     }
 
     #[test]

@@ -14,18 +14,20 @@ use era_protocol::{
     negotiate_version,
 };
 use era_runtime_protocol::{
-    AdvanceTime, AudioEffect, AudioEffectAction, CancelExternalRequest, CanvasPixelRequest,
-    CanvasPixelResponse, CanvasPoint, CellAlignment, ClientCapabilities, ClientHello,
-    CommandErrorCode, CommandRejected, ConfigurationUpdatePrepared, DECODE_CANVAS_IMAGE_OPERATION,
+    AdvanceTime, AudioEffect, AudioEffectAction, CONFIG_TUI, CancelExternalRequest,
+    CanvasPixelRequest, CanvasPixelResponse, CanvasPoint, CellAlignment, ClientCapabilities,
+    ClientHello, CommandErrorCode, CommandRejected, ConfigurationApplication,
+    ConfigurationClientProfile, ConfigurationUpdateCommitted, ConfigurationUpdateOutcome,
+    ConfigurationUpdatePrepared, DECODE_CANVAS_IMAGE_OPERATION,
     DECODE_CANVAS_IMAGE_OPERATION_VERSION, DecodeCanvasImageRequest, DecodeCanvasImageResponse,
     ENCODE_CANVAS_PNG_OPERATION, ENCODE_CANVAS_PNG_OPERATION_VERSION, EffectAcknowledgement,
     EffectBatch, EffectEvent, EffectKind, EffectOutcomeStatus, EncodeCanvasPngRequest,
     EncodeCanvasPngResponse, ExitReason, ExitRequested, ExtensionDeclaration,
-    ExtensionRegistrySubmit, ExternalRequestKind, FaultCode, FilePayload, FrontendInput,
-    FrontendIoErrorKind, GET_DISPLAY_LINE_OPERATION, GET_DISPLAY_LINE_OPERATION_VERSION,
-    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GGET_TEXT_SIZE_OPERATION,
-    GGET_TEXT_SIZE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse,
-    HTML_GET_PRINTED_STR_OPERATION, HTML_GET_PRINTED_STR_OPERATION_VERSION,
+    ExtensionRegistrySubmit, ExternalRequestKind, FaultCode, FileCategory, FilePayload,
+    FinalizeConfigurationUpdate, FrontendInput, FrontendIoErrorKind, GET_DISPLAY_LINE_OPERATION,
+    GET_DISPLAY_LINE_OPERATION_VERSION, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
+    GGET_TEXT_SIZE_OPERATION, GGET_TEXT_SIZE_OPERATION_VERSION, GetKeyStateRequest,
+    GetKeyStateResponse, HTML_GET_PRINTED_STR_OPERATION, HTML_GET_PRINTED_STR_OPERATION_VERSION,
     HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
     HTML_STRING_LINES_OPERATION_VERSION, HTML_SUBSTRING_OPERATION,
     HTML_SUBSTRING_OPERATION_VERSION, HtmlMeasureRequest, HtmlSubstringResponse,
@@ -66,6 +68,9 @@ use erabasic_vm::{
     VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot, VmValue,
 };
 use serde::{Deserialize, Serialize};
+
+#[cfg(test)]
+use era_runtime_protocol::ConfigurationChange;
 
 use crate::controller::{SystemController, SystemFlow, SystemStep};
 use crate::host::{
@@ -373,6 +378,7 @@ pub struct RuntimeSession {
     frontend_time_origin: Option<(u64, u64)>,
     random_seed: Option<u64>,
     negotiated_features: BTreeSet<RuntimeFeature>,
+    configuration_profile: ConfigurationClientProfile,
     inbound: VecDeque<(u64, InboundMessage)>,
     outbound: VecDeque<Vec<u8>>,
     outbound_journal: BTreeMap<u64, Vec<u8>>,
@@ -426,6 +432,7 @@ pub struct RuntimeSession {
     undo_replay: Option<UndoReplay>,
     undo_token: Option<InteractionToken>,
     project_snapshot: Option<NormalizedProjectSnapshot>,
+    pending_configuration_update: Option<PendingConfigurationUpdate>,
     selected_locale: String,
     available_fonts: BTreeSet<String>,
     service_capabilities: BTreeMap<(ServiceKind, String), ProtocolVersion>,
@@ -475,6 +482,16 @@ struct PendingProjectLoad {
 struct PendingProjectReload {
     build: crate::project::ProjectBuild,
     previous_phase: RuntimePhase,
+}
+
+struct PendingConfigurationUpdate {
+    preparation_message_id: u64,
+    project_revision: u64,
+    expected_source_digest: ProtocolBytes,
+    prepared_source_digest: ProtocolBytes,
+    contents: String,
+    values: erabasic_config::ConfigStore,
+    changed_codes: BTreeSet<String>,
 }
 
 #[allow(clippy::struct_excessive_bools)]

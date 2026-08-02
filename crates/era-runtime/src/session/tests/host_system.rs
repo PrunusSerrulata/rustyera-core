@@ -14,6 +14,7 @@ fn restart_redraws_string_and_integer_button_menus_in_the_current_function() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -224,6 +225,7 @@ fn inputs_accepts_an_automatic_button_from_the_pending_print_buffer() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -319,6 +321,7 @@ fn visible_buttons_from_an_earlier_wait_remain_usable_until_breakbutton() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -447,6 +450,7 @@ fn skipdisp_silently_skips_wait_commands_like_the_reference() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -528,6 +532,7 @@ fn input_undo_records_only_accepted_scalar_input_after_a_checkpoint() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -700,6 +705,7 @@ fn stopcalltrain_discards_its_caller_and_resumes_the_train_system_phase() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -774,6 +780,7 @@ fn continuous_train_reports_progress_and_routes_unavailable_commands_to_usercom(
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();

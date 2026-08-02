@@ -17,6 +17,10 @@ runtime-message =
   [21, runtime-state] /
   [22, exit-requested] /
   [23, {}] /
+  [24, prepare-configuration-update] /
+  [25, configuration-update-prepared] /
+  [26, finalize-configuration-update] /
+  [27, configuration-update-committed] /
   [30, frontend-input] /
   [31, advance-time] /
   [32, wait-change] /
@@ -55,14 +59,23 @@ runtime-message =
   [97, protocol-diagnostic] /
   [98, runtime-log]
 
-client-hello = { 0: any, 1: tstr, 2: [* uint], 3: runtime-limits, 4: any, 5: [* tstr] }
-server-hello = { 0: any, 1: any, 2: [* uint], 3: runtime-limits, 4: uint, 5: any, 6: tstr }
+configuration-client-profile = 0..3
+client-hello = {
+  0: any, 1: tstr, 2: [* uint], 3: runtime-limits, 4: any, 5: [* tstr],
+  ? 6: configuration-client-profile / null
+}
+server-hello = {
+  0: any, 1: any, 2: [* uint], 3: runtime-limits, 4: uint, 5: any, 6: tstr,
+  ? 7: configuration-client-profile / null
+}
 runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint }
 version-rejected = { 0: any, 1: tstr }
 project-manifest = { 0: uint, 1: [* any] }
 project-identity = { 0: uint, 1: bstr }
 project-load-request = { 0: project-identity, ? 1: project-manifest / null, ? 2: uint / null }
-project-load-report = { 0: uint, 1: bool, 2: [* any], 3: bool }
+project-load-report = {
+  0: uint, 1: bool, 2: [* any], 3: bool, ? 4: project-configuration-snapshot / null
+}
 reload-project = { 0: uint, 1: uint, 2: [* any] }
 project-analysis-request = { 0: project-manifest, 1: [* tstr], 2: bool }
 project-analysis-report = { 0: uint, 1: bool, 2: [* any], 3: [* tstr] }
@@ -78,6 +91,18 @@ extension-argument = { 0: uint, 1: bool, 2: bool }
 start-request = { 0: any }
 runtime-state = { 0: uint, 1: uint, 2: uint }
 exit-requested = { 0: uint, 1: bool, 2: uint }
+project-configuration-entry = {
+  0: tstr, 1: tstr, 2: tstr, 3: tstr, 4: 0..7, 5: [* tstr], 6: bool,
+  7: uint, 8: tstr, 9: tstr, 10: 0..1
+}
+project-configuration-snapshot = {
+  0: uint, 1: bstr, 2: [* project-configuration-entry], 3: bool
+}
+configuration-change = { 0: tstr, 1: tstr }
+prepare-configuration-update = { 0: uint, 1: bstr, 2: [* configuration-change] }
+configuration-update-prepared = { 0: uint, 1: bstr, 2: tstr, 3: bool, 4: bstr }
+finalize-configuration-update = { 0: uint, 1: 0..1 }
+configuration-update-committed = { 0: project-configuration-snapshot }
 frontend-input = { 0: uint, 1: interaction-token, 2: uint, 3: any, 4: bool }
 advance-time = { 0: uint }
 wait-change = any
@@ -156,7 +181,8 @@ sequence-acknowledgement = { 0: uint }
 resynchronize-request = { 0: uint / null }
 runtime-resynchronized = {
   0: uint, 1: uint, 2: uint, 3: presentation-snapshot, 4: exit-requested / null,
-  5: tstr, 6: input-undo-state, 7: key-macro-state
+  5: tstr, 6: input-undo-state, 7: key-macro-state,
+  ? 8: project-configuration-snapshot / null
 }
 command-rejected = { 0: uint, 1: tstr, 2: bool, 3: any / null }
 ; Runtime protocol 24 makes log severity backend-authoritative.

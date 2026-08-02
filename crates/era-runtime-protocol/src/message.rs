@@ -7,11 +7,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AdvanceTime, CancelExternalRequest, ClientHello, ClientStateChanged, CommandRejected,
-    ConfigurationUpdatePrepared, DeviceStateChanged, EffectAcknowledgement, EffectBatch,
-    ExitRequested, ExtensionRegistrySubmit, FrontendInput, InputUndoRequest, InputUndoState,
-    KeyMacroCommand, KeyMacroProfileSubmit, KeyMacroState, PrepareConfigurationUpdate,
-    PresentationDelta, PresentationSnapshot, ProjectAnalysisReport, ProjectAnalysisRequest,
-    ProjectLoadReport, ProjectLoadRequest, ProjectManifest, ProjectionObservation, ProjectionState,
+    ConfigurationUpdateCommitted, ConfigurationUpdatePrepared, DeviceStateChanged,
+    EffectAcknowledgement, EffectBatch, ExitRequested, ExtensionRegistrySubmit,
+    FinalizeConfigurationUpdate, FrontendInput, InputUndoRequest, InputUndoState, KeyMacroCommand,
+    KeyMacroProfileSubmit, KeyMacroState, PrepareConfigurationUpdate, PresentationDelta,
+    PresentationSnapshot, ProjectAnalysisReport, ProjectAnalysisRequest, ProjectLoadReport,
+    ProjectLoadRequest, ProjectManifest, ProjectionObservation, ProjectionState,
     ProtocolDiagnostic, ReloadProject, ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault,
     RuntimeLog, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello,
     ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
@@ -88,6 +89,10 @@ pub enum RuntimeMessage {
     PrepareConfigurationUpdate(#[n(0)] PrepareConfigurationUpdate),
     #[n(25)]
     ConfigurationUpdatePrepared(#[n(0)] ConfigurationUpdatePrepared),
+    #[n(26)]
+    FinalizeConfigurationUpdate(#[n(0)] FinalizeConfigurationUpdate),
+    #[n(27)]
+    ConfigurationUpdateCommitted(#[n(0)] ConfigurationUpdateCommitted),
     #[n(30)]
     Input(#[n(0)] FrontendInput),
     #[n(31)]
@@ -187,6 +192,8 @@ impl RuntimeMessage {
             Self::ReturnToTitle(_) => 23,
             Self::PrepareConfigurationUpdate(_) => 24,
             Self::ConfigurationUpdatePrepared(_) => 25,
+            Self::FinalizeConfigurationUpdate(_) => 26,
+            Self::ConfigurationUpdateCommitted(_) => 27,
             Self::Input(_) => 30,
             Self::AdvanceTime(_) => 31,
             Self::WaitChanged(_) => 32,

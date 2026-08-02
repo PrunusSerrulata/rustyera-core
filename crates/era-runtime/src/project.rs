@@ -5,10 +5,11 @@ mod frontend;
 mod tests;
 
 use era_runtime_protocol::{
-    CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ConfigurationValueKind, FileCategory,
-    FileChange, FilePayload, ProjectAnalysisReport, ProjectAnalysisRequest,
-    ProjectConfigurationEntry, ProjectConfigurationSnapshot, ProjectLoadReport, ProjectManifest,
-    ProtocolDiagnostic, ReloadProject, RuntimeLogLevel, SourceLocation, validate_relative_path,
+    CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ConfigurationApplication,
+    ConfigurationClientProfile, ConfigurationValueKind, FileCategory, FileChange, FilePayload,
+    ProjectAnalysisReport, ProjectAnalysisRequest, ProjectConfigurationEntry,
+    ProjectConfigurationSnapshot, ProjectLoadReport, ProjectManifest, ProtocolDiagnostic,
+    ReloadProject, RuntimeLogLevel, SourceLocation, SubmittedFile, validate_relative_path,
 };
 use erabasic_analyzer::{
     AnalysisInput, AnalysisProgressStage, AnalyzerDiagnosticSeverity, AnalyzerOptions,
@@ -35,6 +36,14 @@ use self::frontend::{
     analyzer_source, csv_file, manifest_source_texts, payload_hash, project_diagnostic,
     project_source_location,
 };
+
+pub(crate) fn is_root_configuration_file(file: &SubmittedFile) -> bool {
+    file.category == FileCategory::Configuration
+        && file
+            .relative_path
+            .replace('\\', "/")
+            .eq_ignore_ascii_case("emuera.config")
+}
 
 pub(crate) struct ProjectBuild {
     pub(crate) artifact: Option<ValidatedArtifact>,
@@ -67,6 +76,7 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) line_height: u32,
     pub(crate) print_c_per_line: u32,
     pub(crate) print_c_length: u32,
+    pub(crate) configuration_profile: ConfigurationClientProfile,
     /// Complete query-visible configuration, including client-only compatibility values.
     pub(crate) configuration: ConfigStore,
     /// Regular default/user/fixed configuration, excluding Replace and debug values.
@@ -81,13 +91,7 @@ impl NormalizedProjectSnapshot {
             .manifest
             .files
             .iter()
-            .find(|file| {
-                file.category == FileCategory::Configuration
-                    && file
-                        .relative_path
-                        .replace('\\', "/")
-                        .eq_ignore_ascii_case("emuera.config")
-            })
+            .find(|file| is_root_configuration_file(file))
             .and_then(|file| match &file.payload {
                 FilePayload::Utf8(text) => Some(era_protocol::ProtocolBytes::new(
                     blake3::hash(text.as_bytes()).as_bytes().to_vec(),
@@ -100,6 +104,7 @@ impl NormalizedProjectSnapshot {
             .filter(|spec| erabasic_config::is_regular_code(spec.code))
             .filter_map(|spec| {
                 let value = self.editable_configuration.get_code(spec.code)?;
+                let effective = self.configuration.get_code(spec.code)?;
                 let applicability = protocol_applicability(spec.clients);
                 (applicability != 0).then(|| ProjectConfigurationEntry {
                     code: spec.code.into(),
@@ -113,14 +118,46 @@ impl NormalizedProjectSnapshot {
                     },
                     fixed: self.editable_configuration.is_fixed(spec.code),
                     applicability,
+                    default_value: profile_default(&spec, self.configuration_profile).config_text(),
+                    effective_value: effective.config_text(),
+                    application: profile_application(spec.code, self.configuration_profile),
                 })
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let restart_pending = entries
+            .iter()
+            .any(|entry| entry.value != entry.effective_value);
         ProjectConfigurationSnapshot {
             project_revision: self.manifest.project_revision,
             source_digest,
             entries,
+            restart_pending,
         }
+    }
+}
+
+fn profile_default(
+    spec: &erabasic_config::ConfigSpec,
+    profile: ConfigurationClientProfile,
+) -> erabasic_config::ConfigValue {
+    if profile == ConfigurationClientProfile::Tui
+        && let Some(value) = erabasic_config::tui_default(spec.code)
+    {
+        return value;
+    }
+    spec.default.clone()
+}
+
+fn profile_application(
+    code: &str,
+    profile: ConfigurationClientProfile,
+) -> ConfigurationApplication {
+    if profile == ConfigurationClientProfile::Tui
+        && erabasic_config::tui_application(code) == Some(erabasic_config::ConfigApplication::Hot)
+    {
+        ConfigurationApplication::Hot
+    } else {
+        ConfigurationApplication::Restart
     }
 }
 
@@ -233,6 +270,7 @@ pub(crate) fn build_project_with_extensions(
         previous,
         previous_artifact,
         extensions,
+        ConfigurationClientProfile::Reference,
         None,
     )
 }
@@ -242,6 +280,7 @@ pub(crate) fn build_project_with_extensions_and_progress(
     previous: Option<&IncrementalState>,
     previous_artifact: Option<&BytecodeArtifact>,
     extensions: &[era_runtime_protocol::ExtensionDeclaration],
+    configuration_profile: ConfigurationClientProfile,
     progress: Option<&ProjectProgressReporter>,
 ) -> ProjectBuild {
     build_project_inner_with_extensions(
@@ -251,6 +290,7 @@ pub(crate) fn build_project_with_extensions_and_progress(
         None,
         false,
         extensions,
+        configuration_profile,
         progress,
     )
 }
@@ -258,6 +298,7 @@ pub(crate) fn build_project_with_extensions_and_progress(
 pub(crate) fn analyze_submitted_project_with_extensions(
     request: &ProjectAnalysisRequest,
     extensions: &[era_runtime_protocol::ExtensionDeclaration],
+    configuration_profile: ConfigurationClientProfile,
 ) -> ProjectAnalysisReport {
     let selected = request
         .selected_erb_paths
@@ -272,6 +313,7 @@ pub(crate) fn analyze_submitted_project_with_extensions(
         Some(&selected),
         request.debug_mode,
         extensions,
+        configuration_profile,
         None,
     );
     let mut analyzed_erb_paths = request
@@ -304,11 +346,16 @@ fn build_project_inner(
         analysis_selection,
         false,
         &[],
+        ConfigurationClientProfile::Reference,
         None,
     )
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "the atomic build pipeline keeps all identity-affecting inputs explicit"
+)]
 fn build_project_inner_with_extensions(
     manifest: &ProjectManifest,
     previous: Option<&IncrementalState>,
@@ -316,6 +363,7 @@ fn build_project_inner_with_extensions(
     analysis_selection: Option<&std::collections::BTreeSet<String>>,
     analysis_debug_mode: bool,
     extension_declarations: &[era_runtime_protocol::ExtensionDeclaration],
+    configuration_profile: ConfigurationClientProfile,
     progress: Option<&ProjectProgressReporter>,
 ) -> ProjectBuild {
     let mut diagnostics = Vec::new();
@@ -329,7 +377,7 @@ fn build_project_inner_with_extensions(
     let (extensions, host_registry, extension_map) =
         prepare_extensions(extension_declarations, &mut diagnostics);
     let mut files = manifest.files.clone();
-    let mut config = parse_configuration(&files, &mut diagnostics);
+    let mut config = parse_configuration(&files, &mut diagnostics, configuration_profile);
     if config.csv.sort_with_filename {
         files.sort_by(|left, right| {
             (!path_has_priority_directory(&left.relative_path))
@@ -710,6 +758,7 @@ fn build_project_inner_with_extensions(
             line_height: config.line_height,
             print_c_per_line: config.print_c_per_line,
             print_c_length: config.print_c_length,
+            configuration_profile,
             configuration: config.values,
             editable_configuration,
             extensions: extension_map,

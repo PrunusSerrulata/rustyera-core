@@ -13,6 +13,7 @@ fn chkdata_returns_its_status_and_updates_the_description() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -94,6 +95,7 @@ fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -254,6 +256,7 @@ fn sequence_gaps_are_rejected_before_execution() {
         requested_limits: RuntimeOptions::default().limits,
         capabilities: capabilities(),
         preferred_locales: vec!["ja".into()],
+        configuration_profile: None,
     });
     let envelope = message
         .envelope(None, None, 2, 1, None)
@@ -281,6 +284,7 @@ fn active_session_rejects_stale_epochs_and_acknowledges_journal_entries() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("hello");

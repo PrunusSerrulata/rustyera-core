@@ -1,5 +1,6 @@
 use era_runtime_protocol::{
-    FileCategory, FilePayload, ProtocolDiagnostic, RuntimeLogLevel, SourceLocation,
+    ConfigurationClientProfile, FileCategory, FilePayload, ProtocolDiagnostic, RuntimeLogLevel,
+    SourceLocation,
 };
 use erabasic_analyzer::WarningPolicy;
 use erabasic_config::{ConfigStore, ConfigValue};
@@ -11,8 +12,12 @@ use super::{SemanticConfig, inspect_deferred_file, project_diagnostic};
 pub(super) fn parse_configuration(
     files: &[era_runtime_protocol::SubmittedFile],
     diagnostics: &mut Vec<ProtocolDiagnostic>,
+    profile: ConfigurationClientProfile,
 ) -> SemanticConfig {
     let mut config = SemanticConfig::default();
+    if profile == ConfigurationClientProfile::Tui {
+        config.values = ConfigStore::with_tui_defaults();
+    }
     let mut configuration_files = files
         .iter()
         .filter(|file| file.category == FileCategory::Configuration)

@@ -13,6 +13,7 @@ fn project_load_start_and_print_cross_the_message_boundary() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -116,6 +117,7 @@ fn linecount_drives_clearline_and_bounded_padding_loops() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -192,6 +194,7 @@ fn nested_begin_returns_current_frame_then_applies_the_deferred_flow() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -257,6 +260,7 @@ fn builtin_title_precedes_reset_data_and_initial_character_insertion() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["en".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -373,6 +377,7 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -461,6 +466,7 @@ fn reference_presentation_fixture_preserves_logical_intent() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -563,6 +569,7 @@ fn printform_and_printc_family_preserve_reference_semantics() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -702,6 +709,7 @@ fn typed_input_updates_result_and_sixth_argument_honors_message_skip() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("hello");
@@ -789,6 +797,7 @@ fn untimed_one_input_message_skip_keeps_the_complete_default() {
             requested_limits: RuntimeOptions::default().limits,
             capabilities: capabilities(),
             preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).expect("hello");

@@ -2,7 +2,7 @@ use era_protocol::{ProtocolBytes, ProtocolVersion, SessionId, VersionRange};
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::{ServiceKind, SourceLocation, StorageCapabilities};
+use crate::{ConfigurationClientProfile, ServiceKind, SourceLocation, StorageCapabilities};
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -249,6 +249,9 @@ pub struct ClientHello {
     /// Ordered BCP-47 preferences sampled by the frontend.
     #[n(5)]
     pub preferred_locales: Vec<String>,
+    /// Optional client policy for project configuration defaults and application behavior.
+    #[n(6)]
+    pub configuration_profile: Option<ConfigurationClientProfile>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -268,6 +271,9 @@ pub struct ServerHello {
     pub selected_capabilities: ClientCapabilities,
     #[n(6)]
     pub selected_locale: String,
+    /// Echoed only when the Runtime supports the requested configuration profile.
+    #[n(7)]
+    pub configuration_profile: Option<ConfigurationClientProfile>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

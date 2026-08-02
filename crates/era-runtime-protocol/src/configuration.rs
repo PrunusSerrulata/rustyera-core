@@ -5,6 +5,30 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]
+pub enum ConfigurationClientProfile {
+    #[n(0)]
+    Reference,
+    #[n(1)]
+    Tui,
+    #[n(2)]
+    Browser,
+    #[n(3)]
+    Tauri,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigurationApplication {
+    #[n(0)]
+    Hot,
+    #[n(1)]
+    Restart,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
 pub enum ConfigurationValueKind {
     #[n(0)]
     Boolean,
@@ -50,6 +74,14 @@ pub struct ProjectConfigurationEntry {
     pub fixed: bool,
     #[n(7)]
     pub applicability: u32,
+    /// Client-profile default before project configuration files are applied.
+    #[n(8)]
+    pub default_value: String,
+    /// Value currently used by the live Runtime session.
+    #[n(9)]
+    pub effective_value: String,
+    #[n(10)]
+    pub application: ConfigurationApplication,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -62,6 +94,8 @@ pub struct ProjectConfigurationSnapshot {
     pub source_digest: ProtocolBytes,
     #[n(2)]
     pub entries: Vec<ProjectConfigurationEntry>,
+    #[n(3)]
+    pub restart_pending: bool,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -96,4 +130,32 @@ pub struct ConfigurationUpdatePrepared {
     pub contents: String,
     #[n(3)]
     pub restart_required: bool,
+    #[n(4)]
+    pub prepared_source_digest: ProtocolBytes,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigurationUpdateOutcome {
+    #[n(0)]
+    Abort,
+    #[n(1)]
+    Commit,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct FinalizeConfigurationUpdate {
+    #[n(0)]
+    pub preparation_message_id: u64,
+    #[n(1)]
+    pub outcome: ConfigurationUpdateOutcome,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ConfigurationUpdateCommitted {
+    #[n(0)]
+    pub configuration: ProjectConfigurationSnapshot,
 }
