@@ -32,11 +32,12 @@ impl RuntimeSession {
                 "a configuration update is already pending",
             );
         }
-        let transactional = self.configuration_profile == ConfigurationClientProfile::Tui;
+        let profile_flag = crate::project::profile_applicability(self.configuration_profile);
+        let transactional = profile_flag.is_some();
         let editable = current
             .entries
             .iter()
-            .filter(|entry| !transactional || entry.applicability & CONFIG_TUI != 0)
+            .filter(|entry| profile_flag.is_none_or(|flag| entry.applicability & flag != 0))
             .map(|entry| (entry.code.to_ascii_uppercase(), entry))
             .collect::<BTreeMap<_, _>>();
         let mut values = snapshot.editable_configuration.clone();
@@ -299,10 +300,14 @@ impl RuntimeSession {
             .filter(|feature| hello.features.contains(feature))
             .collect();
         self.negotiated_features = features.iter().copied().collect();
-        let configuration_profile = match hello.configuration_profile {
-            Some(ConfigurationClientProfile::Tui) => Some(ConfigurationClientProfile::Tui),
-            _ => None,
-        };
+        let configuration_profile = hello.configuration_profile.filter(|profile| {
+            matches!(
+                profile,
+                ConfigurationClientProfile::Tui
+                    | ConfigurationClientProfile::Browser
+                    | ConfigurationClientProfile::Tauri
+            )
+        });
         self.configuration_profile =
             configuration_profile.unwrap_or(ConfigurationClientProfile::Reference);
         let selected_capabilities = selected_capabilities(&hello.capabilities);
@@ -1087,7 +1092,9 @@ fn apply_hot_configuration(
     changed_codes: &BTreeSet<String>,
 ) {
     for code in changed_codes {
-        if erabasic_config::tui_application(code) != Some(erabasic_config::ConfigApplication::Hot) {
+        if crate::project::profile_application(code, snapshot.configuration_profile)
+            != ConfigurationApplication::Hot
+        {
             continue;
         }
         let value = snapshot
@@ -1117,6 +1124,18 @@ fn apply_hot_configuration(
     }
     if let Some(value) = integer("PrintCLength").and_then(|value| u32::try_from(value).ok()) {
         snapshot.print_c_length = value.max(1);
+    }
+    if let Some(value) = integer("WindowX").and_then(|value| u32::try_from(value).ok()) {
+        snapshot.viewport_width = value.max(1);
+    }
+    if let Some(value) = integer("WindowY").and_then(|value| u32::try_from(value).ok()) {
+        snapshot.viewport_height = value.max(1);
+    }
+    if let Some(value) = integer("FontSize").and_then(|value| u32::try_from(value).ok()) {
+        snapshot.font_size = value.max(1);
+    }
+    if let Some(value) = integer("LineHeight").and_then(|value| u32::try_from(value).ok()) {
+        snapshot.line_height = value.max(snapshot.font_size);
     }
 }
 

@@ -259,6 +259,232 @@ fn tui_configuration_profile_applies_defaults_and_commits_atomically() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "browser-configuration-test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["zh-CN".into()],
+            configuration_profile: Some(ConfigurationClientProfile::Browser),
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ServerHello(hello)
+            if hello.configuration_profile == Some(ConfigurationClientProfile::Browser)
+    )));
+
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let initial = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ProjectLoadReport(report) => report.configuration,
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        initial
+            .entries
+            .iter()
+            .filter(|entry| entry.applicability & CONFIG_BROWSER != 0)
+            .count(),
+        43
+    );
+    assert_eq!(
+        initial
+            .entries
+            .iter()
+            .find(|entry| entry.code == "PrintCPerLine")
+            .unwrap()
+            .value,
+        "5"
+    );
+
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::PrepareConfigurationUpdate(PrepareConfigurationUpdate {
+            project_revision: initial.project_revision,
+            expected_source_digest: initial.source_digest,
+            changes: vec![
+                ConfigurationChange {
+                    code: "FontSize".into(),
+                    value: "22".into(),
+                },
+                ConfigurationChange {
+                    code: "LineHeight".into(),
+                    value: "24".into(),
+                },
+                ConfigurationChange {
+                    code: "AutoSave".into(),
+                    value: "NO".into(),
+                },
+            ],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let prepared = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ConfigurationUpdatePrepared(value) => Some(value),
+            _ => None,
+        })
+        .unwrap();
+    assert!(prepared.restart_required);
+
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::FinalizeConfigurationUpdate(FinalizeConfigurationUpdate {
+            preparation_message_id: 3,
+            outcome: ConfigurationUpdateOutcome::Commit,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let committed = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ConfigurationUpdateCommitted(value) => Some(value.configuration),
+            _ => None,
+        })
+        .unwrap();
+    assert!(committed.restart_pending);
+    for (code, value) in [("FontSize", "22"), ("LineHeight", "24")] {
+        let entry = committed
+            .entries
+            .iter()
+            .find(|entry| entry.code == code)
+            .unwrap();
+        assert_eq!(entry.value, value);
+        assert_eq!(entry.effective_value, value);
+    }
+    let auto_save = committed
+        .entries
+        .iter()
+        .find(|entry| entry.code == "AutoSave")
+        .unwrap();
+    assert_eq!(auto_save.value, "NO");
+    assert_eq!(auto_save.effective_value, "YES");
+    let snapshot = session.project_snapshot.as_ref().unwrap();
+    assert_eq!(snapshot.font_size, 22);
+    assert_eq!(snapshot.line_height, 24);
+}
+
+#[test]
+fn browser_and_tauri_configuration_abort_preserves_effective_presentation() {
+    for profile in [
+        ConfigurationClientProfile::Browser,
+        ConfigurationClientProfile::Tauri,
+    ] {
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        submit(
+            &mut session,
+            0,
+            RuntimeMessage::ClientHello(ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "web-configuration-abort-test".into(),
+                features: Vec::new(),
+                requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
+                preferred_locales: vec!["zh-CN".into()],
+                configuration_profile: Some(profile),
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        submit(
+            &mut session,
+            1,
+            RuntimeMessage::ProjectManifest(ProjectManifest {
+                project_revision: 1,
+                files: vec![SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                    content_hash: None,
+                }],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let initial = drain(&mut session)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::ProjectLoadReport(report) => report.configuration,
+                _ => None,
+            })
+            .unwrap();
+        let original_presentation = session.presentation.snapshot().settings;
+
+        submit(
+            &mut session,
+            2,
+            RuntimeMessage::PrepareConfigurationUpdate(PrepareConfigurationUpdate {
+                project_revision: initial.project_revision,
+                expected_source_digest: initial.source_digest,
+                changes: vec![ConfigurationChange {
+                    code: "LineHeight".into(),
+                    value: "30".into(),
+                }],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        assert!(drain(&mut session).iter().any(|message| matches!(
+            message,
+            RuntimeMessage::ConfigurationUpdatePrepared(value) if !value.restart_required
+        )));
+        submit(
+            &mut session,
+            3,
+            RuntimeMessage::FinalizeConfigurationUpdate(FinalizeConfigurationUpdate {
+                preparation_message_id: 3,
+                outcome: ConfigurationUpdateOutcome::Abort,
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let aborted = drain(&mut session)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::ConfigurationUpdateCommitted(value) => Some(value.configuration),
+                _ => None,
+            })
+            .unwrap();
+        let line_height = aborted
+            .entries
+            .iter()
+            .find(|entry| entry.code == "LineHeight")
+            .unwrap();
+        assert_eq!(line_height.value, "19");
+        assert_eq!(line_height.effective_value, "19");
+        assert_eq!(session.project_snapshot.as_ref().unwrap().line_height, 19);
+        assert_eq!(
+            session.presentation.snapshot().settings,
+            original_presentation
+        );
+    }
+}
+
+#[test]
 fn html_pop_matches_the_reference_fixture_and_writes_the_string_result() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(

@@ -276,25 +276,29 @@ pub fn catalog() -> Vec<ConfigSpec> {
 
 fn clients(code: &str, effect: ConfigEffect) -> &'static [ConfigClient] {
     use ConfigClient::{Browser, Runtime, Tauri, Tui};
-    match effect {
-        ConfigEffect::PortableSemantic if tui_configurable(code) => &[Runtime, Tui, Browser, Tauri],
-        ConfigEffect::PortableSemantic => &[Runtime, Browser, Tauri],
-        ConfigEffect::UnsupportedPlatformIntegration => &[],
-        ConfigEffect::QueryOnlyClientPreference => match code {
-            "WindowPosX" | "WindowPosY" | "SetWindowPos" | "WindowMaximixed" | "SizableWindow" => {
-                &[Tauri]
-            }
-            "UseMouse"
-            | "ButtonWrap"
-            | "ForeColor"
-            | "BackColor"
-            | "FocusColor"
-            | "EnglishConfigOutput" => &[Tui, Browser, Tauri],
-            "UseMenu" | "WindowX" | "WindowY" | "FontName" | "FontSize" | "LineHeight"
-            | "LogColor" | "FPS" | "SkipFrame" | "ScrollHeight" | "DisplayReport"
-            | "UseSaveFolder" => &[Browser, Tauri],
-            _ => &[],
-        },
+    let runtime = effect == ConfigEffect::PortableSemantic;
+    match (
+        runtime,
+        tui_configurable(code),
+        browser_configurable(code),
+        tauri_configurable(code),
+    ) {
+        (false, false, false, false) => &[],
+        (false, false, false, true) => &[Tauri],
+        (false, false, true, false) => &[Browser],
+        (false, false, true, true) => &[Browser, Tauri],
+        (false, true, false, false) => &[Tui],
+        (false, true, false, true) => &[Tui, Tauri],
+        (false, true, true, false) => &[Tui, Browser],
+        (false, true, true, true) => &[Tui, Browser, Tauri],
+        (true, false, false, false) => &[Runtime],
+        (true, false, false, true) => &[Runtime, Tauri],
+        (true, false, true, false) => &[Runtime, Browser],
+        (true, true, true, true) => &[Runtime, Tui, Browser, Tauri],
+        (true, false, true, true) => &[Runtime, Browser, Tauri],
+        (true, true, false, false) => &[Runtime, Tui],
+        (true, true, false, true) => &[Runtime, Tui, Tauri],
+        (true, true, true, false) => &[Runtime, Tui, Browser],
     }
 }
 
@@ -304,11 +308,33 @@ pub fn tui_configurable(code: &str) -> bool {
     tui_application(code).is_some()
 }
 
+/// Whether the browser frontend exposes this setting.
+#[must_use]
+pub fn browser_configurable(code: &str) -> bool {
+    browser_application(code).is_some()
+}
+
+/// Whether the Tauri frontend exposes this setting.
+#[must_use]
+pub fn tauri_configurable(code: &str) -> bool {
+    tauri_application(code).is_some()
+}
+
 /// Textual frontend defaults applied before project configuration files.
 #[must_use]
 pub fn tui_default(code: &str) -> Option<ConfigValue> {
     match code {
         "MaxLog" => Some(ConfigValue::Integer(1_000)),
+        "PrintCPerLine" => Some(ConfigValue::Integer(5)),
+        "PrintCLength" => Some(ConfigValue::Integer(24)),
+        _ => None,
+    }
+}
+
+/// Browser and Tauri defaults applied before project configuration files.
+#[must_use]
+pub fn web_default(code: &str) -> Option<ConfigValue> {
+    match code {
         "PrintCPerLine" => Some(ConfigValue::Integer(5)),
         "PrintCLength" => Some(ConfigValue::Integer(24)),
         _ => None,
@@ -361,6 +387,66 @@ pub fn tui_application(code: &str) -> Option<ConfigApplication> {
     }
 }
 
+/// Application policy shared by browser and Tauri settings.
+#[must_use]
+pub fn browser_application(code: &str) -> Option<ConfigApplication> {
+    match code {
+        "UseMenu"
+        | "UseMouse"
+        | "AllowLongInputByMouse"
+        | "Ctrl_Z_Enabled"
+        | "ScrollHeight"
+        | "MaxLog"
+        | "ButtonWrap"
+        | "CompatiLinefeedAs1739"
+        | "PrintCPerLine"
+        | "PrintCLength"
+        | "FontName"
+        | "FontSize"
+        | "LineHeight"
+        | "ForeColor"
+        | "BackColor"
+        | "FocusColor" => Some(ConfigApplication::Hot),
+        "UseRenameFile"
+        | "UseReplaceFile"
+        | "SearchSubdirectory"
+        | "SortWithFilename"
+        | "CompatiCALLNAME"
+        | "CompatiSPChara"
+        | "UseERD"
+        | "VarsizeDimConfig"
+        | "SystemAllowFullSpace"
+        | "useLanguage"
+        | "ReplaceContinuationBR"
+        | "IgnoreCase"
+        | "IgnoreUncalledFunction"
+        | "AllowFunctionOverloading"
+        | "WarnFunctionOverloading"
+        | "DisplayWarningLevel"
+        | "FunctionNotFoundWarning"
+        | "FunctionNotCalledWarning"
+        | "CompatiCallEvent"
+        | "CompatiFuncArgOptional"
+        | "CompatiFuncArgAutoConvert"
+        | "SystemIgnoreTripleSymbol"
+        | "AutoSave"
+        | "SaveDataNos"
+        | "SystemSaveInBinary"
+        | "ZipSaveData"
+        | "EnglishConfigOutput" => Some(ConfigApplication::Restart),
+        _ => None,
+    }
+}
+
+/// Application policy for settings exposed by the Tauri frontend.
+#[must_use]
+pub fn tauri_application(code: &str) -> Option<ConfigApplication> {
+    match code {
+        "WindowMaximixed" | "WindowX" | "WindowY" => Some(ConfigApplication::Hot),
+        _ => browser_application(code),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ConfigStore {
     values: BTreeMap<String, ConfigValue>,
@@ -387,6 +473,18 @@ impl ConfigStore {
         let mut store = Self::default();
         for spec in catalog() {
             if let Some(value) = tui_default(spec.code) {
+                store.values.insert(spec.code.to_ascii_uppercase(), value);
+            }
+        }
+        store
+    }
+
+    /// Construct the catalog with browser/Tauri defaults before project files apply.
+    #[must_use]
+    pub fn with_web_defaults() -> Self {
+        let mut store = Self::default();
+        for spec in catalog() {
+            if let Some(value) = web_default(spec.code) {
                 store.values.insert(spec.code.to_ascii_uppercase(), value);
             }
         }
@@ -738,6 +836,114 @@ mod tests {
                 .count(),
             11
         );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn browser_and_tauri_profiles_have_exact_surfaces_defaults_and_policies() {
+        for spec in catalog() {
+            assert_eq!(
+                spec.clients.contains(&ConfigClient::Tui),
+                tui_application(spec.code).is_some(),
+                "TUI surface and policy drifted for {}",
+                spec.code
+            );
+            assert_eq!(
+                spec.clients.contains(&ConfigClient::Browser),
+                browser_application(spec.code).is_some(),
+                "browser surface and policy drifted for {}",
+                spec.code
+            );
+            assert_eq!(
+                spec.clients.contains(&ConfigClient::Tauri),
+                tauri_application(spec.code).is_some(),
+                "Tauri surface and policy drifted for {}",
+                spec.code
+            );
+        }
+        let browser = catalog()
+            .into_iter()
+            .filter(|spec| spec.clients.contains(&ConfigClient::Browser))
+            .map(|spec| spec.code)
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            "AllowFunctionOverloading",
+            "AllowLongInputByMouse",
+            "AutoSave",
+            "BackColor",
+            "ButtonWrap",
+            "CompatiCALLNAME",
+            "CompatiCallEvent",
+            "CompatiFuncArgAutoConvert",
+            "CompatiFuncArgOptional",
+            "CompatiLinefeedAs1739",
+            "CompatiSPChara",
+            "Ctrl_Z_Enabled",
+            "DisplayWarningLevel",
+            "EnglishConfigOutput",
+            "FocusColor",
+            "FontName",
+            "FontSize",
+            "ForeColor",
+            "FunctionNotCalledWarning",
+            "FunctionNotFoundWarning",
+            "IgnoreCase",
+            "IgnoreUncalledFunction",
+            "LineHeight",
+            "MaxLog",
+            "PrintCLength",
+            "PrintCPerLine",
+            "ReplaceContinuationBR",
+            "SaveDataNos",
+            "ScrollHeight",
+            "SearchSubdirectory",
+            "SortWithFilename",
+            "SystemAllowFullSpace",
+            "SystemIgnoreTripleSymbol",
+            "SystemSaveInBinary",
+            "UseERD",
+            "UseMenu",
+            "UseMouse",
+            "UseRenameFile",
+            "UseReplaceFile",
+            "VarsizeDimConfig",
+            "WarnFunctionOverloading",
+            "ZipSaveData",
+            "useLanguage",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        assert_eq!(browser, expected);
+
+        let tauri = catalog()
+            .into_iter()
+            .filter(|spec| spec.clients.contains(&ConfigClient::Tauri))
+            .map(|spec| spec.code)
+            .collect::<BTreeSet<_>>();
+        let mut expected_tauri = expected;
+        expected_tauri.extend(["WindowMaximixed", "WindowX", "WindowY"]);
+        assert_eq!(tauri, expected_tauri);
+        assert_eq!(
+            expected_tauri
+                .iter()
+                .filter(|code| tauri_application(code) == Some(ConfigApplication::Hot))
+                .count(),
+            19
+        );
+
+        let store = ConfigStore::with_web_defaults();
+        assert_eq!(store.get_code("MaxLog"), Some(&ConfigValue::Integer(5_000)));
+        assert_eq!(
+            store.get_code("PrintCPerLine"),
+            Some(&ConfigValue::Integer(5))
+        );
+        assert_eq!(
+            store.get_code("PrintCLength"),
+            Some(&ConfigValue::Integer(24))
+        );
+        for code in ["SizableWindow", "SetWindowPos", "WindowPosX", "WindowPosY"] {
+            assert!(!tauri_configurable(code));
+        }
     }
 
     #[test]

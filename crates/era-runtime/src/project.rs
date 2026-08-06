@@ -140,24 +140,43 @@ fn profile_default(
     spec: &erabasic_config::ConfigSpec,
     profile: ConfigurationClientProfile,
 ) -> erabasic_config::ConfigValue {
-    if profile == ConfigurationClientProfile::Tui
-        && let Some(value) = erabasic_config::tui_default(spec.code)
-    {
-        return value;
+    let override_value = match profile {
+        ConfigurationClientProfile::Tui => erabasic_config::tui_default(spec.code),
+        ConfigurationClientProfile::Browser | ConfigurationClientProfile::Tauri => {
+            erabasic_config::web_default(spec.code)
+        }
+        ConfigurationClientProfile::Reference => None,
+    };
+    if let Some(value) = override_value {
+        value
+    } else {
+        spec.default.clone()
     }
-    spec.default.clone()
 }
 
-fn profile_application(
+pub(crate) fn profile_application(
     code: &str,
     profile: ConfigurationClientProfile,
 ) -> ConfigurationApplication {
-    if profile == ConfigurationClientProfile::Tui
-        && erabasic_config::tui_application(code) == Some(erabasic_config::ConfigApplication::Hot)
-    {
+    let application = match profile {
+        ConfigurationClientProfile::Tui => erabasic_config::tui_application(code),
+        ConfigurationClientProfile::Browser => erabasic_config::browser_application(code),
+        ConfigurationClientProfile::Tauri => erabasic_config::tauri_application(code),
+        ConfigurationClientProfile::Reference => None,
+    };
+    if application == Some(erabasic_config::ConfigApplication::Hot) {
         ConfigurationApplication::Hot
     } else {
         ConfigurationApplication::Restart
+    }
+}
+
+pub(crate) fn profile_applicability(profile: ConfigurationClientProfile) -> Option<u32> {
+    match profile {
+        ConfigurationClientProfile::Reference => None,
+        ConfigurationClientProfile::Tui => Some(CONFIG_TUI),
+        ConfigurationClientProfile::Browser => Some(CONFIG_BROWSER),
+        ConfigurationClientProfile::Tauri => Some(CONFIG_TAURI),
     }
 }
 

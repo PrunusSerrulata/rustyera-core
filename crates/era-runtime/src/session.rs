@@ -14,21 +14,21 @@ use era_protocol::{
     negotiate_version,
 };
 use era_runtime_protocol::{
-    AdvanceTime, AudioEffect, AudioEffectAction, CONFIG_TUI, CancelExternalRequest,
-    CanvasPixelRequest, CanvasPixelResponse, CanvasPoint, CellAlignment, ClientCapabilities,
-    ClientHello, CommandErrorCode, CommandRejected, ConfigurationApplication,
-    ConfigurationClientProfile, ConfigurationUpdateCommitted, ConfigurationUpdateOutcome,
-    ConfigurationUpdatePrepared, DECODE_CANVAS_IMAGE_OPERATION,
-    DECODE_CANVAS_IMAGE_OPERATION_VERSION, DecodeCanvasImageRequest, DecodeCanvasImageResponse,
-    ENCODE_CANVAS_PNG_OPERATION, ENCODE_CANVAS_PNG_OPERATION_VERSION, EffectAcknowledgement,
-    EffectBatch, EffectEvent, EffectKind, EffectOutcomeStatus, EncodeCanvasPngRequest,
-    EncodeCanvasPngResponse, ExitReason, ExitRequested, ExtensionDeclaration,
-    ExtensionRegistrySubmit, ExternalRequestKind, FaultCode, FileCategory, FilePayload,
-    FinalizeConfigurationUpdate, FrontendInput, FrontendIoErrorKind, GET_DISPLAY_LINE_OPERATION,
-    GET_DISPLAY_LINE_OPERATION_VERSION, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
-    GGET_TEXT_SIZE_OPERATION, GGET_TEXT_SIZE_OPERATION_VERSION, GetKeyStateRequest,
-    GetKeyStateResponse, HTML_GET_PRINTED_STR_OPERATION, HTML_GET_PRINTED_STR_OPERATION_VERSION,
-    HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
+    AdvanceTime, AudioEffect, AudioEffectAction, CancelExternalRequest, CanvasPixelRequest,
+    CanvasPixelResponse, CanvasPoint, CellAlignment, ClientCapabilities, ClientHello,
+    CommandErrorCode, CommandRejected, ConfigurationApplication, ConfigurationClientProfile,
+    ConfigurationUpdateCommitted, ConfigurationUpdateOutcome, ConfigurationUpdatePrepared,
+    DECODE_CANVAS_IMAGE_OPERATION, DECODE_CANVAS_IMAGE_OPERATION_VERSION, DecodeCanvasImageRequest,
+    DecodeCanvasImageResponse, ENCODE_CANVAS_PNG_OPERATION, ENCODE_CANVAS_PNG_OPERATION_VERSION,
+    EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcomeStatus,
+    EncodeCanvasPngRequest, EncodeCanvasPngResponse, ExitReason, ExitRequested,
+    ExtensionDeclaration, ExtensionRegistrySubmit, ExternalRequestKind, FaultCode, FileCategory,
+    FilePayload, FinalizeConfigurationUpdate, FrontendInput, FrontendIoErrorKind,
+    GET_DISPLAY_LINE_OPERATION, GET_DISPLAY_LINE_OPERATION_VERSION, GET_KEY_STATE_OPERATION,
+    GET_KEY_STATE_OPERATION_VERSION, GGET_TEXT_SIZE_OPERATION, GGET_TEXT_SIZE_OPERATION_VERSION,
+    GetKeyStateRequest, GetKeyStateResponse, HTML_GET_PRINTED_STR_OPERATION,
+    HTML_GET_PRINTED_STR_OPERATION_VERSION, HTML_STRING_LEN_OPERATION,
+    HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
     HTML_STRING_LINES_OPERATION_VERSION, HTML_SUBSTRING_OPERATION,
     HTML_SUBSTRING_OPERATION_VERSION, HtmlMeasureRequest, HtmlSubstringResponse,
     IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION, IMAGE_PIXEL_OPERATION,
@@ -70,7 +70,7 @@ use erabasic_vm::{
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
-use era_runtime_protocol::ConfigurationChange;
+use era_runtime_protocol::{CONFIG_BROWSER, CONFIG_TUI, ConfigurationChange};
 
 use crate::controller::{SystemController, SystemFlow, SystemStep};
 use crate::host::{

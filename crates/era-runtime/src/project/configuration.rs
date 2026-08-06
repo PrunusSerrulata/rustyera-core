@@ -14,10 +14,17 @@ pub(super) fn parse_configuration(
     diagnostics: &mut Vec<ProtocolDiagnostic>,
     profile: ConfigurationClientProfile,
 ) -> SemanticConfig {
-    let mut config = SemanticConfig::default();
-    if profile == ConfigurationClientProfile::Tui {
-        config.values = ConfigStore::with_tui_defaults();
-    }
+    let values = match profile {
+        ConfigurationClientProfile::Tui => ConfigStore::with_tui_defaults(),
+        ConfigurationClientProfile::Browser | ConfigurationClientProfile::Tauri => {
+            ConfigStore::with_web_defaults()
+        }
+        ConfigurationClientProfile::Reference => ConfigStore::default(),
+    };
+    let mut config = SemanticConfig {
+        values,
+        ..SemanticConfig::default()
+    };
     let mut configuration_files = files
         .iter()
         .filter(|file| file.category == FileCategory::Configuration)
