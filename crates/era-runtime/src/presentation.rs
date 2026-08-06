@@ -673,6 +673,19 @@ impl PresentationModel {
         self.bump();
     }
 
+    fn apply_project_default_style(&mut self, next: TextStyle) {
+        let previous = std::mem::replace(&mut self.default_style, next.clone());
+        let mut changed = false;
+        for line in &mut self.lines {
+            changed |= replace_project_default_style(&mut line.runs, &previous, &next);
+        }
+        changed |= replace_project_default_style(&mut self.pending_runs, &previous, &next);
+        self.current_style = next;
+        if changed {
+            self.delivery.dirty.force_snapshot = true;
+        }
+    }
+
     pub(crate) fn set_foreground(&mut self, rgb: i64) {
         self.current_style.foreground = rgb_color(rgb);
         self.bump();
@@ -901,6 +914,61 @@ impl PresentationModel {
             enabled: true,
         }
     }
+}
+
+fn replace_project_default_style(
+    runs: &mut [DisplayRun],
+    previous: &TextStyle,
+    next: &TextStyle,
+) -> bool {
+    let mut changed = false;
+    for run in runs {
+        match run {
+            DisplayRun::Text { style, .. } => {
+                changed |= replace_matching_style_defaults(style, previous, next);
+            }
+            DisplayRun::Button {
+                runs, hover_style, ..
+            } => {
+                changed |= replace_project_default_style(runs, previous, next);
+                if let Some(style) = hover_style {
+                    changed |= replace_matching_style_defaults(style, previous, next);
+                }
+            }
+            DisplayRun::ColumnCell { content, .. } => {
+                changed |= replace_project_default_style(content, previous, next);
+            }
+            DisplayRun::HtmlDocument { .. }
+            | DisplayRun::Image { .. }
+            | DisplayRun::Shape { .. }
+            | DisplayRun::Separator { .. }
+            | DisplayRun::Space { .. } => {}
+        }
+    }
+    changed
+}
+
+fn replace_matching_style_defaults(
+    style: &mut TextStyle,
+    previous: &TextStyle,
+    next: &TextStyle,
+) -> bool {
+    let mut changed = false;
+    if style.font_family == previous.font_family && style.font_family != next.font_family {
+        style.font_family.clone_from(&next.font_family);
+        changed = true;
+    }
+    if style.font_millipixels == previous.font_millipixels
+        && style.font_millipixels != next.font_millipixels
+    {
+        style.font_millipixels = next.font_millipixels;
+        changed = true;
+    }
+    if style.foreground == previous.foreground && style.foreground != next.foreground {
+        style.foreground = next.foreground;
+        changed = true;
+    }
+    changed
 }
 
 mod delivery;

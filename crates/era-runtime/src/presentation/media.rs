@@ -231,15 +231,15 @@ impl PresentationModel {
             .map_or(5_000, |value| value.max(500));
         self.settings.prevent_button_wrap = boolean("ButtonWrap").unwrap_or(false);
         self.settings.legacy_nonbutton_wrap = boolean("CompatiLinefeedAs1739").unwrap_or(false);
-        self.default_style.font_family = font;
-        self.default_style.font_millipixels = project.font_size.saturating_mul(1_000);
-        self.default_style.foreground =
-            rgb_color(i64::from(color("ForeColor").unwrap_or(0x00c0_c0c0)));
+        let mut default_style = self.default_style.clone();
+        default_style.font_family = font;
+        default_style.font_millipixels = project.font_size.saturating_mul(1_000);
+        default_style.foreground = rgb_color(i64::from(color("ForeColor").unwrap_or(0x00c0_c0c0)));
         self.default_background = rgb_color(i64::from(color("BackColor").unwrap_or(0)));
         self.settings.background = self.default_background;
         self.settings.button_focus_foreground =
             rgb_color(i64::from(color("FocusColor").unwrap_or(0x00ff_ff00)));
-        self.current_style = self.default_style.clone();
+        self.apply_project_default_style(default_style);
         self.print_c_length = project.print_c_length.max(1);
         self.trim_physical_history();
         self.delivery.dirty.settings = true;

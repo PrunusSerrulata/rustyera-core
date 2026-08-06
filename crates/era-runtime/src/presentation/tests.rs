@@ -1,4 +1,36 @@
 use super::*;
+
+#[test]
+fn project_default_style_changes_update_existing_default_runs() {
+    let mut model = PresentationModel::default();
+    model.append_print_text("default".into(), false, true);
+    model.set_bold(true);
+    model.append_print_text("bold".into(), false, true);
+    model.set_font(Some("explicit".into()));
+    model.append_print_text("explicit".into(), false, true);
+
+    let mut next = model.default_style.clone();
+    next.font_family = Some("project-default".into());
+    next.font_millipixels = 20_000;
+    model.apply_project_default_style(next.clone());
+
+    let styles = model
+        .lines
+        .iter()
+        .map(|line| match &line.runs[0] {
+            DisplayRun::Text { style, .. } => style,
+            _ => panic!("test line must contain text"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(styles[0].font_family, next.font_family);
+    assert_eq!(styles[0].font_millipixels, 20_000);
+    assert_eq!(styles[1].font_family, next.font_family);
+    assert_eq!(styles[1].font_millipixels, 20_000);
+    assert!(styles[1].bold);
+    assert_eq!(styles[2].font_family.as_deref(), Some("explicit"));
+    assert_eq!(styles[2].font_millipixels, 20_000);
+    assert!(model.delivery.dirty.force_snapshot);
+}
 use era_runtime_protocol::PresentationOperation;
 
 fn apply_delta(snapshot: &mut PresentationSnapshot, delta: PresentationDelta) {
