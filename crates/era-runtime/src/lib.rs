@@ -16,7 +16,10 @@ mod runtime_snapshot;
 mod save_adapter;
 mod session;
 
-pub use compiled_cache::{DecodedProjectFile, ProjectFileError, decode_project_file};
+pub use compiled_cache::{
+    DecodedProjectFile, ProjectFileError, decode_project_file,
+    decode_project_file_frontend_manifest,
+};
 pub use runtime_snapshot::{
     RUNTIME_SNAPSHOT_INSPECTION_SCHEMA_VERSION, RuntimeSnapshotContainerInspection,
     RuntimeSnapshotInspection, RuntimeSnapshotInspectionError, RuntimeSnapshotValidation,

@@ -2,7 +2,7 @@ use era_protocol::ProtocolBytes;
 use era_runtime_protocol::{ProjectManifest, SubmittedFile};
 
 #[test]
-fn compact_snapshot_restores_immutable_project_bytes_from_the_loaded_graph() {
+fn compact_snapshot_preserves_and_validates_static_resource_identities() {
     let manifest = ProjectManifest {
         project_revision: 1,
         files: vec![SubmittedFile {
@@ -14,12 +14,31 @@ fn compact_snapshot_restores_immutable_project_bytes_from_the_loaded_graph() {
     };
     let (project, diagnostics) = ResourceGraph::from_manifest(&manifest);
     assert!(diagnostics.is_empty());
-    assert_eq!(project.embedded_project_bytes(), 4);
-
+    assert_eq!(project.embedded_project_bytes(), 0);
     let mut snapshot = project.compact_snapshot();
     assert_eq!(snapshot.embedded_project_bytes(), 0);
-    snapshot.restore_project_bytes(&project).unwrap();
-    assert_eq!(snapshot.embedded_project_bytes(), 4);
+    snapshot
+        .images
+        .values_mut()
+        .next()
+        .unwrap()
+        .bytes
+        .extend_from_slice(&[1, 2, 3, 4]);
+    snapshot.validate_project_resources(&project).unwrap();
+    assert_eq!(snapshot.embedded_project_bytes(), 0);
+
+    let changed_manifest = ProjectManifest {
+        project_revision: 2,
+        files: vec![SubmittedFile {
+            relative_path: "resources/opaque.bin".into(),
+            category: FileCategory::Resource,
+            payload: FilePayload::Bytes(ProtocolBytes::new(vec![4, 3, 2, 1])),
+            content_hash: None,
+        }],
+    };
+    let (changed, diagnostics) = ResourceGraph::from_manifest(&changed_manifest);
+    assert!(diagnostics.is_empty());
+    assert!(snapshot.validate_project_resources(&changed).is_err());
 }
 
 use super::*;

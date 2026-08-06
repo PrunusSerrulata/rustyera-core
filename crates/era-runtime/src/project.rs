@@ -17,13 +17,13 @@ use erabasic_analyzer::{
 };
 use erabasic_bytecode::BytecodeArtifact;
 use erabasic_compiler::{
-    CompilerOptions, IncrementalState, compile_project_with_artifact,
-    compile_project_with_artifact_and_progress,
+    CompilerOptions, IncrementalState, compile_validated_project_with_artifact,
+    compile_validated_project_with_artifact_and_progress,
 };
 use erabasic_config::ConfigStore;
 use erabasic_csv::{CsvDiagnosticSeverity, CsvLoadOptions, ProjectFiles, load_project};
 use erabasic_data::LegacyEncoding;
-use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_compiler_output};
+use erabasic_validator::ValidatedArtifact;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -459,8 +459,9 @@ fn build_project_inner_with_extensions(
             );
             continue;
         }
+        let payload_digest = payload_hash(&file.payload);
         if let (Some(expected), Some(actual)) =
-            (file.content_hash.as_ref(), payload_hash(&file.payload))
+            (file.content_hash.as_ref(), payload_digest.as_ref())
             && expected.as_slice() != actual.as_bytes()
         {
             diagnostics.push(project_diagnostic(
@@ -507,9 +508,13 @@ fn build_project_inner_with_extensions(
             }
             FileCategory::Configuration => {}
             FileCategory::ResourceManifest | FileCategory::Resource => {
-                if let Some(identity) =
-                    normalize_resource(&mut diagnostics, path, file.category, &file.payload)
-                {
+                if let Some(identity) = normalize_resource(
+                    &mut diagnostics,
+                    path,
+                    file.category,
+                    &file.payload,
+                    payload_digest,
+                ) {
                     resources.push(identity);
                 }
             }
@@ -632,13 +637,20 @@ fn build_project_inner_with_extensions(
     let compile_progress = |event: erabasic_compiler::CompileProgress| {
         report_progress(
             progress,
-            ProjectProgressStage::Compiling,
+            match event.stage {
+                erabasic_compiler::CompileProgressStage::Compiling => {
+                    ProjectProgressStage::Compiling
+                }
+                erabasic_compiler::CompileProgressStage::Finalizing => {
+                    ProjectProgressStage::Finalizing
+                }
+            },
             event.completed,
             event.total,
         );
     };
     let compile = if progress.is_some() {
-        compile_project_with_artifact_and_progress(
+        compile_validated_project_with_artifact_and_progress(
             &project,
             &CompilerOptions::default(),
             &host_registry,
@@ -647,7 +659,7 @@ fn build_project_inner_with_extensions(
             &compile_progress,
         )
     } else {
-        compile_project_with_artifact(
+        compile_validated_project_with_artifact(
             &project,
             &CompilerOptions::default(),
             &host_registry,
@@ -689,37 +701,45 @@ fn build_project_inner_with_extensions(
     let Some(artifact) = compile.artifact else {
         return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
     };
-    // The compiler already assigned identities after validating this in-process
-    // artifact. Re-run structural checks at the runtime boundary, but do not
-    // serialize the entire artifact again solely to verify compiler-owned IDs.
-    // Decoded or externally supplied bytecode still uses `validate_bytecode`.
-    report_progress(progress, ProjectProgressStage::Validating, 0, 1);
-    let validation_context = ValidationContext::for_artifact(&artifact);
-    let validation = validate_compiler_output(artifact, &validation_context);
-    report_progress(progress, ProjectProgressStage::Validating, 1, 1);
-    diagnostics.extend(validation.diagnostics.iter().map(|diagnostic| {
-        project_diagnostic(
-            &format!("validator.{:?}", diagnostic.code).to_ascii_lowercase(),
-            RuntimeLogLevel::Error,
-            diagnostic.message.clone(),
-            None,
-        )
-    }));
-    let Some(artifact) = validation.value else {
-        return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
-    };
     let success = !diagnostics
         .iter()
         .any(|diagnostic| diagnostic.level == RuntimeLogLevel::Error);
     if !success {
         return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
     }
+    // The compiler structurally validated this exact in-process value before
+    // refreshing its identities. Avoid repeating that full artifact walk at the
+    // runtime boundary. Decoded or external bytecode still uses `validate_bytecode`.
+    report_progress(progress, ProjectProgressStage::Validating, 0, 1);
+    report_progress(progress, ProjectProgressStage::Validating, 1, 1);
+
+    let preparing_total = ResourceGraph::work_item_count(manifest).saturating_add(2);
+    report_progress(
+        progress,
+        ProjectProgressStage::Preparing,
+        0,
+        preparing_total,
+    );
     resources.sort_by(|left, right| {
         left.relative_path
             .cmp(&right.relative_path)
             .then_with(|| (left.category as u8).cmp(&(right.category as u8)))
     });
-    let (resource_graph, resource_diagnostics) = ResourceGraph::from_manifest(manifest);
+    report_fraction(
+        progress,
+        ProjectProgressStage::Preparing,
+        1,
+        preparing_total,
+    );
+    let (resource_graph, resource_diagnostics) =
+        ResourceGraph::from_manifest_with_progress(manifest, |completed, _| {
+            report_fraction(
+                progress,
+                ProjectProgressStage::Preparing,
+                completed.saturating_add(1),
+                preparing_total,
+            );
+        });
     diagnostics.extend(resource_diagnostics.into_iter().map(|diagnostic| {
         project_diagnostic(
             diagnostic.code,
@@ -745,6 +765,12 @@ fn build_project_inner_with_extensions(
         return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
     }
     let project_identity = project_identity(&artifact, &config, &resources, &extension_map);
+    report_progress(
+        progress,
+        ProjectProgressStage::Preparing,
+        preparing_total,
+        preparing_total,
+    );
     ProjectBuild {
         artifact: Some(artifact),
         incremental,
@@ -870,6 +896,7 @@ fn normalize_resource(
     relative_path: String,
     category: FileCategory,
     payload: &FilePayload,
+    payload_digest: Option<blake3::Hash>,
 ) -> Option<NormalizedResourceIdentity> {
     let location = Some(SourceLocation {
         relative_path: relative_path.clone(),
@@ -878,8 +905,7 @@ fn normalize_resource(
         line: None,
         byte_column: None,
     });
-    let bytes = match payload {
-        FilePayload::Utf8(value) => value.as_bytes(),
+    match payload {
         FilePayload::Bytes(_) if category == FileCategory::ResourceManifest => {
             diagnostics.push(project_diagnostic(
                 "runtime.expected_utf8",
@@ -889,7 +915,7 @@ fn normalize_resource(
             ));
             return None;
         }
-        FilePayload::Bytes(value) => value.as_slice(),
+        FilePayload::Utf8(_) | FilePayload::Bytes(_) => {}
         FilePayload::IoError(error) => {
             diagnostics.push(project_diagnostic(
                 "runtime.frontend_io_error",
@@ -899,11 +925,11 @@ fn normalize_resource(
             ));
             return None;
         }
-    };
+    }
     Some(NormalizedResourceIdentity {
         relative_path,
         category,
-        payload_digest: *blake3::hash(bytes).as_bytes(),
+        payload_digest: *payload_digest?.as_bytes(),
     })
 }
 

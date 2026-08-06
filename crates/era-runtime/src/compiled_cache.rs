@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -550,6 +551,67 @@ pub fn decode_project_file(
     })
 }
 
+/// Decode a compact project-file manifest for frontend-owned resource and diagnostic I/O.
+///
+/// Non-resource payloads that are not referenced by a cached diagnostic are cleared. Their
+/// original content hashes remain available for identity validation, while the full cache import
+/// remains authoritative for runtime loading.
+///
+/// # Errors
+///
+/// Returns an error under the same conditions as [`decode_project_file`].
+pub fn decode_project_file_frontend_manifest(
+    bytes: &[u8],
+    maximum_bytes: usize,
+) -> Result<DecodedProjectFile, ProjectFileError> {
+    let sections = parse_cache_sections(bytes, maximum_bytes).map_err(ProjectFileError::from)?;
+    let (manifest, diagnostics) = rayon::join(
+        || decode_manifest_section(&sections.manifest, sections.identity.project_revision),
+        || decode_section::<Vec<ProtocolDiagnostic>>(&sections.diagnostics),
+    );
+    let mut manifest = manifest.map_err(ProjectFileError::from)?;
+    if project_identity(&manifest) != sections.identity {
+        return Err(ProjectFileError::from(
+            "project file identity does not match its embedded manifest".to_owned(),
+        ));
+    }
+    compact_frontend_manifest(&mut manifest, &diagnostics.map_err(ProjectFileError::from)?);
+    Ok(DecodedProjectFile {
+        identity: sections.identity,
+        manifest,
+    })
+}
+
+fn compact_frontend_manifest(manifest: &mut ProjectManifest, diagnostics: &[ProtocolDiagnostic]) {
+    let diagnostic_sources = diagnostics
+        .iter()
+        .filter_map(|diagnostic| diagnostic.source.as_ref())
+        .map(|source| source.relative_path.to_lowercase())
+        .collect::<BTreeSet<_>>();
+    for file in &mut manifest.files {
+        if file.content_hash.is_none() {
+            let payload = match &file.payload {
+                FilePayload::Utf8(text) => text.as_bytes(),
+                FilePayload::Bytes(bytes) => bytes.as_slice(),
+                FilePayload::IoError(_) => continue,
+            };
+            file.content_hash = Some(ProtocolBytes::new(
+                blake3::hash(payload).as_bytes().to_vec(),
+            ));
+        }
+        if file.category == FileCategory::Resource
+            || diagnostic_sources.contains(&file.relative_path.to_lowercase())
+        {
+            continue;
+        }
+        match &mut file.payload {
+            FilePayload::Utf8(text) => text.clear(),
+            FilePayload::Bytes(bytes) => *bytes = ProtocolBytes::new(Vec::new()),
+            FilePayload::IoError(error) => error.message.clear(),
+        }
+    }
+}
+
 fn parse_cache_sections(
     bytes: &[u8],
     maximum_bytes: usize,
@@ -657,25 +719,63 @@ fn parse_cache_sections(
 }
 
 fn decode_cache_parts(sections: &CompiledCacheSections<'_>) -> Result<DecodedCacheParts, String> {
-    let diagnostics = decode_section::<Vec<ProtocolDiagnostic>>(&sections.diagnostics)?;
-    let manifest = decode_manifest_section(&sections.manifest, sections.identity.project_revision)?;
+    let (primary, secondary) = rayon::join(
+        || {
+            let (diagnostics, manifest) = rayon::join(
+                || decode_section::<Vec<ProtocolDiagnostic>>(&sections.diagnostics),
+                || decode_manifest_section(&sections.manifest, sections.identity.project_revision),
+            );
+            let (metadata, globals) = rayon::join(
+                || decode_section::<CompiledCacheMetadata>(&sections.metadata),
+                || decode_section::<Vec<BytecodeGlobal>>(&sections.globals),
+            );
+            Ok::<_, String>((diagnostics?, manifest?, metadata?, globals?))
+        },
+        || {
+            let ((incremental_cache_keys, project_data), (fingerprints, function_chunks)) =
+                rayon::join(
+                    || {
+                        rayon::join(
+                            || decode_incremental_section(&sections.incremental),
+                            || decode_section::<erabasic_data::ProjectData>(&sections.project_data),
+                        )
+                    },
+                    || {
+                        rayon::join(
+                            || decode_digest_section(&sections.fingerprints),
+                            || decode_function_sections(&sections.functions),
+                        )
+                    },
+                );
+            Ok::<_, String>((
+                incremental_cache_keys?,
+                project_data?,
+                fingerprints?,
+                function_chunks?,
+            ))
+        },
+    );
+    let (diagnostics, manifest, metadata, globals) = primary?;
     if project_identity(&manifest) != sections.identity {
         return Err("project file identity does not match its embedded manifest".into());
     }
-    let metadata = decode_section::<CompiledCacheMetadata>(&sections.metadata)?;
-    let globals = decode_section::<Vec<BytecodeGlobal>>(&sections.globals)?;
-    let incremental_cache_keys = decode_incremental_section(&sections.incremental)?;
-    let project_data = decode_section::<erabasic_data::ProjectData>(&sections.project_data)?;
-    let sources = decode_source_record_section(&sections.sources, &manifest)?;
-    let fingerprints = decode_digest_section(&sections.fingerprints)?;
-    let snapshot =
-        decode_section::<CompiledSnapshotMetadata>(&sections.snapshot)?.into_snapshot(manifest)?;
-    let function_chunks = decode_function_sections(&sections.functions)?;
+    let (incremental_cache_keys, project_data, fingerprints, function_chunks) = secondary?;
     let mut functions = Vec::with_capacity(function_chunks.iter().map(Vec::len).sum());
     for mut chunk in function_chunks {
         functions.append(&mut chunk);
     }
-    let source_chunks = decode_source_sections(&sections.source_entries, &functions)?;
+    let ((sources, snapshot), source_chunks) = rayon::join(
+        || {
+            rayon::join(
+                || decode_source_record_section(&sections.sources, &manifest),
+                || decode_section::<CompiledSnapshotMetadata>(&sections.snapshot),
+            )
+        },
+        || decode_source_sections(&sections.source_entries, &functions),
+    );
+    let sources = sources?;
+    let snapshot = snapshot?.into_snapshot(manifest)?;
+    let source_chunks = source_chunks?;
     let mut entries = Vec::with_capacity(source_chunks.iter().map(Vec::len).sum());
     for mut chunk in source_chunks {
         entries.append(&mut chunk);
@@ -910,10 +1010,18 @@ fn source_record_from_file(file: &SubmittedFile) -> Result<SourceRecord, String>
             .filter(|(_, byte)| *byte == b'\n')
             .map(|(index, _)| u64::try_from(index + 1).unwrap_or(u64::MAX)),
     );
+    let content_hash = file.content_hash.as_ref().map_or_else(
+        || *blake3::hash(text.as_bytes()).as_bytes(),
+        |hash| {
+            hash.as_slice()
+                .try_into()
+                .unwrap_or_else(|_| *blake3::hash(text.as_bytes()).as_bytes())
+        },
+    );
     Ok(SourceRecord {
         relative_path: validate_relative_path(&file.relative_path)
             .map_err(|error| error.to_string())?,
-        content_hash: Digest(*blake3::hash(text.as_bytes()).as_bytes()),
+        content_hash: Digest(content_hash),
         byte_len: u64::try_from(text.len()).map_err(|_| "source text is too large")?,
         line_starts,
     })

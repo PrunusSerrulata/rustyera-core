@@ -5,7 +5,7 @@
 
 use std::ffi::{c_char, c_void};
 
-pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 2 };
+pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 3 };
 pub const ERA_RUNTIME_GET_API_SYMBOL: &str = "era_runtime_get_api";
 
 pub const ERA_DEBUG_SCOPE_VARIABLES_READ: u64 = 1 << 0;
@@ -152,6 +152,8 @@ pub enum EraProjectProgressStage {
     Analyzing = 4,
     Compiling = 5,
     Validating = 6,
+    Finalizing = 7,
+    Preparing = 8,
 }
 
 #[repr(C)]
@@ -183,8 +185,10 @@ pub type EraFunctionPointer = *const c_void;
 /// Versioned function table returned by the `era_runtime_get_api` symbol.
 /// `reserved[0]` in ABI 3.1 is an optional `EraSessionSetProjectProgressFn` extension.
 /// `reserved[1]` in ABI 3.2 is an optional `EraSessionDecodeProjectFileFn` extension.
-/// Authoritative runtime communication continues to use submit/poll; this callback carries only
-/// read-only workload telemetry and must never re-enter the session.
+/// `reserved[2]` in ABI 3.3 is an optional compact frontend-manifest decoder with the same
+/// function signature.
+/// Authoritative runtime communication continues to use submit/poll. Extensions either expose
+/// read-only workload telemetry or project-file projections and must never re-enter the session.
 #[repr(C)]
 pub struct EraRuntimeApi {
     pub struct_size: u32,

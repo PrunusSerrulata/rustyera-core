@@ -219,8 +219,11 @@ fn analyze_project_inner(
     let first_erb = indexed.partition_point(|source| source.kind == SourceKind::Erh);
     let erb_sources = indexed.split_off(first_erb);
     let source_count = indexed.len() + erb_sources.len();
-    let parsing_progress =
-        ProgressCounter::new(AnalysisProgressStage::Parsing, source_count, progress);
+    let parsing_progress = ProgressCounter::new(
+        AnalysisProgressStage::Parsing,
+        source_count.saturating_mul(2),
+        progress,
+    );
     let mut parsed = Vec::with_capacity(source_count);
     for source in indexed {
         let output = parse_erh(&source.text, &mut context);
@@ -239,6 +242,7 @@ fn analyze_project_inner(
                 script,
             });
         }
+        parsing_progress.advance();
         parsing_progress.advance();
     }
     // ERH parsing above establishes the shared macro and variable environment.
@@ -280,6 +284,7 @@ fn analyze_project_inner(
                 script,
             });
         }
+        parsing_progress.advance();
     }
     analyze_with_context(
         input.project_data,

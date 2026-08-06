@@ -67,6 +67,7 @@ pub unsafe extern "C" fn era_runtime_get_api(
         let mut reserved = [std::ptr::null_mut(); 8];
         reserved[0] = session_set_project_progress as *const () as *mut c_void;
         reserved[1] = session_decode_project_file as *const () as *mut c_void;
+        reserved[2] = session_decode_project_file_frontend as *const () as *mut c_void;
         let api = EraRuntimeApi {
             struct_size: u32::try_from(std::mem::size_of::<EraRuntimeApi>()).unwrap_or(u32::MAX),
             abi_version: ERA_RUNTIME_ABI_VERSION,
@@ -94,6 +95,25 @@ extern "C" fn session_decode_project_file(
     input: EraByteSlice,
     out_buffer: *mut EraOwnedBuffer,
 ) -> EraStatus {
+    decode_project_file_buffer(header, handle, input, out_buffer, false)
+}
+
+extern "C" fn session_decode_project_file_frontend(
+    header: EraCallHeader,
+    handle: EraSessionHandle,
+    input: EraByteSlice,
+    out_buffer: *mut EraOwnedBuffer,
+) -> EraStatus {
+    decode_project_file_buffer(header, handle, input, out_buffer, true)
+}
+
+fn decode_project_file_buffer(
+    header: EraCallHeader,
+    handle: EraSessionHandle,
+    input: EraByteSlice,
+    out_buffer: *mut EraOwnedBuffer,
+    compact: bool,
+) -> EraStatus {
     ffi_status(|| {
         if !valid_header::<EraOwnedBuffer>(header)
             || out_buffer.is_null()
@@ -108,32 +128,43 @@ extern "C" fn session_decode_project_file(
             // for this call.
             unsafe { std::slice::from_raw_parts(input.data, input.len) }
         };
-        let mut registry = lock_registry();
-        if !registry.sessions.contains_key(&handle.value) {
-            return EraStatus::InvalidHandle;
+        {
+            let registry = lock_registry();
+            if !registry.sessions.contains_key(&handle.value) {
+                return EraStatus::InvalidHandle;
+            }
         }
-        let manifest = match era_runtime::decode_project_file(bytes, input.len) {
+        let decoded = if compact {
+            era_runtime::decode_project_file_frontend_manifest(bytes, input.len)
+        } else {
+            era_runtime::decode_project_file(bytes, input.len)
+        };
+        let manifest = match decoded {
             Ok(decoded) => decoded.manifest,
             Err(error) => {
-                registry
-                    .sessions
-                    .get_mut(&handle.value)
-                    .expect("session presence checked")
-                    .last_error = error.to_string();
+                let mut registry = lock_registry();
+                let Some(record) = registry.sessions.get_mut(&handle.value) else {
+                    return EraStatus::InvalidHandle;
+                };
+                record.last_error = error.to_string();
                 return EraStatus::InvalidArgument;
             }
         };
         let encoded = match minicbor::to_vec(manifest) {
             Ok(encoded) => encoded,
             Err(error) => {
-                registry
-                    .sessions
-                    .get_mut(&handle.value)
-                    .expect("session presence checked")
-                    .last_error = error.to_string();
+                let mut registry = lock_registry();
+                let Some(record) = registry.sessions.get_mut(&handle.value) else {
+                    return EraStatus::InvalidHandle;
+                };
+                record.last_error = error.to_string();
                 return EraStatus::InternalError;
             }
         };
+        let mut registry = lock_registry();
+        if !registry.sessions.contains_key(&handle.value) {
+            return EraStatus::InvalidHandle;
+        }
         write_owned_buffer(&mut registry, encoded, out_buffer)
     })
 }
@@ -182,6 +213,8 @@ const fn project_progress_stage(stage: ProjectProgressStage) -> EraProjectProgre
         ProjectProgressStage::Analyzing => EraProjectProgressStage::Analyzing,
         ProjectProgressStage::Compiling => EraProjectProgressStage::Compiling,
         ProjectProgressStage::Validating => EraProjectProgressStage::Validating,
+        ProjectProgressStage::Finalizing => EraProjectProgressStage::Finalizing,
+        ProjectProgressStage::Preparing => EraProjectProgressStage::Preparing,
     }
 }
 
@@ -440,6 +473,7 @@ mod tests {
         assert!(!api.release_buffer.is_null());
         assert!(!api.reserved[0].is_null());
         assert!(!api.reserved[1].is_null());
+        assert!(!api.reserved[2].is_null());
     }
 
     #[test]

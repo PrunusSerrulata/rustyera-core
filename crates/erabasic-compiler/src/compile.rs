@@ -8,7 +8,9 @@ use erabasic_bytecode::{
     HostImport, NativeImport, SourceMap, SourceMapEntry, SourceRecord, SymbolKey,
 };
 use erabasic_hir::Function;
-use erabasic_validator::{ValidationContext, validate_compiler_output, validate_hir};
+use erabasic_validator::{
+    ValidatedArtifact, ValidationContext, validate_compiler_output, validate_hir,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -40,6 +42,90 @@ struct CachedFunction {
 enum FunctionBuild {
     Cached(MaterializedFunction),
     Lowered(LoweredFunction),
+}
+
+impl FunctionBuild {
+    fn source_entry_count(&self) -> usize {
+        match self {
+            Self::Cached(entry) => entry.source_entries.len(),
+            Self::Lowered(entry) => entry.source_entries.len(),
+        }
+    }
+}
+
+fn compile_progress_stride(total: usize) -> usize {
+    total.div_ceil(100).clamp(1, 64)
+}
+
+struct CompileProgressCounter<'a> {
+    stage: CompileProgressStage,
+    total: usize,
+    completed: AtomicUsize,
+    reported: AtomicUsize,
+    callback_lock: Mutex<()>,
+    callback: Option<&'a dyn CompileProgressCallback>,
+}
+
+impl<'a> CompileProgressCounter<'a> {
+    fn new(
+        stage: CompileProgressStage,
+        total: usize,
+        callback: Option<&'a dyn CompileProgressCallback>,
+    ) -> Self {
+        if let Some(callback) = callback {
+            callback(CompileProgress {
+                stage,
+                completed: 0,
+                total,
+            });
+        }
+        Self {
+            stage,
+            total,
+            completed: AtomicUsize::new(0),
+            reported: AtomicUsize::new(0),
+            callback_lock: Mutex::new(()),
+            callback,
+        }
+    }
+
+    fn advance(&self) {
+        let completed = self.completed.fetch_add(1, Ordering::Relaxed) + 1;
+        self.report(completed, false);
+    }
+
+    fn checkpoint(&self) {
+        let completed = self.completed.fetch_add(1, Ordering::Relaxed) + 1;
+        self.report(completed, true);
+    }
+
+    fn finish(&self) {
+        self.completed.store(self.total, Ordering::Relaxed);
+        self.report(self.total, true);
+    }
+
+    fn report(&self, completed: usize, force: bool) {
+        let Some(callback) = self.callback else {
+            return;
+        };
+        let _guard = self
+            .callback_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = self.reported.load(Ordering::Relaxed);
+        if completed > previous
+            && (force
+                || completed.saturating_sub(previous) >= compile_progress_stride(self.total)
+                || completed == self.total)
+        {
+            self.reported.store(completed, Ordering::Relaxed);
+            callback(CompileProgress {
+                stage: self.stage,
+                completed,
+                total: self.total,
+            });
+        }
+    }
 }
 
 struct MaterializedFunction {
@@ -209,8 +295,37 @@ pub struct CompileReport {
     pub stats: CompileStats,
 }
 
+/// A compile report whose artifact retains validator provenance for in-process consumers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedCompileReport {
+    pub artifact: Option<ValidatedArtifact>,
+    pub patch: Option<BytecodePatch>,
+    pub incremental_state: IncrementalState,
+    pub diagnostics: Vec<CompilerDiagnostic>,
+    pub stats: CompileStats,
+}
+
+impl From<ValidatedCompileReport> for CompileReport {
+    fn from(report: ValidatedCompileReport) -> Self {
+        Self {
+            artifact: report.artifact.map(ValidatedArtifact::into_inner),
+            patch: report.patch,
+            incremental_state: report.incremental_state,
+            diagnostics: report.diagnostics,
+            stats: report.stats,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompileProgressStage {
+    Compiling,
+    Finalizing,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompileProgress {
+    pub stage: CompileProgressStage,
     pub completed: usize,
     pub total: usize,
 }
@@ -241,7 +356,7 @@ pub fn compile_project(
     host_registry: &HostRegistry,
     previous: Option<&IncrementalState>,
 ) -> CompileReport {
-    compile_project_inner(project, options, host_registry, previous, None, false, None)
+    compile_project_inner(project, options, host_registry, previous, None, false, None).into()
 }
 
 /// Compile with an exact previous artifact backing a compact incremental cache.
@@ -266,6 +381,7 @@ pub fn compile_project_with_artifact(
         true,
         None,
     )
+    .into()
 }
 
 #[must_use]
@@ -286,6 +402,48 @@ pub fn compile_project_with_artifact_and_progress(
         true,
         Some(progress),
     )
+    .into()
+}
+
+/// Compile for a runtime that must preserve the compiler's validation provenance.
+#[must_use]
+pub fn compile_validated_project_with_artifact(
+    project: &AnalyzedProject,
+    options: &CompilerOptions,
+    host_registry: &HostRegistry,
+    previous: Option<&IncrementalState>,
+    previous_artifact: Option<&BytecodeArtifact>,
+) -> ValidatedCompileReport {
+    compile_project_inner(
+        project,
+        options,
+        host_registry,
+        previous,
+        previous_artifact,
+        true,
+        None,
+    )
+}
+
+/// Compile with progress while preserving validator provenance for the runtime.
+#[must_use]
+pub fn compile_validated_project_with_artifact_and_progress(
+    project: &AnalyzedProject,
+    options: &CompilerOptions,
+    host_registry: &HostRegistry,
+    previous: Option<&IncrementalState>,
+    previous_artifact: Option<&BytecodeArtifact>,
+    progress: &dyn CompileProgressCallback,
+) -> ValidatedCompileReport {
+    compile_project_inner(
+        project,
+        options,
+        host_registry,
+        previous,
+        previous_artifact,
+        true,
+        Some(progress),
+    )
 }
 
 #[allow(clippy::too_many_lines)]
@@ -297,17 +455,13 @@ fn compile_project_inner(
     previous_artifact: Option<&BytecodeArtifact>,
     compact_cache: bool,
     progress: Option<&dyn CompileProgressCallback>,
-) -> CompileReport {
+) -> ValidatedCompileReport {
     let total_functions = project.program.functions.len();
-    if let Some(progress) = progress {
-        progress(CompileProgress {
-            completed: 0,
-            total: total_functions,
-        });
-    }
+    let compiling_progress =
+        CompileProgressCounter::new(CompileProgressStage::Compiling, total_functions, progress);
     let hir_report = validate_hir(&project.program, &project.data);
     if !hir_report.is_valid() {
-        return CompileReport {
+        return ValidatedCompileReport {
             artifact: None,
             patch: None,
             incremental_state: previous.cloned().unwrap_or_default(),
@@ -361,9 +515,6 @@ fn compile_project_inner(
         previous.and_then(IncrementalState::base_artifact_id) == Some(artifact.manifest.artifact_id)
     });
     let previous_artifact_index = previous_artifact.map(PreviousArtifactIndex::new);
-    let completed_functions = AtomicUsize::new(0);
-    let reported_percent = AtomicUsize::new(0);
-    let progress_callback_lock = Mutex::new(());
     let compile_one = |function: &Function| {
         let build = {
             let key = function_keys[&function.id];
@@ -388,24 +539,7 @@ fn compile_project_inner(
                 FunctionBuild::Lowered(lower_function(function, key, cache_key, &context))
             }
         };
-        let completed = completed_functions.fetch_add(1, Ordering::Relaxed) + 1;
-        if let Some(progress) = progress {
-            let percent = completed
-                .saturating_mul(100)
-                .checked_div(total_functions)
-                .unwrap_or(100);
-            let _guard = progress_callback_lock
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let previous = reported_percent.load(Ordering::Relaxed);
-            if percent > previous || completed == total_functions {
-                reported_percent.store(percent, Ordering::Relaxed);
-                progress(CompileProgress {
-                    completed,
-                    total: total_functions,
-                });
-            }
-        }
+        compiling_progress.advance();
         build
     };
     let compile_functions = || {
@@ -439,7 +573,7 @@ fn compile_project_inner(
         {
             Ok(pool) => pool.install(compile_functions),
             Err(error) => {
-                return CompileReport {
+                return ValidatedCompileReport {
                     artifact: None,
                     patch: None,
                     incremental_state: previous.cloned().unwrap_or_default(),
@@ -456,6 +590,18 @@ fn compile_project_inner(
     };
     #[cfg(target_arch = "wasm32")]
     let function_builds = compile_functions();
+    compiling_progress.finish();
+    let source_entry_count = function_builds
+        .iter()
+        .map(FunctionBuild::source_entry_count)
+        .sum::<usize>();
+    let source_entry_chunks = source_entry_count.div_ceil(65_536);
+    let finalizing_total = total_functions
+        .saturating_mul(2)
+        .saturating_add(source_entry_chunks.saturating_mul(3))
+        .saturating_add(8);
+    let finalizing_progress =
+        CompileProgressCounter::new(CompileProgressStage::Finalizing, finalizing_total, progress);
     let mut materialized = Vec::with_capacity(function_builds.len());
     let mut lowered_count = 0usize;
     let mut diagnostics = Vec::new();
@@ -469,6 +615,7 @@ fn compile_project_inner(
             }
         };
         materialized.push(entry);
+        finalizing_progress.advance();
     }
     diagnostics.sort_by_key(|diagnostic| {
         diagnostic
@@ -481,11 +628,12 @@ fn compile_project_inner(
                 )
             })
     });
+    finalizing_progress.checkpoint();
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == crate::CompilerDiagnosticSeverity::Error)
     {
-        return CompileReport {
+        return ValidatedCompileReport {
             artifact: None,
             patch: None,
             incremental_state: previous.cloned().unwrap_or_default(),
@@ -509,6 +657,7 @@ fn compile_project_inner(
     let mut functions = Vec::with_capacity(materialized.len());
     let mut cached = BTreeMap::new();
     materialized.sort_by_key(|entry| entry.function.key);
+    finalizing_progress.checkpoint();
     for entry in materialized {
         let key = entry.function.key;
         let cached_entry = if compact_cache {
@@ -525,38 +674,63 @@ fn compile_project_inner(
         lowered_source_entries.extend(entry.source_entries);
         functions.push(entry.function);
         cached.insert(key, cached_entry);
+        finalizing_progress.advance();
     }
-    let mut fingerprint_order = lowered_source_entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| (entry.statement_fingerprint, index))
-        .collect::<Vec<_>>();
+    let mut fingerprint_order = Vec::with_capacity(lowered_source_entries.len());
+    for (chunk_index, chunk) in lowered_source_entries.chunks(65_536).enumerate() {
+        let base = chunk_index.saturating_mul(65_536);
+        fingerprint_order.extend(
+            chunk
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| (entry.statement_fingerprint, base + index)),
+        );
+        finalizing_progress.checkpoint();
+    }
     fingerprint_order.sort_unstable();
+    finalizing_progress.checkpoint();
     let mut statement_fingerprints = Vec::new();
     let mut fingerprint_indices = vec![0_u32; lowered_source_entries.len()];
-    for (fingerprint, entry_index) in fingerprint_order {
-        let fingerprint_index = if statement_fingerprints.last() == Some(&fingerprint) {
-            statement_fingerprints.len().saturating_sub(1)
-        } else {
-            statement_fingerprints.push(fingerprint);
-            statement_fingerprints.len().saturating_sub(1)
-        };
-        fingerprint_indices[entry_index] = u32::try_from(fingerprint_index).unwrap_or(u32::MAX);
+    for chunk in fingerprint_order.chunks(65_536) {
+        for &(fingerprint, entry_index) in chunk {
+            let fingerprint_index = if statement_fingerprints.last() == Some(&fingerprint) {
+                statement_fingerprints.len().saturating_sub(1)
+            } else {
+                statement_fingerprints.push(fingerprint);
+                statement_fingerprints.len().saturating_sub(1)
+            };
+            fingerprint_indices[entry_index] = u32::try_from(fingerprint_index).unwrap_or(u32::MAX);
+        }
+        finalizing_progress.checkpoint();
     }
-    let source_entries = lowered_source_entries
-        .into_iter()
-        .zip(fingerprint_indices)
-        .map(|(entry, statement_fingerprint)| SourceMapEntry {
-            function: entry.function,
-            code_start: entry.code_start,
-            code_end: entry.code_end,
-            byte_start: entry.byte_start,
-            byte_end: entry.byte_end,
-            statement_fingerprint,
-            origin_chain: entry.origin_chain,
-            source_index: entry.source_index,
-        })
-        .collect();
+    let mut source_entries = Vec::with_capacity(source_entry_count);
+    let mut lowered_source_entries = lowered_source_entries.into_iter();
+    let mut fingerprint_indices = fingerprint_indices.into_iter();
+    loop {
+        let mut consumed = 0usize;
+        for _ in 0..65_536 {
+            let (Some(entry), Some(statement_fingerprint)) =
+                (lowered_source_entries.next(), fingerprint_indices.next())
+            else {
+                break;
+            };
+            source_entries.push(SourceMapEntry {
+                function: entry.function,
+                code_start: entry.code_start,
+                code_end: entry.code_end,
+                byte_start: entry.byte_start,
+                byte_end: entry.byte_end,
+                statement_fingerprint,
+                origin_chain: entry.origin_chain,
+                source_index: entry.source_index,
+            });
+            consumed += 1;
+        }
+        if consumed == 0 {
+            break;
+        }
+        finalizing_progress.checkpoint();
+    }
     let artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(compiler_options),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility {
@@ -589,13 +763,15 @@ fn compile_project_inner(
             entries: source_entries,
         },
     };
+    finalizing_progress.checkpoint();
     // Compiler output has no identity to verify yet. Validate its structure in
     // place, then serialize the complete artifact only once to assign final IDs.
     // Untrusted decoded artifacts continue to use the validator's identity-checking path.
     let validation_context = ValidationContext::for_artifact(&artifact);
     let validation = validate_compiler_output(artifact, &validation_context);
+    finalizing_progress.checkpoint();
     if !validation.is_valid() {
-        return CompileReport {
+        return ValidatedCompileReport {
             artifact: None,
             patch: None,
             incremental_state: previous.cloned().unwrap_or_default(),
@@ -620,24 +796,29 @@ fn compile_project_inner(
             stats: CompileStats::default(),
         };
     }
-    let mut artifact = validation
+    let artifact = validation
         .value
         .expect("a valid compiler artifact is returned by the validator")
-        .into_inner();
-    if let Err(error) = artifact.refresh_ids() {
-        return CompileReport {
-            artifact: None,
-            patch: None,
-            incremental_state: previous.cloned().unwrap_or_default(),
-            diagnostics: vec![CompilerDiagnostic::new(
-                CompilerDiagnosticCode::Encoding,
-                error.to_string(),
-            )],
-            stats: CompileStats::default(),
-        };
-    }
-    let patch =
-        previous.and_then(|base| create_incremental_patch(base, previous_artifact, &artifact));
+        .refresh_ids();
+    let artifact = match artifact {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            return ValidatedCompileReport {
+                artifact: None,
+                patch: None,
+                incremental_state: previous.cloned().unwrap_or_default(),
+                diagnostics: vec![CompilerDiagnostic::new(
+                    CompilerDiagnosticCode::Encoding,
+                    error,
+                )],
+                stats: CompileStats::default(),
+            };
+        }
+    };
+    finalizing_progress.checkpoint();
+    let patch = previous
+        .and_then(|base| create_incremental_patch(base, previous_artifact, artifact.artifact()));
+    finalizing_progress.checkpoint();
     let patch_functions = patch
         .as_ref()
         .map_or(0, |patch| patch.changed_functions.len());
@@ -652,13 +833,30 @@ fn compile_project_inner(
         functions: cached,
         // Function bodies and source entries already live in `functions`; retain only the
         // remaining fields needed to compare the next build instead of cloning the artifact.
-        base: Some(IncrementalBase::from_artifact(&artifact, !compact_cache)),
+        base: Some(IncrementalBase::from_artifact(
+            artifact.artifact(),
+            !compact_cache,
+        )),
     };
-    CompileReport {
+    finalizing_progress.finish();
+    ValidatedCompileReport {
         artifact: Some(artifact),
         patch,
         incremental_state,
         diagnostics,
         stats,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compile_progress_stride;
+
+    #[test]
+    fn compile_progress_is_frequent_for_large_projects() {
+        assert_eq!(compile_progress_stride(1), 1);
+        assert_eq!(compile_progress_stride(100), 1);
+        assert_eq!(compile_progress_stride(1_000), 10);
+        assert_eq!(compile_progress_stride(58_349), 64);
     }
 }

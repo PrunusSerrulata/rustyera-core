@@ -749,7 +749,15 @@ impl RuntimeSession {
                 exact_cached_project(exact, request.identity.project_revision)
             }
             cached => {
-                let Some(manifest) = request.manifest.as_ref() else {
+                let embedded_manifest = cached.as_ref().and_then(|value| {
+                    let mut manifest = value.snapshot.manifest.as_ref().clone();
+                    manifest.project_revision = request.identity.project_revision;
+                    (crate::compiled_cache::project_identity(&manifest).source_digest
+                        == request.identity.source_digest)
+                        .then_some(manifest)
+                });
+                let Some(manifest) = embedded_manifest.as_ref().or(request.manifest.as_ref())
+                else {
                     let mut diagnostics = Vec::new();
                     if let Some(error) = cache_warning.take() {
                         diagnostics.push(ProtocolDiagnostic {

@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.0`、公共信封 `2.0`、Runtime 协议 `24.0`。源码入口：
+> C ABI `3.3`、公共信封 `2.0`、Runtime 协议 `24.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -18,7 +18,7 @@
 
 | 层 | 当前稳定性 | 用途 |
 | --- | --- | --- |
-| C ABI 3.0 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
+| C ABI 3.3 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
 | Runtime 协议 24.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
@@ -49,7 +49,7 @@ snake_case JSON 表示仅供测试/日志，C ABI 实际只传确定性 CBOR。
 前端线程/worker
   │ create ─ submit(CBOR) ─ drive(预算) ─ poll(CBOR) ─ release_buffer
   ▼
-C ABI 全局 session 注册表（Mutex；当前把 ABI 调用串行化）
+C ABI 全局 session 注册表（Mutex；session 操作串行化）
   ▼
 RuntimeSession（唯一可变所有者；无回调、无内部事件循环）
   ├─ Runtime/Debug 入站队列
@@ -65,8 +65,11 @@ RuntimeSession（唯一可变所有者；无回调、无内部事件循环）
 - `poll` 把一条已编码输出移交为 `EraOwnedBuffer`。缓冲区仍由动态库拥有，前端读完后
   必须且只能调用一次 `release_buffer`。
 - `session_destroy` 从注册表移除对象并释放全部状态；后台缓存任务会被取消并 join。
-- 当前实现用进程级互斥锁保护注册表，甚至会覆盖一次 `drive`。不同线程调用在内存上
-  被串行化，但这不是高并发承诺；不要从回调重入，建议每个 session 固定在一个 worker。
+- 当前实现用进程级互斥锁保护注册表，session 操作（包括一次 `drive`）会被串行化。
+  3.2/3.3 项目文件投影扩展只在检查 handle、记录错误及登记输出 buffer 时持锁，耗时的
+  校验、解压和 CBOR 编码在锁外执行；期间销毁 session 会令调用最终返回
+  `INVALID_HANDLE`。这不是高并发承诺；不要从回调重入，建议每个 session 固定在一个
+  worker。
 - session handle、interaction token、request ID、transfer ID、effect ID 都是不透明值；
   不要推导、跨 session/epoch 缓存或自行生成。
 
@@ -84,7 +87,7 @@ get_api → create → ClientHello → ServerHello
                                                 destroy
 ```
 
-## 3. C ABI 3.0
+## 3. C ABI 3.3
 
 ### 3.1 数据结构
 
@@ -157,6 +160,26 @@ create=`EraCreateOptions`，drive=`EraDriveOptions`，poll/release/last-error=
 
 `session_destroy` 成功后 handle 立即失效；先释放仍持有的输出 buffer。当前 buffer 注册
 独立于 session，但依赖这一细节延迟释放没有兼容性保证。
+
+函数表的可选扩展占用以下 `reserved` 槽；调用方必须同时检查 ABI 次版本与非空指针：
+
+- ABI 3.1 的 `reserved[0]` 是 `EraSessionSetProjectProgressFn`，注册只读项目进度回调；
+- ABI 3.2 的 `reserved[1]` 是 `EraSessionDecodeProjectFileFn`，校验 `.reraproj` 并返回完整
+  `ProjectManifest` 的确定性 CBOR；
+- ABI 3.3 的 `reserved[2]` 使用相同函数签名，返回供前端 I/O 使用的紧凑 manifest。
+  它保留资源文件、I/O 错误和被缓存诊断引用的源码 payload；其他 payload 被清空，但若
+  原记录缺少 `content_hash`，清空前会先计算并保留哈希。因此紧凑投影仍可用于项目身份、
+  前端资源和诊断展示；配置与其他权威状态由完整项目文件导入 runtime。
+
+项目进度阶段的 C ABI 数值保持追加兼容：`SCANNING` 至 `VALIDATING` 为 0–6，ABI 3.3
+追加的 `FINALIZING = 7` 表示函数编译完成后的缓存合并、源码映射整理、结构验证与身份计算；
+`PREPARING = 8` 表示 Runtime 正在整理资源索引与计算项目身份。解析、finalizing 和 preparing
+阶段都会按实际处理批次报告进度，前端不应仅依赖百分比变化判断活性。
+
+两个解码扩展都借用输入 slice 到调用返回，并以 `EraOwnedBuffer` 返回结果；调用方必须用
+`release_buffer` 释放。坏文件或超过调用方上限的文件返回 `INVALID_ARGUMENT` 并写入
+`last_error`。ABI 3.2 客户端应使用 `reserved[1]`；ABI 3.3 客户端优先使用紧凑槽，并可向
+3.2 动态库回退到完整槽。
 
 当前精确同步错误映射：create/drive 的外层 header 错误或空指针是
 `INVALID_ARGUMENT`，其 options 内嵌 header 错误是 `ABI_MISMATCH`；submit 的 header
@@ -392,7 +415,7 @@ Warning、Error。前端可以筛选、着色和添加到达时间，但不得�
 | `FilePayload` | `Utf8(String)` / `Bytes` / `IoError` | 源码直接 UTF-8；不要提交本地绝对路径 |
 | `ProjectManifest` | `project_revision:u64`, `files[]` | 文件顺序是协议输入的一部分，runtime 内部做确定性处理 |
 | `ProjectIdentity` | `project_revision`, `source_digest` | digest 由完整规范项目身份产生 |
-| `ProjectLoadRequest` | `identity`, `manifest?`, `compiled_cache_transfer_id?` | cache 不精确时报告 `payload_required=true`，再带完整 manifest 重试 |
+| `ProjectLoadRequest` | `identity`, `manifest?`, `compiled_cache_transfer_id?` | cache key 不精确但其嵌入 manifest 身份匹配时直接重编译；缓存无效或源码身份不同且未带 manifest 时才报告 `payload_required=true` |
 | `ProjectLoadReport` | `project_revision`, `success`, `diagnostics[]`, `payload_required` | `success=false` 时不要 Start |
 | `ProjectAnalysisRequest` | `manifest`, `selected_erb_paths[]`, `debug_mode` | 一次性分析，不替换项目 |
 | `ProjectAnalysisReport` | `project_revision`, `success`, `diagnostics[]`, `analyzed_erb_paths[]` | 仅报告 |
@@ -648,9 +671,13 @@ diagnostic，交由前端明确呈现。CompiledProjectCache 传输承载可持�
 项目文件：文件头 magic 为 `RERAPROJ`，当前单字节格式版本为 `02`，payload 继续使用
 既有 zstd 参数和分片策略。v2 只保存一次 manifest 文件内容，并由它重建资源图、源码哈希、
 长度和行索引；增量状态只保存按规范函数顺序排列的 cache key，语句指纹在既有 `Digest`
-接口中使用 128 位有效内容。版本 `01` 和旧 `RERACACH` 编译缓存不再兼容；前端仍持有源码
-时应按普通 cache miss 重新编译，没有源码的独立旧项目文件会加载失败。项目文件同时保留成功构建产生的项目诊断；精确命中时重放原等级、code 和 source，并在
-正文前添加 `[cached] `。项目文件准备异步，首次请求可能被可恢复地拒绝为“已开始/仍在准备”，稍后再请求。
+接口中使用 128 位有效内容。v2 cache key 因客户端配置或扩展变化而不再精确、但嵌入
+manifest 的源码身份仍匹配时，runtime 直接从其中的完整 payload 重编译，不要求紧凑前端
+投影再传一次源码。版本 `01` 和旧 `RERACACH` 编译缓存不再兼容；前端仍持有源码时应按
+普通 cache miss 重新编译，没有源码的独立旧项目文件会加载失败。项目文件同时保留成功
+构建产生的项目诊断；精确命中时重放原等级、code 和 source，并在正文前添加
+`[cached] `。项目文件准备异步，首次请求可能被可恢复地拒绝为“已开始/仍在准备”，稍后
+再请求。
 
 开发和诊断工具可调用
 `inspect_runtime_snapshot(bytes, maximum_bytes) -> RuntimeSnapshotInspection`，复用正式

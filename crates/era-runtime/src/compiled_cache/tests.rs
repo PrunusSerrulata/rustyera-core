@@ -138,8 +138,14 @@ fn project_file_stores_manifest_payload_once_and_extracts_it_exactly() {
     .unwrap();
     let sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
     let extracted = decode_project_file(&bytes, bytes.len()).unwrap();
+    let frontend = decode_project_file_frontend_manifest(&bytes, bytes.len()).unwrap();
 
     assert_eq!(extracted.manifest, project);
+    assert!(
+        matches!(&frontend.manifest.files[0].payload, FilePayload::Utf8(text) if text.is_empty())
+    );
+    assert_eq!(frontend.manifest.files[1].payload, project.files[1].payload);
+    assert_eq!(frontend.identity, extracted.identity);
     assert!(sections.snapshot.decoded_length < resource.len() as u64);
     let resource_length = u64::try_from(resource.len()).unwrap();
     assert!(sections.manifest.decoded_length > resource_length);
@@ -147,12 +153,76 @@ fn project_file_stores_manifest_payload_once_and_extracts_it_exactly() {
 }
 
 #[test]
+fn frontend_manifest_keeps_resources_and_diagnostic_sources_only() {
+    let mut project = ProjectManifest {
+        project_revision: 1,
+        files: vec![
+            SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@MAIN\nRETURN\n".into()),
+                content_hash: Some(ProtocolBytes::new(vec![1; 32])),
+            },
+            SubmittedFile {
+                relative_path: "other.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@OTHER\nRETURN\n".into()),
+                content_hash: Some(ProtocolBytes::new(vec![2; 32])),
+            },
+            SubmittedFile {
+                relative_path: "resources/a.png".into(),
+                category: FileCategory::Resource,
+                payload: FilePayload::Bytes(ProtocolBytes::new(vec![3, 4, 5])),
+                content_hash: Some(ProtocolBytes::new(vec![3; 32])),
+            },
+            SubmittedFile {
+                relative_path: "emuera.config".into(),
+                category: FileCategory::Configuration,
+                payload: FilePayload::Utf8("FontSize:18\n".into()),
+                content_hash: None,
+            },
+        ],
+    };
+    let diagnostics = vec![ProtocolDiagnostic {
+        code: "test".into(),
+        level: era_runtime_protocol::RuntimeLogLevel::Warning,
+        message: "warning".into(),
+        source: Some(era_runtime_protocol::SourceLocation {
+            relative_path: "MAIN.ERB".into(),
+            byte_start: 0,
+            byte_end: 1,
+            line: Some(1),
+            byte_column: Some(1),
+        }),
+    }];
+
+    compact_frontend_manifest(&mut project, &diagnostics);
+
+    assert!(matches!(&project.files[0].payload, FilePayload::Utf8(text) if !text.is_empty()));
+    assert!(matches!(&project.files[1].payload, FilePayload::Utf8(text) if text.is_empty()));
+    assert!(
+        matches!(&project.files[2].payload, FilePayload::Bytes(bytes) if bytes.as_slice() == [3, 4, 5])
+    );
+    assert!(matches!(&project.files[3].payload, FilePayload::Utf8(text) if text.is_empty()));
+    assert_eq!(
+        project.files[1].content_hash.as_ref().unwrap().as_slice(),
+        [2; 32]
+    );
+    assert_eq!(
+        project.files[3].content_hash.as_ref().unwrap().as_slice(),
+        blake3::hash(b"FontSize:18\n").as_bytes()
+    );
+}
+
+#[test]
 fn compiled_project_cache_rejects_corruption() {
     assert!(decode(b"not a compiled cache", 1024).is_err());
     assert!(decode_project_file(b"not a project file", 1024).is_err());
+    assert!(decode_project_file_frontend_manifest(b"not a project file", 1024).is_err());
     let mut obsolete = vec![0_u8; 512];
     obsolete[..8].copy_from_slice(b"RERACACH");
     assert!(decode_project_file(&obsolete, obsolete.len()).is_err());
+    assert!(decode_project_file_frontend_manifest(&obsolete, obsolete.len()).is_err());
 }
 
 #[test]
@@ -172,12 +242,23 @@ fn project_file_projection_honors_limits_and_version() {
     .unwrap();
 
     assert!(decode_project_file(&bytes, bytes.len() - 1).is_err());
+    assert!(decode_project_file_frontend_manifest(&bytes, bytes.len() - 1).is_err());
+    assert!(decode_project_file_frontend_manifest(&bytes[..bytes.len() - 1], bytes.len()).is_err());
+    let mut corrupt = bytes.clone();
+    *corrupt.last_mut().unwrap() ^= 1;
+    assert!(decode_project_file_frontend_manifest(&corrupt, corrupt.len()).is_err());
     bytes[8] = 2;
     let digest_offset = bytes.len() - 32;
     let digest = blake3::hash(&bytes[..digest_offset]);
     bytes[digest_offset..].copy_from_slice(digest.as_bytes());
     assert!(
         decode_project_file(&bytes, 64 * 1024 * 1024)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported project file version 02")
+    );
+    assert!(
+        decode_project_file_frontend_manifest(&bytes, 64 * 1024 * 1024)
             .unwrap_err()
             .to_string()
             .contains("unsupported project file version 02")

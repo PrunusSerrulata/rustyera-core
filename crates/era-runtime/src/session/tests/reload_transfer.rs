@@ -477,3 +477,60 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
     assert_eq!(replayed.source.as_ref().unwrap().byte_end, 13);
     assert_eq!(cached.snapshot.unwrap().manifest.project_revision, 8);
 }
+
+#[test]
+fn mismatched_compiled_cache_rebuilds_from_its_matching_embedded_manifest() {
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+            content_hash: None,
+        }],
+    };
+    let mut initial = crate::project::build_project(&manifest, None);
+    assert!(initial.report.success, "{:?}", initial.report.diagnostics);
+    initial.incremental.compact();
+    let cache = crate::compiled_cache::encode(
+        &manifest,
+        &[],
+        initial.artifact.as_ref().unwrap(),
+        &initial.incremental,
+        initial.snapshot.as_ref().unwrap(),
+        &initial.report.diagnostics,
+    )
+    .unwrap();
+    let mut identity = crate::compiled_cache::project_identity(&manifest);
+    identity.project_revision = 9;
+    let mut compact_manifest = manifest.clone();
+    compact_manifest.project_revision = 9;
+    compact_manifest.files[0].content_hash = Some(ProtocolBytes::new(
+        blake3::hash(b"@SYSTEM_TITLE\nRETURN\n").as_bytes().to_vec(),
+    ));
+    compact_manifest.files[0].payload = FilePayload::Utf8(String::new());
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.configuration_profile = ConfigurationClientProfile::Browser;
+
+    let rebuilt = session
+        .build_project_from_cache(
+            &ProjectLoadRequest {
+                identity,
+                manifest: Some(compact_manifest),
+                compiled_cache_transfer_id: None,
+            },
+            Some(&cache),
+        )
+        .expect("a valid embedded manifest avoids retransmitting project payloads");
+
+    assert!(rebuilt.report.success, "{:?}", rebuilt.report.diagnostics);
+    assert!(!rebuilt.report.payload_required);
+    assert_eq!(rebuilt.report.project_revision, 9);
+    assert!(
+        rebuilt
+            .report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "runtime.compiled_cache_hit")
+    );
+}

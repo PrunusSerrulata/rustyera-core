@@ -123,6 +123,8 @@ struct ResourceImage {
     relative_path: String,
     digest: [u8; 32],
     metadata: Option<ImageMetadata>,
+    // Retained in the serialized snapshot schema for compatibility. Static file
+    // payloads are frontend-owned, so new graphs always leave this empty.
     bytes: Vec<u8>,
 }
 
@@ -172,38 +174,17 @@ pub(crate) struct ResourceDiagnostic {
 }
 
 impl ResourceGraph {
-    /// Copy runtime resource state without duplicating immutable project files.
+    /// Copy runtime resource state for a snapshot.
     ///
-    /// The exact project identity is part of every runtime snapshot, so the
-    /// original file bytes can be restored from the already loaded project.
+    /// Static resource payloads remain frontend-owned and are fetched lazily, so
+    /// the graph contains only identities and mutable runtime metadata.
     pub(crate) fn compact_snapshot(&self) -> Self {
-        let images = self
-            .images
-            .iter()
-            .map(|(key, image)| {
-                (
-                    key.clone(),
-                    ResourceImage {
-                        relative_path: image.relative_path.clone(),
-                        digest: image.digest,
-                        metadata: image.metadata.clone(),
-                        bytes: Vec::new(),
-                    },
-                )
-            })
-            .collect();
-        Self {
-            images,
-            sprites: self.sprites.clone(),
-            canvases: self.canvases.clone(),
-            animation_timer_ms: self.animation_timer_ms,
-            canvas_defaults: self.canvas_defaults.clone(),
-        }
+        self.clone()
     }
 
-    /// Restore immutable file bytes after the snapshot's project identity has
-    /// been matched against the currently loaded project.
-    pub(crate) fn restore_project_bytes(&mut self, project: &Self) -> Result<(), String> {
+    /// Verify that a snapshot refers to the exact static resource set loaded by
+    /// the current project.
+    pub(crate) fn validate_project_resources(&mut self, project: &Self) -> Result<(), String> {
         if self.images.len() != project.images.len() {
             return Err("runtime snapshot resource list differs from the loaded project".into());
         }
@@ -217,7 +198,7 @@ impl ResourceGraph {
                     image.relative_path
                 ));
             }
-            image.bytes.clone_from(&source.bytes);
+            image.bytes.clear();
         }
         Ok(())
     }
@@ -228,29 +209,60 @@ impl ResourceGraph {
     }
 
     pub(crate) fn from_manifest(manifest: &ProjectManifest) -> (Self, Vec<ResourceDiagnostic>) {
+        Self::from_manifest_with_progress(manifest, |_, _| {})
+    }
+
+    pub(crate) fn work_item_count(manifest: &ProjectManifest) -> usize {
+        manifest
+            .files
+            .iter()
+            .filter(|file| {
+                matches!(
+                    file.category,
+                    FileCategory::Resource | FileCategory::ResourceManifest
+                )
+            })
+            .count()
+    }
+
+    pub(crate) fn from_manifest_with_progress(
+        manifest: &ProjectManifest,
+        mut progress: impl FnMut(usize, usize),
+    ) -> (Self, Vec<ResourceDiagnostic>) {
         let mut graph = Self::default();
         let mut diagnostics = Vec::new();
-        for file in &manifest.files {
-            if file.category != FileCategory::Resource {
-                continue;
+        let total = Self::work_item_count(manifest);
+        let mut completed = 0;
+        progress(completed, total);
+        for file in manifest
+            .files
+            .iter()
+            .filter(|file| file.category == FileCategory::Resource)
+        {
+            if let Ok(path) = validate_relative_path(&file.relative_path)
+                && let Some(bytes) = match &file.payload {
+                    FilePayload::Utf8(value) => Some(value.as_bytes()),
+                    FilePayload::Bytes(value) => Some(value.as_slice()),
+                    FilePayload::IoError(_) => None,
+                }
+            {
+                let digest = file
+                    .content_hash
+                    .as_ref()
+                    .and_then(|hash| <[u8; 32]>::try_from(hash.as_slice()).ok())
+                    .unwrap_or_else(|| *blake3::hash(bytes).as_bytes());
+                graph.images.insert(
+                    path.to_ascii_lowercase(),
+                    ResourceImage {
+                        relative_path: path,
+                        digest,
+                        metadata: None,
+                        bytes: Vec::new(),
+                    },
+                );
             }
-            let Ok(path) = validate_relative_path(&file.relative_path) else {
-                continue;
-            };
-            let bytes = match &file.payload {
-                FilePayload::Utf8(value) => value.as_bytes(),
-                FilePayload::Bytes(value) => value.as_slice(),
-                FilePayload::IoError(_) => continue,
-            };
-            graph.images.insert(
-                path.to_ascii_lowercase(),
-                ResourceImage {
-                    relative_path: path,
-                    digest: *blake3::hash(bytes).as_bytes(),
-                    metadata: None,
-                    bytes: bytes.to_vec(),
-                },
-            );
+            completed += 1;
+            progress(completed, total);
         }
 
         let mut manifests = manifest
@@ -265,9 +277,13 @@ impl ResourceGraph {
         });
         for manifest in manifests {
             let FilePayload::Utf8(text) = &manifest.payload else {
+                completed += 1;
+                progress(completed, total);
                 continue;
             };
             parse_resource_manifest(&mut graph, &mut diagnostics, &manifest.relative_path, text);
+            completed += 1;
+            progress(completed, total);
         }
         (graph, diagnostics)
     }

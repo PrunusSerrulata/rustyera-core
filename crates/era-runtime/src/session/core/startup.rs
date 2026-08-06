@@ -190,7 +190,7 @@ impl RuntimeSession {
         }
         if let Err(error) = payload
             .resource_graph
-            .restore_project_bytes(&project.resource_graph)
+            .validate_project_resources(&project.resource_graph)
         {
             return self.reject(
                 message_id,

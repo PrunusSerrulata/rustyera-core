@@ -1,7 +1,7 @@
 # Runtime 调试接口
 
 > 面向前端开发人员和 EraBasic 脚本开发人员。本文描述 Debug 协议 `4.0` 在当前
-> `era-runtime`/`erabasic-vm` 中的实际实现。公共信封为 `2.0`，C ABI 为 `3.0`。
+> `era-runtime`/`erabasic-vm` 中的实际实现。公共信封为 `2.0`，C ABI 为 `3.3`。
 > 主要源码：
 > [`era-debug-protocol`](../crates/era-debug-protocol/src/lib.rs)、
 > [`RuntimeSession` 调试分发](../crates/era-runtime/src/session/debug_session.rs)、
@@ -44,7 +44,8 @@ RuntimeVm / Vm
 - session、VM、grant、stop、断点和 script-output buffer 都由 runtime 创建并释放；
   前端只缓存 opaque token，并在 session destroy 时丢弃。
 - 调试消息和普通 Runtime 消息都只能在调用方执行 `drive` 时生效；没有 runtime 回调或
-  后台 VM 执行。C ABI 当前用进程级 mutex 串行化调用，建议仍由同一 worker 顺序 pump。
+  后台 VM 执行。C ABI 当前用进程级 mutex 串行化 session 操作（项目文件投影扩展的
+  解码与编码例外地在锁外完成），建议仍由同一 worker 顺序 pump。
 - Debug 与 Runtime 各自拥有入站/出站 sequence；两者共享全局递增的 `message_id`。
   Debug 输出不使用 Runtime tag 93 ACK journal，前端只需按序消费。
 - `StopToken` 给出一次一致视图。continue、step、reload、epoch/generation/revision

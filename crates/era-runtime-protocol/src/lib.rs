@@ -27,6 +27,7 @@ pub use effect::{
     AudioEffect, AudioEffectAction, EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind,
     EffectOutcome, EffectOutcomeStatus, VideoEffect,
 };
+pub use era_protocol::ProtocolBytes;
 pub use erabasic_html::{
     HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlDocument, HtmlElementKind, HtmlElementSemantic,
     HtmlInteraction, HtmlLength, HtmlNode, parse_document,

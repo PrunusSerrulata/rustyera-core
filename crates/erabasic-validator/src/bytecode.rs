@@ -82,6 +82,21 @@ impl ValidationContext {
 pub struct ValidatedArtifact(Arc<BytecodeArtifact>);
 
 impl ValidatedArtifact {
+    /// Refresh identities on a compiler artifact without losing its validation provenance.
+    ///
+    /// Identity refresh canonicalizes ordering and changes only manifest identities,
+    /// preserving the structural invariants established by validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a canonical identity section cannot be encoded.
+    pub fn refresh_ids(mut self) -> Result<Self, String> {
+        Arc::make_mut(&mut self.0)
+            .refresh_ids()
+            .map_err(|error| error.to_string())?;
+        Ok(self)
+    }
+
     #[must_use]
     pub fn artifact(&self) -> &BytecodeArtifact {
         &self.0

@@ -468,7 +468,9 @@ fn project_build_reports_real_workload_progress() {
         ProjectProgressStage::Parsing,
         ProjectProgressStage::Analyzing,
         ProjectProgressStage::Compiling,
+        ProjectProgressStage::Finalizing,
         ProjectProgressStage::Validating,
+        ProjectProgressStage::Preparing,
     ] {
         let values = observed
             .iter()

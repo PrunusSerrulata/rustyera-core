@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define ERA_RUNTIME_ABI_MAJOR 3u
-#define ERA_RUNTIME_ABI_MINOR 2u
+#define ERA_RUNTIME_ABI_MINOR 3u
 
 #define ERA_DEBUG_SCOPE_VARIABLES_READ (UINT64_C(1) << 0)
 #define ERA_DEBUG_SCOPE_VARIABLES_WRITE (UINT64_C(1) << 1)
@@ -76,7 +76,9 @@ typedef enum EraProjectProgressStage {
     ERA_PROJECT_PROGRESS_PARSING = 3,
     ERA_PROJECT_PROGRESS_ANALYZING = 4,
     ERA_PROJECT_PROGRESS_COMPILING = 5,
-    ERA_PROJECT_PROGRESS_VALIDATING = 6
+    ERA_PROJECT_PROGRESS_VALIDATING = 6,
+    ERA_PROJECT_PROGRESS_FINALIZING = 7,
+    ERA_PROJECT_PROGRESS_PREPARING = 8
 } EraProjectProgressStage;
 
 typedef struct EraProjectProgress {
@@ -113,7 +115,8 @@ typedef struct EraRuntimeApi {
     EraReleaseBufferFn release_buffer;
     EraLastErrorFn last_error;
     /* ABI 3.1: reserved[0] is EraSessionSetProjectProgressFn.
-       ABI 3.2: reserved[1] is EraSessionDecodeProjectFileFn. */
+       ABI 3.2: reserved[1] is EraSessionDecodeProjectFileFn.
+       ABI 3.3: reserved[2] is EraSessionDecodeProjectFileFn returning a compact frontend manifest. */
     void *reserved[8];
 } EraRuntimeApi;
 

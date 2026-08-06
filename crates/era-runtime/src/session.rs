@@ -132,6 +132,8 @@ pub enum ProjectProgressStage {
     Analyzing,
     Compiling,
     Validating,
+    Finalizing,
+    Preparing,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
