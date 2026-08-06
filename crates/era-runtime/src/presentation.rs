@@ -675,15 +675,13 @@ impl PresentationModel {
 
     fn apply_project_default_style(&mut self, next: TextStyle) {
         let previous = std::mem::replace(&mut self.default_style, next.clone());
-        let mut changed = false;
         for line in &mut self.lines {
-            changed |= replace_project_default_style(&mut line.runs, &previous, &next);
+            if replace_project_default_style(&mut line.runs, &previous, &next) {
+                self.delivery.dirty_lines.insert(line.line_id);
+            }
         }
-        changed |= replace_project_default_style(&mut self.pending_runs, &previous, &next);
+        replace_project_default_style(&mut self.pending_runs, &previous, &next);
         self.current_style = next;
-        if changed {
-            self.delivery.dirty.force_snapshot = true;
-        }
     }
 
     pub(crate) fn set_foreground(&mut self, rgb: i64) {

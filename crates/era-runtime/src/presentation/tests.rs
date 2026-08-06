@@ -29,7 +29,8 @@ fn project_default_style_changes_update_existing_default_runs() {
     assert!(styles[1].bold);
     assert_eq!(styles[2].font_family.as_deref(), Some("explicit"));
     assert_eq!(styles[2].font_millipixels, 20_000);
-    assert!(model.delivery.dirty.force_snapshot);
+    assert_eq!(model.delivery.dirty_lines, BTreeSet::from([1, 2, 3]));
+    assert!(!model.delivery.dirty.force_snapshot);
 }
 use era_runtime_protocol::PresentationOperation;
 
