@@ -655,7 +655,7 @@ impl PresentationModel {
     /// Reset the user-controlled console style without changing the console
     /// background, matching EmueraConsole.ResetStyle.
     pub(crate) fn reset_style(&mut self) {
-        self.current_style = default_style();
+        self.current_style = self.default_style.clone();
         self.current_alignment = LineAlignment::Left;
         self.bump();
     }

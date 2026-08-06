@@ -3,6 +3,11 @@ use super::*;
 #[test]
 fn project_default_style_changes_update_existing_default_runs() {
     let mut model = PresentationModel::default();
+    let mut project_style = model.default_style.clone();
+    project_style.font_family = Some("initial-project-font".into());
+    project_style.font_millipixels = 18_000;
+    model.apply_project_default_style(project_style);
+    model.reset_style();
     model.append_print_text("default".into(), false, true);
     model.set_bold(true);
     model.append_print_text("bold".into(), false, true);
