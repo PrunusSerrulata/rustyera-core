@@ -2,6 +2,50 @@
 use super::super::*;
 
 impl RuntimeSession {
+    /// Stage an owned compiled-project cache for the next project-load request.
+    ///
+    /// In-process hosts use this entry point to avoid serializing an already contiguous cache
+    /// through the chunked frontend protocol. The cache's embedded version, digest, identities,
+    /// and bytecode are still validated by the normal project-load path before installation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when another import is active or the cache exceeds the negotiated
+    /// transfer limit.
+    pub fn stage_compiled_project_cache(&mut self, bytes: Vec<u8>) -> Result<u64, RuntimeError> {
+        if self.inbound_transfer.is_some() {
+            return Err(RuntimeError::Busy("another state import is already active"));
+        }
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+            > self.options.limits.maximum_transfer_bytes
+        {
+            return Err(RuntimeError::ResourceLimit(
+                "compiled project cache exceeds the negotiated transfer limit",
+            ));
+        }
+        let transfer_id = self.allocate_transfer();
+        self.inbound_transfer = Some(InboundStateTransfer {
+            descriptor: StateTransferDescriptor {
+                transfer_id,
+                kind: StateExportKind::CompiledProjectCache,
+                total_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                // Host staging transfers ownership in one call. The compiled-cache decoder
+                // validates the format's own trailing digest before any artifact is installed.
+                digest: ProtocolBytes::new(Vec::new()),
+                artifact_id: None,
+            },
+            bytes,
+            committed: true,
+        });
+        Ok(transfer_id)
+    }
+
+    /// Return the negotiated upper bound for an in-process compiled-cache staging call.
+    #[must_use]
+    pub const fn maximum_transfer_bytes(&self) -> u64 {
+        self.options.limits.maximum_transfer_bytes
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(in super::super) fn export_state(
         &mut self,
@@ -265,7 +309,7 @@ impl RuntimeSession {
             };
             self.outbound_transfer = Some(OutboundStateTransfer {
                 descriptor: descriptor.clone(),
-                bytes: bytes.into(),
+                bytes: Arc::new(bytes),
                 next_offset: 0,
             });
             StateExportResult::Ready {
@@ -386,7 +430,7 @@ impl RuntimeSession {
         match result {
             Ok(bytes) => {
                 self.compiled_cache_failure = None;
-                self.compiled_project_cache = Some(bytes.into());
+                self.compiled_project_cache = Some(Arc::new(bytes));
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                         code: "runtime.compiled_cache_ready".into(),

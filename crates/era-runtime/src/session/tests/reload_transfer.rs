@@ -479,6 +479,178 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn host_staged_exact_cache_uses_the_normal_project_load_contract() {
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+            content_hash: None,
+        }],
+    };
+    let mut initial = crate::project::build_project(&manifest, None);
+    assert!(initial.report.success, "{:?}", initial.report.diagnostics);
+    initial.incremental.compact();
+    let cache = crate::compiled_cache::encode(
+        &manifest,
+        &[],
+        initial.artifact.as_ref().unwrap(),
+        &initial.incremental,
+        initial.snapshot.as_ref().unwrap(),
+        &initial.report.diagnostics,
+    )
+    .unwrap();
+    let identity = crate::compiled_cache::project_identity(&manifest);
+    let expected_session = RuntimeSession::new(RuntimeOptions::default());
+    let expected = expected_session
+        .build_project_from_cache(
+            &ProjectLoadRequest {
+                identity: identity.clone(),
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+            Some(&cache),
+        )
+        .unwrap()
+        .report;
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.phase = RuntimePhase::Ready;
+    let mismatch_cache = cache.clone();
+    let transfer_id = session.stage_compiled_project_cache(cache).unwrap();
+
+    session
+        .load_project(
+            44,
+            &ProjectLoadRequest {
+                identity,
+                manifest: None,
+                compiled_cache_transfer_id: Some(transfer_id),
+            },
+        )
+        .unwrap();
+
+    let mut report = None;
+    while let Some(bytes) = session.poll_envelope() {
+        let envelope = decode_envelope(&bytes, WireLimits::default()).unwrap();
+        let message = RuntimeMessage::from_envelope(&envelope).unwrap();
+        assert!(!matches!(
+            message,
+            RuntimeMessage::StateImportAccepted(_) | RuntimeMessage::StateImportReady(_)
+        ));
+        if let RuntimeMessage::ProjectLoadReport(value) = message {
+            assert_eq!(envelope.correlation_id, Some(44));
+            report = Some(value);
+        }
+    }
+    let report = report.expect("staged cache load emits a project report");
+    assert_eq!(report.success, expected.success);
+    assert_eq!(report.payload_required, expected.payload_required);
+    assert_eq!(report.project_revision, expected.project_revision);
+    assert_eq!(report.diagnostics, expected.diagnostics);
+    assert_eq!(session.phase, RuntimePhase::Ready);
+    assert!(session.inbound_transfer.is_none());
+
+    session
+        .load_project(
+            45,
+            &ProjectLoadRequest {
+                identity: crate::compiled_cache::project_identity(&manifest),
+                manifest: None,
+                compiled_cache_transfer_id: Some(transfer_id),
+            },
+        )
+        .unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(CommandRejected {
+            code: CommandErrorCode::InvalidValue,
+            ..
+        })
+    )));
+
+    let mut mismatch = RuntimeSession::new(RuntimeOptions::default());
+    mismatch.phase = RuntimePhase::Ready;
+    let transfer_id = mismatch
+        .stage_compiled_project_cache(mismatch_cache)
+        .unwrap();
+    mismatch
+        .load_project(
+            46,
+            &ProjectLoadRequest {
+                identity: ProjectIdentity {
+                    project_revision: manifest.project_revision,
+                    source_digest: ProtocolBytes::new(vec![0; 32]),
+                },
+                manifest: Some(manifest),
+                compiled_cache_transfer_id: Some(transfer_id),
+            },
+        )
+        .unwrap();
+    let mismatch_report = drain(&mut mismatch)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ProjectLoadReport(report) => Some(report),
+            _ => None,
+        })
+        .unwrap();
+    assert!(!mismatch_report.success);
+    assert!(!mismatch_report.payload_required);
+    assert!(
+        mismatch_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "runtime.project_identity_mismatch")
+    );
+    assert!(mismatch.inbound_transfer.is_none());
+}
+
+#[test]
+fn host_staged_corrupt_cache_reports_a_normal_cache_miss() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.phase = RuntimePhase::Ready;
+    let transfer_id = session.stage_compiled_project_cache(vec![7; 64]).unwrap();
+
+    session
+        .load_project(
+            51,
+            &ProjectLoadRequest {
+                identity: ProjectIdentity {
+                    project_revision: 9,
+                    source_digest: ProtocolBytes::new(vec![0; 32]),
+                },
+                manifest: None,
+                compiled_cache_transfer_id: Some(transfer_id),
+            },
+        )
+        .unwrap();
+
+    let report = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ProjectLoadReport(report) => Some(report),
+            _ => None,
+        })
+        .unwrap();
+    assert!(!report.success);
+    assert!(report.payload_required);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "runtime.compiled_cache_ignored")
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "runtime.project_payload_required")
+    );
+    assert!(session.inbound_transfer.is_none());
+}
+
+#[test]
 fn mismatched_compiled_cache_rebuilds_from_its_matching_embedded_manifest() {
     let manifest = ProjectManifest {
         project_revision: 1,

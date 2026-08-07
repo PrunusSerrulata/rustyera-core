@@ -613,7 +613,7 @@ impl RuntimeSession {
         self.compiled_project_cache = if exact_cache_hit {
             // The validated imported bytes are already the desired opaque export. Re-encoding
             // the multi-gigabyte logical artifact would erase most of the warm-start win.
-            cache_bytes.map(Into::into)
+            cache_bytes.map(Arc::new)
         } else {
             // Cache serialization is intentionally lazy. It is a frontend persistence concern
             // and must not add a multi-second zstd pass to the cold-start critical path.

@@ -268,6 +268,7 @@ pub enum RuntimeError {
     InvalidSequence { expected: u64, actual: u64 },
     SessionMismatch,
     ResourceLimit(&'static str),
+    Busy(&'static str),
     Internal(String),
 }
 
@@ -279,7 +280,7 @@ impl fmt::Display for RuntimeError {
                 write!(formatter, "expected sequence {expected}, received {actual}")
             }
             Self::SessionMismatch => formatter.write_str("runtime session identity differs"),
-            Self::ResourceLimit(message) => formatter.write_str(message),
+            Self::ResourceLimit(message) | Self::Busy(message) => formatter.write_str(message),
             Self::Internal(message) => formatter.write_str(message),
         }
     }
@@ -320,7 +321,7 @@ struct InboundStateTransfer {
 #[derive(Debug)]
 struct OutboundStateTransfer {
     descriptor: StateTransferDescriptor,
-    bytes: Arc<[u8]>,
+    bytes: Arc<Vec<u8>>,
     next_offset: u64,
 }
 
@@ -453,7 +454,7 @@ pub struct RuntimeSession {
     pending_project_load: Option<PendingProjectLoad>,
     pending_candidate_commit: Option<PendingCandidateCommit>,
     candidate_clock: Option<LocalDateTimeResponse>,
-    compiled_project_cache: Option<Arc<[u8]>>,
+    compiled_project_cache: Option<Arc<Vec<u8>>>,
     compiled_cache_diagnostics: Vec<ProtocolDiagnostic>,
     compiled_cache_task: Option<CompiledCacheTask>,
     compiled_cache_failure: Option<String>,

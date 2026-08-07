@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.3`、公共信封 `2.0`、Runtime 协议 `24.0`。源码入口：
+> C ABI `3.4`、公共信封 `2.0`、Runtime 协议 `24.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -18,7 +18,7 @@
 
 | 层 | 当前稳定性 | 用途 |
 | --- | --- | --- |
-| C ABI 3.3 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
+| C ABI 3.4 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
 | Runtime 协议 24.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
@@ -87,7 +87,7 @@ get_api → create → ClientHello → ServerHello
                                                 destroy
 ```
 
-## 3. C ABI 3.3
+## 3. C ABI 3.4
 
 ### 3.1 数据结构
 
@@ -114,11 +114,11 @@ get_api → create → ClientHello → ServerHello
 | --- | --- | --- |
 | `OK=0` | 调用完成 | 继续 |
 | `EMPTY=1` | `poll` 当前无消息 | 停止本轮 drain |
-| `BUSY=2` | 定义为暂时忙 | 当前实现没有返回路径；若未来出现，稍后重试 |
+| `BUSY=2` | 暂时忙 | host 缓存暂存与另一个入站传输冲突时稍后重试 |
 | `INVALID_ARGUMENT=3` | 空指针、无效 header/mask、坏 CBOR 或 session 级协议提交错误 | 查 `last_error`，修正调用；不要盲重试 |
 | `ABI_MISMATCH=4` | ABI 主版本不同或结构太短 | 加载兼容动态库/绑定 |
 | `INVALID_HANDLE=5` | handle 不存在、已销毁或属于别的进程 | 丢弃本地 session 状态 |
-| `RESOURCE_LIMIT=6` | 定义的资源限制状态 | 当前 C 投影没有直接返回路径；协议内限制通常成为拒绝或故障 |
+| `RESOURCE_LIMIT=6` | 资源限制 | host 缓存超过协商传输上限；协议内限制通常成为拒绝或故障 |
 | `INTERNAL_ERROR=7` | drive/runtime 内部错误 | 读 `last_error`，将 session 视为不可继续或重新创建 |
 
 ### 3.2 函数索引和契约
@@ -169,7 +169,11 @@ create=`EraCreateOptions`，drive=`EraDriveOptions`，poll/release/last-error=
 - ABI 3.3 的 `reserved[2]` 使用相同函数签名，返回供前端 I/O 使用的紧凑 manifest。
   它保留资源文件、I/O 错误和被缓存诊断引用的源码 payload；其他 payload 被清空，但若
   原记录缺少 `content_hash`，清空前会先计算并保留哈希。因此紧凑投影仍可用于项目身份、
-  前端资源和诊断展示；配置与其他权威状态由完整项目文件导入 runtime。
+  前端资源和诊断展示；配置与其他权威状态由完整项目文件导入 runtime；
+- ABI 3.4 的 `reserved[3]` 是 `EraSessionStageCompiledCacheFn`。它取得一份连续缓存字节的
+  所有权副本并返回已提交的 transfer ID，供随后的权威 `ProjectLoad` 使用，从而避免同一
+  进程内再构造、编码、解码和拼接分块传输信封。该入口不提交项目、不推进 runtime，也不
+  绕过项目加载时的缓存版本、内置摘要、项目身份和字节码校验。
 
 项目进度阶段的 C ABI 数值保持追加兼容：`SCANNING` 至 `VALIDATING` 为 0–6，ABI 3.3
 追加的 `FINALIZING = 7` 表示函数编译完成后的缓存合并、源码映射整理、结构验证与身份计算；
@@ -180,6 +184,11 @@ create=`EraCreateOptions`，drive=`EraDriveOptions`，poll/release/last-error=
 `release_buffer` 释放。坏文件或超过调用方上限的文件返回 `INVALID_ARGUMENT` 并写入
 `last_error`。ABI 3.2 客户端应使用 `reserved[1]`；ABI 3.3 客户端优先使用紧凑槽，并可向
 3.2 动态库回退到完整槽。
+
+缓存暂存扩展同样只借用输入到调用返回，成功后 runtime 持有自己的连续副本。输出 transfer
+ID 必须原样放入下一条 `ProjectLoad.compiled_cache_transfer_id`，不能跨 session 复用。未知
+handle 返回 `INVALID_HANDLE`，已有入站传输返回 `BUSY`，超过协商上限返回
+`RESOURCE_LIMIT`；详细文本由 `last_error` 提供。
 
 当前精确同步错误映射：create/drive 的外层 header 错误或空指针是
 `INVALID_ARGUMENT`，其 options 内嵌 header 错误是 `ABI_MISMATCH`；submit 的 header

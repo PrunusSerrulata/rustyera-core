@@ -966,6 +966,23 @@ fn state_import_rejects_out_of_order_chunks_and_bad_digests() {
 }
 
 #[test]
+fn host_staged_compiled_cache_reuses_the_owned_payload() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    let payload = vec![7; 4096];
+
+    let transfer_id = session
+        .stage_compiled_project_cache(payload.clone())
+        .expect("host cache staging should accept an in-limit payload");
+    let staged = session
+        .consume_state_import(1, transfer_id, StateExportKind::CompiledProjectCache)
+        .unwrap()
+        .expect("staged cache should be committed immediately");
+
+    assert_eq!(staged, payload);
+    assert!(session.inbound_transfer.is_none());
+}
+
+#[test]
 fn training_reset_updates_shared_and_all_character_state_atomically() {
     let build = build_project(
         &ProjectManifest {

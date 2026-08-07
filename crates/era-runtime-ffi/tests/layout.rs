@@ -30,8 +30,8 @@ fn abi_headers_and_handles_have_fixed_layouts() {
 fn checked_header_tracks_the_rust_abi_version() {
     let header = include_str!("../include/era_runtime.h");
     assert!(header.contains("#define ERA_RUNTIME_ABI_MAJOR 3u"));
-    assert!(header.contains("#define ERA_RUNTIME_ABI_MINOR 3u"));
+    assert!(header.contains("#define ERA_RUNTIME_ABI_MINOR 4u"));
     assert!(header.contains(ERA_RUNTIME_GET_API_SYMBOL));
     assert_eq!(ERA_RUNTIME_ABI_VERSION.major, 3);
-    assert_eq!(ERA_RUNTIME_ABI_VERSION.minor, 3);
+    assert_eq!(ERA_RUNTIME_ABI_VERSION.minor, 4);
 }
