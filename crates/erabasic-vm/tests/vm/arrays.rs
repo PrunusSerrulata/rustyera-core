@@ -755,9 +755,10 @@ fn dynamic_variable_string_oracle_matches_reference_fixture() {
          ENCODETOUNI A界\n\
          RESULT:54 = RESULT:0\n\
          RETURN\n";
+    let fixture = include_str!("../../../../tools/runtime-tester/fixture-reference/erb/oracle.erb")
+        .replace("\r\n", "\n");
     assert!(
-        include_str!("../../../../tools/runtime-tester/fixture-reference/erb/oracle.erb")
-            .contains(source),
+        fixture.contains(source),
         "Rust and reference oracle bodies differ"
     );
     let artifact = compile_source(source);
