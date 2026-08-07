@@ -155,6 +155,7 @@ impl RuntimeSession {
             system_menu_page: 0,
             inbound_transfer: None,
             outbound_transfer: None,
+            staged_project_manifest: None,
             pending_project_load: None,
             pending_candidate_commit: None,
             candidate_clock: None,
@@ -412,6 +413,9 @@ impl RuntimeSession {
         message: RuntimeMessage,
     ) -> Result<(), RuntimeError> {
         if self.state == SessionState::Negotiating {
+            if is_project_load_message(&message) {
+                self.clear_staged_project_manifest();
+            }
             return match message {
                 RuntimeMessage::ClientHello(hello) => self.hello(message_id, &hello),
                 _ => self.reject(
@@ -422,6 +426,9 @@ impl RuntimeSession {
             };
         }
         if self.phase == RuntimePhase::DebugPaused && debugger_suspends_message(&message) {
+            if is_project_load_message(&message) {
+                self.clear_staged_project_manifest();
+            }
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidState,
@@ -437,6 +444,9 @@ impl RuntimeSession {
                     | RuntimeMessage::ExtensionRegistrySubmit(_)
             )
         {
+            if is_project_load_message(&message) {
+                self.clear_staged_project_manifest();
+            }
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidState,
@@ -522,7 +532,10 @@ impl RuntimeSession {
             RuntimeMessage::FinalizeConfigurationUpdate(request) => {
                 self.finalize_configuration_update(message_id, request)
             }
-            RuntimeMessage::ShutdownRequest(_) => self.shutdown(message_id),
+            RuntimeMessage::ShutdownRequest(_) => {
+                self.clear_staged_project_manifest();
+                self.shutdown(message_id)
+            }
             RuntimeMessage::Acknowledge(ack) => {
                 self.outbound_journal
                     .retain(|sequence, _| *sequence > ack.through_sequence);
@@ -567,6 +580,13 @@ impl RuntimeSession {
             ),
         }
     }
+}
+
+fn is_project_load_message(message: &RuntimeMessage) -> bool {
+    matches!(
+        message,
+        RuntimeMessage::ProjectManifest(_) | RuntimeMessage::ProjectLoad(_)
+    )
 }
 
 mod events;

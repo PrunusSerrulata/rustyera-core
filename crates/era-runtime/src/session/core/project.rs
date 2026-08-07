@@ -3,6 +3,32 @@
 use super::super::*;
 
 impl RuntimeSession {
+    /// Stage an owned source manifest for the next project-load command from an in-process host.
+    ///
+    /// The public protocol remains authoritative for ordering, identity, phase validation, and
+    /// reporting. Staging only avoids serializing an already-owned manifest through that protocol.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::Busy`] when another host manifest is already awaiting its load.
+    pub fn stage_project_manifest(
+        &mut self,
+        manifest: ProjectManifest,
+    ) -> Result<(), RuntimeError> {
+        if self.staged_project_manifest.is_some() {
+            return Err(RuntimeError::Busy(
+                "another project manifest is already staged",
+            ));
+        }
+        self.staged_project_manifest = Some(manifest);
+        Ok(())
+    }
+
+    /// Discard a host-staged source manifest whose project-load command was not submitted.
+    pub fn clear_staged_project_manifest(&mut self) {
+        self.staged_project_manifest = None;
+    }
+
     pub(in super::super) fn prepare_configuration_update(
         &mut self,
         message_id: u64,
@@ -567,6 +593,7 @@ impl RuntimeSession {
         message_id: u64,
         request: &ProjectLoadRequest,
     ) -> Result<(), RuntimeError> {
+        let staged_manifest = self.staged_project_manifest.take();
         if !matches!(
             self.phase,
             RuntimePhase::Negotiating | RuntimePhase::Ready | RuntimePhase::Faulted
@@ -577,6 +604,20 @@ impl RuntimeSession {
                 "project loading requires an idle runtime",
             );
         }
+        let staged_request;
+        let request = if request.manifest.is_none()
+            && request.compiled_cache_transfer_id.is_none()
+            && let Some(manifest) = staged_manifest
+        {
+            staged_request = ProjectLoadRequest {
+                identity: request.identity.clone(),
+                manifest: Some(manifest),
+                compiled_cache_transfer_id: None,
+            };
+            &staged_request
+        } else {
+            request
+        };
         let cache_bytes = match request.compiled_cache_transfer_id {
             Some(transfer_id) => {
                 let Some(bytes) = self.consume_state_import(

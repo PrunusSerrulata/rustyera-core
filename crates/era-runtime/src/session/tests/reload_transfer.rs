@@ -411,6 +411,133 @@ fn identity_only_project_load_requests_payload_after_a_cache_miss() {
 }
 
 #[test]
+fn host_staged_manifest_is_owned_busy_single_use_and_identity_checked() {
+    let manifest = ProjectManifest {
+        project_revision: 4,
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+            content_hash: None,
+        }],
+    };
+    let identity = crate::compiled_cache::project_identity(&manifest);
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.phase = RuntimePhase::Ready;
+
+    session.stage_project_manifest(manifest.clone()).unwrap();
+    assert!(matches!(
+        session.stage_project_manifest(manifest.clone()),
+        Err(RuntimeError::Busy(_))
+    ));
+    session
+        .load_project(
+            41,
+            &ProjectLoadRequest {
+                identity: identity.clone(),
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+    let report = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ProjectLoadReport(report) => Some(report),
+            _ => None,
+        })
+        .unwrap();
+    assert!(report.success, "{:?}", report.diagnostics);
+    assert!(session.staged_project_manifest.is_none());
+
+    session
+        .load_project(
+            42,
+            &ProjectLoadRequest {
+                identity: identity.clone(),
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+    let missing = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ProjectLoadReport(report) => Some(report),
+            _ => None,
+        })
+        .unwrap();
+    assert!(missing.payload_required);
+
+    session.stage_project_manifest(manifest).unwrap();
+    session
+        .load_project(
+            43,
+            &ProjectLoadRequest {
+                identity: ProjectIdentity {
+                    project_revision: identity.project_revision,
+                    source_digest: ProtocolBytes::new(vec![0; 32]),
+                },
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+    let mismatch = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ProjectLoadReport(report) => Some(report),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        mismatch
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "runtime.project_identity_mismatch")
+    );
+    assert!(session.staged_project_manifest.is_none());
+}
+
+#[test]
+fn rejected_or_explicit_project_load_discards_a_host_staged_manifest() {
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: Vec::new(),
+    };
+    let identity = crate::compiled_cache::project_identity(&manifest);
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.phase = RuntimePhase::Running;
+    session.stage_project_manifest(manifest.clone()).unwrap();
+
+    session
+        .load_project(
+            51,
+            &ProjectLoadRequest {
+                identity: identity.clone(),
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+    assert!(session.staged_project_manifest.is_none());
+
+    session.phase = RuntimePhase::Ready;
+    session.stage_project_manifest(manifest.clone()).unwrap();
+    session
+        .load_project(
+            52,
+            &ProjectLoadRequest {
+                identity,
+                manifest: Some(manifest),
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+    assert!(session.staged_project_manifest.is_none());
+}
+
+#[test]
 fn exact_compiled_cache_load_does_not_require_a_manifest() {
     let manifest = ProjectManifest {
         project_revision: 1,
@@ -518,6 +645,7 @@ fn host_staged_exact_cache_uses_the_normal_project_load_contract() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     session.phase = RuntimePhase::Ready;
     let mismatch_cache = cache.clone();
+    session.stage_project_manifest(manifest.clone()).unwrap();
     let transfer_id = session.stage_compiled_project_cache(cache).unwrap();
 
     session
@@ -551,6 +679,7 @@ fn host_staged_exact_cache_uses_the_normal_project_load_contract() {
     assert_eq!(report.diagnostics, expected.diagnostics);
     assert_eq!(session.phase, RuntimePhase::Ready);
     assert!(session.inbound_transfer.is_none());
+    assert!(session.staged_project_manifest.is_none());
 
     session
         .load_project(
