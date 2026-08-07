@@ -3,7 +3,8 @@
 RustyEra 是用 Rust 重新实现的 EraBasic 语言工具链与运行环境，兼容目标固定为
 Emuera 参考实现提交 `26a35dc9334bb67590b96f7b8efbefbf199e391e`（Emuera 1.824
 系列）。项目覆盖从 UTF-8 源码、静态数据、语义分析、字节码、虚拟机到可移植
-runtime 协议和 C ABI 的完整链路，并提供一个 Python/Textual TUI 作为集成验证前端。
+runtime 协议和 C ABI 的完整链路。独立的 Python/Textual TUI 与 Vue/WebAssembly/Tauri
+客户端通过公共边界集成 runtime。
 
 项目仍处于开发阶段，尚未覆盖 Emuera 的全部指令、系统流程以及依赖
 WinForms/GDI/CBG 的客户端能力。协议中存在类型或参考 CLI 能够执行某项操作，不代表
@@ -64,7 +65,6 @@ RustyEra 只接受 UTF-8 源码和配置内容，不负责识别或转换 Shift-
 | [rustyera-tui](https://github.com/PrunusSerrulata/rustyera-tui) | Python 3.12/Textual 前端，通过公共 C ABI 驱动 runtime。 |
 | [rustyera-web](https://github.com/PrunusSerrulata/rustyera-web) | Vue、WebAssembly 和 Tauri 前端；包含 `era-web-bridge`。 |
 | [emuera.em](https://github.com/PrunusSerrulata/emuera.em) | 固定版本的 C# 兼容性参考实现及 NDJSON oracle。 |
-| `../eraTW`（仅本地） | 真实游戏 eraTW 的 CSV、ERH 与 ERB 输入；不纳入版本控制。 |
 | `tools/project-extractor` | 项目解包器，从 `.reraproj` 中按原目录层级恢复 UTF-8 源码和二进制资产。 |
 | `tools/snapshot-analyzer` | Runtime 快照分析器，校验完整快照并以文本或 JSON 展开其中的全部状态。 |
 | `tools/runtime-tester` | runtime 与 C ABI 的人工/长流程测试工具。TUI 审计脚本位于 `rustyera-tui`。 |
@@ -282,10 +282,9 @@ RustyEra 受益于 era 生态长期积累的工具、实现和创作内容，谨
 - **MinorShift** 与 **妊）|дﾟ)の中の人**：Emuera 的著作者。RustyEra 以独立 `emuera.em` 仓库中的固定版本
   Emuera 为兼容性参考实现。
 - **まだ名前は無い人**：`eraThe World`（eraTW）项目在 `GameBase.csv` 中署名的修改／制作
-  者；以及该项目列出的咨询协作者 **哆来咪**。
+  者。
 - **eraTW 的口上与内容作者、改编者**：所有为角色口上、事件、数据与文档作出贡献的
-  创作者。完整署名、改编记录与各自的使用条件均保留在
-  `eraTW/ERB/口上・メッセージ関連/個人口上/` 的随附说明和许可文件中。
+  创作者。完整署名、改编记录与各自的使用条件以该项目随附的说明和许可文件为准。
 - **所有开源依赖、工具维护者和 era 社区的脚本／内容作者**。
 
 本项目的致谢不改变外部第三方材料的著作权、署名、许可或使用条件；使用或再分发
