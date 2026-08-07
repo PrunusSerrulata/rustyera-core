@@ -27,7 +27,7 @@ impl Builder<'_> {
                         BytecodeType::IntegerPlace
                     }
                 };
-                if let Some(key) = self.context.variable_keys.get(&place.variable).copied() {
+                if let Some(key) = self.context.variable_keys.get(place.variable.0).copied() {
                     self.emit(
                         opcode::variable(
                             Opcode::MakePlace,
@@ -75,7 +75,7 @@ impl Builder<'_> {
                 for index in &place.indices {
                     self.lower_expression(index, fallback);
                 }
-                if let Some(key) = self.context.variable_keys.get(&place.variable).copied() {
+                if let Some(key) = self.context.variable_keys.get(place.variable.0).copied() {
                     self.emit(
                         opcode::variable(
                             Opcode::LoadVariable,
@@ -117,9 +117,9 @@ impl Builder<'_> {
                 };
                 match target {
                     CallTarget::User { function } => {
-                        if let Some(key) = self.context.function_keys.get(function).copied()
+                        if let Some(key) = self.context.function_keys.get(function.0).copied()
                             && let Some(target_function) =
-                                self.context.functions_by_id.get(function).copied()
+                                self.context.functions_by_id.get(function.0).copied()
                         {
                             if target_function.kind != FunctionKind::Method {
                                 self.diagnostics.push(CompilerDiagnostic::at(

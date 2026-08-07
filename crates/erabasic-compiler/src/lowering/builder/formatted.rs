@@ -107,7 +107,7 @@ impl Builder<'_> {
                 .variables
                 .iter()
                 .find(|variable| variable.name.eq_ignore_ascii_case(name))
-                .and_then(|variable| self.context.variable_keys.get(&variable.id))
+                .and_then(|variable| self.context.variable_keys.get(variable.id.0))
                 .copied()
         };
         let (Some(index), Some(value)) = (variable_key(index_name), variable_key(value_name))

@@ -48,7 +48,7 @@ impl Builder<'_> {
                 .variables
                 .iter()
                 .find(|variable| variable.name.eq_ignore_ascii_case("RESULT"))
-                .and_then(|variable| self.context.variable_keys.get(&variable.id))
+                .and_then(|variable| self.context.variable_keys.get(variable.id.0))
                 .copied();
             if let Some(result) = result {
                 self.emit(opcode::variable(Opcode::MakePlace, result, 0, 0), location);
@@ -170,7 +170,7 @@ impl Builder<'_> {
                 .find(|variable| {
                     variable.owner.is_none() && variable.name.eq_ignore_ascii_case("COUNT")
                 })
-                .and_then(|variable| self.context.variable_keys.get(&variable.id))
+                .and_then(|variable| self.context.variable_keys.get(variable.id.0))
                 .copied();
             let Some(counter) = counter else {
                 self.emit(
@@ -351,7 +351,7 @@ impl Builder<'_> {
             let direct_condition = matches!(name, "IF" | "ELSEIF" | "SIF" | "WHILE");
             let has_branch = self
                 .control_flow_by_line
-                .get(&line)
+                .get(line.0)
                 .into_iter()
                 .flatten()
                 .any(|edge| edge.from == line && edge.kind == ControlFlowKind::Branch);
@@ -513,7 +513,7 @@ impl Builder<'_> {
             .variables
             .iter()
             .find(|variable| variable.name.eq_ignore_ascii_case(variable_name))
-            .and_then(|variable| self.context.variable_keys.get(&variable.id))
+            .and_then(|variable| self.context.variable_keys.get(variable.id.0))
             .copied();
         if let Some(result) = result {
             self.emit(
@@ -599,7 +599,7 @@ impl Builder<'_> {
             .variables
             .iter()
             .find(|variable| variable.name.eq_ignore_ascii_case("RESULT"))
-            .and_then(|variable| self.context.variable_keys.get(&variable.id))
+            .and_then(|variable| self.context.variable_keys.get(variable.id.0))
             .copied()
     }
 
@@ -622,7 +622,7 @@ impl Builder<'_> {
             );
             return;
         };
-        let Some(key) = self.context.variable_keys.get(&place.variable).copied() else {
+        let Some(key) = self.context.variable_keys.get(place.variable.0).copied() else {
             self.emit(
                 EncodedInstruction::new(Opcode::Trap, b"SET list variable is missing".to_vec()),
                 location,

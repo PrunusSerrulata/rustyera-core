@@ -1,17 +1,17 @@
-use std::{collections::BTreeMap, io::Write};
+use std::{
+    collections::{BTreeMap, HashMap, hash_map::Entry},
+    io::Write,
+};
 
 use erabasic_bytecode::{
     BytecodeConstant, BytecodeEventEntry, BytecodeEventGroup, BytecodeGlobal, BytecodePersistence,
     BytecodeStorage, BytecodeType, Digest, SymbolKey,
 };
 use erabasic_data::{Persistence, StorageScope};
-use erabasic_hir::{
-    ConstantValue, Function, FunctionId, FunctionKind, SemanticType, Variable, VariableId,
-    VariableScope,
-};
+use erabasic_hir::{ConstantValue, Function, FunctionKind, SemanticType, Variable, VariableScope};
 use serde::Serialize;
 
-use crate::lowering::bytecode_type;
+use crate::{compile::DenseIdIndex, lowering::bytecode_type};
 
 pub(super) fn canonical_digest<T: Serialize + ?Sized>(domain: &str, value: &T) -> Digest {
     let mut writer = DigestWriter {
@@ -38,7 +38,7 @@ impl Write for DigestWriter {
 
 pub(super) fn event_groups(
     functions: &[Function],
-    keys: &BTreeMap<FunctionId, SymbolKey>,
+    keys: &DenseIdIndex<SymbolKey>,
 ) -> Vec<BytecodeEventGroup> {
     let mut groups: BTreeMap<String, Vec<&Function>> = BTreeMap::new();
     for function in functions
@@ -62,7 +62,7 @@ pub(super) fn event_groups(
                 later: Vec::new(),
             };
             for function in members {
-                let Some(function_key) = keys.get(&function.id).copied() else {
+                let Some(function_key) = keys.get(function.id.0).copied() else {
                     continue;
                 };
                 let entry = BytecodeEventEntry {
@@ -90,71 +90,84 @@ pub(super) fn event_groups(
 pub(super) fn function_keys(
     functions: &[Function],
     sources: &[erabasic_hir::SourceFile],
-) -> BTreeMap<FunctionId, SymbolKey> {
-    let paths: BTreeMap<_, _> = sources
-        .iter()
-        .map(|source| (source.id, source.relative_path.as_str()))
-        .collect();
-    let mut ordinals = BTreeMap::new();
-    functions
-        .iter()
-        .map(|function| {
-            let identity = (
-                paths
-                    .get(&function.location.source)
-                    .copied()
-                    .unwrap_or_default(),
-                function.name.to_ascii_uppercase(),
-                function_kind_tag(function.kind),
-                function
-                    .parameters
-                    .iter()
-                    .map(|parameter| semantic_type_tag(parameter.target.value_type))
-                    .collect::<Vec<_>>(),
-            );
-            let ordinal = ordinals.entry(identity.clone()).or_insert(0u32);
-            let bytes = serde_json::to_vec(&(identity, *ordinal))
-                .expect("function identity is serializable");
-            *ordinal += 1;
-            (
-                function.id,
-                SymbolKey::derive("rustyera.bytecode.function.v1", &bytes),
-            )
-        })
-        .collect()
+) -> DenseIdIndex<SymbolKey> {
+    let mut paths = DenseIdIndex::new(sources.len());
+    for source in sources {
+        paths.insert(source.id.0, source.relative_path.as_str());
+    }
+    let mut ordinals = HashMap::with_capacity(functions.len());
+    let mut keys = DenseIdIndex::new(functions.len());
+    let mut identity_bytes = Vec::new();
+    for function in functions {
+        let identity = (
+            paths
+                .get(function.location.source.0)
+                .copied()
+                .unwrap_or_default(),
+            function.name.to_ascii_uppercase(),
+            function_kind_tag(function.kind),
+            function
+                .parameters
+                .iter()
+                .map(|parameter| semantic_type_tag(parameter.target.value_type))
+                .collect::<Vec<_>>(),
+        );
+        identity_bytes.clear();
+        match ordinals.entry(identity) {
+            Entry::Occupied(mut entry) => {
+                let ordinal = *entry.get();
+                serde_json::to_writer(&mut identity_bytes, &(entry.key(), ordinal))
+                    .expect("function identity is serializable");
+                *entry.get_mut() += 1;
+            }
+            Entry::Vacant(entry) => {
+                serde_json::to_writer(&mut identity_bytes, &(entry.key(), 0u32))
+                    .expect("function identity is serializable");
+                entry.insert(1);
+            }
+        }
+        keys.insert(
+            function.id.0,
+            SymbolKey::derive("rustyera.bytecode.function.v1", &identity_bytes),
+        );
+    }
+    keys
 }
 
 pub(super) fn variable_keys(
     variables: &[Variable],
-    functions: &BTreeMap<FunctionId, SymbolKey>,
-) -> BTreeMap<VariableId, SymbolKey> {
-    variables
-        .iter()
-        .map(|variable| {
-            let owner = variable
-                .owner
-                .and_then(|owner| functions.get(&owner).copied());
-            let identity =
-                serde_json::to_vec(&(variable.name.to_ascii_uppercase(), variable.scope, owner))
-                    .expect("variable identity is serializable");
-            (
-                variable.id,
-                SymbolKey::derive("rustyera.bytecode.variable.v2", &identity),
-            )
-        })
-        .collect()
+    functions: &DenseIdIndex<SymbolKey>,
+) -> DenseIdIndex<SymbolKey> {
+    let mut keys = DenseIdIndex::new(variables.len());
+    let mut identity = Vec::new();
+    for variable in variables {
+        let owner = variable
+            .owner
+            .and_then(|owner| functions.get(owner.0).copied());
+        identity.clear();
+        serde_json::to_writer(
+            &mut identity,
+            &(variable.name.to_ascii_uppercase(), variable.scope, owner),
+        )
+        .expect("variable identity is serializable");
+        keys.insert(
+            variable.id.0,
+            SymbolKey::derive("rustyera.bytecode.variable.v2", &identity),
+        );
+    }
+    keys
 }
 
 pub(super) fn globals(
     variables: &[Variable],
-    keys: &BTreeMap<VariableId, SymbolKey>,
-    functions: &BTreeMap<FunctionId, SymbolKey>,
+    keys: &DenseIdIndex<SymbolKey>,
+    functions: &DenseIdIndex<SymbolKey>,
 ) -> Vec<BytecodeGlobal> {
     variables
         .iter()
         .filter_map(|variable| {
             Some(BytecodeGlobal {
-                key: keys[&variable.id],
+                key: *keys.get(variable.id.0)?,
                 name: variable.name.clone(),
                 value_type: bytecode_type(variable.value_type)?,
                 dimensions: variable
@@ -175,7 +188,7 @@ pub(super) fn globals(
                     .collect(),
                 owner: variable
                     .owner
-                    .and_then(|owner| functions.get(&owner).copied()),
+                    .and_then(|owner| functions.get(owner.0).copied()),
             })
         })
         .collect()

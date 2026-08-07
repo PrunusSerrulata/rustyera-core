@@ -37,7 +37,7 @@ impl Builder<'_> {
 
         if !is_string
             && let Some(place) = argument_place(arguments.first())
-            && let Some(key) = self.context.variable_keys.get(&place.variable).copied()
+            && let Some(key) = self.context.variable_keys.get(place.variable.0).copied()
         {
             self.emit(EncodedInstruction::new(Opcode::Dup, Vec::new()), location);
             for index in &place.indices {
@@ -184,7 +184,7 @@ impl Builder<'_> {
             };
             &default_destination
         };
-        if let Some(key) = self.context.variable_keys.get(&place.variable).copied() {
+        if let Some(key) = self.context.variable_keys.get(place.variable.0).copied() {
             for index in &place.indices {
                 self.lower_expression(index, location);
             }

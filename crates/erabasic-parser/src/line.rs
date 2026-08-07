@@ -84,15 +84,15 @@ pub(crate) fn parse_line_at(
             matches!(
                 &token.kind,
                 TokenKind::Identifier(name)
-                    if matches!(name.to_ascii_uppercase().as_str(), "VARI" | "VARS")
+                    if name.eq_ignore_ascii_case("VARI") || name.eq_ignore_ascii_case("VARS")
             )
         });
-    let dedicated_instruction_grammar = tokens
-        .first()
-        .and_then(|token| match &token.kind {
-            TokenKind::Identifier(name) => context.instruction(name),
-            _ => None,
-        })
+    let instruction_spec = tokens.first().and_then(|token| match &token.kind {
+        TokenKind::Identifier(name) => context.instruction(name),
+        _ => None,
+    });
+    let dedicated_instruction_grammar = instruction_spec
+        .as_ref()
         .is_some_and(|spec| spec.argument_style != ArgumentStyle::Expressions)
         && !scoped_keyword_assignment;
     if !dedicated_instruction_grammar && let Some(index) = assignment_index {
@@ -263,13 +263,12 @@ pub(crate) fn parse_line_at(
     let raw = line[raw_start..].trim_start().to_string();
     let raw_offset =
         line_base + line[raw_start..].len() - line[raw_start..].trim_start().len() + raw_start;
-    let spec = context.instruction(name).unwrap_or(InstructionSpec {
+    let spec = instruction_spec.unwrap_or(InstructionSpec {
         argument_style: ArgumentStyle::Raw,
     });
-    let uses_mixed_arguments = matches!(
-        name.to_ascii_uppercase().as_str(),
-        "PRINT_IMG" | "PRINT_RECT" | "PRINT_SPACE"
-    );
+    let uses_mixed_arguments = name.eq_ignore_ascii_case("PRINT_IMG")
+        || name.eq_ignore_ascii_case("PRINT_RECT")
+        || name.eq_ignore_ascii_case("PRINT_SPACE");
     if uses_mixed_arguments
         || matches!(
             spec.argument_style,

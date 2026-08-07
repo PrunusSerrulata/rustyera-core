@@ -44,6 +44,57 @@ enum FunctionBuild {
     Lowered(LoweredFunction),
 }
 
+pub(crate) struct DenseIdIndex<T> {
+    len: usize,
+    values: Vec<Option<T>>,
+}
+
+impl<T> DenseIdIndex<T> {
+    pub(crate) fn new(len: usize) -> Self {
+        Self {
+            len,
+            values: Vec::new(),
+        }
+    }
+
+    pub(crate) fn insert(&mut self, id: u32, value: T) {
+        if let Some(slot) = self.slot_mut(id) {
+            *slot = Some(value);
+        }
+    }
+
+    pub(crate) fn get(&self, id: u32) -> Option<&T> {
+        self.values.get(usize::try_from(id).ok()?)?.as_ref()
+    }
+
+    pub(crate) fn get_mut(&mut self, id: u32) -> Option<&mut T> {
+        self.slot_mut(id)?.as_mut()
+    }
+
+    pub(crate) fn get_or_insert_with(
+        &mut self,
+        id: u32,
+        value: impl FnOnce() -> T,
+    ) -> Option<&mut T> {
+        Some(self.slot_mut(id)?.get_or_insert_with(value))
+    }
+
+    pub(crate) fn take(&mut self, id: u32) -> Option<T> {
+        self.slot_mut(id)?.take()
+    }
+
+    fn slot_mut(&mut self, id: u32) -> Option<&mut Option<T>> {
+        let index = usize::try_from(id).ok()?;
+        if index >= self.len {
+            return None;
+        }
+        if self.values.is_empty() {
+            self.values = std::iter::repeat_with(|| None).take(self.len).collect();
+        }
+        self.values.get_mut(index)
+    }
+}
+
 impl FunctionBuild {
     fn source_entry_count(&self) -> usize {
         match self {
@@ -108,16 +159,16 @@ impl<'a> CompileProgressCounter<'a> {
         let Some(callback) = self.callback else {
             return;
         };
+        let previous = self.reported.load(Ordering::Relaxed);
+        if !should_report_progress(completed, previous, self.total, force) {
+            return;
+        }
         let _guard = self
             .callback_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = self.reported.load(Ordering::Relaxed);
-        if completed > previous
-            && (force
-                || completed.saturating_sub(previous) >= compile_progress_stride(self.total)
-                || completed == self.total)
-        {
+        if should_report_progress(completed, previous, self.total, force) {
             self.reported.store(completed, Ordering::Relaxed);
             callback(CompileProgress {
                 stage: self.stage,
@@ -126,6 +177,13 @@ impl<'a> CompileProgressCounter<'a> {
             });
         }
     }
+}
+
+fn should_report_progress(completed: usize, previous: usize, total: usize, force: bool) -> bool {
+    completed > previous
+        && (force
+            || completed.saturating_sub(previous) >= compile_progress_stride(total)
+            || completed == total)
 }
 
 struct MaterializedFunction {
@@ -479,19 +537,14 @@ fn compile_project_inner(
     let compiler_options = canonical_digest("rustyera.compiler.options.v2", &options.optimization);
     let function_keys = function_keys(&project.program.functions, &project.program.sources);
     let variable_keys = variable_keys(&project.program.variables, &function_keys);
-    let functions_by_id = project
-        .program
-        .functions
-        .iter()
-        .map(|function| (function.id, function))
-        .collect();
-    let source_indices = project
-        .program
-        .sources
-        .iter()
-        .enumerate()
-        .map(|(index, source)| (source.id, u32::try_from(index).unwrap_or(u32::MAX)))
-        .collect();
+    let mut functions_by_id = DenseIdIndex::new(project.program.functions.len());
+    for function in &project.program.functions {
+        functions_by_id.insert(function.id.0, function);
+    }
+    let mut source_indices = DenseIdIndex::new(project.program.sources.len());
+    for (index, source) in project.program.sources.iter().enumerate() {
+        source_indices.insert(source.id.0, u32::try_from(index).unwrap_or(u32::MAX));
+    }
     let context = LoweringContext {
         program: &project.program,
         function_keys: &function_keys,
@@ -517,7 +570,9 @@ fn compile_project_inner(
     let previous_artifact_index = previous_artifact.map(PreviousArtifactIndex::new);
     let compile_one = |function: &Function| {
         let build = {
-            let key = function_keys[&function.id];
+            let key = *function_keys
+                .get(function.id.0)
+                .expect("validated function IDs have stable keys");
             let function_digest = canonical_digest("rustyera.compiler.hir-function.v3", function);
             let cache_key = Digest::hash(
                 "rustyera.compiler.function.v3",
@@ -647,8 +702,8 @@ fn compile_project_inner(
         };
     }
 
-    let mut native_imports = BTreeMap::new();
-    let mut host_imports = BTreeMap::new();
+    let mut native_imports = Vec::<erabasic_bytecode::NativeImport>::new();
+    let mut host_imports = Vec::<erabasic_bytecode::HostImport>::new();
     let source_entry_count = materialized
         .iter()
         .map(|entry| entry.source_entries.len())
@@ -656,7 +711,9 @@ fn compile_project_inner(
     let mut lowered_source_entries = Vec::with_capacity(source_entry_count);
     let mut functions = Vec::with_capacity(materialized.len());
     let mut cached = BTreeMap::new();
-    materialized.sort_by_key(|entry| entry.function.key);
+    // Function identities include a deterministic ordinal and are therefore
+    // unique. Their canonical output order does not need stable sorting.
+    materialized.sort_unstable_by_key(|entry| entry.function.key);
     finalizing_progress.checkpoint();
     for entry in materialized {
         let key = entry.function.key;
@@ -666,10 +723,17 @@ fn compile_project_inner(
             cached_function(&entry)
         };
         for import in entry.native_imports {
-            native_imports.insert(import.import.key, import);
+            match native_imports.binary_search_by_key(&import.import.key, |value| value.import.key)
+            {
+                Ok(index) => native_imports[index] = import,
+                Err(index) => native_imports.insert(index, import),
+            }
         }
         for import in entry.host_imports {
-            host_imports.insert(import.import.key, import);
+            match host_imports.binary_search_by_key(&import.import.key, |value| value.import.key) {
+                Ok(index) => host_imports[index] = import,
+                Err(index) => host_imports.insert(index, import),
+            }
         }
         lowered_source_entries.extend(entry.source_entries);
         functions.push(entry.function);
@@ -679,20 +743,30 @@ fn compile_project_inner(
     let mut fingerprint_order = Vec::with_capacity(lowered_source_entries.len());
     for (chunk_index, chunk) in lowered_source_entries.chunks(65_536).enumerate() {
         let base = chunk_index.saturating_mul(65_536);
-        fingerprint_order.extend(
-            chunk
-                .iter()
-                .enumerate()
-                .map(|(index, entry)| (entry.statement_fingerprint, base + index)),
-        );
+        fingerprint_order.extend(chunk.iter().enumerate().map(|(index, entry)| {
+            debug_assert!(
+                entry.statement_fingerprint.0[16..]
+                    .iter()
+                    .all(|byte| *byte == 0)
+            );
+            let mut prefix = [0; 16];
+            prefix.copy_from_slice(&entry.statement_fingerprint.0[..16]);
+            (prefix, base + index)
+        }));
         finalizing_progress.checkpoint();
     }
-    fingerprint_order.sort_unstable();
+    // Equal fingerprints receive the same interned index, so their source-entry
+    // order is irrelevant here; the original entry order is restored through the
+    // index side table below.
+    fingerprint_order.sort_unstable_by_key(|entry| entry.0);
     finalizing_progress.checkpoint();
     let mut statement_fingerprints = Vec::new();
     let mut fingerprint_indices = vec![0_u32; lowered_source_entries.len()];
     for chunk in fingerprint_order.chunks(65_536) {
-        for &(fingerprint, entry_index) in chunk {
+        for &(prefix, entry_index) in chunk {
+            let mut fingerprint = [0; 32];
+            fingerprint[..16].copy_from_slice(&prefix);
+            let fingerprint = Digest(fingerprint);
             let fingerprint_index = if statement_fingerprints.last() == Some(&fingerprint) {
                 statement_fingerprints.len().saturating_sub(1)
             } else {
@@ -703,6 +777,7 @@ fn compile_project_inner(
         }
         finalizing_progress.checkpoint();
     }
+    drop(fingerprint_order);
     let mut source_entries = Vec::with_capacity(source_entry_count);
     let mut lowered_source_entries = lowered_source_entries.into_iter();
     let mut fingerprint_indices = fingerprint_indices.into_iter();
@@ -743,8 +818,8 @@ fn compile_project_inner(
         },
         project_data: project.data.clone(),
         globals: globals(&project.program.variables, &variable_keys, &function_keys),
-        native_imports: native_imports.into_values().collect(),
-        host_imports: host_imports.into_values().collect(),
+        native_imports,
+        host_imports,
         functions,
         event_groups: event_groups(&project.program.functions, &function_keys),
         source_map: SourceMap {
@@ -850,7 +925,7 @@ fn compile_project_inner(
 
 #[cfg(test)]
 mod tests {
-    use super::compile_progress_stride;
+    use super::{compile_progress_stride, should_report_progress};
 
     #[test]
     fn compile_progress_is_frequent_for_large_projects() {
@@ -858,5 +933,15 @@ mod tests {
         assert_eq!(compile_progress_stride(100), 1);
         assert_eq!(compile_progress_stride(1_000), 10);
         assert_eq!(compile_progress_stride(58_349), 64);
+    }
+
+    #[test]
+    fn compile_progress_fast_path_preserves_report_boundaries() {
+        assert!(!should_report_progress(0, 0, 1_000, false));
+        assert!(!should_report_progress(9, 0, 1_000, false));
+        assert!(should_report_progress(10, 0, 1_000, false));
+        assert!(!should_report_progress(10, 10, 1_000, true));
+        assert!(should_report_progress(11, 10, 1_000, true));
+        assert!(should_report_progress(1_000, 991, 1_000, false));
     }
 }

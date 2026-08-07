@@ -49,13 +49,21 @@ impl Builder<'_> {
                 result,
             );
             let key = import.key;
-            self.host_imports.entry(key).or_insert(HostImport {
-                import,
-                effect: binding.effect,
-                capability: binding.capability,
-                snapshot_capability: binding.snapshot_capability,
-                contract: binding.contract,
-            });
+            if let Err(index) = self
+                .host_imports
+                .binary_search_by_key(&key, |value| value.import.key)
+            {
+                self.host_imports.insert(
+                    index,
+                    HostImport {
+                        import,
+                        effect: binding.effect,
+                        capability: binding.capability,
+                        snapshot_capability: binding.snapshot_capability,
+                        contract: binding.contract,
+                    },
+                );
+            }
             let index = self.add_import(ImportKind::Host, key);
             self.emit(
                 opcode::call(
@@ -97,11 +105,19 @@ impl Builder<'_> {
             result,
         );
         let key = import.key;
-        self.native_imports.entry(key).or_insert(NativeImport {
-            import,
-            effect: contract.effect(),
-            contract,
-        });
+        if let Err(index) = self
+            .native_imports
+            .binary_search_by_key(&key, |value| value.import.key)
+        {
+            self.native_imports.insert(
+                index,
+                NativeImport {
+                    import,
+                    effect: contract.effect(),
+                    contract,
+                },
+            );
+        }
         let index = self.add_import(ImportKind::Native, key);
         self.emit(
             opcode::call(

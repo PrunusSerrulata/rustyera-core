@@ -1,5 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
-
 use erabasic_ast::{AssignOp, BinaryOp, UnaryOp};
 use erabasic_bytecode::{
     BytecodeFunction, BytecodeFunctionKind, BytecodeLabel, BytecodeParameter, BytecodeType, Digest,
@@ -7,14 +5,14 @@ use erabasic_bytecode::{
     Opcode, RuntimeImport, SymbolKey, opcode,
 };
 use erabasic_hir::{
-    CallTarget, ControlFlowKind, Function, FunctionId, FunctionKind, HirArgument, HirCallArgument,
-    HirExpr, HirExprKind, HirFormPart, HirFormattedString, HirStatementKind, InstructionTarget,
-    LineId, Program, SemanticType, SourceLocation, VariableId,
+    CallTarget, ControlFlowKind, Function, FunctionKind, HirArgument, HirCallArgument, HirExpr,
+    HirExprKind, HirFormPart, HirFormattedString, HirStatementKind, InstructionTarget, LineId,
+    Program, SemanticType, SourceLocation,
 };
 
 use crate::{
     CompilerDiagnostic, CompilerDiagnosticCode, ExecutionBinding, HostRegistry,
-    registry::extension_binding,
+    compile::DenseIdIndex, registry::extension_binding,
 };
 
 mod builder;
@@ -27,18 +25,19 @@ use encoding::{
     runtime_import, unary_tag,
 };
 use planning::{
-    DataBlock, TryListBlock, add_control_flow, argument_place, collect_data_blocks,
-    collect_try_lists, formatted_constant, statement_fingerprint, structured_if_flow,
+    DataBlock, DataLine, TryListBlock, TryListLine, add_control_flow, argument_place,
+    collect_data_blocks, collect_try_lists, formatted_constant, statement_fingerprint,
+    structured_if_flow,
 };
 
 pub(crate) use encoding::bytecode_type;
 
 pub(crate) struct LoweringContext<'a> {
     pub program: &'a Program,
-    pub function_keys: &'a BTreeMap<FunctionId, SymbolKey>,
-    pub functions_by_id: &'a BTreeMap<FunctionId, &'a Function>,
-    pub variable_keys: &'a BTreeMap<VariableId, SymbolKey>,
-    pub source_indices: &'a BTreeMap<erabasic_hir::SourceId, u32>,
+    pub function_keys: &'a DenseIdIndex<SymbolKey>,
+    pub functions_by_id: &'a DenseIdIndex<&'a Function>,
+    pub variable_keys: &'a DenseIdIndex<SymbolKey>,
+    pub source_indices: &'a DenseIdIndex<u32>,
     pub host_registry: &'a HostRegistry,
 }
 
@@ -49,6 +48,11 @@ pub(crate) struct LoweredFunction {
     pub native_imports: Vec<NativeImport>,
     pub host_imports: Vec<HostImport>,
     pub diagnostics: Vec<CompilerDiagnostic>,
+}
+
+struct LineOffsets {
+    start: usize,
+    entry: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -76,36 +80,47 @@ pub(crate) fn lower_function(
 ) -> LoweredFunction {
     let mut builder = Builder::new(function, key, context);
     let structured = structured_if_flow(function);
-    let (data_blocks, data_body_lines) = collect_data_blocks(function);
-    let (try_lists, try_list_body_lines) = collect_try_lists(function);
-    let mut outgoing = BTreeMap::<LineId, Vec<_>>::new();
-    for edge in &function.control_flow {
-        outgoing.entry(edge.from).or_default().push(edge);
-    }
-    let loop_closers: BTreeMap<_, _> = function
+    let data_lines = collect_data_blocks(function);
+    let try_list_lines = collect_try_lists(function);
+    let mut loop_closers = DenseIdIndex::new(function.lines.len());
+    for edge in function
         .control_flow
         .iter()
         .filter(|edge| edge.kind == ControlFlowKind::LoopBack)
-        .filter_map(|edge| edge.to.map(|opener| (opener, edge.from)))
-        .collect();
-    let mut line_starts = BTreeMap::new();
-    let mut line_entries = BTreeMap::new();
-    let mut pending_jumps = Vec::new();
+    {
+        if let Some(opener) = edge.to {
+            loop_closers.insert(opener.0, edge.from);
+        }
+    }
+    let mut line_offsets = DenseIdIndex::new(function.lines.len());
+    let mut pending_jumps = Vec::with_capacity(function.control_flow.len());
     let mut pending_function_end_jumps = Vec::new();
     for line in &function.lines {
-        line_starts.insert(line.id, builder.code.len());
-        if let Some(end) = structured.alternative_ends.get(&line.id) {
+        let start = builder.code.len();
+        line_offsets.insert(
+            line.id.0,
+            LineOffsets {
+                start,
+                entry: start,
+            },
+        );
+        if let Some(end) = structured.alternative_end(line.id) {
             let instruction = builder.code.len();
             builder.emit(opcode::jump(Opcode::Jump, 0), line.location);
             pending_jumps.push((instruction, *end, false));
         }
-        line_entries.insert(line.id, builder.code.len());
+        line_offsets
+            .get_mut(line.id.0)
+            .expect("validated line IDs have bytecode offsets")
+            .entry = builder.code.len();
         let before = builder.code.len();
-        if let Some(block) = data_blocks.get(&line.id) {
+        if let Some(DataLine::Opener(block)) = data_lines.get(line.id.0) {
             builder.lower_data_block(block);
-        } else if let Some(block) = try_lists.get(&line.id) {
+        } else if let Some(TryListLine::Opener(block)) = try_list_lines.get(line.id.0) {
             builder.lower_try_list(block);
-        } else if data_body_lines.contains(&line.id) || try_list_body_lines.contains(&line.id) {
+        } else if matches!(data_lines.get(line.id.0), Some(DataLine::Body))
+            || matches!(try_list_lines.get(line.id.0), Some(TryListLine::Body))
+        {
             // The opener emits the complete selection so unselected DATA expressions
             // are never evaluated. Body lines retain a NOP for source-map anchoring.
         } else {
@@ -115,7 +130,7 @@ pub(crate) fn lower_function(
                         builder.lower_expression(index, line.location);
                     }
                     builder.lower_expression(value, line.location);
-                    let Some(key) = context.variable_keys.get(&target.variable).copied() else {
+                    let Some(key) = context.variable_keys.get(target.variable.0).copied() else {
                         builder.diagnostics.push(CompilerDiagnostic::at(
                             CompilerDiagnosticCode::InvalidHir,
                             line.location,
@@ -165,13 +180,9 @@ pub(crate) fn lower_function(
                 line.location,
             );
         }
-        if !data_blocks.contains_key(&line.id)
-            && !data_body_lines.contains(&line.id)
-            && !try_lists.contains_key(&line.id)
-            && !try_list_body_lines.contains(&line.id)
-        {
-            let outgoing: &[&erabasic_hir::ControlFlowEdge] =
-                outgoing.get(&line.id).map_or(&[], Vec::as_slice);
+        if data_lines.get(line.id.0).is_none() && try_list_lines.get(line.id.0).is_none() {
+            let outgoing = builder.take_control_flow(line.id);
+            let outgoing = outgoing.as_slice();
             let structural_name = match &line.kind {
                 HirStatementKind::Instruction { target, .. } => Some(target.name()),
                 _ => None,
@@ -223,7 +234,7 @@ pub(crate) fn lower_function(
                     )
                 });
                 let opener = loop_edge.and_then(|edge| edge.to);
-                let closer = opener.and_then(|opener| loop_closers.get(&opener).copied());
+                let closer = opener.and_then(|opener| loop_closers.get(opener.0).copied());
                 let opener_name = opener.and_then(|opener| {
                     function
                         .lines
@@ -299,12 +310,13 @@ pub(crate) fn lower_function(
         builder.lower_era_fallthrough(function.location);
     }
     for (instruction, target, use_entry) in pending_jumps {
-        let locations = if use_entry {
-            &line_entries
-        } else {
-            &line_starts
-        };
-        let Some(target_index) = locations.get(&target) else {
+        let Some(target_index) = line_offsets.get(target.0).map(|offsets| {
+            if use_entry {
+                offsets.entry
+            } else {
+                offsets.start
+            }
+        }) else {
             builder.diagnostics.push(CompilerDiagnostic::at(
                 CompilerDiagnosticCode::InvalidHir,
                 function.location,
@@ -312,7 +324,7 @@ pub(crate) fn lower_function(
             ));
             continue;
         };
-        builder.code[instruction].payload = u32::try_from(*target_index)
+        builder.code[instruction].payload = u32::try_from(target_index)
             .unwrap_or(u32::MAX)
             .to_le_bytes()
             .to_vec()
@@ -329,31 +341,52 @@ pub(crate) fn lower_function(
     // Source-map construction used to search and serialize the whole statement
     // list for every emitted opcode. Large dialogue functions then became O(n²).
     // Cache each exact statement location once; expression sub-spans retain the
-    // same deterministic function-level fallback as before.
-    let fingerprints: BTreeMap<_, _> = function
+    // same deterministic function-level fallback as before. Validated function
+    // lines normally arrive in source order, so retain that contiguous layout for
+    // cache-friendly binary search instead of allocating one tree node per line.
+    let mut fingerprints = function
         .lines
         .iter()
         .map(|line| {
             (
                 (
-                    line.location.source,
+                    line.location.source.0,
                     line.location.span.start,
                     line.location.span.end,
                 ),
                 statement_fingerprint(&line.kind),
             )
         })
-        .collect();
+        .collect::<Vec<_>>();
+    if fingerprints.windows(2).any(|pair| pair[0].0 > pair[1].0) {
+        // Stable ordering preserves BTreeMap collection semantics for invalid HIR
+        // that repeats a location: the last statement at that key wins.
+        fingerprints.sort_by_key(|entry| entry.0);
+    }
+    let mut unique_len = 0;
+    for index in 0..fingerprints.len() {
+        let entry = fingerprints[index];
+        if unique_len != 0 && fingerprints[unique_len - 1].0 == entry.0 {
+            fingerprints[unique_len - 1] = entry;
+        } else {
+            fingerprints[unique_len] = entry;
+            unique_len += 1;
+        }
+    }
+    fingerprints.truncate(unique_len);
     let mut fallback_fingerprint = Digest::hash(
         "rustyera.bytecode.source-statement.v1",
         &[function.name.as_bytes()],
     );
     fallback_fingerprint.0[16..].fill(0);
     let mut offset = 0u64;
-    let mut source_entries = Vec::<LoweredSourceMapEntry>::with_capacity(builder.code.len());
+    // Adjacent opcodes from one HIR line normally coalesce into one source entry.
+    // Reserving for lines is therefore a tighter estimate than reserving for every
+    // opcode, and avoids a per-function shrink allocation after construction.
+    let mut source_entries = Vec::<LoweredSourceMapEntry>::with_capacity(function.lines.len());
     for (instruction, location) in builder.code.iter().zip(&builder.locations) {
         let end = offset + instruction.encoded_len();
-        if let Some(source_index) = context.source_indices.get(&location.source) {
+        if let Some(source_index) = context.source_indices.get(location.source.0) {
             let entry = LoweredSourceMapEntry {
                 function: key,
                 code_start: offset,
@@ -362,9 +395,12 @@ pub(crate) fn lower_function(
                 byte_start: location.span.start as u64,
                 byte_end: location.span.end as u64,
                 statement_fingerprint: fingerprints
-                    .get(&(location.source, location.span.start, location.span.end))
-                    .copied()
-                    .unwrap_or(fallback_fingerprint),
+                    .binary_search_by_key(
+                        &(location.source.0, location.span.start, location.span.end),
+                        |entry| entry.0,
+                    )
+                    .ok()
+                    .map_or(fallback_fingerprint, |index| fingerprints[index].1),
                 origin_chain: None,
             };
             // One statement commonly lowers to several adjacent opcodes. A source
@@ -375,9 +411,6 @@ pub(crate) fn lower_function(
         }
         offset = end;
     }
-    // Coalescing can remove many entries after reserving for the opcode count.
-    // Release that excess before all lowered functions coexist in the compiler.
-    source_entries.shrink_to_fit();
     let parameters = function
         .parameters
         .iter()
@@ -396,7 +429,7 @@ pub(crate) fn lower_function(
                 bytecode_type(parameter.target.value_type)?
             };
             Some(BytecodeParameter {
-                key: *context.variable_keys.get(&parameter.target.variable)?,
+                key: *context.variable_keys.get(parameter.target.variable.0)?,
                 indices: parameter
                     .target
                     .indices
@@ -430,7 +463,7 @@ pub(crate) fn lower_function(
         .filter_map(|(_, name, line)| {
             Some(BytecodeLabel {
                 name: name.clone(),
-                instruction: u32::try_from(*line_starts.get(line)?).ok()?,
+                instruction: u32::try_from(line_offsets.get(line.0)?.start).ok()?,
             })
         })
         .collect();
@@ -454,8 +487,8 @@ pub(crate) fn lower_function(
             code: builder.code,
         },
         source_entries,
-        native_imports: builder.native_imports.into_values().collect(),
-        host_imports: builder.host_imports.into_values().collect(),
+        native_imports: builder.native_imports,
+        host_imports: builder.host_imports,
         diagnostics: builder.diagnostics,
     }
 }

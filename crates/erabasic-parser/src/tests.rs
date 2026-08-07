@@ -464,6 +464,42 @@ fn continuation_spans_map_back_to_physical_utf8_offsets() {
 }
 
 #[test]
+fn instruction_spec_is_reused_for_argument_parsing() {
+    struct CountingContext {
+        inner: DefaultParserContext,
+        instruction_calls: std::cell::Cell<usize>,
+    }
+
+    impl ParserContext for CountingContext {
+        fn lexer_config(&self) -> &erabasic_lexer::LexerConfig {
+            self.inner.lexer_config()
+        }
+
+        fn macros(&self) -> &erabasic_lexer::MacroTable {
+            self.inner.macros()
+        }
+
+        fn macros_mut(&mut self) -> &mut erabasic_lexer::MacroTable {
+            self.inner.macros_mut()
+        }
+
+        fn instruction(&self, name: &str) -> Option<InstructionSpec> {
+            self.instruction_calls.set(self.instruction_calls.get() + 1);
+            self.inner.instruction(name)
+        }
+    }
+
+    let context = CountingContext {
+        inner: DefaultParserContext::default(),
+        instruction_calls: std::cell::Cell::new(0),
+    };
+    let output = parse_line("PRINTFORMW text", &context);
+
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    assert_eq!(context.instruction_calls.get(), 1);
+}
+
+#[test]
 fn standalone_carriage_return_starts_a_new_physical_line() {
     let source = "@SYSTEM_TITLE\nIF 1\nELSE\r      IF 1\nPRINTL nested\nENDIF\nENDIF\nRETURN\n";
     let output = parse_erb(source, &mut DefaultParserContext::default());

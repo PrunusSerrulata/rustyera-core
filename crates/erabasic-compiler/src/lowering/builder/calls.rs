@@ -16,7 +16,7 @@ impl Builder<'_> {
     ) {
         let target_id = self
             .control_flow_by_line
-            .get(&line)
+            .get(line.0)
             .into_iter()
             .flatten()
             .find(|edge| matches!(edge.kind, ControlFlowKind::Call | ControlFlowKind::Jump))
@@ -36,7 +36,7 @@ impl Builder<'_> {
             );
             return;
         };
-        let Some(target) = self.context.function_keys.get(&target_id).copied() else {
+        let Some(target) = self.context.function_keys.get(target_id.0).copied() else {
             if name.starts_with("TRY") {
                 // Reference TRY calls do not evaluate arguments when the target is absent.
                 return;
@@ -52,7 +52,7 @@ impl Builder<'_> {
             );
             return;
         };
-        let target_function = self.context.functions_by_id.get(&target_id).copied();
+        let target_function = self.context.functions_by_id.get(target_id.0).copied();
         if let Some(function) = target_function {
             let method_call = name.ends_with('F');
             let valid_kind = if method_call {
