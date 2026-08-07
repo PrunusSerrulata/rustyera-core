@@ -17,6 +17,44 @@ fn manifest(source: &str, revision: u64) -> ProjectManifest {
 }
 
 #[test]
+fn project_identity_matches_the_cross_host_fixed_vector() {
+    let file = |path: &str, category: FileCategory, digest: Vec<u8>| SubmittedFile {
+        relative_path: path.into(),
+        category,
+        payload: FilePayload::Utf8("@TEST\nRETURN".into()),
+        content_hash: Some(ProtocolBytes::new(digest)),
+    };
+    let left = ProjectManifest {
+        project_revision: 1,
+        files: vec![
+            file("ERB/a.erb", FileCategory::Erb, vec![1; 32]),
+            file("ERB/A.erb", FileCategory::Erh, vec![2; 32]),
+            file("CSV/config.csv", FileCategory::Csv, (0_u8..32).collect()),
+            file("resources/icon.png", FileCategory::Resource, vec![255; 32]),
+        ],
+    };
+    let right = ProjectManifest {
+        project_revision: 1,
+        files: vec![
+            file("resources/icon.png", FileCategory::Resource, vec![255; 32]),
+            file("CSV/config.csv", FileCategory::Csv, (0_u8..32).collect()),
+            file("ERB/A.erb", FileCategory::Erh, vec![2; 32]),
+            file("ERB/a.erb", FileCategory::Erb, vec![1; 32]),
+        ],
+    };
+
+    assert_eq!(project_identity(&left), project_identity(&right));
+    assert_eq!(
+        project_identity(&left).source_digest.as_slice(),
+        &[
+            0x15, 0xd7, 0x21, 0x99, 0xf2, 0xe3, 0x3c, 0x42, 0x9e, 0x0b, 0xd4, 0x18, 0x5e, 0x34,
+            0x41, 0xa2, 0x3c, 0x06, 0x50, 0xc1, 0x42, 0x78, 0xd5, 0x76, 0x0c, 0x51, 0x27, 0xd1,
+            0xa7, 0x0e, 0x07, 0xec,
+        ]
+    );
+}
+
+#[test]
 fn compiled_project_cache_round_trips_and_keys_source_content() {
     let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
     let mut build = crate::project::build_project(&project, None);

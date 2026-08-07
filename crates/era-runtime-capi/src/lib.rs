@@ -28,11 +28,22 @@ struct SessionRecord {
     last_error: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BufferPurpose {
+    Detached,
+    CompiledCache(EraSessionHandle),
+}
+
+struct RegisteredBuffer {
+    bytes: Vec<u8>,
+    purpose: BufferPurpose,
+}
+
 struct Registry {
     next_handle: u64,
     next_buffer: u64,
     sessions: BTreeMap<u64, SessionRecord>,
-    buffers: BTreeMap<u64, Box<[u8]>>,
+    buffers: BTreeMap<u64, RegisteredBuffer>,
 }
 
 impl Default for Registry {
@@ -69,6 +80,8 @@ pub unsafe extern "C" fn era_runtime_get_api(
         reserved[1] = session_decode_project_file as *const () as *mut c_void;
         reserved[2] = session_decode_project_file_frontend as *const () as *mut c_void;
         reserved[3] = session_stage_compiled_cache as *const () as *mut c_void;
+        reserved[4] = session_allocate_compiled_cache as *const () as *mut c_void;
+        reserved[5] = session_commit_compiled_cache as *const () as *mut c_void;
         let api = EraRuntimeApi {
             struct_size: u32::try_from(std::mem::size_of::<EraRuntimeApi>()).unwrap_or(u32::MAX),
             abi_version: ERA_RUNTIME_ABI_VERSION,
@@ -122,25 +135,91 @@ extern "C" fn session_stage_compiled_cache(
             // reserved owned buffer before the call returns. No frontend memory is retained.
             bytes.extend_from_slice(unsafe { std::slice::from_raw_parts(input.data, input.len) });
         }
-        match record.runtime.stage_compiled_project_cache(bytes) {
-            Ok(transfer_id) => {
-                // SAFETY: null was rejected and the caller contract requires writable storage.
-                unsafe { out_transfer_id.write(transfer_id) };
-                EraStatus::Ok
-            }
-            Err(era_runtime::RuntimeError::ResourceLimit(message)) => {
-                record.last_error = message.into();
-                EraStatus::ResourceLimit
-            }
-            Err(era_runtime::RuntimeError::Busy(message)) => {
-                record.last_error = message.into();
-                EraStatus::Busy
-            }
-            Err(error) => {
-                record.last_error = error.to_string();
-                EraStatus::InternalError
-            }
+        stage_owned_compiled_cache(record, bytes, out_transfer_id)
+    })
+}
+
+extern "C" fn session_allocate_compiled_cache(
+    header: EraCallHeader,
+    handle: EraSessionHandle,
+    len: usize,
+    out_buffer: *mut EraOwnedBuffer,
+) -> EraStatus {
+    ffi_status(|| {
+        if !valid_header::<EraOwnedBuffer>(header) || out_buffer.is_null() {
+            return EraStatus::InvalidArgument;
         }
+        let maximum = {
+            let registry = lock_registry();
+            let Some(record) = registry.sessions.get(&handle.value) else {
+                return EraStatus::InvalidHandle;
+            };
+            record.runtime.maximum_transfer_bytes()
+        };
+        if u64::try_from(len).unwrap_or(u64::MAX) > maximum {
+            if let Some(record) = lock_registry().sessions.get_mut(&handle.value) {
+                record.last_error =
+                    "compiled project cache exceeds the negotiated transfer limit".into();
+            }
+            return EraStatus::ResourceLimit;
+        }
+        let mut bytes = Vec::new();
+        if bytes.try_reserve_exact(len).is_err() {
+            if let Some(record) = lock_registry().sessions.get_mut(&handle.value) {
+                record.last_error =
+                    "cannot allocate the compiled project cache staging buffer".into();
+            }
+            return EraStatus::ResourceLimit;
+        }
+        bytes.resize(len, 0);
+        let mut registry = lock_registry();
+        if !registry.sessions.contains_key(&handle.value) {
+            return EraStatus::InvalidHandle;
+        }
+        write_registered_buffer(
+            &mut registry,
+            bytes,
+            BufferPurpose::CompiledCache(handle),
+            out_buffer,
+        )
+    })
+}
+
+extern "C" fn session_commit_compiled_cache(
+    header: EraCallHeader,
+    handle: EraSessionHandle,
+    buffer: EraOwnedBuffer,
+    out_transfer_id: *mut u64,
+) -> EraStatus {
+    ffi_status(|| {
+        if !valid_header::<u64>(header) || out_transfer_id.is_null() {
+            return EraStatus::InvalidArgument;
+        }
+        let mut registry = lock_registry();
+        if !registry.sessions.contains_key(&handle.value) {
+            return EraStatus::InvalidHandle;
+        }
+        let Some(registered) = registry.buffers.get(&buffer.token) else {
+            return EraStatus::InvalidArgument;
+        };
+        if registered.purpose != BufferPurpose::CompiledCache(handle)
+            || !registered_buffer_matches(registered, &buffer)
+        {
+            return EraStatus::InvalidArgument;
+        }
+        // A structurally valid commit consumes the writable allocation even if Runtime rejects
+        // it. This makes ownership unambiguous across the FFI boundary and prevents a caller from
+        // mutating bytes after Runtime has inspected them.
+        let registered = registry
+            .buffers
+            .remove(&buffer.token)
+            .expect("registered buffer was just validated");
+        let bytes = registered.bytes;
+        let record = registry
+            .sessions
+            .get_mut(&handle.value)
+            .expect("session was just validated");
+        stage_owned_compiled_cache(record, bytes, out_transfer_id)
     })
 }
 
@@ -435,11 +514,15 @@ extern "C" fn release_buffer(header: EraCallHeader, buffer: EraOwnedBuffer) -> E
         if !valid_header::<EraOwnedBuffer>(header) {
             return EraStatus::AbiMismatch;
         }
-        if lock_registry().buffers.remove(&buffer.token).is_some() {
-            EraStatus::Ok
-        } else {
-            EraStatus::InvalidArgument
+        let mut registry = lock_registry();
+        let Some(registered) = registry.buffers.get(&buffer.token) else {
+            return EraStatus::InvalidArgument;
+        };
+        if !registered_buffer_matches(registered, &buffer) {
+            return EraStatus::InvalidArgument;
         }
+        registry.buffers.remove(&buffer.token);
+        EraStatus::Ok
     })
 }
 
@@ -466,18 +549,59 @@ fn write_owned_buffer(
     bytes: Vec<u8>,
     out_buffer: *mut EraOwnedBuffer,
 ) -> EraStatus {
+    write_registered_buffer(registry, bytes, BufferPurpose::Detached, out_buffer)
+}
+
+fn write_registered_buffer(
+    registry: &mut Registry,
+    bytes: Vec<u8>,
+    purpose: BufferPurpose,
+    out_buffer: *mut EraOwnedBuffer,
+) -> EraStatus {
     let token = registry.next_buffer;
     registry.next_buffer = registry.next_buffer.saturating_add(1);
-    let mut bytes = bytes.into_boxed_slice();
+    let mut bytes = bytes;
     let output = EraOwnedBuffer {
         data: bytes.as_mut_ptr(),
         len: bytes.len(),
         token,
     };
-    registry.buffers.insert(token, bytes);
+    registry
+        .buffers
+        .insert(token, RegisteredBuffer { bytes, purpose });
     // SAFETY: callers reach this helper only after validating out_buffer.
     unsafe { out_buffer.write(output) };
     EraStatus::Ok
+}
+
+fn registered_buffer_matches(registered: &RegisteredBuffer, buffer: &EraOwnedBuffer) -> bool {
+    registered.bytes.as_ptr().cast_mut() == buffer.data && registered.bytes.len() == buffer.len
+}
+
+fn stage_owned_compiled_cache(
+    record: &mut SessionRecord,
+    bytes: Vec<u8>,
+    out_transfer_id: *mut u64,
+) -> EraStatus {
+    match record.runtime.stage_compiled_project_cache(bytes) {
+        Ok(transfer_id) => {
+            // SAFETY: both ABI entry points reject null and require writable u64 storage.
+            unsafe { out_transfer_id.write(transfer_id) };
+            EraStatus::Ok
+        }
+        Err(era_runtime::RuntimeError::ResourceLimit(message)) => {
+            record.last_error = message.into();
+            EraStatus::ResourceLimit
+        }
+        Err(era_runtime::RuntimeError::Busy(message)) => {
+            record.last_error = message.into();
+            EraStatus::Busy
+        }
+        Err(error) => {
+            record.last_error = error.to_string();
+            EraStatus::InternalError
+        }
+    }
 }
 
 fn valid_header<T>(header: EraCallHeader) -> bool {
@@ -530,6 +654,8 @@ mod tests {
         assert!(!api.reserved[1].is_null());
         assert!(!api.reserved[2].is_null());
         assert!(!api.reserved[3].is_null());
+        assert!(!api.reserved[4].is_null());
+        assert!(!api.reserved[5].is_null());
     }
 
     #[test]
@@ -694,6 +820,249 @@ mod tests {
         assert_eq!(second_transfer_id, 117);
         assert_eq!(
             session_destroy(EraCallHeader::for_type::<EraCallHeader>(), handle),
+            EraStatus::Ok
+        );
+    }
+
+    #[test]
+    fn writable_compiled_cache_buffer_commits_without_an_input_copy() {
+        let options = EraCreateOptions::default();
+        let mut handle = EraSessionHandle::default();
+        assert_eq!(
+            session_create(options.header, &raw const options, &raw mut handle),
+            EraStatus::Ok
+        );
+        let mut buffer = EraOwnedBuffer {
+            data: std::ptr::null_mut(),
+            len: 0,
+            token: 0,
+        };
+        assert_eq!(
+            session_allocate_compiled_cache(
+                EraCallHeader::for_type::<EraOwnedBuffer>(),
+                handle,
+                4,
+                &raw mut buffer,
+            ),
+            EraStatus::Ok
+        );
+        // SAFETY: the allocation extension returned four caller-writable bytes.
+        unsafe { std::slice::from_raw_parts_mut(buffer.data, buffer.len) }
+            .copy_from_slice(&[1, 2, 3, 4]);
+        let consumed_buffer = EraOwnedBuffer {
+            data: buffer.data,
+            len: buffer.len,
+            token: buffer.token,
+        };
+        let mut transfer_id = 0;
+        assert_eq!(
+            session_commit_compiled_cache(
+                EraCallHeader::for_type::<u64>(),
+                handle,
+                buffer,
+                &raw mut transfer_id,
+            ),
+            EraStatus::Ok
+        );
+        assert_ne!(transfer_id, 0);
+        assert_eq!(
+            release_buffer(EraCallHeader::for_type::<EraOwnedBuffer>(), consumed_buffer,),
+            EraStatus::InvalidArgument
+        );
+        assert_eq!(
+            session_destroy(EraCallHeader::for_type::<EraCallHeader>(), handle),
+            EraStatus::Ok
+        );
+    }
+
+    #[test]
+    fn writable_compiled_cache_buffer_can_be_released_or_rejects_a_forged_shape() {
+        let options = EraCreateOptions::default();
+        let mut handle = EraSessionHandle::default();
+        assert_eq!(
+            session_create(options.header, &raw const options, &raw mut handle),
+            EraStatus::Ok
+        );
+        let mut buffer = EraOwnedBuffer {
+            data: std::ptr::null_mut(),
+            len: 0,
+            token: 0,
+        };
+        assert_eq!(
+            session_allocate_compiled_cache(
+                EraCallHeader::for_type::<EraOwnedBuffer>(),
+                handle,
+                4,
+                &raw mut buffer,
+            ),
+            EraStatus::Ok
+        );
+        let forged_pointer = EraOwnedBuffer {
+            data: std::ptr::dangling_mut(),
+            len: buffer.len,
+            token: buffer.token,
+        };
+        assert_eq!(
+            release_buffer(EraCallHeader::for_type::<EraOwnedBuffer>(), forged_pointer,),
+            EraStatus::InvalidArgument
+        );
+        let forged = EraOwnedBuffer {
+            data: buffer.data,
+            len: buffer.len + 1,
+            token: buffer.token,
+        };
+        assert_eq!(
+            release_buffer(EraCallHeader::for_type::<EraOwnedBuffer>(), forged),
+            EraStatus::InvalidArgument
+        );
+        assert_eq!(
+            release_buffer(EraCallHeader::for_type::<EraOwnedBuffer>(), buffer),
+            EraStatus::Ok
+        );
+        assert_eq!(
+            session_destroy(EraCallHeader::for_type::<EraCallHeader>(), handle),
+            EraStatus::Ok
+        );
+    }
+
+    #[test]
+    fn writable_compiled_cache_allocation_validates_handle_and_limit_first() {
+        let mut untouched = EraOwnedBuffer {
+            data: std::ptr::dangling_mut(),
+            len: 73,
+            token: 74,
+        };
+        assert_eq!(
+            session_allocate_compiled_cache(
+                EraCallHeader::for_type::<EraOwnedBuffer>(),
+                EraSessionHandle { value: u64::MAX },
+                usize::MAX,
+                &raw mut untouched,
+            ),
+            EraStatus::InvalidHandle
+        );
+        assert_eq!(untouched.len, 73);
+        assert_eq!(untouched.token, 74);
+
+        let options = EraCreateOptions::default();
+        let mut handle = EraSessionHandle::default();
+        assert_eq!(
+            session_create(options.header, &raw const options, &raw mut handle),
+            EraStatus::Ok
+        );
+        assert_eq!(
+            session_allocate_compiled_cache(
+                EraCallHeader::for_type::<EraOwnedBuffer>(),
+                handle,
+                usize::MAX,
+                &raw mut untouched,
+            ),
+            EraStatus::ResourceLimit
+        );
+        assert_eq!(untouched.len, 73);
+        assert_eq!(untouched.token, 74);
+        assert_eq!(
+            session_destroy(EraCallHeader::for_type::<EraCallHeader>(), handle),
+            EraStatus::Ok
+        );
+    }
+
+    #[test]
+    fn writable_compiled_cache_cannot_cross_sessions_and_valid_commit_consumes_it() {
+        let options = EraCreateOptions::default();
+        let mut first = EraSessionHandle::default();
+        let mut second = EraSessionHandle::default();
+        assert_eq!(
+            session_create(options.header, &raw const options, &raw mut first),
+            EraStatus::Ok
+        );
+        assert_eq!(
+            session_create(options.header, &raw const options, &raw mut second),
+            EraStatus::Ok
+        );
+        let mut buffer = EraOwnedBuffer {
+            data: std::ptr::null_mut(),
+            len: 0,
+            token: 0,
+        };
+        assert_eq!(
+            session_allocate_compiled_cache(
+                EraCallHeader::for_type::<EraOwnedBuffer>(),
+                first,
+                4,
+                &raw mut buffer,
+            ),
+            EraStatus::Ok
+        );
+        let mut transfer_id = 81;
+        assert_eq!(
+            session_commit_compiled_cache(
+                EraCallHeader::for_type::<u64>(),
+                second,
+                EraOwnedBuffer {
+                    data: buffer.data,
+                    len: buffer.len,
+                    token: buffer.token,
+                },
+                &raw mut transfer_id,
+            ),
+            EraStatus::InvalidArgument
+        );
+        assert_eq!(transfer_id, 81);
+        assert_eq!(
+            session_commit_compiled_cache(
+                EraCallHeader::for_type::<u64>(),
+                first,
+                buffer,
+                &raw mut transfer_id,
+            ),
+            EraStatus::Ok
+        );
+        assert_ne!(transfer_id, 81);
+
+        let mut busy_buffer = EraOwnedBuffer {
+            data: std::ptr::null_mut(),
+            len: 0,
+            token: 0,
+        };
+        assert_eq!(
+            session_allocate_compiled_cache(
+                EraCallHeader::for_type::<EraOwnedBuffer>(),
+                first,
+                4,
+                &raw mut busy_buffer,
+            ),
+            EraStatus::Ok
+        );
+        let consumed_busy_buffer = EraOwnedBuffer {
+            data: busy_buffer.data,
+            len: busy_buffer.len,
+            token: busy_buffer.token,
+        };
+        let mut busy_transfer_id = 82;
+        assert_eq!(
+            session_commit_compiled_cache(
+                EraCallHeader::for_type::<u64>(),
+                first,
+                busy_buffer,
+                &raw mut busy_transfer_id,
+            ),
+            EraStatus::Busy
+        );
+        assert_eq!(busy_transfer_id, 82);
+        assert_eq!(
+            release_buffer(
+                EraCallHeader::for_type::<EraOwnedBuffer>(),
+                consumed_busy_buffer,
+            ),
+            EraStatus::InvalidArgument
+        );
+        assert_eq!(
+            session_destroy(EraCallHeader::for_type::<EraCallHeader>(), first),
+            EraStatus::Ok
+        );
+        assert_eq!(
+            session_destroy(EraCallHeader::for_type::<EraCallHeader>(), second),
             EraStatus::Ok
         );
     }

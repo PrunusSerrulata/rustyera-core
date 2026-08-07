@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define ERA_RUNTIME_ABI_MAJOR 3u
-#define ERA_RUNTIME_ABI_MINOR 4u
+#define ERA_RUNTIME_ABI_MINOR 5u
 
 #define ERA_DEBUG_SCOPE_VARIABLES_READ (UINT64_C(1) << 0)
 #define ERA_DEBUG_SCOPE_VARIABLES_WRITE (UINT64_C(1) << 1)
@@ -95,6 +95,17 @@ typedef EraStatus (*EraSessionDecodeProjectFileFn)(EraCallHeader, EraSessionHand
                                                     EraByteSlice, EraOwnedBuffer *);
 typedef EraStatus (*EraSessionStageCompiledCacheFn)(EraCallHeader, EraSessionHandle,
                                                      EraByteSlice, uint64_t *);
+/* ABI 3.5 writable cache ownership:
+   - The caller must fill every returned byte before commit and must not access the buffer
+     concurrently with commit/release.
+   - Exactly one of commit or release_buffer must consume the original data/len/token triple.
+   - A shape/handle/session-purpose rejection does not consume the buffer.
+   - Once those checks pass, commit consumes the buffer even when it returns BUSY,
+     RESOURCE_LIMIT, or INTERNAL_ERROR; the transfer id is written only on OK. */
+typedef EraStatus (*EraSessionAllocateCompiledCacheFn)(EraCallHeader, EraSessionHandle,
+                                                        size_t, EraOwnedBuffer *);
+typedef EraStatus (*EraSessionCommitCompiledCacheFn)(EraCallHeader, EraSessionHandle,
+                                                      EraOwnedBuffer, uint64_t *);
 
 typedef EraStatus (*EraSessionCreateFn)(EraCallHeader, const EraCreateOptions *, EraSessionHandle *);
 typedef EraStatus (*EraSessionSubmitFn)(EraCallHeader, EraSessionHandle, EraByteSlice);
@@ -119,7 +130,9 @@ typedef struct EraRuntimeApi {
     /* ABI 3.1: reserved[0] is EraSessionSetProjectProgressFn.
        ABI 3.2: reserved[1] is EraSessionDecodeProjectFileFn.
        ABI 3.3: reserved[2] is EraSessionDecodeProjectFileFn returning a compact frontend manifest.
-       ABI 3.4: reserved[3] is EraSessionStageCompiledCacheFn. */
+       ABI 3.4: reserved[3] is EraSessionStageCompiledCacheFn.
+       ABI 3.5: reserved[4] is EraSessionAllocateCompiledCacheFn and reserved[5] is
+                EraSessionCommitCompiledCacheFn. */
     void *reserved[8];
 } EraRuntimeApi;
 

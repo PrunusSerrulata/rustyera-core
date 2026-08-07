@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.4`、公共信封 `2.0`、Runtime 协议 `24.0`。源码入口：
+> C ABI `3.5`、公共信封 `2.0`、Runtime 协议 `24.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -18,7 +18,7 @@
 
 | 层 | 当前稳定性 | 用途 |
 | --- | --- | --- |
-| C ABI 3.4 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
+| C ABI 3.5 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
 | Runtime 协议 24.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
@@ -87,7 +87,7 @@ get_api → create → ClientHello → ServerHello
                                                 destroy
 ```
 
-## 3. C ABI 3.4
+## 3. C ABI 3.5
 
 ### 3.1 数据结构
 
@@ -155,7 +155,7 @@ create=`EraCreateOptions`，drive=`EraDriveOptions`，poll/release/last-error=
 输出 `RuntimeFault`。
 
 `session_poll` 成功返回一个 buffer；`EMPTY` 时输出不可使用。`release_buffer` 不需要
-有效 session，但 token 必须仍在全局 buffer 注册表中。重复释放是
+有效 session，但 data、len 和 token 必须与全局 buffer 注册表中的记录完全一致。重复释放是
 `INVALID_ARGUMENT`。`last_error` 也返回 owned UTF-8 buffer；没有错误时可为空串。
 
 `session_destroy` 成功后 handle 立即失效；先释放仍持有的输出 buffer。当前 buffer 注册
@@ -173,7 +173,14 @@ create=`EraCreateOptions`，drive=`EraDriveOptions`，poll/release/last-error=
 - ABI 3.4 的 `reserved[3]` 是 `EraSessionStageCompiledCacheFn`。它取得一份连续缓存字节的
   所有权副本并返回已提交的 transfer ID，供随后的权威 `ProjectLoad` 使用，从而避免同一
   进程内再构造、编码、解码和拼接分块传输信封。该入口不提交项目、不推进 runtime，也不
-  绕过项目加载时的缓存版本、内置摘要、项目身份和字节码校验。
+  绕过项目加载时的缓存版本、内置摘要、项目身份和字节码校验；
+- ABI 3.5 的 `reserved[4]` 是 `EraSessionAllocateCompiledCacheFn`，按协商上限分配一个
+  runtime-owned 可写 `EraOwnedBuffer`；`reserved[5]` 是 `EraSessionCommitCompiledCacheFn`，
+  把已完整填充的同一 buffer 原样提交并返回 transfer ID。前端必须写满全部 `len` 字节，
+  然后恰好选择一次 commit 或 `release_buffer`。结构有效的 commit 会消费 buffer，即使
+  runtime 随后返回 `BUSY` 或其他错误，也不得再释放或访问它。该组合让文件 I/O 直接写入
+  runtime 最终拥有的连续内存，避免 ABI 3.4 借用输入所需的整块复制；所有项目加载校验保持
+  不变。
 
 项目进度阶段的 C ABI 数值保持追加兼容：`SCANNING` 至 `VALIDATING` 为 0–6，ABI 3.3
 追加的 `FINALIZING = 7` 表示函数编译完成后的缓存合并、源码映射整理、结构验证与身份计算；
@@ -185,10 +192,16 @@ create=`EraCreateOptions`，drive=`EraDriveOptions`，poll/release/last-error=
 `last_error`。ABI 3.2 客户端应使用 `reserved[1]`；ABI 3.3 客户端优先使用紧凑槽，并可向
 3.2 动态库回退到完整槽。
 
-缓存暂存扩展同样只借用输入到调用返回，成功后 runtime 持有自己的连续副本。输出 transfer
+ABI 3.4 缓存暂存扩展只借用输入到调用返回，成功后 runtime 持有自己的连续副本。输出 transfer
 ID 必须原样放入下一条 `ProjectLoad.compiled_cache_transfer_id`，不能跨 session 复用。未知
 handle 返回 `INVALID_HANDLE`，已有入站传输返回 `BUSY`，超过协商上限返回
 `RESOURCE_LIMIT`；详细文本由 `last_error` 提供。
+
+ABI 3.5 的可写缓存 buffer 与分配它的 session 绑定，不能提交到其他 session；在 commit 前
+仍由动态库登记，填充失败时必须把原始三元组交给 `release_buffer`。分配阶段的未知 handle、
+超限和内存不足分别返回 `INVALID_HANDLE`、`RESOURCE_LIMIT`、`RESOURCE_LIMIT`。commit 的
+handle、buffer 形状或用途不匹配时不会消费 buffer；一旦形状和用途验证成功则取得所有权，
+其状态映射与 ABI 3.4 暂存入口一致。
 
 当前精确同步错误映射：create/drive 的外层 header 错误或空指针是
 `INVALID_ARGUMENT`，其 options 内嵌 header 错误是 `ABI_MISMATCH`；submit 的 header

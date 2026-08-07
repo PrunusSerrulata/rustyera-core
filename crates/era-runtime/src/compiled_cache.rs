@@ -238,15 +238,20 @@ pub(crate) fn project_key(
 }
 
 pub(crate) fn project_identity(manifest: &ProjectManifest) -> ProjectIdentity {
-    let mut files = manifest.files.iter().collect::<Vec<_>>();
-    files.sort_by_key(|file| {
-        (
-            file.relative_path.to_lowercase(),
-            file.relative_path.clone(),
-        )
-    });
+    let mut files = manifest
+        .files
+        .iter()
+        .map(|file| {
+            (
+                file.relative_path.to_lowercase(),
+                file.relative_path.as_str(),
+                file,
+            )
+        })
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1)));
     let mut hasher = blake3::Hasher::new_derive_key("rustyera.project-source-identity.v1");
-    for file in files {
+    for (_, _, file) in files {
         let path = file.relative_path.as_bytes();
         hasher.update(&(path.len() as u64).to_le_bytes());
         hasher.update(path);

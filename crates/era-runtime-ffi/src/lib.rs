@@ -5,7 +5,7 @@
 
 use std::ffi::{c_char, c_void};
 
-pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 4 };
+pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 5 };
 pub const ERA_RUNTIME_GET_API_SYMBOL: &str = "era_runtime_get_api";
 
 pub const ERA_DEBUG_SCOPE_VARIABLES_READ: u64 = 1 << 0;
@@ -190,6 +190,13 @@ pub type EraFunctionPointer = *const c_void;
 /// `reserved[3]` in ABI 3.4 is an optional owned compiled-cache staging fast path. It only stages
 /// bytes; the authoritative project-load request and all observable results continue to use
 /// submit/poll.
+/// `reserved[4]` and `reserved[5]` in ABI 3.5 optionally allocate and commit a runtime-owned
+/// writable compiled-cache buffer. A frontend may fill that buffer directly, then either commit
+/// it once or return it unchanged to `release_buffer`. The caller must fill all bytes and must not
+/// access the allocation concurrently with commit/release. A rejected header, handle, shape, or
+/// session purpose leaves ownership with the caller; after those checks pass, commit consumes the
+/// allocation even when staging returns busy, resource-limit, or internal-error status. Only a
+/// successful commit writes the transfer ID.
 #[repr(C)]
 pub struct EraRuntimeApi {
     pub struct_size: u32,
