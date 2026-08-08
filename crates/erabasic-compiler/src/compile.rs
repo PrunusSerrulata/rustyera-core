@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use erabasic_analyzer::AnalyzedProject;
 use erabasic_bytecode::{
-    ArtifactManifest, BytecodeArtifact, BytecodeEventGroup, BytecodeGlobal, BytecodePatch, Digest,
-    HostImport, NativeImport, SourceMap, SourceMapEntry, SourceRecord, SymbolKey,
+    ArtifactManifest, BytecodeArtifact, BytecodeEventGroup, BytecodeFunction, BytecodeGlobal,
+    BytecodePatch, Digest, HostImport, NativeImport, SourceMap, SourceMapEntry, SourceRecord,
+    SymbolKey,
 };
 use erabasic_hir::Function;
 use erabasic_validator::{
@@ -273,6 +274,26 @@ impl IncrementalState {
     /// Returns an error when the state is not the compact cache for the exact
     /// supplied artifact and current compiler ABI.
     pub fn compact_cache_keys(&self, artifact: &BytecodeArtifact) -> Result<Vec<Digest>, String> {
+        self.validate_compact_cache_artifact(artifact)?;
+        artifact
+            .functions
+            .iter()
+            .map(|function| self.compact_cache_key(function))
+            .collect()
+    }
+
+    /// Validate that this compact state belongs to the supplied artifact.
+    ///
+    /// This separates the constant-time artifact checks from per-function key lookup so
+    /// single-threaded hosts can collect cache keys over multiple event-loop turns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the state was produced for another artifact or compiler ABI.
+    pub fn validate_compact_cache_artifact(
+        &self,
+        artifact: &BytecodeArtifact,
+    ) -> Result<(), String> {
         if self.compiler_abi != erabasic_bytecode::COMPILER_ABI_VERSION {
             return Err("incremental cache compiler ABI differs from the artifact".into());
         }
@@ -282,19 +303,23 @@ impl IncrementalState {
         if self.functions.len() != artifact.functions.len() {
             return Err("incremental cache function count differs from the artifact".into());
         }
-        artifact
+        Ok(())
+    }
+
+    /// Return one function's compact cache key after artifact-level validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the compact state lacks the function or stores a mismatched key.
+    pub fn compact_cache_key(&self, function: &BytecodeFunction) -> Result<Digest, String> {
+        let cached = self
             .functions
-            .iter()
-            .map(|function| {
-                let cached = self.functions.get(&function.key).ok_or_else(|| {
-                    "incremental cache is missing an artifact function".to_owned()
-                })?;
-                if cached.function_key != function.key {
-                    return Err("incremental cache function key is inconsistent".into());
-                }
-                Ok(cached.cache_key)
-            })
-            .collect()
+            .get(&function.key)
+            .ok_or_else(|| "incremental cache is missing an artifact function".to_owned())?;
+        if cached.function_key != function.key {
+            return Err("incremental cache function key is inconsistent".into());
+        }
+        Ok(cached.cache_key)
     }
 
     /// Rebuild a compact incremental cache from canonical artifact function keys.

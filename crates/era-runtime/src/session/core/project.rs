@@ -667,7 +667,7 @@ impl RuntimeSession {
             .filter(|diagnostic| !diagnostic.code.starts_with("runtime.compiled_cache_"))
             .cloned()
             .collect();
-        self.incremental = build.incremental;
+        self.incremental = Arc::new(build.incremental);
         self.artifact = build.artifact;
         self.project_snapshot = build.snapshot;
         let metadata = self
@@ -840,7 +840,7 @@ impl RuntimeSession {
                 }
                 let previous_incremental = cached
                     .as_ref()
-                    .map_or(&self.incremental, |value| &value.incremental);
+                    .map_or(self.incremental.as_ref(), |value| &value.incremental);
                 let previous_artifact = cached
                     .as_ref()
                     .map(|value| value.artifact.artifact())
@@ -954,7 +954,7 @@ impl RuntimeSession {
             .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
         let mut build = build_project_with_extensions_and_progress(
             &manifest,
-            Some(&self.incremental),
+            Some(self.incremental.as_ref()),
             previous_artifact,
             &self.extension_declarations,
             self.configuration_profile,
@@ -1052,7 +1052,7 @@ impl RuntimeSession {
 
         self.artifact = Some(target);
         build.incremental.compact();
-        self.incremental = build.incremental;
+        self.incremental = Arc::new(build.incremental);
         self.project_snapshot = build.snapshot;
         self.compiled_cache_diagnostics = build
             .report

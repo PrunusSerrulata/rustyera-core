@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{self, Write as _};
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::AtomicBool;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::Ordering;
@@ -260,6 +261,8 @@ pub struct RuntimeDriveReport {
     pub vm_instructions: u64,
     pub runtime_transitions: u32,
     pub queued_envelopes: u32,
+    /// Whether this drive advanced one single-threaded background-work quantum.
+    pub cooperative_background_work: bool,
 }
 
 #[derive(Debug)]
@@ -325,21 +328,30 @@ struct OutboundStateTransfer {
     next_offset: u64,
 }
 
-struct CompiledCacheTask {
+enum CompiledCacheTask {
     #[cfg(not(target_arch = "wasm32"))]
-    cancelled: Arc<AtomicBool>,
-    #[cfg(not(target_arch = "wasm32"))]
-    handle: Option<JoinHandle<Result<Vec<u8>, String>>>,
-    #[cfg(target_arch = "wasm32")]
-    result: Option<Result<Vec<u8>, String>>,
+    Native {
+        cancelled: Arc<AtomicBool>,
+        handle: Option<JoinHandle<Result<Vec<u8>, String>>>,
+    },
+    #[cfg(any(target_arch = "wasm32", test))]
+    Cooperative {
+        encoder: Box<crate::compiled_cache::CooperativeCompiledCacheEncoder>,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for CompiledCacheTask {
     fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+        match self {
+            Self::Native { cancelled, handle } => {
+                cancelled.store(true, Ordering::Relaxed);
+                if let Some(handle) = handle.take() {
+                    let _ = handle.join();
+                }
+            }
+            #[cfg(test)]
+            Self::Cooperative { .. } => {}
         }
     }
 }
@@ -393,7 +405,7 @@ pub struct RuntimeSession {
     debug_resume_phase: Option<RuntimePhase>,
     debug_frontend_time_sample: Option<u64>,
     artifact: Option<ValidatedArtifact>,
-    incremental: IncrementalState,
+    incremental: Arc<IncrementalState>,
     extension_declarations: Vec<ExtensionDeclaration>,
     vm: Option<RuntimeVm>,
     presentation: PresentationModel,

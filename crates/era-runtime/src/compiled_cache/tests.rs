@@ -55,6 +55,58 @@ fn project_identity_matches_the_cross_host_fixed_vector() {
 }
 
 #[test]
+fn cooperative_planning_bounds_manifest_and_function_traversal() {
+    let files = (0..=COOPERATIVE_ITEM_QUANTUM * 2)
+        .map(|index| SubmittedFile {
+            relative_path: format!("resources/{index:04}.bin"),
+            category: FileCategory::Resource,
+            payload: FilePayload::Bytes(ProtocolBytes::new(index.to_le_bytes().to_vec())),
+            content_hash: Some(ProtocolBytes::new(
+                blake3::hash(&index.to_le_bytes()).as_bytes().to_vec(),
+            )),
+        })
+        .collect();
+    let resource_manifest = ProjectManifest {
+        project_revision: 7,
+        files,
+    };
+    let mut identity = ProjectIdentityPlanner::new();
+    assert!(identity.step(&resource_manifest).is_none());
+    assert_eq!(identity.cursor, COOPERATIVE_ITEM_QUANTUM);
+    assert!(identity.step(&resource_manifest).is_none());
+    assert_eq!(identity.cursor, COOPERATIVE_ITEM_QUANTUM * 2);
+    let planned_identity = loop {
+        if let Some(value) = identity.step(&resource_manifest) {
+            break value;
+        }
+    };
+    assert_eq!(planned_identity, project_identity(&resource_manifest));
+
+    let mut source = "@SYSTEM_TITLE\nRETURN\n".to_owned();
+    for index in 0..=COOPERATIVE_ITEM_QUANTUM * 2 {
+        writeln!(source, "@CACHE_PLAN_{index}\nRETURN").unwrap();
+    }
+    let project = manifest(&source, 1);
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let artifact = build.artifact.unwrap();
+    let mut planner = CacheLayoutPlanner::new(CacheKeyPlanner::Incremental {
+        state: Arc::new(build.incremental),
+        keys: Vec::new(),
+    });
+    while planner.identity.is_none() {
+        assert!(planner.step(&project, &artifact).unwrap().is_none());
+    }
+    assert!(planner.step(&project, &artifact).unwrap().is_none());
+    assert_eq!(planner.cursor, COOPERATIVE_ITEM_QUANTUM);
+    let CacheKeyPlanner::Incremental { keys, .. } = &planner.cache_keys else {
+        panic!("incremental cache-key planner changed variant");
+    };
+    assert_eq!(keys.len(), COOPERATIVE_ITEM_QUANTUM);
+}
+
+#[test]
 fn compiled_project_cache_round_trips_and_keys_source_content() {
     let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
     let mut build = crate::project::build_project(&project, None);
@@ -310,24 +362,166 @@ fn compiled_project_cache_encoding_honors_cancellation() {
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
     let cancelled = AtomicBool::new(true);
-    let cache_keys = build
-        .incremental
-        .compact_cache_keys(build.artifact.as_ref().unwrap().artifact())
-        .unwrap();
-
     let snapshot = CompiledSnapshotMetadata::from(build.snapshot.as_ref().unwrap());
     let error = encode_cancellable(
-        &project,
-        &[],
-        build.artifact.as_ref().unwrap(),
-        &cache_keys,
-        &snapshot,
-        &build.report.diagnostics,
-        &cancelled,
+        Arc::new(project),
+        Vec::new(),
+        build.artifact.unwrap(),
+        Arc::new(build.incremental),
+        snapshot,
+        build.report.diagnostics,
+        Arc::new(cancelled),
     )
     .unwrap_err();
 
     assert_eq!(error, "compiled cache build cancelled");
+}
+
+#[test]
+fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
+    let resource = vec![0x5a; COOPERATIVE_MANIFEST_CHUNK_BYTES * 2 + 1];
+    let project = ProjectManifest {
+        project_revision: 1,
+        files: vec![
+            manifest("@SYSTEM_TITLE\nRETURN\n", 1)
+                .files
+                .into_iter()
+                .next()
+                .unwrap(),
+            SubmittedFile {
+                relative_path: "resources/large.bin".into(),
+                category: FileCategory::Resource,
+                content_hash: Some(ProtocolBytes::new(
+                    blake3::hash(&resource).as_bytes().to_vec(),
+                )),
+                payload: FilePayload::Bytes(ProtocolBytes::new(resource)),
+            },
+        ],
+    };
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let artifact = build.artifact.clone().unwrap();
+    let snapshot = build.snapshot.as_ref().unwrap();
+    let cache_keys = build
+        .incremental
+        .compact_cache_keys(artifact.artifact())
+        .unwrap();
+    let canonical = encode(
+        &snapshot.manifest,
+        &[],
+        &artifact,
+        &build.incremental,
+        snapshot,
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let mut encoder = CooperativeCompiledCacheEncoder::new(
+        Arc::clone(&snapshot.manifest),
+        Vec::new(),
+        artifact,
+        cache_keys,
+        CompiledSnapshotMetadata::from(snapshot),
+        build.report.diagnostics.clone(),
+        None,
+    );
+
+    assert!(encoder.step().unwrap().is_none());
+    let mut steps = 1;
+    let bytes = loop {
+        steps += 1;
+        if let Some(bytes) = encoder.step().unwrap() {
+            break bytes;
+        }
+        assert!(steps < 256, "cooperative cache encoder did not finish");
+    };
+
+    assert!(steps > 16, "cache encoding should span multiple host pumps");
+    assert_eq!(bytes, canonical);
+    let decoded = decode(&bytes, 64 * 1024 * 1024).unwrap();
+    assert_eq!(
+        decoded.snapshot.manifest.as_ref(),
+        snapshot.manifest.as_ref()
+    );
+    assert_eq!(
+        decoded.artifact.artifact(),
+        build.artifact.unwrap().artifact()
+    );
+}
+
+#[test]
+fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_errors() {
+    let project = ProjectManifest {
+        project_revision: 1,
+        files: vec![
+            manifest("@SYSTEM_TITLE\nRETURN\n", 1)
+                .files
+                .into_iter()
+                .next()
+                .unwrap(),
+            SubmittedFile {
+                relative_path: "resources/empty.bin".into(),
+                category: FileCategory::Resource,
+                content_hash: Some(ProtocolBytes::new(blake3::hash(&[]).as_bytes().to_vec())),
+                payload: FilePayload::Bytes(ProtocolBytes::new(Vec::new())),
+            },
+        ],
+    };
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let artifact = build.artifact.clone().unwrap();
+    let snapshot = build.snapshot.as_ref().unwrap();
+    let cache_keys = build
+        .incremental
+        .compact_cache_keys(artifact.artifact())
+        .unwrap();
+    let run = |manifest: ProjectManifest| {
+        let mut encoder = CooperativeCompiledCacheEncoder::new(
+            Arc::new(manifest),
+            Vec::new(),
+            artifact.clone(),
+            cache_keys.clone(),
+            CompiledSnapshotMetadata::from(snapshot),
+            build.report.diagnostics.clone(),
+            None,
+        );
+        loop {
+            match encoder.step() {
+                Ok(Some(bytes)) => break Ok(bytes),
+                Ok(None) => {}
+                Err(error) => break Err(error),
+            }
+        }
+    };
+
+    let bytes = run(project.clone()).unwrap();
+    assert_eq!(
+        decode_project_file(&bytes, bytes.len())
+            .unwrap()
+            .manifest
+            .files[1]
+            .payload,
+        FilePayload::Bytes(ProtocolBytes::new(Vec::new()))
+    );
+
+    let mut mismatched = project.clone();
+    mismatched.files[1].content_hash = Some(ProtocolBytes::new(vec![1; 32]));
+    assert_eq!(
+        run(mismatched).unwrap_err(),
+        "project manifest content hash differs from its payload"
+    );
+
+    let mut unreadable = project;
+    unreadable.files[1].payload = FilePayload::IoError(era_runtime_protocol::FrontendIoError {
+        kind: era_runtime_protocol::FrontendIoErrorKind::Other,
+        message: "fixture".into(),
+        platform_code: None,
+    });
+    assert_eq!(
+        run(unreadable).unwrap_err(),
+        "project files with I/O errors cannot be cached"
+    );
 }
 
 #[test]

@@ -92,7 +92,7 @@ impl RuntimeSession {
             debug_resume_phase: None,
             debug_frontend_time_sample: None,
             artifact: None,
-            incremental: IncrementalState::default(),
+            incremental: Arc::new(IncrementalState::default()),
             extension_declarations: Vec::new(),
             vm: None,
             presentation: PresentationModel::default(),
@@ -242,7 +242,13 @@ impl RuntimeSession {
         &mut self,
         budget: RuntimeDriveBudget,
     ) -> Result<RuntimeDriveReport, RuntimeError> {
-        self.poll_compiled_cache_task()?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if matches!(
+            self.compiled_cache_task,
+            Some(CompiledCacheTask::Native { .. })
+        ) {
+            self.poll_compiled_cache_task()?;
+        }
         let transition_limit = budget.maximum_runtime_transitions.max(1);
         let mut transitions = 0;
         let mut instructions = 0;
@@ -300,9 +306,8 @@ impl RuntimeSession {
                     self.finish_input(submission, false)?;
                 }
                 transitions += 1;
-                // A synchronous host call temporarily makes its fiber idle, but handling the
-                // returned event immediately makes it runnable again. Keep servicing such calls
-                // inside this bounded drive so PRINT-heavy scripts do not require one FFI round
+                // A synchronous host-call event immediately makes its idle fiber runnable again.
+                // Keep servicing such calls in this drive so PRINT-heavy scripts need no FFI
                 // trip per display fragment. External waits, input, faults, and debug stops still
                 // leave no runnable fiber or change phase and therefore cross the caller boundary.
                 if self.phase != RuntimePhase::Running
@@ -316,8 +321,23 @@ impl RuntimeSession {
             }
             break;
         }
+        #[cfg(any(target_arch = "wasm32", test))]
+        let cooperative_background_work = self.poll_cooperative_background_work()?;
+        #[cfg(all(not(target_arch = "wasm32"), not(test)))]
+        let cooperative_background_work = false;
         self.flush_presentation()?;
-        let state = if self.phase == RuntimePhase::Faulted {
+        let state = self.drive_state();
+        Ok(RuntimeDriveReport {
+            state,
+            vm_instructions: instructions,
+            runtime_transitions: transitions,
+            queued_envelopes: u32::try_from(self.outbound.len()).unwrap_or(u32::MAX),
+            cooperative_background_work,
+        })
+    }
+
+    fn drive_state(&self) -> RuntimeDriveState {
+        if self.phase == RuntimePhase::Faulted {
             RuntimeDriveState::Faulted
         } else if self.phase == RuntimePhase::Stopped {
             RuntimeDriveState::Stopped
@@ -330,13 +350,18 @@ impl RuntimeSession {
             RuntimeDriveState::MoreWork
         } else {
             RuntimeDriveState::Idle
-        };
-        Ok(RuntimeDriveReport {
-            state,
-            vm_instructions: instructions,
-            runtime_transitions: transitions,
-            queued_envelopes: u32::try_from(self.outbound.len()).unwrap_or(u32::MAX),
-        })
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn poll_cooperative_background_work(&mut self) -> Result<bool, RuntimeError> {
+        if matches!(
+            self.compiled_cache_task,
+            Some(CompiledCacheTask::Cooperative { .. })
+        ) {
+            return self.poll_compiled_cache_task();
+        }
+        Ok(false)
     }
 
     fn take_next_inbound(&mut self) -> Option<(u64, InboundMessage)> {

@@ -1,5 +1,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
+use std::io::Write as _;
+use std::ops::Range;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use era_protocol::ProtocolBytes;
@@ -34,6 +37,8 @@ const DIGEST_SECTION_MAGIC: &[u8; 4] = b"RDI2";
 const MANIFEST_SECTION_MAGIC: &[u8; 4] = b"RMF2";
 const SOURCE_RECORD_SECTION_MAGIC: &[u8; 4] = b"RSR2";
 const INCREMENTAL_SECTION_MAGIC: &[u8; 4] = b"RIC2";
+const COOPERATIVE_MANIFEST_CHUNK_BYTES: usize = 256 * 1024;
+const COOPERATIVE_ITEM_QUANTUM: usize = 256;
 
 #[derive(Serialize)]
 struct CompiledCacheMetadataRef<'a> {
@@ -171,6 +176,601 @@ impl CompiledSnapshotMetadata {
     }
 }
 
+/// Incremental cache encoder used by single-threaded hosts such as WebAssembly workers.
+///
+/// The canonical layout is planned once, manifest payloads and final assembly are byte-quantized,
+/// and every encoded section is appended and released before the next one starts. Hosts call one
+/// step per event-loop turn so cache work begins immediately without monopolizing later input.
+pub(crate) struct CooperativeCompiledCacheEncoder {
+    manifest: Arc<ProjectManifest>,
+    extensions: Vec<ExtensionDeclaration>,
+    artifact: ValidatedArtifact,
+    snapshot: CompiledSnapshotMetadata,
+    diagnostics: Vec<ProtocolDiagnostic>,
+    cancelled: Option<Arc<AtomicBool>>,
+    planner: Option<CacheLayoutPlanner>,
+    plan: Option<CacheLayoutPlan>,
+    next_section: usize,
+    manifest_encoder: Option<ManifestSectionEncoder>,
+    pending_section: Option<(Vec<u8>, usize)>,
+    output: Option<(Vec<u8>, blake3::Hasher)>,
+}
+
+struct CacheLayoutPlan {
+    identity: ProjectIdentity,
+    cache_keys: Vec<Digest>,
+    function_indices: std::collections::BTreeMap<SymbolKey, usize>,
+    function_ranges: Vec<Range<usize>>,
+    source_ranges: Vec<Range<usize>>,
+}
+
+impl CacheLayoutPlan {
+    fn section_count(&self) -> usize {
+        9 + self.function_ranges.len() + self.source_ranges.len()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CacheLayoutPlanningStage {
+    Identity,
+    FunctionIndices,
+    FunctionRanges,
+}
+
+struct CacheLayoutPlanner {
+    stage: CacheLayoutPlanningStage,
+    identity_planner: ProjectIdentityPlanner,
+    identity: Option<ProjectIdentity>,
+    function_indices: std::collections::BTreeMap<SymbolKey, usize>,
+    function_ranges: Vec<Range<usize>>,
+    cursor: usize,
+    total_weight: usize,
+    target_weight: usize,
+    range_start: usize,
+    range_weight: usize,
+    cache_keys: CacheKeyPlanner,
+}
+
+impl CacheLayoutPlanner {
+    fn new(cache_keys: CacheKeyPlanner) -> Self {
+        Self {
+            stage: CacheLayoutPlanningStage::Identity,
+            identity_planner: ProjectIdentityPlanner::new(),
+            identity: None,
+            function_indices: std::collections::BTreeMap::new(),
+            function_ranges: Vec::new(),
+            cursor: 0,
+            total_weight: 0,
+            target_weight: 0,
+            range_start: 0,
+            range_weight: 0,
+            cache_keys,
+        }
+    }
+
+    fn step(
+        &mut self,
+        manifest: &ProjectManifest,
+        artifact: &ValidatedArtifact,
+    ) -> Result<Option<CacheLayoutPlan>, String> {
+        let functions = &artifact.artifact().functions;
+        match self.stage {
+            CacheLayoutPlanningStage::Identity => {
+                let Some(identity) = self.identity_planner.step(manifest) else {
+                    return Ok(None);
+                };
+                self.identity = Some(identity);
+                self.cache_keys.validate(artifact.artifact())?;
+                self.stage = CacheLayoutPlanningStage::FunctionIndices;
+            }
+            CacheLayoutPlanningStage::FunctionIndices => {
+                let end = self
+                    .cursor
+                    .saturating_add(COOPERATIVE_ITEM_QUANTUM)
+                    .min(functions.len());
+                for (index, function) in functions.iter().enumerate().take(end).skip(self.cursor) {
+                    self.function_indices.insert(function.key, index);
+                    self.cache_keys.push(function)?;
+                    self.total_weight =
+                        self.total_weight.saturating_add(function.code.len().max(1));
+                }
+                self.cursor = end;
+                if end == functions.len() {
+                    self.target_weight =
+                        self.total_weight.div_ceil(TARGET_PARALLEL_SECTIONS).max(1);
+                    self.cursor = 0;
+                    self.stage = CacheLayoutPlanningStage::FunctionRanges;
+                }
+            }
+            CacheLayoutPlanningStage::FunctionRanges => {
+                let end = self
+                    .cursor
+                    .saturating_add(COOPERATIVE_ITEM_QUANTUM)
+                    .min(functions.len());
+                for (index, function) in functions.iter().enumerate().take(end).skip(self.cursor) {
+                    self.range_weight =
+                        self.range_weight.saturating_add(function.code.len().max(1));
+                    if self.range_weight >= self.target_weight
+                        && self.function_ranges.len() + 1 < TARGET_PARALLEL_SECTIONS
+                    {
+                        self.function_ranges.push(self.range_start..index + 1);
+                        self.range_start = index + 1;
+                        self.range_weight = 0;
+                    }
+                }
+                self.cursor = end;
+                if end == functions.len() {
+                    if self.range_start < functions.len() {
+                        self.function_ranges.push(self.range_start..functions.len());
+                    }
+                    return Ok(Some(CacheLayoutPlan {
+                        identity: self.identity.take().expect("cache identity was planned"),
+                        cache_keys: self.cache_keys.finish(),
+                        function_indices: std::mem::take(&mut self.function_indices),
+                        function_ranges: std::mem::take(&mut self.function_ranges),
+                        source_ranges: equal_ranges(artifact.artifact().source_map.entries.len()),
+                    }));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ProjectIdentityPlanningStage {
+    Collect,
+    Hash,
+}
+
+type OrderedManifestFiles = std::collections::btree_map::IntoValues<(String, String, usize), usize>;
+
+struct PendingIdentityPayload {
+    file_index: usize,
+    offset: usize,
+    hasher: blake3::Hasher,
+    content_hash: bool,
+}
+
+struct ProjectIdentityPlanner {
+    stage: ProjectIdentityPlanningStage,
+    cursor: usize,
+    ordered: std::collections::BTreeMap<(String, String, usize), usize>,
+    files: Option<OrderedManifestFiles>,
+    hasher: blake3::Hasher,
+    pending: Option<PendingIdentityPayload>,
+}
+
+impl ProjectIdentityPlanner {
+    fn new() -> Self {
+        Self {
+            stage: ProjectIdentityPlanningStage::Collect,
+            cursor: 0,
+            ordered: std::collections::BTreeMap::new(),
+            files: None,
+            hasher: blake3::Hasher::new_derive_key("rustyera.project-source-identity.v1"),
+            pending: None,
+        }
+    }
+
+    fn step(&mut self, manifest: &ProjectManifest) -> Option<ProjectIdentity> {
+        if let Some(pending) = self.pending.as_mut() {
+            let file = &manifest.files[pending.file_index];
+            let bytes = if pending.content_hash {
+                file.content_hash
+                    .as_ref()
+                    .expect("pending content hash exists")
+                    .as_slice()
+            } else {
+                identity_payload(file)
+            };
+            let end = pending
+                .offset
+                .saturating_add(COOPERATIVE_MANIFEST_CHUNK_BYTES)
+                .min(bytes.len());
+            pending.hasher.update(&bytes[pending.offset..end]);
+            pending.offset = end;
+            if end == bytes.len() {
+                self.hasher.update(pending.hasher.finalize().as_bytes());
+                self.pending = None;
+            }
+            return None;
+        }
+        match self.stage {
+            ProjectIdentityPlanningStage::Collect => {
+                let end = self
+                    .cursor
+                    .saturating_add(COOPERATIVE_ITEM_QUANTUM)
+                    .min(manifest.files.len());
+                for (index, file) in manifest
+                    .files
+                    .iter()
+                    .enumerate()
+                    .take(end)
+                    .skip(self.cursor)
+                {
+                    self.ordered.insert(
+                        (
+                            file.relative_path.to_lowercase(),
+                            file.relative_path.clone(),
+                            index,
+                        ),
+                        index,
+                    );
+                }
+                self.cursor = end;
+                if end == manifest.files.len() {
+                    self.files = Some(std::mem::take(&mut self.ordered).into_values());
+                    self.stage = ProjectIdentityPlanningStage::Hash;
+                }
+            }
+            ProjectIdentityPlanningStage::Hash => {
+                for _ in 0..COOPERATIVE_ITEM_QUANTUM {
+                    let Some(file_index) = self
+                        .files
+                        .as_mut()
+                        .expect("ordered manifest files exist")
+                        .next()
+                    else {
+                        return Some(ProjectIdentity {
+                            project_revision: manifest.project_revision,
+                            source_digest: ProtocolBytes::new(
+                                self.hasher.finalize().as_bytes().to_vec(),
+                            ),
+                        });
+                    };
+                    let file = &manifest.files[file_index];
+                    let path = file.relative_path.as_bytes();
+                    self.hasher.update(&(path.len() as u64).to_le_bytes());
+                    self.hasher.update(path);
+                    self.hasher.update(&[file.category as u8]);
+                    if let Some(content_hash) = &file.content_hash
+                        && content_hash.as_slice().len() == blake3::OUT_LEN
+                    {
+                        self.hasher.update(content_hash.as_slice());
+                        continue;
+                    }
+                    self.pending = Some(PendingIdentityPayload {
+                        file_index,
+                        offset: 0,
+                        hasher: blake3::Hasher::new(),
+                        content_hash: file.content_hash.is_some(),
+                    });
+                    return None;
+                }
+            }
+        }
+        None
+    }
+}
+
+fn identity_payload(file: &SubmittedFile) -> &[u8] {
+    match &file.payload {
+        FilePayload::Utf8(text) => text.as_bytes(),
+        FilePayload::Bytes(bytes) => bytes.as_slice(),
+        FilePayload::IoError(error) => error.message.as_bytes(),
+    }
+}
+
+enum CacheKeyPlanner {
+    #[cfg(test)]
+    Ready(Option<Vec<Digest>>),
+    Incremental {
+        state: Arc<IncrementalState>,
+        keys: Vec<Digest>,
+    },
+}
+
+impl CacheKeyPlanner {
+    fn validate(&self, artifact: &BytecodeArtifact) -> Result<(), String> {
+        match self {
+            #[cfg(test)]
+            Self::Ready(_) => Ok(()),
+            Self::Incremental { state, .. } => state.validate_compact_cache_artifact(artifact),
+        }
+    }
+
+    fn push(&mut self, function: &BytecodeFunction) -> Result<(), String> {
+        match self {
+            #[cfg(test)]
+            Self::Ready(_) => {}
+            Self::Incremental { state, keys } => {
+                keys.push(state.compact_cache_key(function)?);
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Vec<Digest> {
+        match self {
+            #[cfg(test)]
+            Self::Ready(keys) => keys.take().expect("cache keys were planned"),
+            Self::Incremental { keys, .. } => std::mem::take(keys),
+        }
+    }
+}
+
+impl CooperativeCompiledCacheEncoder {
+    #[cfg(test)]
+    pub(crate) fn new(
+        manifest: Arc<ProjectManifest>,
+        extensions: Vec<ExtensionDeclaration>,
+        artifact: ValidatedArtifact,
+        cache_keys: Vec<Digest>,
+        snapshot: CompiledSnapshotMetadata,
+        diagnostics: Vec<ProtocolDiagnostic>,
+        cancelled: Option<Arc<AtomicBool>>,
+    ) -> Self {
+        Self {
+            manifest,
+            extensions,
+            artifact,
+            snapshot,
+            diagnostics,
+            cancelled,
+            planner: Some(CacheLayoutPlanner::new(CacheKeyPlanner::Ready(Some(
+                cache_keys,
+            )))),
+            plan: None,
+            next_section: 0,
+            manifest_encoder: None,
+            pending_section: None,
+            output: None,
+        }
+    }
+
+    pub(crate) fn new_with_incremental(
+        manifest: Arc<ProjectManifest>,
+        extensions: Vec<ExtensionDeclaration>,
+        artifact: ValidatedArtifact,
+        incremental: Arc<IncrementalState>,
+        snapshot: CompiledSnapshotMetadata,
+        diagnostics: Vec<ProtocolDiagnostic>,
+        cancelled: Option<Arc<AtomicBool>>,
+    ) -> Self {
+        Self {
+            manifest,
+            extensions,
+            artifact,
+            snapshot,
+            diagnostics,
+            cancelled,
+            planner: Some(CacheLayoutPlanner::new(CacheKeyPlanner::Incremental {
+                state: incremental,
+                keys: Vec::new(),
+            })),
+            plan: None,
+            next_section: 0,
+            manifest_encoder: None,
+            pending_section: None,
+            output: None,
+        }
+    }
+
+    pub(crate) fn step(&mut self) -> Result<Option<Vec<u8>>, String> {
+        if self
+            .cancelled
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return Err("compiled cache build cancelled".into());
+        }
+        if let Some((section, offset)) = self.pending_section.as_mut() {
+            let end = offset
+                .saturating_add(COOPERATIVE_MANIFEST_CHUNK_BYTES)
+                .min(section.len());
+            let chunk = &section[*offset..end];
+            let (output, hasher) = self.output.as_mut().expect("cache output was initialized");
+            output.extend_from_slice(chunk);
+            hasher.update(chunk);
+            *offset = end;
+            if end == section.len() {
+                self.pending_section = None;
+                self.next_section += 1;
+            }
+            return Ok(None);
+        }
+        if self.plan.is_none() {
+            self.poll_layout()?;
+            return Ok(None);
+        }
+        let plan = self.plan.as_ref().expect("cache layout was planned");
+        let fixed_sections = 9;
+        let function_start = fixed_sections;
+        let source_start = function_start + plan.function_ranges.len();
+        if self.next_section < plan.section_count() {
+            let cancelled = self.cancelled.as_deref();
+            let section = match self.next_section {
+                0 => encode_section(
+                    &CompiledCacheMetadataRef {
+                        manifest: &self.artifact.artifact().manifest,
+                        call_compatibility: &self.artifact.artifact().call_compatibility,
+                        native_imports: &self.artifact.artifact().native_imports,
+                        host_imports: &self.artifact.artifact().host_imports,
+                        event_groups: &self.artifact.artifact().event_groups,
+                    },
+                    cancelled,
+                )?,
+                1 => encode_section(&self.artifact.artifact().globals, cancelled)?,
+                2 => encode_incremental_section(&plan.cache_keys, cancelled)?,
+                3 => encode_section(&self.artifact.artifact().project_data, cancelled)?,
+                4 => encode_source_record_section(
+                    &self.artifact.artifact().source_map.sources,
+                    &self.manifest,
+                    cancelled,
+                )?,
+                5 => encode_digest_section(
+                    &self.artifact.artifact().source_map.statement_fingerprints,
+                    cancelled,
+                )?,
+                6 => {
+                    let encoder = self
+                        .manifest_encoder
+                        .get_or_insert(ManifestSectionEncoder::new(self.manifest.files.len())?);
+                    let Some(section) = encoder.step(&self.manifest)? else {
+                        return Ok(None);
+                    };
+                    self.manifest_encoder = None;
+                    section
+                }
+                7 => encode_section(&self.snapshot, cancelled)?,
+                8 => encode_section(&self.diagnostics, cancelled)?,
+                index if index < source_start => {
+                    let range = plan.function_ranges[index - function_start].clone();
+                    encode_section(&self.artifact.artifact().functions[range], cancelled)?
+                }
+                index => {
+                    let range = plan.source_ranges[index - source_start].clone();
+                    encode_source_section(
+                        &self.artifact.artifact().source_map.entries[range],
+                        &plan.function_indices,
+                        cancelled,
+                    )?
+                }
+            };
+            self.pending_section = Some((section, 0));
+            return Ok(None);
+        }
+        let (mut output, hasher) = self.output.take().expect("cache output was initialized");
+        output.extend_from_slice(hasher.finalize().as_bytes());
+        Ok(Some(output))
+    }
+
+    fn poll_layout(&mut self) -> Result<(), String> {
+        let Some(plan) = self
+            .planner
+            .as_mut()
+            .expect("cache layout planner exists")
+            .step(&self.manifest, &self.artifact)?
+        else {
+            return Ok(());
+        };
+        let mut output = Vec::new();
+        encode_project_file_header(
+            &mut output,
+            &plan.identity,
+            &self.extensions,
+            self.snapshot.configuration_profile,
+            plan.function_ranges.len(),
+            plan.source_ranges.len(),
+        )?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&output);
+        self.output = Some((output, hasher));
+        self.planner = None;
+        self.plan = Some(plan);
+        Ok(())
+    }
+}
+
+struct ManifestSectionEncoder {
+    writer:
+        Option<self::io::CountingWriter<'static, zstd::stream::write::Encoder<'static, Vec<u8>>>>,
+    file_index: usize,
+    payload_offset: usize,
+    payload_hasher: Option<blake3::Hasher>,
+}
+
+impl ManifestSectionEncoder {
+    fn new(file_count: usize) -> Result<Self, String> {
+        let encoder = zstd::stream::Encoder::new(Vec::new(), COMPRESSION_LEVEL)
+            .map_err(|error| error.to_string())?;
+        let mut writer = self::io::CountingWriter::new(encoder, None);
+        writer
+            .write_all(MANIFEST_SECTION_MAGIC)
+            .map_err(|error| error.to_string())?;
+        write_varint(
+            &mut writer,
+            u64::try_from(file_count).map_err(|_| "project manifest has too many files")?,
+        )?;
+        Ok(Self {
+            writer: Some(writer),
+            file_index: 0,
+            payload_offset: 0,
+            payload_hasher: None,
+        })
+    }
+
+    fn step(&mut self, manifest: &ProjectManifest) -> Result<Option<Vec<u8>>, String> {
+        let Some(file) = manifest.files.get(self.file_index) else {
+            let writer = self
+                .writer
+                .take()
+                .expect("manifest encoder retains its writer");
+            let decoded_length = writer.bytes;
+            let compressed = writer
+                .into_inner()
+                .finish()
+                .map_err(|error| error.to_string())?;
+            let mut output = Vec::with_capacity(16 + compressed.len());
+            output.extend_from_slice(&decoded_length.to_le_bytes());
+            output.extend_from_slice(
+                &u64::try_from(compressed.len())
+                    .map_err(|_| "compiled cache section is too large")?
+                    .to_le_bytes(),
+            );
+            output.extend_from_slice(&compressed);
+            return Ok(Some(output));
+        };
+        let payload = match &file.payload {
+            FilePayload::Utf8(text) => text.as_bytes(),
+            FilePayload::Bytes(bytes) => bytes.as_slice(),
+            FilePayload::IoError(_) => {
+                return Err("project files with I/O errors cannot be cached".into());
+            }
+        };
+        let writer = self
+            .writer
+            .as_mut()
+            .expect("manifest encoder retains its writer");
+        if self.payload_hasher.is_none() {
+            write_bytes(writer, file.relative_path.as_bytes())?;
+            writer
+                .write_all(&[
+                    file.category as u8,
+                    u8::from(file.content_hash.is_some()),
+                    u8::from(matches!(&file.payload, FilePayload::Bytes(_))),
+                ])
+                .map_err(|error| error.to_string())?;
+            write_varint(
+                writer,
+                u64::try_from(payload.len())
+                    .map_err(|_| "compiled cache byte string is too large")?,
+            )?;
+            self.payload_hasher = Some(blake3::Hasher::new());
+            return Ok(None);
+        }
+        let end = self
+            .payload_offset
+            .saturating_add(COOPERATIVE_MANIFEST_CHUNK_BYTES)
+            .min(payload.len());
+        let chunk = &payload[self.payload_offset..end];
+        writer.write_all(chunk).map_err(|error| error.to_string())?;
+        self.payload_hasher
+            .as_mut()
+            .expect("payload hasher was initialized")
+            .update(chunk);
+        self.payload_offset = end;
+        if end == payload.len() {
+            let actual = self
+                .payload_hasher
+                .take()
+                .expect("payload hasher was initialized")
+                .finalize();
+            if file
+                .content_hash
+                .as_ref()
+                .is_some_and(|expected| expected.as_slice() != actual.as_bytes())
+            {
+                return Err("project manifest content hash differs from its payload".into());
+            }
+            self.file_index += 1;
+            self.payload_offset = 0;
+        }
+        Ok(None)
+    }
+}
+
 struct DecodedCacheParts {
     metadata: CompiledCacheMetadata,
     globals: Vec<BytecodeGlobal>,
@@ -288,173 +888,45 @@ pub(crate) fn encode(
 ) -> Result<Vec<u8>, String> {
     let snapshot = CompiledSnapshotMetadata::from(snapshot);
     let cache_keys = incremental.compact_cache_keys(artifact.artifact())?;
-    encode_inner(
-        manifest,
-        extensions,
-        artifact,
-        &cache_keys,
-        &snapshot,
-        diagnostics,
+    let mut encoder = CooperativeCompiledCacheEncoder::new(
+        Arc::new(manifest.clone()),
+        extensions.to_vec(),
+        artifact.clone(),
+        cache_keys,
+        snapshot,
+        diagnostics.to_vec(),
         None,
-    )
+    );
+    loop {
+        if let Some(bytes) = encoder.step()? {
+            return Ok(bytes);
+        }
+    }
 }
 
 pub(crate) fn encode_cancellable(
-    manifest: &ProjectManifest,
-    extensions: &[ExtensionDeclaration],
-    artifact: &ValidatedArtifact,
-    cache_keys: &[Digest],
-    snapshot: &CompiledSnapshotMetadata,
-    diagnostics: &[ProtocolDiagnostic],
-    cancelled: &AtomicBool,
+    manifest: Arc<ProjectManifest>,
+    extensions: Vec<ExtensionDeclaration>,
+    artifact: ValidatedArtifact,
+    incremental: Arc<IncrementalState>,
+    snapshot: CompiledSnapshotMetadata,
+    diagnostics: Vec<ProtocolDiagnostic>,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<Vec<u8>, String> {
-    encode_inner(
+    let mut encoder = CooperativeCompiledCacheEncoder::new_with_incremental(
         manifest,
         extensions,
         artifact,
-        cache_keys,
+        incremental,
         snapshot,
         diagnostics,
         Some(cancelled),
-    )
-}
-
-#[allow(clippy::too_many_lines)]
-fn encode_inner(
-    manifest: &ProjectManifest,
-    extensions: &[ExtensionDeclaration],
-    artifact: &ValidatedArtifact,
-    cache_keys: &[Digest],
-    snapshot: &CompiledSnapshotMetadata,
-    diagnostics: &[ProtocolDiagnostic],
-    cancelled: Option<&AtomicBool>,
-) -> Result<Vec<u8>, String> {
-    if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-        return Err("compiled cache build cancelled".into());
-    }
-    let configuration_profile = snapshot.configuration_profile;
-    let artifact = artifact.artifact();
-    let function_indices = artifact
-        .functions
-        .iter()
-        .enumerate()
-        .map(|(index, function)| (function.key, index))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let function_ranges = weighted_function_ranges(&artifact.functions);
-    let source_ranges = equal_ranges(artifact.source_map.entries.len());
-    let mut metadata = encode_section(
-        &CompiledCacheMetadataRef {
-            manifest: &artifact.manifest,
-            call_compatibility: &artifact.call_compatibility,
-            native_imports: &artifact.native_imports,
-            host_imports: &artifact.host_imports,
-            event_groups: &artifact.event_groups,
-        },
-        cancelled,
-    )?;
-    let (
-        (globals, incremental),
-        (project_data, (sources, (fingerprints, (manifest_result, snapshot)))),
-    ) = rayon::join(
-        || {
-            rayon::join(
-                || encode_section(&artifact.globals, cancelled),
-                || encode_incremental_section(cache_keys, cancelled),
-            )
-        },
-        || {
-            rayon::join(
-                || encode_section(&artifact.project_data, cancelled),
-                || {
-                    rayon::join(
-                        || {
-                            encode_source_record_section(
-                                &artifact.source_map.sources,
-                                manifest,
-                                cancelled,
-                            )
-                        },
-                        || {
-                            rayon::join(
-                                || {
-                                    encode_digest_section(
-                                        &artifact.source_map.statement_fingerprints,
-                                        cancelled,
-                                    )
-                                },
-                                || {
-                                    rayon::join(
-                                        || encode_manifest_section(manifest, cancelled),
-                                        || encode_section(snapshot, cancelled),
-                                    )
-                                },
-                            )
-                        },
-                    )
-                },
-            )
-        },
     );
-    let mut globals = globals?;
-    let mut incremental = incremental?;
-    let mut project_data = project_data?;
-    let mut sources = sources?;
-    let mut fingerprints = fingerprints?;
-    let mut manifest_section = manifest_result?;
-    let mut snapshot = snapshot?;
-    let mut diagnostics = encode_section(diagnostics, cancelled)?;
-    let mut function_sections = function_ranges
-        .par_iter()
-        .map(|range| encode_section(&artifact.functions[range.clone()], cancelled))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut source_sections = source_ranges
-        .par_iter()
-        .map(|range| {
-            encode_source_section(
-                &artifact.source_map.entries[range.clone()],
-                &function_indices,
-                cancelled,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let section_bytes = metadata.len()
-        + globals.len()
-        + incremental.len()
-        + project_data.len()
-        + sources.len()
-        + fingerprints.len()
-        + manifest_section.len()
-        + snapshot.len()
-        + diagnostics.len()
-        + function_sections.iter().map(Vec::len).sum::<usize>()
-        + source_sections.iter().map(Vec::len).sum::<usize>();
-    let identity = project_identity(manifest);
-    let mut output = Vec::with_capacity(
-        MAGIC.len() + 1 + 8 + 32 + 32 + 4 + 4 + section_bytes + std::mem::size_of::<Digest>(),
-    );
-    encode_project_file_header(
-        &mut output,
-        &identity,
-        extensions,
-        configuration_profile,
-        function_sections.len(),
-        source_sections.len(),
-    )?;
-    output.append(&mut metadata);
-    output.append(&mut globals);
-    output.append(&mut incremental);
-    output.append(&mut project_data);
-    output.append(&mut sources);
-    output.append(&mut fingerprints);
-    output.append(&mut manifest_section);
-    output.append(&mut snapshot);
-    output.append(&mut diagnostics);
-    for section in function_sections.iter_mut().chain(&mut source_sections) {
-        output.append(section);
+    loop {
+        if let Some(bytes) = encoder.step()? {
+            return Ok(bytes);
+        }
     }
-    let digest = blake3::hash(&output);
-    output.extend_from_slice(digest.as_bytes());
-    Ok(output)
 }
 
 fn encode_project_file_header(
@@ -825,60 +1297,6 @@ fn encode_section<T: Serialize + ?Sized>(
     encode_raw_section(cancelled, |writer| {
         rmp_serde::encode::write(writer, value).map_err(|error| error.to_string())
     })
-}
-
-fn encode_manifest_section(
-    manifest: &ProjectManifest,
-    cancelled: Option<&AtomicBool>,
-) -> Result<Vec<u8>, String> {
-    encode_raw_section(cancelled, |writer| {
-        writer
-            .write_all(MANIFEST_SECTION_MAGIC)
-            .map_err(|error| error.to_string())?;
-        write_varint(
-            writer,
-            u64::try_from(manifest.files.len())
-                .map_err(|_| "project manifest has too many files")?,
-        )?;
-        for file in &manifest.files {
-            write_bytes(writer, file.relative_path.as_bytes())?;
-            writer
-                .write_all(&[file.category as u8])
-                .map_err(|error| error.to_string())?;
-            let hash_present = u8::from(file.content_hash.is_some());
-            match &file.payload {
-                FilePayload::Utf8(text) => {
-                    validate_embedded_content_hash(file, text.as_bytes())?;
-                    writer
-                        .write_all(&[hash_present, 0])
-                        .map_err(|error| error.to_string())?;
-                    write_bytes(writer, text.as_bytes())?;
-                }
-                FilePayload::Bytes(bytes) => {
-                    validate_embedded_content_hash(file, bytes.as_slice())?;
-                    writer
-                        .write_all(&[hash_present, 1])
-                        .map_err(|error| error.to_string())?;
-                    write_bytes(writer, bytes.as_slice())?;
-                }
-                FilePayload::IoError(_) => {
-                    return Err("project files with I/O errors cannot be cached".into());
-                }
-            }
-        }
-        Ok(())
-    })
-}
-
-fn validate_embedded_content_hash(file: &SubmittedFile, payload: &[u8]) -> Result<(), String> {
-    if file
-        .content_hash
-        .as_ref()
-        .is_some_and(|expected| expected.as_slice() != blake3::hash(payload).as_bytes())
-    {
-        return Err("project manifest content hash differs from its payload".into());
-    }
-    Ok(())
 }
 
 fn decode_manifest_section(
@@ -1442,5 +1860,5 @@ mod tests;
 
 use self::io::{
     HashWriter, decode_raw_section, decode_section, encode_raw_section, equal_ranges, read_section,
-    read_stream_varint, read_u32, read_u64, read_varint, weighted_function_ranges, write_varint,
+    read_stream_varint, read_u32, read_u64, read_varint, write_varint,
 };

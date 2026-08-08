@@ -2,7 +2,6 @@ use std::io::{Read, Write};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use erabasic_bytecode::BytecodeFunction;
 use serde::de::DeserializeOwned;
 
 use super::{EncodedSectionRef, TARGET_PARALLEL_SECTIONS};
@@ -126,32 +125,6 @@ pub(super) fn decode_raw_section<T>(
         return Err("compiled cache decoded section length differs".into());
     }
     Ok(value)
-}
-
-pub(super) fn weighted_function_ranges(functions: &[BytecodeFunction]) -> Vec<Range<usize>> {
-    if functions.is_empty() {
-        return Vec::new();
-    }
-    let total_weight = functions
-        .iter()
-        .map(|function| function.code.len().max(1))
-        .sum::<usize>();
-    let target_weight = total_weight.div_ceil(TARGET_PARALLEL_SECTIONS).max(1);
-    let mut ranges = Vec::new();
-    let mut start = 0;
-    let mut weight = 0_usize;
-    for (index, function) in functions.iter().enumerate() {
-        weight = weight.saturating_add(function.code.len().max(1));
-        if weight >= target_weight && ranges.len() + 1 < TARGET_PARALLEL_SECTIONS {
-            ranges.push(start..index + 1);
-            start = index + 1;
-            weight = 0;
-        }
-    }
-    if start < functions.len() {
-        ranges.push(start..functions.len());
-    }
-    ranges
 }
 
 pub(super) fn equal_ranges(length: usize) -> Vec<Range<usize>> {
