@@ -253,6 +253,7 @@ fn compile_and_export(manifest: ProjectManifest) -> Vec<u8> {
         RuntimeMessage::ClientHello(ClientHello {
             runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
             client_name: "project-extractor-audit".into(),
+            configuration_profile: None,
             features: vec![RuntimeFeature::StateResynchronization],
             requested_limits,
             capabilities: ClientCapabilities {

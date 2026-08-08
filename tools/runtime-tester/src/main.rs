@@ -501,6 +501,13 @@ fn audit_registry() {
     }
 }
 
+const MINIMAL_AUDIT_ANSWERS: &[i64] = &[
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 9999, 0, 2, 1999, 0, 100, 1,
+];
+const ERATW_BENCHMARK_ANSWERS: &[i64] = &[
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 9999, 0, 2, 1999, 0, 100, 1, 2000, 1999, 0, 100, 1, 100,
+];
+
 fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
     let total_started = std::time::Instant::now();
     let root_argument = env::args().nth(2);
@@ -567,6 +574,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         RuntimeMessage::ClientHello(ClientHello {
             runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
             client_name: "tui-audit".into(),
+            configuration_profile: None,
             features: vec![
                 RuntimeFeature::TraditionalSave,
                 RuntimeFeature::TimedInput,
@@ -725,14 +733,20 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         }),
     );
     let mut sequence = 3;
-    let answers = [
-        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 9999, 0, 2, 1999, 0, 100, 1,
-    ];
+    let answers = if benchmark {
+        ERATW_BENCHMARK_ANSWERS
+    } else {
+        MINIMAL_AUDIT_ANSWERS
+    };
     let mut answer_index = 0;
     let mut last_text = String::new();
     let mut storage =
         std::collections::BTreeMap::<(StorageNamespace, String), (ProtocolBytes, String)>::new();
     let mut day_one_elapsed = None;
+    let mut wake_started = None;
+    let mut wake_instruction = None;
+    let mut wake_to_home_elapsed = None;
+    let mut total_vm_instructions = 0_u64;
     let mut snapshot_count = 0_u64;
     let mut delta_count = 0_u64;
     let mut presentation_lines = Vec::<DisplayLine>::new();
@@ -745,6 +759,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
             })
             .unwrap();
         let drive_elapsed = drive_started.elapsed();
+        total_vm_instructions = total_vm_instructions.saturating_add(drive_report.vm_instructions);
         let drain_started = std::time::Instant::now();
         let (out, last_outbound_sequence) = drain_with_last_sequence(&mut session);
         let drain_elapsed = drain_started.elapsed();
@@ -928,16 +943,41 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                             InputIntent::Enter
                         } else if let Some(answer) = answers.get(answer_index).copied() {
                             answer_index += 1;
+                            if benchmark && answer == 100 {
+                                let contains_wake_prompt = presentation_lines
+                                    .iter()
+                                    .flat_map(|line| line.runs.iter())
+                                    .map(display_text)
+                                    .any(|text| text.contains("睜開眼睛"));
+                                if contains_wake_prompt && wake_started.is_none() {
+                                    println!("wake_input_instruction={total_vm_instructions}");
+                                    wake_started = Some(std::time::Instant::now());
+                                    wake_instruction = Some(total_vm_instructions);
+                                }
+                            }
                             if !benchmark {
                                 println!("runtime_answer[{answer_index}]={answer}");
                             }
                             InputIntent::CommitText(answer.to_string())
                         } else {
-                            if !benchmark {
-                                println!("runtime_unplanned_wait={wait:?}");
-                            }
                             if wait.system_input {
-                                day_one_elapsed = Some(start_started.elapsed());
+                                let reached_home = std::time::Instant::now();
+                                day_one_elapsed = Some(reached_home.duration_since(start_started));
+                                wake_to_home_elapsed = wake_started
+                                    .map(|started| reached_home.duration_since(started));
+                            }
+                            println!("runtime_unplanned_wait={wait:?}");
+                            if benchmark {
+                                let visible_text = presentation_lines
+                                    .iter()
+                                    .rev()
+                                    .take(12)
+                                    .rev()
+                                    .flat_map(|line| line.runs.iter())
+                                    .map(display_text)
+                                    .collect::<Vec<_>>()
+                                    .join(" | ");
+                                println!("runtime_unplanned_text={visible_text}");
                             }
                             unplanned_wait = true;
                             continue;
@@ -1018,6 +1058,17 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         report_rss("after_snapshot_export");
         println!("file_prepare_ms={}", file_prepare_elapsed.as_millis());
         println!("project_load_ms={}", project_load_elapsed.as_millis());
+        println!("vm_instructions_to_day1={total_vm_instructions}");
+        println!(
+            "wake_to_home_ms={}",
+            wake_to_home_elapsed.map_or(u128::MAX, |elapsed| elapsed.as_millis())
+        );
+        println!(
+            "wake_to_home_instructions={}",
+            wake_instruction.map_or(u64::MAX, |started| {
+                total_vm_instructions.saturating_sub(started)
+            })
+        );
         println!(
             "start_to_day1_ms={}",
             day_one_elapsed.map_or(u128::MAX, |elapsed| elapsed.as_millis())
@@ -1064,6 +1115,7 @@ fn report_rss(stage: &str) {
 }
 
 fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
+    let total_started = std::time::Instant::now();
     println!("restore_begin_bytes={}", save.as_slice().len());
     let mut runtime_options = RuntimeOptions::default();
     runtime_options.limits.maximum_envelope_bytes = 128 * 1024 * 1024;
@@ -1078,6 +1130,7 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
         RuntimeMessage::ClientHello(ClientHello {
             runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
             client_name: "tui-audit-restore".into(),
+            configuration_profile: None,
             features: vec![
                 RuntimeFeature::TraditionalSave,
                 RuntimeFeature::TimedInput,
@@ -1110,6 +1163,7 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
     );
     drive(&mut session);
     drain(&mut session);
+    let project_load_started = std::time::Instant::now();
     submit_with_epoch(
         &mut session,
         1,
@@ -1121,6 +1175,10 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
     );
     drive(&mut session);
     let load = drain(&mut session);
+    println!(
+        "restore_project_load_ms={}",
+        project_load_started.elapsed().as_millis()
+    );
     let loaded = load.iter().any(
         |message| matches!(message, RuntimeMessage::ProjectLoadReport(report) if report.success),
     );
@@ -1179,6 +1237,7 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
     drive(&mut session);
     let committed = drain(&mut session);
     println!("restore_import_messages={committed:?}");
+    let start_started = std::time::Instant::now();
     submit_with_epoch(
         &mut session,
         5,
@@ -1306,6 +1365,11 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
     }
     println!("restore_final_text={last_text}");
     println!("restore_final_phase={:?}", session.phase());
+    println!(
+        "restore_start_to_wait_ms={}",
+        start_started.elapsed().as_millis()
+    );
+    println!("restore_total_ms={}", total_started.elapsed().as_millis());
     submit_with_epoch(
         &mut session,
         sequence,

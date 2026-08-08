@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use era_runtime_save::{
     OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveExtension,
@@ -6,7 +6,9 @@ use era_runtime_save::{
     Text1808Variable, decode, decode_save_extension, decode_text_with_layout, encode,
     encode_save_extension, encode_text_with_layout,
 };
-use erabasic_bytecode::{BytecodeArtifact, BytecodePersistence, BytecodeStorage, BytecodeType};
+use erabasic_bytecode::{
+    BytecodeArtifact, BytecodeGlobal, BytecodePersistence, BytecodeStorage, BytecodeType,
+};
 use erabasic_data::VariableId;
 use erabasic_vm::{EraState, EraVariableState, StructuredExtension, VmValue};
 
@@ -138,11 +140,12 @@ pub(crate) fn decode_era_save(
             "start requires an ordinary save".into(),
         ));
     }
-    let variables = decode_entries(&document.variables, artifact, false)?;
+    let definitions = SaveDefinitionIndex::new(artifact);
+    let variables = decode_entries(&document.variables, &definitions.shared)?;
     let characters = document
         .characters
         .iter()
-        .map(|entries| decode_entries(entries, artifact, true))
+        .map(|entries| decode_entries(entries, &definitions.character))
         .collect::<Result<Vec<_>, _>>()?;
     let (structured_extensions, opaque_extensions) = decode_extensions(document.opaque_extensions)?;
     Ok(DecodedEraSave {
@@ -177,11 +180,12 @@ pub(crate) fn decode_scoped_save(
             "save file kind differs from the requested operation".into(),
         ));
     }
-    let variables = decode_entries(&document.variables, artifact, false)?;
+    let definitions = SaveDefinitionIndex::new(artifact);
+    let variables = decode_entries(&document.variables, &definitions.shared)?;
     let characters = document
         .characters
         .iter()
-        .map(|entries| decode_entries(entries, artifact, true))
+        .map(|entries| decode_entries(entries, &definitions.character))
         .collect::<Result<Vec<_>, _>>()?;
     let (structured_extensions, opaque_extensions) = decode_extensions(document.opaque_extensions)?;
     Ok(DecodedEraSave {
@@ -446,32 +450,45 @@ fn extended_group(variable: &Text1808Variable) -> Option<usize> {
     )
 }
 
+struct SaveDefinitionIndex<'a> {
+    shared: HashMap<String, &'a BytecodeGlobal>,
+    character: HashMap<String, &'a BytecodeGlobal>,
+}
+
+impl<'a> SaveDefinitionIndex<'a> {
+    fn new(artifact: &'a BytecodeArtifact) -> Self {
+        let mut shared = HashMap::new();
+        let mut character = HashMap::new();
+        for definition in &artifact.globals {
+            let definitions = match definition.storage {
+                BytecodeStorage::Project | BytecodeStorage::FunctionStatic => &mut shared,
+                BytecodeStorage::Character => &mut character,
+                _ => continue,
+            };
+            definitions
+                .entry(definition.name.to_ascii_uppercase())
+                .or_insert(definition);
+        }
+        Self { shared, character }
+    }
+}
+
 fn decode_entries(
     entries: &[SaveEntry],
-    artifact: &BytecodeArtifact,
-    character: bool,
+    definitions: &HashMap<String, &BytecodeGlobal>,
 ) -> Result<BTreeMap<erabasic_bytecode::SymbolKey, EraVariableState>, SaveCodecError> {
     let mut result = BTreeMap::new();
     let mut names = BTreeSet::new();
     for entry in entries {
         let normalized = entry.name.to_ascii_uppercase();
+        let definition = definitions.get(&normalized).copied();
         if !names.insert(normalized) {
             return Err(SaveCodecError::InvalidFormat(format!(
                 "duplicate saved variable {}",
                 entry.name
             )));
         }
-        let Some(definition) = artifact.globals.iter().find(|definition| {
-            definition.name.eq_ignore_ascii_case(&entry.name)
-                && if character {
-                    definition.storage == BytecodeStorage::Character
-                } else {
-                    matches!(
-                        definition.storage,
-                        BytecodeStorage::Project | BytecodeStorage::FunctionStatic
-                    )
-                }
-        }) else {
+        let Some(definition) = definition else {
             // The reference binary reader ignores names absent from the current project.
             continue;
         };
@@ -737,5 +754,84 @@ mod tests {
             ["NO", "CFLAG", "Z_USER", "A_USER"]
         );
         assert_eq!(encoded.user_defined_start, Some(2));
+    }
+
+    #[test]
+    fn save_definition_index_separates_shared_and_character_entries() {
+        let project_data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+            .data
+            .unwrap();
+        let definitions = [
+            BytecodeGlobal {
+                key: erabasic_bytecode::SymbolKey::derive("save-index", b"shared"),
+                name: "SHARED_VALUE".into(),
+                value_type: BytecodeType::Integer,
+                dimensions: Vec::new(),
+                mutable: true,
+                storage: BytecodeStorage::Project,
+                persistence: BytecodePersistence::GameSave,
+                initial_values: Vec::new(),
+                owner: None,
+            },
+            BytecodeGlobal {
+                key: erabasic_bytecode::SymbolKey::derive("save-index", b"character"),
+                name: "CHARACTER_VALUE".into(),
+                value_type: BytecodeType::Integer,
+                dimensions: Vec::new(),
+                mutable: true,
+                storage: BytecodeStorage::Character,
+                persistence: BytecodePersistence::GameSave,
+                initial_values: Vec::new(),
+                owner: None,
+            },
+        ];
+        let artifact = BytecodeArtifact {
+            manifest: ArtifactManifest::new(Digest::default()),
+            call_compatibility: BytecodeCallCompatibility::default(),
+            project_data,
+            globals: definitions.to_vec(),
+            native_imports: Vec::new(),
+            host_imports: Vec::new(),
+            functions: Vec::new(),
+            event_groups: Vec::new(),
+            source_map: SourceMap::default(),
+        };
+        let index = SaveDefinitionIndex::new(&artifact);
+        let shared = decode_entries(
+            &[
+                SaveEntry {
+                    name: "shared_value".into(),
+                    value: SaveValue::Integer(7),
+                },
+                SaveEntry {
+                    name: "CHARACTER_VALUE".into(),
+                    value: SaveValue::Integer(8),
+                },
+            ],
+            &index.shared,
+        )
+        .unwrap();
+        let character = decode_entries(
+            &[
+                SaveEntry {
+                    name: "SHARED_VALUE".into(),
+                    value: SaveValue::Integer(9),
+                },
+                SaveEntry {
+                    name: "character_value".into(),
+                    value: SaveValue::Integer(10),
+                },
+            ],
+            &index.character,
+        )
+        .unwrap();
+
+        assert_eq!(shared.len(), 1);
+        assert_eq!(shared[&definitions[0].key].values, [VmValue::Integer(7)]);
+        assert_eq!(character.len(), 1);
+        assert_eq!(
+            character[&definitions[1].key].values,
+            [VmValue::Integer(10)]
+        );
     }
 }

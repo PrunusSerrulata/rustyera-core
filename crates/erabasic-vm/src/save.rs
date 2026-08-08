@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use erabasic_bytecode::{BytecodePersistence, BytecodeStorage, BytecodeType, SymbolKey};
 use serde::{Deserialize, Serialize};
@@ -203,11 +203,16 @@ pub(crate) fn prepare_ordinary_memory(
     if context.clear_characters_before_overlay {
         memory.characters.clear();
     }
+    let character_definitions =
+        DefinitionLookup::new(artifact.globals.iter().filter(|definition| {
+            definition.storage == BytecodeStorage::Character
+                && definition.persistence != BytecodePersistence::None
+        }));
     for saved_character in &state.characters {
         memory.push_character(artifact, None);
         let index = memory.characters.len() - 1;
         overlay_character(
-            artifact,
+            &character_definitions,
             &mut memory.characters[index],
             saved_character,
             &mut report,
@@ -244,11 +249,16 @@ pub(crate) fn prepare_appended_characters(
     validate_compatibility(artifact, state)?;
     let mut memory = current.clone();
     let mut report = EraStateReport::default();
+    let character_definitions =
+        DefinitionLookup::new(artifact.globals.iter().filter(|definition| {
+            definition.storage == BytecodeStorage::Character
+                && definition.persistence != BytecodePersistence::None
+        }));
     for saved_character in &state.characters {
         memory.push_character(artifact, None);
         let index = memory.characters.len() - 1;
         overlay_character(
-            artifact,
+            &character_definitions,
             &mut memory.characters[index],
             saved_character,
             &mut report,
@@ -392,26 +402,14 @@ fn overlay_shared(
     scope: EraSaveScope,
     report: &mut EraStateReport,
 ) {
-    let eligible = artifact.globals.iter().filter(|definition| {
+    let definitions = DefinitionLookup::new(artifact.globals.iter().filter(|definition| {
         matches!(
             definition.storage,
             BytecodeStorage::Project | BytecodeStorage::FunctionStatic
         ) && persistence_in_scope(definition.persistence, scope)
-    });
-    let mut by_key = BTreeMap::new();
-    let mut by_name = BTreeMap::new();
-    for definition in eligible {
-        by_key.insert(definition.key, definition);
-        by_name
-            .entry(definition.name.to_ascii_uppercase())
-            .or_insert(definition);
-    }
+    }));
     for (key, variable) in saved {
-        let Some(definition) = by_key
-            .get(key)
-            .copied()
-            .or_else(|| by_name.get(&variable.name.to_ascii_uppercase()).copied())
-        else {
+        let Some(definition) = definitions.resolve(*key, &variable.name) else {
             report.skipped_variables += 1;
             continue;
         };
@@ -450,30 +448,40 @@ fn persistence_in_scope(persistence: BytecodePersistence, scope: EraSaveScope) -
     )
 }
 
+struct DefinitionLookup<'a> {
+    by_key: HashMap<SymbolKey, &'a erabasic_bytecode::BytecodeGlobal>,
+    by_name: HashMap<String, &'a erabasic_bytecode::BytecodeGlobal>,
+}
+
+impl<'a> DefinitionLookup<'a> {
+    fn new(definitions: impl IntoIterator<Item = &'a erabasic_bytecode::BytecodeGlobal>) -> Self {
+        let mut by_key = HashMap::new();
+        let mut by_name = HashMap::new();
+        for definition in definitions {
+            by_key.insert(definition.key, definition);
+            by_name
+                .entry(definition.name.to_ascii_uppercase())
+                .or_insert(definition);
+        }
+        Self { by_key, by_name }
+    }
+
+    fn resolve(&self, key: SymbolKey, name: &str) -> Option<&'a erabasic_bytecode::BytecodeGlobal> {
+        self.by_key
+            .get(&key)
+            .copied()
+            .or_else(|| self.by_name.get(&name.to_ascii_uppercase()).copied())
+    }
+}
+
 fn overlay_character(
-    artifact: &erabasic_bytecode::BytecodeArtifact,
+    definitions: &DefinitionLookup<'_>,
     character: &mut BTreeMap<SymbolKey, crate::VariableCell>,
     saved: &BTreeMap<SymbolKey, EraVariableState>,
     report: &mut EraStateReport,
 ) {
-    let eligible = artifact.globals.iter().filter(|definition| {
-        definition.storage == BytecodeStorage::Character
-            && definition.persistence != BytecodePersistence::None
-    });
-    let mut by_key = BTreeMap::new();
-    let mut by_name = BTreeMap::new();
-    for definition in eligible {
-        by_key.insert(definition.key, definition);
-        by_name
-            .entry(definition.name.to_ascii_uppercase())
-            .or_insert(definition);
-    }
     for (key, variable) in saved {
-        let Some(definition) = by_key
-            .get(key)
-            .copied()
-            .or_else(|| by_name.get(&variable.name.to_ascii_uppercase()).copied())
-        else {
+        let Some(definition) = definitions.resolve(*key, &variable.name) else {
             report.skipped_variables += 1;
             continue;
         };
@@ -552,6 +560,36 @@ mod tests {
         assert_eq!(
             new_game.statics[&definition.key].first(),
             Some(VmValue::Integer(0))
+        );
+    }
+
+    #[test]
+    fn restore_definition_lookup_prefers_exact_keys_and_stable_name_fallbacks() {
+        let first = BytecodeGlobal {
+            key: SymbolKey::derive("save.lookup", b"first"),
+            name: "VALUE".into(),
+            value_type: BytecodeType::Integer,
+            dimensions: Vec::new(),
+            mutable: true,
+            storage: BytecodeStorage::Project,
+            persistence: BytecodePersistence::GameSave,
+            initial_values: Vec::new(),
+            owner: None,
+        };
+        let second = BytecodeGlobal {
+            key: SymbolKey::derive("save.lookup", b"second"),
+            name: "value".into(),
+            ..first.clone()
+        };
+        let lookup = DefinitionLookup::new([&first, &second]);
+
+        assert_eq!(lookup.resolve(second.key, "VALUE").unwrap().key, second.key);
+        assert_eq!(
+            lookup
+                .resolve(SymbolKey::derive("save.lookup", b"missing"), "VaLuE")
+                .unwrap()
+                .key,
+            first.key
         );
     }
 }
