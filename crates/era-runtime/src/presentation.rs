@@ -53,6 +53,8 @@ pub(crate) struct PresentationModel {
     audio: Vec<AudioState>,
     tooltip: TooltipSettings,
     resources: ResourceReplay,
+    #[serde(default)]
+    resource_replay_stale: bool,
     print_c_length: u32,
     /// Frontend delivery bookkeeping is transport state, not authoritative game state.
     #[serde(skip)]
@@ -152,6 +154,7 @@ impl Default for PresentationModel {
                 normalized_format: TooltipFormat::default(),
             },
             resources: ResourceReplay::default(),
+            resource_replay_stale: false,
             print_c_length: 25,
             delivery: PresentationDelivery::default(),
         }

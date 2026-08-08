@@ -4,8 +4,8 @@ use era_debug_protocol::{
 };
 use era_protocol::{Channel, Envelope, ProtocolBytes, decode_envelope, encode_envelope};
 use era_runtime_protocol::{
-    DisplayRun, FileCategory, FileChange, FilePayload, ProjectIdentity, ProjectManifest,
-    ProjectionLength, ProjectionSize, ProjectionTransform, SubmittedFile,
+    DisplayRun, FileCategory, FileChange, FilePayload, PresentationOperation, ProjectIdentity,
+    ProjectManifest, ProjectionLength, ProjectionSize, ProjectionTransform, SubmittedFile,
 };
 use erabasic_vm::VmDebugInspect;
 

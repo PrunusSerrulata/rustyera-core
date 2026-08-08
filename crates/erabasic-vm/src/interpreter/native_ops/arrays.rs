@@ -345,6 +345,10 @@ pub(in super::super) fn optional_nonnegative(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "range validation, revision caching, and regex compatibility form one ordered query"
+)]
 pub(in super::super) fn execute_find_element(
     vm: &mut Vm,
     fiber: &Fiber,
@@ -352,7 +356,9 @@ pub(in super::super) fn execute_find_element(
     arguments: &[VmValue],
 ) -> Result<VmValue, VmError> {
     let place = array_place(arguments)?;
-    let values = array_snapshot(vm, fiber, place)?;
+    let mut array = place.clone();
+    array.indices.clear();
+    let array_len = vm.place_array_len(fiber, &array)?;
     let needle = arguments
         .get(1)
         .ok_or_else(|| VmError::InvalidArguments("FINDELEMENT target is missing".into()))?;
@@ -362,16 +368,42 @@ pub(in super::super) fn execute_find_element(
             .map_err(|_| VmError::InvalidArguments("FINDELEMENT start is negative".into()))?,
     };
     let end = match integer_argument(arguments, 3).unwrap_or(i64::MIN) {
-        i64::MIN => values.len(),
+        i64::MIN => array_len,
         value => usize::try_from(value)
             .map_err(|_| VmError::InvalidArguments("FINDELEMENT end is negative".into()))?,
     };
-    if start > end || end > values.len() {
+    if start > end || end > array_len {
         return Err(VmError::InvalidArguments(
             "FINDELEMENT range is invalid".into(),
         ));
     }
     let exact = !matches!(integer_argument(arguments, 4), Ok(0) | Err(_));
+    let cache_key =
+        vm.place_array_revision(fiber, &array)?
+            .and_then(|(generation, variable, revision)| {
+                let needle = match needle {
+                    VmValue::Integer(value) => FindElementNeedle::Integer(*value),
+                    VmValue::String(value) => FindElementNeedle::String(value.clone()),
+                    VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => return None,
+                };
+                Some(FindElementCacheKey {
+                    generation,
+                    variable,
+                    revision,
+                    start,
+                    end,
+                    last,
+                    exact,
+                    needle,
+                })
+            });
+    if let Some(result) = cache_key
+        .as_ref()
+        .and_then(|key| vm.find_element_cache.get(key))
+    {
+        return Ok(VmValue::Integer(*result));
+    }
+    let values = vm.read_place_array_range(fiber, &array, start, end)?;
     // FINDELEMENT treats the string needle as one regular expression for the
     // whole query. Compile it lazily so an empty range keeps its historical
     // no-op behavior, but do not rebuild the same automaton for every element.
@@ -380,6 +412,16 @@ pub(in super::super) fn execute_find_element(
         match (value, needle) {
             (VmValue::Integer(value), VmValue::Integer(needle)) => Ok(value == needle),
             (VmValue::String(value), VmValue::String(needle)) => {
+                if !needle
+                    .bytes()
+                    .any(|byte| b"\\.^$*+?()[]{}|".contains(&byte))
+                {
+                    return Ok(if exact {
+                        value == needle
+                    } else {
+                        value.contains(needle)
+                    });
+                }
                 match crate::regex_compat::find_repeated_character(needle, value) {
                     crate::regex_compat::RepeatedCharacterMatch::Unsupported => {}
                     crate::regex_compat::RepeatedCharacterMatch::NoMatch => return Ok(false),
@@ -404,16 +446,24 @@ pub(in super::super) fn execute_find_element(
         }
     };
     let range: Box<dyn Iterator<Item = usize>> = if last {
-        Box::new((start..end).rev())
+        Box::new((0..values.len()).rev())
     } else {
-        Box::new(start..end)
+        Box::new(0..values.len())
     };
+    let mut result = -1;
     for index in range {
         if matched(&values[index])? {
-            return Ok(VmValue::Integer(i64::try_from(index).unwrap_or(i64::MAX)));
+            result = i64::try_from(start.saturating_add(index)).unwrap_or(i64::MAX);
+            break;
         }
     }
-    Ok(VmValue::Integer(-1))
+    if let Some(key) = cache_key {
+        if vm.find_element_cache.len() >= 65_536 {
+            vm.find_element_cache.clear();
+        }
+        vm.find_element_cache.insert(key, result);
+    }
+    Ok(VmValue::Integer(result))
 }
 
 #[allow(clippy::too_many_lines)]

@@ -40,8 +40,22 @@ impl PresentationModel {
 
     pub(crate) fn set_resource_replay(&mut self, resources: ResourceReplay) {
         self.resources = resources;
+        self.resource_replay_stale = false;
         self.delivery.dirty.resources = true;
         self.bump();
+    }
+
+    pub(crate) fn mark_resource_replay_stale(&mut self) {
+        self.resource_replay_stale = true;
+    }
+
+    pub(crate) const fn resource_replay_stale(&self) -> bool {
+        self.resource_replay_stale
+    }
+
+    pub(crate) fn resource_replay_is_ready_to_publish(&self) -> bool {
+        self.resource_replay_stale
+            && (self.input_wait.is_some() || (self.redraw_enabled && self.delivery.dirty.redraw))
     }
 
     pub(crate) fn add_background(&mut self, resource_id: String, depth: i64, opacity: i64) {

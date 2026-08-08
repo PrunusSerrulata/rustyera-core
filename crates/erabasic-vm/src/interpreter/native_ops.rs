@@ -8,6 +8,7 @@ use super::{
     VmError, VmValue, array_snapshot_any_rank, character_series, global_unindexed_place,
     indexed_place,
 };
+use crate::{FindElementCacheKey, FindElementNeedle};
 
 mod arrays;
 mod variables;

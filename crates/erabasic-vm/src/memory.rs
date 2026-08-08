@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
+use std::ops::{Deref, DerefMut};
 
 use erabasic_bytecode::{
     BytecodeArtifact, BytecodeConstant, BytecodeGlobal, BytecodeStorage, BytecodeType, SymbolKey,
@@ -9,6 +11,84 @@ use serde::{
 };
 
 use crate::{GenerationId, PlaceDescriptor, VmValue};
+
+pub(crate) struct SymbolKeyHasher(u64);
+
+impl Default for SymbolKeyHasher {
+    fn default() -> Self {
+        Self(0x517c_c1b7_2722_0a95)
+    }
+}
+
+impl Hasher for SymbolKeyHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hash = self.0;
+        for chunk in bytes.chunks(8) {
+            let mut word = [0_u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            hash ^= u64::from_le_bytes(word);
+            hash = hash.rotate_left(27).wrapping_mul(0x3c79_ac49_2ba7_b653);
+        }
+        self.0 = hash;
+    }
+}
+
+pub(crate) type VariableHashMap =
+    HashMap<SymbolKey, VariableCell, BuildHasherDefault<SymbolKeyHasher>>;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct VariableMap(VariableHashMap);
+
+impl Deref for VariableMap {
+    type Target = VariableHashMap;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for VariableMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl FromIterator<(SymbolKey, VariableCell)> for VariableMap {
+    fn from_iter<T: IntoIterator<Item = (SymbolKey, VariableCell)>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl Serialize for VariableMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeMap as _;
+
+        let mut values = self.0.iter().collect::<Vec<_>>();
+        values.sort_unstable_by_key(|(key, _)| **key);
+        let mut map = serializer.serialize_map(Some(values.len()))?;
+        for (key, value) in values {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for VariableMap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let values = BTreeMap::<SymbolKey, VariableCell>::deserialize(deserializer)?;
+        Ok(values.into_iter().collect())
+    }
+}
 
 /// Variable storage is specialized by `EraBasic` value type.
 ///
@@ -102,6 +182,11 @@ impl VariableValues {
             | Self::SparseIntegerPlaces { length, .. }
             | Self::SparseStringPlaces { length, .. } => *length,
         }
+    }
+
+    fn to_values_range(&self, start: usize, end: usize) -> Option<Vec<VmValue>> {
+        (start <= end && end <= self.len())
+            .then(|| (start..end).filter_map(|index| self.get(index)).collect())
     }
 
     #[inline]
@@ -359,6 +444,34 @@ fn clear_sparse_range<T>(entries: &mut Vec<(usize, T)>, start: usize, end: usize
     entries.retain(|(index, _)| *index < start || *index >= end);
 }
 
+fn collect_values<T>(
+    values: &[VmValue],
+    mut convert: impl FnMut(&VmValue) -> Option<T>,
+) -> Result<Vec<T>, String> {
+    values
+        .iter()
+        .map(|value| {
+            convert(value)
+                .ok_or_else(|| "array replacement differs from its storage shape or type".into())
+        })
+        .collect()
+}
+
+fn collect_sparse_values<T: Default + PartialEq>(
+    values: &[VmValue],
+    mut convert: impl FnMut(&VmValue) -> Option<T>,
+) -> Result<Vec<(usize, T)>, String> {
+    let mut entries = Vec::new();
+    for (index, value) in values.iter().enumerate() {
+        let value = convert(value)
+            .ok_or_else(|| "array replacement differs from its storage shape or type".to_owned())?;
+        if value != T::default() {
+            entries.push((index, value));
+        }
+    }
+    Ok(entries)
+}
+
 fn set_slot<T>(values: &mut [T], index: usize, value: T) -> Result<(), String> {
     let slot = values
         .get_mut(index)
@@ -367,12 +480,23 @@ fn set_slot<T>(values: &mut [T], index: usize, value: T) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct VariableCell {
     pub value_type: BytecodeType,
     pub dimensions: Vec<u64>,
     values: VariableValues,
+    revision: u64,
 }
+
+impl PartialEq for VariableCell {
+    fn eq(&self, other: &Self) -> bool {
+        self.value_type == other.value_type
+            && self.dimensions == other.dimensions
+            && self.values == other.values
+    }
+}
+
+impl Eq for VariableCell {}
 
 struct SparseDefaults<'a, T>(&'a [T]);
 
@@ -514,6 +638,7 @@ impl<'de> Deserialize<'de> for VariableCell {
             value_type,
             dimensions,
             values,
+            revision: 0,
         })
     }
 }
@@ -575,6 +700,7 @@ impl VariableCell {
             value_type: definition.value_type,
             dimensions: definition.dimensions.clone(),
             values,
+            revision: 0,
         }
     }
 
@@ -589,7 +715,9 @@ impl VariableCell {
     #[inline]
     pub fn write(&mut self, indices: &[u64], value: VmValue) -> Result<(), String> {
         let offset = flatten(&self.dimensions, indices)?;
-        self.values.set(offset, value)
+        self.values.set(offset, value)?;
+        self.bump_revision();
+        Ok(())
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -608,11 +736,15 @@ impl VariableCell {
 
     #[inline]
     pub(crate) fn set(&mut self, index: usize, value: VmValue) -> Result<(), String> {
-        self.values.set(index, value)
+        self.values.set(index, value)?;
+        self.bump_revision();
+        Ok(())
     }
 
     pub(crate) fn fill(&mut self, value: VmValue) -> Result<(), String> {
-        self.values.fill(value)
+        self.values.fill(value)?;
+        self.bump_revision();
+        Ok(())
     }
 
     pub(crate) fn fill_range(
@@ -621,11 +753,17 @@ impl VariableCell {
         end: usize,
         value: VmValue,
     ) -> Result<(), String> {
-        self.values.fill_range(start, end, value)
+        self.values.fill_range(start, end, value)?;
+        self.bump_revision();
+        Ok(())
     }
 
     pub(crate) fn to_values(&self) -> Vec<VmValue> {
         self.values.to_vm_values()
+    }
+
+    pub(crate) fn to_values_range(&self, start: usize, end: usize) -> Option<Vec<VmValue>> {
+        self.values.to_values_range(start, end)
     }
 
     pub(crate) fn integers(&self) -> Option<&[i64]> {
@@ -636,6 +774,7 @@ impl VariableCell {
     }
 
     pub(crate) fn integers_mut(&mut self) -> Option<&mut [i64]> {
+        self.bump_revision();
         match &mut self.values {
             VariableValues::Integers(values) => Some(values),
             _ => None,
@@ -655,6 +794,90 @@ impl VariableCell {
             replacement.set(index, value)?;
         }
         self.values = replacement;
+        self.bump_revision();
+        Ok(())
+    }
+
+    fn replace_values_from_slice(&mut self, values: &[VmValue]) -> Result<(), String> {
+        if values.len() != self.len() {
+            return Err("array replacement differs from its storage shape or type".into());
+        }
+        let replacement = match &self.values {
+            VariableValues::Integers(_) => {
+                VariableValues::Integers(collect_values(values, |value| {
+                    let VmValue::Integer(value) = value else {
+                        return None;
+                    };
+                    Some(*value)
+                })?)
+            }
+            VariableValues::Strings(_) => {
+                VariableValues::Strings(collect_values(values, |value| {
+                    let VmValue::String(value) = value else {
+                        return None;
+                    };
+                    Some(value.clone())
+                })?)
+            }
+            VariableValues::IntegerPlaces(_) => {
+                VariableValues::IntegerPlaces(collect_values(values, |value| {
+                    let VmValue::IntegerPlace(value) = value else {
+                        return None;
+                    };
+                    Some(value.as_ref().clone())
+                })?)
+            }
+            VariableValues::StringPlaces(_) => {
+                VariableValues::StringPlaces(collect_values(values, |value| {
+                    let VmValue::StringPlace(value) = value else {
+                        return None;
+                    };
+                    Some(value.as_ref().clone())
+                })?)
+            }
+            VariableValues::SparseIntegers { length, .. } => VariableValues::SparseIntegers {
+                length: *length,
+                entries: collect_sparse_values(values, |value| {
+                    let VmValue::Integer(value) = value else {
+                        return None;
+                    };
+                    Some(*value)
+                })?,
+            },
+            VariableValues::SparseStrings { length, .. } => VariableValues::SparseStrings {
+                length: *length,
+                entries: collect_sparse_values(values, |value| {
+                    let VmValue::String(value) = value else {
+                        return None;
+                    };
+                    Some(value.clone())
+                })?,
+            },
+            VariableValues::SparseIntegerPlaces { length, .. } => {
+                VariableValues::SparseIntegerPlaces {
+                    length: *length,
+                    entries: collect_sparse_values(values, |value| {
+                        let VmValue::IntegerPlace(value) = value else {
+                            return None;
+                        };
+                        Some(value.as_ref().clone())
+                    })?,
+                }
+            }
+            VariableValues::SparseStringPlaces { length, .. } => {
+                VariableValues::SparseStringPlaces {
+                    length: *length,
+                    entries: collect_sparse_values(values, |value| {
+                        let VmValue::StringPlace(value) = value else {
+                            return None;
+                        };
+                        Some(value.as_ref().clone())
+                    })?,
+                }
+            }
+        };
+        self.values = replacement;
+        self.bump_revision();
         Ok(())
     }
 
@@ -672,6 +895,14 @@ impl VariableCell {
 
     pub(crate) fn storage_is_valid(&self) -> bool {
         self.values.value_type() == self.value_type
+    }
+
+    pub(crate) const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.saturating_add(1);
     }
 
     pub(crate) fn materialize_snapshot(&mut self) -> Result<(), String> {
@@ -700,6 +931,9 @@ impl VariableCell {
     }
 
     pub fn overlay(&mut self, dimensions: &[u64], values: &[VmValue]) -> Result<(), String> {
+        if dimensions == self.dimensions && values.len() == self.len() {
+            return self.replace_values_from_slice(values);
+        }
         for (source_offset, value) in values.iter().enumerate() {
             let coordinates = unflatten(dimensions, source_offset);
             if coordinates.len() != self.dimensions.len()
@@ -718,6 +952,69 @@ impl VariableCell {
                 self.set(target_offset, value.clone())?;
             }
         }
+        Ok(())
+    }
+
+    pub fn overlay_sparse(
+        &mut self,
+        dimensions: &[u64],
+        values: &[(u64, VmValue)],
+    ) -> Result<(), String> {
+        let source_len = element_count(dimensions)
+            .ok_or_else(|| "saved variable dimensions exceed this platform".to_owned())?;
+        if dimensions != self.dimensions {
+            let default = match self.value_type {
+                BytecodeType::Integer => VmValue::Integer(0),
+                BytecodeType::String => VmValue::String(String::new()),
+                BytecodeType::IntegerPlace | BytecodeType::StringPlace => {
+                    return Err("saved variables cannot contain places".into());
+                }
+            };
+            let mut dense = vec![default; source_len];
+            for (index, value) in values {
+                let index = usize::try_from(*index)
+                    .map_err(|_| "saved variable offset exceeds this platform")?;
+                let target = dense
+                    .get_mut(index)
+                    .ok_or_else(|| "saved variable offset exceeds its dimensions".to_owned())?;
+                if value.value_type() != self.value_type {
+                    return Err("saved variable value type does not match its schema".into());
+                }
+                target.clone_from(value);
+            }
+            return self.overlay(dimensions, &dense);
+        }
+        if source_len != self.len() {
+            return Err("saved variable dimensions differ from their element count".into());
+        }
+        let mut replacement = match &self.values {
+            VariableValues::Integers(_) => VariableValues::Integers(vec![0; source_len]),
+            VariableValues::Strings(_) => VariableValues::Strings(vec![String::new(); source_len]),
+            VariableValues::SparseIntegers { .. } => VariableValues::SparseIntegers {
+                length: source_len,
+                entries: Vec::new(),
+            },
+            VariableValues::SparseStrings { .. } => VariableValues::SparseStrings {
+                length: source_len,
+                entries: Vec::new(),
+            },
+            VariableValues::IntegerPlaces(_)
+            | VariableValues::StringPlaces(_)
+            | VariableValues::SparseIntegerPlaces { .. }
+            | VariableValues::SparseStringPlaces { .. } => {
+                return Err("saved variables cannot contain places".into());
+            }
+        };
+        for (index, value) in values {
+            let index = usize::try_from(*index)
+                .map_err(|_| "saved variable offset exceeds this platform")?;
+            if index >= source_len {
+                return Err("saved variable offset exceeds its dimensions".into());
+            }
+            replacement.set(index, value.clone())?;
+        }
+        self.values = replacement;
+        self.bump_revision();
         Ok(())
     }
 }

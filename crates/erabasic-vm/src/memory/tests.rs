@@ -17,6 +17,39 @@ fn global(value_type: BytecodeType, dimensions: Vec<u64>) -> BytecodeGlobal {
 }
 
 #[test]
+fn variable_map_serialization_is_key_ordered_and_accepts_legacy_maps() {
+    let definition = global(BytecodeType::Integer, vec![1]);
+    let entries = [
+        (
+            SymbolKey::derive("memory.test", b"second"),
+            VariableCell::new(&definition),
+        ),
+        (
+            SymbolKey::derive("memory.test", b"first"),
+            VariableCell::new(&definition),
+        ),
+    ];
+    let forward = entries.clone().into_iter().collect::<VariableMap>();
+    let reverse = entries.into_iter().rev().collect::<VariableMap>();
+
+    let encoded = serde_json::to_vec(&forward).unwrap();
+    assert_eq!(encoded, serde_json::to_vec(&reverse).unwrap());
+    let legacy = forward
+        .iter()
+        .map(|(key, value)| (*key, value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(encoded, serde_json::to_vec(&legacy).unwrap());
+    let decoded: VariableMap = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(decoded.len(), forward.len());
+    for (key, cell) in &*forward {
+        assert_eq!(
+            decoded.get(key).map(VariableCell::to_values),
+            Some(cell.to_values())
+        );
+    }
+}
+
+#[test]
 fn dense_integer_cell_preserves_public_vm_value_behavior() {
     let mut cell = VariableCell::new(&global(BytecodeType::Integer, vec![4]));
     cell.write(&[2], VmValue::Integer(41)).unwrap();
@@ -86,6 +119,86 @@ fn large_cells_keep_default_storage_sparse_during_point_updates() {
         string.values,
         VariableValues::SparseStrings { ref entries, .. } if entries.is_empty()
     ));
+}
+
+#[test]
+fn exact_overlay_preserves_sparse_and_dense_storage_and_is_atomic_on_type_errors() {
+    let mut sparse = VariableCell::new(&global(BytecodeType::Integer, vec![1_000_000]));
+    let mut saved = vec![VmValue::Integer(0); 1_000_000];
+    saved[17] = VmValue::Integer(7);
+    saved[999_999] = VmValue::Integer(9);
+    sparse.overlay(&[1_000_000], &saved).unwrap();
+    assert!(matches!(
+        sparse.values,
+        VariableValues::SparseIntegers { ref entries, .. }
+            if entries == &[(17, 7), (999_999, 9)]
+    ));
+    assert_eq!(sparse.get(17), Some(VmValue::Integer(7)));
+
+    let mut dense = VariableCell::new(&global(BytecodeType::Integer, vec![4]));
+    dense
+        .overlay(
+            &[4],
+            &[
+                VmValue::Integer(1),
+                VmValue::Integer(2),
+                VmValue::Integer(3),
+                VmValue::Integer(4),
+            ],
+        )
+        .unwrap();
+    assert!(
+        matches!(dense.values, VariableValues::Integers(ref values) if values == &[1, 2, 3, 4])
+    );
+
+    let before = dense.clone();
+    assert!(
+        dense
+            .overlay(
+                &[4],
+                &[
+                    VmValue::Integer(5),
+                    VmValue::String("wrong".into()),
+                    VmValue::Integer(7),
+                    VmValue::Integer(8),
+                ],
+            )
+            .is_err()
+    );
+    assert_eq!(dense, before);
+}
+
+#[test]
+fn exact_sparse_overlay_avoids_materializing_skipped_defaults() {
+    let mut sparse = VariableCell::new(&global(BytecodeType::Integer, vec![1_000_000]));
+    sparse
+        .overlay_sparse(
+            &[1_000_000],
+            &[(17, VmValue::Integer(7)), (999_999, VmValue::Integer(9))],
+        )
+        .unwrap();
+    assert!(matches!(
+        sparse.values,
+        VariableValues::SparseIntegers { ref entries, .. }
+            if entries == &[(17, 7), (999_999, 9)]
+    ));
+
+    let mut dense = VariableCell::new(&global(BytecodeType::Integer, vec![4]));
+    dense
+        .overlay_sparse(&[4], &[(1, VmValue::Integer(2)), (3, VmValue::Integer(4))])
+        .unwrap();
+    assert!(matches!(
+        dense.values,
+        VariableValues::Integers(ref values) if values == &[0, 2, 0, 4]
+    ));
+
+    let before = dense.clone();
+    assert!(
+        dense
+            .overlay_sparse(&[4], &[(2, VmValue::String("wrong".into()))])
+            .is_err()
+    );
+    assert_eq!(dense, before);
 }
 
 #[test]

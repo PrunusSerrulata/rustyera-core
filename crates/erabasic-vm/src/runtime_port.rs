@@ -39,6 +39,11 @@ pub enum VmRuntimeStateTransaction {
     ResetGameData,
     ResetGlobalData,
     RestoreOrdinary(Box<EraState>),
+    RestoreOrdinaryWithLastLoad {
+        state: Box<EraState>,
+        slot: i64,
+        text: String,
+    },
     OverlayGlobal(Box<EraState>),
     AppendCharacters(Box<EraState>),
     SetLastLoad {

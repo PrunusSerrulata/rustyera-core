@@ -1,6 +1,6 @@
 //! Bytecode operand decoding and stack arithmetic helpers.
 
-use super::{StepError, SymbolKey, VmError, VmFaultCode, VmValue};
+use super::{StepError, VmError, VmFaultCode, VmValue};
 
 pub(super) fn exact<const N: usize>(payload: &[u8]) -> Result<[u8; N], StepError> {
     payload.try_into().map_err(|_| {
@@ -29,30 +29,57 @@ pub(super) fn exact_slice<const N: usize>(
         .ok_or_else(|| StepError::new(VmFaultCode::InvalidInstruction, "truncated operand"))
 }
 
-pub(super) fn read_key(payload: &[u8]) -> Result<SymbolKey, StepError> {
-    Ok(SymbolKey(exact_slice(payload, 0)?))
-}
-
 pub(super) fn pop(stack: &mut Vec<VmValue>) -> Result<VmValue, StepError> {
     stack
         .pop()
         .ok_or_else(|| StepError::new(VmFaultCode::StackUnderflow, "operand stack underflow"))
 }
 
-pub(super) fn pop_indices(stack: &mut Vec<VmValue>, count: usize) -> Result<Vec<u64>, StepError> {
-    let mut indices = Vec::with_capacity(count);
-    for _ in 0..count {
+pub(super) struct PoppedIndices {
+    inline: [u64; 4],
+    length: usize,
+    overflow: Vec<u64>,
+}
+
+impl PoppedIndices {
+    pub(super) fn as_slice(&self) -> &[u64] {
+        if self.length <= self.inline.len() {
+            &self.inline[..self.length]
+        } else {
+            &self.overflow
+        }
+    }
+}
+
+pub(super) fn pop_indices(
+    stack: &mut Vec<VmValue>,
+    count: usize,
+) -> Result<PoppedIndices, StepError> {
+    let mut indices = PoppedIndices {
+        inline: [0; 4],
+        length: count,
+        overflow: if count > 4 {
+            vec![0; count]
+        } else {
+            Vec::new()
+        },
+    };
+    for index in (0..count).rev() {
         let VmValue::Integer(value) = pop(stack)? else {
             return Err(StepError::new(
                 VmFaultCode::TypeMismatch,
                 "variable indices must be integers",
             ));
         };
-        indices.push(u64::try_from(value).map_err(|_| {
+        let value = u64::try_from(value).map_err(|_| {
             StepError::new(VmFaultCode::Bounds, "variable index cannot be negative")
-        })?);
+        })?;
+        if count <= indices.inline.len() {
+            indices.inline[index] = value;
+        } else {
+            indices.overflow[index] = value;
+        }
     }
-    indices.reverse();
     Ok(indices)
 }
 
@@ -213,6 +240,22 @@ pub(super) fn map_vm_error(error: VmError) -> StepError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn popped_indices_preserve_source_order_inline_and_on_overflow() {
+        for expected in [vec![1_u64, 2, 3], vec![1_u64, 2, 3, 4, 5]] {
+            let mut stack = expected
+                .iter()
+                .copied()
+                .map(|value| VmValue::Integer(i64::try_from(value).unwrap_or_default()))
+                .collect::<Vec<_>>();
+            let Ok(indices) = pop_indices(&mut stack, expected.len()) else {
+                panic!("valid integer indices must decode");
+            };
+            assert_eq!(indices.as_slice(), expected);
+            assert!(stack.is_empty());
+        }
+    }
 
     #[test]
     fn multiplication_repeats_a_string_in_either_operand_order() {

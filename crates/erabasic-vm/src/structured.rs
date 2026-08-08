@@ -259,7 +259,8 @@ impl StructuredState {
         match transaction {
             crate::VmRuntimeStateTransaction::ResetNewGame
             | crate::VmRuntimeStateTransaction::ResetGameData
-            | crate::VmRuntimeStateTransaction::RestoreOrdinary(_) => {
+            | crate::VmRuntimeStateTransaction::RestoreOrdinary(_)
+            | crate::VmRuntimeStateTransaction::RestoreOrdinaryWithLastLoad { .. } => {
                 self.clear_declared(
                     &extensions.save_maps,
                     &extensions.save_xmls,

@@ -1,5 +1,6 @@
 mod cursor;
 
+use std::borrow::Cow;
 use std::io::{Read, Write};
 
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
@@ -32,6 +33,27 @@ pub(crate) fn is_binary(data: &[u8]) -> bool {
 /// Returns an error for malformed, unsupported, compressed, or oversized input.
 #[allow(clippy::too_many_lines)]
 pub fn decode_binary(data: &[u8], limits: SaveCodecLimits) -> Result<SaveDocument, SaveCodecError> {
+    decode_binary_with_array_mode(data, limits, false)
+}
+
+/// Decode an Emuera 1808 binary save while preserving sparse array runs.
+///
+/// # Errors
+///
+/// Returns an error for malformed, unsupported, compressed, or oversized input.
+pub fn decode_binary_sparse(
+    data: &[u8],
+    limits: SaveCodecLimits,
+) -> Result<SaveDocument, SaveCodecError> {
+    decode_binary_with_array_mode(data, limits, true)
+}
+
+#[allow(clippy::too_many_lines)]
+fn decode_binary_with_array_mode(
+    data: &[u8],
+    limits: SaveCodecLimits,
+    sparse_arrays: bool,
+) -> Result<SaveDocument, SaveCodecError> {
     if data.len() > limits.maximum_bytes {
         return Err(SaveCodecError::LimitExceeded("maximum bytes"));
     }
@@ -59,11 +81,15 @@ pub fn decode_binary(data: &[u8], limits: SaveCodecLimits) -> Result<SaveDocumen
         if decoded.len() > limits.maximum_bytes {
             return Err(SaveCodecError::LimitExceeded("decompressed bytes"));
         }
-        decoded
+        Cow::Owned(decoded)
     } else {
-        outer.remaining().to_vec()
+        Cow::Borrowed(outer.remaining())
     };
-    let mut reader = Cursor::new(&body, limits);
+    let mut reader = if sparse_arrays {
+        Cursor::new_sparse(body.as_ref(), limits)
+    } else {
+        Cursor::new(body.as_ref(), limits)
+    };
     let kind = match reader.u8()? {
         0 => SaveFileKind::Normal,
         1 => SaveFileKind::Global,
@@ -336,8 +362,11 @@ fn write_entries(
         let tag = match &entry.value {
             SaveValue::Integer(_) => 0x00,
             SaveValue::String(_) => 0x10,
-            SaveValue::Integers { dimensions, .. } => integer_tag(dimensions.len())?,
-            SaveValue::Strings { dimensions, .. } => string_tag(dimensions.len())?,
+            SaveValue::Integers { dimensions, .. }
+            | SaveValue::SparseIntegers { dimensions, .. } => integer_tag(dimensions.len())?,
+            SaveValue::Strings { dimensions, .. } | SaveValue::SparseStrings { dimensions, .. } => {
+                string_tag(dimensions.len())?
+            }
         };
         output.push(tag);
         write_string(output, &entry.name, limits)?;
@@ -347,12 +376,56 @@ fn write_entries(
             SaveValue::Integers { dimensions, values } => {
                 write_integer_array(output, dimensions, values, limits)?;
             }
+            SaveValue::SparseIntegers { dimensions, values } => {
+                let dense = materialize_sparse_integers(dimensions, values, limits)?;
+                write_integer_array(output, dimensions, &dense, limits)?;
+            }
             SaveValue::Strings { dimensions, values } => {
                 write_string_array(output, dimensions, values, limits)?;
+            }
+            SaveValue::SparseStrings { dimensions, values } => {
+                let dense = materialize_sparse_strings(dimensions, values, limits)?;
+                write_string_array(output, dimensions, &dense, limits)?;
             }
         }
     }
     Ok(())
+}
+
+fn materialize_sparse_integers(
+    dimensions: &[u32],
+    entries: &[(u64, i64)],
+    limits: SaveCodecLimits,
+) -> Result<Vec<i64>, SaveCodecError> {
+    let mut values = vec![0; element_count(dimensions, limits)?];
+    for (index, value) in entries {
+        let index =
+            usize::try_from(*index).map_err(|_| SaveCodecError::LimitExceeded("array elements"))?;
+        let target = values.get_mut(index).ok_or_else(|| {
+            SaveCodecError::InvalidFormat("sparse array index exceeds dimensions".into())
+        })?;
+        *target = *value;
+    }
+    Ok(values)
+}
+
+fn materialize_sparse_strings(
+    dimensions: &[u32],
+    entries: &[(u64, String)],
+    limits: SaveCodecLimits,
+) -> Result<Vec<String>, SaveCodecError> {
+    let count = element_count(dimensions, limits)?;
+    let mut values = Vec::new();
+    values.resize_with(count, String::new);
+    for (index, value) in entries {
+        let index =
+            usize::try_from(*index).map_err(|_| SaveCodecError::LimitExceeded("array elements"))?;
+        let target = values.get_mut(index).ok_or_else(|| {
+            SaveCodecError::InvalidFormat("sparse array index exceeds dimensions".into())
+        })?;
+        target.clone_from(value);
+    }
+    Ok(values)
 }
 
 fn write_character_entries(
@@ -697,9 +770,37 @@ mod tests {
             SaveCodecLimits::default(),
         )
         .unwrap();
+        let sparse = decode_binary_sparse(&encoded, SaveCodecLimits::default()).unwrap();
+        assert!(matches!(
+            &sparse.variables[0].value,
+            SaveValue::SparseIntegers { dimensions, values }
+                if dimensions == &[4, 5] && values == &[(6, 7), (18, 9)]
+        ));
+        assert!(matches!(
+            &sparse.variables[1].value,
+            SaveValue::SparseStrings { dimensions, values }
+                if dimensions == &[3, 3, 4]
+                    && values == &[(5, "first".into()), (32, "last".into())]
+        ));
         assert_eq!(
             decode_binary(&encoded, SaveCodecLimits::default()).unwrap(),
             document
         );
+    }
+
+    #[test]
+    fn sparse_array_reader_rejects_invalid_tokens_and_runs_past_the_shape() {
+        let limits = SaveCodecLimits::default();
+        let mut invalid_string = Cursor::new(&[1, 0, 0, 0, 0xD0], limits);
+        assert!(matches!(
+            invalid_string.array(1, true),
+            Err(SaveCodecError::InvalidFormat(message)) if message == "invalid array token"
+        ));
+
+        let mut overflowing_run = Cursor::new(&[2, 0, 0, 0, 0xF0, 3, 0xFF], limits);
+        assert!(matches!(
+            overflowing_run.array(1, false),
+            Err(SaveCodecError::InvalidFormat(message)) if message == "array run exceeds dimensions"
+        ));
     }
 }

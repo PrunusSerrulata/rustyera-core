@@ -462,13 +462,20 @@ impl RuntimeSession {
                 let vm = self.vm.as_ref().ok_or_else(|| {
                     RuntimeError::Internal("system load completion has no VM".into())
                 })?;
-                let valid = decode_scoped_save(
+                let Ok(decoded) = decode_scoped_save(
                     data.as_slice(),
                     vm.vm().artifact(),
                     era_runtime_save::SaveFileKind::Normal,
-                )
-                .ok()
-                .is_some_and(|decoded| {
+                ) else {
+                    self.presentation.append_system_text(
+                        localized_system_text(&self.selected_locale, SystemTextKey::InvalidValue),
+                        SystemTextKey::InvalidValue,
+                        Vec::new(),
+                        true,
+                    );
+                    return self.render_slot_menu(false);
+                };
+                let valid = {
                     let game = &vm.vm().artifact().project_data.static_data.game_base;
                     decoded.state.unique_code == game.unique_code
                         && vm
@@ -478,7 +485,7 @@ impl RuntimeSession {
                             .save_load_context()
                             .compatibility
                             .accepts(decoded.state.unique_code, decoded.state.version)
-                });
+                };
                 if !valid {
                     self.presentation.append_system_text(
                         localized_system_text(&self.selected_locale, SystemTextKey::InvalidValue),
@@ -489,7 +496,7 @@ impl RuntimeSession {
                     return self.render_slot_menu(false);
                 }
                 self.system_menu_host_request = None;
-                self.complete_ordinary_load(slot, data.as_slice())
+                self.complete_decoded_ordinary_load(slot, data.as_slice(), decoded)
             }
             (pending, StorageResult::Error { error }) => {
                 if matches!(

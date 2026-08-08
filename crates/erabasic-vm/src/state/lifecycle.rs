@@ -121,6 +121,9 @@ impl Vm {
             pending_reload: None,
             debug: DebugState::default(),
             regex_cache: RegexCache::default(),
+            find_element_cache: HashMap::new(),
+            function_memo_cache: HashMap::new(),
+            active_function_memos: HashMap::new(),
         }
     }
 
@@ -274,6 +277,9 @@ impl Vm {
             .fibers
             .get_mut(&fiber)
             .ok_or(VmError::UnknownFiber(fiber))?;
+        for frame in &fiber.frames {
+            self.active_function_memos.remove(&frame.id);
+        }
         fiber.frames.clear();
         fiber.state = FiberState::Cancelled;
         Ok(())

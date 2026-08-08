@@ -154,6 +154,67 @@ impl RuntimeSession {
         slot: u32,
         bytes: &[u8],
     ) -> Result<(), RuntimeError> {
+        let vm = self
+            .vm
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Internal("ordinary load has no VM".into()))?;
+        let decoded = decode_scoped_save(
+            bytes,
+            vm.vm().artifact(),
+            era_runtime_save::SaveFileKind::Normal,
+        )
+        .map_err(|error| RuntimeError::Internal(format!("invalid ordinary save: {error}")))?;
+        self.complete_decoded_ordinary_load(slot, bytes, decoded)
+    }
+
+    pub(in super::super) fn complete_decoded_ordinary_load(
+        &mut self,
+        slot: u32,
+        bytes: &[u8],
+        decoded: DecodedEraSave,
+    ) -> Result<(), RuntimeError> {
+        let load = self.prepare_decoded_ordinary_load(slot, decoded)?;
+        self.complete_prepared_ordinary_load(slot, bytes, load)
+    }
+
+    pub(in super::super) fn prepare_decoded_ordinary_load(
+        &self,
+        slot: u32,
+        decoded: DecodedEraSave,
+    ) -> Result<PreparedOrdinaryLoad, RuntimeError> {
+        let DecodedEraSave {
+            state,
+            description,
+            opaque_extensions,
+            structured_extensions,
+        } = decoded;
+        let vm = self
+            .vm
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Internal("ordinary load has no VM".into()))?;
+        let (prepared, _) = vm
+            .prepare_runtime_state_with_extensions(
+                VmRuntimeStateTransaction::RestoreOrdinaryWithLastLoad {
+                    state: Box::new(state),
+                    slot: i64::from(slot),
+                    text: description,
+                },
+                StructuredScope::Ordinary,
+                &structured_extensions,
+            )
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        Ok(PreparedOrdinaryLoad {
+            prepared,
+            opaque_extensions,
+        })
+    }
+
+    pub(in super::super) fn complete_prepared_ordinary_load(
+        &mut self,
+        slot: u32,
+        bytes: &[u8],
+        load: PreparedOrdinaryLoad,
+    ) -> Result<(), RuntimeError> {
         let establish_undo = self.undo_replay.is_none();
         let random_before_load = establish_undo
             .then(|| {
@@ -168,33 +229,9 @@ impl RuntimeSession {
             .vm
             .take()
             .ok_or_else(|| RuntimeError::Internal("ordinary load has no VM".into()))?;
-        let decoded = decode_scoped_save(
-            bytes,
-            vm.vm().artifact(),
-            era_runtime_save::SaveFileKind::Normal,
-        )
-        .map_err(|error| RuntimeError::Internal(format!("invalid ordinary save: {error}")))?;
-        let version = decoded.state.version;
-        let description = decoded.description.clone();
-        let (prepared, _) = vm
-            .prepare_runtime_state_with_extensions(
-                VmRuntimeStateTransaction::RestoreOrdinary(Box::new(decoded.state)),
-                StructuredScope::Ordinary,
-                &decoded.structured_extensions,
-            )
+        vm.commit_runtime_state(load.prepared)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        vm.commit_runtime_state(prepared)
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        let last_load = vm
-            .prepare_runtime_state(VmRuntimeStateTransaction::SetLastLoad {
-                version,
-                slot: i64::from(slot),
-                text: description,
-            })
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        vm.commit_runtime_state(last_load)
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        self.save_extensions = decoded.opaque_extensions;
+        self.save_extensions = load.opaque_extensions;
         self.advance_epoch();
         self.controller.clear();
         self.controller.flow = Some(SystemFlow::Shop);

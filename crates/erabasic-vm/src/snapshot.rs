@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::Arc;
 
@@ -567,6 +567,9 @@ impl Vm {
             pending_reload: None,
             debug: crate::debug::DebugState::default(),
             regex_cache: crate::regex_compat::RegexCache::default(),
+            find_element_cache: HashMap::new(),
+            function_memo_cache: HashMap::new(),
+            active_function_memos: HashMap::new(),
         };
         vm.retire_terminal_fibers();
         Ok(vm)

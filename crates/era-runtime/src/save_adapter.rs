@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use era_runtime_save::{
     OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveExtension,
     SaveFileKind, SaveFormat, SaveMetadata, SaveValue, Text1808Layout, Text1808ValueType,
-    Text1808Variable, decode, decode_save_extension, decode_text_with_layout, encode,
+    Text1808Variable, decode_save_extension, decode_sparse, decode_text_with_layout, encode,
     encode_save_extension, encode_text_with_layout,
 };
 use erabasic_bytecode::{
@@ -127,7 +127,7 @@ pub(crate) fn decode_era_save(
 ) -> Result<DecodedEraSave, SaveCodecError> {
     // Both binary headers begin with the non-UTF-8 0x89 signature byte.
     let document = if bytes.starts_with(&[0x89]) {
-        decode(bytes, SaveCodecLimits::default())?
+        decode_sparse(bytes, SaveCodecLimits::default())?
     } else {
         decode_text_with_layout(
             bytes,
@@ -167,7 +167,7 @@ pub(crate) fn decode_scoped_save(
     kind: SaveFileKind,
 ) -> Result<DecodedEraSave, SaveCodecError> {
     let document = if bytes.starts_with(&[0x89]) {
-        decode(bytes, SaveCodecLimits::default())?
+        decode_sparse(bytes, SaveCodecLimits::default())?
     } else {
         decode_text_with_layout(
             bytes,
@@ -492,7 +492,12 @@ fn decode_entries(
             // The reference binary reader ignores names absent from the current project.
             continue;
         };
-        let (value_type, dimensions, values) = decode_value(&entry.value);
+        let DecodedValue {
+            value_type,
+            dimensions,
+            values,
+            sparse_values,
+        } = decode_value(&entry.value);
         if value_type != definition.value_type {
             return Err(SaveCodecError::InvalidFormat(format!(
                 "saved variable {} has the wrong type",
@@ -508,34 +513,68 @@ fn decode_entries(
                 persistence: definition.persistence,
                 storage: definition.storage,
                 values,
+                sparse_values,
             },
         );
     }
     Ok(result)
 }
 
-fn decode_value(value: &SaveValue) -> (BytecodeType, Vec<u64>, Vec<VmValue>) {
+struct DecodedValue {
+    value_type: BytecodeType,
+    dimensions: Vec<u64>,
+    values: Vec<VmValue>,
+    sparse_values: Option<Vec<(u64, VmValue)>>,
+}
+
+fn decode_value(value: &SaveValue) -> DecodedValue {
     match value {
-        SaveValue::Integer(value) => (
-            BytecodeType::Integer,
-            Vec::new(),
-            vec![VmValue::Integer(*value)],
-        ),
-        SaveValue::String(value) => (
-            BytecodeType::String,
-            Vec::new(),
-            vec![VmValue::String(value.clone())],
-        ),
-        SaveValue::Integers { dimensions, values } => (
-            BytecodeType::Integer,
-            dimensions.iter().map(|value| u64::from(*value)).collect(),
-            values.iter().copied().map(VmValue::Integer).collect(),
-        ),
-        SaveValue::Strings { dimensions, values } => (
-            BytecodeType::String,
-            dimensions.iter().map(|value| u64::from(*value)).collect(),
-            values.iter().cloned().map(VmValue::String).collect(),
-        ),
+        SaveValue::Integer(value) => DecodedValue {
+            value_type: BytecodeType::Integer,
+            dimensions: Vec::new(),
+            values: vec![VmValue::Integer(*value)],
+            sparse_values: None,
+        },
+        SaveValue::String(value) => DecodedValue {
+            value_type: BytecodeType::String,
+            dimensions: Vec::new(),
+            values: vec![VmValue::String(value.clone())],
+            sparse_values: None,
+        },
+        SaveValue::Integers { dimensions, values } => DecodedValue {
+            value_type: BytecodeType::Integer,
+            dimensions: dimensions.iter().map(|value| u64::from(*value)).collect(),
+            values: values.iter().copied().map(VmValue::Integer).collect(),
+            sparse_values: None,
+        },
+        SaveValue::Strings { dimensions, values } => DecodedValue {
+            value_type: BytecodeType::String,
+            dimensions: dimensions.iter().map(|value| u64::from(*value)).collect(),
+            values: values.iter().cloned().map(VmValue::String).collect(),
+            sparse_values: None,
+        },
+        SaveValue::SparseIntegers { dimensions, values } => DecodedValue {
+            value_type: BytecodeType::Integer,
+            dimensions: dimensions.iter().map(|value| u64::from(*value)).collect(),
+            values: Vec::new(),
+            sparse_values: Some(
+                values
+                    .iter()
+                    .map(|(index, value)| (*index, VmValue::Integer(*value)))
+                    .collect(),
+            ),
+        },
+        SaveValue::SparseStrings { dimensions, values } => DecodedValue {
+            value_type: BytecodeType::String,
+            dimensions: dimensions.iter().map(|value| u64::from(*value)).collect(),
+            values: Vec::new(),
+            sparse_values: Some(
+                values
+                    .iter()
+                    .map(|(index, value)| (*index, VmValue::String(value.clone())))
+                    .collect(),
+            ),
+        },
     }
 }
 
@@ -602,25 +641,61 @@ fn encode_entry(variable: &EraVariableState) -> Result<SaveEntry, SaveCodecError
             u32::try_from(*value).map_err(|_| SaveCodecError::LimitExceeded("array dimension"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let value = match (variable.value_type, dimensions.is_empty()) {
-        (BytecodeType::Integer, true) => SaveValue::Integer(integer_at(variable, 0)?),
-        (BytecodeType::String, true) => SaveValue::String(string_at(variable, 0)?.to_owned()),
-        (BytecodeType::Integer, false) => SaveValue::Integers {
-            dimensions,
-            values: (0..variable.values.len())
-                .map(|index| integer_at(variable, index))
-                .collect::<Result<_, _>>()?,
-        },
-        (BytecodeType::String, false) => SaveValue::Strings {
-            dimensions,
-            values: (0..variable.values.len())
-                .map(|index| string_at(variable, index).map(str::to_owned))
-                .collect::<Result<_, _>>()?,
-        },
-        (BytecodeType::IntegerPlace | BytecodeType::StringPlace, _) => {
-            return Err(SaveCodecError::InvalidFormat(
-                "a saved variable cannot contain places".into(),
-            ));
+    let value = if let Some(values) = &variable.sparse_values {
+        match variable.value_type {
+            BytecodeType::Integer => SaveValue::SparseIntegers {
+                dimensions,
+                values: values
+                    .iter()
+                    .map(|(index, value)| match value {
+                        VmValue::Integer(value) => Ok((*index, *value)),
+                        _ => Err(SaveCodecError::InvalidFormat(format!(
+                            "saved variable {} contains a non-integer value",
+                            variable.name
+                        ))),
+                    })
+                    .collect::<Result<_, _>>()?,
+            },
+            BytecodeType::String => SaveValue::SparseStrings {
+                dimensions,
+                values: values
+                    .iter()
+                    .map(|(index, value)| match value {
+                        VmValue::String(value) => Ok((*index, value.clone())),
+                        _ => Err(SaveCodecError::InvalidFormat(format!(
+                            "saved variable {} contains a non-string value",
+                            variable.name
+                        ))),
+                    })
+                    .collect::<Result<_, _>>()?,
+            },
+            BytecodeType::IntegerPlace | BytecodeType::StringPlace => {
+                return Err(SaveCodecError::InvalidFormat(
+                    "a saved variable cannot contain places".into(),
+                ));
+            }
+        }
+    } else {
+        match (variable.value_type, dimensions.is_empty()) {
+            (BytecodeType::Integer, true) => SaveValue::Integer(integer_at(variable, 0)?),
+            (BytecodeType::String, true) => SaveValue::String(string_at(variable, 0)?.to_owned()),
+            (BytecodeType::Integer, false) => SaveValue::Integers {
+                dimensions,
+                values: (0..variable.values.len())
+                    .map(|index| integer_at(variable, index))
+                    .collect::<Result<_, _>>()?,
+            },
+            (BytecodeType::String, false) => SaveValue::Strings {
+                dimensions,
+                values: (0..variable.values.len())
+                    .map(|index| string_at(variable, index).map(str::to_owned))
+                    .collect::<Result<_, _>>()?,
+            },
+            (BytecodeType::IntegerPlace | BytecodeType::StringPlace, _) => {
+                return Err(SaveCodecError::InvalidFormat(
+                    "a saved variable cannot contain places".into(),
+                ));
+            }
         }
     };
     Ok(SaveEntry {
@@ -660,6 +735,21 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn sparse_binary_values_cross_the_adapter_without_dense_materialization() {
+        let decoded = decode_value(&SaveValue::SparseIntegers {
+            dimensions: vec![1_000_000],
+            values: vec![(17, 7), (999_999, 9)],
+        });
+        assert_eq!(decoded.value_type, BytecodeType::Integer);
+        assert_eq!(decoded.dimensions, [1_000_000]);
+        assert!(decoded.values.is_empty());
+        assert_eq!(
+            decoded.sparse_values.unwrap(),
+            [(17, VmValue::Integer(7)), (999_999, VmValue::Integer(9))]
+        );
+    }
 
     #[test]
     fn structured_merge_replaces_declared_record_and_preserves_unknown_payload() {
@@ -739,6 +829,7 @@ mod tests {
                     persistence: BytecodePersistence::GameSave,
                     storage: BytecodeStorage::Character,
                     values: vec![VmValue::Integer(value)],
+                    sparse_values: None,
                 },
             );
         }

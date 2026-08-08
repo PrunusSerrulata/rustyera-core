@@ -8,7 +8,10 @@ mod metadata;
 mod model;
 mod text;
 
-pub use binary::{decode_binary, decode_save_extension, encode_binary, encode_save_extension};
+pub use binary::{
+    decode_binary, decode_binary_sparse, decode_save_extension, encode_binary,
+    encode_save_extension,
+};
 pub use metadata::{SaveMetadataInspection, inspect_metadata};
 pub use model::{
     OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveExtension,
@@ -25,6 +28,23 @@ pub use text::{decode_text, decode_text_with_layout, encode_text, encode_text_wi
 pub fn decode(data: &[u8], limits: SaveCodecLimits) -> Result<SaveDocument, SaveCodecError> {
     if binary::is_binary(data) {
         decode_binary(data, limits)
+    } else {
+        decode_text(data, limits)
+    }
+}
+
+/// Decode a save while retaining the sparse representation of binary arrays.
+///
+/// Text saves remain dense because their layout is inherently positional. This entry point is
+/// intended for runtimes that can overlay non-default binary elements without materializing every
+/// skipped zero or empty string.
+///
+/// # Errors
+///
+/// Returns an error for an invalid header, unsupported format, malformed data, or limit breach.
+pub fn decode_sparse(data: &[u8], limits: SaveCodecLimits) -> Result<SaveDocument, SaveCodecError> {
+    if binary::is_binary(data) {
+        decode_binary_sparse(data, limits)
     } else {
         decode_text(data, limits)
     }

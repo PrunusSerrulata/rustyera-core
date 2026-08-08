@@ -10,7 +10,7 @@ pub(crate) fn make_frame<'a>(
     return_value_to_caller: bool,
     event_context: bool,
 ) -> Frame {
-    let mut locals: BTreeMap<_, _> = local_definitions
+    let mut locals: VariableMap = local_definitions
         .into_iter()
         .map(|definition| (definition.key, VariableCell::new(definition)))
         .collect();

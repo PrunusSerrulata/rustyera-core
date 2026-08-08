@@ -3,9 +3,9 @@ use super::*;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct LegacyMemory {
-    pub shared: BTreeMap<SymbolKey, VariableCell>,
-    pub statics: BTreeMap<SymbolKey, VariableCell>,
-    pub characters: Vec<BTreeMap<SymbolKey, VariableCell>>,
+    pub shared: VariableMap,
+    pub statics: VariableMap,
+    pub characters: Vec<VariableMap>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -23,9 +23,9 @@ impl Eq for StaticInitializationCache {}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Memory {
-    pub shared: BTreeMap<SymbolKey, VariableCell>,
-    pub statics: BTreeMap<SymbolKey, VariableCell>,
-    pub characters: Vec<BTreeMap<SymbolKey, VariableCell>>,
+    pub shared: VariableMap,
+    pub statics: VariableMap,
+    pub characters: Vec<VariableMap>,
     pub legacy: BTreeMap<GenerationId, LegacyMemory>,
     #[serde(skip)]
     initialized_static_functions: StaticInitializationCache,
@@ -139,7 +139,7 @@ impl Memory {
         artifact: &BytecodeArtifact,
         template: Option<&CharacterTemplate>,
     ) {
-        let mut character: BTreeMap<_, _> = artifact
+        let mut character: VariableMap = artifact
             .globals
             .iter()
             .filter(|definition| definition.storage == BytecodeStorage::Character)
@@ -422,7 +422,7 @@ impl Memory {
             .map(|definition| (definition.key, definition))
             .collect();
         let mut legacy = LegacyMemory {
-            characters: vec![BTreeMap::new(); self.characters.len()],
+            characters: vec![VariableMap::default(); self.characters.len()],
             ..LegacyMemory::default()
         };
         for definition in &old.globals {
@@ -478,9 +478,12 @@ impl Memory {
                     self.shared.insert(definition.key, cell);
                 }
                 BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
-                    if let Some(cell) = self.statics.get(&definition.key) {
-                        self.statics
-                            .insert(definition.key, cell.migrate(definition));
+                    let migrated = self
+                        .statics
+                        .get(&definition.key)
+                        .map(|cell| cell.migrate(definition));
+                    if let Some(cell) = migrated {
+                        self.statics.insert(definition.key, cell);
                     }
                 }
                 BytecodeStorage::Character => {
@@ -520,7 +523,7 @@ fn find_definition<'a>(artifact: &'a BytecodeArtifact, name: &str) -> Option<&'a
 
 fn initialize_character(
     artifact: &BytecodeArtifact,
-    cells: &mut BTreeMap<SymbolKey, VariableCell>,
+    cells: &mut VariableMap,
     template: &CharacterTemplate,
 ) {
     for (name, value) in [

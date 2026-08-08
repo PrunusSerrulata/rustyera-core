@@ -24,7 +24,9 @@ impl VmRuntimeStatePort for Vm {
         let artifact = self.artifact();
         let reset_execution = matches!(
             &transaction,
-            VmRuntimeStateTransaction::ResetNewGame | VmRuntimeStateTransaction::RestoreOrdinary(_)
+            VmRuntimeStateTransaction::ResetNewGame
+                | VmRuntimeStateTransaction::RestoreOrdinary(_)
+                | VmRuntimeStateTransaction::RestoreOrdinaryWithLastLoad { .. }
         );
         let mut memory = prepare_transaction_memory(artifact, &self.memory, &transaction)?;
         if let VmRuntimeStateTransaction::Mutate {
@@ -138,6 +140,11 @@ fn prepare_transaction_memory(
         }
         VmRuntimeStateTransaction::RestoreOrdinary(state) => {
             crate::save::prepare_era_memory(artifact, current, state)?.0
+        }
+        VmRuntimeStateTransaction::RestoreOrdinaryWithLastLoad { state, slot, text } => {
+            let mut memory = crate::save::prepare_era_memory(artifact, current, state)?.0;
+            memory.set_last_load(artifact, state.version, *slot, text);
+            memory
         }
         VmRuntimeStateTransaction::OverlayGlobal(state) => {
             crate::save::prepare_global_memory(artifact, current, state)?.0

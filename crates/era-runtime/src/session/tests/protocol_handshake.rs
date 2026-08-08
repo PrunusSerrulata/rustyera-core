@@ -105,6 +105,46 @@ fn presentation_updates_are_coalesced_until_the_drive_boundary() {
 }
 
 #[test]
+fn resource_replay_is_materialized_once_when_a_deferred_frame_is_published() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.presentation.snapshot_for_delivery();
+
+    assert!(!session.sync_resource_replay());
+    assert!(!session.sync_resource_replay());
+    session.emit_presentation().unwrap();
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let deferred = drain(&mut session);
+    assert!(session.presentation.resource_replay_stale());
+    assert!(deferred.iter().all(|message| {
+        match message {
+            RuntimeMessage::PresentationDelta(delta) => !delta
+                .operations
+                .iter()
+                .any(|operation| matches!(operation, PresentationOperation::SetResources { .. })),
+            _ => true,
+        }
+    }));
+
+    session.presentation.set_redraw(false);
+    session.presentation.set_redraw(true);
+    session.emit_presentation().unwrap();
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let published = drain(&mut session);
+    let resource_updates = published
+        .iter()
+        .filter_map(|message| match message {
+            RuntimeMessage::PresentationDelta(delta) => Some(&delta.operations),
+            _ => None,
+        })
+        .flatten()
+        .filter(|operation| matches!(operation, PresentationOperation::SetResources { .. }))
+        .count();
+
+    assert_eq!(resource_updates, 1);
+    assert!(!session.presentation.resource_replay_stale());
+}
+
+#[test]
 fn handshake_selects_only_implemented_features() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(

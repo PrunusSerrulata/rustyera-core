@@ -6,6 +6,7 @@ pub(super) struct Cursor<'a> {
     pub(super) position: usize,
     limits: SaveCodecLimits,
     entries: usize,
+    sparse_arrays: bool,
 }
 impl<'a> Cursor<'a> {
     pub(super) fn new(data: &'a [u8], limits: SaveCodecLimits) -> Self {
@@ -14,6 +15,13 @@ impl<'a> Cursor<'a> {
             position: 0,
             limits,
             entries: 0,
+            sparse_arrays: false,
+        }
+    }
+    pub(super) fn new_sparse(data: &'a [u8], limits: SaveCodecLimits) -> Self {
+        Self {
+            sparse_arrays: true,
+            ..Self::new(data, limits)
         }
     }
     pub(super) fn remaining(&self) -> &'a [u8] {
@@ -148,8 +156,79 @@ impl<'a> Cursor<'a> {
             dimensions.push(self.u32()?);
         }
         let count = element_count(&dimensions, self.limits)?;
-        let mut ints = vec![0i64; count];
-        let mut strs = vec![String::new(); count];
+        if strings {
+            if self.sparse_arrays {
+                let values = self.sparse_entries(
+                    &dimensions,
+                    count,
+                    |reader, tag| match tag {
+                        0xD8 => reader.string().map(Some),
+                        0..=0xCF => Ok(None),
+                        _ => Err(SaveCodecError::InvalidFormat("invalid array token".into())),
+                    },
+                    String::is_empty,
+                )?;
+                return Ok(SaveValue::SparseStrings { dimensions, values });
+            }
+            let values = self.dense_array(&dimensions, count, |reader, tag| match tag {
+                0xD8 => reader.string().map(Some),
+                0..=0xCF => Ok(None),
+                _ => Err(SaveCodecError::InvalidFormat("invalid array token".into())),
+            })?;
+            return Ok(SaveValue::Strings { dimensions, values });
+        }
+        if self.sparse_arrays {
+            let values = self.sparse_entries(
+                &dimensions,
+                count,
+                |reader, tag| reader.packed_integer(Some(tag)).map(Some),
+                |value| *value == 0,
+            )?;
+            return Ok(SaveValue::SparseIntegers { dimensions, values });
+        }
+        let values = self.dense_array(&dimensions, count, |reader, tag| {
+            reader.packed_integer(Some(tag)).map(Some)
+        })?;
+        Ok(SaveValue::Integers { dimensions, values })
+    }
+
+    fn dense_array<T: Default>(
+        &mut self,
+        dimensions: &[u32],
+        count: usize,
+        decode_value: impl FnMut(&mut Self, u8) -> Result<Option<T>, SaveCodecError>,
+    ) -> Result<Vec<T>, SaveCodecError> {
+        let mut values = Vec::new();
+        values.resize_with(count, T::default);
+        self.walk_sparse_array(dimensions, count, decode_value, |index, value| {
+            values[index] = value;
+        })?;
+        Ok(values)
+    }
+
+    fn sparse_entries<T>(
+        &mut self,
+        dimensions: &[u32],
+        count: usize,
+        decode_value: impl FnMut(&mut Self, u8) -> Result<Option<T>, SaveCodecError>,
+        is_default: impl Fn(&T) -> bool,
+    ) -> Result<Vec<(u64, T)>, SaveCodecError> {
+        let mut values = Vec::new();
+        self.walk_sparse_array(dimensions, count, decode_value, |index, value| {
+            if !is_default(&value) {
+                values.push((index as u64, value));
+            }
+        })?;
+        Ok(values)
+    }
+
+    fn walk_sparse_array<T>(
+        &mut self,
+        dimensions: &[u32],
+        count: usize,
+        mut decode_value: impl FnMut(&mut Self, u8) -> Result<Option<T>, SaveCodecError>,
+        mut store: impl FnMut(usize, T),
+    ) -> Result<(), SaveCodecError> {
         let mut index = 0usize;
         loop {
             let tag = self.u8()?;
@@ -185,28 +264,17 @@ impl<'a> Cursor<'a> {
                     });
                     index = index.saturating_add(planes.saturating_mul(plane));
                 }
-                0xD8 if strings => {
+                tag => {
                     if index >= count {
                         return Err(SaveCodecError::InvalidFormat(
                             "array data exceeds dimensions".into(),
                         ));
                     }
-                    strs[index] = self.string()?;
-                    index += 1;
-                }
-                tag if !strings => {
-                    if index >= count {
-                        return Err(SaveCodecError::InvalidFormat(
-                            "array data exceeds dimensions".into(),
-                        ));
+                    if let Some(value) = decode_value(self, tag)? {
+                        store(index, value);
                     }
-                    ints[index] = self.packed_integer(Some(tag))?;
                     index += 1;
                 }
-                0..=0xCF if strings => {
-                    index += 1;
-                }
-                _ => return Err(SaveCodecError::InvalidFormat("invalid array token".into())),
             }
             if index > count {
                 return Err(SaveCodecError::InvalidFormat(
@@ -214,17 +282,7 @@ impl<'a> Cursor<'a> {
                 ));
             }
         }
-        Ok(if strings {
-            SaveValue::Strings {
-                dimensions,
-                values: strs,
-            }
-        } else {
-            SaveValue::Integers {
-                dimensions,
-                values: ints,
-            }
-        })
+        Ok(())
     }
 }
 

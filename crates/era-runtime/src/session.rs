@@ -62,9 +62,9 @@ use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
 use erabasic_vm::{
     DEFAULT_LINE_COLUMNS, EraSaveScope, EraState, HostReady, HostWaitStability, HostWrite,
-    PlaceDescriptor, PreparedCandidateState, RunBudget, RuntimeVm, SnapshotEligibility,
-    StructuredScope, VmConfig, VmDriveMode, VmHostCompletion, VmHostRequest, VmPortEvent,
-    VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
+    PlaceDescriptor, PreparedCandidateState, PreparedRuntimeState, RunBudget, RuntimeVm,
+    SnapshotEligibility, StructuredScope, VmConfig, VmDriveMode, VmHostCompletion, VmHostRequest,
+    VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
     VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot, VmValue,
 };
 use serde::{Deserialize, Serialize};
@@ -95,7 +95,7 @@ use crate::runtime_snapshot::{
     RuntimeSnapshotPayload,
 };
 use crate::save_adapter::{
-    decode_era_save, decode_scoped_save, encode_era_save, encode_scoped_save,
+    DecodedEraSave, decode_era_save, decode_scoped_save, encode_era_save, encode_scoped_save,
     merge_opaque_extensions, merge_structured_extensions,
 };
 
@@ -481,6 +481,11 @@ struct PendingProjectLoad {
     remaining_metadata: BTreeSet<String>,
     queued_metadata: VecDeque<(String, [u8; 32])>,
     reload: Option<PendingProjectReload>,
+}
+
+struct PreparedOrdinaryLoad {
+    prepared: PreparedRuntimeState,
+    opaque_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
 }
 
 struct PendingProjectReload {

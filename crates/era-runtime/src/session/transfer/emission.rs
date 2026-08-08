@@ -60,6 +60,7 @@ impl RuntimeSession {
     }
 
     pub(in super::super) fn resynchronize(&mut self, message_id: u64) -> Result<(), RuntimeError> {
+        self.materialize_resource_replay();
         let input_undo = self.input_undo_state();
         let presentation = self.presentation.snapshot_for_delivery();
         self.pending_presentation_update = false;
@@ -96,6 +97,7 @@ impl RuntimeSession {
         reason = "callers retain the fallible presentation-delivery contract; encoding now occurs at the drive boundary"
     )]
     pub(in super::super) fn emit_presentation(&mut self) -> Result<(), RuntimeError> {
+        self.materialize_resource_replay_if_ready();
         self.pending_presentation_update = true;
         Ok(())
     }
@@ -104,6 +106,7 @@ impl RuntimeSession {
         if !self.pending_presentation_update {
             return Ok(());
         }
+        self.materialize_resource_replay_if_ready();
         self.pending_presentation_update = false;
         let message = match self.presentation.next_update() {
             PresentationUpdate::Snapshot(snapshot) => {
@@ -114,7 +117,23 @@ impl RuntimeSession {
         self.emit_immediate(message, None)
     }
 
-    pub(in super::super) fn sync_resource_replay(&mut self) {
+    pub(in super::super) fn sync_resource_replay(&mut self) -> bool {
+        self.presentation.mark_resource_replay_stale();
+        self.materialize_resource_replay_if_ready()
+    }
+
+    fn materialize_resource_replay_if_ready(&mut self) -> bool {
+        if !self.presentation.resource_replay_is_ready_to_publish() {
+            return false;
+        }
+        self.materialize_resource_replay();
+        true
+    }
+
+    fn materialize_resource_replay(&mut self) {
+        if !self.presentation.resource_replay_stale() {
+            return;
+        }
         let replay = self
             .project_snapshot
             .as_ref()
@@ -130,8 +149,11 @@ impl RuntimeSession {
         value: i64,
     ) -> Result<(), RuntimeError> {
         commit_integer_result(vm, request, value)?;
-        self.sync_resource_replay();
-        self.emit_presentation()
+        if self.sync_resource_replay() {
+            self.emit_presentation()
+        } else {
+            Ok(())
+        }
     }
 
     pub(in super::super) fn set_phase(&mut self, phase: RuntimePhase) -> Result<(), RuntimeError> {

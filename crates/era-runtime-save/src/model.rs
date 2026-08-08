@@ -31,9 +31,17 @@ pub enum SaveValue {
         dimensions: Vec<u32>,
         values: Vec<i64>,
     },
+    SparseIntegers {
+        dimensions: Vec<u32>,
+        values: Vec<(u64, i64)>,
+    },
     Strings {
         dimensions: Vec<u32>,
         values: Vec<String>,
+    },
+    SparseStrings {
+        dimensions: Vec<u32>,
+        values: Vec<(u64, String)>,
     },
 }
 

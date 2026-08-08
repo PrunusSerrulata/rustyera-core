@@ -35,14 +35,22 @@ use native_ops::{
 };
 use operand::{
     assign_binary_tag, binary_value, exact, map_vm_error, pop, pop_arguments, pop_indices,
-    read_key, read_u16, read_u32, unary_value,
+    read_u16, read_u32, unary_value,
 };
 
 enum StepOutcome {
     Continue,
+    BulkProgress(u64),
     Yielded,
     Blocked,
     Completed(Option<VmValue>),
+}
+
+#[derive(Clone, Copy)]
+struct ExecutionPolicy {
+    allow_function_memo: bool,
+    remaining_quantum: u32,
+    remaining_instructions: u64,
 }
 
 struct StepError {
@@ -63,6 +71,7 @@ struct InstructionPosition<'a> {
     generation: crate::GenerationId,
     function: SymbolKey,
     instruction: usize,
+    variable: Option<&'a erabasic_bytecode::BytecodeGlobal>,
     encoded: DispatchInstruction<'a>,
 }
 
@@ -157,12 +166,14 @@ impl Vm {
                                 generation: self.current_generation,
                                 function: SymbolKey::default(),
                                 instruction: 0,
+                                variable: None,
                                 encoded: DispatchInstruction::trap(),
                             },
                             |frame| InstructionPosition {
                                 generation: frame.generation,
                                 function: frame.function,
                                 instruction: frame.instruction,
+                                variable: None,
                                 encoded: DispatchInstruction::trap(),
                             },
                         );
@@ -187,20 +198,37 @@ impl Vm {
                     break;
                 }
                 let host_before = report.host_calls;
+                let policy = ExecutionPolicy {
+                    allow_function_memo: !debug_checks_active,
+                    remaining_quantum: quantum.saturating_sub(used),
+                    remaining_instructions: budget
+                        .maximum_instructions
+                        .saturating_sub(report.instructions),
+                };
                 let outcome = self.execute_instruction(
                     &mut fiber,
                     &position,
                     host,
                     natives,
                     &mut report.host_calls,
+                    policy,
                 );
-                report.instructions = report.instructions.saturating_add(1);
-                used = used.saturating_add(1);
+                let additional_instructions = match &outcome {
+                    Ok(StepOutcome::BulkProgress(instructions)) => *instructions,
+                    _ => 0,
+                };
+                report.instructions = report
+                    .instructions
+                    .saturating_add(1)
+                    .saturating_add(additional_instructions);
+                used = used
+                    .saturating_add(1)
+                    .saturating_add(u32::try_from(additional_instructions).unwrap_or(u32::MAX));
                 if report.host_calls != host_before {
                     fiber.mark_progress();
                 }
                 match outcome {
-                    Ok(StepOutcome::Continue) => {
+                    Ok(StepOutcome::Continue | StepOutcome::BulkProgress(_)) => {
                         if debug_checks_active
                             && let Some(stop) = self.debug_stop_after(&fiber, false, false)
                         {
@@ -294,6 +322,7 @@ impl Vm {
                                 generation: self.current_generation,
                                 function: SymbolKey::default(),
                                 instruction: 0,
+                                variable: None,
                                 encoded: DispatchInstruction::trap(),
                             });
                         let fault = self.make_fault(
@@ -311,6 +340,11 @@ impl Vm {
                 }
                 if matches!(fiber.state, FiberState::Runnable) {
                     self.runnable.push_back(fiber_id);
+                }
+            }
+            if matches!(fiber.state, FiberState::Faulted(_) | FiberState::Cancelled) {
+                for frame in &fiber.frames {
+                    self.active_function_memos.remove(&frame.id);
                 }
             }
             self.fibers.insert(fiber_id, fiber);
@@ -384,6 +418,9 @@ impl Vm {
             generation: frame.generation,
             function: frame.function,
             instruction: frame.instruction,
+            variable: cursor
+                .program
+                .instruction_global(cursor.index, frame.instruction),
             encoded: DispatchInstruction {
                 opcode: encoded.opcode,
                 payload: &encoded.payload,
@@ -399,6 +436,7 @@ impl Vm {
         host: &mut impl VmHost,
         natives: &mut NativeServiceRegistry,
         host_calls: &mut u32,
+        policy: ExecutionPolicy,
     ) -> Result<StepOutcome, StepError> {
         let opcode = Opcode::try_from(position.encoded.opcode).map_err(|opcode| {
             StepError::new(
@@ -406,6 +444,12 @@ impl Vm {
                 format!("unknown opcode {opcode}"),
             )
         })?;
+        if opcode == Opcode::PushString
+            && let Some(additional_instructions) =
+                self.try_literal_group_match(fiber, position, policy)
+        {
+            return Ok(StepOutcome::BulkProgress(additional_instructions));
+        }
         let frame = fiber
             .frames
             .last_mut()
@@ -435,7 +479,6 @@ impl Vm {
                 frame.stack.push(VmValue::String(value.into()));
             }
             Opcode::LoadVariable | Opcode::StoreVariable | Opcode::MakePlace => {
-                let key = read_key(position.encoded.payload)?;
                 let count = read_u16(position.encoded.payload, 16)? as usize;
                 let operation = *position.encoded.payload.get(18).ok_or_else(|| {
                     StepError::new(
@@ -446,39 +489,43 @@ impl Vm {
                 let value = (opcode == Opcode::StoreVariable)
                     .then(|| pop(&mut fiber.frames.last_mut().expect("frame exists").stack))
                     .transpose()?;
-                let mut indices = pop_indices(
+                let indices = pop_indices(
                     &mut fiber.frames.last_mut().expect("frame exists").stack,
                     count,
                 )?;
                 let frame = fiber.frames.last().expect("frame exists");
-                let program = self
-                    .generations
-                    .get(&position.generation)
-                    .expect("validated frame generation exists");
-                let definition = program.global(key).ok_or_else(|| {
+                let definition = position.variable.ok_or_else(|| {
                     StepError::new(
                         VmFaultCode::MissingSymbol,
-                        format!("variable {key:?} is not defined"),
+                        "variable operand does not identify a defined global",
                     )
                 })?;
+                let key = definition.key;
                 let character = if definition.storage == BytecodeStorage::Character {
-                    if indices.len() > definition.dimensions.len() {
-                        Some(indices.remove(0))
+                    if indices.as_slice().len() > definition.dimensions.len() {
+                        Some(indices.as_slice()[0])
                     } else {
                         Some(self.target_character_for_generation(position.generation) as u64)
                     }
                 } else {
                     None
                 };
-                let place = PlaceDescriptor {
-                    variable: key,
-                    indices,
-                    character,
-                    fiber: Some(fiber.id),
-                    frame: (definition.storage == BytecodeStorage::FunctionLocal)
-                        .then_some(frame.id),
+                let value_indices = if character.is_some()
+                    && indices.as_slice().len() > definition.dimensions.len()
+                {
+                    &indices.as_slice()[1..]
+                } else {
+                    indices.as_slice()
                 };
                 if opcode == Opcode::MakePlace {
+                    let place = PlaceDescriptor {
+                        variable: key,
+                        indices: value_indices.to_vec(),
+                        character,
+                        fiber: Some(fiber.id),
+                        frame: (definition.storage == BytecodeStorage::FunctionLocal)
+                            .then_some(frame.id),
+                    };
                     let value = match definition.value_type {
                         BytecodeType::Integer => VmValue::IntegerPlace(Box::new(place)),
                         BytecodeType::String => VmValue::StringPlace(Box::new(place)),
@@ -497,7 +544,15 @@ impl Vm {
                         .push(value);
                 } else if opcode == Opcode::LoadVariable {
                     let value = self
-                        .read_place_resolved(fiber, &place, position.generation, definition)
+                        .read_variable_resolved(
+                            fiber,
+                            position.generation,
+                            definition,
+                            value_indices,
+                            character,
+                            (definition.storage == BytecodeStorage::FunctionLocal)
+                                .then_some(frame.id),
+                        )
                         .map_err(map_vm_error)?;
                     fiber
                         .frames
@@ -509,12 +564,28 @@ impl Vm {
                     let mut value = value.expect("store value was popped");
                     if operation != 0 {
                         let previous = self
-                            .read_place_resolved(fiber, &place, position.generation, definition)
+                            .read_variable_resolved(
+                                fiber,
+                                position.generation,
+                                definition,
+                                value_indices,
+                                character,
+                                (definition.storage == BytecodeStorage::FunctionLocal)
+                                    .then_some(frame.id),
+                            )
                             .map_err(map_vm_error)?;
                         value = binary_value(assign_binary_tag(operation)?, previous, value)?;
                     }
-                    self.write_place(fiber, &place, value)
-                        .map_err(map_vm_error)?;
+                    self.write_variable_resolved(
+                        fiber,
+                        position.generation,
+                        definition,
+                        value_indices,
+                        character,
+                        (definition.storage == BytecodeStorage::FunctionLocal).then_some(frame.id),
+                        value,
+                    )
+                    .map_err(map_vm_error)?;
                 }
             }
             Opcode::Unary => {
@@ -634,6 +705,12 @@ impl Vm {
                 self.write_place(fiber, &counter, VmValue::Integer(start))
                     .map_err(map_vm_error)?;
                 let active = (step > 0 && start < end) || (step < 0 && start > end);
+                if active
+                    && let Some(additional_instructions) = self
+                        .try_bulk_fill_loop(fiber, position, &counter, start, end, step, policy)?
+                {
+                    return Ok(StepOutcome::BulkProgress(additional_instructions));
+                }
                 if active {
                     fiber
                         .frames
@@ -967,10 +1044,11 @@ impl Vm {
                 let import_index = read_u32(position.encoded.payload, 0)? as usize;
                 let argument_count = read_u16(position.encoded.payload, 4)? as usize;
                 let new_frame = (opcode == Opcode::Call).then(|| self.allocate_frame_id());
-                let generation = self
-                    .generations
-                    .get(&position.generation)
-                    .expect("validated frame generation exists");
+                let generation = Arc::clone(
+                    self.generations
+                        .get(&position.generation)
+                        .expect("validated frame generation exists"),
+                );
                 let artifact = &generation.artifact;
                 let function = generation
                     .function(position.function)
@@ -1014,12 +1092,52 @@ impl Vm {
                             &mut self.memory,
                             position.generation,
                             target,
-                            generation,
+                            &generation,
                             &arguments,
                         )
                         .map_err(map_vm_error)?;
-                        fiber.frames.push(make_frame(
-                            new_frame.expect("function call reserved a frame id"),
+                        if policy.allow_function_memo
+                            && let Some(value) = self.try_memoized_indexed_read(
+                                fiber,
+                                position.generation,
+                                target.key,
+                                &arguments,
+                            )?
+                        {
+                            fiber
+                                .frames
+                                .last_mut()
+                                .expect("caller frame exists")
+                                .stack
+                                .push(value);
+                            return Ok(StepOutcome::Continue);
+                        }
+                        let frame_id = new_frame.expect("function call reserved a frame id");
+                        let memo_key = (policy.allow_function_memo
+                            && usize::try_from(policy.remaining_quantum)
+                                .ok()
+                                .is_some_and(|remaining| target.code.len() < remaining))
+                        .then(|| {
+                            self.function_memo_key(position.generation, target.key, &arguments)
+                        })
+                        .flatten();
+                        if let Some(entry) = memo_key
+                            .as_ref()
+                            .and_then(|key| self.function_memo_cache.get(key))
+                            .cloned()
+                        {
+                            self.replay_function_memo_entry(position.generation, &entry)
+                                .map_err(map_vm_error)?;
+                            fiber
+                                .frames
+                                .last_mut()
+                                .expect("caller frame exists")
+                                .stack
+                                .push(entry.result);
+                            return Ok(StepOutcome::Continue);
+                        }
+                        let frame = make_frame(
+                            frame_id,
                             position.generation,
                             target,
                             generation.function_locals(target.key),
@@ -1031,7 +1149,11 @@ impl Vm {
                                 .expect("caller frame exists")
                                 .event_context
                                 || target.kind == BytecodeFunctionKind::Event,
-                        ));
+                        );
+                        if let Some(key) = memo_key {
+                            self.active_function_memos.insert(frame_id, key);
+                        }
+                        fiber.frames.push(frame);
                     }
                     (Opcode::CallNative, ImportKind::Native) => {
                         let target_index =
@@ -1456,6 +1578,16 @@ impl Vm {
                     .then(|| pop(&mut fiber.frames.last_mut().expect("frame exists").stack))
                     .transpose()?;
                 let returned_frame = fiber.frames.pop().expect("returning frame exists");
+                if let Some(key) = self.active_function_memos.remove(&returned_frame.id)
+                    && policy.allow_function_memo
+                    && let Some(value) = value.as_ref()
+                    && let Some(entry) = self.capture_function_memo_entry(&key, value.clone())
+                {
+                    if self.function_memo_cache.len() >= 65_536 {
+                        self.function_memo_cache.clear();
+                    }
+                    self.function_memo_cache.insert(key, entry);
+                }
                 if let Some(caller) = fiber.frames.last_mut() {
                     if returned_frame.return_value_to_caller
                         && let Some(value) = value.clone()
@@ -1534,6 +1666,248 @@ impl Vm {
         Ok(StepOutcome::Continue)
     }
 
+    fn try_memoized_indexed_read(
+        &mut self,
+        fiber: &mut Fiber,
+        generation_id: crate::GenerationId,
+        function: SymbolKey,
+        arguments: &[VmValue],
+    ) -> Result<Option<VmValue>, StepError> {
+        let Some(plan) = self
+            .generations
+            .get(&generation_id)
+            .and_then(|generation| generation.memoized_indexed_read_plan(function))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let Some(VmValue::Integer(index)) = arguments.get(plan.index_parameter) else {
+            return Ok(None);
+        };
+        let Some(selector) = arguments.get(plan.selector_parameter) else {
+            return Ok(None);
+        };
+        let selector_arguments = [
+            VmValue::String(plan.selector_prefix.clone()),
+            selector.clone(),
+        ];
+        let Some(key) =
+            self.function_memo_key(generation_id, plan.selector_function, &selector_arguments)
+        else {
+            return Ok(None);
+        };
+        let Some(entry) = self.function_memo_cache.get(&key).cloned() else {
+            return Ok(None);
+        };
+        let VmValue::Integer(selector_index) = entry.result else {
+            return Ok(None);
+        };
+        let Some(index) = u64::try_from(*index).ok() else {
+            return Ok(None);
+        };
+        let Some(selector_index) = u64::try_from(selector_index).ok() else {
+            return Ok(None);
+        };
+        let (selector_function, scratch, target) = {
+            let generation = self
+                .generations
+                .get(&generation_id)
+                .expect("validated frame generation exists");
+            let selector_function = generation
+                .function(plan.selector_function)
+                .expect("memoized selector function exists")
+                .clone();
+            let scratch = generation
+                .global(plan.scratch)
+                .expect("indexed read scratch exists")
+                .clone();
+            let target = generation
+                .global(plan.target)
+                .expect("indexed read target exists")
+                .clone();
+            (selector_function, scratch, target)
+        };
+        self.memory.ensure_function_statics(
+            generation_id,
+            selector_function.key,
+            self.generations
+                .get(&generation_id)
+                .expect("validated frame generation exists")
+                .function_statics(selector_function.key),
+        );
+        let generation = self
+            .generations
+            .get(&generation_id)
+            .expect("validated frame generation exists");
+        bind_persistent_arguments(
+            &mut self.memory,
+            generation_id,
+            &selector_function,
+            generation,
+            &selector_arguments,
+        )
+        .map_err(map_vm_error)?;
+        self.replay_function_memo_entry(generation_id, &entry)
+            .map_err(map_vm_error)?;
+        self.memory
+            .cell_mut(generation_id, &scratch, 0)
+            .ok_or_else(|| {
+                StepError::new(
+                    VmFaultCode::MissingSymbol,
+                    "indexed read scratch is missing",
+                )
+            })?
+            .write(
+                &[],
+                VmValue::Integer(i64::try_from(selector_index).unwrap_or(i64::MAX)),
+            )
+            .map_err(|error| StepError::new(VmFaultCode::InvalidInstruction, error))?;
+        self.read_variable_resolved(
+            fiber,
+            generation_id,
+            &target,
+            &[index, selector_index],
+            None,
+            None,
+        )
+        .map(Some)
+        .map_err(map_vm_error)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn try_bulk_fill_loop(
+        &mut self,
+        fiber: &mut Fiber,
+        position: &InstructionPosition<'_>,
+        counter: &PlaceDescriptor,
+        start: i64,
+        end: i64,
+        step: i64,
+        policy: ExecutionPolicy,
+    ) -> Result<Option<u64>, StepError> {
+        if !policy.allow_function_memo
+            || step != 1
+            || counter.character.is_some()
+            || !counter.indices.is_empty()
+        {
+            return Ok(None);
+        }
+        let Some(plan) = self
+            .generations
+            .get(&position.generation)
+            .and_then(|generation| {
+                generation.bulk_fill_loop_plan(position.function, position.instruction)
+            })
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if counter.variable != plan.counter {
+            return Ok(None);
+        }
+        let iterations = u64::try_from(end.wrapping_sub(start)).unwrap_or(u64::MAX);
+        let logical_instructions = iterations.saturating_mul(7).saturating_add(2);
+        if logical_instructions > policy.remaining_instructions
+            || logical_instructions > u64::from(policy.remaining_quantum)
+            || fiber
+                .backward_branches_without_progress
+                .saturating_add(iterations.saturating_sub(1))
+                > self.config.maximum_backward_branches_without_progress
+        {
+            return Ok(None);
+        }
+        let (prefix, target) = {
+            let generation = self
+                .generations
+                .get(&position.generation)
+                .expect("validated frame generation exists");
+            let Some(prefix) = generation.global(plan.prefix).cloned() else {
+                return Ok(None);
+            };
+            let Some(target) = generation.global(plan.target).cloned() else {
+                return Ok(None);
+            };
+            (prefix, target)
+        };
+        let frame = fiber.frames.last().expect("frame exists");
+        let VmValue::Integer(prefix_index) = self
+            .read_variable_resolved(
+                fiber,
+                position.generation,
+                &prefix,
+                &[],
+                None,
+                (prefix.storage == BytecodeStorage::FunctionLocal).then_some(frame.id),
+            )
+            .map_err(map_vm_error)?
+        else {
+            return Ok(None);
+        };
+        let Some((flat_start, flat_end)) =
+            bulk_fill_flat_range(&target.dimensions, prefix_index, start, end)
+        else {
+            return Ok(None);
+        };
+        self.fill_place_array_range(
+            fiber,
+            &PlaceDescriptor {
+                variable: target.key,
+                indices: Vec::new(),
+                character: None,
+                fiber: Some(fiber.id),
+                frame: None,
+            },
+            flat_start,
+            flat_end,
+            plan.value,
+        )
+        .map_err(map_vm_error)?;
+        self.write_place(fiber, counter, VmValue::Integer(end))
+            .map_err(map_vm_error)?;
+        let frame = fiber.frames.last_mut().expect("frame exists");
+        frame.instruction = plan.after_loop;
+        fiber.backward_branches_without_progress = fiber
+            .backward_branches_without_progress
+            .saturating_add(iterations.saturating_sub(1));
+        Ok(Some(logical_instructions.saturating_sub(1)))
+    }
+
+    fn try_literal_group_match(
+        &self,
+        fiber: &mut Fiber,
+        position: &InstructionPosition<'_>,
+        policy: ExecutionPolicy,
+    ) -> Option<u64> {
+        if !policy.allow_function_memo {
+            return None;
+        }
+        let plan = self
+            .generations
+            .get(&position.generation)?
+            .literal_group_match_plan(position.function, position.instruction)?;
+        let logical_instructions = u64::try_from(plan.candidates.len()).ok()?.saturating_add(1);
+        if logical_instructions > policy.remaining_instructions
+            || logical_instructions > u64::from(policy.remaining_quantum)
+        {
+            return None;
+        }
+        let frame = fiber.frames.last_mut()?;
+        let VmValue::String(value) = frame.stack.last()? else {
+            return None;
+        };
+        let matches = plan
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.as_ref() == value)
+            .count();
+        frame.stack.pop();
+        frame
+            .stack
+            .push(VmValue::Integer(i64::try_from(matches).unwrap_or(i64::MAX)));
+        frame.instruction = plan.after_call;
+        Some(logical_instructions.saturating_sub(1))
+    }
+
     fn make_fault(
         &self,
         fiber: FiberId,
@@ -1608,4 +1982,26 @@ impl Vm {
         }
         format!("{opcode:?}")
     }
+}
+
+fn bulk_fill_flat_range(
+    dimensions: &[u64],
+    prefix: i64,
+    start: i64,
+    end: i64,
+) -> Option<(usize, usize)> {
+    let &[rows, columns] = dimensions else {
+        return None;
+    };
+    let prefix = u64::try_from(prefix).ok()?;
+    let start = u64::try_from(start).ok()?;
+    let end = u64::try_from(end).ok()?;
+    if prefix >= rows || end > columns {
+        return None;
+    }
+    let row = prefix.checked_mul(columns)?;
+    Some((
+        usize::try_from(row.checked_add(start)?).ok()?,
+        usize::try_from(row.checked_add(end)?).ok()?,
+    ))
 }

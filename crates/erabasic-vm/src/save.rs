@@ -13,6 +13,8 @@ pub struct EraVariableState {
     pub persistence: BytecodePersistence,
     pub storage: BytecodeStorage,
     pub values: Vec<VmValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparse_values: Option<Vec<(u64, VmValue)>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -392,6 +394,7 @@ fn saved_variable(
         persistence: definition.persistence,
         storage: definition.storage,
         values: cell.to_values(),
+        sparse_values: None,
     }
 }
 
@@ -426,11 +429,15 @@ fn overlay_shared(
             report.skipped_variables += 1;
             continue;
         };
-        if cell.value_type != variable.value_type
-            || cell
-                .overlay(&variable.dimensions, &variable.values)
-                .is_err()
-        {
+        if cell.value_type != variable.value_type {
+            report.skipped_variables += 1;
+            continue;
+        }
+        let overlay = match &variable.sparse_values {
+            Some(values) => cell.overlay_sparse(&variable.dimensions, values),
+            None => cell.overlay(&variable.dimensions, &variable.values),
+        };
+        if overlay.is_err() {
             report.skipped_variables += 1;
         } else {
             report.restored_variables += 1;
@@ -476,7 +483,7 @@ impl<'a> DefinitionLookup<'a> {
 
 fn overlay_character(
     definitions: &DefinitionLookup<'_>,
-    character: &mut BTreeMap<SymbolKey, crate::VariableCell>,
+    character: &mut crate::VariableMap,
     saved: &BTreeMap<SymbolKey, EraVariableState>,
     report: &mut EraStateReport,
 ) {
@@ -489,11 +496,15 @@ fn overlay_character(
             report.skipped_variables += 1;
             continue;
         };
-        if cell.value_type != variable.value_type
-            || cell
-                .overlay(&variable.dimensions, &variable.values)
-                .is_err()
-        {
+        if cell.value_type != variable.value_type {
+            report.skipped_variables += 1;
+            continue;
+        }
+        let overlay = match &variable.sparse_values {
+            Some(values) => cell.overlay_sparse(&variable.dimensions, values),
+            None => cell.overlay(&variable.dimensions, &variable.values),
+        };
+        if overlay.is_err() {
             report.skipped_variables += 1;
         } else {
             report.restored_variables += 1;
