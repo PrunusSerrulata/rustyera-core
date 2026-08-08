@@ -324,18 +324,10 @@ pub(crate) fn lower_function(
             ));
             continue;
         };
-        builder.code[instruction].payload = u32::try_from(target_index)
-            .unwrap_or(u32::MAX)
-            .to_le_bytes()
-            .to_vec()
-            .into();
+        builder.patch_jump(instruction, target_index);
     }
     for instruction in pending_function_end_jumps {
-        builder.code[instruction].payload = u32::try_from(function_end)
-            .unwrap_or(u32::MAX)
-            .to_le_bytes()
-            .to_vec()
-            .into();
+        builder.patch_jump(instruction, function_end);
     }
 
     // Source-map construction used to search and serialize the whole statement

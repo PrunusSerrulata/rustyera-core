@@ -1,3 +1,5 @@
+use crate::HostBinding;
+
 use super::super::{
     BytecodeType, CompilerDiagnostic, CompilerDiagnosticCode, EncodedInstruction, ExecutionBinding,
     FunctionImport, HostImport, ImportKind, NATIVE_ABI_VERSION, NativeImport, Opcode,
@@ -14,33 +16,62 @@ impl Builder<'_> {
         extension: bool,
         location: SourceLocation,
     ) {
-        let classification = if extension {
-            self.context
-                .host_registry
-                .classification(name)
-                .cloned()
-                .unwrap_or_else(|| ExecutionBinding::Host(extension_binding(name)))
-        } else {
-            self.context
-                .host_registry
-                .classification(name)
-                .cloned()
-                .unwrap_or(ExecutionBinding::Unsupported {
-                    reason: "the callable has no execution catalog entry".into(),
-                })
-        };
-        if let ExecutionBinding::Host(binding) = classification {
-            if binding.contract.portability
-                == erabasic_bytecode::OperationPortability::FrontendObservation
-            {
-                self.diagnostics.push(CompilerDiagnostic::notice_at(
-                    CompilerDiagnosticCode::FrontendObservation,
-                    location,
-                    format!(
-                        "{name} observes the authoritative frontend environment and may vary across clients"
-                    ),
-                ));
+        let registry = self.context.host_registry;
+        match registry.classification(name) {
+            Some(ExecutionBinding::Host(binding)) => {
+                self.emit_host_call(name, parameters, result, binding, location);
             }
+            Some(ExecutionBinding::Native(contract)) => {
+                self.emit_native_call(name, parameters, result, *contract, location);
+            }
+            Some(ExecutionBinding::Unsupported { reason }) => {
+                self.emit_unsupported_call(name, reason, location);
+            }
+            None if extension => {
+                let binding = extension_binding(name);
+                self.emit_host_call(name, parameters, result, &binding, location);
+            }
+            None => self.emit_unsupported_call(
+                name,
+                "the callable has no execution catalog entry",
+                location,
+            ),
+        }
+    }
+
+    fn emit_host_call(
+        &mut self,
+        name: &str,
+        parameters: &[BytecodeType],
+        result: Option<BytecodeType>,
+        binding: &HostBinding,
+        location: SourceLocation,
+    ) {
+        if binding.contract.portability
+            == erabasic_bytecode::OperationPortability::FrontendObservation
+        {
+            self.diagnostics.push(CompilerDiagnostic::notice_at(
+                CompilerDiagnosticCode::FrontendObservation,
+                location,
+                format!(
+                    "{name} observes the authoritative frontend environment and may vary across clients"
+                ),
+            ));
+        }
+        let key = if let Some(key) = self
+            .host_imports
+            .iter()
+            .find(|value| {
+                value.import.namespace == binding.namespace
+                    && value.import.name == binding.name
+                    && value.import.abi_version == binding.abi_version
+                    && value.import.parameters == parameters
+                    && value.import.result == result
+            })
+            .map(|value| value.import.key)
+        {
+            key
+        } else {
             let import = runtime_import(
                 &binding.namespace,
                 &binding.name,
@@ -64,29 +95,30 @@ impl Builder<'_> {
                     },
                 );
             }
-            let index = self.add_import(ImportKind::Host, key);
-            self.emit(
-                opcode::call(
-                    Opcode::CallHost,
-                    index,
-                    u16::try_from(parameters.len()).unwrap_or(u16::MAX),
-                    result,
-                ),
-                location,
-            );
-        } else if let ExecutionBinding::Native(contract) = classification {
-            self.emit_native_call(name, parameters, result, contract, location);
-        } else if let ExecutionBinding::Unsupported { reason } = classification {
-            self.diagnostics.push(CompilerDiagnostic::at(
-                CompilerDiagnosticCode::UnsupportedConstruct,
-                location,
-                format!("{name} is unsupported: {reason}"),
-            ));
-            self.emit(
-                EncodedInstruction::new(Opcode::Trap, format!("unsupported {name}").into_bytes()),
-                location,
-            );
-        }
+            key
+        };
+        let index = self.add_import(ImportKind::Host, key);
+        self.emit(
+            opcode::call(
+                Opcode::CallHost,
+                index,
+                u16::try_from(parameters.len()).unwrap_or(u16::MAX),
+                result,
+            ),
+            location,
+        );
+    }
+
+    fn emit_unsupported_call(&mut self, name: &str, reason: &str, location: SourceLocation) {
+        self.diagnostics.push(CompilerDiagnostic::at(
+            CompilerDiagnosticCode::UnsupportedConstruct,
+            location,
+            format!("{name} is unsupported: {reason}"),
+        ));
+        self.emit(
+            EncodedInstruction::new(Opcode::Trap, format!("unsupported {name}").into_bytes()),
+            location,
+        );
     }
 
     pub(in super::super) fn emit_native_call(
@@ -97,27 +129,43 @@ impl Builder<'_> {
         contract: erabasic_bytecode::OperationContract,
         location: SourceLocation,
     ) {
-        let import = runtime_import(
-            "rustyera.vm",
-            &name.to_ascii_lowercase(),
-            NATIVE_ABI_VERSION,
-            parameters,
-            result,
-        );
-        let key = import.key;
-        if let Err(index) = self
+        let key = if let Some(key) = self
             .native_imports
-            .binary_search_by_key(&key, |value| value.import.key)
+            .iter()
+            .find(|value| {
+                value.import.namespace == "rustyera.vm"
+                    && value.import.name.eq_ignore_ascii_case(name)
+                    && value.import.abi_version == NATIVE_ABI_VERSION
+                    && value.import.parameters == parameters
+                    && value.import.result == result
+            })
+            .map(|value| value.import.key)
         {
-            self.native_imports.insert(
-                index,
-                NativeImport {
-                    import,
-                    effect: contract.effect(),
-                    contract,
-                },
+            key
+        } else {
+            let import = runtime_import(
+                "rustyera.vm",
+                &name.to_ascii_lowercase(),
+                NATIVE_ABI_VERSION,
+                parameters,
+                result,
             );
-        }
+            let key = import.key;
+            if let Err(index) = self
+                .native_imports
+                .binary_search_by_key(&key, |value| value.import.key)
+            {
+                self.native_imports.insert(
+                    index,
+                    NativeImport {
+                        import,
+                        effect: contract.effect(),
+                        contract,
+                    },
+                );
+            }
+            key
+        };
         let index = self.add_import(ImportKind::Native, key);
         self.emit(
             opcode::call(
@@ -131,15 +179,17 @@ impl Builder<'_> {
     }
 
     pub(in super::super) fn add_import(&mut self, kind: ImportKind, key: SymbolKey) -> u32 {
-        if let Some(index) = self
-            .imports
-            .iter()
-            .position(|import| import.kind == kind && import.key == key)
-        {
-            return u32::try_from(index).unwrap_or(u32::MAX);
+        let kind_tag = match kind {
+            ImportKind::Function => 0,
+            ImportKind::Native => 1,
+            ImportKind::Host => 2,
+        };
+        if let Some(index) = self.import_indices.get(&(kind_tag, key)) {
+            return *index;
         }
-        let index = self.imports.len();
+        let index = u32::try_from(self.imports.len()).unwrap_or(u32::MAX);
         self.imports.push(FunctionImport { kind, key });
-        u32::try_from(index).unwrap_or(u32::MAX)
+        self.import_indices.insert((kind_tag, key), index);
+        index
     }
 }

@@ -59,21 +59,13 @@ impl Builder<'_> {
                     self.lower_formatted(then_value, fallback);
                     let end_jump = self.code.len();
                     self.emit(opcode::jump(Opcode::Jump, 0), *location);
-                    self.code[false_jump].payload = u32::try_from(self.code.len())
-                        .unwrap_or(u32::MAX)
-                        .to_le_bytes()
-                        .to_vec()
-                        .into();
+                    self.patch_jump(false_jump, self.code.len());
                     if let Some(else_value) = else_value {
                         self.lower_formatted(else_value, fallback);
                     } else {
                         self.emit(opcode::push_string(""), *location);
                     }
-                    self.code[end_jump].payload = u32::try_from(self.code.len())
-                        .unwrap_or(u32::MAX)
-                        .to_le_bytes()
-                        .to_vec()
-                        .into();
+                    self.patch_jump(end_jump, self.code.len());
                 }
                 HirFormPart::Triple { symbol, location } => {
                     self.lower_form_triple(*symbol, *location);

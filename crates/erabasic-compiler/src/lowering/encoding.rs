@@ -1,5 +1,7 @@
 //! Stable mappings from semantic operations to bytecode and Host ABI values.
 
+use std::cell::RefCell;
+
 use super::{AssignOp, BinaryOp, BytecodeType, RuntimeImport, SemanticType, SymbolKey, UnaryOp};
 
 pub(super) fn compiler_native_contract(pure: bool) -> erabasic_bytecode::OperationContract {
@@ -53,16 +55,27 @@ pub(super) fn runtime_import(
     parameters: &[BytecodeType],
     result: Option<BytecodeType>,
 ) -> RuntimeImport {
-    let identity = serde_json::to_vec(&(namespace, name, abi_version, parameters, result))
+    let key = RUNTIME_IMPORT_IDENTITY.with_borrow_mut(|identity| {
+        identity.clear();
+        serde_json::to_writer(
+            &mut *identity,
+            &(namespace, name, abi_version, parameters, result),
+        )
         .expect("runtime import identity is serializable");
+        SymbolKey::derive("rustyera.bytecode.runtime-import.v1", identity)
+    });
     RuntimeImport {
-        key: SymbolKey::derive("rustyera.bytecode.runtime-import.v1", &identity),
+        key,
         namespace: namespace.into(),
         name: name.into(),
         abi_version,
         parameters: parameters.to_vec(),
         result,
     }
+}
+
+thread_local! {
+    static RUNTIME_IMPORT_IDENTITY: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 pub(crate) fn bytecode_type(value: SemanticType) -> Option<BytecodeType> {

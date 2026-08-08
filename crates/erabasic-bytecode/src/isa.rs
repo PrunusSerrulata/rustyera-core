@@ -276,6 +276,13 @@ impl EncodedInstruction {
         }
     }
 
+    fn from_payload_slice(opcode: Opcode, payload: &[u8]) -> Self {
+        Self {
+            opcode: opcode as u16,
+            payload: InstructionPayload::from_slice(payload),
+        }
+    }
+
     #[must_use]
     pub fn encoded_len(&self) -> u64 {
         2 + 4 + self.payload.len() as u64
@@ -288,14 +295,23 @@ pub mod opcode {
 
     #[must_use]
     pub fn push_integer(value: i64) -> EncodedInstruction {
-        EncodedInstruction::new(Opcode::PushInteger, value.to_le_bytes().to_vec())
+        EncodedInstruction::from_payload_slice(Opcode::PushInteger, &value.to_le_bytes())
     }
 
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
     pub fn push_string(value: &str) -> EncodedInstruction {
-        let mut payload = Vec::with_capacity(4 + value.len());
         let length = u32::try_from(value.len()).expect("one bytecode string exceeds 4 GiB");
+        if value.len() <= 15 {
+            let mut payload = [0; 19];
+            payload[..4].copy_from_slice(&length.to_le_bytes());
+            payload[4..4 + value.len()].copy_from_slice(value.as_bytes());
+            return EncodedInstruction::from_payload_slice(
+                Opcode::PushString,
+                &payload[..4 + value.len()],
+            );
+        }
+        let mut payload = Vec::with_capacity(4 + value.len());
         payload.extend_from_slice(&length.to_le_bytes());
         payload.extend_from_slice(value.as_bytes());
         EncodedInstruction::new(Opcode::PushString, payload)
@@ -308,26 +324,26 @@ pub mod opcode {
         indices: u16,
         operation: u8,
     ) -> EncodedInstruction {
-        let mut payload = Vec::with_capacity(19);
-        payload.extend_from_slice(&key.0);
-        payload.extend_from_slice(&indices.to_le_bytes());
-        payload.push(operation);
-        EncodedInstruction::new(opcode, payload)
+        let mut payload = [0; 19];
+        payload[..16].copy_from_slice(&key.0);
+        payload[16..18].copy_from_slice(&indices.to_le_bytes());
+        payload[18] = operation;
+        EncodedInstruction::from_payload_slice(opcode, &payload)
     }
 
     #[must_use]
     pub fn unary(operation: u8) -> EncodedInstruction {
-        EncodedInstruction::new(Opcode::Unary, vec![operation])
+        EncodedInstruction::from_payload_slice(Opcode::Unary, &[operation])
     }
 
     #[must_use]
     pub fn binary(operation: u8) -> EncodedInstruction {
-        EncodedInstruction::new(Opcode::Binary, vec![operation])
+        EncodedInstruction::from_payload_slice(Opcode::Binary, &[operation])
     }
 
     #[must_use]
     pub fn jump(opcode: Opcode, instruction: u32) -> EncodedInstruction {
-        EncodedInstruction::new(opcode, instruction.to_le_bytes().to_vec())
+        EncodedInstruction::from_payload_slice(opcode, &instruction.to_le_bytes())
     }
 
     #[must_use]
@@ -337,16 +353,16 @@ pub mod opcode {
         arguments: u16,
         result: Option<BytecodeType>,
     ) -> EncodedInstruction {
-        let mut payload = Vec::with_capacity(7);
-        payload.extend_from_slice(&import.to_le_bytes());
-        payload.extend_from_slice(&arguments.to_le_bytes());
-        payload.push(result.map_or(u8::MAX, type_tag));
-        EncodedInstruction::new(opcode, payload)
+        let mut payload = [0; 7];
+        payload[..4].copy_from_slice(&import.to_le_bytes());
+        payload[4..6].copy_from_slice(&arguments.to_le_bytes());
+        payload[6] = result.map_or(u8::MAX, type_tag);
+        EncodedInstruction::from_payload_slice(opcode, &payload)
     }
 
     #[must_use]
     pub fn return_value(has_value: bool) -> EncodedInstruction {
-        EncodedInstruction::new(Opcode::Return, vec![u8::from(has_value)])
+        EncodedInstruction::from_payload_slice(Opcode::Return, &[u8::from(has_value)])
     }
 
     #[must_use]
@@ -355,35 +371,37 @@ pub mod opcode {
         allow_missing: bool,
         method: bool,
     ) -> EncodedInstruction {
-        let mut payload = missing_target.to_le_bytes().to_vec();
-        payload.push(u8::from(allow_missing));
-        payload.push(u8::from(method));
-        EncodedInstruction::new(Opcode::ResolveFunction, payload)
+        let mut payload = [0; 6];
+        payload[..4].copy_from_slice(&missing_target.to_le_bytes());
+        payload[4] = u8::from(allow_missing);
+        payload[5] = u8::from(method);
+        EncodedInstruction::from_payload_slice(Opcode::ResolveFunction, &payload)
     }
 
     #[must_use]
     pub fn invoke_dynamic(arguments: u16, tail: bool) -> EncodedInstruction {
-        let mut payload = arguments.to_le_bytes().to_vec();
-        payload.push(u8::from(tail));
-        EncodedInstruction::new(Opcode::InvokeDynamic, payload)
+        let mut payload = [0; 3];
+        payload[..2].copy_from_slice(&arguments.to_le_bytes());
+        payload[2] = u8::from(tail);
+        EncodedInstruction::from_payload_slice(Opcode::InvokeDynamic, &payload)
     }
 
     #[must_use]
     pub fn jump_dynamic_label(missing_target: u32) -> EncodedInstruction {
-        EncodedInstruction::new(
+        EncodedInstruction::from_payload_slice(
             Opcode::JumpDynamicLabel,
-            missing_target.to_le_bytes().to_vec(),
+            &missing_target.to_le_bytes(),
         )
     }
 
     #[must_use]
     pub fn invoke_event() -> EncodedInstruction {
-        EncodedInstruction::new(Opcode::InvokeEvent, Vec::new())
+        EncodedInstruction::from_payload_slice(Opcode::InvokeEvent, &[])
     }
 
     #[must_use]
     pub fn concat(parts: u16) -> EncodedInstruction {
-        EncodedInstruction::new(Opcode::Concat, parts.to_le_bytes().to_vec())
+        EncodedInstruction::from_payload_slice(Opcode::Concat, &parts.to_le_bytes())
     }
 
     #[must_use]
@@ -437,6 +455,77 @@ mod tests {
                 .payload
                 .len(),
             INLINE_PAYLOAD_BYTES
+        );
+    }
+
+    #[test]
+    fn stack_payload_constructors_match_the_general_constructor() {
+        let key = SymbolKey([7; 16]);
+        assert_eq!(
+            opcode::push_integer(-17),
+            EncodedInstruction::new(Opcode::PushInteger, (-17_i64).to_le_bytes().to_vec())
+        );
+        for value in ["short", "a string longer than fifteen bytes"] {
+            let mut payload = u32::try_from(value.len()).unwrap().to_le_bytes().to_vec();
+            payload.extend_from_slice(value.as_bytes());
+            assert_eq!(
+                opcode::push_string(value),
+                EncodedInstruction::new(Opcode::PushString, payload)
+            );
+        }
+        let mut variable = key.0.to_vec();
+        variable.extend_from_slice(&3_u16.to_le_bytes());
+        variable.push(4);
+        assert_eq!(
+            opcode::variable(Opcode::StoreVariable, key, 3, 4),
+            EncodedInstruction::new(Opcode::StoreVariable, variable)
+        );
+        assert_eq!(
+            opcode::unary(2),
+            EncodedInstruction::new(Opcode::Unary, vec![2])
+        );
+        assert_eq!(
+            opcode::binary(9),
+            EncodedInstruction::new(Opcode::Binary, vec![9])
+        );
+        assert_eq!(
+            opcode::jump(Opcode::JumpIfFalse, 42),
+            EncodedInstruction::new(Opcode::JumpIfFalse, 42_u32.to_le_bytes().to_vec())
+        );
+        let mut call = 11_u32.to_le_bytes().to_vec();
+        call.extend_from_slice(&2_u16.to_le_bytes());
+        call.push(opcode::type_tag(BytecodeType::String));
+        assert_eq!(
+            opcode::call(Opcode::Call, 11, 2, Some(BytecodeType::String)),
+            EncodedInstruction::new(Opcode::Call, call)
+        );
+        assert_eq!(
+            opcode::return_value(true),
+            EncodedInstruction::new(Opcode::Return, vec![1])
+        );
+        let mut resolve = 31_u32.to_le_bytes().to_vec();
+        resolve.extend_from_slice(&[1, 0]);
+        assert_eq!(
+            opcode::resolve_function(31, true, false),
+            EncodedInstruction::new(Opcode::ResolveFunction, resolve)
+        );
+        let mut invoke = 5_u16.to_le_bytes().to_vec();
+        invoke.push(1);
+        assert_eq!(
+            opcode::invoke_dynamic(5, true),
+            EncodedInstruction::new(Opcode::InvokeDynamic, invoke)
+        );
+        assert_eq!(
+            opcode::jump_dynamic_label(23),
+            EncodedInstruction::new(Opcode::JumpDynamicLabel, 23_u32.to_le_bytes().to_vec())
+        );
+        assert_eq!(
+            opcode::invoke_event(),
+            EncodedInstruction::new(Opcode::InvokeEvent, Vec::new())
+        );
+        assert_eq!(
+            opcode::concat(6),
+            EncodedInstruction::new(Opcode::Concat, 6_u16.to_le_bytes().to_vec())
         );
     }
 }

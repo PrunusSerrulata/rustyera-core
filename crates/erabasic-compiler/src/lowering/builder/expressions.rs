@@ -1,3 +1,5 @@
+use erabasic_hir::HirPlace;
+
 use super::super::{
     BinaryOp, BytecodeType, CallTarget, CompilerDiagnostic, CompilerDiagnosticCode,
     EncodedInstruction, FunctionKind, HirArgument, HirCallArgument, HirExpr, HirExprKind,
@@ -17,34 +19,7 @@ impl Builder<'_> {
             HirArgument::MixedExpression { expression, .. } => {
                 self.lower_expression(expression, location)
             }
-            HirArgument::Place(place) => {
-                for index in &place.indices {
-                    self.lower_expression(index, location);
-                }
-                let value_type = match place.value_type {
-                    SemanticType::String => BytecodeType::StringPlace,
-                    SemanticType::Integer | SemanticType::Void | SemanticType::Error => {
-                        BytecodeType::IntegerPlace
-                    }
-                };
-                if let Some(key) = self.context.variable_keys.get(place.variable.0).copied() {
-                    self.emit(
-                        opcode::variable(
-                            Opcode::MakePlace,
-                            key,
-                            u16::try_from(place.indices.len()).unwrap_or(u16::MAX),
-                            0,
-                        ),
-                        location,
-                    );
-                } else {
-                    self.emit(
-                        EncodedInstruction::new(Opcode::Trap, b"missing variable place".to_vec()),
-                        location,
-                    );
-                }
-                value_type
-            }
+            HirArgument::Place(place) => self.lower_place(place, location),
             HirArgument::Formatted(formatted) => self.lower_formatted(formatted, location),
             HirArgument::Raw(value) => {
                 self.emit(opcode::push_string(value), location);
@@ -103,10 +78,9 @@ impl Builder<'_> {
                             HirCallArgument::Value(argument) => {
                                 Some(self.lower_expression(argument, fallback))
                             }
-                            HirCallArgument::Place(place) => Some(self.lower_argument(
-                                &HirArgument::Place(place.clone()),
-                                expression.location,
-                            )),
+                            HirCallArgument::Place(place) => {
+                                Some(self.lower_place(place, expression.location))
+                            }
                             HirCallArgument::Omitted if builtin => {
                                 self.emit(opcode::push_integer(i64::MIN), expression.location);
                                 Some(BytecodeType::Integer)
@@ -170,18 +144,14 @@ impl Builder<'_> {
                                         let HirExprKind::Variable { place } = &value.kind else {
                                             unreachable!("guard checked variable expression")
                                         };
-                                        self.lower_argument(
-                                            &HirArgument::Place(place.clone()),
-                                            fallback,
-                                        )
+                                        self.lower_place(place, fallback)
                                     }
                                     Some(HirCallArgument::Value(value)) => {
                                         self.lower_expression(value, fallback)
                                     }
-                                    Some(HirCallArgument::Place(place)) => self.lower_argument(
-                                        &HirArgument::Place(place.clone()),
-                                        location,
-                                    ),
+                                    Some(HirCallArgument::Place(place)) => {
+                                        self.lower_place(place, location)
+                                    }
                                     Some(HirCallArgument::Omitted) | None => {
                                         if let Some(default) = &parameter.default {
                                             self.lower_expression(default, fallback)
@@ -334,21 +304,13 @@ impl Builder<'_> {
                         );
                         let end = self.code.len();
                         self.emit(opcode::jump(Opcode::Jump, 0), location);
-                        self.code[branch].payload = u32::try_from(self.code.len())
-                            .unwrap_or(u32::MAX)
-                            .to_le_bytes()
-                            .to_vec()
-                            .into();
+                        self.patch_jump(branch, self.code.len());
                         self.lower_expression(right, fallback);
                         self.emit(opcode::unary(2), location);
                         if *op == BinaryOp::LogicalOr {
                             self.emit(opcode::unary(2), location);
                         }
-                        self.code[end].payload = u32::try_from(self.code.len())
-                            .unwrap_or(u32::MAX)
-                            .to_le_bytes()
-                            .to_vec()
-                            .into();
+                        self.patch_jump(end, self.code.len());
                     } else {
                         self.lower_expression(right, fallback);
                         self.emit(opcode::unary(2), location);
@@ -357,20 +319,12 @@ impl Builder<'_> {
                         }
                         let end = self.code.len();
                         self.emit(opcode::jump(Opcode::Jump, 0), location);
-                        self.code[branch].payload = u32::try_from(self.code.len())
-                            .unwrap_or(u32::MAX)
-                            .to_le_bytes()
-                            .to_vec()
-                            .into();
+                        self.patch_jump(branch, self.code.len());
                         self.emit(
                             opcode::push_integer(i64::from(*op == BinaryOp::Nand)),
                             location,
                         );
-                        self.code[end].payload = u32::try_from(self.code.len())
-                            .unwrap_or(u32::MAX)
-                            .to_le_bytes()
-                            .to_vec()
-                            .into();
+                        self.patch_jump(end, self.code.len());
                     }
                 } else {
                     self.lower_expression(left, fallback);
@@ -389,17 +343,9 @@ impl Builder<'_> {
                 self.lower_expression(then_expr, fallback);
                 let end_jump = self.code.len();
                 self.emit(opcode::jump(Opcode::Jump, 0), location);
-                self.code[false_jump].payload = u32::try_from(self.code.len())
-                    .unwrap_or(u32::MAX)
-                    .to_le_bytes()
-                    .to_vec()
-                    .into();
+                self.patch_jump(false_jump, self.code.len());
                 self.lower_expression(else_expr, fallback);
-                self.code[end_jump].payload = u32::try_from(self.code.len())
-                    .unwrap_or(u32::MAX)
-                    .to_le_bytes()
-                    .to_vec()
-                    .into();
+                self.patch_jump(end_jump, self.code.len());
             }
             HirExprKind::Formatted { value } => {
                 self.lower_formatted(value, fallback);
@@ -428,7 +374,7 @@ impl Builder<'_> {
             self.lower_expression(operand, fallback);
             return;
         };
-        let value_type = self.lower_argument(&HirArgument::Place(place.clone()), fallback);
+        let value_type = self.lower_place(place, fallback);
         if value_type != BytecodeType::IntegerPlace {
             self.diagnostics.push(CompilerDiagnostic::at(
                 CompilerDiagnosticCode::InvalidHir,
@@ -450,5 +396,38 @@ impl Builder<'_> {
             compiler_variable_mutation_contract(),
             operand.location,
         );
+    }
+
+    pub(in super::super) fn lower_place(
+        &mut self,
+        place: &HirPlace,
+        location: SourceLocation,
+    ) -> BytecodeType {
+        for index in &place.indices {
+            self.lower_expression(index, location);
+        }
+        let value_type = match place.value_type {
+            SemanticType::String => BytecodeType::StringPlace,
+            SemanticType::Integer | SemanticType::Void | SemanticType::Error => {
+                BytecodeType::IntegerPlace
+            }
+        };
+        if let Some(key) = self.context.variable_keys.get(place.variable.0).copied() {
+            self.emit(
+                opcode::variable(
+                    Opcode::MakePlace,
+                    key,
+                    u16::try_from(place.indices.len()).unwrap_or(u16::MAX),
+                    0,
+                ),
+                location,
+            );
+        } else {
+            self.emit(
+                EncodedInstruction::new(Opcode::Trap, b"missing variable place".to_vec()),
+                location,
+            );
+        }
+        value_type
     }
 }

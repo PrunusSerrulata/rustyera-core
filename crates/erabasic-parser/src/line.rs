@@ -291,10 +291,21 @@ pub(crate) fn parse_line_at(
         parse_arguments(&raw, raw_offset, spec.argument_style, context)
     };
     diagnostics.append(&mut args_output.diagnostics);
+    let name = match tokens.into_iter().next() {
+        Some(Token {
+            kind: TokenKind::Identifier(name),
+            ..
+        }) if name.is_ascii() && !name.bytes().any(|byte| byte.is_ascii_lowercase()) => name,
+        Some(Token {
+            kind: TokenKind::Identifier(name),
+            ..
+        }) => name.to_uppercase(),
+        _ => unreachable!("instruction name was validated above"),
+    };
     ParseOutput {
         value: Some(Statement {
             kind: StatementKind::Instruction {
-                name: name.to_uppercase(),
+                name,
                 arguments: args_output.value.unwrap_or_default(),
                 raw_arguments: raw,
             },

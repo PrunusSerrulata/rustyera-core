@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+};
 
 use erabasic_lexer::{LexerConfig, MacroTable};
 use serde::{Deserialize, Serialize};
@@ -111,23 +114,23 @@ impl ParserContext for DefaultParserContext {
     }
 
     fn instruction(&self, name: &str) -> Option<InstructionSpec> {
-        let upper = name.to_uppercase();
-        let style = if DYNAMIC_CALL_INSTRUCTIONS.contains(&upper.as_str()) {
+        let upper = uppercase_name(name);
+        let style = if DYNAMIC_CALL_INSTRUCTIONS.contains(&upper.as_ref()) {
             ArgumentStyle::DynamicCall
-        } else if NO_ARG_INSTRUCTIONS.contains(&upper.as_str()) {
+        } else if NO_ARG_INSTRUCTIONS.contains(&upper.as_ref()) {
             ArgumentStyle::None
         } else if matches!(
-            upper.as_str(),
+            upper.as_ref(),
             "INPUTS" | "ONEINPUTS" | "BINPUTS" | "ONEBINPUTS"
         ) {
             ArgumentStyle::FormattedFirst
         } else if is_formatted_instruction(&upper) {
             ArgumentStyle::Formatted
-        } else if matches!(upper.as_str(), "PRINTV" | "PRINTVL" | "PRINTVW") {
+        } else if matches!(upper.as_ref(), "PRINTV" | "PRINTVL" | "PRINTVW") {
             ArgumentStyle::PrintV
         } else if upper == "TIMES" {
             ArgumentStyle::Times
-        } else if matches!(upper.as_str(), "CASE" | "ALIGNMENT") || is_raw_print_instruction(&upper)
+        } else if matches!(upper.as_ref(), "CASE" | "ALIGNMENT") || is_raw_print_instruction(&upper)
         {
             // CASE owns the reference-only `IS <expr>` and `<expr> TO <expr>`
             // selector grammar. Preserve it losslessly for semantic lowering.
@@ -141,16 +144,24 @@ impl ParserContext for DefaultParserContext {
     }
 
     fn is_function(&self, name: &str) -> bool {
-        self.functions.contains(&name.to_uppercase())
+        self.functions.contains(uppercase_name(name).as_ref())
     }
     fn is_variable(&self, name: &str) -> bool {
-        self.variables.contains(&name.to_uppercase())
+        self.variables.contains(uppercase_name(name).as_ref())
     }
     fn register_variable(&mut self, name: &str) -> bool {
         self.variables.insert(name.to_uppercase())
     }
     fn preprocessor_symbol(&self, name: &str) -> Option<i64> {
-        self.symbols.get(&name.to_uppercase()).copied()
+        self.symbols.get(uppercase_name(name).as_ref()).copied()
+    }
+}
+
+fn uppercase_name(name: &str) -> Cow<'_, str> {
+    if name.is_ascii() && !name.bytes().any(|byte| byte.is_ascii_lowercase()) {
+        Cow::Borrowed(name)
+    } else {
+        Cow::Owned(name.to_uppercase())
     }
 }
 

@@ -1,8 +1,10 @@
 //! Stateful HIR-to-bytecode builder.
 
+use std::collections::HashMap;
+
 use super::{
-    CompilerDiagnostic, DenseIdIndex, EncodedInstruction, Function, FunctionImport, HostImport,
-    LineId, LoweringContext, NativeImport, SourceLocation, SymbolKey,
+    BytecodeType, CompilerDiagnostic, DenseIdIndex, EncodedInstruction, Function, FunctionImport,
+    HostImport, LineId, LoweringContext, NativeImport, Opcode, SourceLocation, SymbolKey, opcode,
 };
 
 mod calls;
@@ -18,8 +20,10 @@ pub(super) struct Builder<'a> {
     pub(super) code: Vec<EncodedInstruction>,
     pub(super) locations: Vec<SourceLocation>,
     pub(super) imports: Vec<FunctionImport>,
+    pub(super) import_indices: HashMap<(u8, SymbolKey), u32>,
     pub(super) native_imports: Vec<NativeImport>,
     pub(super) host_imports: Vec<HostImport>,
+    pub(super) argument_types: Vec<BytecodeType>,
     control_flow_by_line: DenseIdIndex<Vec<&'a erabasic_hir::ControlFlowEdge>>,
     pub(super) diagnostics: Vec<CompilerDiagnostic>,
 }
@@ -44,8 +48,10 @@ impl<'a> Builder<'a> {
             code: Vec::with_capacity(minimum_instructions),
             locations: Vec::with_capacity(minimum_instructions),
             imports: Vec::new(),
+            import_indices: HashMap::with_capacity(8),
             native_imports: Vec::new(),
             host_imports: Vec::new(),
+            argument_types: Vec::new(),
             control_flow_by_line,
             diagnostics: Vec::new(),
         }
@@ -54,6 +60,26 @@ impl<'a> Builder<'a> {
     pub(super) fn emit(&mut self, instruction: EncodedInstruction, location: SourceLocation) {
         self.code.push(instruction);
         self.locations.push(location);
+    }
+
+    pub(super) fn patch_jump(&mut self, instruction: usize, target: usize) {
+        self.code[instruction].payload =
+            opcode::jump(Opcode::Jump, u32::try_from(target).unwrap_or(u32::MAX)).payload;
+    }
+
+    pub(super) fn patch_resolve_function(
+        &mut self,
+        instruction: usize,
+        target: usize,
+        allow_missing: bool,
+        method: bool,
+    ) {
+        self.code[instruction].payload = opcode::resolve_function(
+            u32::try_from(target).unwrap_or(u32::MAX),
+            allow_missing,
+            method,
+        )
+        .payload;
     }
 
     pub(super) fn take_control_flow(

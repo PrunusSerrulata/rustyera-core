@@ -211,7 +211,7 @@ impl Builder<'_> {
                 );
                 return;
             };
-            self.lower_argument(&HirArgument::Place(counter.clone()), location);
+            self.lower_place(counter, location);
             match arguments.get(1) {
                 Some(HirArgument::Omitted) | None => self.emit(opcode::push_integer(0), location),
                 Some(start) => {
@@ -487,7 +487,8 @@ impl Builder<'_> {
             self.lower_static_call(arguments, line, name, location);
             return;
         }
-        let mut parameter_types = Vec::new();
+        let mut parameter_types = std::mem::take(&mut self.argument_types);
+        parameter_types.reserve(arguments.len().saturating_mul(2));
         for argument in arguments {
             if let HirArgument::MixedExpression { expression, is_px } = argument {
                 parameter_types.push(self.lower_expression(expression, location));
@@ -499,6 +500,8 @@ impl Builder<'_> {
         }
         let extension = matches!(target, InstructionTarget::Extension(_));
         self.emit_runtime_call(name, &parameter_types, None, extension, location);
+        parameter_types.clear();
+        self.argument_types = parameter_types;
     }
 
     fn store_method_result(&mut self, return_type: SemanticType, location: SourceLocation) {

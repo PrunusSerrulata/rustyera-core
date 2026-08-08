@@ -36,14 +36,11 @@ fn parse_script(
     let mut declarations = Vec::new();
     let mut top_level = Vec::new();
     let mut current: Option<Function> = None;
-    let mut blocks: Vec<(String, Span)> = Vec::new();
+    let mut blocks: Vec<(&'static str, Span)> = Vec::new();
     let mut preprocessor: Vec<PreprocessorFrame> = Vec::new();
 
-    let lines: Vec<_> = lines_with_offsets(source).collect();
-    let mut line_index = 0;
-    while line_index < lines.len() {
-        let (mut offset, raw_line) = lines[line_index];
-        line_index += 1;
+    let mut lines = lines_with_offsets(source).peekable();
+    while let Some((mut offset, raw_line)) = lines.next() {
         let mut line = raw_line.trim_end_matches('\r');
         // `read_to_string` preserves an UTF-8 BOM whereas StreamReader consumes it.
         // Skip it only at the beginning and keep every reported span byte-accurate.
@@ -71,9 +68,7 @@ fn parse_script(
             let mut first_offset = None;
             let mut closed = false;
             let mut source_map = ContinuationSourceMap::default();
-            while line_index < lines.len() {
-                let (part_offset, raw_part) = lines[line_index];
-                line_index += 1;
+            while let Some((part_offset, raw_part)) = lines.next() {
                 let part = raw_part.trim_end_matches('\r');
                 let part_trimmed =
                     trim_line_start(part, context.lexer_config().allow_full_width_space);
@@ -98,9 +93,7 @@ fn parse_script(
                 source_map.push_source(logical_start, part.len(), part_offset);
                 let replacement_start = continued.len();
                 continued.push_str(context.continuation_separator());
-                let next_offset = lines
-                    .get(line_index)
-                    .map_or(source.len(), |(offset, _)| *offset);
+                let next_offset = lines.peek().map_or(source.len(), |(offset, _)| *offset);
                 source_map.push_replacement(
                     replacement_start,
                     context.continuation_separator().len(),
@@ -228,22 +221,22 @@ fn parse_function_header(
     );
     let diagnostics = shift_diagnostics(lexed.diagnostics, base + 1);
     let tokens = shift_tokens(lexed.tokens, base + 1);
-    let name = match tokens.first() {
+    if !matches!(
+        tokens.first(),
         Some(Token {
-            kind: TokenKind::Identifier(name),
+            kind: TokenKind::Identifier(_),
             ..
-        }) => name.clone(),
-        _ => {
-            return ParseOutput {
-                value: None,
-                diagnostics: vec![Diagnostic::error(
-                    DiagnosticCode::UnexpectedToken,
-                    Span::new(base, base + source.len()),
-                    "function name expected after '@'",
-                )],
-            };
-        }
-    };
+        })
+    ) {
+        return ParseOutput {
+            value: None,
+            diagnostics: vec![Diagnostic::error(
+                DiagnosticCode::UnexpectedToken,
+                Span::new(base, base + source.len()),
+                "function name expected after '@'",
+            )],
+        };
+    }
     let mut parameters = Vec::new();
     let tail = tokens.get(1..).unwrap_or_default();
     let parameter_tokens = if matches!(
@@ -282,19 +275,27 @@ fn parse_function_header(
             is_reference: false,
         });
     }
+    let raw_parameters = header_body
+        .get(
+            tokens
+                .first()
+                .map_or(0, |token| token.span.end.saturating_sub(base + 1))..,
+        )
+        .unwrap_or_default()
+        .trim_start()
+        .to_string();
+    let Some(Token {
+        kind: TokenKind::Identifier(name),
+        ..
+    }) = tokens.into_iter().next()
+    else {
+        unreachable!("function name was validated above");
+    };
     ParseOutput {
         value: Some(Function {
             name,
             parameters,
-            raw_parameters: header_body
-                .get(
-                    tokens
-                        .first()
-                        .map_or(0, |token| token.span.end.saturating_sub(base + 1))..,
-                )
-                .unwrap_or_default()
-                .trim_start()
-                .to_string(),
+            raw_parameters,
             attributes: Vec::new(),
             body: Vec::new(),
             span: Span::new(base, base + source.len()),
@@ -370,7 +371,7 @@ fn declaration_name(source: &str) -> Option<&str> {
 
 fn check_structure(
     statement: &Statement,
-    blocks: &mut Vec<(String, Span)>,
+    blocks: &mut Vec<(&'static str, Span)>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let StatementKind::Instruction {
@@ -393,14 +394,16 @@ fn check_structure(
             Some("PRINTDATA")
         }
         "DATALIST" => Some("DATALIST"),
-        "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST" => Some(name.as_str()),
+        "TRYCALLLIST" => Some("TRYCALLLIST"),
+        "TRYJUMPLIST" => Some("TRYJUMPLIST"),
+        "TRYGOTOLIST" => Some("TRYGOTOLIST"),
         _ => None,
     };
     if let Some(opener) = opener {
         if matches!(opener, "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST")
-            && blocks.iter().any(|(name, _)| {
-                matches!(name.as_str(), "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST")
-            })
+            && blocks
+                .iter()
+                .any(|(name, _)| matches!(*name, "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST"))
         {
             diagnostics.push(Diagnostic::error(
                 DiagnosticCode::UnmatchedBlock,
@@ -408,11 +411,11 @@ fn check_structure(
                 "TRY*LIST blocks may not be nested",
             ));
         }
-        blocks.push((opener.to_string(), statement.span));
+        blocks.push((opener, statement.span));
         return;
     }
     if name == "FUNC" {
-        match blocks.last().map(|(name, _)| name.as_str()) {
+        match blocks.last().map(|(name, _)| *name) {
             Some("TRYGOTOLIST") if arguments.len() != 1 => diagnostics.push(Diagnostic::error(
                 DiagnosticCode::UnexpectedToken,
                 statement.span,
@@ -441,7 +444,7 @@ fn check_structure(
     };
     if name == "ENDFUNC" {
         if !matches!(
-            blocks.pop().as_ref().map(|(name, _)| name.as_str()),
+            blocks.pop().map(|(name, _)| name),
             Some("TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST")
         ) {
             diagnostics.push(Diagnostic::error(

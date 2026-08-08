@@ -83,16 +83,12 @@ impl Builder<'_> {
             self.emit(opcode::jump(Opcode::Jump, 0), location);
             end_jumps.push(end);
             if let Some(jump) = false_jump {
-                self.code[jump].payload = u32::try_from(self.code.len())
-                    .unwrap_or(u32::MAX)
-                    .to_le_bytes()
-                    .to_vec()
-                    .into();
+                self.patch_jump(jump, self.code.len());
             }
         }
-        let end = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+        let end = self.code.len();
         for jump in end_jumps {
-            self.code[jump].payload = end.to_le_bytes().to_vec().into();
+            self.patch_jump(jump, end);
         }
         if !is_string {
             if name.ends_with('L') {
@@ -102,11 +98,7 @@ impl Builder<'_> {
             }
         }
         if let Some(jump) = skip_jump {
-            self.code[jump].payload = u32::try_from(self.code.len())
-                .unwrap_or(u32::MAX)
-                .to_le_bytes()
-                .to_vec()
-                .into();
+            self.patch_jump(jump, self.code.len());
         }
     }
 
@@ -228,11 +220,7 @@ impl Builder<'_> {
             if opener == "TRYGOTOLIST" {
                 let instruction = self.code.len();
                 self.emit(opcode::jump_dynamic_label(0), candidate.location);
-                self.code[instruction].payload = u32::try_from(self.code.len())
-                    .unwrap_or(u32::MAX)
-                    .to_le_bytes()
-                    .to_vec()
-                    .into();
+                self.patch_jump(instruction, self.code.len());
                 continue;
             }
             let resolve = self.code.len();
@@ -259,19 +247,11 @@ impl Builder<'_> {
                 EncodedInstruction::new(Opcode::Pop, Vec::new()),
                 candidate.location,
             );
-            self.code[resolve].payload = {
-                let mut payload = u32::try_from(missing)
-                    .unwrap_or(u32::MAX)
-                    .to_le_bytes()
-                    .to_vec();
-                payload.push(1);
-                payload.push(0);
-                payload.into()
-            };
+            self.patch_resolve_function(resolve, missing, true, false);
         }
-        let end = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+        let end = self.code.len();
         for jump in end_jumps {
-            self.code[jump].payload = end.to_le_bytes().to_vec().into();
+            self.patch_jump(jump, end);
         }
     }
 }

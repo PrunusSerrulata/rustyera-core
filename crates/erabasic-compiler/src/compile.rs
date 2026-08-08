@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -663,9 +663,9 @@ fn compile_project_inner(
     for result in function_builds {
         let entry = match result {
             FunctionBuild::Cached(entry) => entry,
-            FunctionBuild::Lowered(result) => {
+            FunctionBuild::Lowered(mut result) => {
                 lowered_count += 1;
-                diagnostics.extend(result.diagnostics.clone());
+                diagnostics.append(&mut result.diagnostics);
                 materialized_function(result)
             }
         };
@@ -704,6 +704,8 @@ fn compile_project_inner(
 
     let mut native_imports = Vec::<erabasic_bytecode::NativeImport>::new();
     let mut host_imports = Vec::<erabasic_bytecode::HostImport>::new();
+    let mut native_import_indices = HashMap::new();
+    let mut host_import_indices = HashMap::new();
     let source_entry_count = materialized
         .iter()
         .map(|entry| entry.source_entries.len())
@@ -723,16 +725,21 @@ fn compile_project_inner(
             cached_function(&entry)
         };
         for import in entry.native_imports {
-            match native_imports.binary_search_by_key(&import.import.key, |value| value.import.key)
-            {
-                Ok(index) => native_imports[index] = import,
-                Err(index) => native_imports.insert(index, import),
+            let key = import.import.key;
+            if let Some(index) = native_import_indices.get(&key).copied() {
+                native_imports[index] = import;
+            } else {
+                native_import_indices.insert(key, native_imports.len());
+                native_imports.push(import);
             }
         }
         for import in entry.host_imports {
-            match host_imports.binary_search_by_key(&import.import.key, |value| value.import.key) {
-                Ok(index) => host_imports[index] = import,
-                Err(index) => host_imports.insert(index, import),
+            let key = import.import.key;
+            if let Some(index) = host_import_indices.get(&key).copied() {
+                host_imports[index] = import;
+            } else {
+                host_import_indices.insert(key, host_imports.len());
+                host_imports.push(import);
             }
         }
         lowered_source_entries.extend(entry.source_entries);
@@ -740,6 +747,8 @@ fn compile_project_inner(
         cached.insert(key, cached_entry);
         finalizing_progress.advance();
     }
+    native_imports.sort_unstable_by_key(|value| value.import.key);
+    host_imports.sort_unstable_by_key(|value| value.import.key);
     let mut fingerprint_order = Vec::with_capacity(lowered_source_entries.len());
     for (chunk_index, chunk) in lowered_source_entries.chunks(65_536).enumerate() {
         let base = chunk_index.saturating_mul(65_536);

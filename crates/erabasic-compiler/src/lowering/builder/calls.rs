@@ -82,25 +82,10 @@ impl Builder<'_> {
                 return;
             }
         }
-        let reference_parameters = target_function
-            .map(|function| {
-                function
-                    .parameters
-                    .iter()
-                    .map(|parameter| {
-                        self.context
-                            .program
-                            .variables
-                            .get(parameter.target.variable.0 as usize)
-                            .is_some_and(|variable| variable.reference)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let supplied = arguments.iter().skip(1).collect::<Vec<_>>();
-        let mut parameter_types = Vec::new();
+        let mut parameter_types =
+            Vec::with_capacity(target_function.map_or(0, |function| function.parameters.len()));
         if let Some(function) = target_function {
-            if supplied.len() > function.parameters.len() {
+            if arguments.len().saturating_sub(1) > function.parameters.len() {
                 self.diagnostics.push(CompilerDiagnostic::at(
                     CompilerDiagnosticCode::InvalidHir,
                     location,
@@ -108,7 +93,7 @@ impl Builder<'_> {
                 ));
             }
             for (index, parameter) in function.parameters.iter().enumerate() {
-                let argument = supplied.get(index).copied();
+                let argument = arguments.get(index + 1);
                 if matches!(argument, None | Some(HirArgument::Omitted)) {
                     if let Some(default) = &parameter.default {
                         parameter_types.push(self.lower_expression(default, location));
@@ -143,12 +128,17 @@ impl Builder<'_> {
                     continue;
                 }
                 let argument = argument.expect("handled missing argument above");
-                if reference_parameters.get(index) == Some(&true)
+                let reference = self
+                    .context
+                    .program
+                    .variables
+                    .get(parameter.target.variable.0 as usize)
+                    .is_some_and(|variable| variable.reference);
+                if reference
                     && let HirArgument::Expression(expression) = argument
                     && let HirExprKind::Variable { place } = &expression.kind
                 {
-                    parameter_types
-                        .push(self.lower_argument(&HirArgument::Place(place.clone()), location));
+                    parameter_types.push(self.lower_place(place, location));
                 } else {
                     let actual = self.lower_argument(argument, location);
                     let expected =
@@ -239,7 +229,7 @@ impl Builder<'_> {
                 if let HirArgument::Expression(expression) = argument
                     && let HirExprKind::Variable { place } = &expression.kind
                 {
-                    self.lower_argument(&HirArgument::Place(place.clone()), location)
+                    self.lower_place(place, location)
                 } else {
                     self.lower_argument(argument, location)
                 }
@@ -263,17 +253,9 @@ impl Builder<'_> {
             if has_catch {
                 self.emit(opcode::push_integer(0), location);
             }
-            let end = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
-            self.code[resolve].payload = {
-                let mut payload = u32::try_from(missing)
-                    .unwrap_or(u32::MAX)
-                    .to_le_bytes()
-                    .to_vec();
-                payload.push(1);
-                payload.push(u8::from(method));
-                payload.into()
-            };
-            self.code[success].payload = end.to_le_bytes().to_vec().into();
+            let end = self.code.len();
+            self.patch_resolve_function(resolve, missing, true, method);
+            self.patch_jump(success, end);
         }
     }
 }

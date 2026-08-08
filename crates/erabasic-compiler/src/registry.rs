@@ -58,7 +58,13 @@ impl HostRegistry {
 
     #[must_use]
     pub fn classification(&self, era_name: &str) -> Option<&ExecutionBinding> {
-        self.bindings.get(&era_name.to_ascii_uppercase())
+        self.bindings.get(era_name).or_else(|| {
+            era_name
+                .bytes()
+                .any(|byte| byte.is_ascii_lowercase())
+                .then(|| era_name.to_ascii_uppercase())
+                .and_then(|name| self.bindings.get(&name))
+        })
     }
 
     #[must_use]

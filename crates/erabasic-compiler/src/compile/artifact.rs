@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashMap, hash_map::Entry},
     io::Write,
 };
@@ -40,13 +41,13 @@ pub(super) fn event_groups(
     functions: &[Function],
     keys: &DenseIdIndex<SymbolKey>,
 ) -> Vec<BytecodeEventGroup> {
-    let mut groups: BTreeMap<String, Vec<&Function>> = BTreeMap::new();
+    let mut groups: BTreeMap<Cow<'_, str>, Vec<&Function>> = BTreeMap::new();
     for function in functions
         .iter()
         .filter(|function| function.kind == FunctionKind::Event)
     {
         groups
-            .entry(function.name.to_ascii_uppercase())
+            .entry(ascii_uppercase(&function.name))
             .or_default()
             .push(function);
     }
@@ -55,7 +56,7 @@ pub(super) fn event_groups(
         .map(|(name, mut members)| {
             members.sort_by_key(|function| function.definition_order);
             let mut group = BytecodeEventGroup {
-                name,
+                name: name.into_owned(),
                 only: Vec::new(),
                 priority: Vec::new(),
                 normal: Vec::new(),
@@ -104,7 +105,7 @@ pub(super) fn function_keys(
                 .get(function.location.source.0)
                 .copied()
                 .unwrap_or_default(),
-            function.name.to_ascii_uppercase(),
+            ascii_uppercase(&function.name),
             function_kind_tag(function.kind),
             function
                 .parameters
@@ -147,7 +148,7 @@ pub(super) fn variable_keys(
         identity.clear();
         serde_json::to_writer(
             &mut identity,
-            &(variable.name.to_ascii_uppercase(), variable.scope, owner),
+            &(ascii_uppercase(&variable.name), variable.scope, owner),
         )
         .expect("variable identity is serializable");
         keys.insert(
@@ -192,6 +193,14 @@ pub(super) fn globals(
             })
         })
         .collect()
+}
+
+fn ascii_uppercase(value: &str) -> Cow<'_, str> {
+    if value.bytes().any(|byte| byte.is_ascii_lowercase()) {
+        Cow::Owned(value.to_ascii_uppercase())
+    } else {
+        Cow::Borrowed(value)
+    }
 }
 
 fn variable_storage(variable: &Variable) -> BytecodeStorage {
