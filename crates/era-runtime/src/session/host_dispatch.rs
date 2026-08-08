@@ -2996,17 +2996,18 @@ impl RuntimeSession {
                 .first()
                 .map_or_else(String::new, display_value);
             let bgm = name == "PLAYBGM";
-            let exists = self
+            let resolved_resource = self
                 .project_snapshot
                 .as_ref()
-                .is_some_and(|project| project.resource_graph.contains_audio(&resource));
-            if !exists {
+                .and_then(|project| project.resource_graph.audio_path(&resource))
+                .map(str::to_owned);
+            let Some(resource) = resolved_resource else {
                 return commit_completion(
                     vm,
                     request.id,
                     VmHostCompletion::Ready(HostReady::empty()),
                 );
-            }
+            };
             self.presentation.set_audio(resource.clone(), bgm, true);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             self.emit_presentation()?;

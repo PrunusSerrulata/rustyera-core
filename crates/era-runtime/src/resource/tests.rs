@@ -41,6 +41,29 @@ fn compact_snapshot_preserves_and_validates_static_resource_identities() {
     assert!(snapshot.validate_project_resources(&changed).is_err());
 }
 
+#[test]
+fn resolves_emuera_audio_names_from_the_sound_directory() {
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![SubmittedFile {
+            relative_path: "sound/Theme.MP3".into(),
+            category: FileCategory::Resource,
+            payload: FilePayload::Bytes(ProtocolBytes::new(vec![1, 2, 3])),
+            content_hash: None,
+        }],
+    };
+    let (graph, diagnostics) = ResourceGraph::from_manifest(&manifest);
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(graph.audio_path("theme.mp3"), Some("sound/Theme.MP3"));
+    assert_eq!(
+        graph.audio_path("SOUND\\THEME.MP3"),
+        Some("sound/Theme.MP3")
+    );
+    assert!(graph.contains_audio("Theme.MP3"));
+    assert_eq!(graph.audio_path("missing.mp3"), None);
+}
+
 use super::*;
 
 #[test]

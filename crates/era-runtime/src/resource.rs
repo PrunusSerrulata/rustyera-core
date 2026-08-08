@@ -424,8 +424,17 @@ impl ResourceGraph {
         ))
     }
 
+    pub(crate) fn audio_path(&self, name: &str) -> Option<&str> {
+        let normalized = name.replace('\\', "/");
+        let key = normalized.to_ascii_lowercase();
+        self.images
+            .get(&key)
+            .or_else(|| self.images.get(&format!("sound/{key}")))
+            .map(|resource| resource.relative_path.as_str())
+    }
+
     pub(crate) fn contains_audio(&self, name: &str) -> bool {
-        self.images.contains_key(&name.to_ascii_lowercase())
+        self.audio_path(name).is_some()
     }
 
     // This is deliberately one exhaustive translation table so adding an

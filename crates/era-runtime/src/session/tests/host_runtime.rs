@@ -1,6 +1,96 @@
 use super::*;
 
 #[test]
+fn audio_commands_project_canonical_sound_directory_resources() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    let mut client_capabilities = capabilities();
+    client_capabilities.audio = true;
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "audio-test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: client_capabilities,
+            preferred_locales: vec!["en".into()],
+            configuration_profile: None,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(
+                        "@SYSTEM_TITLE\nPLAYBGM \"theme.mp3\"\nWAIT\nRETURN\n".into(),
+                    ),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "sound/theme.mp3".into(),
+                    category: FileCategory::Resource,
+                    payload: FilePayload::Bytes(ProtocolBytes::new(vec![1, 2, 3])),
+                    content_hash: None,
+                },
+            ],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+
+    let mut messages = Vec::new();
+    for _ in 0..16 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        messages.extend(drain(&mut session));
+        if messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::EffectBatch(_)))
+        {
+            break;
+        }
+    }
+
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::EffectBatch(batch)
+                if matches!(
+                    &batch.effects[0].kind,
+                    EffectKind::Audio(AudioEffect {
+                        action: AudioEffectAction::Play,
+                        resource_id: Some(resource),
+                        ..
+                    }) if resource == "sound/theme.mp3"
+                )
+        )),
+        "{messages:#?}"
+    );
+    assert!(
+        session
+            .presentation
+            .snapshot()
+            .audio
+            .iter()
+            .any(|audio| { audio.playing && audio.resource_id == "sound/theme.mp3" })
+    );
+}
+
+#[test]
 fn project_load_start_and_print_cross_the_message_boundary() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(
