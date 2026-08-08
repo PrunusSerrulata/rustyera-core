@@ -165,6 +165,64 @@ fn one_input_normalization_is_scalar_default_and_activation_aware() {
 }
 
 #[test]
+fn empty_string_input_without_a_default_remains_a_valid_string() {
+    let submission = InteractionToken { epoch: 4, id: 1 };
+    let empty_button = InteractionToken { epoch: 4, id: 2 };
+    let mut pending = PendingInput {
+        host_request: None,
+        wait: InputWait {
+            wait_id: 1,
+            kind: WaitKind::StringValue,
+            stability: WaitStability::StableInput,
+            one_input: true,
+            stop_message_skip: false,
+            system_input: false,
+            mouse_input: true,
+            default_value: None,
+            deadline_ns: None,
+            display_time: false,
+            timeout_message: None,
+            submission_token: submission,
+            countdown_remaining_ms: None,
+        },
+        result_name: Some("RESULTS".into()),
+        choices: BTreeMap::from([(empty_button, VmValue::String(String::new()))]),
+        timeout_duration_ns: None,
+        post_input: None,
+    };
+
+    assert_eq!(
+        input_value(
+            &pending,
+            submission,
+            InputIntent::CommitText(String::new()),
+            false,
+        ),
+        Some(InputSubmission::Value(VmValue::String(String::new())))
+    );
+    assert_eq!(
+        input_value(
+            &pending,
+            submission,
+            InputIntent::Activate(empty_button),
+            false,
+        ),
+        Some(InputSubmission::Value(VmValue::String(String::new())))
+    );
+
+    pending.wait.kind = WaitKind::StringButton;
+    assert_eq!(
+        input_value(
+            &pending,
+            submission,
+            InputIntent::Activate(empty_button),
+            false,
+        ),
+        Some(InputSubmission::Value(VmValue::String(String::new())))
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn one_input_activation_uses_the_loaded_allow_long_configuration() {
     fn run(allow_long: bool) -> (i64, String) {

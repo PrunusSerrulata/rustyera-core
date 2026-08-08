@@ -87,6 +87,9 @@ fn submitted_text_value(
     let value = if use_default {
         pending.wait.default_value.as_ref().map(protocol_to_vm)
     } else {
+        None
+    }
+    .or_else(|| {
         if pending.wait.one_input && !allow_long_activation {
             text.truncate(text.chars().next().map_or(0, char::len_utf8));
         }
@@ -97,7 +100,7 @@ fn submitted_text_value(
             WaitKind::StringValue | WaitKind::StringButton => Some(VmValue::String(text)),
             _ => None,
         }
-    }?;
+    })?;
     submission_matches_wait(pending, value)
 }
 
