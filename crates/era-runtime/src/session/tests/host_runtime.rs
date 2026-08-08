@@ -30,7 +30,8 @@ fn audio_commands_project_canonical_sound_directory_resources() {
                     relative_path: "main.erb".into(),
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\nPLAYBGM \"theme.mp3\"\nWAIT\nRETURN\n".into(),
+                        "@SYSTEM_TITLE\nPLAYBGM \"theme.mp3\"\nPLAYSOUND \"door.mp3\"\nSETSOUNDVOLUME 25\nPLAYSOUND \"knock.mp3\"\nSTOPSOUND\nWAIT\nRETURN\n"
+                            .into(),
                     ),
                     content_hash: None,
                 },
@@ -38,6 +39,18 @@ fn audio_commands_project_canonical_sound_directory_resources() {
                     relative_path: "sound/theme.mp3".into(),
                     category: FileCategory::Resource,
                     payload: FilePayload::Bytes(ProtocolBytes::new(vec![1, 2, 3])),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "sound/door.mp3".into(),
+                    category: FileCategory::Resource,
+                    payload: FilePayload::Bytes(ProtocolBytes::new(vec![4, 5, 6])),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "sound/knock.mp3".into(),
+                    category: FileCategory::Resource,
+                    payload: FilePayload::Bytes(ProtocolBytes::new(vec![7, 8, 9])),
                     content_hash: None,
                 },
             ],
@@ -57,36 +70,59 @@ fn audio_commands_project_canonical_sound_directory_resources() {
     for _ in 0..16 {
         session.drive(RuntimeDriveBudget::default()).unwrap();
         messages.extend(drain(&mut session));
-        if messages
+        let audio_effects = messages
             .iter()
-            .any(|message| matches!(message, RuntimeMessage::EffectBatch(_)))
-        {
+            .filter_map(|message| match message {
+                RuntimeMessage::EffectBatch(batch) => Some(batch.effects.len()),
+                _ => None,
+            })
+            .sum::<usize>();
+        if audio_effects >= 5 {
             break;
         }
     }
 
+    assert_audio_effect(
+        &messages,
+        1,
+        AudioEffectAction::Play,
+        Some("sound/theme.mp3"),
+    );
+    for resource in ["sound/door.mp3", "sound/knock.mp3"] {
+        assert_audio_effect(&messages, 0, AudioEffectAction::Play, Some(resource));
+    }
+    for action in [AudioEffectAction::SetVolume, AudioEffectAction::Stop] {
+        assert_audio_effect(&messages, 0, action, None);
+    }
+    let audio = session.presentation.snapshot().audio;
+    assert_eq!(audio.len(), 1);
+    assert_eq!(audio[0].channel_id, 1);
+    assert_eq!(audio[0].resource_id, "sound/theme.mp3");
+    assert_eq!(audio[0].volume_millionths, 1_000_000);
+    assert!(audio[0].playing);
+}
+
+fn assert_audio_effect(
+    messages: &[RuntimeMessage],
+    channel_id: u64,
+    action: AudioEffectAction,
+    resource_id: Option<&str>,
+) {
     assert!(
         messages.iter().any(|message| matches!(
             message,
             RuntimeMessage::EffectBatch(batch)
-                if matches!(
-                    &batch.effects[0].kind,
-                    EffectKind::Audio(AudioEffect {
-                        action: AudioEffectAction::Play,
-                        resource_id: Some(resource),
-                        ..
-                    }) if resource == "sound/theme.mp3"
-                )
+                if batch.effects.iter().any(|effect| matches!(
+                    &effect.kind,
+                    EffectKind::Audio(audio)
+                        if audio.channel_id == channel_id
+                            && audio.action == action
+                            && resource_id.is_none_or(|expected| {
+                                audio.resource_id.as_deref() == Some(expected)
+                            })
+                ))
         )),
-        "{messages:#?}"
-    );
-    assert!(
-        session
-            .presentation
-            .snapshot()
-            .audio
-            .iter()
-            .any(|audio| { audio.playing && audio.resource_id == "sound/theme.mp3" })
+        "missing channel {channel_id} {action:?} audio effect for {resource_id:?}: {messages:#?}"
     );
 }
 

@@ -3008,9 +3008,13 @@ impl RuntimeSession {
                     VmHostCompletion::Ready(HostReady::empty()),
                 );
             };
-            self.presentation.set_audio(resource.clone(), bgm, true);
+            if bgm {
+                self.presentation.play_bgm(resource.clone());
+            }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
-            self.emit_presentation()?;
+            if bgm {
+                self.emit_presentation()?;
+            }
             if self.presentation.projects_audio() && self.client_audio_available {
                 return self.emit_effect(EffectKind::Audio(AudioEffect {
                     channel_id: u64::from(bgm),
@@ -3027,9 +3031,13 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "STOPBGM" | "STOPSOUND") {
             let bgm = name == "STOPBGM";
-            self.presentation.set_audio(String::new(), bgm, false);
+            if bgm {
+                self.presentation.stop_bgm();
+            }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
-            self.emit_presentation()?;
+            if bgm {
+                self.emit_presentation()?;
+            }
             if self.presentation.projects_audio() && self.client_audio_available {
                 return self.emit_effect(EffectKind::Audio(AudioEffect {
                     channel_id: u64::from(bgm),
@@ -3047,9 +3055,13 @@ impl RuntimeSession {
         if matches!(name.as_str(), "SETBGMVOLUME" | "SETSOUNDVOLUME") {
             let bgm = name == "SETBGMVOLUME";
             let volume = integer_argument_value(&request.arguments, 0)?;
-            self.presentation.set_audio_volume(bgm, volume);
+            if bgm {
+                self.presentation.set_bgm_volume(volume);
+            }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
-            self.emit_presentation()?;
+            if bgm {
+                self.emit_presentation()?;
+            }
             if self.presentation.projects_audio() && self.client_audio_available {
                 return self.emit_effect(EffectKind::Audio(AudioEffect {
                     channel_id: u64::from(bgm),

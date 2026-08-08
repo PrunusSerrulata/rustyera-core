@@ -135,7 +135,7 @@ fn presentation_deltas_replay_to_the_same_visible_state_as_a_snapshot() {
     model.set_tooltip_delay(250).unwrap();
     model.set_resource_replay(ResourceReplay::default());
     model.add_background("background".into(), 2, 128);
-    model.set_audio("sound".into(), false, true);
+    model.play_bgm("sound".into());
     model.append_html_island(erabasic_html::parse_document("<b>top</b>").unwrap());
     model.set_button_generation(1);
     let PresentationUpdate::Delta(delta) = model.next_update() else {
@@ -265,7 +265,7 @@ fn style_and_media_are_canonical_but_capability_projected() {
     model.append_print_text("styled".into(), false, true);
     model.append_html(erabasic_html::parse_document("<b>fallback</b>").unwrap());
     model.append_image("image.png".into(), Some("image".into()));
-    model.set_audio("sound.ogg".into(), false, true);
+    model.play_bgm("sound.ogg".into());
 
     let fallback = model.snapshot();
     assert!(fallback.audio.is_empty());

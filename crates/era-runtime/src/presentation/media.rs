@@ -4,31 +4,31 @@ use era_runtime_protocol::{
 };
 
 impl PresentationModel {
-    pub(crate) fn set_audio(&mut self, resource_id: String, bgm: bool, playing: bool) {
-        let channel_id = u64::from(bgm);
-        self.audio.retain(|state| state.channel_id != channel_id);
-        if playing {
-            self.audio.push(AudioState {
-                channel_id,
-                resource_id,
-                repeat_count: if bgm { -1 } else { 1 },
-                volume_millionths: 1_000_000,
-                playing: true,
-                revision: self.revision.saturating_add(1),
-            });
-        }
+    pub(crate) fn play_bgm(&mut self, resource_id: String) {
+        self.audio.clear();
+        self.audio.push(AudioState {
+            channel_id: 1,
+            resource_id,
+            repeat_count: -1,
+            volume_millionths: 1_000_000,
+            playing: true,
+            revision: self.revision.saturating_add(1),
+        });
         self.delivery.dirty.audio = true;
         self.bump();
     }
 
-    pub(crate) fn set_audio_volume(&mut self, bgm: bool, volume: i64) {
-        let channel_id = u64::from(bgm);
+    pub(crate) fn stop_bgm(&mut self) {
+        self.audio.clear();
+        self.delivery.dirty.audio = true;
+        self.bump();
+    }
+
+    pub(crate) fn set_bgm_volume(&mut self, volume: i64) {
         let volume = volume.clamp(0, 100);
         for state in &mut self.audio {
-            if state.channel_id == channel_id || (!bgm && state.channel_id != 1) {
-                state.volume_millionths = u32::try_from(volume).unwrap_or_default() * 10_000;
-                state.revision = self.revision.saturating_add(1);
-            }
+            state.volume_millionths = u32::try_from(volume).unwrap_or_default() * 10_000;
+            state.revision = self.revision.saturating_add(1);
         }
         self.delivery.dirty.audio = true;
         self.bump();
