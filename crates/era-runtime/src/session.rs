@@ -403,6 +403,7 @@ pub struct RuntimeSession {
     hotkey_state: Vec<i64>,
     key_macros: KeyMacros,
     queued_input: VecDeque<(String, bool)>,
+    deferred_input_completion: Option<InputSubmission>,
     text_box: String,
     text_box_layout: TextBoxLayout,
     flow_input_enabled: bool,

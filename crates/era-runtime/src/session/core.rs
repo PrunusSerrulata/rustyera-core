@@ -102,6 +102,7 @@ impl RuntimeSession {
             hotkey_state: Vec::new(),
             key_macros: KeyMacros::default(),
             queued_input: VecDeque::new(),
+            deferred_input_completion: None,
             text_box: String::new(),
             text_box_layout: TextBoxLayout::default(),
             flow_input_enabled: false,
@@ -246,7 +247,7 @@ impl RuntimeSession {
         let mut transitions = 0;
         let mut instructions = 0;
         while transitions < transition_limit {
-            if let Some((message_id, message)) = self.inbound.pop_front() {
+            if let Some((message_id, message)) = self.take_next_inbound() {
                 match message {
                     InboundMessage::Runtime(message) => self.handle_message(message_id, message)?,
                     InboundMessage::Debug(message) => {
@@ -289,11 +290,15 @@ impl RuntimeSession {
                 if self.operations.active_input().is_some()
                     && !vm.has_runnable_fibers()
                     && self.phase == RuntimePhase::Running
+                    && self.deferred_input_completion.is_none()
                 {
                     self.set_phase(RuntimePhase::WaitingInput)?;
                 }
                 let has_runnable_fibers = vm.has_runnable_fibers();
                 self.vm = Some(vm);
+                if let Some(submission) = self.deferred_input_completion.take() {
+                    self.finish_input(submission, false)?;
+                }
                 transitions += 1;
                 // A synchronous host call temporarily makes its fiber idle, but handling the
                 // returned event immediately makes it runnable again. Keep servicing such calls
@@ -332,6 +337,41 @@ impl RuntimeSession {
             runtime_transitions: transitions,
             queued_envelopes: u32::try_from(self.outbound.len()).unwrap_or(u32::MAX),
         })
+    }
+
+    fn take_next_inbound(&mut self) -> Option<(u64, InboundMessage)> {
+        let timer_is_next = matches!(
+            self.inbound.front(),
+            Some((_, InboundMessage::Runtime(RuntimeMessage::AdvanceTime(_))))
+        );
+        if timer_is_next {
+            let matching_input = self.operations.active_input().and_then(|pending| {
+                self.inbound
+                    .iter()
+                    .position(|(_, message)| {
+                        !matches!(
+                            message,
+                            InboundMessage::Runtime(RuntimeMessage::AdvanceTime(_))
+                        )
+                    })
+                    .filter(|&index| {
+                        matches!(
+                            &self.inbound[index].1,
+                            InboundMessage::Runtime(RuntimeMessage::Input(input))
+                                if input.wait_id == pending.wait.wait_id
+                                    && input.token == pending.wait.submission_token
+                        )
+                    })
+            });
+            if let Some(index) = matching_input {
+                // A timer sampled before a user action can be queued first even though both
+                // commands are present for the same visible wait. Preserve wait identity and
+                // idempotency while giving every matching user-input intent priority over that
+                // automatic transition, just as a UI event cancels the current timer tick.
+                return self.inbound.remove(index);
+            }
+        }
+        self.inbound.pop_front()
     }
 
     #[must_use]

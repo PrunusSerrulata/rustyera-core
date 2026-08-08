@@ -8,6 +8,12 @@ use era_runtime_protocol::{
 use std::collections::BTreeSet;
 
 impl PresentationModel {
+    pub(crate) fn has_wait(&self, wait_id: u64) -> bool {
+        self.input_wait
+            .as_ref()
+            .is_some_and(|wait| wait.wait_id == wait_id)
+    }
+
     pub(crate) fn set_wait(&mut self, wait: Option<InputWait>) {
         self.input_wait = wait;
         self.delivery.dirty.input_wait = true;

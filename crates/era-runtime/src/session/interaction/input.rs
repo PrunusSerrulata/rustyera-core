@@ -79,20 +79,13 @@ impl RuntimeSession {
                 "input wait identity is stale",
             );
         }
-        let observed_time = self.observe_frontend_time(input.monotonic_time_ns);
+        // An input event and a timer event are ordered commands. If this wait is
+        // still active when its matching input arrives, the user action wins;
+        // only an explicit AdvanceTime command may complete it as a timeout.
+        // Reinterpreting the input's timestamp as a timer silently discarded
+        // every kind of input at transient-wait boundaries.
+        self.observe_frontend_time(input.monotonic_time_ns);
         let pending = self.operations.active_input().expect("checked above");
-        if pending
-            .wait
-            .deadline_ns
-            .is_some_and(|deadline| observed_time > deadline)
-        {
-            return self.advance_time(
-                message_id,
-                AdvanceTime {
-                    monotonic_time_ns: input.monotonic_time_ns,
-                },
-            );
-        }
         if let InputIntent::CommitText(command) = &input.intent
             && command.len() > 1
             && command.starts_with('@')

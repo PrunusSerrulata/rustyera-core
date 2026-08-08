@@ -308,6 +308,7 @@ impl RuntimeSession {
         self.hotkey_state = payload.hotkey_state;
         self.key_macros = payload.key_macros;
         self.queued_input.clear();
+        self.deferred_input_completion = None;
         self.text_box = payload.text_box;
         self.text_box_layout = payload.text_box_layout;
         self.flow_input_enabled = payload.flow_input_enabled;
@@ -474,6 +475,7 @@ impl RuntimeSession {
             self.presentation.configure_project(project);
         }
         self.queued_input.clear();
+        self.deferred_input_completion = None;
         self.command_intents.clear();
         self.reusable_system_intents.clear();
         self.undo_checkpoint = None;

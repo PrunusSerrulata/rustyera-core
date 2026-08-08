@@ -27,6 +27,33 @@ fn flow_input_configuration_shapes_system_waits() {
 }
 
 #[test]
+fn message_skip_only_completes_non_value_waits_without_a_stop_barrier() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    let mut wait = session.system_wait(InteractionToken { epoch: 0, id: 1 });
+    wait.system_input = false;
+    for kind in [WaitKind::EnterKey, WaitKind::AnyKey, WaitKind::Void] {
+        wait.kind = kind;
+        wait.stop_message_skip = false;
+        assert!(message_skip_submission(&wait).is_some(), "{kind:?}");
+    }
+    for kind in [
+        WaitKind::IntegerValue,
+        WaitKind::StringValue,
+        WaitKind::AnyValue,
+        WaitKind::IntegerButton,
+        WaitKind::StringButton,
+        WaitKind::PrimitiveMouseKey,
+    ] {
+        wait.kind = kind;
+        wait.stop_message_skip = false;
+        assert!(message_skip_submission(&wait).is_none(), "{kind:?}");
+    }
+    wait.kind = WaitKind::EnterKey;
+    wait.stop_message_skip = true;
+    assert!(message_skip_submission(&wait).is_none());
+}
+
+#[test]
 fn frontend_monotonic_time_rebases_onto_restored_logical_time() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     session.logical_time_ns = 100;

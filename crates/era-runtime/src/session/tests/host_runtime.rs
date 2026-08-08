@@ -127,6 +127,193 @@ fn assert_audio_effect(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn one_message_skip_input_drains_non_value_waits_until_forcewait() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "message-skip-test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["en".into()],
+            configuration_profile: None,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "message-skip.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nPRINTL first\nWAIT\nPRINTL second\nWAITANYKEY\nPRINTL third\nTWAIT 100, 1\nPRINTL fourth\nFORCEWAIT\nPRINTL after\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    for _ in 0..16 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        if session.operations.active_input().is_some() {
+            break;
+        }
+    }
+    drain(&mut session);
+    let (initial_wait_id, initial_token) = {
+        let pending = session.operations.active_input().unwrap();
+        (pending.wait.wait_id, pending.wait.submission_token)
+    };
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id: initial_wait_id,
+            token: initial_token,
+            monotonic_time_ns: 0,
+            intent: InputIntent::Enter,
+            message_skip: true,
+        }),
+    );
+
+    let mut messages = Vec::new();
+    for _ in 0..32 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        messages.extend(drain(&mut session));
+        if session
+            .operations
+            .active_input()
+            .is_some_and(|input| input.wait.stop_message_skip)
+        {
+            break;
+        }
+    }
+
+    let pending = session.operations.active_input().expect("force wait");
+    assert!(pending.wait.stop_message_skip);
+    assert!(!session.message_skip);
+    let output = session.presentation.log_text(false);
+    assert!(output.contains("fourth"));
+    assert!(!output.contains("after"));
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::CommandRejected(_)))
+    );
+    assert!(!messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::WaitChanged(WaitChange::Opened(wait)) if !wait.stop_message_skip
+    )));
+    assert_eq!(
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                RuntimeMessage::WaitChanged(WaitChange::Closed(wait_id)) => Some(*wait_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![initial_wait_id]
+    );
+}
+
+#[test]
+fn message_skip_stops_before_a_value_wait() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "message-skip-value-test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["en".into()],
+            configuration_profile: None,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "message-skip-value.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nWAIT\nINPUT\nPRINTL after\nRETURN\n".into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    for _ in 0..16 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        if session.operations.active_input().is_some() {
+            break;
+        }
+    }
+    drain(&mut session);
+    let (wait_id, token) = {
+        let pending = session.operations.active_input().unwrap();
+        (pending.wait.wait_id, pending.wait.submission_token)
+    };
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id,
+            token,
+            monotonic_time_ns: 0,
+            intent: InputIntent::Enter,
+            message_skip: true,
+        }),
+    );
+    for _ in 0..16 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        if session
+            .operations
+            .active_input()
+            .is_some_and(|input| input.wait.kind == WaitKind::IntegerValue)
+        {
+            break;
+        }
+    }
+    let pending = session.operations.active_input().expect("value wait");
+    assert_eq!(pending.wait.kind, WaitKind::IntegerValue);
+    assert!(!session.message_skip);
+    assert!(!session.presentation.log_text(false).contains("after"));
+}
+
+#[test]
 fn project_load_start_and_print_cross_the_message_boundary() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(
@@ -823,7 +1010,7 @@ fn printform_and_printc_family_preserve_reference_semantics() {
 }
 
 #[test]
-fn typed_input_updates_result_and_sixth_argument_honors_message_skip() {
+fn matching_timed_input_wins_over_queued_timer_and_starts_message_skip() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(
         &mut session,
@@ -882,13 +1069,21 @@ fn typed_input_updates_result_and_sixth_argument_honors_message_skip() {
     );
     assert_eq!(wait.stability, WaitStability::Transient);
 
+    session.observe_frontend_time(0);
     submit(
         &mut session,
         3,
+        RuntimeMessage::AdvanceTime(AdvanceTime {
+            monotonic_time_ns: 2_000_000_000,
+        }),
+    );
+    submit(
+        &mut session,
+        4,
         RuntimeMessage::Input(FrontendInput {
             wait_id: wait.wait_id,
             token: wait.submission_token,
-            monotonic_time_ns: 10,
+            monotonic_time_ns: 2_000_000_000,
             intent: InputIntent::CommitText("42".into()),
             message_skip: true,
         }),

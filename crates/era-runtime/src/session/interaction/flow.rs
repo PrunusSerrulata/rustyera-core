@@ -597,7 +597,7 @@ impl RuntimeSession {
         }
         if let Some(submission) = self.replay_submission(&pending.wait) {
             self.operations.activate_input(pending);
-            return self.finish_input(submission, false);
+            return self.finish_or_defer_automatic_input(submission);
         }
         if self.undo_replay.is_none() {
             self.undo_token = None;
@@ -612,6 +612,23 @@ impl RuntimeSession {
                     VmValue::Integer(self.flow_input_default)
                 }
             });
+        let automatic_message_skip = self
+            .message_skip
+            .then(|| message_skip_submission(&pending.wait))
+            .flatten();
+        if pending.wait.stop_message_skip
+            || (self.message_skip
+                && automatic_message_skip.is_none()
+                && automatic_system_value.is_none())
+        {
+            self.message_skip = false;
+        }
+        if let Some(submission) =
+            automatic_message_skip.or_else(|| automatic_system_value.map(InputSubmission::Value))
+        {
+            self.operations.activate_input(pending);
+            return self.finish_or_defer_automatic_input(submission);
+        }
         let count = self.presentation.pending_auto_button_values().len();
         let tokens = (0..count)
             .map(|_| self.allocate_interaction())
@@ -630,9 +647,6 @@ impl RuntimeSession {
         )?;
         self.operations.activate_input(pending);
         self.emit_presentation()?;
-        if let Some(value) = automatic_system_value {
-            return self.finish_input(InputSubmission::Value(value), false);
-        }
         if pause_runtime {
             self.set_phase(RuntimePhase::WaitingInput)
         } else {
@@ -640,7 +654,26 @@ impl RuntimeSession {
         }
     }
 
+    fn finish_or_defer_automatic_input(
+        &mut self,
+        submission: InputSubmission,
+    ) -> Result<(), RuntimeError> {
+        if self.vm.is_some() {
+            self.finish_input(submission, false)
+        } else {
+            debug_assert!(self.deferred_input_completion.is_none());
+            self.deferred_input_completion = Some(submission);
+            Ok(())
+        }
+    }
+
     pub(in super::super) fn close_wait(&mut self, wait_id: u64) -> Result<(), RuntimeError> {
+        // Runtime-owned replay and message-skip completions never publish their
+        // intermediate waits. Keep the wire lifecycle paired by closing only a
+        // wait that was installed in the canonical presentation.
+        if !self.presentation.has_wait(wait_id) {
+            return Ok(());
+        }
         self.presentation.set_wait(None);
         self.emit(
             RuntimeMessage::WaitChanged(WaitChange::Closed(wait_id)),

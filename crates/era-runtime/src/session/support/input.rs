@@ -78,6 +78,23 @@ pub(in super::super) fn input_value(
     }
 }
 
+pub(in super::super) fn message_skip_submission(wait: &InputWait) -> Option<InputSubmission> {
+    if wait.stop_message_skip {
+        return None;
+    }
+    match wait.kind {
+        WaitKind::EnterKey | WaitKind::AnyKey | WaitKind::Void => {
+            Some(InputSubmission::Value(VmValue::Integer(0)))
+        }
+        WaitKind::IntegerValue
+        | WaitKind::StringValue
+        | WaitKind::AnyValue
+        | WaitKind::IntegerButton
+        | WaitKind::StringButton
+        | WaitKind::PrimitiveMouseKey => None,
+    }
+}
+
 fn submitted_text_value(
     pending: &PendingInput,
     mut text: String,
