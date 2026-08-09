@@ -323,6 +323,123 @@ fn projection_attaches_runtime_columns_to_nested_and_fallback_text() {
 }
 
 #[test]
+fn projection_preserves_internal_spaces_across_adjacent_runs_with_the_same_style() {
+    let projected = super::projection::project_runs(
+        vec![
+            plain_text("A ".into(), 19_000),
+            plain_text(String::new(), 19_000),
+            plain_text(" B C".into(), 19_000),
+        ],
+        false,
+        false,
+        19_000,
+        false,
+        false,
+    );
+    let mut layouts = Vec::new();
+    collect_text_layouts(&projected, &mut layouts);
+
+    assert_eq!(
+        layouts,
+        [
+            ("A", 1),
+            (" ", 1),
+            ("", 0),
+            (" ", 1),
+            ("B", 1),
+            (" ", 1),
+            ("C", 1),
+        ]
+    );
+}
+
+#[test]
+fn projection_only_suppresses_alignment_space_before_double_vertical_edge() {
+    let mut changed_style = super::projection::plain_text("B C ".into(), 19_000);
+    let DisplayRun::Text { style, .. } = &mut changed_style else {
+        panic!("plain_text must create a text run")
+    };
+    style.foreground.red = 1;
+    let mut double_edge = super::projection::plain_text("║".into(), 19_000);
+    let DisplayRun::Text { style, .. } = &mut double_edge else {
+        panic!("plain_text must create a text run")
+    };
+    style.foreground.blue = 1;
+    let system_reference = SystemTextRef {
+        key: SystemTextKey::PressAnyKey,
+        arguments: Vec::new(),
+    };
+    let projected = super::projection::project_runs(
+        vec![
+            plain_text("A ".into(), 19_000),
+            changed_style,
+            DisplayRun::Button {
+                runs: vec![plain_text("D ".into(), 19_000)],
+                token: InteractionToken { epoch: 1, id: 1 },
+                title: None,
+                hover_style: None,
+                value: ProtocolValue::Integer(1),
+                generation: 0,
+                enabled: true,
+            },
+            plain_text("Q ".into(), 19_000),
+            plain_text("F ".into(), 19_000),
+            double_edge,
+            DisplayRun::Text {
+                text: "E ".into(),
+                style: super::projection::default_style(),
+                system_text: Some(system_reference.clone()),
+            },
+        ],
+        false,
+        false,
+        19_000,
+        false,
+        false,
+    );
+    let mut layouts = Vec::new();
+    collect_text_layouts(&projected, &mut layouts);
+
+    assert_eq!(
+        layouts,
+        [
+            ("A", 1),
+            (" ", 1),
+            ("B", 1),
+            (" ", 1),
+            ("C", 1),
+            (" ", 1),
+            ("D", 1),
+            (" ", 1),
+            ("Q", 1),
+            (" ", 1),
+            ("F", 1),
+            (" ", 0),
+            ("║", 2),
+            ("E", 1),
+            (" ", 1),
+        ]
+    );
+    let tail = &projected[projected.len() - 2..];
+    assert!(matches!(
+        tail,
+        [
+            DisplayRun::TextLayout {
+                text,
+                system_text: Some(reference),
+                ..
+            },
+            DisplayRun::TextLayout {
+                text: space,
+                system_text: None,
+                columns: 1,
+                ..
+            }
+        ] if text == "E" && reference == &system_reference && space == " "
+    ));
+}
+
+#[test]
 fn plain_separator_fallback_fills_logical_columns_with_ambiguous_patterns() {
     let projected = super::projection::project_runs(
         vec![DisplayRun::Separator {

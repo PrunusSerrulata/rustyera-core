@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
 
 use era_runtime_protocol::{
@@ -481,7 +481,8 @@ pub(super) fn project_runs(
     graphics: bool,
 ) -> Vec<DisplayRun> {
     let mut projected = Vec::new();
-    for run in runs {
+    let mut runs = VecDeque::from(runs);
+    while let Some(run) = runs.pop_front() {
         match run {
             DisplayRun::Text {
                 text,
@@ -493,7 +494,17 @@ pub(super) fn project_runs(
                 style,
                 system_text,
                 ..
-            } => extend_text_layouts(&mut projected, text, style, system_text),
+            } => {
+                let suppress_alignment_space = system_text.is_none()
+                    && text_fragment_ends_before_double_vertical_edge(&style, &runs);
+                extend_text_layouts(
+                    &mut projected,
+                    text,
+                    style,
+                    system_text,
+                    suppress_alignment_space,
+                );
+            }
             DisplayRun::Button {
                 runs,
                 token,
@@ -644,21 +655,77 @@ fn text_layout(
     }
 }
 
+fn text_fragment_ends_before_double_vertical_edge(
+    style: &TextStyle,
+    remaining: &VecDeque<DisplayRun>,
+) -> bool {
+    for run in remaining {
+        match run {
+            DisplayRun::Text {
+                text,
+                style: next_style,
+                system_text: None,
+            }
+            | DisplayRun::TextLayout {
+                text,
+                style: next_style,
+                system_text: None,
+                ..
+            } if next_style == style => {
+                if !text.is_empty() {
+                    return false;
+                }
+            }
+            DisplayRun::Text {
+                text,
+                system_text: None,
+                ..
+            }
+            | DisplayRun::TextLayout {
+                text,
+                system_text: None,
+                ..
+            } => return text.starts_with('║'),
+            _ => return false,
+        }
+    }
+    false
+}
+
 fn extend_text_layouts(
     output: &mut Vec<DisplayRun>,
     text: String,
     style: TextStyle,
     system_text: Option<era_runtime_protocol::SystemTextRef>,
+    suppress_trailing_ascii_spaces: bool,
 ) {
     if text.is_empty() {
         output.push(text_layout(text, style, system_text));
         return;
     }
     let mut system_text = system_text;
-    output.extend(
-        text.graphemes(true)
-            .map(|grapheme| text_layout(grapheme.to_owned(), style.clone(), system_text.take())),
-    );
+    let trailing_ascii_spaces = if suppress_trailing_ascii_spaces {
+        text.chars()
+            .rev()
+            .take_while(|character| *character == ' ')
+            .count()
+    } else {
+        0
+    };
+    let grapheme_count = text.graphemes(true).count();
+    output.extend(text.graphemes(true).enumerate().map(|(index, grapheme)| {
+        let mut layout = text_layout(grapheme.to_owned(), style.clone(), system_text.take());
+        // eraTW uses a separately styled ASCII spacer as an alignment marker
+        // before the shrine's double vertical edge. It must not create a
+        // half-cell between the full-width map columns.
+        if grapheme == " " && index >= grapheme_count.saturating_sub(trailing_ascii_spaces) {
+            let DisplayRun::TextLayout { columns, .. } = &mut layout else {
+                unreachable!("text_layout always returns projected text")
+            };
+            *columns = 0;
+        }
+        layout
+    }));
 }
 
 pub(crate) fn display_value(value: &VmValue) -> String {
