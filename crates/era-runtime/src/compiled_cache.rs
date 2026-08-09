@@ -102,8 +102,8 @@ pub(crate) struct CompiledSnapshotMetadata {
     print_c_per_line: u32,
     print_c_length: u32,
     configuration_profile: ConfigurationClientProfile,
-    configuration: erabasic_config::ConfigStore,
-    editable_configuration: erabasic_config::ConfigStore,
+    configuration: era_config::ConfigStore,
+    editable_configuration: era_config::ConfigStore,
     extensions: std::collections::BTreeMap<String, ExtensionDeclaration>,
 }
 

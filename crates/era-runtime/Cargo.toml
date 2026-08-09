@@ -14,7 +14,7 @@ erabasic-analyzer = { path = "../erabasic-analyzer" }
 erabasic-ast = { path = "../erabasic-ast" }
 erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-compiler = { path = "../erabasic-compiler" }
-erabasic-config = { path = "../erabasic-config" }
+era-config = { path = "../era-config" }
 erabasic-csv = { path = "../erabasic-csv" }
 erabasic-data = { path = "../erabasic-data" }
 erabasic-html = { path = "../erabasic-html" }

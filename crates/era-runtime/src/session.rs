@@ -513,7 +513,7 @@ struct PendingConfigurationUpdate {
     expected_source_digest: ProtocolBytes,
     prepared_source_digest: ProtocolBytes,
     contents: String,
-    values: erabasic_config::ConfigStore,
+    values: era_config::ConfigStore,
     changed_codes: BTreeSet<String>,
 }
 

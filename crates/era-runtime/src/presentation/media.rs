@@ -216,7 +216,7 @@ impl PresentationModel {
         &mut self,
         project: &crate::project::NormalizedProjectSnapshot,
     ) {
-        use erabasic_config::ConfigValue;
+        use era_config::ConfigValue;
 
         let integer = |code| match project.configuration.get_code(code) {
             Some(ConfigValue::Integer(value)) => Some(*value),

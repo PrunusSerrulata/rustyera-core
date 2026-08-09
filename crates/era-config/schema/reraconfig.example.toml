@@ -1,0 +1,309 @@
+# RustyEra 跨客户端项目配置示例。所有字段都可以省略，省略时使用注释中的默认值。
+
+[meta]
+# 类型：整数；当前仅支持 1。
+schema_version = 1
+# 类型：字符串数组；列出的设置不可由客户端设置面板修改。
+locked_settings = []
+
+[application]
+# 用途：允许同时启动多个实例；类型：布尔
+allow_multiple_instances = true
+
+[audio]
+# 用途：设置游戏主音量百分比；类型：整数；范围：0..=100
+volume = 100
+
+[clipboard]
+# 用途：启用游戏文本自动复制；类型：布尔
+enabled = false
+# 用途：复制前移除尖括号标签；类型：布尔
+strip_angle_bracket_tags = false
+# 用途：设置被移除标签的替换文本；类型：字符串
+tag_replacement = "."
+# 用途：只复制新增行；类型：布尔
+new_lines_only = true
+# 用途：刷新画面时清空复制缓冲；类型：布尔
+clear_on_screen_refresh = false
+# 用途：左键单击时触发复制；类型：布尔
+trigger_left_click = true
+# 用途：中键单击时触发复制；类型：布尔
+trigger_middle_click = false
+# 用途：左键双击时触发复制；类型：布尔
+trigger_double_click = false
+# 用途：进入 WAIT 时触发复制；类型：布尔
+trigger_wait = false
+# 用途：进入 INPUT 时触发复制；类型：布尔
+trigger_input = true
+# 用途：限制一次复制的行数；类型：整数；范围：-2147483648..=2147483647
+lines_per_copy = 25
+# 用途：设置复制环形缓冲容量；类型：整数；范围：1..=2147483647
+buffer_lines = 300
+# 用途：设置复制历史每次滚动行数；类型：整数；范围：-2147483648..=2147483647
+scroll_lines = 5
+# 用途：设置两次剪贴板写入的最短间隔；类型：整数；范围：1..=2147483647
+minimum_interval_ms = 800
+
+[color]
+# 用途：设置默认文字颜色；类型：RGB 整数数组；每个分量范围：0..=255
+text = [192, 192, 192]
+# 用途：设置默认背景颜色；类型：RGB 整数数组；每个分量范围：0..=255
+background = [0, 0, 0]
+# 用途：设置选中项文字颜色；类型：RGB 整数数组；每个分量范围：0..=255
+selection = [255, 255, 0]
+# 用途：设置历史日志文字颜色；类型：RGB 整数数组；每个分量范围：0..=255
+history = [192, 192, 192]
+
+[compatibility]
+# 用途：CALLNAME 为空时回退到 NAME；类型：布尔
+callname_falls_back_to_name = false
+# 用途：使用 eramaker RAND 兼容语义；类型：布尔
+eramaker_rand = false
+# 用途：始终在新行执行 DRAWLINE 的旧别名；类型：布尔
+drawline_starts_new_line = false
+# 用途：函数和属性名称区分大小写；类型：布尔
+function_names_case_sensitive = false
+# 用途：重现 1739 版以前的非按钮换行；类型：布尔
+legacy_nonbutton_wrapping = false
+# 用途：选择传统东亚编码语义；类型：字符串枚举；可选值："japanese"、"korean"、"simplified_chinese"、"traditional_chinese"
+east_asian_language = "japanese"
+# 用途：启用 SP 角色兼容行为；类型：布尔
+sp_characters = false
+# 用途：使用 eramaker TIMES 计算语义；类型：布尔
+eramaker_times = false
+# 用途：要求显式提供角色变量参数；类型：布尔
+require_character_variable_arguments = false
+# 用途：字符串变量赋值必须使用字符串表达式；类型：布尔
+require_string_expression_assignment = false
+# 用途：VARSIZE 使用 ERD 的一基维度编号；类型：布尔
+erd_varsize_dimensions = false
+
+[debug]
+# 用途：允许执行调试命令；类型：布尔
+commands_enabled = false
+# 用途：执行调试命令时修改 MASTER 名称；类型：布尔
+rename_master = true
+
+[debug_window]
+# 用途：启动时显示调试窗口；类型：布尔
+show_on_start = true
+# 用途：调试窗口保持置顶；类型：布尔
+always_on_top = true
+# 用途：设置调试窗口宽度；类型：整数；范围：-2147483648..=2147483647
+width = 400
+# 用途：设置调试窗口高度；类型：整数；范围：-2147483648..=2147483647
+height = 300
+# 用途：应用保存的调试窗口位置；类型：布尔
+use_saved_position = false
+# 用途：设置调试窗口横坐标；类型：整数；范围：-2147483648..=2147483647
+position_x = 0
+# 用途：设置调试窗口纵坐标；类型：整数；范围：-2147483648..=2147483647
+position_y = 0
+
+[diagnostics]
+# 用途：过滤低于阈值的加载诊断；类型：整数；范围：0..=255
+minimum_warning_level = 1
+# 用途：忽略未调用函数的处理和警告；类型：布尔
+ignore_uncalled_functions = true
+# 用途：设置找不到函数时的警告策略；类型：字符串枚举；可选值："ignore"、"later"、"once"、"display"
+missing_function = "ignore"
+# 用途：设置函数未调用时的警告策略；类型：字符串枚举；可选值："ignore"、"later"、"once"、"display"
+uncalled_function = "ignore"
+# 用途：显示 eramaker 兼容性警告；类型：布尔
+eramaker_compatibility = true
+# 用途：系统函数被覆盖时显示警告；类型：布尔
+system_function_override = true
+# 用途：普通函数重名时显示警告；类型：布尔
+duplicate_normal_functions = false
+# 用途：检查 ERD 标识符与局部变量重名；类型：布尔
+erd_local_identifier_conflict = false
+# 用途：外部插件启用时显示警告；类型：布尔
+external_plugin_enabled = true
+
+[dictionary]
+# 用途：启用 Rikaichan 词典查询；类型：布尔
+enabled = false
+# 用途：设置 Rikaichan 词典路径；类型：字符串
+file_path = "Emuera-Rikai-edict.txt-eucjp"
+# 用途：设置词典弹窗背景颜色；类型：RGB 整数数组；每个分量范围：0..=255
+background_color = [0, 0, 139]
+# 用途：设置词典弹窗文字颜色；类型：RGB 整数数组；每个分量范围：0..=255
+text_color = [255, 255, 255]
+# 用途：高亮当前查询的原文词段；类型：布尔
+highlight_current_phrase = true
+
+[display]
+# 用途：设置目标刷新帧率；类型：整数；范围：-2147483648..=2147483647
+frames_per_second = 5
+# 用途：保留最大跳帧设置；类型：整数；范围：-2147483648..=2147483647
+maximum_skipped_frames = 3
+
+[editor]
+# 用途：设置打开源码的外部编辑器；类型：字符串
+command = "notepad"
+# 用途：设置编辑器行号参数风格；类型：字符串枚举；可选值："sakura"、"terapad"、"emeditor"、"custom"
+argument_style = "custom"
+# 用途：设置传递给编辑器的自定义参数；类型：字符串
+arguments = ""
+
+[file_io]
+# 用途：限制 LOADTEXT 和 SAVETEXT 扩展名；类型：字符串数组
+text_file_extensions = ["txt"]
+
+[input]
+# 用途：允许鼠标点击游戏交互项；类型：布尔
+mouse_enabled = true
+# 用途：启用键盘宏；类型：布尔
+keyboard_macros_enabled = true
+# 用途：允许鼠标向 ONEINPUT 提交多个字符；类型：布尔
+allow_long_oneinput_from_mouse = false
+# 用途：启用 Ctrl+Z 输入撤销；类型：布尔
+undo_enabled = false
+
+[interface]
+# 用途：常态显示客户端菜单；类型：布尔
+menu_visible = true
+# 用途：选择客户端界面语言；类型：字符串
+language = ""
+
+[legacy]
+# 用途：保留旧 CONFIG 英文键输出偏好；类型：布尔
+write_english_config_keys = false
+# 用途：保留旧高速随机算法开关；当前固定使用 SFMT；类型：布尔
+use_new_random = false
+
+[network]
+# 用途：禁止脚本执行联网更新检查；类型：布尔
+disable_update_check = false
+
+[output]
+# 用途：限制物理历史日志行数；类型：整数；范围：500..=2147483647
+history_lines = 1000
+# 用途：设置每行 PRINTC 项数；类型：整数；范围：1..=2147483647
+printc_items_per_line = 5
+# 用途：设置 PRINTC 项的目标字符宽度；类型：整数；范围：1..=2147483647
+printc_item_width = 24
+# 用途：设置每次滚动的行数；类型：整数；范围：1..=2147483647
+scroll_lines = 1
+# 用途：避免在按钮内容中途换行；类型：布尔
+keep_buttons_on_one_line = false
+
+[project]
+# 用途：加载并应用 _Rename.csv；类型：布尔
+use_rename_file = false
+# 用途：加载时显示阶段报告；类型：布尔
+show_loading_report = false
+# 用途：控制加载时预解析参数；类型：字符串枚举；可选值："always"、"once"、"never"
+reduce_arguments_on_load = "never"
+# 用途：递归搜索项目子目录；类型：布尔
+search_subdirectories = false
+# 用途：按文件名稳定排序加载顺序；类型：布尔
+sort_files_by_name = false
+# 用途：保存一次性参数预解析的更新代码；类型：整数；范围：-9223372036854775808..=9223372036854775807
+last_update_code = 0
+# 用途：存在无法解析的行时仍允许启动；类型：布尔
+continue_with_parse_errors = false
+# 用途：加载并应用 ERD 扩展定义；类型：布尔
+erd_enabled = true
+
+[replacement]
+# 用途：启用 replacement 表中的替换设置；类型：布尔
+enabled = true
+# 用途：设置货币单位文本；类型：字符串
+currency_label = "$"
+# 用途：把货币单位显示在金额之前；类型：布尔
+currency_before_amount = true
+# 用途：设置加载提示文本；类型：字符串
+loading_message = "Now Loading..."
+# 用途：设置商店物品容量；类型：整数；范围：-2147483648..=2147483647
+maximum_shop_items = 100
+# 用途：设置 DRAWLINE 使用的文本；类型：字符串
+drawline_text = "-"
+# 用途：设置 BAR 已填充字符；类型：单个 Unicode 字符
+bar_filled_character = "*"
+# 用途：设置 BAR 未填充字符；类型：单个 Unicode 字符
+bar_empty_character = "."
+# 用途：设置新游戏菜单文本；类型：字符串
+new_game_label = "最初からはじめる"
+# 用途：设置读取存档菜单文本；类型：字符串
+load_game_label = "ロードしてはじめる"
+# 用途：设置 COM_ABLE 默认值；类型：整数；范围：-2147483648..=2147483647
+default_com_able = 1
+# 用途：设置 STAIN 等级默认数组；类型：整数数组
+default_stain = [0, 0, 2, 1, 8]
+# 用途：设置时间耗尽提示文本；类型：字符串
+time_up_message = "時間切れ"
+# 用途：设置 EXPLV 阈值数组；类型：整数数组
+default_experience_levels = [0, 1, 4, 20, 50, 200]
+# 用途：设置 PALAMLV 阈值数组；类型：整数数组
+default_palam_levels = [0, 100, 500, 3000, 10000, 30000, 60000, 100000, 150000, 250000]
+# 用途：设置 PBAND 默认值；类型：整数；范围：-9223372036854775808..=9223372036854775807
+default_pband = 4
+# 用途：设置 RELATION 默认值；类型：整数；范围：-9223372036854775808..=9223372036854775807
+default_relation = 0
+
+[runtime]
+# 用途：设置无限循环警告等待时间；类型：整数；范围：-2147483648..=2147483647
+infinite_loop_warning_ms = 5000
+
+[save]
+# 用途：商店事件结束后执行自动保存；类型：布尔
+auto_save = true
+# 用途：设置存档菜单每页槽位数；类型：整数；范围：20..=80
+slots_per_page = 20
+# 用途：把传统存档写入 sav 目录；类型：布尔
+use_sav_directory = false
+# 用途：使用传统二进制存档格式；类型：布尔
+binary_format = false
+# 用途：压缩传统二进制存档；类型：布尔
+compress_binary = false
+
+[script]
+# 用途：名称比较时忽略大小写差异；类型：布尔
+ignore_case = true
+# 用途：允许覆盖系统函数；类型：布尔
+allow_system_function_override = true
+# 用途：把全角空格视为脚本空白；类型：布尔
+full_width_space_is_whitespace = true
+# 用途：允许普通 CALL 调用事件函数；类型：布尔
+allow_calling_event_functions = false
+# 用途：允许省略用户函数的全部参数；类型：布尔
+allow_omitted_function_arguments = false
+# 用途：为字符串参数自动补充 TOSTR；类型：布尔
+auto_convert_function_arguments_to_string = false
+# 用途：不展开 FORM 中的三连符号；类型：布尔
+preserve_triple_symbols_in_form = false
+# 用途：设置续行物理换行的替换文本；类型：字符串
+continuation_newline_replacement = '" "'
+
+[text]
+# 用途：选择文本绘制接口；类型：字符串枚举；可选值："graphics"、"textrenderer"、"winapi"
+drawing_method = "textrenderer"
+# 用途：设置游戏默认字体族；类型：字符串
+font_family = "ＭＳ ゴシック"
+# 用途：设置游戏默认字号；类型：整数；范围：8..=2147483647
+font_size = 18
+# 用途：设置游戏默认行高；类型：整数；范围：8..=2147483647
+line_height = 19
+# 用途：把游戏输出中的全角空格显示为两个半角空格；类型：布尔
+replace_full_width_spaces = false
+# 用途：选择字符列宽计算策略；当前仅保存选项；类型：字符串枚举；可选值："automatic"、"ambiguous_narrow"、"ambiguous_wide"
+character_width_mode = "automatic"
+
+[window]
+# 用途：允许调整窗口大小；类型：布尔
+resizable = true
+# 用途：设置游戏主视口宽度；类型：整数；范围：128..=2147483647
+width = 760
+# 用途：设置游戏主视口高度；类型：整数；范围：128..=2147483647
+height = 480
+# 用途：设置原生窗口起始横坐标；类型：整数；范围：-2147483648..=2147483647
+position_x = 0
+# 用途：设置原生窗口起始纵坐标；类型：整数；范围：-2147483648..=2147483647
+position_y = 0
+# 用途：启动时应用保存的窗口位置；类型：布尔
+use_saved_position = false
+# 用途：启动时最大化原生窗口；类型：布尔
+start_maximized = false
+# 用途：设置原生窗口图标路径；类型：字符串
+icon_path = ""

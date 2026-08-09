@@ -34,7 +34,7 @@ RustyEra 只接受 UTF-8 源码和配置内容，不负责识别或转换 Shift-
 | `erabasic-ast` | 公共 AST、UTF-8 byte span 与稳定诊断结构。 |
 | `erabasic-lexer` | 上下文相关词法分析、终止规则、宏与 FORM 字符串拆分。 |
 | `erabasic-parser` | 表达式、逻辑行、ERH、ERB、预处理器与块结构解析。 |
-| `erabasic-config` | Emuera 配置项的可序列化模型与规范化处理。 |
+| `era-config` | Era 配置项的可序列化模型与规范化处理。 |
 | `erabasic-data` | 项目静态数据、初始化数据与存档加载契约。 |
 | `erabasic-csv` | 只处理前端提交内容的内存 CSV 加载器，不执行文件 I/O。 |
 | `erabasic-hir` | 稳定、可序列化的类型化高级中间表示。 |

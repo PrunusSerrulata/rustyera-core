@@ -1,9 +1,9 @@
+use era_config::{ConfigStore, ConfigValue};
 use era_runtime_protocol::{
     ConfigurationClientProfile, FileCategory, FilePayload, ProtocolDiagnostic, RuntimeLogLevel,
     SourceLocation,
 };
 use erabasic_analyzer::WarningPolicy;
-use erabasic_config::{ConfigStore, ConfigValue};
 use erabasic_data::LegacyEncoding;
 
 use super::{SemanticConfig, inspect_deferred_file, project_diagnostic};
@@ -102,10 +102,8 @@ pub(super) fn parse_configuration(
             if let Err(error) = applied {
                 diagnostics.push(project_diagnostic(
                     match error {
-                        erabasic_config::ConfigParseError::UnknownKey => {
-                            "runtime.unknown_configuration"
-                        }
-                        erabasic_config::ConfigParseError::InvalidValue => {
+                        era_config::ConfigParseError::UnknownKey => "runtime.unknown_configuration",
+                        era_config::ConfigParseError::InvalidValue => {
                             "runtime.invalid_configuration"
                         }
                     },

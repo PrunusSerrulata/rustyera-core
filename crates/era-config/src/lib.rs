@@ -1,4 +1,4 @@
-//! Portable, I/O-free representation of the pinned Emuera configuration catalog.
+//! Portable, I/O-free representation of the Era project configuration catalog.
 //!
 //! This crate deliberately stores client-specific settings as compatibility values.
 //! Consumers decide which settings have portable runtime semantics; parsing a setting
@@ -7,6 +7,15 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+
+mod rera;
+
+pub use rera::{
+    ByteSpan, LegacyConfigSource, LegacyMigration, LegacyMigrationDiagnostic,
+    LegacyMigrationDiagnosticKind, RERACONFIG_SCHEMA_VERSION, ReraConfigDocument, ReraConfigError,
+    ReraConfigErrorKind, ReraConfigSpec, generate_annotated_example, generate_json_schema,
+    migrate_legacy_configuration, normalize_line_endings, rera_catalog,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ConfigValue {
@@ -155,9 +164,9 @@ pub fn catalog() -> Vec<ConfigSpec> {
         spec!(WindowPosY, "ウィンドウ位置Y", "Window Y position", i 0, QueryOnlyClientPreference),
         spec!(SetWindowPos, "起動時のウィンドウ位置を指定する", "Fixed window starting position", b false, QueryOnlyClientPreference),
         spec!(WindowMaximixed, "起動時にウィンドウを最大化する", "Maximize window on startup", b false, QueryOnlyClientPreference),
-        spec!(MaxLog, "履歴ログの行数", "Max history log lines", i 5000, PortableSemantic),
-        spec!(PrintCPerLine, "PRINTCを並べる数", "Items per line for PRINTC", i 3, PortableSemantic),
-        spec!(PrintCLength, "PRINTCの文字数", "Number of Item characters for PRINTC", i 25, PortableSemantic),
+        spec!(MaxLog, "履歴ログの行数", "Max history log lines", i 1000, PortableSemantic),
+        spec!(PrintCPerLine, "PRINTCを並べる数", "Items per line for PRINTC", i 5, PortableSemantic),
+        spec!(PrintCLength, "PRINTCの文字数", "Number of Item characters for PRINTC", i 24, PortableSemantic),
         spec!(FontName, "フォント名", "Font name", s "ＭＳ ゴシック", QueryOnlyClientPreference),
         spec!(FontSize, "フォントサイズ", "Font size", i 18, QueryOnlyClientPreference),
         spec!(LineHeight, "一行の高さ", "Line height", i 19, QueryOnlyClientPreference),
@@ -267,6 +276,10 @@ pub fn catalog() -> Vec<ConfigSpec> {
         spec!(PalamLvDef, "PALAMLVの初期値", "Default PALAMLV", il [0, 100, 500, 3000, 10000, 30000, 60000, 100_000, 150_000, 250_000], PortableSemantic),
         spec!(pbandDef, "PBANDの初期値", "Default PBAND", i 4, PortableSemantic),
         spec!(RelationDef, "RELATIONの初期値", "Default RELATION", i 0, PortableSemantic),
+        spec!(UseNewRandom, "新しい高速な乱数アルゴリズムを使う", "Use new random algorithm", b false, QueryOnlyClientPreference),
+        spec!(AudioVolume, "ゲーム音量", "Game volume", i 100, QueryOnlyClientPreference),
+        spec!(ReplaceFullWidthSpaces, "全角スペースを半角スペースに置換する", "Replace full-width spaces", b false, QueryOnlyClientPreference),
+        spec!(CharacterWidthMode, "文字列幅計算モード", "Character width mode", e "AUTOMATIC" ["AUTOMATIC", "AMBIGUOUS_NARROW", "AMBIGUOUS_WIDE"], QueryOnlyClientPreference),
     ];
     for spec in &mut specs {
         spec.clients = clients(spec.code, spec.effect);
@@ -323,22 +336,15 @@ pub fn tauri_configurable(code: &str) -> bool {
 /// Textual frontend defaults applied before project configuration files.
 #[must_use]
 pub fn tui_default(code: &str) -> Option<ConfigValue> {
-    match code {
-        "MaxLog" => Some(ConfigValue::Integer(1_000)),
-        "PrintCPerLine" => Some(ConfigValue::Integer(5)),
-        "PrintCLength" => Some(ConfigValue::Integer(24)),
-        _ => None,
-    }
+    let _ = code;
+    None
 }
 
 /// Browser and Tauri defaults applied before project configuration files.
 #[must_use]
 pub fn web_default(code: &str) -> Option<ConfigValue> {
-    match code {
-        "PrintCPerLine" => Some(ConfigValue::Integer(5)),
-        "PrintCLength" => Some(ConfigValue::Integer(24)),
-        _ => None,
-    }
+    let _ = code;
+    None
 }
 
 /// Application policy for settings visible in the Textual frontend.
@@ -355,7 +361,9 @@ pub fn tui_application(code: &str) -> Option<ConfigApplication> {
         | "PrintCLength"
         | "ForeColor"
         | "BackColor"
-        | "FocusColor" => Some(ConfigApplication::Hot),
+        | "FocusColor"
+        | "ReplaceFullWidthSpaces"
+        | "CharacterWidthMode" => Some(ConfigApplication::Hot),
         "UseRenameFile"
         | "UseReplaceFile"
         | "SearchSubdirectory"
@@ -407,6 +415,9 @@ pub fn browser_application(code: &str) -> Option<ConfigApplication> {
         | "ForeColor"
         | "BackColor"
         | "FocusColor" => Some(ConfigApplication::Hot),
+        "AudioVolume" | "ReplaceFullWidthSpaces" | "CharacterWidthMode" => {
+            Some(ConfigApplication::Hot)
+        }
         "UseRenameFile"
         | "UseReplaceFile"
         | "SearchSubdirectory"
@@ -544,7 +555,7 @@ impl ConfigStore {
         fixed: bool,
     ) -> Result<(), ConfigParseError> {
         let code = resolve_code(name).ok_or(ConfigParseError::UnknownKey)?;
-        if is_replace_code(&code) || code.starts_with("DEBUG") {
+        if !is_regular_code(&code) {
             return Err(ConfigParseError::UnknownKey);
         }
         self.apply(&code, raw, fixed)
@@ -564,7 +575,7 @@ impl ConfigStore {
         let mut output = String::new();
         for spec in catalog() {
             let code = spec.code.to_ascii_uppercase();
-            if is_replace_code(&code) || code.starts_with("DEBUG") {
+            if !is_regular_code(&code) {
                 continue;
             }
             let Some(value) = self.values.get(&code) else {
@@ -582,10 +593,15 @@ impl ConfigStore {
 #[must_use]
 pub fn is_regular_code(code: &str) -> bool {
     let code = code.to_ascii_uppercase();
-    !is_replace_code(&code) && !code.starts_with("DEBUG")
+    !is_replace_code(&code)
+        && !code.starts_with("DEBUG")
+        && !matches!(
+            code.as_str(),
+            "USENEWRANDOM" | "AUDIOVOLUME" | "REPLACEFULLWIDTHSPACES" | "CHARACTERWIDTHMODE"
+        )
 }
 
-fn is_replace_code(code: &str) -> bool {
+pub(crate) fn is_replace_code(code: &str) -> bool {
     matches!(
         code,
         "MONEYLABEL"
@@ -613,7 +629,7 @@ pub enum ConfigParseError {
     InvalidValue,
 }
 
-fn resolve_code(name: &str) -> Option<String> {
+pub(crate) fn resolve_code(name: &str) -> Option<String> {
     let key = name.trim().to_uppercase();
     catalog()
         .into_iter()
@@ -715,7 +731,7 @@ mod tests {
 
     #[test]
     fn catalog_aliases_types_and_fixed_precedence_are_deterministic() {
-        assert_eq!(catalog().len(), 123, "pinned ConfigData catalog drifted");
+        assert_eq!(catalog().len(), 127, "Era configuration catalog drifted");
         let mut store = ConfigStore::default();
         assert_eq!(
             store.get("描画インターフェース"),
@@ -799,6 +815,7 @@ mod tests {
             "MaxLog",
             "PrintCLength",
             "PrintCPerLine",
+            "ReplaceFullWidthSpaces",
             "ReplaceContinuationBR",
             "SaveDataNos",
             "SearchSubdirectory",
@@ -813,6 +830,7 @@ mod tests {
             "VarsizeDimConfig",
             "WarnFunctionOverloading",
             "ZipSaveData",
+            "CharacterWidthMode",
             "useLanguage",
         ]
         .into_iter()
@@ -834,7 +852,7 @@ mod tests {
                 .iter()
                 .filter(|code| tui_application(code) == Some(ConfigApplication::Hot))
                 .count(),
-            11
+            13
         );
     }
 
@@ -869,6 +887,7 @@ mod tests {
         let expected = [
             "AllowFunctionOverloading",
             "AllowLongInputByMouse",
+            "AudioVolume",
             "AutoSave",
             "BackColor",
             "ButtonWrap",
@@ -893,6 +912,7 @@ mod tests {
             "MaxLog",
             "PrintCLength",
             "PrintCPerLine",
+            "ReplaceFullWidthSpaces",
             "ReplaceContinuationBR",
             "SaveDataNos",
             "ScrollHeight",
@@ -909,6 +929,7 @@ mod tests {
             "VarsizeDimConfig",
             "WarnFunctionOverloading",
             "ZipSaveData",
+            "CharacterWidthMode",
             "useLanguage",
         ]
         .into_iter()
@@ -928,11 +949,11 @@ mod tests {
                 .iter()
                 .filter(|code| tauri_application(code) == Some(ConfigApplication::Hot))
                 .count(),
-            19
+            22
         );
 
         let store = ConfigStore::with_web_defaults();
-        assert_eq!(store.get_code("MaxLog"), Some(&ConfigValue::Integer(5_000)));
+        assert_eq!(store.get_code("MaxLog"), Some(&ConfigValue::Integer(1_000)));
         assert_eq!(
             store.get_code("PrintCPerLine"),
             Some(&ConfigValue::Integer(5))

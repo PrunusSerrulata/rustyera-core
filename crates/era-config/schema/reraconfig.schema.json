@@ -1,0 +1,1938 @@
+{
+  "$id": "urn:rustyera:reraconfig:schema:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "RustyEra 跨客户端项目配置。所有设置项均可省略，省略时采用各项统一默认值。",
+  "properties": {
+    "application": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_multiple_instances": {
+          "default": true,
+          "description": "用途：允许同时启动多个实例；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "AllowMultipleInstances",
+          "x-rustyera-setting-id": 7
+        }
+      },
+      "type": "object"
+    },
+    "audio": {
+      "additionalProperties": false,
+      "properties": {
+        "volume": {
+          "default": 100,
+          "description": "用途：设置游戏主音量百分比；类型：整数；范围：0..=100",
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "AudioVolume",
+          "x-rustyera-setting-id": 125
+        }
+      },
+      "type": "object"
+    },
+    "clipboard": {
+      "additionalProperties": false,
+      "properties": {
+        "buffer_lines": {
+          "default": 300,
+          "description": "用途：设置复制环形缓冲容量；类型：整数；范围：1..=2147483647",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBBufferSize",
+          "x-rustyera-setting-id": 92
+        },
+        "clear_on_screen_refresh": {
+          "default": false,
+          "description": "用途：刷新画面时清空复制缓冲；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBClearBuffer",
+          "x-rustyera-setting-id": 85
+        },
+        "enabled": {
+          "default": false,
+          "description": "用途：启用游戏文本自动复制；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBUseClipboard",
+          "x-rustyera-setting-id": 81
+        },
+        "lines_per_copy": {
+          "default": 25,
+          "description": "用途：限制一次复制的行数；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBMaxCB",
+          "x-rustyera-setting-id": 91
+        },
+        "minimum_interval_ms": {
+          "default": 800,
+          "description": "用途：设置两次剪贴板写入的最短间隔；类型：整数；范围：1..=2147483647",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBMinTimer",
+          "x-rustyera-setting-id": 94
+        },
+        "new_lines_only": {
+          "default": true,
+          "description": "用途：只复制新增行；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBNewLinesOnly",
+          "x-rustyera-setting-id": 84
+        },
+        "scroll_lines": {
+          "default": 5,
+          "description": "用途：设置复制历史每次滚动行数；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBScrollCount",
+          "x-rustyera-setting-id": 93
+        },
+        "strip_angle_bracket_tags": {
+          "default": false,
+          "description": "用途：复制前移除尖括号标签；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBIgnoreTags",
+          "x-rustyera-setting-id": 82
+        },
+        "tag_replacement": {
+          "default": ".",
+          "description": "用途：设置被移除标签的替换文本；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBReplaceTags",
+          "x-rustyera-setting-id": 83
+        },
+        "trigger_double_click": {
+          "default": false,
+          "description": "用途：左键双击时触发复制；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBTriggerDoubleLeftClick",
+          "x-rustyera-setting-id": 88
+        },
+        "trigger_input": {
+          "default": true,
+          "description": "用途：进入 INPUT 时触发复制；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBTriggerInputWait",
+          "x-rustyera-setting-id": 90
+        },
+        "trigger_left_click": {
+          "default": true,
+          "description": "用途：左键单击时触发复制；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBTriggerLeftClick",
+          "x-rustyera-setting-id": 86
+        },
+        "trigger_middle_click": {
+          "default": false,
+          "description": "用途：中键单击时触发复制；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBTriggerMiddleClick",
+          "x-rustyera-setting-id": 87
+        },
+        "trigger_wait": {
+          "default": false,
+          "description": "用途：进入 WAIT 时触发复制；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "CBTriggerAnyKeyWait",
+          "x-rustyera-setting-id": 89
+        }
+      },
+      "type": "object"
+    },
+    "color": {
+      "additionalProperties": false,
+      "properties": {
+        "background": {
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "用途：设置默认背景颜色；类型：RGB 整数数组；每个分量范围：0..=255",
+          "items": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "BackColor",
+          "x-rustyera-setting-id": 25
+        },
+        "history": {
+          "default": [
+            192,
+            192,
+            192
+          ],
+          "description": "用途：设置历史日志文字颜色；类型：RGB 整数数组；每个分量范围：0..=255",
+          "items": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "LogColor",
+          "x-rustyera-setting-id": 27
+        },
+        "selection": {
+          "default": [
+            255,
+            255,
+            0
+          ],
+          "description": "用途：设置选中项文字颜色；类型：RGB 整数数组；每个分量范围：0..=255",
+          "items": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "FocusColor",
+          "x-rustyera-setting-id": 26
+        },
+        "text": {
+          "default": [
+            192,
+            192,
+            192
+          ],
+          "description": "用途：设置默认文字颜色；类型：RGB 整数数组；每个分量范围：0..=255",
+          "items": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "ForeColor",
+          "x-rustyera-setting-id": 24
+        }
+      },
+      "type": "object"
+    },
+    "compatibility": {
+      "additionalProperties": false,
+      "properties": {
+        "callname_falls_back_to_name": {
+          "default": false,
+          "description": "用途：CALLNAME 为空时回退到 NAME；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "CompatiCALLNAME",
+          "x-rustyera-setting-id": 52
+        },
+        "drawline_starts_new_line": {
+          "default": false,
+          "deprecated": true,
+          "description": "用途：始终在新行执行 DRAWLINE 的旧别名；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "CompatiDRAWLINE",
+          "x-rustyera-setting-id": 55
+        },
+        "east_asian_language": {
+          "default": "japanese",
+          "description": "用途：选择传统东亚编码语义；类型：字符串枚举；可选值：\"japanese\"、\"korean\"、\"simplified_chinese\"、\"traditional_chinese\"",
+          "enum": [
+            "japanese",
+            "korean",
+            "simplified_chinese",
+            "traditional_chinese"
+          ],
+          "type": "string",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "useLanguage",
+          "x-rustyera-setting-id": 59
+        },
+        "eramaker_rand": {
+          "default": false,
+          "description": "用途：使用 eramaker RAND 兼容语义；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "CompatiRAND",
+          "x-rustyera-setting-id": 54
+        },
+        "eramaker_times": {
+          "default": false,
+          "description": "用途：使用 eramaker TIMES 计算语义；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "TimesNotRigorousCalculation",
+          "x-rustyera-setting-id": 67
+        },
+        "erd_varsize_dimensions": {
+          "default": false,
+          "description": "用途：VARSIZE 使用 ERD 的一基维度编号；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "VarsizeDimConfig",
+          "x-rustyera-setting-id": 72
+        },
+        "function_names_case_sensitive": {
+          "default": false,
+          "description": "用途：函数和属性名称区分大小写；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "CompatiFunctionNoignoreCase",
+          "x-rustyera-setting-id": 56
+        },
+        "legacy_nonbutton_wrapping": {
+          "default": false,
+          "description": "用途：重现 1739 版以前的非按钮换行；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "CompatiLinefeedAs1739",
+          "x-rustyera-setting-id": 58
+        },
+        "require_character_variable_arguments": {
+          "default": false,
+          "description": "用途：要求显式提供角色变量参数；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "SystemNoTarget",
+          "x-rustyera-setting-id": 68
+        },
+        "require_string_expression_assignment": {
+          "default": false,
+          "description": "用途：字符串变量赋值必须使用字符串表达式；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "SystemIgnoreStringSet",
+          "x-rustyera-setting-id": 69
+        },
+        "sp_characters": {
+          "default": false,
+          "description": "用途：启用 SP 角色兼容行为；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "CompatiSPChara",
+          "x-rustyera-setting-id": 62
+        }
+      },
+      "type": "object"
+    },
+    "debug": {
+      "additionalProperties": false,
+      "properties": {
+        "commands_enabled": {
+          "default": false,
+          "description": "用途：允许执行调试命令；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "UseDebugCommand",
+          "x-rustyera-setting-id": 6
+        },
+        "rename_master": {
+          "default": true,
+          "description": "用途：执行调试命令时修改 MASTER 名称；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "ChangeMasterNameIfDebug",
+          "x-rustyera-setting-id": 38
+        }
+      },
+      "type": "object"
+    },
+    "debug_window": {
+      "additionalProperties": false,
+      "properties": {
+        "always_on_top": {
+          "default": true,
+          "description": "用途：调试窗口保持置顶；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "DebugWindowTopMost",
+          "x-rustyera-setting-id": 102
+        },
+        "height": {
+          "default": 300,
+          "description": "用途：设置调试窗口高度；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "DebugWindowHeight",
+          "x-rustyera-setting-id": 104
+        },
+        "position_x": {
+          "default": 0,
+          "description": "用途：设置调试窗口横坐标；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "DebugWindowPosX",
+          "x-rustyera-setting-id": 106
+        },
+        "position_y": {
+          "default": 0,
+          "description": "用途：设置调试窗口纵坐标；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "DebugWindowPosY",
+          "x-rustyera-setting-id": 107
+        },
+        "show_on_start": {
+          "default": true,
+          "description": "用途：启动时显示调试窗口；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "DebugShowWindow",
+          "x-rustyera-setting-id": 101
+        },
+        "use_saved_position": {
+          "default": false,
+          "description": "用途：应用保存的调试窗口位置；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "DebugSetWindowPos",
+          "x-rustyera-setting-id": 105
+        },
+        "width": {
+          "default": 400,
+          "description": "用途：设置调试窗口宽度；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "DebugWindowWidth",
+          "x-rustyera-setting-id": 103
+        }
+      },
+      "type": "object"
+    },
+    "diagnostics": {
+      "additionalProperties": false,
+      "properties": {
+        "duplicate_normal_functions": {
+          "default": false,
+          "description": "用途：普通函数重名时显示警告；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "WarnNormalFunctionOverloading",
+          "x-rustyera-setting-id": 50
+        },
+        "eramaker_compatibility": {
+          "default": true,
+          "description": "用途：显示 eramaker 兼容性警告；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "WarnBackCompatibility",
+          "x-rustyera-setting-id": 44
+        },
+        "erd_local_identifier_conflict": {
+          "default": false,
+          "description": "用途：检查 ERD 标识符与局部变量重名；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "CheckDuplicateIdentifier",
+          "x-rustyera-setting-id": 73
+        },
+        "external_plugin_enabled": {
+          "default": true,
+          "description": "用途：外部插件启用时显示警告；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "PluginAvailableWarn",
+          "x-rustyera-setting-id": 75
+        },
+        "ignore_uncalled_functions": {
+          "default": true,
+          "description": "用途：忽略未调用函数的处理和警告；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "IgnoreUncalledFunction",
+          "x-rustyera-setting-id": 35
+        },
+        "minimum_warning_level": {
+          "default": 1,
+          "description": "用途：过滤低于阈值的加载诊断；类型：整数；范围：0..=255",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "DisplayWarningLevel",
+          "x-rustyera-setting-id": 32
+        },
+        "missing_function": {
+          "default": "ignore",
+          "description": "用途：设置找不到函数时的警告策略；类型：字符串枚举；可选值：\"ignore\"、\"later\"、\"once\"、\"display\"",
+          "enum": [
+            "ignore",
+            "later",
+            "once",
+            "display"
+          ],
+          "type": "string",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "FunctionNotFoundWarning",
+          "x-rustyera-setting-id": 36
+        },
+        "system_function_override": {
+          "default": true,
+          "description": "用途：系统函数被覆盖时显示警告；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "WarnFunctionOverloading",
+          "x-rustyera-setting-id": 46
+        },
+        "uncalled_function": {
+          "default": "ignore",
+          "description": "用途：设置函数未调用时的警告策略；类型：字符串枚举；可选值：\"ignore\"、\"later\"、\"once\"、\"display\"",
+          "enum": [
+            "ignore",
+            "later",
+            "once",
+            "display"
+          ],
+          "type": "string",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "FunctionNotCalledWarning",
+          "x-rustyera-setting-id": 37
+        }
+      },
+      "type": "object"
+    },
+    "dictionary": {
+      "additionalProperties": false,
+      "properties": {
+        "background_color": {
+          "default": [
+            0,
+            0,
+            139
+          ],
+          "description": "用途：设置词典弹窗背景颜色；类型：RGB 整数数组；每个分量范围：0..=255",
+          "items": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "RikaiColorBack",
+          "x-rustyera-setting-id": 97
+        },
+        "enabled": {
+          "default": false,
+          "description": "用途：启用 Rikaichan 词典查询；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "RikaiEnabled",
+          "x-rustyera-setting-id": 95
+        },
+        "file_path": {
+          "default": "Emuera-Rikai-edict.txt-eucjp",
+          "description": "用途：设置 Rikaichan 词典路径；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "RikaiFilename",
+          "x-rustyera-setting-id": 96
+        },
+        "highlight_current_phrase": {
+          "default": true,
+          "description": "用途：高亮当前查询的原文词段；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "RikaiUseSeparateBoxes",
+          "x-rustyera-setting-id": 99
+        },
+        "text_color": {
+          "default": [
+            255,
+            255,
+            255
+          ],
+          "description": "用途：设置词典弹窗文字颜色；类型：RGB 整数数组；每个分量范围：0..=255",
+          "items": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "RikaiColorText",
+          "x-rustyera-setting-id": 98
+        }
+      },
+      "type": "object"
+    },
+    "display": {
+      "additionalProperties": false,
+      "properties": {
+        "frames_per_second": {
+          "default": 5,
+          "description": "用途：设置目标刷新帧率；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "FPS",
+          "x-rustyera-setting-id": 28
+        },
+        "maximum_skipped_frames": {
+          "default": 3,
+          "description": "用途：保留最大跳帧设置；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "SkipFrame",
+          "x-rustyera-setting-id": 29
+        }
+      },
+      "type": "object"
+    },
+    "editor": {
+      "additionalProperties": false,
+      "properties": {
+        "argument_style": {
+          "default": "custom",
+          "description": "用途：设置编辑器行号参数风格；类型：字符串枚举；可选值：\"sakura\"、\"terapad\"、\"emeditor\"、\"custom\"",
+          "enum": [
+            "sakura",
+            "terapad",
+            "emeditor",
+            "custom"
+          ],
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "EditorType",
+          "x-rustyera-setting-id": 48
+        },
+        "arguments": {
+          "default": "",
+          "description": "用途：设置传递给编辑器的自定义参数；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "EditorArgument",
+          "x-rustyera-setting-id": 49
+        },
+        "command": {
+          "default": "notepad",
+          "description": "用途：设置打开源码的外部编辑器；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "TextEditor",
+          "x-rustyera-setting-id": 47
+        }
+      },
+      "type": "object"
+    },
+    "file_io": {
+      "additionalProperties": false,
+      "properties": {
+        "text_file_extensions": {
+          "default": [
+            "txt"
+          ],
+          "description": "用途：限制 LOADTEXT 和 SAVETEXT 扩展名；类型：字符串数组",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "ValidExtension",
+          "x-rustyera-setting-id": 76
+        }
+      },
+      "type": "object"
+    },
+    "input": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_long_oneinput_from_mouse": {
+          "default": false,
+          "description": "用途：允许鼠标向 ONEINPUT 提交多个字符；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "AllowLongInputByMouse",
+          "x-rustyera-setting-id": 60
+        },
+        "keyboard_macros_enabled": {
+          "default": true,
+          "description": "用途：启用键盘宏；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "UseKeyMacro",
+          "x-rustyera-setting-id": 9
+        },
+        "mouse_enabled": {
+          "default": true,
+          "description": "用途：允许鼠标点击游戏交互项；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "UseMouse",
+          "x-rustyera-setting-id": 4
+        },
+        "undo_enabled": {
+          "default": false,
+          "description": "用途：启用 Ctrl+Z 输入撤销；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "Ctrl_Z_Enabled",
+          "x-rustyera-setting-id": 100
+        }
+      },
+      "type": "object"
+    },
+    "interface": {
+      "additionalProperties": false,
+      "properties": {
+        "language": {
+          "default": "",
+          "description": "用途：选择客户端界面语言；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "EmueraLang",
+          "x-rustyera-setting-id": 79
+        },
+        "menu_visible": {
+          "default": true,
+          "description": "用途：常态显示客户端菜单；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "UseMenu",
+          "x-rustyera-setting-id": 5
+        }
+      },
+      "type": "object"
+    },
+    "legacy": {
+      "additionalProperties": false,
+      "properties": {
+        "use_new_random": {
+          "default": false,
+          "deprecated": true,
+          "description": "用途：保留旧高速随机算法开关；当前固定使用 SFMT；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "UseNewRandom",
+          "x-rustyera-setting-id": 124
+        },
+        "write_english_config_keys": {
+          "default": false,
+          "deprecated": true,
+          "description": "用途：保留旧 CONFIG 英文键输出偏好；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "EnglishConfigOutput",
+          "x-rustyera-setting-id": 78
+        }
+      },
+      "type": "object"
+    },
+    "meta": {
+      "additionalProperties": false,
+      "description": "配置格式元数据。所有字段均可省略，省略时采用 schema 版本 1 且没有锁定项。",
+      "properties": {
+        "locked_settings": {
+          "default": [],
+          "description": "不可由客户端设置面板修改的规范设置路径，承接旧 _fixed.config 语义。",
+          "items": {
+            "enum": [
+              "script.ignore_case",
+              "project.use_rename_file",
+              "replacement.enabled",
+              "input.mouse_enabled",
+              "interface.menu_visible",
+              "debug.commands_enabled",
+              "application.allow_multiple_instances",
+              "save.auto_save",
+              "input.keyboard_macros_enabled",
+              "window.resizable",
+              "text.drawing_method",
+              "window.width",
+              "window.height",
+              "window.position_x",
+              "window.position_y",
+              "window.use_saved_position",
+              "window.start_maximized",
+              "output.history_lines",
+              "output.printc_items_per_line",
+              "output.printc_item_width",
+              "text.font_family",
+              "text.font_size",
+              "text.line_height",
+              "color.text",
+              "color.background",
+              "color.selection",
+              "color.history",
+              "display.frames_per_second",
+              "display.maximum_skipped_frames",
+              "output.scroll_lines",
+              "runtime.infinite_loop_warning_ms",
+              "diagnostics.minimum_warning_level",
+              "project.show_loading_report",
+              "project.reduce_arguments_on_load",
+              "diagnostics.ignore_uncalled_functions",
+              "diagnostics.missing_function",
+              "diagnostics.uncalled_function",
+              "debug.rename_master",
+              "output.keep_buttons_on_one_line",
+              "project.search_subdirectories",
+              "project.sort_files_by_name",
+              "project.last_update_code",
+              "save.slots_per_page",
+              "diagnostics.eramaker_compatibility",
+              "script.allow_system_function_override",
+              "diagnostics.system_function_override",
+              "editor.command",
+              "editor.argument_style",
+              "editor.arguments",
+              "diagnostics.duplicate_normal_functions",
+              "project.continue_with_parse_errors",
+              "compatibility.callname_falls_back_to_name",
+              "save.use_sav_directory",
+              "compatibility.eramaker_rand",
+              "compatibility.drawline_starts_new_line",
+              "compatibility.function_names_case_sensitive",
+              "script.full_width_space_is_whitespace",
+              "compatibility.legacy_nonbutton_wrapping",
+              "compatibility.east_asian_language",
+              "input.allow_long_oneinput_from_mouse",
+              "script.allow_calling_event_functions",
+              "compatibility.sp_characters",
+              "save.binary_format",
+              "script.allow_omitted_function_arguments",
+              "script.auto_convert_function_arguments_to_string",
+              "script.preserve_triple_symbols_in_form",
+              "compatibility.eramaker_times",
+              "compatibility.require_character_variable_arguments",
+              "compatibility.require_string_expression_assignment",
+              "network.disable_update_check",
+              "project.erd_enabled",
+              "compatibility.erd_varsize_dimensions",
+              "diagnostics.erd_local_identifier_conflict",
+              "script.continuation_newline_replacement",
+              "diagnostics.external_plugin_enabled",
+              "file_io.text_file_extensions",
+              "save.compress_binary",
+              "legacy.write_english_config_keys",
+              "interface.language",
+              "window.icon_path",
+              "clipboard.enabled",
+              "clipboard.strip_angle_bracket_tags",
+              "clipboard.tag_replacement",
+              "clipboard.new_lines_only",
+              "clipboard.clear_on_screen_refresh",
+              "clipboard.trigger_left_click",
+              "clipboard.trigger_middle_click",
+              "clipboard.trigger_double_click",
+              "clipboard.trigger_wait",
+              "clipboard.trigger_input",
+              "clipboard.lines_per_copy",
+              "clipboard.buffer_lines",
+              "clipboard.scroll_lines",
+              "clipboard.minimum_interval_ms",
+              "dictionary.enabled",
+              "dictionary.file_path",
+              "dictionary.background_color",
+              "dictionary.text_color",
+              "dictionary.highlight_current_phrase",
+              "input.undo_enabled",
+              "debug_window.show_on_start",
+              "debug_window.always_on_top",
+              "debug_window.width",
+              "debug_window.height",
+              "debug_window.use_saved_position",
+              "debug_window.position_x",
+              "debug_window.position_y",
+              "replacement.currency_label",
+              "replacement.currency_before_amount",
+              "replacement.loading_message",
+              "replacement.maximum_shop_items",
+              "replacement.drawline_text",
+              "replacement.bar_filled_character",
+              "replacement.bar_empty_character",
+              "replacement.new_game_label",
+              "replacement.load_game_label",
+              "replacement.default_com_able",
+              "replacement.default_stain",
+              "replacement.time_up_message",
+              "replacement.default_experience_levels",
+              "replacement.default_palam_levels",
+              "replacement.default_pband",
+              "replacement.default_relation",
+              "legacy.use_new_random",
+              "audio.volume",
+              "text.replace_full_width_spaces",
+              "text.character_width_mode"
+            ],
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "description": "reraconfig.toml 的格式版本。当前仅支持整数 1。",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "network": {
+      "additionalProperties": false,
+      "properties": {
+        "disable_update_check": {
+          "default": false,
+          "description": "用途：禁止脚本执行联网更新检查；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "ForbidUpdateCheck",
+          "x-rustyera-setting-id": 70
+        }
+      },
+      "type": "object"
+    },
+    "output": {
+      "additionalProperties": false,
+      "properties": {
+        "history_lines": {
+          "default": 1000,
+          "description": "用途：限制物理历史日志行数；类型：整数；范围：500..=2147483647",
+          "maximum": 2147483647,
+          "minimum": 500,
+          "type": "integer",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "MaxLog",
+          "x-rustyera-setting-id": 18
+        },
+        "keep_buttons_on_one_line": {
+          "default": false,
+          "description": "用途：避免在按钮内容中途换行；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "ButtonWrap",
+          "x-rustyera-setting-id": 39
+        },
+        "printc_item_width": {
+          "default": 24,
+          "description": "用途：设置 PRINTC 项的目标字符宽度；类型：整数；范围：1..=2147483647",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "PrintCLength",
+          "x-rustyera-setting-id": 20
+        },
+        "printc_items_per_line": {
+          "default": 5,
+          "description": "用途：设置每行 PRINTC 项数；类型：整数；范围：1..=2147483647",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "PrintCPerLine",
+          "x-rustyera-setting-id": 19
+        },
+        "scroll_lines": {
+          "default": 1,
+          "description": "用途：设置每次滚动的行数；类型：整数；范围：1..=2147483647",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "ScrollHeight",
+          "x-rustyera-setting-id": 30
+        }
+      },
+      "type": "object"
+    },
+    "project": {
+      "additionalProperties": false,
+      "properties": {
+        "continue_with_parse_errors": {
+          "default": false,
+          "description": "用途：存在无法解析的行时仍允许启动；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "CompatiErrorLine",
+          "x-rustyera-setting-id": 51
+        },
+        "erd_enabled": {
+          "default": true,
+          "description": "用途：加载并应用 ERD 扩展定义；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "UseERD",
+          "x-rustyera-setting-id": 71
+        },
+        "last_update_code": {
+          "default": 0,
+          "description": "用途：保存一次性参数预解析的更新代码；类型：整数；范围：-9223372036854775808..=9223372036854775807",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "LastKey",
+          "x-rustyera-setting-id": 42
+        },
+        "reduce_arguments_on_load": {
+          "default": "never",
+          "description": "用途：控制加载时预解析参数；类型：字符串枚举；可选值：\"always\"、\"once\"、\"never\"",
+          "enum": [
+            "always",
+            "once",
+            "never"
+          ],
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "ReduceArgumentOnLoad",
+          "x-rustyera-setting-id": 34
+        },
+        "search_subdirectories": {
+          "default": false,
+          "description": "用途：递归搜索项目子目录；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "SearchSubdirectory",
+          "x-rustyera-setting-id": 40
+        },
+        "show_loading_report": {
+          "default": false,
+          "description": "用途：加载时显示阶段报告；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "DisplayReport",
+          "x-rustyera-setting-id": 33
+        },
+        "sort_files_by_name": {
+          "default": false,
+          "description": "用途：按文件名稳定排序加载顺序；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "SortWithFilename",
+          "x-rustyera-setting-id": 41
+        },
+        "use_rename_file": {
+          "default": false,
+          "description": "用途：加载并应用 _Rename.csv；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "UseRenameFile",
+          "x-rustyera-setting-id": 2
+        }
+      },
+      "type": "object"
+    },
+    "replacement": {
+      "additionalProperties": false,
+      "properties": {
+        "bar_empty_character": {
+          "default": ".",
+          "description": "用途：设置 BAR 未填充字符；类型：单个 Unicode 字符",
+          "maxLength": 1,
+          "minLength": 1,
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "BarChar2",
+          "x-rustyera-setting-id": 114
+        },
+        "bar_filled_character": {
+          "default": "*",
+          "description": "用途：设置 BAR 已填充字符；类型：单个 Unicode 字符",
+          "maxLength": 1,
+          "minLength": 1,
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "BarChar1",
+          "x-rustyera-setting-id": 113
+        },
+        "currency_before_amount": {
+          "default": true,
+          "description": "用途：把货币单位显示在金额之前；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "MoneyFirst",
+          "x-rustyera-setting-id": 109
+        },
+        "currency_label": {
+          "default": "$",
+          "description": "用途：设置货币单位文本；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "MoneyLabel",
+          "x-rustyera-setting-id": 108
+        },
+        "default_com_able": {
+          "default": 1,
+          "description": "用途：设置 COM_ABLE 默认值；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "ComAbleDefault",
+          "x-rustyera-setting-id": 117
+        },
+        "default_experience_levels": {
+          "default": [
+            0,
+            1,
+            4,
+            20,
+            50,
+            200
+          ],
+          "description": "用途：设置 EXPLV 阈值数组；类型：整数数组",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "ExpLvDef",
+          "x-rustyera-setting-id": 120
+        },
+        "default_palam_levels": {
+          "default": [
+            0,
+            100,
+            500,
+            3000,
+            10000,
+            30000,
+            60000,
+            100000,
+            150000,
+            250000
+          ],
+          "description": "用途：设置 PALAMLV 阈值数组；类型：整数数组",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "PalamLvDef",
+          "x-rustyera-setting-id": 121
+        },
+        "default_pband": {
+          "default": 4,
+          "description": "用途：设置 PBAND 默认值；类型：整数；范围：-9223372036854775808..=9223372036854775807",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "pbandDef",
+          "x-rustyera-setting-id": 122
+        },
+        "default_relation": {
+          "default": 0,
+          "description": "用途：设置 RELATION 默认值；类型：整数；范围：-9223372036854775808..=9223372036854775807",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "RelationDef",
+          "x-rustyera-setting-id": 123
+        },
+        "default_stain": {
+          "default": [
+            0,
+            0,
+            2,
+            1,
+            8
+          ],
+          "description": "用途：设置 STAIN 等级默认数组；类型：整数数组",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "StainDefault",
+          "x-rustyera-setting-id": 118
+        },
+        "drawline_text": {
+          "default": "-",
+          "description": "用途：设置 DRAWLINE 使用的文本；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "DrawLineString",
+          "x-rustyera-setting-id": 112
+        },
+        "enabled": {
+          "default": true,
+          "description": "用途：启用 replacement 表中的替换设置；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "UseReplaceFile",
+          "x-rustyera-setting-id": 3
+        },
+        "load_game_label": {
+          "default": "ロードしてはじめる",
+          "description": "用途：设置读取存档菜单文本；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "TitleMenuString1",
+          "x-rustyera-setting-id": 116
+        },
+        "loading_message": {
+          "default": "Now Loading...",
+          "description": "用途：设置加载提示文本；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "LoadLabel",
+          "x-rustyera-setting-id": 110
+        },
+        "maximum_shop_items": {
+          "default": 100,
+          "description": "用途：设置商店物品容量；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "MaxShopItem",
+          "x-rustyera-setting-id": 111
+        },
+        "new_game_label": {
+          "default": "最初からはじめる",
+          "description": "用途：设置新游戏菜单文本；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "TitleMenuString0",
+          "x-rustyera-setting-id": 115
+        },
+        "time_up_message": {
+          "default": "時間切れ",
+          "description": "用途：设置时间耗尽提示文本；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "TimeupLabel",
+          "x-rustyera-setting-id": 119
+        }
+      },
+      "type": "object"
+    },
+    "runtime": {
+      "additionalProperties": false,
+      "properties": {
+        "infinite_loop_warning_ms": {
+          "default": 5000,
+          "description": "用途：设置无限循环警告等待时间；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [
+            "runtime"
+          ],
+          "x-rustyera-legacy-code": "InfiniteLoopAlertTime",
+          "x-rustyera-setting-id": 31
+        }
+      },
+      "type": "object"
+    },
+    "save": {
+      "additionalProperties": false,
+      "properties": {
+        "auto_save": {
+          "default": true,
+          "description": "用途：商店事件结束后执行自动保存；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "AutoSave",
+          "x-rustyera-setting-id": 8
+        },
+        "binary_format": {
+          "default": false,
+          "description": "用途：使用传统二进制存档格式；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "SystemSaveInBinary",
+          "x-rustyera-setting-id": 63
+        },
+        "compress_binary": {
+          "default": false,
+          "description": "用途：压缩传统二进制存档；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "ZipSaveData",
+          "x-rustyera-setting-id": 77
+        },
+        "slots_per_page": {
+          "default": 20,
+          "description": "用途：设置存档菜单每页槽位数；类型：整数；范围：20..=80",
+          "maximum": 80,
+          "minimum": 20,
+          "type": "integer",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "SaveDataNos",
+          "x-rustyera-setting-id": 43
+        },
+        "use_sav_directory": {
+          "default": false,
+          "description": "用途：把传统存档写入 sav 目录；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "UseSaveFolder",
+          "x-rustyera-setting-id": 53
+        }
+      },
+      "type": "object"
+    },
+    "script": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_calling_event_functions": {
+          "default": false,
+          "description": "用途：允许普通 CALL 调用事件函数；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "CompatiCallEvent",
+          "x-rustyera-setting-id": 61
+        },
+        "allow_omitted_function_arguments": {
+          "default": false,
+          "description": "用途：允许省略用户函数的全部参数；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "CompatiFuncArgOptional",
+          "x-rustyera-setting-id": 64
+        },
+        "allow_system_function_override": {
+          "default": true,
+          "description": "用途：允许覆盖系统函数；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "AllowFunctionOverloading",
+          "x-rustyera-setting-id": 45
+        },
+        "auto_convert_function_arguments_to_string": {
+          "default": false,
+          "description": "用途：为字符串参数自动补充 TOSTR；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "CompatiFuncArgAutoConvert",
+          "x-rustyera-setting-id": 65
+        },
+        "continuation_newline_replacement": {
+          "default": "\" \"",
+          "description": "用途：设置续行物理换行的替换文本；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "ReplaceContinuationBR",
+          "x-rustyera-setting-id": 74
+        },
+        "full_width_space_is_whitespace": {
+          "default": true,
+          "description": "用途：把全角空格视为脚本空白；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "SystemAllowFullSpace",
+          "x-rustyera-setting-id": 57
+        },
+        "ignore_case": {
+          "default": true,
+          "description": "用途：名称比较时忽略大小写差异；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "IgnoreCase",
+          "x-rustyera-setting-id": 1
+        },
+        "preserve_triple_symbols_in_form": {
+          "default": false,
+          "description": "用途：不展开 FORM 中的三连符号；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "SystemIgnoreTripleSymbol",
+          "x-rustyera-setting-id": 66
+        }
+      },
+      "type": "object"
+    },
+    "text": {
+      "additionalProperties": false,
+      "properties": {
+        "character_width_mode": {
+          "default": "automatic",
+          "description": "用途：选择字符列宽计算策略；当前仅保存选项；类型：字符串枚举；可选值：\"automatic\"、\"ambiguous_narrow\"、\"ambiguous_wide\"",
+          "enum": [
+            "automatic",
+            "ambiguous_narrow",
+            "ambiguous_wide"
+          ],
+          "type": "string",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "CharacterWidthMode",
+          "x-rustyera-setting-id": 127
+        },
+        "drawing_method": {
+          "default": "textrenderer",
+          "description": "用途：选择文本绘制接口；类型：字符串枚举；可选值：\"graphics\"、\"textrenderer\"、\"winapi\"",
+          "enum": [
+            "graphics",
+            "textrenderer",
+            "winapi"
+          ],
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "TextDrawingMode",
+          "x-rustyera-setting-id": 11
+        },
+        "font_family": {
+          "default": "ＭＳ ゴシック",
+          "description": "用途：设置游戏默认字体族；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "FontName",
+          "x-rustyera-setting-id": 21
+        },
+        "font_size": {
+          "default": 18,
+          "description": "用途：设置游戏默认字号；类型：整数；范围：8..=2147483647",
+          "maximum": 2147483647,
+          "minimum": 8,
+          "type": "integer",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "FontSize",
+          "x-rustyera-setting-id": 22
+        },
+        "line_height": {
+          "default": 19,
+          "description": "用途：设置游戏默认行高；类型：整数；范围：8..=2147483647",
+          "maximum": 2147483647,
+          "minimum": 8,
+          "type": "integer",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "LineHeight",
+          "x-rustyera-setting-id": 23
+        },
+        "replace_full_width_spaces": {
+          "default": false,
+          "description": "用途：把游戏输出中的全角空格显示为两个半角空格；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "ReplaceFullWidthSpaces",
+          "x-rustyera-setting-id": 126
+        }
+      },
+      "type": "object"
+    },
+    "window": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "default": 480,
+          "description": "用途：设置游戏主视口高度；类型：整数；范围：128..=2147483647",
+          "maximum": 2147483647,
+          "minimum": 128,
+          "type": "integer",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "WindowY",
+          "x-rustyera-setting-id": 13
+        },
+        "icon_path": {
+          "default": "",
+          "description": "用途：设置原生窗口图标路径；类型：字符串",
+          "type": "string",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "EmueraIcon",
+          "x-rustyera-setting-id": 80
+        },
+        "position_x": {
+          "default": 0,
+          "description": "用途：设置原生窗口起始横坐标；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "WindowPosX",
+          "x-rustyera-setting-id": 14
+        },
+        "position_y": {
+          "default": 0,
+          "description": "用途：设置原生窗口起始纵坐标；类型：整数；范围：-2147483648..=2147483647",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "WindowPosY",
+          "x-rustyera-setting-id": 15
+        },
+        "resizable": {
+          "default": true,
+          "description": "用途：允许调整窗口大小；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "SizableWindow",
+          "x-rustyera-setting-id": 10
+        },
+        "start_maximized": {
+          "default": false,
+          "description": "用途：启动时最大化原生窗口；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "WindowMaximixed",
+          "x-rustyera-setting-id": 17
+        },
+        "use_saved_position": {
+          "default": false,
+          "description": "用途：启动时应用保存的窗口位置；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "unsupported",
+          "x-rustyera-clients": [],
+          "x-rustyera-legacy-code": "SetWindowPos",
+          "x-rustyera-setting-id": 16
+        },
+        "width": {
+          "default": 760,
+          "description": "用途：设置游戏主视口宽度；类型：整数；范围：128..=2147483647",
+          "maximum": 2147483647,
+          "minimum": 128,
+          "type": "integer",
+          "x-rustyera-application": "hot",
+          "x-rustyera-clients": [
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "WindowX",
+          "x-rustyera-setting-id": 12
+        }
+      },
+      "type": "object"
+    }
+  },
+  "title": "RustyEra reraconfig.toml",
+  "type": "object"
+}

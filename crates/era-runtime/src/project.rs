@@ -4,6 +4,7 @@ mod frontend;
 #[cfg(test)]
 mod tests;
 
+use era_config::ConfigStore;
 use era_runtime_protocol::{
     CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ConfigurationApplication,
     ConfigurationClientProfile, ConfigurationValueKind, FileCategory, FileChange, FilePayload,
@@ -20,7 +21,6 @@ use erabasic_compiler::{
     CompilerOptions, IncrementalState, compile_validated_project_with_artifact,
     compile_validated_project_with_artifact_and_progress,
 };
-use erabasic_config::ConfigStore;
 use erabasic_csv::{CsvDiagnosticSeverity, CsvLoadOptions, ProjectFiles, load_project};
 use erabasic_data::LegacyEncoding;
 use erabasic_validator::ValidatedArtifact;
@@ -99,9 +99,9 @@ impl NormalizedProjectSnapshot {
                 _ => None,
             })
             .unwrap_or_else(|| era_protocol::ProtocolBytes::new(Vec::new()));
-        let entries = erabasic_config::catalog()
+        let entries = era_config::catalog()
             .into_iter()
-            .filter(|spec| erabasic_config::is_regular_code(spec.code))
+            .filter(|spec| era_config::is_regular_code(spec.code))
             .filter_map(|spec| {
                 let value = self.editable_configuration.get_code(spec.code)?;
                 let effective = self.configuration.get_code(spec.code)?;
@@ -113,7 +113,7 @@ impl NormalizedProjectSnapshot {
                     value: value.config_text(),
                     kind: configuration_value_kind(value),
                     allowed: match value {
-                        erabasic_config::ConfigValue::Enum { allowed, .. } => allowed.clone(),
+                        era_config::ConfigValue::Enum { allowed, .. } => allowed.clone(),
                         _ => Vec::new(),
                     },
                     fixed: self.editable_configuration.is_fixed(spec.code),
@@ -137,13 +137,13 @@ impl NormalizedProjectSnapshot {
 }
 
 fn profile_default(
-    spec: &erabasic_config::ConfigSpec,
+    spec: &era_config::ConfigSpec,
     profile: ConfigurationClientProfile,
-) -> erabasic_config::ConfigValue {
+) -> era_config::ConfigValue {
     let override_value = match profile {
-        ConfigurationClientProfile::Tui => erabasic_config::tui_default(spec.code),
+        ConfigurationClientProfile::Tui => era_config::tui_default(spec.code),
         ConfigurationClientProfile::Browser | ConfigurationClientProfile::Tauri => {
-            erabasic_config::web_default(spec.code)
+            era_config::web_default(spec.code)
         }
         ConfigurationClientProfile::Reference => None,
     };
@@ -159,12 +159,12 @@ pub(crate) fn profile_application(
     profile: ConfigurationClientProfile,
 ) -> ConfigurationApplication {
     let application = match profile {
-        ConfigurationClientProfile::Tui => erabasic_config::tui_application(code),
-        ConfigurationClientProfile::Browser => erabasic_config::browser_application(code),
-        ConfigurationClientProfile::Tauri => erabasic_config::tauri_application(code),
+        ConfigurationClientProfile::Tui => era_config::tui_application(code),
+        ConfigurationClientProfile::Browser => era_config::browser_application(code),
+        ConfigurationClientProfile::Tauri => era_config::tauri_application(code),
         ConfigurationClientProfile::Reference => None,
     };
-    if application == Some(erabasic_config::ConfigApplication::Hot) {
+    if application == Some(era_config::ConfigApplication::Hot) {
         ConfigurationApplication::Hot
     } else {
         ConfigurationApplication::Restart
@@ -180,8 +180,8 @@ pub(crate) fn profile_applicability(profile: ConfigurationClientProfile) -> Opti
     }
 }
 
-fn protocol_applicability(clients: &[erabasic_config::ConfigClient]) -> u32 {
-    use erabasic_config::ConfigClient;
+fn protocol_applicability(clients: &[era_config::ConfigClient]) -> u32 {
+    use era_config::ConfigClient;
     let mut flags = 0;
     for client in clients {
         flags |= match client {
@@ -194,8 +194,8 @@ fn protocol_applicability(clients: &[erabasic_config::ConfigClient]) -> u32 {
     flags
 }
 
-fn configuration_value_kind(value: &erabasic_config::ConfigValue) -> ConfigurationValueKind {
-    use erabasic_config::ConfigValue;
+fn configuration_value_kind(value: &era_config::ConfigValue) -> ConfigurationValueKind {
+    use era_config::ConfigValue;
     match value {
         ConfigValue::Boolean(_) => ConfigurationValueKind::Boolean,
         ConfigValue::Integer(_) => ConfigurationValueKind::Integer,

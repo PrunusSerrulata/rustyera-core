@@ -880,7 +880,7 @@ impl RuntimeSession {
                 report.configuration = Some(snapshot.configuration_snapshot());
                 self.key_macros.set_enabled(matches!(
                     snapshot.configuration.get_code("UseKeyMacro"),
-                    Some(erabasic_config::ConfigValue::Boolean(true))
+                    Some(era_config::ConfigValue::Boolean(true))
                 ));
                 self.presentation.configure_project(snapshot);
             }
@@ -1158,11 +1158,11 @@ fn apply_hot_configuration(
     }
 
     let boolean = |code| match snapshot.configuration.get_code(code) {
-        Some(erabasic_config::ConfigValue::Boolean(value)) => Some(*value),
+        Some(era_config::ConfigValue::Boolean(value)) => Some(*value),
         _ => None,
     };
     let integer = |code| match snapshot.configuration.get_code(code) {
-        Some(erabasic_config::ConfigValue::Integer(value)) => Some(*value),
+        Some(era_config::ConfigValue::Integer(value)) => Some(*value),
         _ => None,
     };
     snapshot.ctrl_z_enabled = boolean("Ctrl_Z_Enabled").unwrap_or(snapshot.ctrl_z_enabled);

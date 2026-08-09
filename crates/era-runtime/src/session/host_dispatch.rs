@@ -240,20 +240,20 @@ impl RuntimeSession {
                 .ok_or_else(|| RuntimeError::Internal("GETCONFIG has no loaded project".into()))?;
             let value = if let Some(value) = project.configuration.get(key) {
                 match (name.as_str(), value.script_value()) {
-                    ("GETCONFIG", erabasic_config::ScriptConfigValue::Integer(value)) => {
+                    ("GETCONFIG", era_config::ScriptConfigValue::Integer(value)) => {
                         VmValue::Integer(value)
                     }
-                    ("GETCONFIGS", erabasic_config::ScriptConfigValue::String(value)) => {
+                    ("GETCONFIGS", era_config::ScriptConfigValue::String(value)) => {
                         VmValue::String(value)
                     }
-                    ("GETCONFIG", erabasic_config::ScriptConfigValue::String(_)) => {
+                    ("GETCONFIG", era_config::ScriptConfigValue::String(_)) => {
                         return self.fault(
                             FaultCode::VmFault,
                             "GETCONFIG value is a string; use GETCONFIGS",
                             Some(request.origin.clone()),
                         );
                     }
-                    ("GETCONFIGS", erabasic_config::ScriptConfigValue::Integer(_)) => {
+                    ("GETCONFIGS", era_config::ScriptConfigValue::Integer(_)) => {
                         return self.fault(
                             FaultCode::VmFault,
                             "GETCONFIGS value is an integer; use GETCONFIG",

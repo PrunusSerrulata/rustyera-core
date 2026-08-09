@@ -415,7 +415,7 @@ impl PresentationModel {
         self.pending_runs.push(DisplayRun::ColumnCell {
             content,
             alignment,
-            // Emuera's default PrintCLength is 25. This is layout intent, not padding.
+            // The configured PrintCLength is layout intent, not padding.
             preferred_columns: self.print_c_length,
         });
         self.bump();

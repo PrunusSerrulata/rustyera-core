@@ -23,7 +23,7 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
   加载器；自身不执行文件 I/O。
 - `crates/erabasic-lexer`：EraBasic lexer，包括上下文终止规则和格式化字符串。
 - `crates/erabasic-parser`：表达式、逻辑行、ERH、ERB、预处理器和块结构 parser。
-- `crates/erabasic-config`：Emuera 配置项的可序列化模型和规范化处理。
+- `crates/era-config`：Era 配置项的可序列化模型和规范化处理。
 - `crates/erabasic-hir`：稳定、可序列化的类型化高级中间表示。
 - `crates/erabasic-html`：EraBasic HTML 子集的规范化与安全文本处理。
 - `crates/erabasic-analyzer`：项目级声明、符号、类型、指令参数和控制流语义分析。
