@@ -187,18 +187,7 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
     }
     drain(&mut restored);
     let snapshot = restored.presentation.snapshot();
-    let display = snapshot
-        .history
-        .logical_lines
-        .iter()
-        .flat_map(|line| &line.runs)
-        .filter_map(|run| match run {
-            era_runtime_protocol::DisplayRun::Text { text, .. }
-            | era_runtime_protocol::DisplayRun::TextLayout { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("|");
+    let display = projected_presentation_text(&snapshot);
     let loadend = display.find("loadend=37").expect("SYSTEM_LOADEND output");
     let eventload = display.find("eventload").expect("EVENTLOAD output");
     let shop = display.find("shop").expect("SHOW_SHOP output");

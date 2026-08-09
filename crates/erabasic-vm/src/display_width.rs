@@ -1,3 +1,4 @@
+use erabasic_data::LegacyEncoding;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -10,7 +11,26 @@ use unicode_width::UnicodeWidthStr;
 /// operations intentionally retain their separate code-page and UTF-16 semantics.
 #[must_use]
 pub fn emuera_display_width(value: &str) -> usize {
-    UnicodeWidthStr::width_cjk(value)
+    value.graphemes(true).map(emuera_grapheme_width).sum()
+}
+
+fn emuera_grapheme_width(grapheme: &str) -> usize {
+    let unicode_width = UnicodeWidthStr::width_cjk(grapheme);
+    let mut characters = grapheme.chars();
+    let Some(character) = characters.next() else {
+        return 0;
+    };
+    // MS Gothic gives the CP932 double-byte repertoire a full console cell even where
+    // terminal-oriented Unicode width tables keep Greek and Cyrillic letters narrow.
+    // Multi-scalar graphemes stay on Unicode rules so combining marks add no phantom cell.
+    if characters.next().is_none()
+        && unicode_width == 1
+        && LegacyEncoding::Japanese.encoded_char_len(character) == 2
+    {
+        2
+    } else {
+        unicode_width
+    }
 }
 
 /// Repeat a pattern to a deterministic logical-column limit without splitting graphemes.
@@ -68,6 +88,11 @@ mod tests {
             ("界", 2),
             ("■", 2),
             ("…", 2),
+            ("γ", 2),
+            ("о", 2),
+            ("´", 2),
+            ("ﾄ", 1),
+            ("｡", 1),
             ("e\u{301}", 1),
             ("\u{200b}", 0),
             ("😀", 2),

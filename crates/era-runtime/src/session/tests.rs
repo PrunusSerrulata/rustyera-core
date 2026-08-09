@@ -4,8 +4,9 @@ use era_debug_protocol::{
 };
 use era_protocol::{Channel, Envelope, ProtocolBytes, decode_envelope, encode_envelope};
 use era_runtime_protocol::{
-    DisplayRun, FileCategory, FileChange, FilePayload, PresentationOperation, ProjectIdentity,
-    ProjectManifest, ProjectionLength, ProjectionSize, ProjectionTransform, SubmittedFile,
+    DisplayLine, DisplayRun, FileCategory, FileChange, FilePayload, PresentationOperation,
+    PresentationSnapshot, ProjectIdentity, ProjectManifest, ProjectionLength, ProjectionSize,
+    ProjectionTransform, SubmittedFile,
 };
 use erabasic_vm::VmDebugInspect;
 
@@ -76,12 +77,31 @@ fn drain(session: &mut RuntimeSession) -> Vec<RuntimeMessage> {
     messages
 }
 
-fn display_run_contains(run: &DisplayRun, expected: &str) -> bool {
-    matches!(
-        run,
-        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
-            if text.contains(expected)
-    )
+fn projected_run_text(run: &DisplayRun) -> String {
+    match run {
+        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => text.clone(),
+        DisplayRun::Button { runs, .. } => runs.iter().map(projected_run_text).collect(),
+        DisplayRun::ColumnCell { content, .. } => content.iter().map(projected_run_text).collect(),
+        DisplayRun::HtmlDocument { .. }
+        | DisplayRun::Image { .. }
+        | DisplayRun::Shape { .. }
+        | DisplayRun::Separator { .. }
+        | DisplayRun::Space { .. } => String::new(),
+    }
+}
+
+fn projected_line_text(line: &DisplayLine) -> String {
+    line.runs.iter().map(projected_run_text).collect()
+}
+
+fn projected_presentation_text(snapshot: &PresentationSnapshot) -> String {
+    snapshot
+        .history
+        .logical_lines
+        .iter()
+        .map(projected_line_text)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn submit_debug(session: &mut RuntimeSession, sequence: u64, message: &DebugMessage) {

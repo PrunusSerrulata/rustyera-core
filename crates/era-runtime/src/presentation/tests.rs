@@ -186,7 +186,22 @@ fn consecutive_column_cells_share_the_pending_logical_line() {
     let committed = model.snapshot();
     assert_eq!(committed.history.logical_lines.len(), 1);
     assert!(committed.history.logical_lines[0].line_end);
-    assert_eq!(committed.history.logical_lines[0].runs.len(), 3);
+    assert_eq!(
+        committed.history.logical_lines[0]
+            .runs
+            .iter()
+            .filter(|run| matches!(run, DisplayRun::ColumnCell { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(
+        committed.history.logical_lines[0]
+            .runs
+            .iter()
+            .filter_map(display_text)
+            .collect::<String>(),
+        "done"
+    );
 }
 
 #[test]
@@ -351,10 +366,14 @@ fn temporary_empty_lines_can_be_replaced_without_frontend_state() {
     let snapshot = model.snapshot();
     assert_eq!(snapshot.history.logical_lines.len(), 2);
     assert!(snapshot.history.logical_lines[1].temporary);
-    assert!(matches!(
-        &snapshot.history.logical_lines[1].runs[0],
-        DisplayRun::TextLayout { text, .. } if text == "invalid"
-    ));
+    assert_eq!(
+        snapshot.history.logical_lines[1]
+            .runs
+            .iter()
+            .filter_map(display_text)
+            .collect::<String>(),
+        "invalid"
+    );
 }
 
 #[test]
@@ -480,10 +499,14 @@ fn automatic_buttons_are_grouped_after_the_complete_print_buffer_is_committed() 
         mixed.bind_last_line_auto_buttons(&tokens),
         vec![(tokens[0], 1), (tokens[1], 3)]
     );
-    assert!(matches!(
-        &mixed.snapshot().history.logical_lines[0].runs[1],
-        DisplayRun::TextLayout { text, .. } if text == "[2] plain "
-    ));
+    let snapshot = mixed.snapshot();
+    let plain = snapshot.history.logical_lines[0]
+        .runs
+        .iter()
+        .filter(|run| !matches!(run, DisplayRun::Button { .. }))
+        .filter_map(display_text)
+        .collect::<String>();
+    assert_eq!(plain, "[2] plain ");
 }
 
 #[test]

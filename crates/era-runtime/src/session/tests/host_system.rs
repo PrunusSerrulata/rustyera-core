@@ -195,19 +195,7 @@ fn restart_redraws_string_and_integer_button_menus_in_the_current_function() {
     );
 
     let snapshot = session.presentation.snapshot();
-    let visible_text = snapshot
-        .history
-        .logical_lines
-        .iter()
-        .flat_map(|line| &line.runs)
-        .filter_map(|run| match run {
-            DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
-                Some(text.as_str())
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let visible_text = projected_presentation_text(&snapshot);
     assert!(visible_text.contains("move display=1"), "{visible_text}");
     assert!(visible_text.contains("ability page=1"), "{visible_text}");
     assert!(!visible_text.contains("invalid move"), "{visible_text}");
@@ -309,12 +297,7 @@ fn inputs_accepts_an_automatic_button_from_the_pending_print_buffer() {
             .history
             .logical_lines
             .iter()
-            .any(|line| line.runs.iter().any(|run| matches!(
-                run,
-                era_runtime_protocol::DisplayRun::Text { text, .. }
-                    | era_runtime_protocol::DisplayRun::TextLayout { text, .. }
-                    if text.contains("pending auto=58")
-            )))
+            .any(|line| projected_line_text(line).contains("pending auto=58"))
     );
 }
 

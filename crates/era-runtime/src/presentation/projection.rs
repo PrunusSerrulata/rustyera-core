@@ -654,9 +654,10 @@ fn extend_text_layouts(
         output.push(text_layout(text, style, system_text));
         return;
     }
+    let mut system_text = system_text;
     output.extend(
         text.graphemes(true)
-            .map(|grapheme| text_layout(grapheme.to_owned(), style.clone(), system_text.clone())),
+            .map(|grapheme| text_layout(grapheme.to_owned(), style.clone(), system_text.take())),
     );
 }
 

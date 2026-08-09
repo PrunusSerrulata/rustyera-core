@@ -398,16 +398,20 @@ fn project_load_start_and_print_cross_the_message_boundary() {
         RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
     )));
     let snapshot = session.presentation.snapshot();
-    assert!(snapshot.history.logical_lines.iter().any(|line| {
-        line.runs
+    assert!(
+        snapshot
+            .history
+            .logical_lines
             .iter()
-            .any(|run| display_run_contains(run, "ORACLE_READY"))
-    }));
-    assert!(snapshot.history.logical_lines.iter().any(|line| {
-        line.runs
+            .any(|line| projected_line_text(line).contains("ORACLE_READY"))
+    );
+    assert!(
+        snapshot
+            .history
+            .logical_lines
             .iter()
-            .any(|run| display_run_contains(run, "TITLE_CHARANUM=0"))
-    }));
+            .any(|line| projected_line_text(line).contains("TITLE_CHARANUM=0"))
+    );
 }
 
 #[test]
@@ -480,15 +484,13 @@ fn linecount_drives_clearline_and_bounded_padding_loops() {
     assert_eq!(read_runtime_integer(vm, "RESULT", &[52], None).unwrap(), 3);
     let snapshot = session.presentation.snapshot();
     assert_eq!(snapshot.history.logical_lines.len(), 3);
-    assert!(snapshot.history.logical_lines.iter().any(|line| {
-        line.runs.iter().any(|run| {
-            matches!(
-                run,
-                DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
-                    if text == "one"
-            )
-        })
-    }));
+    assert!(
+        snapshot
+            .history
+            .logical_lines
+            .iter()
+            .any(|line| projected_line_text(line) == "one")
+    );
 }
 
 #[test]
@@ -546,19 +548,17 @@ fn nested_begin_returns_current_frame_then_applies_the_deferred_flow() {
     );
     assert!(!session.skip_print);
     let snapshot = session.presentation.snapshot();
-    let run = snapshot
+    let line = snapshot
         .history
         .logical_lines
         .iter()
-        .flat_map(|line| &line.runs)
-        .find(|run| {
-            matches!(
-                run,
-                DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
-                    if text == "entered"
-            )
-        })
+        .find(|line| projected_line_text(line) == "entered")
         .expect("EVENTFIRST output");
+    let run = line
+        .runs
+        .iter()
+        .find(|run| matches!(run, DisplayRun::Text { .. } | DisplayRun::TextLayout { .. }))
+        .expect("EVENTFIRST text style");
     assert!(matches!(
         run,
         DisplayRun::Text { style, .. } | DisplayRun::TextLayout { style, .. }
@@ -649,24 +649,12 @@ fn builtin_title_precedes_reset_data_and_initial_character_insertion() {
     );
     let snapshot = session.presentation.snapshot();
     assert!(snapshot.history.logical_lines.iter().any(|line| {
-        line.alignment == LineAlignment::Center
-            && line.runs.iter().any(|run| {
-                matches!(
-                    run,
-                    DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
-                        if text == "Demo"
-                )
-            })
+        line.alignment == LineAlignment::Center && projected_line_text(line) == "Demo"
     }));
     assert!(snapshot.history.logical_lines.iter().any(|line| {
-        line.runs.iter().any(|run| {
-            matches!(run, DisplayRun::Button { runs, .. }
-            if matches!(
-                &runs[0],
-                DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
-                    if text.starts_with("[0]")
-            ))
-        })
+        line.runs.iter().any(
+            |run| matches!(run, DisplayRun::Button { .. } if projected_run_text(run).starts_with("[0]")),
+        )
     }));
     let pending = session.operations.active_input().unwrap();
     let wait_id = pending.wait.wait_id;
@@ -746,16 +734,11 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
     let output = drain(&mut session);
     let snapshot = session.presentation.snapshot();
     assert!(
-        snapshot.history.logical_lines.iter().any(|line| {
-            line.runs.iter().any(|run| {
-                matches!(
-                    run,
-                    era_runtime_protocol::DisplayRun::Text { text, .. }
-                        | era_runtime_protocol::DisplayRun::TextLayout { text, .. }
-                        if text.contains("meta=3,1,0,SYSTEM_TITLE,5,bound")
-                )
-            })
-        }),
+        snapshot
+            .history
+            .logical_lines
+            .iter()
+            .any(|line| { projected_line_text(line).contains("meta=3,1,0,SYSTEM_TITLE,5,bound") }),
         "{output:#?}"
     );
     let rendered = snapshot
@@ -864,16 +847,13 @@ fn reference_presentation_fixture_preserves_logical_intent() {
             .iter()
             .any(|run| matches!(run, era_runtime_protocol::DisplayRun::Separator { .. }))
     }));
-    assert!(snapshot.history.logical_lines.iter().any(|line| {
-        line.runs.iter().any(|run| {
-            matches!(
-                run,
-                era_runtime_protocol::DisplayRun::Text { text, .. }
-                    | era_runtime_protocol::DisplayRun::TextLayout { text, .. }
-                    if text == "VISIBLE"
-            )
-        })
-    }));
+    assert!(
+        snapshot
+            .history
+            .logical_lines
+            .iter()
+            .any(|line| projected_line_text(line) == "VISIBLE")
+    );
 }
 
 fn flattened_display_text(runs: &[DisplayRun]) -> String {
@@ -1115,16 +1095,13 @@ fn matching_timed_input_wins_over_queued_timer_and_starts_message_skip() {
     }
     drain(&mut session);
     let snapshot = session.presentation.snapshot();
-    assert!(snapshot.history.logical_lines.iter().any(|line| {
-        line.runs.iter().any(|run| {
-            matches!(
-                run,
-                era_runtime_protocol::DisplayRun::Text { text, .. }
-                    | era_runtime_protocol::DisplayRun::TextLayout { text, .. }
-                    if text.contains("got=9")
-            )
-        })
-    }));
+    assert!(
+        snapshot
+            .history
+            .logical_lines
+            .iter()
+            .any(|line| projected_line_text(line).contains("got=9"))
+    );
 }
 
 #[test]
@@ -1213,14 +1190,11 @@ fn untimed_one_input_message_skip_keeps_the_complete_default() {
     }
     drain(&mut session);
     let snapshot = session.presentation.snapshot();
-    assert!(snapshot.history.logical_lines.iter().any(|line| {
-        line.runs.iter().any(|run| {
-            matches!(
-                run,
-                era_runtime_protocol::DisplayRun::Text { text, .. }
-                    | era_runtime_protocol::DisplayRun::TextLayout { text, .. }
-                    if text.contains("got=LONG")
-            )
-        })
-    }));
+    assert!(
+        snapshot
+            .history
+            .logical_lines
+            .iter()
+            .any(|line| projected_line_text(line).contains("got=LONG"))
+    );
 }
