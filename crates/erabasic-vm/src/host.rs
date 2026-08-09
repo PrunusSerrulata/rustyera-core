@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 use erabasic_bytecode::{BytecodeArtifact, RuntimeImport, SymbolKey};
 use erabasic_data::LegacyEncoding;
 use serde::{Deserialize, Serialize};
-use unicode_width::UnicodeWidthStr;
 
 use crate::sfmt::Sfmt19937;
 use crate::structured::{StructuredExtension, StructuredScope};

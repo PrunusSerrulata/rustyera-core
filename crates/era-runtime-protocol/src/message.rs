@@ -21,7 +21,7 @@ use crate::{
     StateTransferCancel, StorageRequest, StorageResponse, VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(25, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(26, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]

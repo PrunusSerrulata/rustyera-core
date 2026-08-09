@@ -193,7 +193,8 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
         .iter()
         .flat_map(|line| &line.runs)
         .filter_map(|run| match run {
-            era_runtime_protocol::DisplayRun::Text { text, .. } => Some(text.as_str()),
+            era_runtime_protocol::DisplayRun::Text { text, .. }
+            | era_runtime_protocol::DisplayRun::TextLayout { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -407,6 +408,10 @@ fn empty_storage_listing_opens_a_fixed_runtime_tokenized_page() {
                         era_runtime_protocol::DisplayRun::Text {
                             system_text: Some(reference),
                             ..
+                        }
+                        | era_runtime_protocol::DisplayRun::TextLayout {
+                            system_text: Some(reference),
+                            ..
                         } if reference.key == SystemTextKey::LoadQuestion
                     )
                 })
@@ -443,9 +448,13 @@ fn occupied_save_slots_do_not_expose_delete_actions() {
     let snapshot = session.presentation.snapshot();
     assert!(snapshot.history.logical_lines.iter().all(|line| {
         line.runs.iter().all(|run| match run {
-            DisplayRun::Button { runs, .. } => runs.iter().all(
-                |run| !matches!(run, DisplayRun::Text { text, .. } if text.starts_with("Delete ")),
-            ),
+            DisplayRun::Button { runs, .. } => runs.iter().all(|run| {
+                !matches!(
+                    run,
+                    DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
+                        if text.starts_with("Delete ")
+                )
+            }),
             _ => true,
         })
     }));

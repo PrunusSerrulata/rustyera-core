@@ -325,6 +325,19 @@ pub enum DisplayRun {
         #[n(0)]
         width: PresentationLength,
     },
+    /// Frontend projection of canonical text with a runtime-owned CJK column advance.
+    /// This variant is never stored in a runtime snapshot.
+    #[n(8)]
+    TextLayout {
+        #[n(0)]
+        text: String,
+        #[n(1)]
+        style: TextStyle,
+        #[n(2)]
+        system_text: Option<SystemTextRef>,
+        #[n(3)]
+        columns: u32,
+    },
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

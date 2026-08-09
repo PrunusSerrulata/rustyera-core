@@ -176,7 +176,6 @@ dependencies = [
  "serde",
  "serde_json",
  "unicode-segmentation",
- "unicode-width",
  "zstd",
 ]
 

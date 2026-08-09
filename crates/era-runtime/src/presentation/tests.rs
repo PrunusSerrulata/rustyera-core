@@ -1,4 +1,24 @@
+use super::projection::plain_text;
 use super::*;
+
+fn display_text(run: &DisplayRun) -> Option<&str> {
+    match run {
+        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => Some(text),
+        _ => None,
+    }
+}
+
+fn collect_text_layouts<'a>(runs: &'a [DisplayRun], output: &mut Vec<(&'a str, u32)>) {
+    for run in runs {
+        match run {
+            DisplayRun::TextLayout { text, columns, .. } => output.push((text, *columns)),
+            DisplayRun::Button { runs, .. } | DisplayRun::ColumnCell { content: runs, .. } => {
+                collect_text_layouts(runs, output);
+            }
+            _ => {}
+        }
+    }
+}
 
 #[test]
 fn project_default_style_changes_update_existing_default_runs() {
@@ -196,10 +216,7 @@ fn plain_projection_pads_column_cells_to_their_preferred_width() {
     let text = snapshot.history.logical_lines[0]
         .runs
         .iter()
-        .filter_map(|run| match run {
-            DisplayRun::Text { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
+        .filter_map(display_text)
         .collect::<String>();
     assert_eq!(text, format!("{}A{}B", " ".repeat(24), " ".repeat(24)));
 
@@ -214,6 +231,100 @@ fn plain_projection_pads_column_cells_to_their_preferred_width() {
             .iter()
             .all(|run| !matches!(run, DisplayRun::ColumnCell { .. }))
     );
+}
+
+#[test]
+fn plain_projection_treats_ambiguous_cjk_glyphs_as_full_width() {
+    let mut model = PresentationModel::default();
+    model.set_projection(false, false, false, false, false);
+    model.append_column_cell("■……■".into(), CellAlignment::Left);
+    let snapshot = model.snapshot();
+    let text = snapshot.history.logical_lines[0]
+        .runs
+        .iter()
+        .filter_map(display_text)
+        .collect::<String>();
+
+    assert_eq!(text, format!("■……■{}", " ".repeat(17)));
+}
+
+#[test]
+fn projection_attaches_runtime_columns_to_nested_and_fallback_text() {
+    let projected = super::projection::project_runs(
+        vec![
+            DisplayRun::Button {
+                runs: vec![plain_text("■".into(), 19_000)],
+                token: InteractionToken { epoch: 1, id: 1 },
+                title: None,
+                hover_style: None,
+                value: ProtocolValue::Integer(1),
+                generation: 0,
+                enabled: true,
+            },
+            DisplayRun::ColumnCell {
+                content: vec![plain_text("……".into(), 19_000)],
+                alignment: CellAlignment::Left,
+                preferred_columns: 4,
+            },
+            DisplayRun::HtmlDocument {
+                document: erabasic_html::parse_document("<b>■……■</b>").unwrap(),
+            },
+            DisplayRun::Image {
+                placement: MediaPlacement {
+                    resource_id: "missing.png".into(),
+                    x: LogicalLength(0),
+                    y: LogicalLength(0),
+                    width: LogicalLength(0),
+                    height: LogicalLength(0),
+                    depth: 0,
+                    opacity: RationalOpacity {
+                        numerator: 255,
+                        denominator: 255,
+                    },
+                    revision: 0,
+                    hover_resource_id: None,
+                    mask_resource_id: None,
+                    requested_width: None,
+                    requested_height: None,
+                    requested_y: None,
+                },
+                alt_text: Some("…".into()),
+            },
+        ],
+        false,
+        false,
+        19_000,
+        false,
+        false,
+    );
+    let mut layouts = Vec::new();
+    collect_text_layouts(&projected, &mut layouts);
+    assert!(layouts.contains(&("■", 2)));
+    assert_eq!(
+        layouts.iter().filter(|layout| **layout == ("…", 2)).count(),
+        3
+    );
+    assert!(layouts.contains(&("■……■", 8)));
+}
+
+#[test]
+fn plain_separator_fallback_fills_logical_columns_with_ambiguous_patterns() {
+    let projected = super::projection::project_runs(
+        vec![DisplayRun::Separator {
+            pattern: "■A".into(),
+            role: SeparatorRole::Rule,
+        }],
+        false,
+        false,
+        19_000,
+        false,
+        false,
+    );
+    assert!(matches!(
+        projected.as_slice(),
+        [DisplayRun::TextLayout { text, columns: 75, .. }]
+            if text == &"■A".repeat(25)
+    ));
 }
 
 #[test]
@@ -242,7 +353,7 @@ fn temporary_empty_lines_can_be_replaced_without_frontend_state() {
     assert!(snapshot.history.logical_lines[1].temporary);
     assert!(matches!(
         &snapshot.history.logical_lines[1].runs[0],
-        DisplayRun::Text { text, .. } if text == "invalid"
+        DisplayRun::TextLayout { text, .. } if text == "invalid"
     ));
 }
 
@@ -273,14 +384,14 @@ fn style_and_media_are_canonical_but_capability_projected() {
         fallback.history.logical_lines[0].alignment,
         LineAlignment::Center
     );
-    let DisplayRun::Text { style, .. } = &fallback.history.logical_lines[0].runs[0] else {
+    let DisplayRun::TextLayout { style, .. } = &fallback.history.logical_lines[0].runs[0] else {
         panic!("first run must be text");
     };
     assert!(style.bold);
     assert!(style.underline);
     assert!(matches!(
         &fallback.history.logical_lines[1].runs[0],
-        DisplayRun::Text { text, .. } if text == "fallback"
+        DisplayRun::TextLayout { text, .. } if text == "fallback"
     ));
 
     model.set_projection(true, true, true, true, true);
@@ -371,7 +482,7 @@ fn automatic_buttons_are_grouped_after_the_complete_print_buffer_is_committed() 
     );
     assert!(matches!(
         &mixed.snapshot().history.logical_lines[0].runs[1],
-        DisplayRun::Text { text, .. } if text == "[2] plain "
+        DisplayRun::TextLayout { text, .. } if text == "[2] plain "
     ));
 }
 

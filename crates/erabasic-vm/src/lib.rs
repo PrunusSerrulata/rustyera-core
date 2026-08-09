@@ -7,6 +7,7 @@
 mod config;
 mod debug;
 mod debug_port;
+mod display_width;
 mod fault;
 mod host;
 mod hot_reload;
@@ -32,6 +33,7 @@ pub use debug_port::{
     VmDebugVariable, VmDebugVariableRef, VmDebugVariableWrite, VmResolvedBreakpoint, VmStepKind,
     VmStopToken,
 };
+pub use display_width::{emuera_display_width, logical_line_string};
 pub use fault::{VmError, VmFault, VmFaultCode};
 pub use host::{
     HostCallRequest, HostCallResult, HostReady, HostRebindRequest, HostWaitStability,
@@ -46,7 +48,6 @@ pub use runtime_port::{
 };
 pub use runtime_vm::{
     DEFAULT_LINE_COLUMNS, PreparedCandidateState, PreparedHostCompletion, RuntimeVm,
-    logical_line_string,
 };
 pub use save::{EraSaveScope, EraState, EraStateReport, EraVariableState};
 pub use snapshot::{

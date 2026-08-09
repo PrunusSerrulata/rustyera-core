@@ -201,7 +201,9 @@ fn restart_redraws_string_and_integer_button_menus_in_the_current_function() {
         .iter()
         .flat_map(|line| &line.runs)
         .filter_map(|run| match run {
-            DisplayRun::Text { text, .. } => Some(text.as_str()),
+            DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+                Some(text.as_str())
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -300,11 +302,20 @@ fn inputs_accepts_an_automatic_button_from_the_pending_print_buffer() {
             .drive(RuntimeDriveBudget::default())
             .expect("accept back button");
     }
-    assert!(session.presentation.snapshot().history.logical_lines.iter().any(
-        |line| line.runs.iter().any(
-            |run| matches!(run, era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("pending auto=58"))
-        )
-    ));
+    assert!(
+        session
+            .presentation
+            .snapshot()
+            .history
+            .logical_lines
+            .iter()
+            .any(|line| line.runs.iter().any(|run| matches!(
+                run,
+                era_runtime_protocol::DisplayRun::Text { text, .. }
+                    | era_runtime_protocol::DisplayRun::TextLayout { text, .. }
+                    if text.contains("pending auto=58")
+            )))
+    );
 }
 
 #[test]
@@ -429,7 +440,9 @@ fn visible_buttons_from_an_earlier_wait_remain_usable_until_breakbutton() {
         .iter()
         .flat_map(|line| &line.runs)
         .filter_map(|run| match run {
-            DisplayRun::Text { text, .. } => Some(text.as_str()),
+            DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+                Some(text.as_str())
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -510,7 +523,9 @@ fn skipdisp_silently_skips_wait_commands_like_the_reference() {
         .iter()
         .flat_map(|line| &line.runs)
         .filter_map(|run| match run {
-            DisplayRun::Text { text, .. } => Some(text.as_str()),
+            DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+                Some(text.as_str())
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -679,6 +694,10 @@ fn autosave_failure_prints_both_reference_messages_and_waits_before_shop() {
             era_runtime_protocol::DisplayRun::Text {
                 system_text: Some(reference),
                 ..
+            }
+            | era_runtime_protocol::DisplayRun::TextLayout {
+                system_text: Some(reference),
+                ..
             } => Some(reference.key),
             _ => None,
         })
@@ -833,6 +852,10 @@ fn continuous_train_reports_progress_and_routes_unavailable_commands_to_usercom(
         .flat_map(|line| line.runs)
         .filter_map(|run| match run {
             era_runtime_protocol::DisplayRun::Text {
+                system_text: Some(reference),
+                ..
+            }
+            | era_runtime_protocol::DisplayRun::TextLayout {
                 system_text: Some(reference),
                 ..
             } => Some(reference.key),

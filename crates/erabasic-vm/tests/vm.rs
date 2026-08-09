@@ -182,6 +182,38 @@ fn run_compiled_result(artifact: &BytecodeArtifact) -> VmValue {
     vm.read_variable(result, &[0], None).unwrap()
 }
 
+fn run_compiled_string_result(artifact: &BytecodeArtifact) -> VmValue {
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .expect("RESULTS")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(artifact);
+    let mut vm = Vm::new(validated(artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    vm.read_variable(results, &[0], None).unwrap()
+}
+
 #[derive(Default)]
 struct ReadyHost {
     calls: Vec<i64>,

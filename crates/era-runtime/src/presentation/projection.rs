@@ -5,8 +5,8 @@ use era_runtime_protocol::{
     CellAlignment, Color, DisplayLine, DisplayRun, InteractionToken, LogicalLength,
     PresentationLength, ProtocolValue, TextStyle,
 };
-use erabasic_vm::VmValue;
-use unicode_width::UnicodeWidthStr;
+use erabasic_vm::{VmValue, emuera_display_width};
+use unicode_segmentation::UnicodeSegmentation as _;
 
 pub(super) fn auto_button_groups(
     runs: &[DisplayRun],
@@ -266,7 +266,9 @@ pub(super) fn rebind_html_nodes(
 
 pub(super) fn append_log_run(output: &mut String, run: &DisplayRun) {
     match run {
-        DisplayRun::Text { text, .. } => output.push_str(text),
+        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+            output.push_str(text);
+        }
         DisplayRun::Button { runs, .. } => {
             for run in runs {
                 append_log_run(output, run);
@@ -294,7 +296,7 @@ pub(super) fn append_log_run(output: &mut String, run: &DisplayRun) {
 #[allow(clippy::too_many_lines)]
 pub(super) fn append_html_run(output: &mut String, run: &DisplayRun, line_height: LogicalLength) {
     match run {
-        DisplayRun::Text { text, style, .. } => {
+        DisplayRun::Text { text, style, .. } | DisplayRun::TextLayout { text, style, .. } => {
             let mut value = erabasic_html::escape(text);
             if style.strikeout {
                 value = format!("<s>{value}</s>");
@@ -439,7 +441,7 @@ pub(super) fn append_raw_mixed_length(output: &mut String, value: &PresentationL
 
 pub(super) fn run_is_empty(run: &DisplayRun) -> bool {
     match run {
-        DisplayRun::Text { text, .. } => text.is_empty(),
+        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => text.is_empty(),
         DisplayRun::Button { runs, .. } | DisplayRun::ColumnCell { content: runs, .. } => {
             runs.iter().all(run_is_empty)
         }
@@ -481,6 +483,17 @@ pub(super) fn project_runs(
     let mut projected = Vec::new();
     for run in runs {
         match run {
+            DisplayRun::Text {
+                text,
+                style,
+                system_text,
+            }
+            | DisplayRun::TextLayout {
+                text,
+                style,
+                system_text,
+                ..
+            } => extend_text_layouts(&mut projected, text, style, system_text),
             DisplayRun::Button {
                 runs,
                 token,
@@ -518,31 +531,29 @@ pub(super) fn project_runs(
                             .saturating_sub(width),
                     );
                     if alignment == CellAlignment::Right && !padding.is_empty() {
-                        projected.push(plain_text(padding.clone(), line_height));
+                        projected.push(projected_plain_text(padding.clone(), line_height));
                     }
                     projected.extend(content);
                     if alignment == CellAlignment::Left && !padding.is_empty() {
-                        projected.push(plain_text(padding, line_height));
+                        projected.push(projected_plain_text(padding, line_height));
                     }
                 }
             }
             DisplayRun::Separator { pattern, .. } if !separators => {
                 // A fixed 75-column projection is deterministic and independent of viewport.
                 let pattern = if pattern.is_empty() { "-" } else { &pattern };
-                projected.push(plain_text(
-                    pattern.repeat(75).chars().take(75).collect(),
-                    line_height,
-                ));
+                let text = logical_line_string(pattern, 75).unwrap_or_default();
+                projected.push(projected_plain_text(text, line_height));
             }
             DisplayRun::HtmlDocument { document } if !html => {
-                projected.push(plain_text(
+                projected.push(projected_plain_text(
                     strip_markup(&erabasic_html::serialize_document(&document)),
                     line_height,
                 ));
             }
             DisplayRun::Image { alt_text, .. } if !graphics => {
                 if let Some(text) = alt_text {
-                    projected.push(plain_text(text, line_height));
+                    projected.push(projected_plain_text(text, line_height));
                 }
             }
             DisplayRun::Shape { .. } if !graphics => {}
@@ -555,15 +566,16 @@ pub(super) fn project_runs(
 pub(super) fn projected_text_width(runs: &[DisplayRun]) -> usize {
     runs.iter()
         .map(|run| match run {
-            DisplayRun::Text { text, .. } => UnicodeWidthStr::width(text.as_str()),
+            DisplayRun::Text { text, .. } => emuera_display_width(text),
+            DisplayRun::TextLayout { columns, .. } => *columns as usize,
             DisplayRun::Button { runs, .. } | DisplayRun::ColumnCell { content: runs, .. } => {
                 projected_text_width(runs)
             }
-            DisplayRun::HtmlDocument { document } => UnicodeWidthStr::width(
+            DisplayRun::HtmlDocument { document } => emuera_display_width(
                 strip_markup(&erabasic_html::serialize_document(document)).as_str(),
             ),
             DisplayRun::Image { alt_text, .. } => {
-                alt_text.as_deref().map_or(0, UnicodeWidthStr::width)
+                alt_text.as_deref().map_or(0, emuera_display_width)
             }
             DisplayRun::Shape { .. } | DisplayRun::Separator { .. } | DisplayRun::Space { .. } => 0,
         })
@@ -604,6 +616,48 @@ pub(super) fn plain_text(text: String, _line_height: i64) -> DisplayRun {
         style: default_style(),
         system_text: None,
     }
+}
+
+fn projected_plain_text(text: String, line_height: i64) -> DisplayRun {
+    let DisplayRun::Text {
+        text,
+        style,
+        system_text,
+    } = plain_text(text, line_height)
+    else {
+        unreachable!("plain_text always returns text")
+    };
+    text_layout(text, style, system_text)
+}
+
+fn text_layout(
+    text: String,
+    style: TextStyle,
+    system_text: Option<era_runtime_protocol::SystemTextRef>,
+) -> DisplayRun {
+    let columns = u32::try_from(emuera_display_width(&text)).unwrap_or(u32::MAX);
+    DisplayRun::TextLayout {
+        text,
+        style,
+        system_text,
+        columns,
+    }
+}
+
+fn extend_text_layouts(
+    output: &mut Vec<DisplayRun>,
+    text: String,
+    style: TextStyle,
+    system_text: Option<era_runtime_protocol::SystemTextRef>,
+) {
+    if text.is_empty() {
+        output.push(text_layout(text, style, system_text));
+        return;
+    }
+    output.extend(
+        text.graphemes(true)
+            .map(|grapheme| text_layout(grapheme.to_owned(), style.clone(), system_text.clone())),
+    );
 }
 
 pub(crate) fn display_value(value: &VmValue) -> String {

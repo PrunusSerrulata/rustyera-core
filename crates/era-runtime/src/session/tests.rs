@@ -76,6 +76,14 @@ fn drain(session: &mut RuntimeSession) -> Vec<RuntimeMessage> {
     messages
 }
 
+fn display_run_contains(run: &DisplayRun, expected: &str) -> bool {
+    matches!(
+        run,
+        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
+            if text.contains(expected)
+    )
+}
+
 fn submit_debug(session: &mut RuntimeSession, sequence: u64, message: &DebugMessage) {
     let envelope = message
         .envelope(

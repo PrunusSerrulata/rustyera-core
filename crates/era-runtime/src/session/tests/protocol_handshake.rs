@@ -97,7 +97,9 @@ fn presentation_updates_are_coalesced_until_the_drive_boundary() {
         .iter()
         .flat_map(|line| &line.runs)
         .filter_map(|run| match run {
-            DisplayRun::Text { text, .. } => Some(text.as_str()),
+            DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+                Some(text.as_str())
+            }
             _ => None,
         })
         .collect::<String>();

@@ -160,7 +160,7 @@ pub(super) fn apply_width(
         Some(_) => return Err("format alignment must be an integer".into()),
         None => false,
     };
-    let characters = UnicodeWidthStr::width(value);
+    let characters = crate::emuera_display_width(value);
     if characters >= width {
         return Ok(value.into());
     }

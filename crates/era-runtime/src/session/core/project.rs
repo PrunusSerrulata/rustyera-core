@@ -291,12 +291,12 @@ impl RuntimeSession {
         let Some(selected) = negotiate_version(hello.runtime_versions, supported) else {
             self.emit_log(
                 RuntimeLogLevel::Error,
-                "runtime protocol negotiation failed: runtime protocol 25.0 is required",
+                "runtime protocol negotiation failed: runtime protocol 26.0 is required",
             )?;
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 25.0 is required".into(),
+                    message: "runtime protocol 26.0 is required".into(),
                 }),
                 Some(message_id),
             );

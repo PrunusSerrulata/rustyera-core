@@ -399,21 +399,14 @@ fn project_load_start_and_print_cross_the_message_boundary() {
     )));
     let snapshot = session.presentation.snapshot();
     assert!(snapshot.history.logical_lines.iter().any(|line| {
-        line.runs.iter().any(|run| {
-            matches!(
-                run,
-                era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("ORACLE_READY")
-            )
-        })
+        line.runs
+            .iter()
+            .any(|run| display_run_contains(run, "ORACLE_READY"))
     }));
     assert!(snapshot.history.logical_lines.iter().any(|line| {
-        line.runs.iter().any(|run| {
-            matches!(
-                run,
-                era_runtime_protocol::DisplayRun::Text { text, .. }
-                    if text.contains("TITLE_CHARANUM=0")
-            )
-        })
+        line.runs
+            .iter()
+            .any(|run| display_run_contains(run, "TITLE_CHARANUM=0"))
     }));
 }
 
@@ -488,9 +481,13 @@ fn linecount_drives_clearline_and_bounded_padding_loops() {
     let snapshot = session.presentation.snapshot();
     assert_eq!(snapshot.history.logical_lines.len(), 3);
     assert!(snapshot.history.logical_lines.iter().any(|line| {
-        line.runs
-            .iter()
-            .any(|run| matches!(run, DisplayRun::Text { text, .. } if text == "one"))
+        line.runs.iter().any(|run| {
+            matches!(
+                run,
+                DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
+                    if text == "one"
+            )
+        })
     }));
 }
 
@@ -554,9 +551,19 @@ fn nested_begin_returns_current_frame_then_applies_the_deferred_flow() {
         .logical_lines
         .iter()
         .flat_map(|line| &line.runs)
-        .find(|run| matches!(run, DisplayRun::Text { text, .. } if text == "entered"))
+        .find(|run| {
+            matches!(
+                run,
+                DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
+                    if text == "entered"
+            )
+        })
         .expect("EVENTFIRST output");
-    assert!(matches!(run, DisplayRun::Text { style, .. } if !style.bold));
+    assert!(matches!(
+        run,
+        DisplayRun::Text { style, .. } | DisplayRun::TextLayout { style, .. }
+            if !style.bold
+    ));
 }
 
 #[test]
@@ -643,15 +650,22 @@ fn builtin_title_precedes_reset_data_and_initial_character_insertion() {
     let snapshot = session.presentation.snapshot();
     assert!(snapshot.history.logical_lines.iter().any(|line| {
         line.alignment == LineAlignment::Center
-            && line
-                .runs
-                .iter()
-                .any(|run| matches!(run, DisplayRun::Text { text, .. } if text == "Demo"))
+            && line.runs.iter().any(|run| {
+                matches!(
+                    run,
+                    DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
+                        if text == "Demo"
+                )
+            })
     }));
     assert!(snapshot.history.logical_lines.iter().any(|line| {
         line.runs.iter().any(|run| {
             matches!(run, DisplayRun::Button { runs, .. }
-            if matches!(&runs[0], DisplayRun::Text { text, .. } if text.starts_with("[0]")))
+            if matches!(
+                &runs[0],
+                DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
+                    if text.starts_with("[0]")
+            ))
         })
     }));
     let pending = session.operations.active_input().unwrap();
@@ -737,6 +751,7 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
                 matches!(
                     run,
                     era_runtime_protocol::DisplayRun::Text { text, .. }
+                        | era_runtime_protocol::DisplayRun::TextLayout { text, .. }
                         if text.contains("meta=3,1,0,SYSTEM_TITLE,5,bound")
                 )
             })
@@ -749,7 +764,8 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
         .iter()
         .flat_map(|line| line.runs.iter())
         .filter_map(|run| match run {
-            era_runtime_protocol::DisplayRun::Text { text, .. } => Some(text.as_str()),
+            era_runtime_protocol::DisplayRun::Text { text, .. }
+            | era_runtime_protocol::DisplayRun::TextLayout { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect::<String>();
@@ -826,7 +842,9 @@ fn reference_presentation_fixture_preserves_logical_intent() {
                 era_runtime_protocol::DisplayRun::Button { runs, .. }
                     if runs.iter().any(|run| matches!(
                         run,
-                        era_runtime_protocol::DisplayRun::Text { text, .. } if text == "A"
+                        era_runtime_protocol::DisplayRun::Text { text, .. }
+                            | era_runtime_protocol::DisplayRun::TextLayout { text, .. }
+                            if text == "A"
                     ))
             )
         })
@@ -850,7 +868,9 @@ fn reference_presentation_fixture_preserves_logical_intent() {
         line.runs.iter().any(|run| {
             matches!(
                 run,
-                era_runtime_protocol::DisplayRun::Text { text, .. } if text == "VISIBLE"
+                era_runtime_protocol::DisplayRun::Text { text, .. }
+                    | era_runtime_protocol::DisplayRun::TextLayout { text, .. }
+                    if text == "VISIBLE"
             )
         })
     }));
@@ -859,7 +879,7 @@ fn reference_presentation_fixture_preserves_logical_intent() {
 fn flattened_display_text(runs: &[DisplayRun]) -> String {
     runs.iter()
         .map(|run| match run {
-            DisplayRun::Text { text, .. } => text.clone(),
+            DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => text.clone(),
             DisplayRun::Button { runs, .. } | DisplayRun::ColumnCell { content: runs, .. } => {
                 flattened_display_text(runs)
             }
@@ -1002,7 +1022,7 @@ fn printform_and_printc_family_preserve_reference_semantics() {
     let DisplayRun::Button { runs, .. } = &cells[0].0[0] else {
         unreachable!()
     };
-    let DisplayRun::Text { style, .. } = &runs[0] else {
+    let (DisplayRun::Text { style, .. } | DisplayRun::TextLayout { style, .. }) = &runs[0] else {
         unreachable!()
     };
     assert_eq!(style.foreground.red, 0xc0);
@@ -1099,7 +1119,9 @@ fn matching_timed_input_wins_over_queued_timer_and_starts_message_skip() {
         line.runs.iter().any(|run| {
             matches!(
                 run,
-                era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("got=9")
+                era_runtime_protocol::DisplayRun::Text { text, .. }
+                    | era_runtime_protocol::DisplayRun::TextLayout { text, .. }
+                    if text.contains("got=9")
             )
         })
     }));
@@ -1195,7 +1217,9 @@ fn untimed_one_input_message_skip_keeps_the_complete_default() {
         line.runs.iter().any(|run| {
             matches!(
                 run,
-                era_runtime_protocol::DisplayRun::Text { text, .. } if text.contains("got=LONG")
+                era_runtime_protocol::DisplayRun::Text { text, .. }
+                    | era_runtime_protocol::DisplayRun::TextLayout { text, .. }
+                    if text.contains("got=LONG")
             )
         })
     }));

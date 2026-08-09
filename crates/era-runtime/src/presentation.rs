@@ -925,7 +925,7 @@ fn replace_project_default_style(
     let mut changed = false;
     for run in runs {
         match run {
-            DisplayRun::Text { style, .. } => {
+            DisplayRun::Text { style, .. } | DisplayRun::TextLayout { style, .. } => {
                 changed |= replace_matching_style_defaults(style, previous, next);
             }
             DisplayRun::Button {

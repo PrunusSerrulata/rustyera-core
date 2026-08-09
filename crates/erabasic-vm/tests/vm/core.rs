@@ -7,6 +7,15 @@ fn power_statement_writes_the_destination_instead_of_passing_its_place_as_an_ope
 }
 
 #[test]
+fn compiled_form_padding_uses_portable_ambiguous_character_columns() {
+    let artifact = compile_source("@SYSTEM_TITLE\nRESULTS:0 = %\"■……■\", 12, LEFT%\nRETURN\n");
+    assert_eq!(
+        run_compiled_string_result(&artifact),
+        VmValue::String(format!("■……■{}", " ".repeat(4)))
+    );
+}
+
+#[test]
 fn static_call_target_with_an_inline_comment_executes_in_the_vm() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nCALL TARGET; inline comment\nRETURN RESULT\n@TARGET\nRESULT = 42\nRETURN RESULT\n",

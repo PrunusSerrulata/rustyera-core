@@ -28,7 +28,47 @@ fn form_width_honors_alignment_and_unicode_display_columns() {
         .unwrap(),
         format!("霊夢{}", " ".repeat(16))
     );
+    assert_eq!(
+        apply_width(
+            "■……■",
+            Some(&VmValue::Integer(12)),
+            Some(&VmValue::Integer(1)),
+        )
+        .unwrap(),
+        format!("■……■{}", " ".repeat(4))
+    );
+    assert_eq!(
+        apply_width(
+            "■……■",
+            Some(&VmValue::Integer(12)),
+            Some(&VmValue::Integer(0)),
+        )
+        .unwrap(),
+        format!("{}■……■", " ".repeat(4))
+    );
+    assert_eq!(
+        apply_width(
+            "■……■",
+            Some(&VmValue::Integer(4)),
+            Some(&VmValue::Integer(1)),
+        )
+        .unwrap(),
+        "■……■"
+    );
     assert!(apply_width("x", Some(&VmValue::Integer(-1)), None).is_err());
+}
+
+#[test]
+fn getline_repeats_ambiguous_cjk_glyphs_by_their_full_width() {
+    assert_eq!(crate::logical_line_string("■", 8).unwrap(), "■■■■");
+    assert_eq!(crate::logical_line_string("…", 6).unwrap(), "………");
+    assert_eq!(crate::logical_line_string("A■", 7).unwrap(), "A■A■A");
+    assert_eq!(
+        crate::logical_line_string("\u{200b}■", 5).unwrap(),
+        "\u{200b}■\u{200b}■"
+    );
+    assert_eq!(crate::logical_line_string("■", 1).unwrap(), "");
+    assert!(crate::logical_line_string("\u{200b}", 8).is_err());
 }
 
 #[test]

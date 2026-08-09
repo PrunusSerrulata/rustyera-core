@@ -1230,7 +1230,9 @@ fn train_controller_consumes_runtime_button_intent_and_loops_after_eventcomend()
             fn text(runs: &[DisplayRun], output: &mut String) {
                 for run in runs {
                     match run {
-                        DisplayRun::Text { text, .. } => output.push_str(text),
+                        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+                            output.push_str(text);
+                        }
                         DisplayRun::Button { runs, .. }
                         | DisplayRun::ColumnCell { content: runs, .. } => text(runs, output),
                         _ => {}

@@ -1,7 +1,5 @@
 use erabasic_bytecode::{Digest, HostSnapshotCapability, SymbolKey};
 use erabasic_validator::ValidatedArtifact;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 use crate::structured::{StructuredExtension, StructuredScope};
 use crate::{
@@ -27,41 +25,6 @@ pub struct RuntimeVm {
 
 /// Stable logical width used until a frontend reports its projection dimensions.
 pub const DEFAULT_LINE_COLUMNS: u32 = 75;
-
-/// Repeat a pattern to a deterministic logical-column limit without splitting graphemes.
-///
-/// # Errors
-///
-/// Returns an error when the pattern is empty or has no positive logical width.
-pub fn logical_line_string(pattern: &str, columns: usize) -> Result<String, &'static str> {
-    if pattern.is_empty() {
-        return Err("GETLINESTR pattern must not be empty");
-    }
-    let graphemes: Vec<_> = pattern.graphemes(true).collect();
-    let widths: Vec<_> = graphemes
-        .iter()
-        .map(|grapheme| UnicodeWidthStr::width(*grapheme))
-        .collect();
-    if widths.iter().all(|width| *width == 0) {
-        return Err("GETLINESTR pattern must have positive logical width");
-    }
-    let mut result = String::new();
-    let mut used: usize = 0;
-    'fill: loop {
-        let before = used;
-        for (grapheme, width) in graphemes.iter().zip(&widths) {
-            if used.saturating_add(*width) > columns {
-                break 'fill;
-            }
-            result.push_str(grapheme);
-            used = used.saturating_add(*width);
-        }
-        if used == before || used >= columns {
-            break;
-        }
-    }
-    Ok(result)
-}
 
 /// Opaque candidate state prepared against one exact artifact generation.
 /// It intentionally excludes fibers, frames and scheduler counters.
@@ -209,7 +172,7 @@ impl RuntimeVm {
             .replace
             .draw_line_string
             .clone();
-        let value = logical_line_string(
+        let value = crate::logical_line_string(
             &pattern,
             usize::try_from(self.line_columns).unwrap_or(usize::MAX),
         )
