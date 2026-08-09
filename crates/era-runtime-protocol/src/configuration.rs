@@ -89,13 +89,17 @@ pub struct ProjectConfigurationEntry {
 pub struct ProjectConfigurationSnapshot {
     #[n(0)]
     pub project_revision: u64,
-    /// BLAKE3 of the submitted root emuera.config, or an empty byte string if absent.
+    /// BLAKE3 of the effective root reraconfig.toml after normalizing line endings to LF.
     #[n(1)]
     pub source_digest: ProtocolBytes,
     #[n(2)]
     pub entries: Vec<ProjectConfigurationEntry>,
     #[n(3)]
     pub restart_pending: bool,
+    /// Complete LF-form TOML generated from legacy sources when reraconfig.toml was absent.
+    /// Clients persist it only while the destination is absent and convert LF to native endings.
+    #[n(4)]
+    pub generated_source: Option<Box<str>>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

@@ -1,125 +1,43 @@
-use era_config::{ConfigStore, ConfigValue};
+use era_config::{
+    ConfigStore, ConfigValue, LegacyConfigSource, ReraConfigDocument, migrate_legacy_configuration,
+};
 use era_runtime_protocol::{
-    ConfigurationClientProfile, FileCategory, FilePayload, ProtocolDiagnostic, RuntimeLogLevel,
-    SourceLocation,
+    FileCategory, FilePayload, ProtocolDiagnostic, RuntimeLogLevel, SourceLocation,
 };
 use erabasic_analyzer::WarningPolicy;
 use erabasic_data::LegacyEncoding;
 
 use super::{SemanticConfig, inspect_deferred_file, project_diagnostic};
 
-#[allow(clippy::too_many_lines)]
+pub(super) struct ParsedConfiguration {
+    pub(super) semantic: SemanticConfig,
+    pub(super) document: ReraConfigDocument,
+    pub(super) generated_source: Option<String>,
+}
+
 pub(super) fn parse_configuration(
     files: &[era_runtime_protocol::SubmittedFile],
     diagnostics: &mut Vec<ProtocolDiagnostic>,
-    profile: ConfigurationClientProfile,
-) -> SemanticConfig {
-    let values = match profile {
-        ConfigurationClientProfile::Tui => ConfigStore::with_tui_defaults(),
-        ConfigurationClientProfile::Browser | ConfigurationClientProfile::Tauri => {
-            ConfigStore::with_web_defaults()
-        }
-        ConfigurationClientProfile::Reference => ConfigStore::default(),
+) -> ParsedConfiguration {
+    let root = files.iter().find(|file| {
+        file.category == FileCategory::Configuration
+            && file
+                .relative_path
+                .replace('\\', "/")
+                .eq_ignore_ascii_case("reraconfig.toml")
+    });
+    let (document, values, generated_source) = match root {
+        Some(file) => parse_reraconfig(file, diagnostics),
+        None => migrate_configuration(files, diagnostics),
     };
     let mut config = SemanticConfig {
         values,
         ..SemanticConfig::default()
     };
-    let mut configuration_files = files
-        .iter()
-        .filter(|file| file.category == FileCategory::Configuration)
-        .collect::<Vec<_>>();
-    // Emuera has a semantic precedence independent of frontend submission order.
-    configuration_files.sort_by_key(|file| configuration_precedence(&file.relative_path));
-    for file in configuration_files {
-        let FilePayload::Utf8(text) = &file.payload else {
-            inspect_deferred_file(
-                diagnostics,
-                &file.relative_path,
-                &file.payload,
-                true,
-                "runtime.configuration_ignored",
-                "configuration payload was not UTF-8",
-            );
-            continue;
-        };
-        if parse_json_configuration(text, &file.relative_path, &mut config, diagnostics) {
-            continue;
-        }
-        let fixed = is_fixed_configuration(&file.relative_path);
-        let debug_configuration = file
-            .relative_path
-            .replace('\\', "/")
-            .rsplit('/')
-            .next()
-            .is_some_and(|name| name.eq_ignore_ascii_case("debug.config"));
-        for (line_index, raw) in text.trim_start_matches('\u{feff}').lines().enumerate() {
-            let line = raw.trim();
-            if line.is_empty() || line.starts_with(';') {
-                continue;
-            }
-            let Some((name, value)) = line.split_once(':') else {
-                diagnostics.push(project_diagnostic(
-                    "runtime.invalid_configuration",
-                    RuntimeLogLevel::Warning,
-                    "configuration line has no ':' separator",
-                    Some(SourceLocation {
-                        relative_path: file.relative_path.clone(),
-                        byte_start: 0,
-                        byte_end: 0,
-                        line: Some(line_index as u64 + 1),
-                        byte_column: None,
-                    }),
-                ));
-                continue;
-            };
-            let name = name.trim();
-            let value = value.trim();
-            if matches!(name, "UseNewRandom" | "新しい高速な乱数アルゴリズムを使う")
-            {
-                match parse_boolean(value) {
-                    Some(boolean) => config.use_new_random = boolean,
-                    None => diagnostics.push(project_diagnostic(
-                        "runtime.invalid_configuration",
-                        RuntimeLogLevel::Warning,
-                        "UseNewRandom must be a boolean value",
-                        Some(SourceLocation {
-                            relative_path: file.relative_path.clone(),
-                            byte_start: 0,
-                            byte_end: 0,
-                            line: Some(line_index as u64 + 1),
-                            byte_column: None,
-                        }),
-                    )),
-                }
-                continue;
-            }
-            let applied = if debug_configuration {
-                config.values.apply(name, value, false)
-            } else {
-                config.values.apply_regular(name, value, fixed)
-            };
-            if let Err(error) = applied {
-                diagnostics.push(project_diagnostic(
-                    match error {
-                        era_config::ConfigParseError::UnknownKey => "runtime.unknown_configuration",
-                        era_config::ConfigParseError::InvalidValue => {
-                            "runtime.invalid_configuration"
-                        }
-                    },
-                    RuntimeLogLevel::Warning,
-                    format!("configuration assignment {name:?} was not applied"),
-                    Some(SourceLocation {
-                        relative_path: file.relative_path.clone(),
-                        byte_start: 0,
-                        byte_end: 0,
-                        line: Some(line_index as u64 + 1),
-                        byte_column: None,
-                    }),
-                ));
-            }
-        }
-    }
+    config.use_new_random = matches!(
+        config.values.get_code("UseNewRandom"),
+        Some(ConfigValue::Boolean(true))
+    );
     if config.use_new_random {
         diagnostics.push(project_diagnostic(
             "runtime.use_new_random_ignored",
@@ -129,7 +47,120 @@ pub(super) fn parse_configuration(
         ));
     }
     apply_catalog_semantics(&mut config);
-    config
+    ParsedConfiguration {
+        semantic: config,
+        document,
+        generated_source,
+    }
+}
+
+fn parse_reraconfig(
+    file: &era_runtime_protocol::SubmittedFile,
+    diagnostics: &mut Vec<ProtocolDiagnostic>,
+) -> (ReraConfigDocument, ConfigStore, Option<String>) {
+    let FilePayload::Utf8(text) = &file.payload else {
+        inspect_deferred_file(
+            diagnostics,
+            &file.relative_path,
+            &file.payload,
+            true,
+            "runtime.configuration_ignored",
+            "reraconfig.toml payload was not UTF-8",
+        );
+        return (ReraConfigDocument::empty(), ConfigStore::default(), None);
+    };
+    match ReraConfigDocument::parse(text) {
+        Ok(document) => {
+            let values = document
+                .values()
+                .expect("a parsed reraconfig remains valid");
+            (document, values, None)
+        }
+        Err(error) => {
+            diagnostics.push(project_diagnostic(
+                "runtime.invalid_reraconfig",
+                RuntimeLogLevel::Error,
+                error.to_string(),
+                Some(SourceLocation {
+                    relative_path: file.relative_path.clone(),
+                    byte_start: error.span.map_or(0, |span| span.start as u64),
+                    byte_end: error.span.map_or(0, |span| span.end as u64),
+                    line: None,
+                    byte_column: None,
+                }),
+            ));
+            (ReraConfigDocument::empty(), ConfigStore::default(), None)
+        }
+    }
+}
+
+fn migrate_configuration(
+    files: &[era_runtime_protocol::SubmittedFile],
+    diagnostics: &mut Vec<ProtocolDiagnostic>,
+) -> (ReraConfigDocument, ConfigStore, Option<String>) {
+    for file in files
+        .iter()
+        .filter(|file| is_legacy_configuration_source(file))
+    {
+        if !matches!(file.payload, FilePayload::Utf8(_)) {
+            inspect_deferred_file(
+                diagnostics,
+                &file.relative_path,
+                &file.payload,
+                true,
+                "runtime.legacy_configuration_ignored",
+                "legacy configuration payload could not be decoded",
+            );
+        }
+    }
+    let sources = files
+        .iter()
+        .filter_map(|file| match &file.payload {
+            FilePayload::Utf8(contents) if is_legacy_configuration_source(file) => {
+                Some(LegacyConfigSource {
+                    relative_path: &file.relative_path,
+                    contents,
+                })
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let migration = migrate_legacy_configuration(&sources);
+    for diagnostic in migration.diagnostics {
+        diagnostics.push(project_diagnostic(
+            "runtime.legacy_configuration_migration",
+            RuntimeLogLevel::Warning,
+            diagnostic.message,
+            Some(SourceLocation {
+                relative_path: diagnostic.relative_path,
+                byte_start: diagnostic.span.map_or(0, |span| span.start as u64),
+                byte_end: diagnostic.span.map_or(0, |span| span.end as u64),
+                line: diagnostic.line.map(|line| line as u64),
+                byte_column: None,
+            }),
+        ));
+    }
+    let generated_source = (!sources.is_empty()).then(|| migration.document.to_lf_string());
+    (migration.document, migration.values, generated_source)
+}
+
+fn basename(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+fn is_legacy_configuration_source(file: &era_runtime_protocol::SubmittedFile) -> bool {
+    let name = basename(&file.relative_path);
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "_default.config"
+            | "default.config"
+            | "emuera.config"
+            | "setting.json"
+            | "_fixed.config"
+            | "fixed.config"
+            | "debug.config"
+            | "_replace.csv"
+    )
 }
 
 #[allow(clippy::too_many_lines)]
@@ -277,128 +308,77 @@ fn parse_warning_policy(value: &str) -> Option<WarningPolicy> {
     }
 }
 
-fn parse_json_configuration(
-    text: &str,
-    path: &str,
-    config: &mut SemanticConfig,
-    diagnostics: &mut Vec<ProtocolDiagnostic>,
-) -> bool {
-    let text = text.trim_start_matches('\u{feff}');
-    if !text.trim_start().starts_with('{') {
-        return false;
-    }
-    match serde_json::from_str::<serde_json::Value>(text) {
-        Ok(value) => {
-            if let Some(boolean) = value
-                .get("UseNewRandom")
-                .and_then(serde_json::Value::as_bool)
-            {
-                config.use_new_random = boolean;
-            }
-        }
-        Err(error) => diagnostics.push(project_diagnostic(
-            "runtime.invalid_json_configuration",
-            RuntimeLogLevel::Warning,
-            error.to_string(),
-            Some(SourceLocation {
-                relative_path: path.into(),
-                byte_start: 0,
-                byte_end: u64::try_from(text.len()).unwrap_or(u64::MAX),
-                line: None,
-                byte_column: None,
-            }),
-        )),
-    }
-    true
-}
-
-fn configuration_precedence(path: &str) -> (u8, String) {
-    let normalized = path.replace('\\', "/").to_ascii_lowercase();
-    let name = normalized.rsplit('/').next().unwrap_or(&normalized);
-    let rank = match name {
-        "_default.config" | "default.config" => 0,
-        "setting.json" => 2,
-        "_fixed.config" | "fixed.config" => 3,
-        "debug.config" => 4,
-        _ => 1,
-    };
-    (rank, normalized)
-}
-
-fn is_fixed_configuration(path: &str) -> bool {
-    matches!(
-        path.replace('\\', "/")
-            .to_ascii_lowercase()
-            .rsplit('/')
-            .next(),
-        Some("_fixed.config" | "fixed.config")
-    )
-}
-
-fn parse_boolean(value: &str) -> Option<bool> {
-    match value.trim().to_ascii_uppercase().as_str() {
-        "YES" | "TRUE" | "1" => Some(true),
-        "NO" | "FALSE" | "0" => Some(false),
-        _ => None,
-    }
-}
-
-pub(super) fn sync_replace_configuration(
-    store: &mut ConfigStore,
-    replace: &erabasic_data::ReplaceSettings,
+pub(super) fn apply_replace_configuration(
+    store: &ConfigStore,
+    replace: &mut erabasic_data::ReplaceSettings,
 ) {
-    // Replace.csv is parsed by erabasic-csv, then mirrored into the unified script
-    // query catalog. This avoids treating replace keys as emuera.config settings.
-    let values = [
-        ("MoneyLabel", replace.money_label.clone()),
-        (
-            "MoneyFirst",
-            if replace.money_first {
-                "YES".into()
-            } else {
-                "NO".into()
-            },
-        ),
-        ("LoadLabel", replace.load_label.clone()),
-        ("MaxShopItem", replace.max_shop_item.to_string()),
-        ("DrawLineString", replace.draw_line_string.clone()),
-        ("BarChar1", replace.bar_char_1.to_string()),
-        ("BarChar2", replace.bar_char_2.to_string()),
-        ("TitleMenuString0", replace.title_menu_string_0.clone()),
-        ("TitleMenuString1", replace.title_menu_string_1.clone()),
-        ("ComAbleDefault", replace.com_able_default.to_string()),
-        (
-            "StainDefault",
-            replace
-                .stain_default
-                .iter()
-                .map(i64::to_string)
-                .collect::<Vec<_>>()
-                .join("/"),
-        ),
-        ("TimeupLabel", replace.timeup_label.clone()),
-        (
-            "ExpLvDef",
-            replace
-                .exp_lv_default
-                .iter()
-                .map(i64::to_string)
-                .collect::<Vec<_>>()
-                .join("/"),
-        ),
-        (
-            "PalamLvDef",
-            replace
-                .palam_lv_default
-                .iter()
-                .map(i64::to_string)
-                .collect::<Vec<_>>()
-                .join("/"),
-        ),
-        ("pbandDef", replace.pband_default.to_string()),
-        ("RelationDef", replace.relation_default.to_string()),
-    ];
-    for (name, value) in values {
-        let _ = store.apply(name, &value, false);
+    let string = |code| match store.get_code(code) {
+        Some(ConfigValue::String(value) | ConfigValue::Enum { value, .. }) => Some(value.clone()),
+        _ => None,
+    };
+    let boolean = |code| match store.get_code(code) {
+        Some(ConfigValue::Boolean(value)) => Some(*value),
+        _ => None,
+    };
+    let integer = |code| match store.get_code(code) {
+        Some(ConfigValue::Integer(value)) => Some(*value),
+        _ => None,
+    };
+    let character = |code| match store.get_code(code) {
+        Some(ConfigValue::Character(value)) => Some(*value),
+        _ => None,
+    };
+    let integer_list = |code| match store.get_code(code) {
+        Some(ConfigValue::IntegerList(value)) => Some(value.clone()),
+        _ => None,
+    };
+
+    if let Some(value) = string("MoneyLabel") {
+        replace.money_label = value;
+    }
+    if let Some(value) = boolean("MoneyFirst") {
+        replace.money_first = value;
+    }
+    if let Some(value) = string("LoadLabel") {
+        replace.load_label = value;
+    }
+    if let Some(value) = integer("MaxShopItem").and_then(|value| i32::try_from(value).ok()) {
+        replace.max_shop_item = value;
+    }
+    if let Some(value) = string("DrawLineString") {
+        replace.draw_line_string = value;
+    }
+    if let Some(value) = character("BarChar1") {
+        replace.bar_char_1 = value;
+    }
+    if let Some(value) = character("BarChar2") {
+        replace.bar_char_2 = value;
+    }
+    if let Some(value) = string("TitleMenuString0") {
+        replace.title_menu_string_0 = value;
+    }
+    if let Some(value) = string("TitleMenuString1") {
+        replace.title_menu_string_1 = value;
+    }
+    if let Some(value) = integer("ComAbleDefault").and_then(|value| i32::try_from(value).ok()) {
+        replace.com_able_default = value;
+    }
+    if let Some(value) = integer_list("StainDefault") {
+        replace.stain_default = value;
+    }
+    if let Some(value) = string("TimeupLabel") {
+        replace.timeup_label = value;
+    }
+    if let Some(value) = integer_list("ExpLvDef") {
+        replace.exp_lv_default = value;
+    }
+    if let Some(value) = integer_list("PalamLvDef") {
+        replace.palam_lv_default = value;
+    }
+    if let Some(value) = integer("pbandDef") {
+        replace.pband_default = value;
+    }
+    if let Some(value) = integer("RelationDef") {
+        replace.relation_default = value;
     }
 }

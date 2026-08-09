@@ -146,6 +146,21 @@ impl CompiledSnapshotMetadata {
                 diagnostic.message
             ));
         }
+        let configuration_document = manifest
+            .files
+            .iter()
+            .find(|file| crate::project::is_root_configuration_file(file))
+            .and_then(|file| match &file.payload {
+                FilePayload::Utf8(contents) => Some(contents),
+                _ => None,
+            })
+            .map_or_else(
+                || Ok(era_config::ReraConfigDocument::empty()),
+                |contents| {
+                    era_config::ReraConfigDocument::parse(contents)
+                        .map_err(|error| error.to_string())
+                },
+            )?;
         Ok(NormalizedProjectSnapshot {
             manifest: std::sync::Arc::new(manifest),
             project_identity: self.project_identity,
@@ -171,6 +186,8 @@ impl CompiledSnapshotMetadata {
             configuration_profile: self.configuration_profile,
             configuration: self.configuration,
             editable_configuration: self.editable_configuration,
+            configuration_document,
+            generated_configuration_source: None,
             extensions: self.extensions,
         })
     }

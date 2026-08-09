@@ -60,47 +60,18 @@ impl RuntimeSession {
         }
         let profile_flag = crate::project::profile_applicability(self.configuration_profile);
         let transactional = profile_flag.is_some();
-        let editable = current
-            .entries
-            .iter()
-            .filter(|entry| profile_flag.is_none_or(|flag| entry.applicability & flag != 0))
-            .map(|entry| (entry.code.to_ascii_uppercase(), entry))
-            .collect::<BTreeMap<_, _>>();
-        let mut values = snapshot.editable_configuration.clone();
-        for change in &request.changes {
-            if !editable.contains_key(&change.code.to_ascii_uppercase()) {
-                return self.reject(
-                    message_id,
-                    CommandErrorCode::InvalidValue,
-                    "configuration update contains an unsupported, fixed, or invalid value",
-                );
+        let validated = match validate_configuration_changes(
+            snapshot,
+            &current,
+            &request.changes,
+            profile_flag,
+        ) {
+            Ok(validated) => validated,
+            Err(message) => {
+                return self.reject(message_id, CommandErrorCode::InvalidValue, message);
             }
-            if values.is_fixed(&change.code)
-                || values
-                    .apply_regular(&change.code, &change.value, false)
-                    .is_err()
-            {
-                return self.reject(
-                    message_id,
-                    CommandErrorCode::InvalidValue,
-                    "configuration update contains an unsupported, fixed, or invalid value",
-                );
-            }
-        }
-        let changed_codes = editable
-            .values()
-            .filter(|entry| {
-                values
-                    .get_code(&entry.code)
-                    .is_some_and(|value| value.config_text() != entry.value)
-            })
-            .map(|entry| entry.code.clone())
-            .collect::<BTreeSet<_>>();
-        let restart_required = editable.values().any(|entry| {
-            changed_codes.contains(&entry.code)
-                && entry.application == ConfigurationApplication::Restart
-        });
-        let contents = values.serialize_regular();
+        };
+        let contents = validated.document.to_lf_string();
         let prepared_source_digest =
             ProtocolBytes::new(blake3::hash(contents.as_bytes()).as_bytes().to_vec());
         if transactional {
@@ -110,8 +81,9 @@ impl RuntimeSession {
                 expected_source_digest: current.source_digest.clone(),
                 prepared_source_digest: prepared_source_digest.clone(),
                 contents: contents.clone(),
-                values,
-                changed_codes,
+                values: validated.values,
+                document: validated.document,
+                changed_codes: validated.changed_codes,
             });
         }
         self.emit(
@@ -120,7 +92,7 @@ impl RuntimeSession {
                 expected_source_digest: current.source_digest,
                 contents,
                 restart_required: if transactional {
-                    restart_required
+                    validated.restart_required
                 } else {
                     true
                 },
@@ -194,6 +166,8 @@ impl RuntimeSession {
                 &pending.prepared_source_digest,
             );
             snapshot.editable_configuration = pending.values;
+            snapshot.configuration_document = pending.document;
+            snapshot.generated_configuration_source = None;
             apply_hot_configuration(snapshot, &pending.changed_codes);
             snapshot.configuration_snapshot()
         };
@@ -1113,6 +1087,62 @@ impl RuntimeSession {
     }
 }
 
+struct ValidatedConfigurationUpdate {
+    values: era_config::ConfigStore,
+    document: era_config::ReraConfigDocument,
+    changed_codes: BTreeSet<String>,
+    restart_required: bool,
+}
+
+fn validate_configuration_changes(
+    snapshot: &NormalizedProjectSnapshot,
+    current: &era_runtime_protocol::ProjectConfigurationSnapshot,
+    changes: &[era_runtime_protocol::ConfigurationChange],
+    profile_flag: Option<u32>,
+) -> Result<ValidatedConfigurationUpdate, &'static str> {
+    let editable = current
+        .entries
+        .iter()
+        .filter(|entry| profile_flag.is_none_or(|flag| entry.applicability & flag != 0))
+        .map(|entry| (entry.code.to_ascii_uppercase(), entry))
+        .collect::<BTreeMap<_, _>>();
+    let mut values = snapshot.editable_configuration.clone();
+    let mut document = snapshot.configuration_document.clone();
+    for change in changes {
+        if !editable.contains_key(&change.code.to_ascii_uppercase())
+            || values.is_fixed(&change.code)
+            || values.apply(&change.code, &change.value, false).is_err()
+        {
+            return Err("configuration update contains an unsupported, fixed, or invalid value");
+        }
+        let value = values
+            .get_code(&change.code)
+            .expect("a validated configuration change has a catalog value");
+        if document.set_code(&change.code, value).is_err() {
+            return Err("configuration update contains a locked or invalid value");
+        }
+    }
+    let changed_codes = editable
+        .values()
+        .filter(|entry| {
+            values
+                .get_code(&entry.code)
+                .is_some_and(|value| value.config_text() != entry.value)
+        })
+        .map(|entry| entry.code.clone())
+        .collect::<BTreeSet<_>>();
+    let restart_required = editable.values().any(|entry| {
+        changed_codes.contains(&entry.code)
+            && entry.application == ConfigurationApplication::Restart
+    });
+    Ok(ValidatedConfigurationUpdate {
+        values,
+        document,
+        changed_codes,
+        restart_required,
+    })
+}
+
 fn commit_configuration_manifest(
     snapshot: &mut NormalizedProjectSnapshot,
     contents: &str,
@@ -1128,7 +1158,7 @@ fn commit_configuration_manifest(
         file.content_hash = Some(digest.clone());
     } else {
         manifest.files.push(era_runtime_protocol::SubmittedFile {
-            relative_path: "emuera.config".into(),
+            relative_path: "reraconfig.toml".into(),
             category: FileCategory::Configuration,
             payload: FilePayload::Utf8(contents.into()),
             content_hash: Some(digest.clone()),
@@ -1153,7 +1183,7 @@ fn apply_hot_configuration(
             .config_text();
         snapshot
             .configuration
-            .apply_regular(code, &value, false)
+            .apply(code, &value, false)
             .expect("a prepared configuration value remains valid");
     }
 

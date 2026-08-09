@@ -84,7 +84,7 @@ fn tui_configuration_profile_applies_defaults_and_commits_atomically() {
             .iter()
             .filter(|entry| entry.applicability & CONFIG_TUI != 0)
             .count(),
-        38
+        40
     );
     for (code, expected) in [
         ("MaxLog", "1000"),
@@ -309,7 +309,7 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
             .iter()
             .filter(|entry| entry.applicability & CONFIG_BROWSER != 0)
             .count(),
-        43
+        46
     );
     assert_eq!(
         initial
@@ -657,8 +657,8 @@ fn configuration_update_is_validated_and_serialized_by_the_runtime() {
     assert!(drain(&mut session).iter().any(|message| matches!(
         message,
         RuntimeMessage::ConfigurationUpdatePrepared(prepared)
-            if prepared.contents.contains("フォントサイズ:22\n")
-                && prepared.contents.contains("ウィンドウ幅:900\n")
+            if prepared.contents.contains("font_size = 22")
+                && prepared.contents.contains("width = 900")
                 && prepared.restart_required
     )));
 

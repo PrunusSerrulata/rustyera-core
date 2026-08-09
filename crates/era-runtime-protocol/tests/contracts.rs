@@ -130,7 +130,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(26, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(27, 0));
 }
 
 #[test]
@@ -225,8 +225,14 @@ fn protocol_25_round_trips_configuration_profile_transactions() {
                 application: ConfigurationApplication::Hot,
             }],
             restart_pending: false,
+            generated_source: Some("[meta]\nschema_version = 1\n".into()),
         },
     });
+    let json = serde_json::to_string(&committed).unwrap();
+    assert_eq!(
+        serde_json::from_str::<RuntimeMessage>(&json).unwrap(),
+        committed
+    );
     assert_eq!(committed.tag(), 27);
     assert_eq!(
         RuntimeMessage::decode_payload(27, &committed.encode_payload().unwrap()),
@@ -246,7 +252,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(26, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(27, 0));
 }
 
 #[test]
@@ -255,7 +261,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(26, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(27, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -421,7 +427,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(26, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(27, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -460,7 +466,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(26, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(27, 0));
 }
 
 #[test]

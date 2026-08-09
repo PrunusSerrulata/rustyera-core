@@ -4,7 +4,7 @@ mod frontend;
 #[cfg(test)]
 mod tests;
 
-use era_config::ConfigStore;
+use era_config::{ConfigStore, ReraConfigDocument};
 use era_runtime_protocol::{
     CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ConfigurationApplication,
     ConfigurationClientProfile, ConfigurationValueKind, FileCategory, FileChange, FilePayload,
@@ -30,7 +30,7 @@ use std::sync::Arc;
 use crate::resource::ResourceGraph;
 use crate::{ProjectProgress, ProjectProgressReporter, ProjectProgressStage};
 
-use self::configuration::{parse_configuration, sync_replace_configuration};
+use self::configuration::{apply_replace_configuration, parse_configuration};
 use self::extensions::{category_relative_path, is_deferred_index_source, prepare_extensions};
 use self::frontend::{
     analyzer_source, csv_file, manifest_source_texts, payload_hash, project_diagnostic,
@@ -42,7 +42,7 @@ pub(crate) fn is_root_configuration_file(file: &SubmittedFile) -> bool {
         && file
             .relative_path
             .replace('\\', "/")
-            .eq_ignore_ascii_case("emuera.config")
+            .eq_ignore_ascii_case("reraconfig.toml")
 }
 
 pub(crate) struct ProjectBuild {
@@ -79,8 +79,10 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) configuration_profile: ConfigurationClientProfile,
     /// Complete query-visible configuration, including client-only compatibility values.
     pub(crate) configuration: ConfigStore,
-    /// Regular default/user/fixed configuration, excluding Replace and debug values.
+    /// Complete editable TOML values; the protocol applies each client's UI whitelist.
     pub(crate) editable_configuration: ConfigStore,
+    pub(crate) configuration_document: ReraConfigDocument,
+    pub(crate) generated_configuration_source: Option<String>,
     pub(crate) extensions:
         std::collections::BTreeMap<String, era_runtime_protocol::ExtensionDeclaration>,
 }
@@ -94,14 +96,22 @@ impl NormalizedProjectSnapshot {
             .find(|file| is_root_configuration_file(file))
             .and_then(|file| match &file.payload {
                 FilePayload::Utf8(text) => Some(era_protocol::ProtocolBytes::new(
-                    blake3::hash(text.as_bytes()).as_bytes().to_vec(),
+                    blake3::hash(era_config::normalize_line_endings(text).as_bytes())
+                        .as_bytes()
+                        .to_vec(),
                 )),
                 _ => None,
             })
             .unwrap_or_else(|| era_protocol::ProtocolBytes::new(Vec::new()));
         let entries = era_config::catalog()
             .into_iter()
-            .filter(|spec| era_config::is_regular_code(spec.code))
+            .filter(|spec| {
+                era_config::is_regular_code(spec.code)
+                    || matches!(
+                        spec.code,
+                        "AudioVolume" | "ReplaceFullWidthSpaces" | "CharacterWidthMode"
+                    )
+            })
             .filter_map(|spec| {
                 let value = self.editable_configuration.get_code(spec.code)?;
                 let effective = self.configuration.get_code(spec.code)?;
@@ -132,6 +142,10 @@ impl NormalizedProjectSnapshot {
             source_digest,
             entries,
             restart_pending,
+            generated_source: self
+                .generated_configuration_source
+                .clone()
+                .map(String::into_boxed_str),
         }
     }
 }
@@ -396,7 +410,10 @@ fn build_project_inner_with_extensions(
     let (extensions, host_registry, extension_map) =
         prepare_extensions(extension_declarations, &mut diagnostics);
     let mut files = manifest.files.clone();
-    let mut config = parse_configuration(&files, &mut diagnostics, configuration_profile);
+    let parsed_configuration = parse_configuration(&files, &mut diagnostics);
+    let mut config = parsed_configuration.semantic;
+    let configuration_document = parsed_configuration.document;
+    let generated_configuration_source = parsed_configuration.generated_source;
     if config.csv.sort_with_filename {
         files.sort_by(|left, right| {
             (!path_has_priority_directory(&left.relative_path))
@@ -551,7 +568,7 @@ fn build_project_inner_with_extensions(
     };
     data.static_data.legacy_encoding = config.legacy_encoding;
     let editable_configuration = config.values.clone();
-    sync_replace_configuration(&mut config.values, &data.static_data.replace);
+    apply_replace_configuration(&config.values, &mut data.static_data.replace);
     config
         .money_label
         .clone_from(&data.static_data.replace.money_label);
@@ -771,6 +788,17 @@ fn build_project_inner_with_extensions(
         preparing_total,
         preparing_total,
     );
+    let mut normalized_manifest = manifest.clone();
+    if let Some(contents) = &generated_configuration_source {
+        let digest =
+            era_protocol::ProtocolBytes::new(blake3::hash(contents.as_bytes()).as_bytes().to_vec());
+        normalized_manifest.files.push(SubmittedFile {
+            relative_path: "reraconfig.toml".into(),
+            category: FileCategory::Configuration,
+            payload: FilePayload::Utf8(contents.clone()),
+            content_hash: Some(digest),
+        });
+    }
     ProjectBuild {
         artifact: Some(artifact),
         incremental,
@@ -782,7 +810,7 @@ fn build_project_inner_with_extensions(
             configuration: None,
         },
         snapshot: Some(NormalizedProjectSnapshot {
-            manifest: Arc::new(manifest.clone()),
+            manifest: Arc::new(normalized_manifest),
             project_identity,
             resources,
             resource_graph,
@@ -806,6 +834,8 @@ fn build_project_inner_with_extensions(
             configuration_profile,
             configuration: config.values,
             editable_configuration,
+            configuration_document,
+            generated_configuration_source,
             extensions: extension_map,
         }),
     }

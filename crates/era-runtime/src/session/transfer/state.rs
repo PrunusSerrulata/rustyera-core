@@ -355,6 +355,11 @@ impl RuntimeSession {
                     .to_owned(),
             );
         }
+        if snapshot.generated_configuration_source.is_some() {
+            return Err(
+                "compiled cache build requires reraconfig.toml migration to be persisted".into(),
+            );
+        }
         let manifest = Arc::clone(&snapshot.manifest);
         let snapshot = crate::compiled_cache::CompiledSnapshotMetadata::from(snapshot);
         let extensions = self.extension_declarations.clone();

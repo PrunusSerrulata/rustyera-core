@@ -28,12 +28,20 @@ fn configuration(text: &str) -> SubmittedFile {
 fn semantic_configuration_is_applied_and_new_random_warns_once() {
     let mut diagnostics = Vec::new();
     let config = parse_configuration(
-        &[configuration(
-            "\u{feff}Sort filenames:YES\nIgnore case:NO\nUseNewRandom:TRUE\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nImitate ERD to VARSIZE dimension specification:YES\nText color:1,2,3\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
-        )],
+        &[
+            configuration(
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nImitate ERD to VARSIZE dimension specification:YES\nText color:1,2,3\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
+            ),
+            SubmittedFile {
+                relative_path: "setting.json".into(),
+                category: FileCategory::Configuration,
+                payload: FilePayload::Utf8(r#"{"UseNewRandom":true}"#.into()),
+                content_hash: None,
+            },
+        ],
         &mut diagnostics,
-        ConfigurationClientProfile::Reference,
-    );
+    )
+    .semantic;
     assert!(config.csv.sort_with_filename);
     assert!(!config.csv.ignore_case);
     assert!(!config.analyzer.ignore_case);
@@ -69,12 +77,17 @@ fn semantic_configuration_is_applied_and_new_random_warns_once() {
 fn setting_json_only_applies_reference_setting_fields() {
     let mut diagnostics = Vec::new();
     let config = parse_configuration(
-        &[configuration(
-            r#"{"UseNewRandom":true,"UseMouse":false,"AllowLongInputByMouse":true,"WindowWidth":1200,"FontSize":21,"LineHeight":19,"CompatiCallEvent":true,"CompatiFuncArgOptional":true,"CompatiFuncArgAutoConvert":true}"#,
-        )],
+        &[SubmittedFile {
+            relative_path: "setting.json".into(),
+            category: FileCategory::Configuration,
+            payload: FilePayload::Utf8(
+                r#"{"UseNewRandom":true,"UseMouse":false,"AllowLongInputByMouse":true,"WindowWidth":1200,"FontSize":21,"LineHeight":19,"CompatiCallEvent":true,"CompatiFuncArgOptional":true,"CompatiFuncArgAutoConvert":true}"#.into(),
+            ),
+            content_hash: None,
+        }],
         &mut diagnostics,
-        ConfigurationClientProfile::Reference,
-    );
+    )
+    .semantic;
     assert!(config.use_new_random);
     assert!(!config.allow_long_input_by_activation);
     assert_eq!(config.font_size, 18);
@@ -87,6 +100,80 @@ fn setting_json_only_applies_reference_setting_fields() {
             .iter()
             .any(|diagnostic| diagnostic.code == "runtime.use_new_random_ignored")
     );
+}
+
+#[test]
+fn reraconfig_takes_priority_and_legacy_sources_generate_it_only_when_absent() {
+    let legacy = configuration("Font size:21\n");
+    let rera = SubmittedFile {
+        relative_path: "reraconfig.toml".into(),
+        category: FileCategory::Configuration,
+        payload: FilePayload::Utf8("[text]\r\nfont_size = 24\r\n".into()),
+        content_hash: None,
+    };
+    let mut diagnostics = Vec::new();
+    let parsed = parse_configuration(&[legacy.clone(), rera], &mut diagnostics);
+    assert_eq!(
+        parsed.semantic.values.get_code("FontSize"),
+        Some(&era_config::ConfigValue::Integer(24))
+    );
+    assert!(parsed.generated_source.is_none());
+
+    let migrated = parse_configuration(&[legacy], &mut diagnostics);
+    let generated = migrated
+        .generated_source
+        .expect("legacy source generates TOML");
+    assert!(generated.contains("font_size = 21"));
+    assert!(!generated.contains('\r'));
+}
+
+#[test]
+fn new_frontend_settings_have_only_the_requested_hot_applicability() {
+    assert_eq!(
+        profile_application("AudioVolume", ConfigurationClientProfile::Browser),
+        ConfigurationApplication::Hot
+    );
+    assert_eq!(
+        profile_application("AudioVolume", ConfigurationClientProfile::Tauri),
+        ConfigurationApplication::Hot
+    );
+    assert!(!era_config::tui_configurable("AudioVolume"));
+    for code in ["ReplaceFullWidthSpaces", "CharacterWidthMode"] {
+        assert_eq!(
+            profile_application(code, ConfigurationClientProfile::Tui),
+            ConfigurationApplication::Hot
+        );
+        assert_eq!(
+            profile_application(code, ConfigurationClientProfile::Browser),
+            ConfigurationApplication::Hot
+        );
+    }
+    let audio = era_config::catalog()
+        .into_iter()
+        .find(|spec| spec.code == "AudioVolume")
+        .unwrap();
+    assert!(!audio.clients.contains(&era_config::ConfigClient::Tui));
+}
+
+#[test]
+fn invalid_reraconfig_volume_is_rejected_by_the_project_boundary() {
+    let mut diagnostics = Vec::new();
+    let parsed = parse_configuration(
+        &[SubmittedFile {
+            relative_path: "reraconfig.toml".into(),
+            category: FileCategory::Configuration,
+            payload: FilePayload::Utf8("[audio]\nvolume = 101\n".into()),
+            content_hash: None,
+        }],
+        &mut diagnostics,
+    );
+    assert_eq!(
+        parsed.semantic.values.get_code("AudioVolume"),
+        Some(&era_config::ConfigValue::Integer(100))
+    );
+    assert!(diagnostics.iter().any(|item| {
+        item.code == "runtime.invalid_reraconfig" && item.level == RuntimeLogLevel::Error
+    }));
 }
 
 #[test]

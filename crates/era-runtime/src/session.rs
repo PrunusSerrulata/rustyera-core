@@ -514,6 +514,7 @@ struct PendingConfigurationUpdate {
     prepared_source_digest: ProtocolBytes,
     contents: String,
     values: era_config::ConfigStore,
+    document: era_config::ReraConfigDocument,
     changed_codes: BTreeSet<String>,
 }
 

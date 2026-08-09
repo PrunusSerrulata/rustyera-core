@@ -96,7 +96,8 @@ project-configuration-entry = {
   7: uint, 8: tstr, 9: tstr, 10: 0..1
 }
 project-configuration-snapshot = {
-  0: uint, 1: bstr, 2: [* project-configuration-entry], 3: bool
+  0: uint, 1: bstr, 2: [* project-configuration-entry], 3: bool,
+  4: tstr / null
 }
 configuration-change = { 0: tstr, 1: tstr }
 prepare-configuration-update = { 0: uint, 1: bstr, 2: [* configuration-change] }

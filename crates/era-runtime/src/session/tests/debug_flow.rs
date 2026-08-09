@@ -353,7 +353,7 @@ fn configuration_is_parsed_and_resources_receive_stable_identities() {
         .iter()
         .map(|diagnostic| diagnostic.code.as_str())
         .collect();
-    assert!(codes.contains(&"runtime.invalid_configuration"));
+    assert!(codes.contains(&"runtime.legacy_configuration_migration"));
     assert!(!codes.contains(&"runtime.resource_manifest_deferred"));
     let snapshot = build.snapshot.expect("normalized project snapshot");
     assert_eq!(snapshot.resources.len(), 1);
