@@ -234,12 +234,20 @@ fn return_to_title_reuses_the_loaded_artifact_without_project_loading() {
 fn compiled_cache_export_prepares_the_payload_off_thread() {
     let manifest = ProjectManifest {
         project_revision: 1,
-        files: vec![SubmittedFile {
-            relative_path: "main.erb".into(),
-            category: FileCategory::Erb,
-            payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
-            content_hash: None,
-        }],
+        files: vec![
+            SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "emuera.config".into(),
+                category: FileCategory::Configuration,
+                payload: FilePayload::Utf8("Font size:18\n".into()),
+                content_hash: None,
+            },
+        ],
     };
     let identity = crate::compiled_cache::project_identity(&manifest);
     let mut session = RuntimeSession::new(RuntimeOptions::default());
@@ -257,6 +265,13 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
             },
         )
         .unwrap();
+
+    let generated = session
+        .project_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.generated_configuration_source.as_deref())
+        .expect("legacy configuration generates reraconfig.toml");
+    assert_rera_font_size(generated, 18);
 
     assert!(session.compiled_project_cache.is_none());
     assert!(session.compiled_cache_task.is_none());
@@ -296,6 +311,8 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
     );
     let bytes = session.compiled_project_cache.as_ref().unwrap();
     assert!(crate::compiled_cache::decode(bytes, 64 * 1024 * 1024).is_ok());
+    let project_file = crate::compiled_cache::decode_project_file(bytes, bytes.len()).unwrap();
+    assert_manifest_rera_font_size(&project_file.manifest, 18);
 
     session
         .export_state(
@@ -313,6 +330,30 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
             result: StateExportResult::Ready { .. },
         })
     )));
+}
+
+fn assert_manifest_rera_font_size(manifest: &ProjectManifest, expected: i64) {
+    let source = manifest
+        .files
+        .iter()
+        .find(|file| file.relative_path.eq_ignore_ascii_case("reraconfig.toml"))
+        .and_then(|file| match &file.payload {
+            FilePayload::Utf8(source) => Some(source.as_str()),
+            _ => None,
+        })
+        .expect("compiled project embeds the generated reraconfig.toml");
+    assert_rera_font_size(source, expected);
+}
+
+fn assert_rera_font_size(source: &str, expected: i64) {
+    let values = era_config::ReraConfigDocument::parse(source)
+        .unwrap()
+        .values()
+        .unwrap();
+    assert_eq!(
+        values.get_code("FontSize"),
+        Some(&era_config::ConfigValue::Integer(expected))
+    );
 }
 
 #[test]
