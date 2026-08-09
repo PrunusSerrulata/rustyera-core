@@ -252,6 +252,7 @@ impl RuntimeSession {
         let transition_limit = budget.maximum_runtime_transitions.max(1);
         let mut transitions = 0;
         let mut instructions = 0;
+        let mut queued_input_quantum = (!self.queued_input.is_empty()).then_some(());
         while transitions < transition_limit {
             if let Some((message_id, message)) = self.take_next_inbound() {
                 match message {
@@ -263,10 +264,16 @@ impl RuntimeSession {
                 transitions += 1;
                 continue;
             }
-            if self.phase == RuntimePhase::WaitingInput && !self.queued_input.is_empty() {
+            if self.phase == RuntimePhase::WaitingInput
+                && !self.queued_input.is_empty()
+                && queued_input_quantum.take().is_some()
+            {
                 self.consume_queued_input()?;
                 transitions += 1;
                 continue;
+            }
+            if self.phase == RuntimePhase::WaitingInput && !self.queued_input.is_empty() {
+                break;
             }
             if self.phase == RuntimePhase::Running && instructions < budget.maximum_vm_instructions
             {
@@ -568,7 +575,15 @@ impl RuntimeSession {
                 self.observe_projection(message_id, observation)
             }
             RuntimeMessage::InputUndoRequest(request) => {
-                self.request_input_undo(message_id, &request)
+                if self.queued_input.is_empty() {
+                    self.request_input_undo(message_id, &request)
+                } else {
+                    self.reject(
+                        message_id,
+                        CommandErrorCode::InvalidState,
+                        "input undo is unavailable while an input macro is being processed",
+                    )
+                }
             }
             RuntimeMessage::EffectAcknowledgement(acknowledgement) => {
                 self.acknowledge_effects(message_id, acknowledgement)

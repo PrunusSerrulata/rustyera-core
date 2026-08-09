@@ -7,6 +7,7 @@
 mod compiled_cache;
 mod controller;
 mod host;
+mod input_set;
 mod key_macro;
 mod operation;
 mod presentation;

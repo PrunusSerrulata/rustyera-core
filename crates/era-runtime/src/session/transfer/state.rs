@@ -61,6 +61,17 @@ impl RuntimeSession {
                 "snapshot purpose is only valid for VM snapshot exports",
             );
         }
+        if request.kind == StateExportKind::VmSnapshot && !self.queued_input.is_empty() {
+            return self.emit(
+                RuntimeMessage::StateExportReady(StateExportReady {
+                    kind: request.kind,
+                    result: StateExportResult::Ineligible {
+                        reasons: vec![SnapshotIneligibleReason::SnapshotStateUnavailable],
+                    },
+                }),
+                Some(message_id),
+            );
+        }
         if request.snapshot_purpose == SnapshotExportPurpose::Debug
             && self.active_debug_grant.is_none()
         {
@@ -157,9 +168,6 @@ impl RuntimeSession {
                 reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
             }
             if request.kind == StateExportKind::VmSnapshot && self.undo_replay.is_some() {
-                reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
-            }
-            if request.kind == StateExportKind::VmSnapshot && !self.queued_input.is_empty() {
                 reasons.push(SnapshotIneligibleReason::SnapshotStateUnavailable);
             }
         }

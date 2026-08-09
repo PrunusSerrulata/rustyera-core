@@ -61,31 +61,51 @@ impl RuntimeSession {
         message_id: u64,
         input: FrontendInput,
     ) -> Result<(), RuntimeError> {
-        let Some(wait_id) = self
-            .operations
-            .active_input()
-            .map(|pending| pending.wait.wait_id)
-        else {
+        let Some(pending) = self.operations.active_input().cloned() else {
             return self.reject(
                 message_id,
                 CommandErrorCode::StaleRequest,
                 "no input is pending",
             );
         };
-        if wait_id != input.wait_id {
+        if pending.wait.wait_id != input.wait_id {
             return self.reject(
                 message_id,
                 CommandErrorCode::StaleRequest,
                 "input wait identity is stale",
             );
         }
+        if pending.wait.submission_token != input.token {
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "input submission token is stale",
+            );
+        }
+        if input.intent == InputIntent::Cancel {
+            if self.queued_input.is_empty() {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "no input macro is being processed",
+                );
+            }
+            return self.cancel_queued_input();
+        }
         // An input event and a timer event are ordered commands. If this wait is
         // still active when its matching input arrives, the user action wins;
         // only an explicit AdvanceTime command may complete it as a timeout.
         // Reinterpreting the input's timestamp as a timer silently discarded
-        // every kind of input at transient-wait boundaries.
+        // every kind of input at transient-wait boundaries. Cancellation is not
+        // a completion and therefore leaves the timed wait's clock untouched.
         self.observe_frontend_time(input.monotonic_time_ns);
-        let pending = self.operations.active_input().expect("checked above");
+        if !self.queued_input.is_empty() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "an input macro is already being processed",
+            );
+        }
         if let InputIntent::CommitText(command) = &input.intent
             && command.len() > 1
             && command.starts_with('@')
@@ -93,55 +113,31 @@ impl RuntimeSession {
         {
             return self.handle_system_input_command(message_id, command);
         }
-        self.message_skip = input.message_skip;
         if let InputIntent::ActivateKeyMacro { group, slot } = &input.intent {
-            if !self
-                .negotiated_features
-                .contains(&RuntimeFeature::KeyMacros)
-            {
-                return self.reject(
-                    message_id,
-                    CommandErrorCode::FeatureUnavailable,
-                    "key macros were not negotiated",
-                );
-            }
-            if input.token != pending.wait.submission_token {
-                return self.reject(
-                    message_id,
-                    CommandErrorCode::StaleRequest,
-                    "key macro activation token is stale",
-                );
-            }
-            let Some(text) = self.key_macros.recall(*group, *slot) else {
-                return self.reject(
-                    message_id,
-                    CommandErrorCode::InvalidValue,
-                    "key macro is disabled or out of range",
-                );
-            };
-            self.text_box = text.into();
-            return self.emit_projection_state();
+            return self.recall_key_macro(message_id, *group, *slot);
         }
+        let mut submitted_message_skip = input.message_skip;
         let mut intent = input.intent;
         if let InputIntent::CommitText(text) = intent {
-            let Ok(mut pieces) = preprocess_input(&text) else {
+            let Ok(pieces) = preprocess_input(&text) else {
                 return self.reject(
                     message_id,
                     CommandErrorCode::ResourceLimit,
                     "input macro expansion exceeds the runtime limit",
                 );
             };
-            let (text, skip) = pieces.remove(0);
-            self.message_skip |= skip;
+            let mut pieces = pieces.into_iter();
+            let segment = pieces.next().expect("input preprocessing yields one piece");
+            submitted_message_skip |= segment.message_skip;
             self.queued_input.extend(pieces);
-            intent = InputIntent::CommitText(text);
+            intent = InputIntent::CommitText(segment.text);
         }
         let allow_long_activation = self
             .project_snapshot
             .as_ref()
             .is_some_and(|project| project.allow_long_input_by_activation);
         let Some(submission) = self.input_value_with_visible_button(
-            pending,
+            &pending,
             input.token,
             intent,
             allow_long_activation,
@@ -152,7 +148,35 @@ impl RuntimeSession {
                 "input value does not match the active wait",
             );
         };
+        self.message_skip = submitted_message_skip;
         self.finish_input(submission, false)
+    }
+
+    fn recall_key_macro(
+        &mut self,
+        message_id: u64,
+        group: u8,
+        slot: u8,
+    ) -> Result<(), RuntimeError> {
+        if !self
+            .negotiated_features
+            .contains(&RuntimeFeature::KeyMacros)
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::FeatureUnavailable,
+                "key macros were not negotiated",
+            );
+        }
+        let Some(text) = self.key_macros.recall(group, slot) else {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "key macro is disabled or out of range",
+            );
+        };
+        self.text_box = text.into();
+        self.emit_projection_state()
     }
 
     fn input_value_with_visible_button(
@@ -183,33 +207,50 @@ impl RuntimeSession {
     /// Feed the next expanded keyboard-input segment into the next wait without
     /// accepting a new frontend event or bypassing the wait's ordinary validator.
     pub(in super::super) fn consume_queued_input(&mut self) -> Result<(), RuntimeError> {
-        let Some((text, skip)) = self.queued_input.pop_front() else {
-            return Ok(());
-        };
-        if text.len() > 1
-            && text.starts_with('@')
-            && self
-                .operations
-                .active_input()
-                .is_some_and(|pending| !pending.wait.one_input)
-        {
-            return self.handle_system_input_command(0, &text);
-        }
+        let segment = self
+            .queued_input
+            .front()
+            .cloned()
+            .ok_or_else(|| RuntimeError::Internal("queued input segment disappeared".into()))?;
         let pending = self
             .operations
             .active_input()
             .ok_or_else(|| RuntimeError::Internal("queued input has no active wait".into()))?;
-        self.message_skip = skip;
-        let Some(submission) = input_value(
-            pending,
-            pending.wait.submission_token,
-            InputIntent::CommitText(text),
-            false,
-        ) else {
-            self.queued_input.clear();
+        if pending.wait.kind == WaitKind::Void {
+            return self.finish_input(InputSubmission::Value(VmValue::Integer(0)), false);
+        }
+        let intent = queued_text_intent(&pending.wait, segment.text);
+        let token = pending.wait.submission_token;
+        self.queued_input.pop_front();
+        let pending = self
+            .operations
+            .active_input()
+            .expect("active wait is unchanged");
+        let Some(submission) = input_value(pending, token, intent, false) else {
             return Ok(());
         };
-        self.finish_input(submission, false)
+        self.message_skip = segment.message_skip;
+        self.finish_input(submission, false)?;
+        Ok(())
+    }
+
+    fn cancel_queued_input(&mut self) -> Result<(), RuntimeError> {
+        self.queued_input.clear();
+        self.message_skip = false;
+        let wait_id = self.allocate_wait();
+        let submission_token = self.allocate_interaction();
+        let wait = {
+            let pending = self
+                .operations
+                .active_input_mut()
+                .expect("input cancellation requires an active wait");
+            pending.wait.wait_id = wait_id;
+            pending.wait.submission_token = submission_token;
+            pending.wait.clone()
+        };
+        self.presentation.set_wait(Some(wait.clone()));
+        self.emit(RuntimeMessage::WaitChanged(WaitChange::Updated(wait)), None)?;
+        self.emit_presentation()
     }
 
     pub(in super::super) fn handle_system_input_command(

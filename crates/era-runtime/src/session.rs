@@ -78,7 +78,8 @@ use crate::host::{
     ClockOperation, ExternalCompletion, PendingInput, PointerCoordinate, PostInputAction,
     ProjectionStringOperation, input_wait,
 };
-use crate::key_macro::{KeyMacros, preprocess_input};
+use crate::input_set::{InputSegment, preprocess_input};
+use crate::key_macro::KeyMacros;
 use crate::operation::{
     CandidateSaveContinuation, PendingOperations, PendingService, PendingStorage,
 };
@@ -414,7 +415,7 @@ pub struct RuntimeSession {
     key_toggle_state: [u8; 256],
     hotkey_state: Vec<i64>,
     key_macros: KeyMacros,
-    queued_input: VecDeque<(String, bool)>,
+    queued_input: VecDeque<InputSegment>,
     deferred_input_completion: Option<InputSubmission>,
     text_box: String,
     text_box_layout: TextBoxLayout,

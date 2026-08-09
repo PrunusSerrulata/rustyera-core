@@ -94,6 +94,7 @@ mod debug_flow;
 mod host_runtime;
 mod host_system;
 mod input_flow;
+mod key_macro_input;
 mod protocol_handshake;
 mod protocol_project;
 mod reload_transfer;

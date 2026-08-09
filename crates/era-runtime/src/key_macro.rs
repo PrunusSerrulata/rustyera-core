@@ -3,8 +3,6 @@ use std::fmt::Write as _;
 use era_runtime_protocol::{KEY_MACRO_GROUPS, KEY_MACRO_SLOTS, KeyMacroState};
 use serde::{Deserialize, Serialize};
 
-const MAX_EXPANDED_BYTES: usize = 1024 * 1024;
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct KeyMacros {
     enabled: bool,
@@ -134,99 +132,15 @@ fn index(group: u8, slot: u8) -> Option<usize> {
     (group < KEY_MACRO_GROUPS && slot < KEY_MACRO_SLOTS).then_some(group * KEY_MACRO_SLOTS + slot)
 }
 
-/// Expand Emuera's keyboard-input mini language before wait-specific validation.
-pub(crate) fn preprocess_input(text: &str) -> Result<Vec<(String, bool)>, &'static str> {
-    let chars = text.chars().collect::<Vec<_>>();
-    let mut position = 0;
-    let expanded = expand_sequence(&chars, &mut position, false)?;
-    if position != chars.len() || expanded.len() > MAX_EXPANDED_BYTES {
-        return Err("input macro expansion exceeds its limit");
-    }
-    let mut pieces = vec![(String::new(), false)];
-    let mut chars = expanded.chars();
-    while let Some(character) = chars.next() {
-        if character == '\\' {
-            match chars.next() {
-                Some('n' | 'r') => pieces.push((String::new(), false)),
-                Some('e') => pieces.last_mut().expect("one piece").1 = true,
-                Some(other) => pieces.last_mut().expect("one piece").0.push(other),
-                None => pieces.last_mut().expect("one piece").0.push('\\'),
-            }
-        } else if matches!(character, '\n' | '\r') {
-            pieces.push((String::new(), false));
-        } else {
-            pieces.last_mut().expect("one piece").0.push(character);
-        }
-    }
-    Ok(pieces)
-}
-
-fn expand_sequence(
-    chars: &[char],
-    position: &mut usize,
-    nested: bool,
-) -> Result<String, &'static str> {
-    let mut output = String::new();
-    while *position < chars.len() {
-        match chars[*position] {
-            ')' if nested => break,
-            '(' => {
-                *position += 1;
-                let group = expand_sequence(chars, position, true)?;
-                if chars.get(*position) != Some(&')') {
-                    return Err("unclosed input repetition");
-                }
-                *position += 1;
-                let mut count = 1usize;
-                if chars.get(*position) == Some(&'*') {
-                    *position += 1;
-                    let start = *position;
-                    while chars.get(*position).is_some_and(char::is_ascii_digit) {
-                        *position += 1;
-                    }
-                    if start == *position {
-                        return Err("input repetition has no count");
-                    }
-                    count = chars[start..*position]
-                        .iter()
-                        .collect::<String>()
-                        .parse()
-                        .map_err(|_| "invalid input repetition count")?;
-                }
-                if group
-                    .len()
-                    .saturating_mul(count)
-                    .saturating_add(output.len())
-                    > MAX_EXPANDED_BYTES
-                {
-                    return Err("input macro expansion exceeds its limit");
-                }
-                for _ in 0..count {
-                    output.push_str(&group);
-                }
-            }
-            character => {
-                output.push(character);
-                *position += 1;
-            }
-        }
-    }
-    Ok(output)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn legacy_profile_round_trips_and_input_language_expands() {
+    fn legacy_profile_round_trips() {
         let mut macros = KeyMacros::default();
         macros.load("グループ2:custom\nG2:マクロキーF3:abc\\n(def)*2\\e");
         assert_eq!(macros.recall(2, 2), Some("abc\\n(def)*2\\e"));
-        assert_eq!(
-            preprocess_input(macros.recall(2, 2).unwrap()).unwrap(),
-            vec![("abc".into(), false), ("defdef".into(), true)]
-        );
         let serialized = macros.state().serialized;
         let mut round_trip = KeyMacros::default();
         round_trip.load(&serialized);

@@ -95,6 +95,20 @@ pub(in super::super) fn message_skip_submission(wait: &InputWait) -> Option<Inpu
     }
 }
 
+pub(in super::super) fn queued_text_intent(wait: &InputWait, text: String) -> InputIntent {
+    match wait.kind {
+        WaitKind::EnterKey => InputIntent::Enter,
+        WaitKind::AnyKey => InputIntent::AnyKey(text),
+        WaitKind::IntegerValue
+        | WaitKind::StringValue
+        | WaitKind::AnyValue
+        | WaitKind::IntegerButton
+        | WaitKind::StringButton
+        | WaitKind::Void
+        | WaitKind::PrimitiveMouseKey => InputIntent::CommitText(text),
+    }
+}
+
 fn submitted_text_value(
     pending: &PendingInput,
     mut text: String,
