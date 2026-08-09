@@ -1115,3 +1115,91 @@ fn mismatched_compiled_cache_rebuilds_from_its_matching_embedded_manifest() {
             .all(|diagnostic| diagnostic.code != "runtime.compiled_cache_hit")
     );
 }
+
+#[test]
+fn journaled_configuration_rebuilds_instead_of_exact_hitting_the_old_artifact() {
+    let old_configuration = "[audio]\nvolume = 100\n";
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![
+            SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "reraconfig.toml".into(),
+                category: FileCategory::Configuration,
+                payload: FilePayload::Utf8(old_configuration.into()),
+                content_hash: None,
+            },
+        ],
+    };
+    let mut initial = crate::project::build_project(&manifest, None);
+    assert!(initial.report.success, "{:?}", initial.report.diagnostics);
+    initial.incremental.compact();
+    let mut cache = crate::compiled_cache::encode(
+        &manifest,
+        &[],
+        initial.artifact.as_ref().unwrap(),
+        &initial.incremental,
+        initial.snapshot.as_ref().unwrap(),
+        &initial.report.diagnostics,
+    )
+    .unwrap();
+    let old_key = crate::compiled_cache::decode(&cache, cache.len())
+        .unwrap()
+        .key;
+    let expected = blake3::hash(old_configuration.as_bytes());
+    let update = crate::compiled_cache::prepare_project_configuration_update(
+        &cache,
+        usize::MAX,
+        expected.as_bytes(),
+        "[audio]\nvolume = 42\n",
+    )
+    .unwrap();
+    cache.extend_from_slice(&update.append);
+    let request_identity = crate::compiled_cache::decode_project_file(&cache, cache.len())
+        .unwrap()
+        .identity;
+    let expected_key = crate::compiled_cache::project_key(
+        &request_identity,
+        &[],
+        ConfigurationClientProfile::Reference,
+    );
+    assert_ne!(old_key, expected_key);
+
+    let session = RuntimeSession::new(RuntimeOptions::default());
+    let rebuilt = session
+        .build_project_from_cache(
+            &ProjectLoadRequest {
+                identity: request_identity,
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+            Some(&cache),
+        )
+        .expect("journaled embedded manifest can safely rebuild the project");
+
+    assert!(rebuilt.report.success, "{:?}", rebuilt.report.diagnostics);
+    assert!(
+        rebuilt
+            .report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "runtime.compiled_cache_hit")
+    );
+    assert!(
+        rebuilt
+            .snapshot
+            .unwrap()
+            .manifest
+            .files
+            .iter()
+            .any(|file| matches!(
+                &file.payload,
+                FilePayload::Utf8(source) if source == "[audio]\nvolume = 42\n"
+            ))
+    );
+}

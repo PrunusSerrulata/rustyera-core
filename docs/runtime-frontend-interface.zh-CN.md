@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.5`、公共信封 `2.0`、Runtime 协议 `24.0`。源码入口：
+> C ABI `3.6`、公共信封 `2.0`、Runtime 协议 `24.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -18,7 +18,7 @@
 
 | 层 | 当前稳定性 | 用途 |
 | --- | --- | --- |
-| C ABI 3.5 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
+| C ABI 3.6 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
 | Runtime 协议 24.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
@@ -87,7 +87,7 @@ get_api → create → ClientHello → ServerHello
                                                 destroy
 ```
 
-## 3. C ABI 3.5
+## 3. C ABI 3.6
 
 ### 3.1 数据结构
 
@@ -180,7 +180,12 @@ create=`EraCreateOptions`，drive=`EraDriveOptions`，poll/release/last-error=
   然后恰好选择一次 commit 或 `release_buffer`。结构有效的 commit 会消费 buffer，即使
   runtime 随后返回 `BUSY` 或其他错误，也不得再释放或访问它。该组合让文件 I/O 直接写入
   runtime 最终拥有的连续内存，避免 ABI 3.4 借用输入所需的整块复制；所有项目加载校验保持
-  不变。
+  不变；
+- ABI 3.6 的 `reserved[6]` 是 `EraPrepareProjectConfigurationUpdateFn`。它校验当前
+  `.reraproj`、`reraconfig.toml` 的乐观锁摘要和新 TOML，返回一个 runtime-owned buffer：
+  前 8 字节是小端 `u64` 截断位置，余下字节是应追加的紧凑配置事务记录。前端先把中断写入
+  留下的不完整尾部截断到该位置，再追加余下字节并持久化；无需重新生成项目主体。完整记录
+  带前置配置摘要、结果摘要和校验和，加载时按序验证。该入口不执行文件 I/O。
 
 项目进度阶段的 C ABI 数值保持追加兼容：`SCANNING` 至 `VALIDATING` 为 0–6，ABI 3.3
 追加的 `FINALIZING = 7` 表示函数编译完成后的缓存合并、源码映射整理、结构验证与身份计算；
@@ -202,6 +207,11 @@ ABI 3.5 的可写缓存 buffer 与分配它的 session 绑定，不能提交到�
 超限和内存不足分别返回 `INVALID_HANDLE`、`RESOURCE_LIMIT`、`RESOURCE_LIMIT`。commit 的
 handle、buffer 形状或用途不匹配时不会消费 buffer；一旦形状和用途验证成功则取得所有权，
 其状态映射与 ABI 3.4 暂存入口一致。
+
+ABI 3.6 的配置更新入口借用三个输入 slice（项目文件、预期配置摘要、UTF-8 TOML）到调用
+返回，并用 `EraOwnedBuffer` 返回更新计划。空预期摘要表示项目内尚无 `reraconfig.toml`；
+摘要不匹配、TOML 无效、记录链损坏或项目格式不受支持时返回 `INVALID_ARGUMENT`。调用方
+必须释放输出 buffer，并在同一已打开文件上依次执行截断、追加和同步。
 
 当前精确同步错误映射：create/drive 的外层 header 错误或空指针是
 `INVALID_ARGUMENT`，其 options 内嵌 header 错误是 `ABI_MISMATCH`；submit 的 header
@@ -690,12 +700,15 @@ Diagnosis；后两者可在任意执行状态捕获，并在快照中保留不�
 恢复规则。恢复仍完整校验字节码 artifact、项目资源、locale/culture、runtime wait 和
 VM fiber 状态；状态确实可恢复时，Debug/Diagnosis 来源会产生稳定代码的 warning
 diagnostic，交由前端明确呈现。CompiledProjectCache 传输承载可持久化的 `.reraproj`
-项目文件：文件头 magic 为 `RERAPROJ`，当前单字节格式版本为 `02`，payload 继续使用
-既有 zstd 参数和分片策略。v2 只保存一次 manifest 文件内容，并由它重建资源图、源码哈希、
-长度和行索引；增量状态只保存按规范函数顺序排列的 cache key，语句指纹在既有 `Digest`
-接口中使用 128 位有效内容。v2 cache key 因客户端配置或扩展变化而不再精确、但嵌入
+项目文件：文件头 magic 为 `RERAPROJ`，当前单字节格式版本为 `04`，主体 payload 使用
+既有 zstd 参数和分片策略。v4 主体只保存一次 manifest 文件内容，并由它重建资源图、源码
+哈希、长度和行索引；增量状态只保存按规范函数顺序排列的 cache key，语句指纹在既有
+`Digest` 接口中使用 128 位有效内容。主体后可顺序追加 `RERACFG1` 配置事务记录；每条保存
+完整的规范化 LF `reraconfig.toml`、前一配置摘要、结果摘要和校验和，末尾不完整记录按中断
+写入处理并在下次保存前截断，完整但损坏或链不连续的记录拒绝加载。v4 cache key 因配置
+更新、客户端配置或扩展变化而不再精确、但应用事务记录后的嵌入
 manifest 的源码身份仍匹配时，runtime 直接从其中的完整 payload 重编译，不要求紧凑前端
-投影再传一次源码。版本 `01` 和旧 `RERACACH` 编译缓存不再兼容；前端仍持有源码时应按
+投影再传一次源码。版本 `01`–`03` 和旧 `RERACACH` 编译缓存不再兼容；前端仍持有源码时应按
 普通 cache miss 重新编译，没有源码的独立旧项目文件会加载失败。项目文件同时保留成功
 构建产生的项目诊断；精确命中时重放原等级、code 和 source，并在正文前添加
 `[cached] `。项目文件准备异步，首次请求可能被可恢复地拒绝为“已开始/仍在准备”，稍后

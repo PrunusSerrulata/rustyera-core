@@ -82,6 +82,7 @@ pub unsafe extern "C" fn era_runtime_get_api(
         reserved[3] = session_stage_compiled_cache as *const () as *mut c_void;
         reserved[4] = session_allocate_compiled_cache as *const () as *mut c_void;
         reserved[5] = session_commit_compiled_cache as *const () as *mut c_void;
+        reserved[6] = prepare_project_configuration_update as *const () as *mut c_void;
         let api = EraRuntimeApi {
             struct_size: u32::try_from(std::mem::size_of::<EraRuntimeApi>()).unwrap_or(u32::MAX),
             abi_version: ERA_RUNTIME_ABI_VERSION,
@@ -301,6 +302,90 @@ fn decode_project_file_buffer(
         }
         write_owned_buffer(&mut registry, encoded, out_buffer)
     })
+}
+
+extern "C" fn prepare_project_configuration_update(
+    header: EraCallHeader,
+    handle: EraSessionHandle,
+    project_file: EraByteSlice,
+    expected_digest: EraByteSlice,
+    contents: EraByteSlice,
+    out_buffer: *mut EraOwnedBuffer,
+) -> EraStatus {
+    ffi_status(|| {
+        if !valid_header::<EraOwnedBuffer>(header)
+            || out_buffer.is_null()
+            || invalid_byte_slice(project_file)
+            || invalid_byte_slice(expected_digest)
+            || invalid_byte_slice(contents)
+        {
+            return EraStatus::InvalidArgument;
+        }
+        let maximum_bytes = {
+            let registry = lock_registry();
+            let Some(record) = registry.sessions.get(&handle.value) else {
+                return EraStatus::InvalidHandle;
+            };
+            usize::try_from(record.runtime.maximum_transfer_bytes()).unwrap_or(usize::MAX)
+        };
+        if project_file.len > maximum_bytes
+            || expected_digest.len > maximum_bytes
+            || contents.len > maximum_bytes
+        {
+            return EraStatus::ResourceLimit;
+        }
+        // SAFETY: all pointer/length pairs were validated and each borrow remains scoped to this
+        // synchronous ABI call.
+        let project_file = if project_file.len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(project_file.data, project_file.len) }
+        };
+        // SAFETY: same argument validation and call-scoped lifetime as above.
+        let expected_digest = if expected_digest.len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(expected_digest.data, expected_digest.len) }
+        };
+        // SAFETY: same argument validation and call-scoped lifetime as above.
+        let contents = if contents.len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(contents.data, contents.len) }
+        };
+        let contents = match std::str::from_utf8(contents) {
+            Ok(contents) => contents,
+            Err(_) => return EraStatus::InvalidArgument,
+        };
+        let update = match era_runtime::prepare_project_configuration_update(
+            project_file,
+            maximum_bytes,
+            expected_digest,
+            contents,
+        ) {
+            Ok(update) => update,
+            Err(error) => {
+                let mut registry = lock_registry();
+                let Some(record) = registry.sessions.get_mut(&handle.value) else {
+                    return EraStatus::InvalidHandle;
+                };
+                record.last_error = error.to_string();
+                return EraStatus::InvalidArgument;
+            }
+        };
+        let mut encoded = Vec::with_capacity(8 + update.append.len());
+        encoded.extend_from_slice(&update.truncate_to.to_le_bytes());
+        encoded.extend_from_slice(&update.append);
+        let mut registry = lock_registry();
+        if !registry.sessions.contains_key(&handle.value) {
+            return EraStatus::InvalidHandle;
+        }
+        write_owned_buffer(&mut registry, encoded, out_buffer)
+    })
+}
+
+const fn invalid_byte_slice(value: EraByteSlice) -> bool {
+    value.data.is_null() && value.len != 0
 }
 
 type ProjectProgressCallback = extern "C" fn(*mut c_void, EraProjectProgress);
@@ -656,6 +741,7 @@ mod tests {
         assert!(!api.reserved[3].is_null());
         assert!(!api.reserved[4].is_null());
         assert!(!api.reserved[5].is_null());
+        assert!(!api.reserved[6].is_null());
     }
 
     #[test]
@@ -699,6 +785,115 @@ mod tests {
         assert_eq!(
             session_create(options.header, &raw const options, &raw mut handle),
             EraStatus::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn project_configuration_update_boundary_rejects_invalid_inputs_and_reports_planner_errors() {
+        let options = EraCreateOptions::default();
+        let mut handle = EraSessionHandle::default();
+        assert_eq!(
+            session_create(options.header, &raw const options, &raw mut handle),
+            EraStatus::Ok
+        );
+        let header = EraCallHeader::for_type::<EraOwnedBuffer>();
+        let empty = EraByteSlice {
+            data: std::ptr::null(),
+            len: 0,
+        };
+        let invalid_utf8 = [0xff];
+        let invalid_project = b"not a project file";
+        let valid_contents = b"[audio]\nvolume = 42\n";
+        let mut output = EraOwnedBuffer {
+            data: std::ptr::dangling_mut(),
+            len: 73,
+            token: 74,
+        };
+
+        assert_eq!(
+            prepare_project_configuration_update(
+                header,
+                handle,
+                EraByteSlice {
+                    data: std::ptr::null(),
+                    len: 1,
+                },
+                empty,
+                empty,
+                &raw mut output,
+            ),
+            EraStatus::InvalidArgument
+        );
+        assert_eq!(
+            prepare_project_configuration_update(
+                header,
+                EraSessionHandle { value: u64::MAX },
+                EraByteSlice {
+                    data: std::ptr::dangling(),
+                    len: 1,
+                },
+                empty,
+                empty,
+                &raw mut output,
+            ),
+            EraStatus::InvalidHandle
+        );
+        assert_eq!(
+            prepare_project_configuration_update(
+                header,
+                handle,
+                EraByteSlice {
+                    data: invalid_project.as_ptr(),
+                    len: invalid_project.len(),
+                },
+                empty,
+                EraByteSlice {
+                    data: invalid_utf8.as_ptr(),
+                    len: invalid_utf8.len(),
+                },
+                &raw mut output,
+            ),
+            EraStatus::InvalidArgument
+        );
+        assert_eq!(
+            prepare_project_configuration_update(
+                header,
+                handle,
+                EraByteSlice {
+                    data: invalid_project.as_ptr(),
+                    len: invalid_project.len(),
+                },
+                empty,
+                EraByteSlice {
+                    data: valid_contents.as_ptr(),
+                    len: valid_contents.len(),
+                },
+                &raw mut output,
+            ),
+            EraStatus::InvalidArgument
+        );
+        assert_eq!(output.len, 73);
+        assert_eq!(output.token, 74);
+
+        let mut error = EraOwnedBuffer {
+            data: std::ptr::null_mut(),
+            len: 0,
+            token: 0,
+        };
+        assert_eq!(last_error(header, handle, &raw mut error), EraStatus::Ok);
+        // SAFETY: `last_error` returned one live owned buffer.
+        let message = unsafe { std::slice::from_raw_parts(error.data, error.len) };
+        assert!(String::from_utf8_lossy(message).contains("invalid header"));
+        let released = EraOwnedBuffer {
+            data: error.data,
+            len: error.len,
+            token: error.token,
+        };
+        assert_eq!(release_buffer(header, error), EraStatus::Ok);
+        assert_eq!(release_buffer(header, released), EraStatus::InvalidArgument);
+        assert_eq!(
+            session_destroy(EraCallHeader::for_type::<EraCallHeader>(), handle),
+            EraStatus::Ok
         );
     }
 

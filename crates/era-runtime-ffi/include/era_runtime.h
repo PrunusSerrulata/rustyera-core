@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define ERA_RUNTIME_ABI_MAJOR 3u
-#define ERA_RUNTIME_ABI_MINOR 5u
+#define ERA_RUNTIME_ABI_MINOR 6u
 
 #define ERA_DEBUG_SCOPE_VARIABLES_READ (UINT64_C(1) << 0)
 #define ERA_DEBUG_SCOPE_VARIABLES_WRITE (UINT64_C(1) << 1)
@@ -93,6 +93,9 @@ typedef EraStatus (*EraSessionSetProjectProgressFn)(EraCallHeader, EraSessionHan
                                                      EraProjectProgressCallback, void *);
 typedef EraStatus (*EraSessionDecodeProjectFileFn)(EraCallHeader, EraSessionHandle,
                                                     EraByteSlice, EraOwnedBuffer *);
+typedef EraStatus (*EraPrepareProjectConfigurationUpdateFn)(
+    EraCallHeader, EraSessionHandle, EraByteSlice, EraByteSlice, EraByteSlice,
+    EraOwnedBuffer *);
 typedef EraStatus (*EraSessionStageCompiledCacheFn)(EraCallHeader, EraSessionHandle,
                                                      EraByteSlice, uint64_t *);
 /* ABI 3.5 writable cache ownership:
@@ -132,7 +135,8 @@ typedef struct EraRuntimeApi {
        ABI 3.3: reserved[2] is EraSessionDecodeProjectFileFn returning a compact frontend manifest.
        ABI 3.4: reserved[3] is EraSessionStageCompiledCacheFn.
        ABI 3.5: reserved[4] is EraSessionAllocateCompiledCacheFn and reserved[5] is
-                EraSessionCommitCompiledCacheFn. */
+                EraSessionCommitCompiledCacheFn.
+       ABI 3.6: reserved[6] is EraPrepareProjectConfigurationUpdateFn. */
     void *reserved[8];
 } EraRuntimeApi;
 

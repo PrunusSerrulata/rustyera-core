@@ -194,6 +194,162 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
 }
 
 #[test]
+fn project_configuration_updates_append_without_rebuilding_the_cache() {
+    let mut project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let original_source = "[audio]\nvolume = 100\n";
+    project.files.push(SubmittedFile {
+        relative_path: "reraconfig.toml".into(),
+        category: FileCategory::Configuration,
+        payload: FilePayload::Utf8(original_source.into()),
+        content_hash: None,
+    });
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let base = encode(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let original_identity = project_identity(&project);
+    let expected = blake3::hash(original_source.as_bytes());
+    assert!(
+        prepare_project_configuration_update(
+            &base,
+            base.len(),
+            expected.as_bytes(),
+            "[audio]\nvolume = 42\n",
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("transfer limit")
+    );
+    let first = prepare_project_configuration_update(
+        &base,
+        usize::MAX,
+        expected.as_bytes(),
+        "[audio]\r\nvolume = 42\r\n",
+    )
+    .unwrap();
+    assert_eq!(first.truncate_to, base.len() as u64);
+    assert!(first.append.len() < base.len());
+    assert_ne!(first.identity, original_identity);
+
+    let mut updated = base.clone();
+    updated.extend_from_slice(&first.append);
+    let decoded = decode_project_file(&updated, updated.len()).unwrap();
+    assert_eq!(decoded.identity, first.identity);
+    assert!(matches!(
+        &decoded.manifest.files.last().unwrap().payload,
+        FilePayload::Utf8(source) if source == "[audio]\nvolume = 42\n"
+    ));
+    let cached = decode(&updated, updated.len()).unwrap();
+    assert!(cached.snapshot.manifest.files.iter().any(|file| matches!(
+        &file.payload,
+        FilePayload::Utf8(source) if source == "[audio]\nvolume = 42\n"
+    )));
+    assert_eq!(
+        cached.key,
+        project_key(
+            &original_identity,
+            &[],
+            ConfigurationClientProfile::Reference
+        )
+    );
+
+    let current = blake3::hash(b"[audio]\nvolume = 42\n");
+    let unchanged = prepare_project_configuration_update(
+        &updated,
+        usize::MAX,
+        current.as_bytes(),
+        "[audio]\r\nvolume = 42\r\n",
+    )
+    .unwrap();
+    assert!(unchanged.append.is_empty());
+    assert!(
+        prepare_project_configuration_update(
+            &updated,
+            usize::MAX,
+            expected.as_bytes(),
+            "[audio]\nvolume = 80\n",
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("modified by another process")
+    );
+    let second = prepare_project_configuration_update(
+        &updated,
+        usize::MAX,
+        current.as_bytes(),
+        "[audio]\nvolume = 42\n[text]\nreplace_full_width_spaces = true\n",
+    )
+    .unwrap();
+    updated.extend_from_slice(&second.append);
+    let decoded = decode_project_file(&updated, updated.len()).unwrap();
+    assert_eq!(decoded.identity, second.identity);
+    assert!(decoded.manifest.files.iter().any(|file| matches!(
+        &file.payload,
+        FilePayload::Utf8(source) if source.contains("replace_full_width_spaces = true")
+    )));
+    let compact = decode_project_file_frontend_manifest(&updated, updated.len()).unwrap();
+    assert_eq!(compact.identity, second.identity);
+}
+
+#[test]
+fn project_configuration_journal_recovers_only_an_incomplete_tail() {
+    let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let base = encode(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let update = prepare_project_configuration_update(
+        &base,
+        usize::MAX,
+        &[],
+        "[text]\nreplace_full_width_spaces = true\n",
+    )
+    .unwrap();
+    let mut interrupted = base.clone();
+    interrupted.extend_from_slice(&update.append[..update.append.len() / 2]);
+    assert_eq!(
+        decode_project_file(&interrupted, interrupted.len())
+            .unwrap()
+            .manifest,
+        project
+    );
+    let recovered = prepare_project_configuration_update(
+        &interrupted,
+        usize::MAX,
+        &[],
+        "[audio]\nvolume = 80\n",
+    )
+    .unwrap();
+    assert_eq!(recovered.truncate_to, base.len() as u64);
+
+    let mut corrupt = base;
+    corrupt.extend_from_slice(&update.append);
+    let checksum = corrupt.len() - 44;
+    corrupt[checksum] ^= 1;
+    assert!(decode_project_file(&corrupt, corrupt.len()).is_err());
+    assert!(
+        prepare_project_configuration_update(&corrupt, usize::MAX, &[], "[audio]\nvolume = 80\n")
+            .is_err()
+    );
+}
+
+#[test]
 fn project_file_stores_manifest_payload_once_and_extracts_it_exactly() {
     let resource = (0..=u8::MAX).cycle().take(128 * 1024).collect::<Vec<_>>();
     let resource_hash = ProtocolBytes::new(blake3::hash(&resource).as_bytes().to_vec());

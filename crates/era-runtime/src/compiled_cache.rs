@@ -23,11 +23,19 @@ use serde::{Deserialize, Serialize};
 use crate::project::{NormalizedProjectSnapshot, NormalizedResourceIdentity};
 use crate::resource::ResourceGraph;
 
+mod configuration_update;
+
+use configuration_update::{
+    ConfigurationJournal, apply_journal, configuration_digest, encode_record, parse_journal,
+    replace_configuration,
+};
+
 const MAGIC: &[u8; 8] = b"RERAPROJ";
-// Project files use a compact byte-sized format version. This is also a semantic epoch:
-// increment it whenever compiler, analyzer or project-loading behavior can change an
-// unchanged source's artifact. Older project files are then rejected instead of being used
-// as an incremental compilation seed.
+// Project files use a compact byte-sized base-format version. This is also a semantic epoch:
+// increment it whenever compiler, analyzer or project-loading behavior can change an unchanged
+// source's artifact. The checksummed configuration journal is a separately versioned trailing
+// extension to v4; changing its record semantics increments its record version. Older readers
+// reject the extension as trailing data instead of using it as an incremental compilation seed.
 const VERSION: u8 = 4;
 const COMPRESSION_LEVEL: i32 = 3;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
@@ -77,6 +85,7 @@ struct CompiledCacheSections<'a> {
     diagnostics: EncodedSectionRef<'a>,
     functions: Vec<EncodedSectionRef<'a>>,
     source_entries: Vec<EncodedSectionRef<'a>>,
+    configuration_journal: ConfigurationJournal<'a>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -836,6 +845,17 @@ pub struct DecodedProjectFile {
     pub manifest: ProjectManifest,
 }
 
+/// A compact append-only update for the `reraconfig.toml` embedded in a project file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectConfigurationUpdate {
+    /// Byte offset at which an interrupted trailing update must be truncated before appending.
+    pub truncate_to: u64,
+    /// Complete journal record to append. Empty when the requested source is already current.
+    pub append: Vec<u8>,
+    /// Project identity after applying this update.
+    pub identity: ProjectIdentity,
+}
+
 pub(crate) fn project_key(
     identity: &ProjectIdentity,
     extensions: &[ExtensionDeclaration],
@@ -1032,16 +1052,19 @@ pub fn decode_project_file(
     maximum_bytes: usize,
 ) -> Result<DecodedProjectFile, ProjectFileError> {
     let sections = parse_cache_sections(bytes, maximum_bytes).map_err(ProjectFileError::from)?;
-    let manifest = decode_manifest_section(&sections.manifest, sections.identity.project_revision)
-        .map_err(ProjectFileError::from)?;
+    let mut manifest =
+        decode_manifest_section(&sections.manifest, sections.identity.project_revision)
+            .map_err(ProjectFileError::from)?;
     let actual_identity = project_identity(&manifest);
     if actual_identity != sections.identity {
         return Err(ProjectFileError::from(
             "project file identity does not match its embedded manifest".to_owned(),
         ));
     }
+    apply_journal(&mut manifest, &sections.configuration_journal)
+        .map_err(ProjectFileError::from)?;
     Ok(DecodedProjectFile {
-        identity: sections.identity,
+        identity: project_identity(&manifest),
         manifest,
     })
 }
@@ -1070,10 +1093,78 @@ pub fn decode_project_file_frontend_manifest(
             "project file identity does not match its embedded manifest".to_owned(),
         ));
     }
+    apply_journal(&mut manifest, &sections.configuration_journal)
+        .map_err(ProjectFileError::from)?;
+    let identity = project_identity(&manifest);
     compact_frontend_manifest(&mut manifest, &diagnostics.map_err(ProjectFileError::from)?);
-    Ok(DecodedProjectFile {
-        identity: sections.identity,
-        manifest,
+    Ok(DecodedProjectFile { identity, manifest })
+}
+
+/// Validate a project file and prepare one compact append-only configuration update.
+///
+/// The returned bytes contain only the journal record, not a regenerated project container.
+/// Callers must truncate an interrupted trailing record to [`ProjectConfigurationUpdate::truncate_to`]
+/// before appending. The embedded configuration is compared with `expected_digest` using
+/// normalized LF line endings; an empty digest represents a missing `reraconfig.toml`.
+///
+/// # Errors
+///
+/// Returns an error when the project file or requested TOML is invalid, the transfer limit is
+/// exceeded, or the optimistic-lock digest no longer matches.
+pub fn prepare_project_configuration_update(
+    bytes: &[u8],
+    maximum_bytes: usize,
+    expected_digest: &[u8],
+    contents: &str,
+) -> Result<ProjectConfigurationUpdate, ProjectFileError> {
+    let sections = parse_cache_sections(bytes, maximum_bytes).map_err(ProjectFileError::from)?;
+    let mut manifest =
+        decode_manifest_section(&sections.manifest, sections.identity.project_revision)
+            .map_err(ProjectFileError::from)?;
+    if project_identity(&manifest) != sections.identity {
+        return Err(ProjectFileError::from(
+            "project file identity does not match its embedded manifest".to_owned(),
+        ));
+    }
+    apply_journal(&mut manifest, &sections.configuration_journal)
+        .map_err(ProjectFileError::from)?;
+    let current = configuration_digest(&manifest).map_err(ProjectFileError::from)?;
+    let expected_matches = match current {
+        Some(digest) => expected_digest == digest.as_slice(),
+        None => expected_digest.is_empty(),
+    };
+    if !expected_matches {
+        return Err(ProjectFileError::from(
+            "reraconfig.toml was modified by another process".to_owned(),
+        ));
+    }
+    let (append, source_digest) =
+        encode_record(current, contents).map_err(ProjectFileError::from)?;
+    let append = if current == Some(source_digest) {
+        Vec::new()
+    } else {
+        replace_configuration(
+            &mut manifest,
+            &era_config::normalize_line_endings(contents),
+            source_digest,
+        );
+        append
+    };
+    if sections
+        .configuration_journal
+        .valid_end
+        .checked_add(append.len())
+        .is_none_or(|length| length > maximum_bytes)
+    {
+        return Err(ProjectFileError::from(
+            "project configuration update exceeds the transfer limit".to_owned(),
+        ));
+    }
+    Ok(ProjectConfigurationUpdate {
+        truncate_to: u64::try_from(sections.configuration_journal.valid_end)
+            .map_err(|_| ProjectFileError::from("project file is too large".to_owned()))?,
+        append,
+        identity: project_identity(&manifest),
     })
 }
 
@@ -1118,10 +1209,6 @@ fn parse_cache_sections(
     if bytes.len() < minimum || &bytes[..MAGIC.len()] != MAGIC {
         return Err("project file has an invalid header".into());
     }
-    let digest_offset = bytes.len() - 32;
-    if blake3::hash(&bytes[..digest_offset]).as_bytes() != &bytes[digest_offset..] {
-        return Err("compiled project cache digest mismatch".into());
-    }
     let mut cursor = MAGIC.len();
     let version = *bytes
         .get(cursor)
@@ -1155,26 +1242,24 @@ fn parse_cache_sections(
     {
         return Err("compiled project cache has too many parallel sections".into());
     }
-    let metadata = read_section(bytes, &mut cursor, digest_offset)?;
-    let globals = read_section(bytes, &mut cursor, digest_offset)?;
-    let incremental = read_section(bytes, &mut cursor, digest_offset)?;
-    let project_data = read_section(bytes, &mut cursor, digest_offset)?;
-    let sources = read_section(bytes, &mut cursor, digest_offset)?;
-    let fingerprints = read_section(bytes, &mut cursor, digest_offset)?;
-    let manifest = read_section(bytes, &mut cursor, digest_offset)?;
-    let snapshot = read_section(bytes, &mut cursor, digest_offset)?;
-    let diagnostics = read_section(bytes, &mut cursor, digest_offset)?;
+    let metadata = read_section(bytes, &mut cursor, bytes.len())?;
+    let globals = read_section(bytes, &mut cursor, bytes.len())?;
+    let incremental = read_section(bytes, &mut cursor, bytes.len())?;
+    let project_data = read_section(bytes, &mut cursor, bytes.len())?;
+    let sources = read_section(bytes, &mut cursor, bytes.len())?;
+    let fingerprints = read_section(bytes, &mut cursor, bytes.len())?;
+    let manifest = read_section(bytes, &mut cursor, bytes.len())?;
+    let snapshot = read_section(bytes, &mut cursor, bytes.len())?;
+    let diagnostics = read_section(bytes, &mut cursor, bytes.len())?;
     let mut functions = Vec::with_capacity(function_section_count);
     for _ in 0..function_section_count {
-        functions.push(read_section(bytes, &mut cursor, digest_offset)?);
+        functions.push(read_section(bytes, &mut cursor, bytes.len())?);
     }
     let mut source_entries = Vec::with_capacity(source_section_count);
     for _ in 0..source_section_count {
-        source_entries.push(read_section(bytes, &mut cursor, digest_offset)?);
+        source_entries.push(read_section(bytes, &mut cursor, bytes.len())?);
     }
-    if cursor != digest_offset {
-        return Err("compiled project cache has trailing data".into());
-    }
+    let configuration_journal = parse_configuration_journal(bytes, cursor)?;
     let decoded_bytes = [
         &metadata,
         &globals,
@@ -1210,7 +1295,24 @@ fn parse_cache_sections(
         diagnostics,
         functions,
         source_entries,
+        configuration_journal,
     })
+}
+
+fn parse_configuration_journal(
+    bytes: &[u8],
+    digest_offset: usize,
+) -> Result<ConfigurationJournal<'_>, String> {
+    let digest_end = digest_offset
+        .checked_add(32)
+        .ok_or("compiled project cache digest offset overflows")?;
+    let digest = bytes
+        .get(digest_offset..digest_end)
+        .ok_or("compiled project cache digest is truncated")?;
+    if blake3::hash(&bytes[..digest_offset]).as_bytes() != digest {
+        return Err("compiled project cache digest mismatch".into());
+    }
+    parse_journal(bytes, digest_end)
 }
 
 fn decode_cache_parts(sections: &CompiledCacheSections<'_>) -> Result<DecodedCacheParts, String> {
@@ -1250,10 +1352,11 @@ fn decode_cache_parts(sections: &CompiledCacheSections<'_>) -> Result<DecodedCac
             ))
         },
     );
-    let (diagnostics, manifest, metadata, globals) = primary?;
+    let (diagnostics, mut manifest, metadata, globals) = primary?;
     if project_identity(&manifest) != sections.identity {
         return Err("project file identity does not match its embedded manifest".into());
     }
+    apply_journal(&mut manifest, &sections.configuration_journal)?;
     let (incremental_cache_keys, project_data, fingerprints, function_chunks) = secondary?;
     let mut functions = Vec::with_capacity(function_chunks.iter().map(Vec::len).sum());
     for mut chunk in function_chunks {

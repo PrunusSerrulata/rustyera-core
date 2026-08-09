@@ -5,7 +5,7 @@
 
 use std::ffi::{c_char, c_void};
 
-pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 5 };
+pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 6 };
 pub const ERA_RUNTIME_GET_API_SYMBOL: &str = "era_runtime_get_api";
 
 pub const ERA_DEBUG_SCOPE_VARIABLES_READ: u64 = 1 << 0;
@@ -197,6 +197,8 @@ pub type EraFunctionPointer = *const c_void;
 /// session purpose leaves ownership with the caller; after those checks pass, commit consumes the
 /// allocation even when staging returns busy, resource-limit, or internal-error status. Only a
 /// successful commit writes the transfer ID.
+/// `reserved[6]` in ABI 3.6 prepares an append-only project-configuration journal record. Its
+/// owned output starts with the little-endian `u64` truncation offset followed by bytes to append.
 #[repr(C)]
 pub struct EraRuntimeApi {
     pub struct_size: u32,
