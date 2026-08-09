@@ -904,6 +904,7 @@ pub(crate) fn encode(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn encode_cancellable(
     manifest: Arc<ProjectManifest>,
     extensions: Vec<ExtensionDeclaration>,

@@ -356,6 +356,7 @@ fn project_file_projection_honors_limits_and_version() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
 fn compiled_project_cache_encoding_honors_cancellation() {
     let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
     let mut build = crate::project::build_project(&project, None);
