@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use toml_edit::{Array, DocumentMut, ImDocument, Item, Table, Value, value};
+use toml_edit::{Array, Document, DocumentMut, Item, Table, Value, value};
 
 use crate::{ConfigStore, ConfigValue};
 
@@ -44,7 +44,7 @@ impl ReraConfigDocument {
         let (source, source_offset) = input
             .strip_prefix('\u{feff}')
             .map_or((input, 0), |source| (source, '\u{feff}'.len_utf8()));
-        let document = source.parse::<ImDocument<String>>().map_err(|error| {
+        let document = source.parse::<Document<String>>().map_err(|error| {
             error_at(
                 ReraConfigErrorKind::TomlSyntax,
                 None,
@@ -446,7 +446,7 @@ fn shift_error(
 }
 
 fn collect_source_spans(
-    document: &ImDocument<String>,
+    document: &Document<String>,
     source_offset: usize,
 ) -> BTreeMap<String, ByteSpan> {
     let mut spans = BTreeMap::new();
