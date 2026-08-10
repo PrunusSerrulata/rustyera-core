@@ -260,9 +260,20 @@ pub(crate) fn parse_line_at(
         };
     };
     let raw_start = name_span.end - line_base;
-    let raw = line[raw_start..].trim_start().to_string();
-    let raw_offset =
-        line_base + line[raw_start..].len() - line[raw_start..].trim_start().len() + raw_start;
+    let raw_tail = &line[raw_start..];
+    // Emuera consumes exactly one separator after an instruction name. This is
+    // observable for the raw/formatted PRINT families: any following spaces are
+    // output text, including an ideographic space after the ASCII separator.
+    let separator_len = raw_tail
+        .chars()
+        .next()
+        .filter(|character| {
+            matches!(character, ' ' | '\t')
+                || (context.lexer_config().allow_full_width_space && *character == '\u{3000}')
+        })
+        .map_or(0, char::len_utf8);
+    let raw = raw_tail[separator_len..].to_string();
+    let raw_offset = line_base + raw_start + separator_len;
     let spec = instruction_spec.unwrap_or(InstructionSpec {
         argument_style: ArgumentStyle::Raw,
     });

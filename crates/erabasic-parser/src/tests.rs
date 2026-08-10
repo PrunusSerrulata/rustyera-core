@@ -382,6 +382,24 @@ fn plain_print_preserves_format_metacharacters_as_raw_text() {
 }
 
 #[test]
+fn plain_print_consumes_only_its_first_separator() {
+    for (source, expected) in [("PRINT  text", " text"), ("PRINT \u{3000}", "\u{3000}")] {
+        let output = parse_line(source, &DefaultParserContext::default());
+        assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+        let StatementKind::Instruction {
+            arguments,
+            raw_arguments,
+            ..
+        } = output.value.unwrap().kind
+        else {
+            panic!("expected instruction");
+        };
+        assert_eq!(raw_arguments, expected);
+        assert_eq!(arguments, vec![Argument::Raw(expected.into())]);
+    }
+}
+
+#[test]
 fn plain_print_ascii_art_is_not_misparsed_as_assignment() {
     let output = parse_line(
         "PRINTDL 　　　　　　　　　-=ﾆ====-　　ﾆ=-",
