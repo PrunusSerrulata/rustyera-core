@@ -323,6 +323,8 @@ pub(in super::super) fn debugger_suspends_message(message: &RuntimeMessage) -> b
             | RuntimeMessage::StateImportCommit(_)
             | RuntimeMessage::StateExportChunkRequest(_)
             | RuntimeMessage::StateTransferCancel(_)
+            | RuntimeMessage::FullProjectManifest(_)
+            | RuntimeMessage::StateExportCancel(_)
             | RuntimeMessage::ReloadProject(_)
     )
 }

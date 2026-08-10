@@ -1,7 +1,7 @@
 # Runtime 调试接口
 
 > 面向前端开发人员和 EraBasic 脚本开发人员。本文描述 Debug 协议 `4.0` 在当前
-> `era-runtime`/`erabasic-vm` 中的实际实现。公共信封为 `2.0`，C ABI 为 `3.6`。
+> `era-runtime`/`erabasic-vm` 中的实际实现。公共信封为 `2.0`，C ABI 为 `3.7`。
 > 主要源码：
 > [`era-debug-protocol`](../crates/era-debug-protocol/src/lib.rs)、
 > [`RuntimeSession` 调试分发](../crates/era-runtime/src/session/debug_session.rs)、

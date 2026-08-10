@@ -3,6 +3,8 @@ use std::fmt;
 use std::io::Write as _;
 use std::ops::Range;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use era_protocol::ProtocolBytes;
@@ -30,23 +32,51 @@ use configuration_update::{
     replace_configuration,
 };
 
-const MAGIC: &[u8; 8] = b"RERAPROJ";
+const PROJECT_MAGIC: &[u8; 8] = b"RERAPROJ";
+const CACHE_MAGIC: &[u8; 8] = b"RERACACH";
 // Project files use a compact byte-sized base-format version. This is also a semantic epoch:
 // increment it whenever compiler, analyzer or project-loading behavior can change an unchanged
 // source's artifact. The checksummed configuration journal is a separately versioned trailing
 // extension introduced with v4; changing its record semantics increments its own record version.
 // Older readers reject the extension as trailing data instead of using it as an incremental seed.
-const VERSION: u8 = 6;
-const COMPRESSION_LEVEL: i32 = 3;
+const LEGACY_PROJECT_VERSION: u8 = 6;
+const VERSION: u8 = 7;
+const PROJECT_COMPRESSION_LEVEL: i32 = 3;
+const CACHE_COMPRESSION_LEVEL: i32 = 1;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const SOURCE_SECTION_MAGIC: &[u8; 4] = b"RSM2";
 const DIGEST_SECTION_MAGIC: &[u8; 4] = b"RDI2";
 const MANIFEST_SECTION_MAGIC: &[u8; 4] = b"RMF2";
+const COMPACT_MANIFEST_SECTION_MAGIC: &[u8; 4] = b"RMF3";
 const SOURCE_RECORD_SECTION_MAGIC: &[u8; 4] = b"RSR2";
+const COMPACT_SOURCE_RECORD_SECTION_MAGIC: &[u8; 4] = b"RSR3";
 const INCREMENTAL_SECTION_MAGIC: &[u8; 4] = b"RIC2";
 const COOPERATIVE_MANIFEST_CHUNK_BYTES: usize = 256 * 1024;
+#[cfg(any(target_arch = "wasm32", test))]
 const COOPERATIVE_ITEM_QUANTUM: usize = 256;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProjectContainerKind {
+    CompiledCache,
+    FullProject,
+}
+
+impl ProjectContainerKind {
+    const fn magic(self) -> &'static [u8; 8] {
+        match self {
+            Self::CompiledCache => CACHE_MAGIC,
+            Self::FullProject => PROJECT_MAGIC,
+        }
+    }
+
+    const fn compression_level(self) -> i32 {
+        match self {
+            Self::CompiledCache => CACHE_COMPRESSION_LEVEL,
+            Self::FullProject => PROJECT_COMPRESSION_LEVEL,
+        }
+    }
+}
 
 #[derive(Serialize)]
 struct CompiledCacheMetadataRef<'a> {
@@ -72,6 +102,8 @@ struct EncodedSectionRef<'a> {
 }
 
 struct CompiledCacheSections<'a> {
+    kind: ProjectContainerKind,
+    version: u8,
     identity: ProjectIdentity,
     key: [u8; 32],
     metadata: EncodedSectionRef<'a>,
@@ -204,13 +236,16 @@ impl CompiledSnapshotMetadata {
 /// The canonical layout is planned once, manifest payloads and final assembly are byte-quantized,
 /// and every encoded section is appended and released before the next one starts. Hosts call one
 /// step per event-loop turn so cache work begins immediately without monopolizing later input.
+#[cfg(any(target_arch = "wasm32", test))]
 pub(crate) struct CooperativeCompiledCacheEncoder {
+    kind: ProjectContainerKind,
     manifest: Arc<ProjectManifest>,
     extensions: Vec<ExtensionDeclaration>,
     artifact: ValidatedArtifact,
     snapshot: CompiledSnapshotMetadata,
     diagnostics: Vec<ProtocolDiagnostic>,
     cancelled: Option<Arc<AtomicBool>>,
+    progress: Option<crate::ProjectProgressReporter>,
     planner: Option<CacheLayoutPlanner>,
     plan: Option<CacheLayoutPlan>,
     next_section: usize,
@@ -219,6 +254,20 @@ pub(crate) struct CooperativeCompiledCacheEncoder {
     output: Option<(Vec<u8>, blake3::Hasher)>,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+struct CooperativeEncoderInput {
+    kind: ProjectContainerKind,
+    manifest: Arc<ProjectManifest>,
+    extensions: Vec<ExtensionDeclaration>,
+    artifact: ValidatedArtifact,
+    cache_keys: CacheKeyPlanner,
+    snapshot: CompiledSnapshotMetadata,
+    diagnostics: Vec<ProtocolDiagnostic>,
+    cancelled: Option<Arc<AtomicBool>>,
+    progress: Option<crate::ProjectProgressReporter>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
 struct CacheLayoutPlan {
     identity: ProjectIdentity,
     cache_keys: Vec<Digest>,
@@ -227,6 +276,7 @@ struct CacheLayoutPlan {
     source_ranges: Vec<Range<usize>>,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 impl CacheLayoutPlan {
     fn section_count(&self) -> usize {
         9 + self.function_ranges.len() + self.source_ranges.len()
@@ -234,12 +284,14 @@ impl CacheLayoutPlan {
 }
 
 #[derive(Clone, Copy)]
+#[cfg(any(target_arch = "wasm32", test))]
 enum CacheLayoutPlanningStage {
     Identity,
     FunctionIndices,
     FunctionRanges,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 struct CacheLayoutPlanner {
     stage: CacheLayoutPlanningStage,
     identity_planner: ProjectIdentityPlanner,
@@ -254,6 +306,7 @@ struct CacheLayoutPlanner {
     cache_keys: CacheKeyPlanner,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 impl CacheLayoutPlanner {
     fn new(cache_keys: CacheKeyPlanner) -> Self {
         Self {
@@ -341,13 +394,16 @@ impl CacheLayoutPlanner {
 }
 
 #[derive(Clone, Copy)]
+#[cfg(any(target_arch = "wasm32", test))]
 enum ProjectIdentityPlanningStage {
     Collect,
     Hash,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 type OrderedManifestFiles = std::collections::btree_map::IntoValues<(String, String, usize), usize>;
 
+#[cfg(any(target_arch = "wasm32", test))]
 struct PendingIdentityPayload {
     file_index: usize,
     offset: usize,
@@ -355,6 +411,7 @@ struct PendingIdentityPayload {
     content_hash: bool,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 struct ProjectIdentityPlanner {
     stage: ProjectIdentityPlanningStage,
     cursor: usize,
@@ -364,6 +421,7 @@ struct ProjectIdentityPlanner {
     pending: Option<PendingIdentityPayload>,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 impl ProjectIdentityPlanner {
     fn new() -> Self {
         Self {
@@ -467,6 +525,7 @@ impl ProjectIdentityPlanner {
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 fn identity_payload(file: &SubmittedFile) -> &[u8] {
     match &file.payload {
         FilePayload::Utf8(text) => text.as_bytes(),
@@ -475,6 +534,7 @@ fn identity_payload(file: &SubmittedFile) -> &[u8] {
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 enum CacheKeyPlanner {
     #[cfg(test)]
     Ready(Option<Vec<Digest>>),
@@ -484,6 +544,7 @@ enum CacheKeyPlanner {
     },
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 impl CacheKeyPlanner {
     fn validate(&self, artifact: &BytecodeArtifact) -> Result<(), String> {
         match self {
@@ -513,6 +574,7 @@ impl CacheKeyPlanner {
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 impl CooperativeCompiledCacheEncoder {
     #[cfg(test)]
     pub(crate) fn new(
@@ -524,16 +586,30 @@ impl CooperativeCompiledCacheEncoder {
         diagnostics: Vec<ProtocolDiagnostic>,
         cancelled: Option<Arc<AtomicBool>>,
     ) -> Self {
-        Self {
+        Self::new_for_kind(CooperativeEncoderInput {
+            kind: ProjectContainerKind::CompiledCache,
             manifest,
             extensions,
             artifact,
+            cache_keys: CacheKeyPlanner::Ready(Some(cache_keys)),
             snapshot,
             diagnostics,
             cancelled,
-            planner: Some(CacheLayoutPlanner::new(CacheKeyPlanner::Ready(Some(
-                cache_keys,
-            )))),
+            progress: None,
+        })
+    }
+
+    fn new_for_kind(input: CooperativeEncoderInput) -> Self {
+        Self {
+            kind: input.kind,
+            manifest: input.manifest,
+            extensions: input.extensions,
+            artifact: input.artifact,
+            snapshot: input.snapshot,
+            diagnostics: input.diagnostics,
+            cancelled: input.cancelled,
+            progress: input.progress,
+            planner: Some(CacheLayoutPlanner::new(input.cache_keys)),
             plan: None,
             next_section: 0,
             manifest_encoder: None,
@@ -542,6 +618,7 @@ impl CooperativeCompiledCacheEncoder {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn new_with_incremental(
         manifest: Arc<ProjectManifest>,
         extensions: Vec<ExtensionDeclaration>,
@@ -551,23 +628,47 @@ impl CooperativeCompiledCacheEncoder {
         diagnostics: Vec<ProtocolDiagnostic>,
         cancelled: Option<Arc<AtomicBool>>,
     ) -> Self {
-        Self {
+        Self::new_for_kind(CooperativeEncoderInput {
+            kind: ProjectContainerKind::CompiledCache,
             manifest,
             extensions,
             artifact,
+            cache_keys: CacheKeyPlanner::Incremental {
+                state: incremental,
+                keys: Vec::new(),
+            },
             snapshot,
             diagnostics,
             cancelled,
-            planner: Some(CacheLayoutPlanner::new(CacheKeyPlanner::Incremental {
+            progress: None,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn new_full_project(
+        manifest: Arc<ProjectManifest>,
+        extensions: Vec<ExtensionDeclaration>,
+        artifact: ValidatedArtifact,
+        incremental: Arc<IncrementalState>,
+        snapshot: CompiledSnapshotMetadata,
+        diagnostics: Vec<ProtocolDiagnostic>,
+        cancelled: Option<Arc<AtomicBool>>,
+        progress: Option<crate::ProjectProgressReporter>,
+    ) -> Self {
+        Self::new_for_kind(CooperativeEncoderInput {
+            kind: ProjectContainerKind::FullProject,
+            manifest,
+            extensions,
+            artifact,
+            cache_keys: CacheKeyPlanner::Incremental {
                 state: incremental,
                 keys: Vec::new(),
-            })),
-            plan: None,
-            next_section: 0,
-            manifest_encoder: None,
-            pending_section: None,
-            output: None,
-        }
+            },
+            snapshot,
+            diagnostics,
+            cancelled,
+            progress,
+        })
     }
 
     pub(crate) fn step(&mut self) -> Result<Option<Vec<u8>>, String> {
@@ -590,6 +691,13 @@ impl CooperativeCompiledCacheEncoder {
             if end == section.len() {
                 self.pending_section = None;
                 self.next_section += 1;
+                if let (Some(plan), Some(reporter)) = (&self.plan, &self.progress) {
+                    reporter.report(crate::ProjectProgress {
+                        stage: crate::ProjectProgressStage::Packaging,
+                        completed: u64::try_from(self.next_section).unwrap_or(u64::MAX),
+                        total: u64::try_from(plan.section_count()).unwrap_or(u64::MAX),
+                    });
+                }
             }
             return Ok(None);
         }
@@ -598,58 +706,9 @@ impl CooperativeCompiledCacheEncoder {
             return Ok(None);
         }
         let plan = self.plan.as_ref().expect("cache layout was planned");
-        let fixed_sections = 9;
-        let function_start = fixed_sections;
-        let source_start = function_start + plan.function_ranges.len();
         if self.next_section < plan.section_count() {
-            let cancelled = self.cancelled.as_deref();
-            let section = match self.next_section {
-                0 => encode_section(
-                    &CompiledCacheMetadataRef {
-                        manifest: &self.artifact.artifact().manifest,
-                        call_compatibility: &self.artifact.artifact().call_compatibility,
-                        native_imports: &self.artifact.artifact().native_imports,
-                        host_imports: &self.artifact.artifact().host_imports,
-                        event_groups: &self.artifact.artifact().event_groups,
-                    },
-                    cancelled,
-                )?,
-                1 => encode_section(&self.artifact.artifact().globals, cancelled)?,
-                2 => encode_incremental_section(&plan.cache_keys, cancelled)?,
-                3 => encode_section(&self.artifact.artifact().project_data, cancelled)?,
-                4 => encode_source_record_section(
-                    &self.artifact.artifact().source_map.sources,
-                    &self.manifest,
-                    cancelled,
-                )?,
-                5 => encode_digest_section(
-                    &self.artifact.artifact().source_map.statement_fingerprints,
-                    cancelled,
-                )?,
-                6 => {
-                    let encoder = self
-                        .manifest_encoder
-                        .get_or_insert(ManifestSectionEncoder::new(self.manifest.files.len())?);
-                    let Some(section) = encoder.step(&self.manifest)? else {
-                        return Ok(None);
-                    };
-                    self.manifest_encoder = None;
-                    section
-                }
-                7 => encode_section(&self.snapshot, cancelled)?,
-                8 => encode_section(&self.diagnostics, cancelled)?,
-                index if index < source_start => {
-                    let range = plan.function_ranges[index - function_start].clone();
-                    encode_section(&self.artifact.artifact().functions[range], cancelled)?
-                }
-                index => {
-                    let range = plan.source_ranges[index - source_start].clone();
-                    encode_source_section(
-                        &self.artifact.artifact().source_map.entries[range],
-                        &plan.function_indices,
-                        cancelled,
-                    )?
-                }
+            let Some(section) = self.encode_next_section()? else {
+                return Ok(None);
             };
             self.pending_section = Some((section, 0));
             return Ok(None);
@@ -657,6 +716,81 @@ impl CooperativeCompiledCacheEncoder {
         let (mut output, hasher) = self.output.take().expect("cache output was initialized");
         output.extend_from_slice(hasher.finalize().as_bytes());
         Ok(Some(output))
+    }
+
+    fn encode_next_section(&mut self) -> Result<Option<Vec<u8>>, String> {
+        let plan = self.plan.as_ref().expect("cache layout was planned");
+        let function_start = 9;
+        let source_start = function_start + plan.function_ranges.len();
+        let cancelled = self.cancelled.as_deref();
+        let section = match self.next_section {
+            0 => encode_section(
+                &CompiledCacheMetadataRef {
+                    manifest: &self.artifact.artifact().manifest,
+                    call_compatibility: &self.artifact.artifact().call_compatibility,
+                    native_imports: &self.artifact.artifact().native_imports,
+                    host_imports: &self.artifact.artifact().host_imports,
+                    event_groups: &self.artifact.artifact().event_groups,
+                },
+                self.kind,
+                cancelled,
+            )?,
+            1 => encode_section(&self.artifact.artifact().globals, self.kind, cancelled)?,
+            2 => encode_incremental_section(&plan.cache_keys, self.kind, cancelled)?,
+            3 => encode_section(&self.artifact.artifact().project_data, self.kind, cancelled)?,
+            4 if self.kind == ProjectContainerKind::CompiledCache => {
+                encode_compact_source_record_section(
+                    &self.artifact.artifact().source_map.sources,
+                    &self.manifest,
+                    self.kind,
+                    cancelled,
+                )?
+            }
+            4 => encode_source_record_section(
+                &self.artifact.artifact().source_map.sources,
+                &self.manifest,
+                self.kind,
+                cancelled,
+            )?,
+            5 => encode_digest_section(
+                &self.artifact.artifact().source_map.statement_fingerprints,
+                self.kind,
+                cancelled,
+            )?,
+            6 => {
+                let encoder = self
+                    .manifest_encoder
+                    .get_or_insert(ManifestSectionEncoder::new(
+                        self.manifest.files.len(),
+                        self.kind,
+                    )?);
+                let Some(section) = encoder.step(&self.manifest)? else {
+                    return Ok(None);
+                };
+                self.manifest_encoder = None;
+                section
+            }
+            7 => encode_section(&self.snapshot, self.kind, cancelled)?,
+            8 => encode_section(&self.diagnostics, self.kind, cancelled)?,
+            index if index < source_start => {
+                let range = plan.function_ranges[index - function_start].clone();
+                encode_section(
+                    &self.artifact.artifact().functions[range],
+                    self.kind,
+                    cancelled,
+                )?
+            }
+            index => {
+                let range = plan.source_ranges[index - source_start].clone();
+                encode_source_section(
+                    &self.artifact.artifact().source_map.entries[range],
+                    &plan.function_indices,
+                    self.kind,
+                    cancelled,
+                )?
+            }
+        };
+        Ok(Some(section))
     }
 
     fn poll_layout(&mut self) -> Result<(), String> {
@@ -671,6 +805,7 @@ impl CooperativeCompiledCacheEncoder {
         let mut output = Vec::new();
         encode_project_file_header(
             &mut output,
+            self.kind,
             &plan.identity,
             &self.extensions,
             self.snapshot.configuration_profile,
@@ -692,15 +827,19 @@ struct ManifestSectionEncoder {
     file_index: usize,
     payload_offset: usize,
     payload_hasher: Option<blake3::Hasher>,
+    kind: ProjectContainerKind,
 }
 
 impl ManifestSectionEncoder {
-    fn new(file_count: usize) -> Result<Self, String> {
-        let encoder = zstd::stream::Encoder::new(Vec::new(), COMPRESSION_LEVEL)
+    fn new(file_count: usize, kind: ProjectContainerKind) -> Result<Self, String> {
+        let encoder = zstd::stream::Encoder::new(Vec::new(), kind.compression_level())
             .map_err(|error| error.to_string())?;
         let mut writer = self::io::CountingWriter::new(encoder, None);
         writer
-            .write_all(MANIFEST_SECTION_MAGIC)
+            .write_all(match kind {
+                ProjectContainerKind::CompiledCache => COMPACT_MANIFEST_SECTION_MAGIC,
+                ProjectContainerKind::FullProject => MANIFEST_SECTION_MAGIC,
+            })
             .map_err(|error| error.to_string())?;
         write_varint(
             &mut writer,
@@ -711,29 +850,13 @@ impl ManifestSectionEncoder {
             file_index: 0,
             payload_offset: 0,
             payload_hasher: None,
+            kind,
         })
     }
 
     fn step(&mut self, manifest: &ProjectManifest) -> Result<Option<Vec<u8>>, String> {
         let Some(file) = manifest.files.get(self.file_index) else {
-            let writer = self
-                .writer
-                .take()
-                .expect("manifest encoder retains its writer");
-            let decoded_length = writer.bytes;
-            let compressed = writer
-                .into_inner()
-                .finish()
-                .map_err(|error| error.to_string())?;
-            let mut output = Vec::with_capacity(16 + compressed.len());
-            output.extend_from_slice(&decoded_length.to_le_bytes());
-            output.extend_from_slice(
-                &u64::try_from(compressed.len())
-                    .map_err(|_| "compiled cache section is too large")?
-                    .to_le_bytes(),
-            );
-            output.extend_from_slice(&compressed);
-            return Ok(Some(output));
+            return self.finish().map(Some);
         };
         let payload = match &file.payload {
             FilePayload::Utf8(text) => text.as_bytes(),
@@ -748,13 +871,39 @@ impl ManifestSectionEncoder {
             .expect("manifest encoder retains its writer");
         if self.payload_hasher.is_none() {
             write_bytes(writer, file.relative_path.as_bytes())?;
-            writer
-                .write_all(&[
-                    file.category as u8,
-                    u8::from(file.content_hash.is_some()),
-                    u8::from(matches!(&file.payload, FilePayload::Bytes(_))),
-                ])
-                .map_err(|error| error.to_string())?;
+            if self.kind == ProjectContainerKind::CompiledCache {
+                let hash = file.content_hash.as_ref().map_or_else(
+                    || blake3::hash(payload).as_bytes().to_vec(),
+                    |value| value.as_slice().to_vec(),
+                );
+                if hash.len() != blake3::OUT_LEN {
+                    return Err("project manifest content hash is not 32 bytes".into());
+                }
+                let omitted = !matches!(
+                    file.category,
+                    FileCategory::Configuration | FileCategory::ResourceManifest
+                );
+                writer
+                    .write_all(&[
+                        file.category as u8,
+                        u8::from(matches!(&file.payload, FilePayload::Bytes(_))),
+                        u8::from(omitted),
+                    ])
+                    .map_err(|error| error.to_string())?;
+                writer.write_all(&hash).map_err(|error| error.to_string())?;
+                if omitted {
+                    self.file_index += 1;
+                    return Ok(None);
+                }
+            } else {
+                writer
+                    .write_all(&[
+                        file.category as u8,
+                        u8::from(file.content_hash.is_some()),
+                        u8::from(matches!(&file.payload, FilePayload::Bytes(_))),
+                    ])
+                    .map_err(|error| error.to_string())?;
+            }
             write_varint(
                 writer,
                 u64::try_from(payload.len())
@@ -791,6 +940,27 @@ impl ManifestSectionEncoder {
             self.payload_offset = 0;
         }
         Ok(None)
+    }
+
+    fn finish(&mut self) -> Result<Vec<u8>, String> {
+        let writer = self
+            .writer
+            .take()
+            .expect("manifest encoder retains its writer");
+        let decoded_length = writer.bytes;
+        let compressed = writer
+            .into_inner()
+            .finish()
+            .map_err(|error| error.to_string())?;
+        let mut output = Vec::with_capacity(16 + compressed.len());
+        output.extend_from_slice(&decoded_length.to_le_bytes());
+        output.extend_from_slice(
+            &u64::try_from(compressed.len())
+                .map_err(|_| "compiled cache section is too large")?
+                .to_le_bytes(),
+        );
+        output.extend_from_slice(&compressed);
+        Ok(output)
     }
 }
 
@@ -911,8 +1081,87 @@ pub(crate) fn project_identity(manifest: &ProjectManifest) -> ProjectIdentity {
     }
 }
 
+pub(crate) fn validate_full_project_manifest(
+    manifest: &ProjectManifest,
+    expected_identity: &ProjectIdentity,
+    sources: &[SourceRecord],
+) -> Result<(), String> {
+    if &project_identity(manifest) != expected_identity {
+        return Err("project files changed after the active project was loaded".into());
+    }
+    let mut paths = BTreeSet::new();
+    for file in &manifest.files {
+        let path =
+            validate_relative_path(&file.relative_path).map_err(|error| error.to_string())?;
+        if !paths.insert(path.to_lowercase()) {
+            return Err("full project manifest contains duplicate paths".into());
+        }
+        let payload = match &file.payload {
+            FilePayload::Utf8(text) => text.as_bytes(),
+            FilePayload::Bytes(bytes) => bytes.as_slice(),
+            FilePayload::IoError(_) => {
+                return Err("full project manifest contains an unreadable file".into());
+            }
+        };
+        if file
+            .content_hash
+            .as_ref()
+            .is_some_and(|expected| expected.as_slice() != blake3::hash(payload).as_bytes())
+        {
+            return Err("full project manifest content hash differs from its payload".into());
+        }
+    }
+    let files = manifest
+        .files
+        .iter()
+        .map(|file| {
+            validate_relative_path(&file.relative_path)
+                .map(|path| (path, file))
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    for source in sources {
+        let file = files
+            .get(&source.relative_path)
+            .ok_or("full project manifest is missing a compiled source")?;
+        if source_record_from_file(file)? != *source {
+            return Err("full project manifest source differs from the active artifact".into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
-pub(crate) fn encode(
+pub(crate) fn encode_full_project_for_test(
+    manifest: &ProjectManifest,
+    extensions: &[ExtensionDeclaration],
+    artifact: &ValidatedArtifact,
+    incremental: &IncrementalState,
+    snapshot: &NormalizedProjectSnapshot,
+    diagnostics: &[ProtocolDiagnostic],
+) -> Result<Vec<u8>, String> {
+    let snapshot = CompiledSnapshotMetadata::from(snapshot);
+    let cache_keys = incremental.compact_cache_keys(artifact.artifact())?;
+    let mut encoder = CooperativeCompiledCacheEncoder::new_for_kind(CooperativeEncoderInput {
+        kind: ProjectContainerKind::FullProject,
+        manifest: Arc::new(manifest.clone()),
+        extensions: extensions.to_vec(),
+        artifact: artifact.clone(),
+        cache_keys: CacheKeyPlanner::Ready(Some(cache_keys)),
+        snapshot,
+        diagnostics: diagnostics.to_vec(),
+        cancelled: None,
+        progress: None,
+    });
+    loop {
+        if let Some(bytes) = encoder.step()? {
+            return Ok(bytes);
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn encode_compiled_cache_for_test(
     manifest: &ProjectManifest,
     extensions: &[ExtensionDeclaration],
     artifact: &ValidatedArtifact,
@@ -939,6 +1188,38 @@ pub(crate) fn encode(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct ProjectContainerControl {
+    pub(crate) cancelled: Arc<AtomicBool>,
+    pub(crate) progress: Option<crate::ProjectProgressReporter>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct NativeContainerInput {
+    kind: ProjectContainerKind,
+    manifest: Arc<ProjectManifest>,
+    extensions: Vec<ExtensionDeclaration>,
+    artifact: ValidatedArtifact,
+    incremental: Arc<IncrementalState>,
+    snapshot: CompiledSnapshotMetadata,
+    diagnostics: Vec<ProtocolDiagnostic>,
+    control: ProjectContainerControl,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct NativeSectionPlan<'a> {
+    kind: ProjectContainerKind,
+    manifest: &'a ProjectManifest,
+    bytecode: &'a BytecodeArtifact,
+    snapshot: &'a CompiledSnapshotMetadata,
+    diagnostics: &'a [ProtocolDiagnostic],
+    cache_keys: &'a [Digest],
+    function_indices: &'a std::collections::BTreeMap<SymbolKey, usize>,
+    function_ranges: &'a [Range<usize>],
+    source_ranges: &'a [Range<usize>],
+    cancelled: &'a AtomicBool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn encode_cancellable(
     manifest: Arc<ProjectManifest>,
     extensions: Vec<ExtensionDeclaration>,
@@ -948,24 +1229,225 @@ pub(crate) fn encode_cancellable(
     diagnostics: Vec<ProtocolDiagnostic>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<Vec<u8>, String> {
-    let mut encoder = CooperativeCompiledCacheEncoder::new_with_incremental(
+    encode_native_container(NativeContainerInput {
+        kind: ProjectContainerKind::CompiledCache,
         manifest,
         extensions,
         artifact,
         incremental,
         snapshot,
         diagnostics,
-        Some(cancelled),
-    );
+        control: ProjectContainerControl {
+            cancelled,
+            progress: None,
+        },
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn encode_full_project_cancellable(
+    manifest: Arc<ProjectManifest>,
+    extensions: Vec<ExtensionDeclaration>,
+    artifact: ValidatedArtifact,
+    incremental: Arc<IncrementalState>,
+    snapshot: CompiledSnapshotMetadata,
+    diagnostics: Vec<ProtocolDiagnostic>,
+    control: ProjectContainerControl,
+) -> Result<Vec<u8>, String> {
+    encode_native_container(NativeContainerInput {
+        kind: ProjectContainerKind::FullProject,
+        manifest,
+        extensions,
+        artifact,
+        incremental,
+        snapshot,
+        diagnostics,
+        control,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn encode_native_container(input: NativeContainerInput) -> Result<Vec<u8>, String> {
+    let NativeContainerInput {
+        kind,
+        manifest,
+        extensions,
+        artifact,
+        incremental,
+        snapshot,
+        diagnostics,
+        control: ProjectContainerControl {
+            cancelled,
+            progress,
+        },
+    } = input;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("compiled cache build cancelled".into());
+    }
+    let bytecode = artifact.artifact();
+    let cache_keys = incremental.compact_cache_keys(bytecode)?;
+    let identity = project_identity(&manifest);
+    let function_indices = bytecode
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(index, function)| (function.key, index))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let function_ranges = weighted_function_ranges(&bytecode.functions);
+    let source_ranges = equal_ranges(bytecode.source_map.entries.len());
+    let section_count = 9 + function_ranges.len() + source_ranges.len();
+    let completed = AtomicU64::new(0);
+    let plan = NativeSectionPlan {
+        kind,
+        manifest: &manifest,
+        bytecode,
+        snapshot: &snapshot,
+        diagnostics: &diagnostics,
+        cache_keys: &cache_keys,
+        function_indices: &function_indices,
+        function_ranges: &function_ranges,
+        source_ranges: &source_ranges,
+        cancelled: &cancelled,
+    };
+    let sections = (0..section_count)
+        .into_par_iter()
+        .map(|index| {
+            let section = encode_native_section(index, &plan)?;
+            let current = completed.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+            if let Some(reporter) = &progress {
+                reporter.report(crate::ProjectProgress {
+                    stage: crate::ProjectProgressStage::Packaging,
+                    completed: current,
+                    total: u64::try_from(section_count).unwrap_or(u64::MAX),
+                });
+            }
+            Ok(section)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("compiled cache build cancelled".into());
+    }
+    let mut output = Vec::new();
+    encode_project_file_header(
+        &mut output,
+        kind,
+        &identity,
+        &extensions,
+        snapshot.configuration_profile,
+        function_ranges.len(),
+        source_ranges.len(),
+    )?;
+    for section in sections {
+        output.extend_from_slice(&section);
+    }
+    output.extend_from_slice(blake3::hash(&output).as_bytes());
+    Ok(output)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn encode_native_section(index: usize, plan: &NativeSectionPlan<'_>) -> Result<Vec<u8>, String> {
+    if plan.cancelled.load(Ordering::Relaxed) {
+        return Err("compiled cache build cancelled".to_owned());
+    }
+    let function_start = 9;
+    let source_start = function_start + plan.function_ranges.len();
+    let cancelled = Some(plan.cancelled);
+    match index {
+        0 => encode_section(
+            &CompiledCacheMetadataRef {
+                manifest: &plan.bytecode.manifest,
+                call_compatibility: &plan.bytecode.call_compatibility,
+                native_imports: &plan.bytecode.native_imports,
+                host_imports: &plan.bytecode.host_imports,
+                event_groups: &plan.bytecode.event_groups,
+            },
+            plan.kind,
+            cancelled,
+        ),
+        1 => encode_section(&plan.bytecode.globals, plan.kind, cancelled),
+        2 => encode_incremental_section(plan.cache_keys, plan.kind, cancelled),
+        3 => encode_section(&plan.bytecode.project_data, plan.kind, cancelled),
+        4 if plan.kind == ProjectContainerKind::CompiledCache => {
+            encode_compact_source_record_section(
+                &plan.bytecode.source_map.sources,
+                plan.manifest,
+                plan.kind,
+                cancelled,
+            )
+        }
+        4 => encode_source_record_section(
+            &plan.bytecode.source_map.sources,
+            plan.manifest,
+            plan.kind,
+            cancelled,
+        ),
+        5 => encode_digest_section(
+            &plan.bytecode.source_map.statement_fingerprints,
+            plan.kind,
+            cancelled,
+        ),
+        6 => encode_manifest_section(plan.manifest, plan.kind, cancelled),
+        7 => encode_section(plan.snapshot, plan.kind, cancelled),
+        8 => encode_section(plan.diagnostics, plan.kind, cancelled),
+        value if value < source_start => encode_section(
+            &plan.bytecode.functions[plan.function_ranges[value - function_start].clone()],
+            plan.kind,
+            cancelled,
+        ),
+        value => encode_source_section(
+            &plan.bytecode.source_map.entries[plan.source_ranges[value - source_start].clone()],
+            plan.function_indices,
+            plan.kind,
+            cancelled,
+        ),
+    }
+}
+
+fn weighted_function_ranges(functions: &[BytecodeFunction]) -> Vec<Range<usize>> {
+    if functions.is_empty() {
+        return Vec::new();
+    }
+    let total = functions
+        .iter()
+        .map(|function| function.code.len().max(1))
+        .sum::<usize>();
+    let target = total.div_ceil(TARGET_PARALLEL_SECTIONS).max(1);
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut weight = 0_usize;
+    for (index, function) in functions.iter().enumerate() {
+        weight = weight.saturating_add(function.code.len().max(1));
+        if weight >= target && ranges.len() + 1 < TARGET_PARALLEL_SECTIONS {
+            ranges.push(start..index + 1);
+            start = index + 1;
+            weight = 0;
+        }
+    }
+    if start < functions.len() {
+        ranges.push(start..functions.len());
+    }
+    ranges
+}
+
+fn encode_manifest_section(
+    manifest: &ProjectManifest,
+    kind: ProjectContainerKind,
+    cancelled: Option<&AtomicBool>,
+) -> Result<Vec<u8>, String> {
+    let mut encoder = ManifestSectionEncoder::new(manifest.files.len(), kind)?;
     loop {
-        if let Some(bytes) = encoder.step()? {
-            return Ok(bytes);
+        if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err("compiled cache build cancelled".into());
+        }
+        if let Some(section) = encoder.step(manifest)? {
+            return Ok(section);
         }
     }
 }
 
 fn encode_project_file_header(
     output: &mut Vec<u8>,
+    kind: ProjectContainerKind,
     identity: &ProjectIdentity,
     extensions: &[ExtensionDeclaration],
     configuration_profile: ConfigurationClientProfile,
@@ -977,7 +1459,7 @@ fn encode_project_file_header(
         .as_slice()
         .try_into()
         .map_err(|_| "project identity digest is not 32 bytes")?;
-    output.extend_from_slice(MAGIC);
+    output.extend_from_slice(kind.magic());
     output.push(VERSION);
     output.extend_from_slice(&identity.project_revision.to_le_bytes());
     output.extend_from_slice(&source_digest);
@@ -1049,6 +1531,7 @@ pub fn decode_project_file(
     maximum_bytes: usize,
 ) -> Result<DecodedProjectFile, ProjectFileError> {
     let sections = parse_cache_sections(bytes, maximum_bytes).map_err(ProjectFileError::from)?;
+    require_full_project(&sections)?;
     let mut manifest =
         decode_manifest_section(&sections.manifest, sections.identity.project_revision)
             .map_err(ProjectFileError::from)?;
@@ -1080,6 +1563,7 @@ pub fn decode_project_file_frontend_manifest(
     maximum_bytes: usize,
 ) -> Result<DecodedProjectFile, ProjectFileError> {
     let sections = parse_cache_sections(bytes, maximum_bytes).map_err(ProjectFileError::from)?;
+    require_full_project(&sections)?;
     let (manifest, diagnostics) = rayon::join(
         || decode_manifest_section(&sections.manifest, sections.identity.project_revision),
         || decode_section::<Vec<ProtocolDiagnostic>>(&sections.diagnostics),
@@ -1116,6 +1600,7 @@ pub fn prepare_project_configuration_update(
     contents: &str,
 ) -> Result<ProjectConfigurationUpdate, ProjectFileError> {
     let sections = parse_cache_sections(bytes, maximum_bytes).map_err(ProjectFileError::from)?;
+    require_full_project(&sections)?;
     let mut manifest =
         decode_manifest_section(&sections.manifest, sections.identity.project_revision)
             .map_err(ProjectFileError::from)?;
@@ -1198,19 +1683,114 @@ fn parse_cache_sections(
     bytes: &[u8],
     maximum_bytes: usize,
 ) -> Result<CompiledCacheSections<'_>, String> {
+    let ParsedContainerHeader {
+        kind,
+        version,
+        identity,
+        key,
+        function_section_count,
+        source_section_count,
+        mut cursor,
+    } = parse_container_header(bytes, maximum_bytes)?;
+    let metadata = read_section(bytes, &mut cursor, bytes.len())?;
+    let globals = read_section(bytes, &mut cursor, bytes.len())?;
+    let incremental = read_section(bytes, &mut cursor, bytes.len())?;
+    let project_data = read_section(bytes, &mut cursor, bytes.len())?;
+    let sources = read_section(bytes, &mut cursor, bytes.len())?;
+    let fingerprints = read_section(bytes, &mut cursor, bytes.len())?;
+    let manifest = read_section(bytes, &mut cursor, bytes.len())?;
+    let snapshot = read_section(bytes, &mut cursor, bytes.len())?;
+    let diagnostics = read_section(bytes, &mut cursor, bytes.len())?;
+    let functions = read_section_list(bytes, &mut cursor, function_section_count)?;
+    let source_entries = read_section_list(bytes, &mut cursor, source_section_count)?;
+    let journal_start = cursor
+        .checked_add(32)
+        .ok_or("compiled project cache digest offset overflows")?;
+    let configuration_journal = parse_configuration_journal(bytes, cursor)?;
+    if kind == ProjectContainerKind::CompiledCache && bytes.len() != journal_start {
+        return Err("compiled project cache cannot contain a configuration journal".into());
+    }
+    let fixed_sections = [
+        &metadata,
+        &globals,
+        &incremental,
+        &project_data,
+        &sources,
+        &fingerprints,
+        &manifest,
+        &snapshot,
+        &diagnostics,
+    ];
+    let decoded_bytes = fixed_sections
+        .into_iter()
+        .chain(&functions)
+        .chain(&source_entries)
+        .try_fold(0_u64, |total, section| {
+            total.checked_add(section.decoded_length)
+        })
+        .ok_or("compiled cache decoded length overflow")?;
+    if decoded_bytes > MAXIMUM_DECODED_PAYLOAD_BYTES {
+        return Err("compiled cache decoded sections exceed their limit".into());
+    }
+    Ok(CompiledCacheSections {
+        kind,
+        version,
+        identity,
+        key,
+        metadata,
+        globals,
+        incremental,
+        project_data,
+        sources,
+        fingerprints,
+        manifest,
+        snapshot,
+        diagnostics,
+        functions,
+        source_entries,
+        configuration_journal,
+    })
+}
+
+struct ParsedContainerHeader {
+    kind: ProjectContainerKind,
+    version: u8,
+    identity: ProjectIdentity,
+    key: [u8; 32],
+    function_section_count: usize,
+    source_section_count: usize,
+    cursor: usize,
+}
+
+fn parse_container_header(
+    bytes: &[u8],
+    maximum_bytes: usize,
+) -> Result<ParsedContainerHeader, String> {
     if bytes.len() > maximum_bytes {
         return Err("compiled project cache exceeds the transfer limit".into());
     }
-    let minimum = MAGIC.len() + 1 + 8 + 32 + 32 + 4 + 4 + 9 * 16 + 32;
-    if bytes.len() < minimum || &bytes[..MAGIC.len()] != MAGIC {
+    let magic_length = PROJECT_MAGIC.len();
+    let minimum = magic_length + 1 + 8 + 32 + 32 + 4 + 4 + 9 * 16 + 32;
+    if bytes.len() < minimum {
         return Err("project file has an invalid header".into());
     }
-    let mut cursor = MAGIC.len();
+    let kind = match &bytes[..magic_length] {
+        magic if magic == PROJECT_MAGIC => ProjectContainerKind::FullProject,
+        magic if magic == CACHE_MAGIC => ProjectContainerKind::CompiledCache,
+        _ => return Err("project file has an invalid header".into()),
+    };
+    let mut cursor = magic_length;
     let version = *bytes
         .get(cursor)
         .ok_or("project file version is truncated")?;
     cursor += 1;
-    if version != VERSION {
+    if !matches!(
+        (kind, version),
+        (
+            ProjectContainerKind::FullProject,
+            LEGACY_PROJECT_VERSION | VERSION
+        ) | (ProjectContainerKind::CompiledCache, VERSION)
+    ) {
         return Err(format!("unsupported project file version {version:02x}"));
     }
     let project_revision = read_u64(bytes, &mut cursor)?;
@@ -1238,61 +1818,36 @@ fn parse_cache_sections(
     {
         return Err("compiled project cache has too many parallel sections".into());
     }
-    let metadata = read_section(bytes, &mut cursor, bytes.len())?;
-    let globals = read_section(bytes, &mut cursor, bytes.len())?;
-    let incremental = read_section(bytes, &mut cursor, bytes.len())?;
-    let project_data = read_section(bytes, &mut cursor, bytes.len())?;
-    let sources = read_section(bytes, &mut cursor, bytes.len())?;
-    let fingerprints = read_section(bytes, &mut cursor, bytes.len())?;
-    let manifest = read_section(bytes, &mut cursor, bytes.len())?;
-    let snapshot = read_section(bytes, &mut cursor, bytes.len())?;
-    let diagnostics = read_section(bytes, &mut cursor, bytes.len())?;
-    let mut functions = Vec::with_capacity(function_section_count);
-    for _ in 0..function_section_count {
-        functions.push(read_section(bytes, &mut cursor, bytes.len())?);
-    }
-    let mut source_entries = Vec::with_capacity(source_section_count);
-    for _ in 0..source_section_count {
-        source_entries.push(read_section(bytes, &mut cursor, bytes.len())?);
-    }
-    let configuration_journal = parse_configuration_journal(bytes, cursor)?;
-    let decoded_bytes = [
-        &metadata,
-        &globals,
-        &incremental,
-        &project_data,
-        &sources,
-        &fingerprints,
-        &manifest,
-        &snapshot,
-        &diagnostics,
-    ]
-    .into_iter()
-    .chain(&functions)
-    .chain(&source_entries)
-    .try_fold(0_u64, |total, section| {
-        total.checked_add(section.decoded_length)
-    })
-    .ok_or("compiled cache decoded length overflow")?;
-    if decoded_bytes > MAXIMUM_DECODED_PAYLOAD_BYTES {
-        return Err("compiled cache decoded sections exceed their limit".into());
-    }
-    Ok(CompiledCacheSections {
+    Ok(ParsedContainerHeader {
+        kind,
+        version,
         identity,
         key,
-        metadata,
-        globals,
-        incremental,
-        project_data,
-        sources,
-        fingerprints,
-        manifest,
-        snapshot,
-        diagnostics,
-        functions,
-        source_entries,
-        configuration_journal,
+        function_section_count,
+        source_section_count,
+        cursor,
     })
+}
+
+fn read_section_list<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    count: usize,
+) -> Result<Vec<EncodedSectionRef<'a>>, String> {
+    let mut sections = Vec::with_capacity(count);
+    for _ in 0..count {
+        sections.push(read_section(bytes, cursor, bytes.len())?);
+    }
+    Ok(sections)
+}
+
+fn require_full_project(sections: &CompiledCacheSections<'_>) -> Result<(), ProjectFileError> {
+    if sections.kind != ProjectContainerKind::FullProject {
+        return Err(ProjectFileError::from(
+            "compiled project caches are not portable project files".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_configuration_journal(
@@ -1361,7 +1916,15 @@ fn decode_cache_parts(sections: &CompiledCacheSections<'_>) -> Result<DecodedCac
     let ((sources, snapshot), source_chunks) = rayon::join(
         || {
             rayon::join(
-                || decode_source_record_section(&sections.sources, &manifest),
+                || {
+                    if sections.kind == ProjectContainerKind::CompiledCache
+                        && sections.version == VERSION
+                    {
+                        decode_compact_source_record_section(&sections.sources, &manifest)
+                    } else {
+                        decode_source_record_section(&sections.sources, &manifest)
+                    }
+                },
                 || decode_section::<CompiledSnapshotMetadata>(&sections.snapshot),
             )
         },
@@ -1409,9 +1972,10 @@ fn decode_source_sections(
 
 fn encode_section<T: Serialize + ?Sized>(
     value: &T,
+    kind: ProjectContainerKind,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, String> {
-    encode_raw_section(cancelled, |writer| {
+    encode_raw_section(kind.compression_level(), cancelled, |writer| {
         rmp_serde::encode::write(writer, value).map_err(|error| error.to_string())
     })
 }
@@ -1421,37 +1985,38 @@ fn decode_manifest_section(
     project_revision: u64,
 ) -> Result<ProjectManifest, String> {
     decode_raw_section(section, |reader| {
-        expect_magic(reader, *MANIFEST_SECTION_MAGIC, "project manifest")?;
+        let mut magic = [0_u8; 4];
+        reader
+            .read_exact(&mut magic)
+            .map_err(|error| error.to_string())?;
+        let compact = match &magic {
+            value if value == MANIFEST_SECTION_MAGIC => false,
+            value if value == COMPACT_MANIFEST_SECTION_MAGIC => true,
+            _ => return Err("project manifest has invalid magic".into()),
+        };
         let count = read_count(reader, section.decoded_length, "project manifest file")?;
         let mut files = Vec::new();
+        let mut paths = BTreeSet::new();
         files
             .try_reserve_exact(count)
             .map_err(|_| "project manifest allocation failed")?;
         for _ in 0..count {
             let relative_path = String::from_utf8(read_bytes(reader, section.decoded_length)?)
                 .map_err(|_| "project manifest path is not UTF-8")?;
+            let normalized_path =
+                validate_relative_path(&relative_path).map_err(|error| error.to_string())?;
+            if !paths.insert(normalized_path.to_lowercase()) {
+                return Err("project manifest contains duplicate paths".into());
+            }
             let mut tags = [0_u8; 3];
             reader
                 .read_exact(&mut tags)
                 .map_err(|error| error.to_string())?;
             let category = decode_file_category(tags[0])?;
-            let payload_bytes = read_bytes(reader, section.decoded_length)?;
-            let payload = match tags[2] {
-                0 => FilePayload::Utf8(
-                    String::from_utf8(payload_bytes)
-                        .map_err(|_| "project manifest text payload is not UTF-8")?,
-                ),
-                1 => FilePayload::Bytes(ProtocolBytes::new(payload_bytes)),
-                _ => return Err("project manifest payload tag is invalid".into()),
-            };
-            let content_hash = match tags[1] {
-                0 => None,
-                1 => Some(ProtocolBytes::new(match &payload {
-                    FilePayload::Utf8(text) => blake3::hash(text.as_bytes()).as_bytes().to_vec(),
-                    FilePayload::Bytes(bytes) => blake3::hash(bytes.as_slice()).as_bytes().to_vec(),
-                    FilePayload::IoError(_) => unreachable!(),
-                })),
-                _ => return Err("project manifest hash-presence tag is invalid".into()),
+            let (payload, content_hash) = if compact {
+                decode_compact_manifest_payload(reader, section.decoded_length, category, tags)?
+            } else {
+                decode_full_manifest_payload(reader, section.decoded_length, tags)?
             };
             files.push(SubmittedFile {
                 relative_path,
@@ -1467,9 +2032,216 @@ fn decode_manifest_section(
     })
 }
 
+fn decode_compact_manifest_payload(
+    reader: &mut dyn std::io::Read,
+    decoded_length: u64,
+    category: FileCategory,
+    tags: [u8; 3],
+) -> Result<(FilePayload, Option<ProtocolBytes>), String> {
+    let mut hash = [0_u8; blake3::OUT_LEN];
+    reader
+        .read_exact(&mut hash)
+        .map_err(|error| error.to_string())?;
+    let omitted = match tags[2] {
+        0 => false,
+        1 => true,
+        _ => return Err("project manifest omission tag is invalid".into()),
+    };
+    let expected_omitted = !matches!(
+        category,
+        FileCategory::Configuration | FileCategory::ResourceManifest
+    );
+    if omitted != expected_omitted {
+        return Err("project cache manifest violates its payload omission policy".into());
+    }
+    let expected_bytes = category == FileCategory::Resource;
+    if (tags[1] == 1) != expected_bytes || tags[1] > 1 {
+        return Err("project cache manifest payload type disagrees with its category".into());
+    }
+    let payload_bytes = if omitted {
+        Vec::new()
+    } else {
+        read_bytes(reader, decoded_length)?
+    };
+    let payload = decode_manifest_payload(payload_bytes, tags[1])?;
+    if !omitted && manifest_payload_hash(&payload).as_bytes() != &hash {
+        return Err("project cache manifest payload hash mismatch".into());
+    }
+    Ok((payload, Some(ProtocolBytes::new(hash.to_vec()))))
+}
+
+fn decode_full_manifest_payload(
+    reader: &mut dyn std::io::Read,
+    decoded_length: u64,
+    tags: [u8; 3],
+) -> Result<(FilePayload, Option<ProtocolBytes>), String> {
+    let payload = decode_manifest_payload(read_bytes(reader, decoded_length)?, tags[2])?;
+    let content_hash = match tags[1] {
+        0 => None,
+        1 => Some(ProtocolBytes::new(
+            manifest_payload_hash(&payload).as_bytes().to_vec(),
+        )),
+        _ => return Err("project manifest hash-presence tag is invalid".into()),
+    };
+    Ok((payload, content_hash))
+}
+
+fn decode_manifest_payload(bytes: Vec<u8>, tag: u8) -> Result<FilePayload, String> {
+    match tag {
+        0 => String::from_utf8(bytes)
+            .map(FilePayload::Utf8)
+            .map_err(|_| "project manifest text payload is not UTF-8".into()),
+        1 => Ok(FilePayload::Bytes(ProtocolBytes::new(bytes))),
+        _ => Err("project manifest payload tag is invalid".into()),
+    }
+}
+
+fn manifest_payload_hash(payload: &FilePayload) -> blake3::Hash {
+    match payload {
+        FilePayload::Utf8(text) => blake3::hash(text.as_bytes()),
+        FilePayload::Bytes(bytes) => blake3::hash(bytes.as_slice()),
+        FilePayload::IoError(_) => unreachable!(),
+    }
+}
+
+fn encode_compact_source_record_section(
+    sources: &[SourceRecord],
+    manifest: &ProjectManifest,
+    kind: ProjectContainerKind,
+    cancelled: Option<&AtomicBool>,
+) -> Result<Vec<u8>, String> {
+    let manifest_indices = manifest
+        .files
+        .iter()
+        .enumerate()
+        .map(|(index, file)| {
+            validate_relative_path(&file.relative_path)
+                .map(|path| (path, index))
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    let records = sources
+        .iter()
+        .map(|source| -> Result<(usize, &SourceRecord), String> {
+            let index = *manifest_indices
+                .get(&source.relative_path)
+                .ok_or_else(|| "bytecode source is missing from the project manifest".to_owned())?;
+            let file = &manifest.files[index];
+            if source_record_from_file(file)? != *source {
+                return Err("bytecode source differs from the project manifest".into());
+            }
+            Ok((index, source))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    encode_raw_section(kind.compression_level(), cancelled, |writer| {
+        writer
+            .write_all(COMPACT_SOURCE_RECORD_SECTION_MAGIC)
+            .map_err(|error| error.to_string())?;
+        write_varint(
+            writer,
+            u64::try_from(records.len()).map_err(|_| "too many bytecode sources")?,
+        )?;
+        for &(index, source) in &records {
+            write_varint(
+                writer,
+                u64::try_from(index).map_err(|_| "manifest file index is too large")?,
+            )?;
+            write_varint(writer, source.byte_len)?;
+            write_varint(
+                writer,
+                u64::try_from(source.line_starts.len())
+                    .map_err(|_| "source record has too many lines")?,
+            )?;
+            let mut previous = 0_u64;
+            for &line_start in &source.line_starts {
+                let delta = line_start
+                    .checked_sub(previous)
+                    .ok_or("source record line starts are not ordered")?;
+                write_varint(writer, delta)?;
+                previous = line_start;
+            }
+        }
+        Ok(())
+    })
+}
+
+fn decode_compact_source_record_section(
+    section: &EncodedSectionRef<'_>,
+    manifest: &ProjectManifest,
+) -> Result<Vec<SourceRecord>, String> {
+    decode_raw_section(section, |reader| {
+        expect_magic(
+            reader,
+            *COMPACT_SOURCE_RECORD_SECTION_MAGIC,
+            "compact source record",
+        )?;
+        let count = read_count(reader, section.decoded_length, "compact source record")?;
+        let mut sources = Vec::new();
+        sources
+            .try_reserve_exact(count)
+            .map_err(|_| "compact source record allocation failed")?;
+        for _ in 0..count {
+            let index = usize::try_from(read_stream_varint(reader)?)
+                .map_err(|_| "manifest source index is not addressable")?;
+            let file = manifest
+                .files
+                .get(index)
+                .ok_or("manifest source index is out of range")?;
+            if !matches!(
+                file.category,
+                FileCategory::Csv | FileCategory::Erh | FileCategory::Erb
+            ) {
+                return Err("compact source record refers to a non-source manifest file".into());
+            }
+            let hash: [u8; 32] = file
+                .content_hash
+                .as_ref()
+                .ok_or("compact source record is missing its manifest hash")?
+                .as_slice()
+                .try_into()
+                .map_err(|_| "compact source record manifest hash is not 32 bytes")?;
+            let byte_len = read_stream_varint(reader)?;
+            let line_count = usize::try_from(read_stream_varint(reader)?)
+                .map_err(|_| "compact source line count is not addressable")?;
+            if line_count == 0
+                || u64::try_from(line_count).unwrap_or(u64::MAX) > byte_len.saturating_add(1)
+            {
+                return Err("compact source line count is invalid".into());
+            }
+            let mut line_starts = Vec::new();
+            line_starts
+                .try_reserve_exact(line_count)
+                .map_err(|_| "compact source line allocation failed")?;
+            let mut previous = 0_u64;
+            for line_index in 0..line_count {
+                let delta = read_stream_varint(reader)?;
+                if (line_index == 0 && delta != 0) || (line_index != 0 && delta == 0) {
+                    return Err("compact source line deltas are invalid".into());
+                }
+                previous = previous
+                    .checked_add(delta)
+                    .ok_or("compact source line delta overflows")?;
+                if previous > byte_len {
+                    return Err("compact source line start exceeds its byte length".into());
+                }
+                line_starts.push(previous);
+            }
+            sources.push(SourceRecord {
+                relative_path: validate_relative_path(&file.relative_path)
+                    .map_err(|error| error.to_string())?,
+                content_hash: Digest(hash),
+                byte_len,
+                line_starts,
+            });
+        }
+        Ok(sources)
+    })
+}
+
 fn encode_source_record_section(
     sources: &[SourceRecord],
     manifest: &ProjectManifest,
+    kind: ProjectContainerKind,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, String> {
     let manifest_indices = manifest
@@ -1495,7 +2267,7 @@ fn encode_source_record_section(
             Ok(index)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    encode_raw_section(cancelled, |writer| {
+    encode_raw_section(kind.compression_level(), cancelled, |writer| {
         writer
             .write_all(SOURCE_RECORD_SECTION_MAGIC)
             .map_err(|error| error.to_string())?;
@@ -1569,9 +2341,10 @@ fn source_record_from_file(file: &SubmittedFile) -> Result<SourceRecord, String>
 
 fn encode_incremental_section(
     cache_keys: &[Digest],
+    kind: ProjectContainerKind,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, String> {
-    encode_raw_section(cancelled, |writer| {
+    encode_raw_section(kind.compression_level(), cancelled, |writer| {
         writer
             .write_all(INCREMENTAL_SECTION_MAGIC)
             .map_err(|error| error.to_string())?;
@@ -1671,9 +2444,10 @@ fn decode_file_category(value: u8) -> Result<FileCategory, String> {
 
 fn encode_digest_section(
     digests: &[Digest],
+    kind: ProjectContainerKind,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, String> {
-    encode_raw_section(cancelled, |writer| {
+    encode_raw_section(kind.compression_level(), cancelled, |writer| {
         writer
             .write_all(DIGEST_SECTION_MAGIC)
             .map_err(|error| error.to_string())?;
@@ -1746,6 +2520,7 @@ fn decode_digest_section(section: &EncodedSectionRef<'_>) -> Result<Vec<Digest>,
 fn encode_source_section(
     entries: &[SourceMapEntry],
     function_indices: &std::collections::BTreeMap<SymbolKey, usize>,
+    kind: ProjectContainerKind,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, String> {
     let group_count = entries
@@ -1753,7 +2528,7 @@ fn encode_source_section(
         .filter(|pair| pair[0].function != pair[1].function)
         .count()
         + usize::from(!entries.is_empty());
-    encode_raw_section(cancelled, |writer| {
+    encode_raw_section(kind.compression_level(), cancelled, |writer| {
         writer
             .write_all(SOURCE_SECTION_MAGIC)
             .map_err(|error| error.to_string())?;

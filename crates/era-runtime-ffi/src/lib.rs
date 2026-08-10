@@ -5,7 +5,7 @@
 
 use std::ffi::{c_char, c_void};
 
-pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 6 };
+pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 7 };
 pub const ERA_RUNTIME_GET_API_SYMBOL: &str = "era_runtime_get_api";
 
 pub const ERA_DEBUG_SCOPE_VARIABLES_READ: u64 = 1 << 0;
@@ -154,6 +154,7 @@ pub enum EraProjectProgressStage {
     Validating = 6,
     Finalizing = 7,
     Preparing = 8,
+    Packaging = 9,
 }
 
 #[repr(C)]

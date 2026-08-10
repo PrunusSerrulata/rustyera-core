@@ -179,6 +179,10 @@ impl RuntimeSession {
         self.compiled_project_cache = None;
         self.compiled_cache_task = None;
         self.compiled_cache_failure = None;
+        self.full_project_file = None;
+        self.full_project_task = None;
+        self.full_project_failure = None;
+        self.staged_full_project_manifest = None;
         if old_ctrl_z
             && self
                 .project_snapshot
@@ -611,6 +615,10 @@ impl RuntimeSession {
         self.compiled_project_cache = None;
         self.compiled_cache_task = None;
         self.compiled_cache_failure = None;
+        self.full_project_file = None;
+        self.full_project_task = None;
+        self.full_project_failure = None;
+        self.staged_full_project_manifest = None;
         self.set_phase(RuntimePhase::LoadingProject)?;
         let mut build = match self.build_project_from_cache(request, cache_bytes.as_deref()) {
             Ok(build) => build,
@@ -625,7 +633,11 @@ impl RuntimeSession {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "runtime.compiled_cache_hit");
-        self.compiled_project_cache = if exact_cache_hit {
+        self.compiled_project_cache = if exact_cache_hit
+            && cache_bytes
+                .as_deref()
+                .is_some_and(|bytes| bytes.starts_with(b"RERACACH"))
+        {
             // The validated imported bytes are already the desired opaque export. Re-encoding
             // the multi-gigabyte logical artifact would erase most of the warm-start win.
             cache_bytes.map(Arc::new)
@@ -773,29 +785,26 @@ impl RuntimeSession {
                 });
                 let Some(manifest) = embedded_manifest.as_ref().or(request.manifest.as_ref())
                 else {
-                    let mut diagnostics = Vec::new();
+                    let mut report =
+                        project_payload_required_report(request.identity.project_revision);
                     if let Some(error) = cache_warning.take() {
-                        diagnostics.push(ProtocolDiagnostic {
-                            code: "runtime.compiled_cache_ignored".into(),
-                            level: RuntimeLogLevel::Warning,
-                            message: error,
-                            source: None,
-                        });
+                        report.diagnostics.insert(
+                            0,
+                            ProtocolDiagnostic {
+                                code: "runtime.compiled_cache_ignored".into(),
+                                level: RuntimeLogLevel::Warning,
+                                message: error,
+                                source: None,
+                            },
+                        );
                     }
-                    diagnostics.push(ProtocolDiagnostic {
-                        code: "runtime.project_payload_required".into(),
-                        level: RuntimeLogLevel::Info,
-                        message: "compiled cache is missing or does not match the project".into(),
-                        source: None,
-                    });
-                    return Err(ProjectLoadReport {
-                        project_revision: request.identity.project_revision,
-                        success: false,
-                        diagnostics,
-                        payload_required: true,
-                        configuration: None,
-                    });
+                    return Err(report);
                 };
+                if manifest_contains_omitted_payloads(manifest) {
+                    return Err(project_payload_required_report(
+                        request.identity.project_revision,
+                    ));
+                }
                 let actual_identity = crate::compiled_cache::project_identity(manifest);
                 if actual_identity.source_digest != request.identity.source_digest {
                     return Err(ProjectLoadReport {
@@ -1038,6 +1047,10 @@ impl RuntimeSession {
         self.compiled_project_cache = None;
         self.compiled_cache_task = None;
         self.compiled_cache_failure = None;
+        self.full_project_file = None;
+        self.full_project_task = None;
+        self.full_project_failure = None;
+        self.staged_full_project_manifest = None;
         if let Some(snapshot) = &self.project_snapshot {
             self.presentation.configure_project(snapshot);
         }
@@ -1215,6 +1228,35 @@ fn apply_hot_configuration(
     }
     if let Some(value) = integer("LineHeight").and_then(|value| u32::try_from(value).ok()) {
         snapshot.line_height = value.max(snapshot.font_size);
+    }
+}
+
+fn manifest_contains_omitted_payloads(manifest: &ProjectManifest) -> bool {
+    manifest.files.iter().any(|file| {
+        let Some(expected) = &file.content_hash else {
+            return false;
+        };
+        let empty_payload = match &file.payload {
+            FilePayload::Utf8(value) => value.is_empty(),
+            FilePayload::Bytes(value) => value.as_slice().is_empty(),
+            FilePayload::IoError(_) => false,
+        };
+        empty_payload && expected.as_slice() != blake3::hash(&[]).as_bytes()
+    })
+}
+
+fn project_payload_required_report(project_revision: u64) -> ProjectLoadReport {
+    ProjectLoadReport {
+        project_revision,
+        success: false,
+        diagnostics: vec![ProtocolDiagnostic {
+            code: "runtime.project_payload_required".into(),
+            level: RuntimeLogLevel::Info,
+            message: "compiled cache is missing or does not match the project".into(),
+            source: None,
+        }],
+        payload_required: true,
+        configuration: None,
     }
 }
 

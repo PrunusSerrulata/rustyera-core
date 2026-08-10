@@ -87,10 +87,11 @@ pub(super) fn decode_section<T: DeserializeOwned>(
 }
 
 pub(super) fn encode_raw_section(
+    compression_level: i32,
     cancelled: Option<&AtomicBool>,
     encode: impl FnOnce(&mut dyn Write) -> Result<(), String>,
 ) -> Result<Vec<u8>, String> {
-    let encoder = zstd::stream::Encoder::new(Vec::new(), super::COMPRESSION_LEVEL)
+    let encoder = zstd::stream::Encoder::new(Vec::new(), compression_level)
         .map_err(|error| error.to_string())?;
     let mut writer = CountingWriter::new(encoder, cancelled);
     encode(&mut writer)?;

@@ -434,6 +434,7 @@ const fn project_progress_stage(stage: ProjectProgressStage) -> EraProjectProgre
         ProjectProgressStage::Validating => EraProjectProgressStage::Validating,
         ProjectProgressStage::Finalizing => EraProjectProgressStage::Finalizing,
         ProjectProgressStage::Preparing => EraProjectProgressStage::Preparing,
+        ProjectProgressStage::Packaging => EraProjectProgressStage::Packaging,
     }
 }
 

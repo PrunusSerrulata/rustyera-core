@@ -8,7 +8,7 @@ use era_runtime_protocol::{
     ConfigurationClientProfile, ConfigurationUpdateCommitted, ConfigurationUpdateOutcome,
     ConfigurationValueKind, DisplayRun, EffectAcknowledgement, EffectBatch, EffectEvent,
     EffectKind, EffectOutcome, EffectOutcomeStatus, ExitReason, ExitRequested,
-    FinalizeConfigurationUpdate, FrontendInput, GET_KEY_STATE_OPERATION,
+    FinalizeConfigurationUpdate, FrontendInput, FullProjectManifest, GET_KEY_STATE_OPERATION,
     GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, InputIntent,
     InputUndoRequest, InputUndoState, InteractionToken, KeyMacroCommand, POINTER_STATE_OPERATION,
     POINTER_STATE_OPERATION_VERSION, PointerStateRequest, PointerStateResponse,
@@ -18,9 +18,9 @@ use era_runtime_protocol::{
     ProjectionTransform, RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay,
     ReturnToTitleRequest, RuntimeLog, RuntimeLogLevel, RuntimeMessage,
     SAMPLE_CANVAS_PIXEL_OPERATION, ServiceKind, ServiceRequest, SnapshotExportPurpose,
-    StateExportChunkRequest, StateExportKind, StateExportRequest, StateImportBegin,
-    StorageNamespace, StorageOperation, StorageRequest, TextExtentRequest, TextStyle,
-    parse_document, validate_relative_path,
+    StateExportCancel, StateExportChunkRequest, StateExportKind, StateExportRequest,
+    StateImportBegin, StorageNamespace, StorageOperation, StorageRequest, TextExtentRequest,
+    TextStyle, parse_document, validate_relative_path,
 };
 
 #[test]
@@ -130,7 +130,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(27, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(28, 0));
 }
 
 #[test]
@@ -172,6 +172,7 @@ fn protocol_23_carries_compiled_cache_loads_and_in_session_title_returns() {
         23
     );
     assert_eq!(StateExportKind::CompiledProjectCache as u8, 2);
+    assert_eq!(StateExportKind::FullProjectFile as u8, 3);
 }
 
 #[test]
@@ -252,7 +253,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(27, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(28, 0));
 }
 
 #[test]
@@ -261,7 +262,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(27, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(28, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -427,7 +428,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(27, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(28, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -466,7 +467,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(27, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(28, 0));
 }
 
 #[test]
@@ -518,6 +519,25 @@ fn state_transfers_are_versioned_and_chunked() {
     });
     let encoded = read.encode_payload().expect("encode export chunk request");
     assert_eq!(RuntimeMessage::decode_payload(67, &encoded), Ok(read));
+
+    let manifest = RuntimeMessage::FullProjectManifest(FullProjectManifest {
+        manifest: ProjectManifest {
+            project_revision: 1,
+            files: Vec::new(),
+        },
+    });
+    let encoded = manifest
+        .encode_payload()
+        .expect("encode full project manifest");
+    assert_eq!(RuntimeMessage::decode_payload(70, &encoded), Ok(manifest));
+
+    let cancel = RuntimeMessage::StateExportCancel(StateExportCancel {
+        kind: StateExportKind::FullProjectFile,
+    });
+    let encoded = cancel
+        .encode_payload()
+        .expect("encode state export cancellation");
+    assert_eq!(RuntimeMessage::decode_payload(71, &encoded), Ok(cancel));
 }
 
 #[test]

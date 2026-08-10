@@ -25,11 +25,11 @@ use era_runtime_protocol::{
     EncodeCanvasPngRequest, EncodeCanvasPngResponse, ExitReason, ExitRequested,
     ExtensionDeclaration, ExtensionRegistrySubmit, ExternalRequestKind, FaultCode, FileCategory,
     FilePayload, FinalizeConfigurationUpdate, FrontendInput, FrontendIoErrorKind,
-    GET_DISPLAY_LINE_OPERATION, GET_DISPLAY_LINE_OPERATION_VERSION, GET_KEY_STATE_OPERATION,
-    GET_KEY_STATE_OPERATION_VERSION, GGET_TEXT_SIZE_OPERATION, GGET_TEXT_SIZE_OPERATION_VERSION,
-    GetKeyStateRequest, GetKeyStateResponse, HTML_GET_PRINTED_STR_OPERATION,
-    HTML_GET_PRINTED_STR_OPERATION_VERSION, HTML_STRING_LEN_OPERATION,
-    HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
+    FullProjectManifest, GET_DISPLAY_LINE_OPERATION, GET_DISPLAY_LINE_OPERATION_VERSION,
+    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GGET_TEXT_SIZE_OPERATION,
+    GGET_TEXT_SIZE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse,
+    HTML_GET_PRINTED_STR_OPERATION, HTML_GET_PRINTED_STR_OPERATION_VERSION,
+    HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
     HTML_STRING_LINES_OPERATION_VERSION, HTML_SUBSTRING_OPERATION,
     HTML_SUBSTRING_OPERATION_VERSION, HtmlMeasureRequest, HtmlSubstringResponse,
     IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION, IMAGE_PIXEL_OPERATION,
@@ -50,14 +50,15 @@ use era_runtime_protocol::{
     SERIALIZE_PHYSICAL_HISTORY_OPERATION, SERIALIZE_PHYSICAL_HISTORY_OPERATION_VERSION,
     SerializePhysicalHistoryRequest, SerializePhysicalHistoryResponse, ServerHello,
     ServiceCapability, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady,
-    SnapshotExportPurpose, SnapshotIneligibleReason, StartMode, StartRequest, StateExportChunk,
-    StateExportChunkRequest, StateExportKind, StateExportReady, StateExportRequest,
-    StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit,
-    StateImportReady, StateTransferCancel, StateTransferDescriptor, StorageCapabilities,
-    StorageEntry, StorageNamespace, StorageOperation, StoragePrecondition, StorageRequest,
-    StorageResponse, StorageResult, SystemTextArgument, SystemTextKey, TextBoxLayout,
-    TextExtentRequest, TextExtentResponse, UPDATE_CHECK_OPERATION, UPDATE_CHECK_OPERATION_VERSION,
-    UpdateCheckRequest, UpdateCheckResponse, VersionRejected, WaitChange, WaitKind, WaitStability,
+    SnapshotExportPurpose, SnapshotIneligibleReason, StartMode, StartRequest, StateExportCancel,
+    StateExportChunk, StateExportChunkRequest, StateExportKind, StateExportReady,
+    StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk,
+    StateImportCommit, StateImportReady, StateTransferCancel, StateTransferDescriptor,
+    StorageCapabilities, StorageEntry, StorageNamespace, StorageOperation, StoragePrecondition,
+    StorageRequest, StorageResponse, StorageResult, SystemTextArgument, SystemTextKey,
+    TextBoxLayout, TextExtentRequest, TextExtentResponse, UPDATE_CHECK_OPERATION,
+    UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest, UpdateCheckResponse, VersionRejected,
+    WaitChange, WaitKind, WaitStability,
 };
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
@@ -136,6 +137,7 @@ pub enum ProjectProgressStage {
     Validating,
     Finalizing,
     Preparing,
+    Packaging,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -329,7 +331,7 @@ struct OutboundStateTransfer {
     next_offset: u64,
 }
 
-enum CompiledCacheTask {
+enum ProjectContainerTask {
     #[cfg(not(target_arch = "wasm32"))]
     Native {
         cancelled: Arc<AtomicBool>,
@@ -342,14 +344,14 @@ enum CompiledCacheTask {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Drop for CompiledCacheTask {
+impl Drop for ProjectContainerTask {
     fn drop(&mut self) {
         match self {
-            Self::Native { cancelled, handle } => {
+            Self::Native {
+                cancelled,
+                handle: _,
+            } => {
                 cancelled.store(true, Ordering::Relaxed);
-                if let Some(handle) = handle.take() {
-                    let _ = handle.join();
-                }
             }
             #[cfg(test)]
             Self::Cooperative { .. } => {}
@@ -466,13 +468,17 @@ pub struct RuntimeSession {
     inbound_transfer: Option<InboundStateTransfer>,
     outbound_transfer: Option<OutboundStateTransfer>,
     staged_project_manifest: Option<ProjectManifest>,
+    staged_full_project_manifest: Option<ProjectManifest>,
     pending_project_load: Option<PendingProjectLoad>,
     pending_candidate_commit: Option<PendingCandidateCommit>,
     candidate_clock: Option<LocalDateTimeResponse>,
     compiled_project_cache: Option<Arc<Vec<u8>>>,
     compiled_cache_diagnostics: Vec<ProtocolDiagnostic>,
-    compiled_cache_task: Option<CompiledCacheTask>,
+    compiled_cache_task: Option<ProjectContainerTask>,
     compiled_cache_failure: Option<String>,
+    full_project_file: Option<Arc<Vec<u8>>>,
+    full_project_task: Option<ProjectContainerTask>,
+    full_project_failure: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -112,7 +112,7 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     let mut build = crate::project::build_project(&project, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
-    let bytes = encode(
+    let bytes = encode_full_project_for_test(
         &project,
         &[],
         build.artifact.as_ref().unwrap(),
@@ -125,7 +125,7 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
 
     assert_eq!(&bytes[..8], b"RERAPROJ");
-    assert_eq!(bytes[8], 6);
+    assert_eq!(bytes[8], 7);
     assert_eq!(
         decoded.key,
         project_key(
@@ -194,6 +194,152 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
 }
 
 #[test]
+fn compact_cache_omits_source_and_binary_payloads_but_remains_loadable() {
+    let mut project = manifest(
+        &format!("@SYSTEM_TITLE\nPRINTL {}\nRETURN\n", "x".repeat(64_000)),
+        1,
+    );
+    let resource = (0..4_000_u64)
+        .flat_map(|index| blake3::hash(&index.to_le_bytes()).as_bytes().to_vec())
+        .collect::<Vec<_>>();
+    project.files.push(SubmittedFile {
+        relative_path: "resources/title.png".into(),
+        category: FileCategory::Resource,
+        payload: FilePayload::Bytes(ProtocolBytes::new(resource)),
+        content_hash: None,
+    });
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let full = encode_full_project_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let compact = encode_compiled_cache_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+
+    assert_eq!(&compact[..8], b"RERACACH");
+    assert!(compact.len() < full.len());
+    let decoded = decode(&compact, 64 * 1024 * 1024).unwrap();
+    assert_eq!(
+        decoded.snapshot.project_identity,
+        build.snapshot.as_ref().unwrap().project_identity
+    );
+    assert!(decode_project_file(&compact, 64 * 1024 * 1024).is_err());
+}
+
+#[test]
+fn compact_sections_reject_noncanonical_omission_hashes_and_source_metadata() {
+    let source = "@SYSTEM_TITLE\nRETURN\n";
+    let mut project = manifest(source, 1);
+    project.files.push(SubmittedFile {
+        relative_path: "reraconfig.toml".into(),
+        category: FileCategory::Configuration,
+        payload: FilePayload::Utf8("[audio]\nvolume = 100\n".into()),
+        content_hash: None,
+    });
+    let manifest_section =
+        encode_manifest_section(&project, ProjectContainerKind::CompiledCache, None).unwrap();
+    let mut cursor = 0;
+    let encoded = read_section(&manifest_section, &mut cursor, manifest_section.len()).unwrap();
+    let mut decoded = zstd::bulk::decompress(
+        encoded.compressed,
+        usize::try_from(encoded.decoded_length).unwrap(),
+    )
+    .unwrap();
+    let first_tags = COMPACT_MANIFEST_SECTION_MAGIC.len() + 1 + 1 + "main.erb".len();
+    decoded[first_tags + 2] = 0;
+    let compressed = zstd::bulk::compress(&decoded, CACHE_COMPRESSION_LEVEL).unwrap();
+    let corrupt = EncodedSectionRef {
+        decoded_length: decoded.len() as u64,
+        compressed: &compressed,
+    };
+    assert!(
+        decode_manifest_section(&corrupt, 1)
+            .unwrap_err()
+            .contains("omission policy")
+    );
+
+    let mut decoded = zstd::bulk::decompress(
+        encoded.compressed,
+        usize::try_from(encoded.decoded_length).unwrap(),
+    )
+    .unwrap();
+    let second_path = first_tags + 3 + 32;
+    let second_tags = second_path + 1 + "reraconfig.toml".len();
+    decoded[second_tags + 3] ^= 1;
+    let compressed = zstd::bulk::compress(&decoded, CACHE_COMPRESSION_LEVEL).unwrap();
+    let corrupt = EncodedSectionRef {
+        decoded_length: decoded.len() as u64,
+        compressed: &compressed,
+    };
+    assert!(
+        decode_manifest_section(&corrupt, 1)
+            .unwrap_err()
+            .contains("payload hash mismatch")
+    );
+
+    let source_record = source_record_from_file(&project.files[0]).unwrap();
+    let encoded = encode_compact_source_record_section(
+        &[source_record],
+        &project,
+        ProjectContainerKind::CompiledCache,
+        None,
+    )
+    .unwrap();
+    let mut cursor = 0;
+    let section = read_section(&encoded, &mut cursor, encoded.len()).unwrap();
+    let mut decoded = zstd::bulk::decompress(
+        section.compressed,
+        usize::try_from(section.decoded_length).unwrap(),
+    )
+    .unwrap();
+    *decoded.last_mut().unwrap() = u8::MAX;
+    let compressed = zstd::bulk::compress(&decoded, CACHE_COMPRESSION_LEVEL).unwrap();
+    let corrupt = EncodedSectionRef {
+        decoded_length: decoded.len() as u64,
+        compressed: &compressed,
+    };
+    assert!(decode_compact_source_record_section(&corrupt, &project).is_err());
+}
+
+#[test]
+fn compact_cache_rejects_configuration_journals() {
+    let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let mut bytes = encode_compiled_cache_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    bytes.extend_from_slice(&encode_record(None, "[audio]\nvolume = 42\n").unwrap().0);
+    assert!(
+        decode(&bytes, bytes.len())
+            .err()
+            .unwrap()
+            .contains("cannot contain a configuration journal")
+    );
+}
+
+#[test]
 fn project_configuration_updates_append_without_rebuilding_the_cache() {
     let mut project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
     let original_source = "[audio]\nvolume = 100\n";
@@ -206,7 +352,7 @@ fn project_configuration_updates_append_without_rebuilding_the_cache() {
     let mut build = crate::project::build_project(&project, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
-    let base = encode(
+    let base = encode_full_project_for_test(
         &project,
         &[],
         build.artifact.as_ref().unwrap(),
@@ -305,7 +451,7 @@ fn project_configuration_journal_recovers_only_an_incomplete_tail() {
     let mut build = crate::project::build_project(&project, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
-    let base = encode(
+    let base = encode_full_project_for_test(
         &project,
         &[],
         build.artifact.as_ref().unwrap(),
@@ -373,7 +519,7 @@ fn project_file_stores_manifest_payload_once_and_extracts_it_exactly() {
     let mut build = crate::project::build_project(&project, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
-    let bytes = encode(
+    let bytes = encode_full_project_for_test(
         &project,
         &[],
         build.artifact.as_ref().unwrap(),
@@ -477,7 +623,7 @@ fn project_file_projection_honors_limits_and_version() {
     let mut build = crate::project::build_project(&project, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
-    let mut bytes = encode(
+    let mut bytes = encode_full_project_for_test(
         &project,
         &[],
         build.artifact.as_ref().unwrap(),
@@ -493,6 +639,15 @@ fn project_file_projection_honors_limits_and_version() {
     let mut corrupt = bytes.clone();
     *corrupt.last_mut().unwrap() ^= 1;
     assert!(decode_project_file_frontend_manifest(&corrupt, corrupt.len()).is_err());
+    let mut legacy = bytes.clone();
+    legacy[8] = LEGACY_PROJECT_VERSION;
+    let digest_offset = legacy.len() - 32;
+    let digest = blake3::hash(&legacy[..digest_offset]);
+    legacy[digest_offset..].copy_from_slice(digest.as_bytes());
+    assert_eq!(
+        decode_project_file(&legacy, legacy.len()).unwrap().manifest,
+        project
+    );
     bytes[8] = 2;
     let digest_offset = bytes.len() - 32;
     let digest = blake3::hash(&bytes[..digest_offset]);
@@ -564,7 +719,7 @@ fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
         .incremental
         .compact_cache_keys(artifact.artifact())
         .unwrap();
-    let canonical = encode(
+    let canonical = encode_compiled_cache_for_test(
         &snapshot.manifest,
         &[],
         &artifact,
@@ -596,10 +751,30 @@ fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
     assert!(steps > 16, "cache encoding should span multiple host pumps");
     assert_eq!(bytes, canonical);
     let decoded = decode(&bytes, 64 * 1024 * 1024).unwrap();
-    assert_eq!(
-        decoded.snapshot.manifest.as_ref(),
-        snapshot.manifest.as_ref()
-    );
+    let decoded_files = &decoded.snapshot.manifest.files;
+    assert_eq!(decoded_files.len(), snapshot.manifest.files.len());
+    for (decoded, original) in decoded_files.iter().zip(&snapshot.manifest.files) {
+        assert_eq!(decoded.relative_path, original.relative_path);
+        assert_eq!(decoded.category, original.category);
+        let original_payload = match &original.payload {
+            FilePayload::Utf8(value) => value.as_bytes(),
+            FilePayload::Bytes(value) => value.as_slice(),
+            FilePayload::IoError(_) => unreachable!(),
+        };
+        assert_eq!(
+            decoded.content_hash.as_ref().map(ProtocolBytes::as_slice),
+            Some(blake3::hash(original_payload).as_bytes().as_slice())
+        );
+        assert!(
+            matches!(
+                &decoded.payload,
+                FilePayload::Utf8(value) if value.is_empty()
+            ) || matches!(
+                &decoded.payload,
+                FilePayload::Bytes(value) if value.as_slice().is_empty()
+            )
+        );
+    }
     assert_eq!(
         decoded.artifact.artifact(),
         build.artifact.unwrap().artifact()
@@ -634,15 +809,17 @@ fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_error
         .compact_cache_keys(artifact.artifact())
         .unwrap();
     let run = |manifest: ProjectManifest| {
-        let mut encoder = CooperativeCompiledCacheEncoder::new(
-            Arc::new(manifest),
-            Vec::new(),
-            artifact.clone(),
-            cache_keys.clone(),
-            CompiledSnapshotMetadata::from(snapshot),
-            build.report.diagnostics.clone(),
-            None,
-        );
+        let mut encoder = CooperativeCompiledCacheEncoder::new_for_kind(CooperativeEncoderInput {
+            kind: ProjectContainerKind::FullProject,
+            manifest: Arc::new(manifest),
+            extensions: Vec::new(),
+            artifact: artifact.clone(),
+            cache_keys: CacheKeyPlanner::Ready(Some(cache_keys.clone())),
+            snapshot: CompiledSnapshotMetadata::from(snapshot),
+            diagnostics: build.report.diagnostics.clone(),
+            cancelled: None,
+            progress: None,
+        });
         loop {
             match encoder.step() {
                 Ok(Some(bytes)) => break Ok(bytes),
@@ -718,7 +895,13 @@ fn compact_source_section_preserves_none_and_empty_origin_chains() {
         code: Vec::new(),
         max_stack: 0,
     }];
-    let encoded = encode_source_section(&entries, &function_indices, None).unwrap();
+    let encoded = encode_source_section(
+        &entries,
+        &function_indices,
+        ProjectContainerKind::FullProject,
+        None,
+    )
+    .unwrap();
     let mut cursor = 0;
     let section = read_section(&encoded, &mut cursor, encoded.len()).unwrap();
 
@@ -743,7 +926,7 @@ fn sharded_binary_cache_is_deterministic() {
     let mut build = crate::project::build_project(&project, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
-    let first = encode(
+    let first = encode_full_project_for_test(
         &project,
         &[],
         build.artifact.as_ref().unwrap(),
@@ -753,7 +936,7 @@ fn sharded_binary_cache_is_deterministic() {
     )
     .unwrap();
 
-    let second = encode(
+    let second = encode_full_project_for_test(
         &project,
         &[],
         build.artifact.as_ref().unwrap(),

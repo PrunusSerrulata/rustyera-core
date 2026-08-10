@@ -2,7 +2,9 @@ use era_protocol::{ProtocolBytes, ProtocolVersion, SessionId, VersionRange};
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::{ConfigurationClientProfile, ServiceKind, SourceLocation, StorageCapabilities};
+use crate::{
+    ConfigurationClientProfile, ProjectManifest, ServiceKind, SourceLocation, StorageCapabilities,
+};
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -410,6 +412,23 @@ pub enum StateExportKind {
     /// Opaque, versioned compiler cache. Frontends persist but never interpret these bytes.
     #[n(2)]
     CompiledProjectCache,
+    /// Self-contained project container including all runtime inputs and binary resources.
+    #[n(3)]
+    FullProjectFile,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct FullProjectManifest {
+    #[n(0)]
+    pub manifest: ProjectManifest,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct StateExportCancel {
+    #[n(0)]
+    pub kind: StateExportKind,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

@@ -9,19 +9,20 @@ use crate::{
     AdvanceTime, CancelExternalRequest, ClientHello, ClientStateChanged, CommandRejected,
     ConfigurationUpdateCommitted, ConfigurationUpdatePrepared, DeviceStateChanged,
     EffectAcknowledgement, EffectBatch, ExitRequested, ExtensionRegistrySubmit,
-    FinalizeConfigurationUpdate, FrontendInput, InputUndoRequest, InputUndoState, KeyMacroCommand,
-    KeyMacroProfileSubmit, KeyMacroState, PrepareConfigurationUpdate, PresentationDelta,
-    PresentationSnapshot, ProjectAnalysisReport, ProjectAnalysisRequest, ProjectLoadReport,
-    ProjectLoadRequest, ProjectManifest, ProjectionObservation, ProjectionState,
-    ProtocolDiagnostic, ReloadProject, ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault,
-    RuntimeLog, RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello,
-    ServiceRequest, ServiceResponse, ShutdownReady, ShutdownRequest, StartRequest,
-    StateExportChunk, StateExportChunkRequest, StateExportReady, StateExportRequest,
-    StateImportAccepted, StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady,
-    StateTransferCancel, StorageRequest, StorageResponse, VersionRejected, WaitChange,
+    FinalizeConfigurationUpdate, FrontendInput, FullProjectManifest, InputUndoRequest,
+    InputUndoState, KeyMacroCommand, KeyMacroProfileSubmit, KeyMacroState,
+    PrepareConfigurationUpdate, PresentationDelta, PresentationSnapshot, ProjectAnalysisReport,
+    ProjectAnalysisRequest, ProjectLoadReport, ProjectLoadRequest, ProjectManifest,
+    ProjectionObservation, ProjectionState, ProtocolDiagnostic, ReloadProject,
+    ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault, RuntimeLog, RuntimePhase,
+    RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceRequest, ServiceResponse,
+    ShutdownReady, ShutdownRequest, StartRequest, StateExportCancel, StateExportChunk,
+    StateExportChunkRequest, StateExportReady, StateExportRequest, StateImportAccepted,
+    StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
+    StorageRequest, StorageResponse, VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(27, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(28, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -149,6 +150,10 @@ pub enum RuntimeMessage {
     StateExportChunk(#[n(0)] StateExportChunk),
     #[n(69)]
     StateTransferCancel(#[n(0)] StateTransferCancel),
+    #[n(70)]
+    FullProjectManifest(#[n(0)] FullProjectManifest),
+    #[n(71)]
+    StateExportCancel(#[n(0)] StateExportCancel),
     #[n(90)]
     ShutdownRequest(#[n(0)] ShutdownRequest),
     #[n(91)]
@@ -222,6 +227,8 @@ impl RuntimeMessage {
             Self::StateExportChunkRequest(_) => 67,
             Self::StateExportChunk(_) => 68,
             Self::StateTransferCancel(_) => 69,
+            Self::FullProjectManifest(_) => 70,
+            Self::StateExportCancel(_) => 71,
             Self::ShutdownRequest(_) => 90,
             Self::ShutdownReady(_) => 91,
             Self::Fault(_) => 92,

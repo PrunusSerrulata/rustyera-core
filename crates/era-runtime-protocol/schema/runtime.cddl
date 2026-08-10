@@ -49,6 +49,8 @@ runtime-message =
   [67, state-export-chunk-request] /
   [68, state-export-chunk] /
   [69, state-transfer-cancel] /
+  [70, full-project-manifest] /
+  [71, state-export-cancel] /
   [90, shutdown-request] /
   [91, shutdown-ready] /
   [92, runtime-fault] /
@@ -175,6 +177,8 @@ state-import-ready = { 0: uint, 1: uint }
 state-export-chunk-request = { 0: uint, 1: uint, 2: uint }
 state-export-chunk = { 0: uint, 1: uint, 2: bstr, 3: bool }
 state-transfer-cancel = { 0: uint }
+full-project-manifest = { 0: project-manifest }
+state-export-cancel = { 0: uint }
 shutdown-request = { 0: bool }
 shutdown-ready = { 0: uint, 1: uint }
 runtime-fault = { 0: uint, 1: tstr, 2: any / null }

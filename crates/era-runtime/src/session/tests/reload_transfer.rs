@@ -310,9 +310,9 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
         "{completion:#?}"
     );
     let bytes = session.compiled_project_cache.as_ref().unwrap();
-    assert!(crate::compiled_cache::decode(bytes, 64 * 1024 * 1024).is_ok());
-    let project_file = crate::compiled_cache::decode_project_file(bytes, bytes.len()).unwrap();
-    assert_manifest_rera_font_size(&project_file.manifest, 18);
+    let decoded = crate::compiled_cache::decode(bytes, 64 * 1024 * 1024).unwrap();
+    assert_manifest_rera_font_size(&decoded.snapshot.manifest, 18);
+    assert!(crate::compiled_cache::decode_project_file(bytes, bytes.len()).is_err());
 
     session
         .export_state(
@@ -329,6 +329,125 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
             kind: StateExportKind::CompiledProjectCache,
             result: StateExportResult::Ready { .. },
         })
+    )));
+}
+
+#[test]
+fn full_project_export_preempts_cache_streams_chunks_and_cancels_cleanly() {
+    let (mut session, manifest, _) = cooperative_cache_session();
+    let cache_manifest = Arc::clone(&session.project_snapshot.as_ref().unwrap().manifest);
+    session.compiled_cache_task = Some(ProjectContainerTask::Cooperative {
+        encoder: Box::new(cooperative_cache_encoder(&session, cache_manifest)),
+    });
+    let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = Arc::clone(&progress);
+    session.project_progress_reporter = Some(ProjectProgressReporter::new(move |value| {
+        observed.lock().unwrap().push(value);
+    }));
+
+    session
+        .stage_full_project_manifest(
+            100,
+            FullProjectManifest {
+                manifest: manifest.clone(),
+            },
+        )
+        .unwrap();
+    session
+        .export_state(
+            101,
+            StateExportRequest {
+                kind: StateExportKind::FullProjectFile,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
+            },
+        )
+        .unwrap();
+    assert!(session.compiled_cache_task.is_none());
+    assert!(session.full_project_task.is_some());
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(CommandRejected { message, .. })
+            if message == "full project preparation started"
+    )));
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while session.full_project_task.is_some() {
+        session.poll_full_project_task();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "full project worker did not finish"
+        );
+        std::thread::yield_now();
+    }
+    let reports = progress.lock().unwrap();
+    assert!(reports.iter().any(|value| {
+        value.stage == ProjectProgressStage::Packaging && value.total > 1 && value.completed > 0
+    }));
+    drop(reports);
+
+    session
+        .export_state(
+            102,
+            StateExportRequest {
+                kind: StateExportKind::FullProjectFile,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
+            },
+        )
+        .unwrap();
+    let ready = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::StateExportReady(StateExportReady {
+                result: StateExportResult::Ready { transfer },
+                ..
+            }) => Some(transfer),
+            _ => None,
+        })
+        .expect("full project transfer is ready");
+    session
+        .read_state_export(
+            103,
+            StateExportChunkRequest {
+                transfer_id: ready.transfer_id,
+                offset: 0,
+                maximum_bytes: 17,
+            },
+        )
+        .unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::StateExportChunk(StateExportChunk { offset: 0, .. })
+    )));
+    session.cancel_state_export(StateExportCancel {
+        kind: StateExportKind::FullProjectFile,
+    });
+    assert!(session.outbound_transfer.is_none());
+    assert!(session.full_project_task.is_none());
+    assert!(session.staged_full_project_manifest.is_none());
+}
+
+#[test]
+fn full_project_export_rejects_a_stale_materialized_manifest() {
+    let (mut session, mut manifest, _) = cooperative_cache_session();
+    manifest.files[0].payload = FilePayload::Utf8("@SYSTEM_TITLE\nPRINTL changed\nRETURN\n".into());
+    session
+        .stage_full_project_manifest(100, FullProjectManifest { manifest })
+        .unwrap();
+    session
+        .export_state(
+            101,
+            StateExportRequest {
+                kind: StateExportKind::FullProjectFile,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
+            },
+        )
+        .unwrap();
+
+    assert!(session.full_project_task.is_none());
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(CommandRejected { message, .. })
+            if message.contains("changed after the active project")
     )));
 }
 
@@ -422,7 +541,7 @@ fn queued_input_is_processed_before_one_cooperative_cache_quantum() {
             session.compiled_cache_diagnostics.clone(),
             None,
         );
-        session.compiled_cache_task = Some(CompiledCacheTask::Cooperative {
+        session.compiled_cache_task = Some(ProjectContainerTask::Cooperative {
             encoder: Box::new(encoder),
         });
         submit(
@@ -525,7 +644,7 @@ fn cooperative_cache_task_publishes_one_ready_diagnostic() {
     let (mut session, _manifest, _identity) = cooperative_cache_session();
 
     let canonical_manifest = Arc::clone(&session.project_snapshot.as_ref().unwrap().manifest);
-    session.compiled_cache_task = Some(CompiledCacheTask::Cooperative {
+    session.compiled_cache_task = Some(ProjectContainerTask::Cooperative {
         encoder: Box::new(cooperative_cache_encoder(&session, canonical_manifest)),
     });
     let completion = finish_cooperative_cache_task(&mut session);
@@ -554,7 +673,7 @@ fn cooperative_cache_failure_is_unique_and_project_replacement_cancels_work() {
         message: "fixture".into(),
         platform_code: None,
     });
-    session.compiled_cache_task = Some(CompiledCacheTask::Cooperative {
+    session.compiled_cache_task = Some(ProjectContainerTask::Cooperative {
         encoder: Box::new(cooperative_cache_encoder(&session, Arc::new(unreadable))),
     });
     let failure = finish_cooperative_cache_task(&mut session);
@@ -570,11 +689,15 @@ fn cooperative_cache_failure_is_unique_and_project_replacement_cancels_work() {
         1
     );
 
-    session.compiled_cache_task = Some(CompiledCacheTask::Cooperative {
+    session.compiled_cache_task = Some(ProjectContainerTask::Cooperative {
         encoder: Box::new(cooperative_cache_encoder(
             &session,
             Arc::new(manifest.clone()),
         )),
+    });
+    let full_encoder = cooperative_cache_encoder(&session, Arc::new(manifest.clone()));
+    session.full_project_task = Some(ProjectContainerTask::Cooperative {
+        encoder: Box::new(full_encoder),
     });
     assert!(session.poll_compiled_cache_task().unwrap());
     session
@@ -588,6 +711,7 @@ fn cooperative_cache_failure_is_unique_and_project_replacement_cancels_work() {
         )
         .unwrap();
     assert!(session.compiled_cache_task.is_none());
+    assert!(session.full_project_task.is_none());
     assert!(drain(&mut session).iter().all(|message| !matches!(
         message,
         RuntimeMessage::Diagnostic(ProtocolDiagnostic { code, .. })
@@ -843,7 +967,7 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
         }),
     });
     initial.incremental.compact();
-    let cache = crate::compiled_cache::encode(
+    let cache = crate::compiled_cache::encode_compiled_cache_for_test(
         &manifest,
         &[],
         initial.artifact.as_ref().unwrap(),
@@ -900,7 +1024,7 @@ fn host_staged_exact_cache_uses_the_normal_project_load_contract() {
     let mut initial = crate::project::build_project(&manifest, None);
     assert!(initial.report.success, "{:?}", initial.report.diagnostics);
     initial.incremental.compact();
-    let cache = crate::compiled_cache::encode(
+    let cache = crate::compiled_cache::encode_compiled_cache_for_test(
         &manifest,
         &[],
         initial.artifact.as_ref().unwrap(),
@@ -1060,7 +1184,7 @@ fn host_staged_corrupt_cache_reports_a_normal_cache_miss() {
 }
 
 #[test]
-fn mismatched_compiled_cache_rebuilds_from_its_matching_embedded_manifest() {
+fn mismatched_compiled_cache_requests_frontend_payloads() {
     let manifest = ProjectManifest {
         project_revision: 1,
         files: vec![SubmittedFile {
@@ -1073,7 +1197,7 @@ fn mismatched_compiled_cache_rebuilds_from_its_matching_embedded_manifest() {
     let mut initial = crate::project::build_project(&manifest, None);
     assert!(initial.report.success, "{:?}", initial.report.diagnostics);
     initial.incremental.compact();
-    let cache = crate::compiled_cache::encode(
+    let cache = crate::compiled_cache::encode_compiled_cache_for_test(
         &manifest,
         &[],
         initial.artifact.as_ref().unwrap(),
@@ -1093,23 +1217,22 @@ fn mismatched_compiled_cache_rebuilds_from_its_matching_embedded_manifest() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     session.configuration_profile = ConfigurationClientProfile::Browser;
 
-    let rebuilt = session
-        .build_project_from_cache(
-            &ProjectLoadRequest {
-                identity,
-                manifest: Some(compact_manifest),
-                compiled_cache_transfer_id: None,
-            },
-            Some(&cache),
-        )
-        .expect("a valid embedded manifest avoids retransmitting project payloads");
+    let Err(report) = session.build_project_from_cache(
+        &ProjectLoadRequest {
+            identity,
+            manifest: Some(compact_manifest),
+            compiled_cache_transfer_id: None,
+        },
+        Some(&cache),
+    ) else {
+        panic!("a stale compact cache should request the complete project payload");
+    };
 
-    assert!(rebuilt.report.success, "{:?}", rebuilt.report.diagnostics);
-    assert!(!rebuilt.report.payload_required);
-    assert_eq!(rebuilt.report.project_revision, 9);
+    assert!(!report.success);
+    assert!(report.payload_required);
+    assert_eq!(report.project_revision, 9);
     assert!(
-        rebuilt
-            .report
+        report
             .diagnostics
             .iter()
             .all(|diagnostic| diagnostic.code != "runtime.compiled_cache_hit")
@@ -1139,7 +1262,7 @@ fn journaled_configuration_rebuilds_instead_of_exact_hitting_the_old_artifact() 
     let mut initial = crate::project::build_project(&manifest, None);
     assert!(initial.report.success, "{:?}", initial.report.diagnostics);
     initial.incremental.compact();
-    let mut cache = crate::compiled_cache::encode(
+    let mut cache = crate::compiled_cache::encode_full_project_for_test(
         &manifest,
         &[],
         initial.artifact.as_ref().unwrap(),

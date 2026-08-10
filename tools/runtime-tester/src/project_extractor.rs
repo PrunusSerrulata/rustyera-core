@@ -10,7 +10,7 @@ use era_protocol::{ProtocolBytes, VersionRange, encode_canonical};
 use era_runtime::{RuntimeOptions, RuntimeSession};
 use era_runtime_protocol::{
     ClientCapabilities, ClientHello, FileCategory, FilePayload, IMAGE_METADATA_OPERATION,
-    IMAGE_METADATA_OPERATION_VERSION, ImageMetadataResponse, InputModality, ProjectManifest,
+    FullProjectManifest, IMAGE_METADATA_OPERATION_VERSION, ImageMetadataResponse, InputModality, ProjectManifest,
     RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeLogLevel, RuntimeMessage, ServiceCapability,
     ServiceKind, ServiceResponse, ServiceResult, SnapshotExportPurpose, StateExportChunkRequest,
     StateExportKind, StateExportRequest, StateExportResult, StorageCapabilities, SubmittedFile,
@@ -77,16 +77,16 @@ fn audit_game(extractor: &Path, game: &Path) {
     let started = Instant::now();
     let files = submitted_project_files(game);
     let expected = expected_project_files(&files);
-    let cache = compile_and_export(ProjectManifest {
+    let project_file = compile_and_export(ProjectManifest {
         project_revision: 1,
         files,
     });
     let temporary = TemporaryDirectory::new();
-    let cache_path = temporary.0.join("compiled-project.reraproj");
+    let project_path = temporary.0.join("compiled-project.reraproj");
     let output_path = temporary.0.join("extracted");
-    fs::write(&cache_path, &cache).expect("write temporary compiled cache");
+    fs::write(&project_path, &project_file).expect("write temporary full project file");
     let output = std::process::Command::new(extractor)
-        .arg(&cache_path)
+        .arg(&project_path)
         .arg(&output_path)
         .output()
         .expect("run project extractor");
@@ -113,10 +113,10 @@ fn audit_game(extractor: &Path, game: &Path) {
         );
     }
     println!(
-        "project_extractor_ok={} files={} cache_bytes={} elapsed_ms={}",
+        "project_extractor_ok={} files={} project_bytes={} elapsed_ms={}",
         game.file_name().unwrap().to_string_lossy(),
         actual_paths.len(),
-        cache.len(),
+        project_file.len(),
         started.elapsed().as_millis()
     );
 }
@@ -130,7 +130,10 @@ fn submitted_project_files(root: &Path) -> Vec<SubmittedFile> {
             let category = if first == "resources" && lower.ends_with(".csv") {
                 FileCategory::ResourceManifest
             } else if first == "resources"
-                && [".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"]
+                && [
+                    ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp", ".aac", ".flac",
+                    ".m4a", ".mp3", ".ogg", ".opus", ".wav",
+                ]
                     .iter()
                     .any(|suffix| lower.ends_with(suffix))
             {
@@ -212,7 +215,10 @@ fn collect_project_paths(root: &Path) -> Vec<String> {
         let first = lower.split('/').next().unwrap_or_default();
         if first == "resources" {
             return lower.ends_with(".csv")
-                || [".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"]
+                || [
+                    ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp", ".aac", ".flac",
+                    ".m4a", ".mp3", ".ogg", ".opus", ".wav",
+                ]
                     .iter()
                     .any(|suffix| lower.ends_with(suffix));
         }
@@ -235,6 +241,7 @@ fn collect_project_paths(root: &Path) -> Vec<String> {
 }
 
 fn compile_and_export(manifest: ProjectManifest) -> Vec<u8> {
+    let full_manifest = manifest.clone();
     let mut options = RuntimeOptions::default();
     options.limits.maximum_envelope_bytes = 1024 * 1024 * 1024;
     options.limits.maximum_payload_bytes = 1023 * 1024 * 1024;
@@ -345,8 +352,20 @@ fn compile_and_export(manifest: ProjectManifest) -> Vec<u8> {
         &mut session,
         sequence,
         Some(1),
+        RuntimeMessage::FullProjectManifest(FullProjectManifest {
+            manifest: full_manifest,
+        }),
+    );
+    sequence += 1;
+    drive(&mut session);
+    let _ = drain(&mut session);
+
+    submit_with_epoch(
+        &mut session,
+        sequence,
+        Some(1),
         RuntimeMessage::StateExportRequest(StateExportRequest {
-            kind: StateExportKind::CompiledProjectCache,
+            kind: StateExportKind::FullProjectFile,
             snapshot_purpose: SnapshotExportPurpose::Normal,
         }),
     );
@@ -354,39 +373,25 @@ fn compile_and_export(manifest: ProjectManifest) -> Vec<u8> {
     drive(&mut session);
     let _ = drain(&mut session);
     let deadline = Instant::now() + CACHE_BUILD_TIMEOUT;
-    loop {
+    let transfer = loop {
         assert!(
             Instant::now() < deadline,
-            "compiled project cache worker timed out"
+            "full project worker timed out"
         );
         drive(&mut session);
-        let ready = drain(&mut session).into_iter().any(|message| {
-            matches!(
-                message,
-                RuntimeMessage::Diagnostic(diagnostic)
-                    if diagnostic.code == "runtime.compiled_cache_ready"
-            )
-        });
-        if ready {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-
-    submit_with_epoch(
-        &mut session,
-        sequence,
-        Some(1),
-        RuntimeMessage::StateExportRequest(StateExportRequest {
-            kind: StateExportKind::CompiledProjectCache,
-            snapshot_purpose: SnapshotExportPurpose::Normal,
-        }),
-    );
-    sequence += 1;
-    drive(&mut session);
-    let transfer = drain(&mut session)
-        .into_iter()
-        .find_map(|message| {
+        let _ = drain(&mut session);
+        submit_with_epoch(
+            &mut session,
+            sequence,
+            Some(1),
+            RuntimeMessage::StateExportRequest(StateExportRequest {
+                kind: StateExportKind::FullProjectFile,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
+            }),
+        );
+        sequence += 1;
+        drive(&mut session);
+        if let Some(transfer) = drain(&mut session).into_iter().find_map(|message| {
             let RuntimeMessage::StateExportReady(ready) = message else {
                 return None;
             };
@@ -394,10 +399,13 @@ fn compile_and_export(manifest: ProjectManifest) -> Vec<u8> {
                 return None;
             };
             Some(transfer)
-        })
-        .expect("runtime did not make the compiled cache transfer ready");
+        }) {
+            break transfer;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     let mut bytes = Vec::with_capacity(
-        usize::try_from(transfer.total_bytes).expect("compiled cache length is addressable"),
+        usize::try_from(transfer.total_bytes).expect("full project length is addressable"),
     );
     loop {
         submit_with_epoch(
@@ -420,7 +428,7 @@ fn compile_and_export(manifest: ProjectManifest) -> Vec<u8> {
                 };
                 Some(chunk)
             })
-            .expect("runtime did not return a compiled cache chunk");
+            .expect("runtime did not return a full project chunk");
         assert_eq!(chunk.offset, bytes.len() as u64);
         bytes.extend_from_slice(chunk.data.as_slice());
         if chunk.complete {

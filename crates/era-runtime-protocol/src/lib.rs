@@ -47,15 +47,15 @@ pub use key_macro::{
 };
 pub use lifecycle::{
     ClientCapabilities, ClientHello, ClientStateChanged, CommandErrorCode, CommandRejected,
-    ExecutionOrigin, ExitReason, ExitRequested, FaultCode, InputModality, ProjectionLength,
-    ProjectionObservation, ProjectionSize, ProjectionState, ProjectionTransform,
+    ExecutionOrigin, ExitReason, ExitRequested, FaultCode, FullProjectManifest, InputModality,
+    ProjectionLength, ProjectionObservation, ProjectionSize, ProjectionState, ProjectionTransform,
     ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault, RuntimeFeature, RuntimeLimits,
     RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceCapability,
     ShutdownReady, ShutdownRequest, SnapshotExportPurpose, SnapshotIneligibleReason, StartMode,
-    StartRequest, StateExportChunk, StateExportChunkRequest, StateExportKind, StateExportReady,
-    StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk,
-    StateImportCommit, StateImportReady, StateTransferCancel, StateTransferDescriptor,
-    TextBoxLayout, VersionRejected,
+    StartRequest, StateExportCancel, StateExportChunk, StateExportChunkRequest, StateExportKind,
+    StateExportReady, StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin,
+    StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
+    StateTransferDescriptor, TextBoxLayout, VersionRejected,
 };
 pub use log::{RuntimeLog, RuntimeLogLevel};
 pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage, RuntimeResynchronized};

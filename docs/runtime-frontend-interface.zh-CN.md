@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.6`、公共信封 `2.0`、Runtime 协议 `24.0`。源码入口：
+> C ABI `3.7`、公共信封 `2.0`、Runtime 协议 `28.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -18,7 +18,7 @@
 
 | 层 | 当前稳定性 | 用途 |
 | --- | --- | --- |
-| C ABI 3.6 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
+| C ABI 3.7 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
 | Runtime 协议 24.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
@@ -87,7 +87,7 @@ get_api → create → ClientHello → ServerHello
                                                 destroy
 ```
 
-## 3. C ABI 3.6
+## 3. C ABI 3.7
 
 ### 3.1 数据结构
 
@@ -190,7 +190,9 @@ create=`EraCreateOptions`，drive=`EraDriveOptions`，poll/release/last-error=
 项目进度阶段的 C ABI 数值保持追加兼容：`SCANNING` 至 `VALIDATING` 为 0–6，ABI 3.3
 追加的 `FINALIZING = 7` 表示函数编译完成后的缓存合并、源码映射整理、结构验证与身份计算；
 `PREPARING = 8` 表示 Runtime 正在整理资源索引与计算项目身份。解析、finalizing 和 preparing
-阶段都会按实际处理批次报告进度，前端不应仅依赖百分比变化判断活性。
+阶段都会按实际处理批次报告进度，前端不应仅依赖百分比变化判断活性。ABI 3.7 追加的
+`PACKAGING = 9` 表示容器正在分段压缩与组装；后台内部缓存也可能报告该阶段，但前端不得
+据此锁定游戏交互，交互锁只跟随用户主动导出全量项目文件的生命周期。
 
 两个解码扩展都借用输入 slice 到调用返回，并以 `EraOwnedBuffer` 返回结果；调用方必须用
 `release_buffer` 释放。坏文件或超过调用方上限的文件返回 `INVALID_ARGUMENT` 并写入
@@ -418,6 +420,8 @@ payload 使用 minicbor enum 形式 `[tag, [value]]`；无值变体为 `[tag, []
 | 60 | `StateExportRequest` | 61 `StateExportReady` |
 | 62/64/65 | import begin/chunk/commit | 63 accepted、66 ready |
 | 67 | `StateExportChunkRequest` | 68 chunk |
+| 70 | `FullProjectManifest` | — |
+| 71 | `StateExportCancel` | — |
 | 69 | `StateTransferCancel` | 取消指定传输 |
 | 90 | `ShutdownRequest` | 91 `ShutdownReady` |
 | 93 | `Acknowledge` | 累计释放 Runtime 输出 journal |
@@ -698,18 +702,18 @@ Traditional save 与普通 VM snapshot 只可在没有 deadline 的稳定输入 
 Diagnosis；后两者可在任意执行状态捕获，并在快照中保留不同来源标记，但该标记不放宽
 恢复规则。恢复仍完整校验字节码 artifact、项目资源、locale/culture、runtime wait 和
 VM fiber 状态；状态确实可恢复时，Debug/Diagnosis 来源会产生稳定代码的 warning
-diagnostic，交由前端明确呈现。CompiledProjectCache 传输承载可持久化的 `.reraproj`
-项目文件：文件头 magic 为 `RERAPROJ`，当前单字节格式版本为 `06`，主体 payload 使用
-既有 zstd 参数和分片策略。v6 延续 v4 主体结构，只保存一次 manifest 文件内容，并由它
-重建资源图、源码
-哈希、长度和行索引；增量状态只保存按规范函数顺序排列的 cache key，语句指纹在既有
-`Digest` 接口中使用 128 位有效内容。主体后可顺序追加 `RERACFG1` 配置事务记录；每条保存
+diagnostic，交由前端明确呈现。`CompiledProjectCache` 是仅供仍可直接读取源码目录的宿主
+持久化的内部 `RERACACH` v7 缓存：它省略脚本、图片和音频正文，用 manifest 索引、内容
+摘要、源码长度及行起点增量重建编译元数据，所有段使用低压缩级别以缩短启动后的后台生成
+时间；它不能作为独立项目文件解码，也不能追加配置事务。`FullProjectFile` 才是可分发的
+`.reraproj`：文件头 magic 为 `RERAPROJ`，当前单字节格式版本为 `07`，并完整保留 manifest
+payload。运行时继续读取自包含的 v6。两种 v7 容器的增量状态都只保存按规范函数顺序排列的
+cache key，语句指纹在既有 `Digest` 接口中使用 128 位有效内容。全量项目主体后可顺序追加
+`RERACFG1` 配置事务记录；每条保存
 完整的规范化 LF `reraconfig.toml`、前一配置摘要、结果摘要和校验和，末尾不完整记录按中断
-写入处理并在下次保存前截断，完整但损坏或链不连续的记录拒绝加载。v4 cache key 因配置
-更新、客户端配置或扩展变化而不再精确、但应用事务记录后的嵌入
-manifest 的源码身份仍匹配时，runtime 直接从其中的完整 payload 重编译，不要求紧凑前端
-投影再传一次源码。版本 `01`–`05` 和旧 `RERACACH` 编译缓存不再兼容；前端仍持有源码时应按
-普通 cache miss 重新编译，没有源码的独立旧项目文件会加载失败。项目文件同时保留成功
+写入处理并在下次保存前截断，完整但损坏或链不连续的记录拒绝加载。版本 `01`–`05` 和
+v7 之前的 `RERACACH` 编译缓存不再兼容；前端仍持有源码时应按普通 cache miss 重新编译，
+没有源码的独立旧项目文件会加载失败。全量项目文件同时保留成功
 构建产生的项目诊断；精确命中时重放原等级、code 和 source，并在正文前添加
 `[cached] `。项目文件准备异步，首次请求可能被可恢复地拒绝为“已开始/仍在准备”，稍后
 再请求。
@@ -757,6 +761,10 @@ manifest 的源码身份仍匹配时，runtime 直接从其中的完整 payload 
   `StateImportReady {transfer_id,kind}`；
 - `StateExportChunkRequest {transfer_id,offset,maximum_bytes}`；
   `StateExportChunk {transfer_id,offset,data,complete}`；
+- `FullProjectManifest {manifest}` 暂存用户主动导出所需的完整运行输入；
+  `StateExportCancel {kind}` 可取消尚在准备或传输中的指定导出。
+- `CompiledProjectCache` 使用内部 `RERACACH` v7 容器和低压缩率，省略可由宿主直接读取的
+  脚本正文及图片、音频正文；`FullProjectFile` 使用自包含 `RERAPROJ` v7 容器。
   `StateTransferCancel {transfer_id}`。
 
 外部请求结构：

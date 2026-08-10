@@ -157,6 +157,7 @@ impl RuntimeSession {
             inbound_transfer: None,
             outbound_transfer: None,
             staged_project_manifest: None,
+            staged_full_project_manifest: None,
             pending_project_load: None,
             pending_candidate_commit: None,
             candidate_clock: None,
@@ -164,6 +165,9 @@ impl RuntimeSession {
             compiled_cache_diagnostics: Vec::new(),
             compiled_cache_task: None,
             compiled_cache_failure: None,
+            full_project_file: None,
+            full_project_task: None,
+            full_project_failure: None,
         }
     }
 
@@ -242,13 +246,7 @@ impl RuntimeSession {
         &mut self,
         budget: RuntimeDriveBudget,
     ) -> Result<RuntimeDriveReport, RuntimeError> {
-        #[cfg(not(target_arch = "wasm32"))]
-        if matches!(
-            self.compiled_cache_task,
-            Some(CompiledCacheTask::Native { .. })
-        ) {
-            self.poll_compiled_cache_task()?;
-        }
+        self.poll_native_project_tasks()?;
         let transition_limit = budget.maximum_runtime_transitions.max(1);
         let mut transitions = 0;
         let mut instructions = 0;
@@ -343,6 +341,24 @@ impl RuntimeSession {
         })
     }
 
+    fn poll_native_project_tasks(&mut self) -> Result<(), RuntimeError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if matches!(
+            self.compiled_cache_task,
+            Some(ProjectContainerTask::Native { .. })
+        ) {
+            self.poll_compiled_cache_task()?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if matches!(
+            self.full_project_task,
+            Some(ProjectContainerTask::Native { .. })
+        ) {
+            self.poll_full_project_task();
+        }
+        Ok(())
+    }
+
     fn drive_state(&self) -> RuntimeDriveState {
         if self.phase == RuntimePhase::Faulted {
             RuntimeDriveState::Faulted
@@ -364,9 +380,15 @@ impl RuntimeSession {
     fn poll_cooperative_background_work(&mut self) -> Result<bool, RuntimeError> {
         if matches!(
             self.compiled_cache_task,
-            Some(CompiledCacheTask::Cooperative { .. })
+            Some(ProjectContainerTask::Cooperative { .. })
         ) {
             return self.poll_compiled_cache_task();
+        }
+        if matches!(
+            self.full_project_task,
+            Some(ProjectContainerTask::Cooperative { .. })
+        ) {
+            return Ok(self.poll_full_project_task());
         }
         Ok(false)
     }
@@ -597,6 +619,13 @@ impl RuntimeSession {
             }
             RuntimeMessage::StateTransferCancel(cancel) => {
                 self.cancel_state_transfer(message_id, cancel)
+            }
+            RuntimeMessage::FullProjectManifest(request) => {
+                self.stage_full_project_manifest(message_id, request)
+            }
+            RuntimeMessage::StateExportCancel(cancel) => {
+                self.cancel_state_export(cancel);
+                Ok(())
             }
             RuntimeMessage::ReloadProject(reload) => self.reload_project(message_id, &reload),
             RuntimeMessage::PrepareConfigurationUpdate(request) => {

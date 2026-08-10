@@ -40,6 +40,24 @@ impl RuntimeSession {
         Ok(transfer_id)
     }
 
+    pub(in super::super) fn stage_full_project_manifest(
+        &mut self,
+        message_id: u64,
+        request: FullProjectManifest,
+    ) -> Result<(), RuntimeError> {
+        if self.full_project_task.is_some() || self.outbound_transfer.is_some() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "a project export is already active",
+            );
+        }
+        self.full_project_failure = None;
+        self.full_project_file = None;
+        self.staged_full_project_manifest = Some(request.manifest);
+        Ok(())
+    }
+
     /// Return the negotiated upper bound for an in-process compiled-cache staging call.
     #[must_use]
     pub const fn maximum_transfer_bytes(&self) -> u64 {
@@ -124,6 +142,70 @@ impl RuntimeSession {
                     message_id,
                     CommandErrorCode::ResourceLimit,
                     "compiled project cache exceeds the negotiated transfer limit",
+                );
+            }
+            let transfer_id = self.allocate_transfer();
+            let descriptor = StateTransferDescriptor {
+                transfer_id,
+                kind: request.kind,
+                total_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                digest: ProtocolBytes::new(blake3::hash(&bytes).as_bytes().to_vec()),
+                artifact_id: None,
+            };
+            self.outbound_transfer = Some(OutboundStateTransfer {
+                descriptor: descriptor.clone(),
+                bytes,
+                next_offset: 0,
+            });
+            return self.emit(
+                RuntimeMessage::StateExportReady(StateExportReady {
+                    kind: request.kind,
+                    result: StateExportResult::Ready {
+                        transfer: descriptor,
+                    },
+                }),
+                Some(message_id),
+            );
+        }
+        if request.kind == StateExportKind::FullProjectFile {
+            if self.outbound_transfer.is_some() {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "another state export is already active",
+                );
+            }
+            if let Some(error) = self.full_project_failure.clone() {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    &format!("full project preparation failed: {error}"),
+                );
+            }
+            if self.full_project_file.is_none() && self.full_project_task.is_none() {
+                if let Err(error) = self.start_full_project_build() {
+                    return self.reject(message_id, CommandErrorCode::InvalidValue, &error);
+                }
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "full project preparation started",
+                );
+            }
+            let Some(bytes) = self.full_project_file.take() else {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "full project is still being prepared",
+                );
+            };
+            if u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+                > self.options.limits.maximum_transfer_bytes
+            {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::ResourceLimit,
+                    "full project exceeds the negotiated transfer limit",
                 );
             }
             let transfer_id = self.allocate_transfer();
@@ -294,7 +376,9 @@ impl RuntimeSession {
                     })
                     .map_err(RuntimeError::Internal)?
                 }
-                StateExportKind::CompiledProjectCache => unreachable!("handled above"),
+                StateExportKind::CompiledProjectCache | StateExportKind::FullProjectFile => {
+                    unreachable!("handled above")
+                }
             };
             if u64::try_from(bytes.len()).unwrap_or(u64::MAX)
                 > self.options.limits.maximum_transfer_bytes
@@ -379,14 +463,14 @@ impl RuntimeSession {
                     )
                 })
                 .map_err(|error| format!("cannot start compiled cache worker: {error}"))?;
-            self.compiled_cache_task = Some(CompiledCacheTask::Native {
+            self.compiled_cache_task = Some(ProjectContainerTask::Native {
                 cancelled,
                 handle: Some(handle),
             });
         }
         #[cfg(target_arch = "wasm32")]
         {
-            self.compiled_cache_task = Some(CompiledCacheTask::Cooperative {
+            self.compiled_cache_task = Some(ProjectContainerTask::Cooperative {
                 encoder: Box::new(
                     crate::compiled_cache::CooperativeCompiledCacheEncoder::new_with_incremental(
                         manifest,
@@ -403,48 +487,100 @@ impl RuntimeSession {
         Ok(())
     }
 
-    pub(in super::super) fn poll_compiled_cache_task(&mut self) -> Result<bool, RuntimeError> {
-        let Some(task) = self.compiled_cache_task.as_mut() else {
-            return Ok(false);
-        };
-        let (result, cooperative_work) = match task {
-            #[cfg(any(target_arch = "wasm32", test))]
-            CompiledCacheTask::Cooperative { encoder } => match encoder.step() {
-                Ok(None) => return Ok(true),
-                result => (
-                    result
-                        .transpose()
-                        .expect("completed cooperative cache result"),
-                    true,
-                ),
-            },
-            #[cfg(not(target_arch = "wasm32"))]
-            CompiledCacheTask::Native { handle, .. } => {
-                if !handle.as_ref().is_some_and(JoinHandle::is_finished) {
-                    return Ok(false);
-                }
-                let mut task = self
-                    .compiled_cache_task
-                    .take()
-                    .expect("finished compiled cache task exists");
-                let handle = match &mut task {
-                    CompiledCacheTask::Native { handle, .. } => handle,
-                    #[cfg(test)]
-                    CompiledCacheTask::Cooperative { .. } => {
-                        unreachable!("finished native cache task changed variant")
-                    }
-                };
-                let handle = handle
-                    .take()
-                    .expect("finished compiled cache task has a join handle");
-                let result = match handle.join() {
-                    Ok(result) => result,
-                    Err(_) => Err("compiled cache worker panicked".to_owned()),
-                };
-                (result, false)
-            }
-        };
+    fn start_full_project_build(&mut self) -> Result<(), String> {
+        let artifact = self
+            .artifact
+            .clone()
+            .ok_or_else(|| "full project build has no loaded artifact".to_owned())?;
+        let snapshot = self
+            .project_snapshot
+            .as_ref()
+            .ok_or_else(|| "full project build has no project snapshot".to_owned())?;
+        if snapshot.configuration_snapshot().restart_pending {
+            return Err("full project export requires restarting pending configuration".into());
+        }
+        let manifest = self
+            .staged_full_project_manifest
+            .take()
+            .unwrap_or_else(|| snapshot.manifest.as_ref().clone());
+        crate::compiled_cache::validate_full_project_manifest(
+            &manifest,
+            &crate::compiled_cache::project_identity(&snapshot.manifest),
+            &artifact.artifact().source_map.sources,
+        )?;
+        // A user-requested full export takes precedence over speculative cache preparation.
+        // Dropping the cache task signals cancellation without coupling game interaction to it.
         self.compiled_cache_task = None;
+        self.compiled_project_cache = None;
+        self.compiled_cache_failure = None;
+        let manifest = Arc::new(manifest);
+        let snapshot = crate::compiled_cache::CompiledSnapshotMetadata::from(snapshot);
+        let extensions = self.extension_declarations.clone();
+        let incremental = Arc::clone(&self.incremental);
+        let diagnostics = self.compiled_cache_diagnostics.clone();
+        let progress = self.project_progress_reporter.clone();
+        self.full_project_failure = None;
+        if let Some(reporter) = &self.project_progress_reporter {
+            reporter.report(ProjectProgress {
+                stage: ProjectProgressStage::Packaging,
+                completed: 0,
+                total: 1,
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let worker_cancelled = Arc::clone(&cancelled);
+            let handle = std::thread::Builder::new()
+                .name("rustyera-full-project".into())
+                .spawn(move || {
+                    crate::compiled_cache::encode_full_project_cancellable(
+                        manifest,
+                        extensions,
+                        artifact,
+                        incremental,
+                        snapshot,
+                        diagnostics,
+                        crate::compiled_cache::ProjectContainerControl {
+                            cancelled: worker_cancelled,
+                            progress,
+                        },
+                    )
+                })
+                .map_err(|error| format!("cannot start full project worker: {error}"))?;
+            self.full_project_task = Some(ProjectContainerTask::Native {
+                cancelled,
+                handle: Some(handle),
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.full_project_task = Some(ProjectContainerTask::Cooperative {
+                encoder: Box::new(
+                    crate::compiled_cache::CooperativeCompiledCacheEncoder::new_full_project(
+                        manifest,
+                        extensions,
+                        artifact,
+                        incremental,
+                        snapshot,
+                        diagnostics,
+                        None,
+                        progress,
+                    ),
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    pub(in super::super) fn poll_compiled_cache_task(&mut self) -> Result<bool, RuntimeError> {
+        let (result, cooperative_work) = poll_project_container_task(
+            &mut self.compiled_cache_task,
+            "compiled cache worker panicked",
+        );
+        let Some(result) = result else {
+            return Ok(cooperative_work);
+        };
         match result {
             Ok(bytes) => {
                 self.compiled_cache_failure = None;
@@ -473,6 +609,48 @@ impl RuntimeSession {
             }
         }
         Ok(cooperative_work)
+    }
+
+    pub(in super::super) fn poll_full_project_task(&mut self) -> bool {
+        let (result, cooperative_work) = poll_project_container_task(
+            &mut self.full_project_task,
+            "full project worker panicked",
+        );
+        let Some(result) = result else {
+            return cooperative_work;
+        };
+        match result {
+            Ok(bytes) => {
+                self.full_project_failure = None;
+                self.full_project_file = Some(Arc::new(bytes));
+            }
+            Err(error) => self.full_project_failure = Some(error),
+        }
+        cooperative_work
+    }
+
+    pub(in super::super) fn cancel_state_export(&mut self, cancel: StateExportCancel) {
+        if self
+            .outbound_transfer
+            .as_ref()
+            .is_some_and(|transfer| transfer.descriptor.kind == cancel.kind)
+        {
+            self.outbound_transfer = None;
+        }
+        match cancel.kind {
+            StateExportKind::CompiledProjectCache => {
+                self.compiled_cache_task = None;
+                self.compiled_project_cache = None;
+                self.compiled_cache_failure = None;
+            }
+            StateExportKind::FullProjectFile => {
+                self.full_project_task = None;
+                self.full_project_file = None;
+                self.full_project_failure = None;
+                self.staged_full_project_manifest = None;
+            }
+            StateExportKind::TraditionalSave | StateExportKind::VmSnapshot => {}
+        }
     }
 
     pub(in super::super) fn begin_state_import(
@@ -741,5 +919,48 @@ impl RuntimeSession {
             return Ok(None);
         }
         Ok(self.inbound_transfer.take().map(|transfer| transfer.bytes))
+    }
+}
+
+fn poll_project_container_task(
+    task: &mut Option<ProjectContainerTask>,
+    panic_message: &'static str,
+) -> (Option<Result<Vec<u8>, String>>, bool) {
+    let Some(active) = task.as_mut() else {
+        return (None, false);
+    };
+    match active {
+        #[cfg(any(target_arch = "wasm32", test))]
+        ProjectContainerTask::Cooperative { encoder } => match encoder.step() {
+            Ok(None) => (None, true),
+            result => {
+                *task = None;
+                (
+                    Some(result.transpose().expect("completed container result")),
+                    true,
+                )
+            }
+        },
+        #[cfg(not(target_arch = "wasm32"))]
+        ProjectContainerTask::Native { handle, .. } => {
+            if !handle.as_ref().is_some_and(JoinHandle::is_finished) {
+                return (None, false);
+            }
+            let mut finished = task.take().expect("finished container task exists");
+            let handle = match &mut finished {
+                ProjectContainerTask::Native { handle, .. } => handle,
+                #[cfg(test)]
+                ProjectContainerTask::Cooperative { .. } => {
+                    unreachable!("finished native container task changed variant")
+                }
+            }
+            .take()
+            .expect("finished container task has a join handle");
+            drop(finished);
+            let result = handle
+                .join()
+                .unwrap_or_else(|_| Err(panic_message.to_owned()));
+            (Some(result), false)
+        }
     }
 }
