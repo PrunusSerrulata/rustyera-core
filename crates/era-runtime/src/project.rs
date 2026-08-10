@@ -88,20 +88,28 @@ pub(crate) struct NormalizedProjectSnapshot {
 
 impl NormalizedProjectSnapshot {
     pub(crate) fn configuration_snapshot(&self) -> ProjectConfigurationSnapshot {
-        let source_digest = self
+        let mut configuration_files = self
             .manifest
             .files
             .iter()
-            .find(|file| is_root_configuration_file(file))
-            .and_then(|file| match &file.payload {
-                FilePayload::Utf8(text) => Some(era_protocol::ProtocolBytes::new(
-                    blake3::hash(era_config::normalize_line_endings(text).as_bytes())
-                        .as_bytes()
-                        .to_vec(),
-                )),
-                _ => None,
-            })
-            .unwrap_or_else(|| era_protocol::ProtocolBytes::new(Vec::new()));
+            .filter(|file| is_root_configuration_file(file));
+        let source = configuration_files.next();
+        let generated_from_legacy =
+            self.generated_configuration_source.is_some() && configuration_files.next().is_none();
+        let source_digest = if generated_from_legacy {
+            era_protocol::ProtocolBytes::new(Vec::new())
+        } else {
+            source
+                .and_then(|file| match &file.payload {
+                    FilePayload::Utf8(text) => Some(era_protocol::ProtocolBytes::new(
+                        blake3::hash(era_config::normalize_line_endings(text).as_bytes())
+                            .as_bytes()
+                            .to_vec(),
+                    )),
+                    _ => None,
+                })
+                .unwrap_or_else(|| era_protocol::ProtocolBytes::new(Vec::new()))
+        };
         let entries = era_config::catalog()
             .into_iter()
             .filter(|spec| {

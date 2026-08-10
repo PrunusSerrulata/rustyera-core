@@ -737,6 +737,10 @@ fn configuration_update_is_validated_and_serialized_by_the_runtime() {
         .unwrap()
         .configuration_snapshot();
     assert!(
+        configuration.source_digest.as_slice().is_empty(),
+        "legacy migration must retain the missing-file write precondition"
+    );
+    assert!(
         configuration
             .entries
             .iter()
