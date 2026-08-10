@@ -1184,7 +1184,7 @@ fn host_staged_corrupt_cache_reports_a_normal_cache_miss() {
 }
 
 #[test]
-fn mismatched_compiled_cache_requests_frontend_payloads() {
+fn compiled_cache_is_reused_across_configuration_profiles() {
     let manifest = ProjectManifest {
         project_revision: 1,
         files: vec![SubmittedFile {
@@ -1194,7 +1194,14 @@ fn mismatched_compiled_cache_requests_frontend_payloads() {
             content_hash: None,
         }],
     };
-    let mut initial = crate::project::build_project(&manifest, None);
+    let mut initial = crate::project::build_project_with_extensions_and_progress(
+        &manifest,
+        None,
+        None,
+        &[],
+        ConfigurationClientProfile::Tui,
+        None,
+    );
     assert!(initial.report.success, "{:?}", initial.report.diagnostics);
     initial.incremental.compact();
     let cache = crate::compiled_cache::encode_compiled_cache_for_test(
@@ -1217,25 +1224,30 @@ fn mismatched_compiled_cache_requests_frontend_payloads() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     session.configuration_profile = ConfigurationClientProfile::Browser;
 
-    let Err(report) = session.build_project_from_cache(
-        &ProjectLoadRequest {
-            identity,
-            manifest: Some(compact_manifest),
-            compiled_cache_transfer_id: None,
-        },
-        Some(&cache),
-    ) else {
-        panic!("a stale compact cache should request the complete project payload");
-    };
+    let build = session
+        .build_project_from_cache(
+            &ProjectLoadRequest {
+                identity,
+                manifest: Some(compact_manifest),
+                compiled_cache_transfer_id: None,
+            },
+            Some(&cache),
+        )
+        .expect("a host-neutral compiled cache should load in a browser session");
 
-    assert!(!report.success);
-    assert!(report.payload_required);
-    assert_eq!(report.project_revision, 9);
+    assert!(build.report.success);
+    assert!(!build.report.payload_required);
+    assert_eq!(build.report.project_revision, 9);
     assert!(
-        report
+        build
+            .report
             .diagnostics
             .iter()
-            .all(|diagnostic| diagnostic.code != "runtime.compiled_cache_hit")
+            .any(|diagnostic| diagnostic.code == "runtime.compiled_cache_hit")
+    );
+    assert_eq!(
+        build.snapshot.unwrap().configuration_profile,
+        ConfigurationClientProfile::Browser
     );
 }
 
@@ -1286,11 +1298,7 @@ fn journaled_configuration_rebuilds_instead_of_exact_hitting_the_old_artifact() 
     let request_identity = crate::compiled_cache::decode_project_file(&cache, cache.len())
         .unwrap()
         .identity;
-    let expected_key = crate::compiled_cache::project_key(
-        &request_identity,
-        &[],
-        ConfigurationClientProfile::Reference,
-    );
+    let expected_key = crate::compiled_cache::project_key(&request_identity, &[]);
     assert_ne!(old_key, expected_key);
 
     let session = RuntimeSession::new(RuntimeOptions::default());

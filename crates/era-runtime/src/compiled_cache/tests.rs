@@ -126,14 +126,7 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
 
     assert_eq!(&bytes[..8], b"RERAPROJ");
     assert_eq!(bytes[8], 7);
-    assert_eq!(
-        decoded.key,
-        project_key(
-            &project_identity(&project),
-            &[],
-            ConfigurationClientProfile::Reference,
-        )
-    );
+    assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
     assert_eq!(decoded_file.identity, project_identity(&project));
     assert_eq!(decoded_file.manifest, project);
     assert_eq!(decoded.diagnostics, build.report.diagnostics);
@@ -156,40 +149,82 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
             .all(|fingerprint| fingerprint.0[16..] == [0; 16])
     );
     assert_eq!(
-        project_key(
-            &project_identity(&project),
-            &[],
-            ConfigurationClientProfile::Reference,
-        ),
+        project_key(&project_identity(&project), &[]),
         project_key(
             &project_identity(&manifest("@SYSTEM_TITLE\nRETURN\n", 9)),
-            &[],
-            ConfigurationClientProfile::Reference,
+            &[]
         )
     );
     assert_ne!(
-        project_key(
-            &project_identity(&project),
-            &[],
-            ConfigurationClientProfile::Reference,
-        ),
+        project_key(&project_identity(&project), &[]),
         project_key(
             &project_identity(&manifest("@SYSTEM_TITLE\nPRINTL changed\nRETURN\n", 1)),
-            &[],
-            ConfigurationClientProfile::Reference,
+            &[]
         )
     );
-    assert_ne!(
-        project_key(
-            &project_identity(&project),
-            &[],
-            ConfigurationClientProfile::Reference,
+}
+
+#[test]
+fn native_tui_and_cooperative_browser_caches_are_byte_identical() {
+    let mut project = manifest("@SYSTEM_TITLE\nPRINTL shared cache\nRETURN\n", 1);
+    project.files.push(SubmittedFile {
+        relative_path: "reraconfig.toml".into(),
+        category: FileCategory::Configuration,
+        payload: FilePayload::Utf8(
+            "[meta]\nschema_version = 2\n[text]\nfont_size = 20\n".into(),
         ),
-        project_key(
-            &project_identity(&project),
-            &[],
-            ConfigurationClientProfile::Tui,
-        )
+        content_hash: None,
+    });
+    let mut tui = crate::project::build_project_with_extensions_and_progress(
+        &project,
+        None,
+        None,
+        &[],
+        ConfigurationClientProfile::Tui,
+        None,
+    );
+    let mut browser = crate::project::build_project_with_extensions_and_progress(
+        &project,
+        None,
+        None,
+        &[],
+        ConfigurationClientProfile::Browser,
+        None,
+    );
+    assert!(tui.report.success, "{:?}", tui.report.diagnostics);
+    assert!(browser.report.success, "{:?}", browser.report.diagnostics);
+    tui.incremental.compact();
+    browser.incremental.compact();
+
+    let tui_snapshot = tui.snapshot.as_ref().unwrap();
+    let native = encode_cancellable(
+        Arc::clone(&tui_snapshot.manifest),
+        Vec::new(),
+        tui.artifact.unwrap(),
+        Arc::new(tui.incremental),
+        CompiledSnapshotMetadata::from(tui_snapshot),
+        tui.report.diagnostics,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let browser_snapshot = browser.snapshot.as_ref().unwrap();
+    let cooperative = encode_compiled_cache_for_test(
+        &browser_snapshot.manifest,
+        &[],
+        browser.artifact.as_ref().unwrap(),
+        &browser.incremental,
+        browser_snapshot,
+        &browser.report.diagnostics,
+    )
+    .unwrap();
+
+    assert_eq!(native, cooperative);
+    assert_eq!(
+        decode(&native, native.len())
+            .unwrap()
+            .snapshot
+            .configuration_profile,
+        ConfigurationClientProfile::Reference
     );
 }
 
@@ -398,14 +433,7 @@ fn project_configuration_updates_append_without_rebuilding_the_cache() {
         &file.payload,
         FilePayload::Utf8(source) if source == "[audio]\nvolume = 42\n"
     )));
-    assert_eq!(
-        cached.key,
-        project_key(
-            &original_identity,
-            &[],
-            ConfigurationClientProfile::Reference
-        )
-    );
+    assert_eq!(cached.key, project_key(&original_identity, &[]));
 
     let current = blake3::hash(b"[audio]\nvolume = 42\n");
     let unchanged = prepare_project_configuration_update(

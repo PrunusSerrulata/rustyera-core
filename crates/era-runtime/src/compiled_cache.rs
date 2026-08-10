@@ -168,7 +168,10 @@ impl From<&NormalizedProjectSnapshot> for CompiledSnapshotMetadata {
             line_height: snapshot.line_height,
             print_c_per_line: snapshot.print_c_per_line,
             print_c_length: snapshot.print_c_length,
-            configuration_profile: snapshot.configuration_profile,
+            // Client profiles only control how the same project configuration is presented and
+            // hot-applied. Keep the persistent compiler cache host-neutral so TUI, browser and
+            // Tauri sessions can share one deterministic artifact.
+            configuration_profile: ConfigurationClientProfile::Reference,
             configuration: snapshot.configuration.clone(),
             editable_configuration: snapshot.editable_configuration.clone(),
             extensions: snapshot.extensions.clone(),
@@ -832,7 +835,6 @@ impl CooperativeCompiledCacheEncoder {
             self.kind,
             &plan.identity,
             &self.extensions,
-            self.snapshot.configuration_profile,
             plan.function_ranges.len(),
             plan.source_ranges.len(),
         )?;
@@ -1081,16 +1083,11 @@ pub struct ProjectConfigurationUpdate {
 pub(crate) fn project_key(
     identity: &ProjectIdentity,
     extensions: &[ExtensionDeclaration],
-    configuration_profile: ConfigurationClientProfile,
 ) -> [u8; 32] {
-    let mut writer = HashWriter::new("rustyera.compiled-project-key.v2");
+    let mut writer = HashWriter::new("rustyera.compiled-project-key.v3");
     serde_json::to_writer(
         &mut writer,
-        &(
-            identity.source_digest.as_slice(),
-            extensions,
-            configuration_profile,
-        ),
+        &(identity.source_digest.as_slice(), extensions),
     )
     .expect("project cache identity values are serializable");
     writer.finish()
@@ -1388,7 +1385,6 @@ fn encode_native_container(input: NativeContainerInput) -> Result<Vec<u8>, Strin
         kind,
         &identity,
         &extensions,
-        snapshot.configuration_profile,
         function_ranges.len(),
         source_ranges.len(),
     )?;
@@ -1505,7 +1501,6 @@ fn encode_project_file_header(
     kind: ProjectContainerKind,
     identity: &ProjectIdentity,
     extensions: &[ExtensionDeclaration],
-    configuration_profile: ConfigurationClientProfile,
     function_sections: usize,
     source_sections: usize,
 ) -> Result<(), String> {
@@ -1518,7 +1513,7 @@ fn encode_project_file_header(
     output.push(VERSION);
     output.extend_from_slice(&identity.project_revision.to_le_bytes());
     output.extend_from_slice(&source_digest);
-    output.extend_from_slice(&project_key(identity, extensions, configuration_profile));
+    output.extend_from_slice(&project_key(identity, extensions));
     output.extend_from_slice(
         &u32::try_from(function_sections)
             .map_err(|_| "compiled cache has too many function sections")?

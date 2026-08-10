@@ -766,15 +766,14 @@ impl RuntimeSession {
                     }
                 },
             );
-        let expected_key = crate::compiled_cache::project_key(
-            &request.identity,
-            &self.extension_declarations,
-            self.configuration_profile,
-        );
+        let expected_key =
+            crate::compiled_cache::project_key(&request.identity, &self.extension_declarations);
         let mut build = match cached {
-            Some(exact) if exact.key == expected_key => {
-                exact_cached_project(exact, request.identity.project_revision)
-            }
+            Some(exact) if exact.key == expected_key => exact_cached_project(
+                exact,
+                request.identity.project_revision,
+                self.configuration_profile,
+            ),
             cached => {
                 let embedded_manifest = cached.as_ref().and_then(|value| {
                     let mut manifest = value.snapshot.manifest.as_ref().clone();
@@ -1263,8 +1262,10 @@ fn project_payload_required_report(project_revision: u64) -> ProjectLoadReport {
 fn exact_cached_project(
     mut exact: crate::compiled_cache::DecodedCompiledCache,
     project_revision: u64,
+    configuration_profile: ConfigurationClientProfile,
 ) -> ProjectBuild {
     Arc::make_mut(&mut exact.snapshot.manifest).project_revision = project_revision;
+    exact.snapshot.configuration_profile = configuration_profile;
     for diagnostic in &mut exact.diagnostics {
         diagnostic.message = format!("[cached] {}", diagnostic.message);
     }
