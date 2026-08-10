@@ -453,19 +453,25 @@ impl RuntimeSession {
                     } => {
                         let result: ProjectionStringResponse =
                             decode_canonical(payload.as_slice())?;
-                        self.validate_projection_query_context(context, result.context)?;
+                        if !self.validate_presentation_query_context(context, result.context)? {
+                            return Ok(());
+                        }
                         let _ = operation;
                         Some(VmValue::String(result.value))
                     }
                     ExternalCompletion::ProjectionInteger { context, .. } => {
                         let result: ProjectionIntegerResponse =
                             decode_canonical(payload.as_slice())?;
-                        self.validate_projection_query_context(context, result.context)?;
+                        if !self.validate_projection_query_context(context, result.context)? {
+                            return Ok(());
+                        }
                         Some(VmValue::Integer(result.value))
                     }
                     ExternalCompletion::HtmlSubstring { context, .. } => {
                         let result: HtmlSubstringResponse = decode_canonical(payload.as_slice())?;
-                        self.validate_projection_query_context(context, result.context)?;
+                        if !self.validate_projection_query_context(context, result.context)? {
+                            return Ok(());
+                        }
                         let vm = self.vm.as_ref().ok_or_else(|| {
                             RuntimeError::Internal("HTML substring completion has no VM".into())
                         })?;
@@ -485,7 +491,9 @@ impl RuntimeSession {
                     }
                     ExternalCompletion::TextExtent { context, .. } => {
                         let result: TextExtentResponse = decode_canonical(payload.as_slice())?;
-                        self.validate_projection_query_context(context, result.context)?;
+                        if !self.validate_projection_query_context(context, result.context)? {
+                            return Ok(());
+                        }
                         if result.width.0 < 0 || result.height.0 < 0 {
                             return self.fault(
                                 FaultCode::ServiceFailure,
@@ -512,7 +520,9 @@ impl RuntimeSession {
                         ..
                     } => {
                         let result: TextExtentResponse = decode_canonical(payload.as_slice())?;
-                        self.validate_projection_query_context(context, result.context)?;
+                        if !self.validate_projection_query_context(context, result.context)? {
+                            return Ok(());
+                        }
                         if result.width.0 < 0 || result.height.0 < 0 {
                             return self.fault(
                                 FaultCode::ServiceFailure,
@@ -552,7 +562,9 @@ impl RuntimeSession {
                         ..
                     } => {
                         let result: CanvasPixelResponse = decode_canonical(payload.as_slice())?;
-                        self.validate_projection_query_context(context, result.context)?;
+                        if !self.validate_projection_query_context(context, result.context)? {
+                            return Ok(());
+                        }
                         if result.canvas_revision != canvas_revision {
                             return self.fault(
                                 FaultCode::ServiceFailure,
@@ -605,7 +617,9 @@ impl RuntimeSession {
                     } => {
                         let result: SerializePhysicalHistoryResponse =
                             decode_canonical(payload.as_slice())?;
-                        self.validate_projection_query_context(context, result.context)?;
+                        if !self.validate_presentation_query_context(context, result.context)? {
+                            return Ok(());
+                        }
                         let mut data = vec![0xef, 0xbb, 0xbf];
                         data.extend_from_slice(result.utf8.as_bytes());
                         return self.issue_storage(
@@ -643,18 +657,38 @@ impl RuntimeSession {
         &mut self,
         expected: ProjectionQueryContext,
         actual: ProjectionQueryContext,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<bool, RuntimeError> {
         if actual != expected
             || actual.presentation_revision != self.presentation.revision()
             || actual.environment_revision != self.projection_environment_revision
             || actual.projection_space_revision != self.projection_space_revision
         {
-            return self.fault(
+            self.fault(
                 FaultCode::ServiceFailure,
                 "stale or mismatched projection query context",
                 None,
-            );
+            )?;
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
+    }
+
+    fn validate_presentation_query_context(
+        &mut self,
+        expected: ProjectionQueryContext,
+        actual: ProjectionQueryContext,
+    ) -> Result<bool, RuntimeError> {
+        // Display-line serialization is determined by the canonical presentation. A resize may
+        // publish a newer projection environment while the frontend is answering the request,
+        // but it does not invalidate the requested historical line.
+        if actual != expected || actual.presentation_revision != self.presentation.revision() {
+            self.fault(
+                FaultCode::ServiceFailure,
+                "stale or mismatched presentation query context",
+                None,
+            )?;
+            return Ok(false);
+        }
+        Ok(true)
     }
 }

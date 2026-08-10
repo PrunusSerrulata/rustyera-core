@@ -447,14 +447,17 @@ fn portable_extension_service_validates_return_and_mutable_writes() {
     assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 5);
 }
 
-#[test]
-fn html_layout_query_is_revision_bound_and_commits_after_service_response() {
+fn start_html_query(
+    source: &str,
+    operation: &str,
+    operation_version: ProtocolVersion,
+) -> (RuntimeSession, ServiceRequest) {
     let mut client_capabilities = capabilities();
     client_capabilities.html = true;
     client_capabilities.services.push(ServiceCapability {
         kind: ServiceKind::PresentationQuery,
-        operation: HTML_STRING_LEN_OPERATION.into(),
-        versions: VersionRange::exact(HTML_STRING_LEN_OPERATION_VERSION),
+        operation: operation.into(),
+        versions: VersionRange::exact(operation_version),
     });
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(
@@ -462,7 +465,7 @@ fn html_layout_query_is_revision_bound_and_commits_after_service_response() {
         0,
         RuntimeMessage::ClientHello(ClientHello {
             runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
-            client_name: "projection-test".into(),
+            client_name: "html-query-test".into(),
             features: vec![RuntimeFeature::Html, RuntimeFeature::ExternalServices],
             requested_limits: RuntimeOptions::default().limits,
             capabilities: client_capabilities,
@@ -480,10 +483,7 @@ fn html_layout_query_is_revision_bound_and_commits_after_service_response() {
             files: vec![SubmittedFile {
                 relative_path: "projection.erb".into(),
                 category: FileCategory::Erb,
-                payload: FilePayload::Utf8(
-                    "@SYSTEM_TITLE\nRESULT = HTML_STRINGLEN(\"<b>x</b>\", 1)\nWAIT\nRETURN\n"
-                        .into(),
-                ),
+                payload: FilePayload::Utf8(source.into()),
                 content_hash: None,
             }],
         }),
@@ -498,27 +498,77 @@ fn html_layout_query_is_revision_bound_and_commits_after_service_response() {
             mode: StartMode::NewGame { seed: Some(1) },
         }),
     );
-    let mut observed = Vec::new();
     let request = (0..8)
         .find_map(|_| {
             session.drive(RuntimeDriveBudget::default()).unwrap();
-            let messages = drain(&mut session);
-            observed.extend(messages.clone());
-            messages.into_iter().find_map(|message| match message {
-                RuntimeMessage::ServiceRequest(request)
-                    if request.operation == HTML_STRING_LEN_OPERATION =>
-                {
-                    Some(request)
-                }
-                _ => None,
-            })
+            drain(&mut session)
+                .into_iter()
+                .find_map(|message| match message {
+                    RuntimeMessage::ServiceRequest(request) if request.operation == operation => {
+                        Some(request)
+                    }
+                    _ => None,
+                })
         })
-        .unwrap_or_else(|| {
-            panic!(
-                "HTML layout service request; phase={:?} {observed:#?}",
-                session.phase()
-            )
-        });
+        .unwrap_or_else(|| panic!("{operation} service request; phase={:?}", session.phase()));
+    (session, request)
+}
+
+fn submit_projection_resize(
+    session: &mut RuntimeSession,
+    sequence: u64,
+    context: ProjectionQueryContext,
+) {
+    submit(
+        session,
+        sequence,
+        RuntimeMessage::ProjectionObservation(ProjectionObservation {
+            environment_revision: context.environment_revision + 1,
+            presentation_revision: context.presentation_revision,
+            client_size: ProjectionSize {
+                width: ProjectionLength(1_600),
+                height: ProjectionLength(900),
+            },
+            projection_space_revision: context.projection_space_revision + 1,
+            line_columns: 100,
+            text_box: String::new(),
+            transform: ProjectionTransform {
+                x_numerator: 1,
+                x_denominator: 1,
+                y_numerator: 1,
+                y_denominator: 1,
+                origin_x: ProjectionLength(0),
+                origin_y: ProjectionLength(0),
+            },
+        }),
+    );
+}
+
+fn assert_service_failure(session: &mut RuntimeSession) {
+    for _ in 0..4 {
+        if session.phase() == RuntimePhase::Faulted {
+            break;
+        }
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+    }
+    let messages = drain(session);
+    assert_eq!(session.phase(), RuntimePhase::Faulted, "{messages:#?}");
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::Fault(RuntimeFault {
+            code: FaultCode::ServiceFailure,
+            ..
+        })
+    )));
+}
+
+#[test]
+fn html_layout_query_is_revision_bound_and_commits_after_service_response() {
+    let (mut session, request) = start_html_query(
+        "@SYSTEM_TITLE\nRESULT = HTML_STRINGLEN(\"<b>x</b>\", 1)\nWAIT\nRETURN\n",
+        HTML_STRING_LEN_OPERATION,
+        HTML_STRING_LEN_OPERATION_VERSION,
+    );
     let payload: HtmlMeasureRequest = decode_canonical(request.payload.as_slice()).unwrap();
     assert_eq!(payload.markup, "<b>x</b>");
     assert_eq!(payload.argument, 1);
@@ -547,6 +597,101 @@ fn html_layout_query_is_revision_bound_and_commits_after_service_response() {
         read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
         12
     );
+}
+
+#[test]
+fn printed_html_query_survives_a_concurrent_projection_resize() {
+    let (mut session, request) = start_html_query(
+        "@SYSTEM_TITLE\nPRINTL title\nRESULTS '= HTML_GETPRINTEDSTR(0)\nWAIT\nRETURN\n",
+        HTML_GET_PRINTED_STR_OPERATION,
+        HTML_GET_PRINTED_STR_OPERATION_VERSION,
+    );
+    let payload: ProjectionStringIndexRequest =
+        decode_canonical(request.payload.as_slice()).unwrap();
+    submit_projection_resize(&mut session, 3, payload.context);
+    submit(
+        &mut session,
+        4,
+        RuntimeMessage::ServiceResponse(ServiceResponse {
+            request_id: request.request_id,
+            result: ServiceResult::Ready {
+                payload: ProtocolBytes::new(
+                    encode_canonical(&ProjectionStringResponse {
+                        context: payload.context,
+                        value: "<p>title</p>".into(),
+                    })
+                    .unwrap(),
+                ),
+            },
+        }),
+    );
+    for _ in 0..4 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    assert_eq!(
+        read_runtime_string(session.vm.as_ref().unwrap(), "RESULTS").unwrap(),
+        "<p>title</p>"
+    );
+}
+
+#[test]
+fn printed_html_query_rejects_a_changed_canonical_presentation() {
+    let (mut session, request) = start_html_query(
+        "@SYSTEM_TITLE\nPRINTL title\nRESULTS '= HTML_GETPRINTEDSTR(0)\nWAIT\nRETURN\n",
+        HTML_GET_PRINTED_STR_OPERATION,
+        HTML_GET_PRINTED_STR_OPERATION_VERSION,
+    );
+    let payload: ProjectionStringIndexRequest =
+        decode_canonical(request.payload.as_slice()).unwrap();
+    session
+        .presentation
+        .append_print_text("changed".into(), false, false);
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::ServiceResponse(ServiceResponse {
+            request_id: request.request_id,
+            result: ServiceResult::Ready {
+                payload: ProtocolBytes::new(
+                    encode_canonical(&ProjectionStringResponse {
+                        context: payload.context,
+                        value: "<p>title</p>".into(),
+                    })
+                    .unwrap(),
+                ),
+            },
+        }),
+    );
+    assert_service_failure(&mut session);
+}
+
+#[test]
+fn html_layout_query_rejects_a_concurrent_projection_resize() {
+    let (mut session, request) = start_html_query(
+        "@SYSTEM_TITLE\nRESULT = HTML_STRINGLEN(\"<b>x</b>\", 1)\nWAIT\nRETURN\n",
+        HTML_STRING_LEN_OPERATION,
+        HTML_STRING_LEN_OPERATION_VERSION,
+    );
+    let payload: HtmlMeasureRequest = decode_canonical(request.payload.as_slice()).unwrap();
+    submit_projection_resize(&mut session, 3, payload.context);
+    submit(
+        &mut session,
+        4,
+        RuntimeMessage::ServiceResponse(ServiceResponse {
+            request_id: request.request_id,
+            result: ServiceResult::Ready {
+                payload: ProtocolBytes::new(
+                    encode_canonical(&ProjectionIntegerResponse {
+                        context: payload.context,
+                        value: 12,
+                    })
+                    .unwrap(),
+                ),
+            },
+        }),
+    );
+    assert_service_failure(&mut session);
 }
 
 #[test]
