@@ -26,13 +26,15 @@ impl CharacterWidthMode {
     }
 }
 
-/// Measure `RustyEra`'s deterministic CJK console columns.
+/// Measure `RustyEra`'s deterministic Era console columns.
 ///
 /// The reference `FormatPercent` uses the selected ANSI code page, while its
 /// `GETLINESTR` uses `WinForms` font pixels. `RustyEra` needs one portable advance
-/// across browser, native-WebView, and terminal clients, so it treats East Asian
-/// Ambiguous characters as wide. Legacy `STRLENS`, `STRLENSU`, and substring
-/// operations intentionally retain their separate code-page and UTF-16 semantics.
+/// across browser, native-WebView, and terminal clients. Automatic mode follows
+/// the CP932 double-byte repertoire used by the reference font and keeps other
+/// ambiguous symbols narrow unless they are pictographic. Legacy `STRLENS`,
+/// `STRLENSU`, and substring operations intentionally retain their separate
+/// code-page and UTF-16 semantics.
 #[must_use]
 pub fn emuera_display_width(value: &str) -> usize {
     display_width(value, CharacterWidthMode::Automatic)
@@ -49,10 +51,10 @@ pub fn display_width(value: &str, mode: CharacterWidthMode) -> usize {
 
 fn grapheme_width(grapheme: &str, mode: CharacterWidthMode) -> usize {
     let unicode_width = match mode {
-        CharacterWidthMode::AmbiguousNarrow => UnicodeWidthStr::width(grapheme),
-        CharacterWidthMode::Automatic | CharacterWidthMode::AmbiguousWide => {
-            UnicodeWidthStr::width_cjk(grapheme)
+        CharacterWidthMode::Automatic | CharacterWidthMode::AmbiguousNarrow => {
+            UnicodeWidthStr::width(grapheme)
         }
+        CharacterWidthMode::AmbiguousWide => UnicodeWidthStr::width_cjk(grapheme),
     };
     if mode != CharacterWidthMode::Automatic {
         return unicode_width;
@@ -67,10 +69,14 @@ fn grapheme_width(grapheme: &str, mode: CharacterWidthMode) -> usize {
     let single_scalar_cp932 = characters.next().is_none()
         && unicode_width == 1
         && LegacyEncoding::Japanese.encoded_char_len(character) == 2;
+    // Era table layouts use box-drawing characters as full console cells even for
+    // variants outside CP932. Block elements are deliberately excluded: games use
+    // them as half-width progress-bar segments.
+    let box_drawing = ('\u{2500}'..='\u{257f}').contains(&character);
     let pictographic = unicode_width == 1
         && !grapheme.contains('\u{fe0e}')
         && grapheme.chars().any(super::extended_pictographic::contains);
-    if single_scalar_cp932 || pictographic {
+    if single_scalar_cp932 || box_drawing || pictographic {
         2
     } else {
         unicode_width
@@ -148,6 +154,8 @@ mod tests {
             ("γ", 2),
             ("о", 2),
             ("´", 2),
+            ("║", 2),
+            ("▅", 1),
             ("ﾄ", 1),
             ("｡", 1),
             ("e\u{301}", 1),
@@ -167,6 +175,9 @@ mod tests {
         assert_eq!(display_width("…γ■", CharacterWidthMode::AmbiguousNarrow), 3);
         assert_eq!(display_width("…γ■", CharacterWidthMode::AmbiguousWide), 5);
         assert_eq!(display_width("…γ■", CharacterWidthMode::Automatic), 6);
+        assert_eq!(display_width("▅", CharacterWidthMode::AmbiguousNarrow), 1);
+        assert_eq!(display_width("▅", CharacterWidthMode::AmbiguousWide), 2);
+        assert_eq!(display_width("▅", CharacterWidthMode::Automatic), 1);
         assert_eq!(display_width("☀❤", CharacterWidthMode::AmbiguousNarrow), 2);
         assert_eq!(display_width("☀❤", CharacterWidthMode::AmbiguousWide), 2);
         assert_eq!(display_width("☀❤", CharacterWidthMode::Automatic), 4);
