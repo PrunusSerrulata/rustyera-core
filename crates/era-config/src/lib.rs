@@ -138,7 +138,7 @@ macro_rules! spec {
     };
 }
 
-/// Return the complete catalog constructed by the pinned `ConfigData.setDefault`.
+/// Return the supported project-setting catalog derived from the pinned `ConfigData.setDefault`.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn catalog() -> Vec<ConfigSpec> {
@@ -157,7 +157,6 @@ pub fn catalog() -> Vec<ConfigSpec> {
         spec!(AutoSave, "オートセーブを行なう", "Make autosaves", b true, PortableSemantic),
         spec!(UseKeyMacro, "キーボードマクロを使用する", "Use keyboard macros", b true, PortableSemantic),
         spec!(SizableWindow, "ウィンドウの高さを可変にする", "Changeable window height", b true, QueryOnlyClientPreference),
-        spec!(TextDrawingMode, "描画インターフェース", "Drawing interface", e "TEXTRENDERER" ["GRAPHICS", "TEXTRENDERER", "WINAPI"], QueryOnlyClientPreference),
         spec!(WindowX, "ウィンドウ幅", "Window width", i 760, QueryOnlyClientPreference),
         spec!(WindowY, "ウィンドウ高さ", "Window height", i 480, QueryOnlyClientPreference),
         spec!(WindowPosX, "ウィンドウ位置X", "Window X position", i 0, QueryOnlyClientPreference),
@@ -175,12 +174,9 @@ pub fn catalog() -> Vec<ConfigSpec> {
         spec!(FocusColor, "選択中文字色", "Highlight color", c 0x00FF_FF00, QueryOnlyClientPreference),
         spec!(LogColor, "履歴文字色", "History log color", c 0x00C0_C0C0, QueryOnlyClientPreference),
         spec!(FPS, "フレーム毎秒", "FPS", i 5, QueryOnlyClientPreference),
-        spec!(SkipFrame, "最大スキップフレーム数", "Skip frames", i 3, QueryOnlyClientPreference),
         spec!(ScrollHeight, "スクロール行数", "Lines per scroll", i 1, QueryOnlyClientPreference),
         spec!(InfiniteLoopAlertTime, "無限ループ警告までのミリ秒数", "Milliseconds for infinite loop warning", i 5000, PortableSemantic),
         spec!(DisplayWarningLevel, "表示する最低警告レベル", "Minimum warning level", i 1, PortableSemantic),
-        spec!(DisplayReport, "ロード時にレポートを表示する", "Display loading report", b false, QueryOnlyClientPreference),
-        spec!(ReduceArgumentOnLoad, "ロード時に引数を解析する", "Reduce argument on load", e "NO" ["YES", "ONCE", "NO"], PortableSemantic),
         spec!(IgnoreUncalledFunction, "呼び出されなかった関数を無視する", "Ignore uncalled functions", b true, PortableSemantic),
         spec!(FunctionNotFoundWarning, "関数が見つからない警告の扱い", "Function is not found warning", e "IGNORE" ["IGNORE", "LATER", "ONCE", "DISPLAY"], PortableSemantic),
         spec!(FunctionNotCalledWarning, "関数が呼び出されなかった警告の扱い", "Function not called warning", e "IGNORE" ["IGNORE", "LATER", "ONCE", "DISPLAY"], PortableSemantic),
@@ -188,21 +184,14 @@ pub fn catalog() -> Vec<ConfigSpec> {
         spec!(ButtonWrap, "ボタンの途中で行を折りかえさない", "Button wrapping", b false, QueryOnlyClientPreference),
         spec!(SearchSubdirectory, "サブディレクトリを検索する", "Search subfolders", b false, PortableSemantic),
         spec!(SortWithFilename, "読み込み順をファイル名順にソートする", "Sort filenames", b false, PortableSemantic),
-        spec!(LastKey, "最終更新コード", "Latest identify code", i 0, UnsupportedPlatformIntegration),
         spec!(SaveDataNos, "表示するセーブデータ数", "Save data count per page", i 20, PortableSemantic),
         spec!(WarnBackCompatibility, "eramaker互換性に関する警告を表示する", "Eramaker compatibility warning", b true, PortableSemantic),
         spec!(AllowFunctionOverloading, "システム関数の上書きを許可する", "Allow overriding system functions", b true, PortableSemantic),
         spec!(WarnFunctionOverloading, "システム関数が上書きされたとき警告を表示する", "System function override warning", b true, PortableSemantic),
-        spec!(TextEditor, "関連づけるテキストエディタ", "Text editor", s "notepad", UnsupportedPlatformIntegration),
-        spec!(EditorType, "テキストエディタコマンドライン指定", "Text editor command line setting", e "USER_SETTING" ["SAKURA", "TERAPAD", "EMEDITOR", "USER_SETTING"], UnsupportedPlatformIntegration),
-        spec!(EditorArgument, "エディタに渡す行指定引数", "Text editor command line arguments", s "", UnsupportedPlatformIntegration),
         spec!(WarnNormalFunctionOverloading, "同名の非イベント関数が複数定義されたとき警告する", "Duplicated functions warning", b false, PortableSemantic),
         spec!(CompatiErrorLine, "解釈不可能な行があっても実行する", "Execute error lines", b false, PortableSemantic),
         spec!(CompatiCALLNAME, "CALLNAMEが空文字列の時にNAMEを代入する", "Use NAME if CALLNAME is empty", b false, PortableSemantic),
-        spec!(UseSaveFolder, "セーブデータをsavフォルダ内に作成する", "Use sav folder", b false, QueryOnlyClientPreference),
         spec!(CompatiRAND, "擬似変数RANDの仕様をeramakerに合わせる", "Imitate behavior for RAND", b false, PortableSemantic),
-        spec!(CompatiDRAWLINE, "DRAWLINEを常に新しい行で行う", "Always start DRAWLINE in a new line", b false, PortableSemantic),
-        spec!(CompatiFunctionNoignoreCase, "関数・属性については大文字小文字を無視しない", "Do not ignore case for functions and attributes", b false, PortableSemantic),
         spec!(SystemAllowFullSpace, "全角スペースをホワイトスペースに含める", "Whitespace includes full-width space", b true, PortableSemantic),
         spec!(CompatiLinefeedAs1739, "ver1739以前の非ボタン折り返しを再現する", "Reproduce wrapping behavior like in pre ver1739", b false, PortableSemantic),
         spec!(useLanguage, "内部で使用する東アジア言語", "Default ANSI encoding", e "JAPANESE" ["JAPANESE", "KOREAN", "CHINESE_HANS", "CHINESE_HANT"], PortableSemantic),
@@ -230,36 +219,8 @@ pub fn catalog() -> Vec<ConfigSpec> {
             PortableSemantic
         ),
         spec!(ZipSaveData, "セーブデータを圧縮して保存する", "Compress save data", b false, PortableSemantic),
-        spec!(EnglishConfigOutput, "CONFIGファイルの内容を英語で保存する", "Output English items in the config file", b false, QueryOnlyClientPreference),
-        spec!(EmueraLang, "Emueraの表示言語", "Emuera interface language", s "", QueryOnlyClientPreference),
         spec!(EmueraIcon, "Emueraのアイコンのパス", "Path to a custom window icon", s "", QueryOnlyClientPreference),
-        spec!(CBUseClipboard, "表示したテキストをクリップボードにコピーする", "Clipboard- Copy text to Clipboard during Game", b false, UnsupportedPlatformIntegration),
-        spec!(CBIgnoreTags, "テキスト中の<>タグを無視する", "Clipboard- ignore <> tags in text", b false, UnsupportedPlatformIntegration),
-        spec!(CBReplaceTags, "<>を次の文で置き換える", "Clipboard- Replace <> with this", s ".", UnsupportedPlatformIntegration),
-        spec!(CBNewLinesOnly, "新しい行のみコピーする", "Clipboard- Show new lines only", b true, UnsupportedPlatformIntegration),
-        spec!(CBClearBuffer, "画面のリフレッシュ時にクリップボードとバッファを消去する", "Clipboard- Clear Buffer when game clears screen", b false, UnsupportedPlatformIntegration),
-        spec!(CBTriggerLeftClick, "左クリックをトリガーにする", "Clipboard- LeftClick Trigger", b true, UnsupportedPlatformIntegration),
-        spec!(CBTriggerMiddleClick, "ホイールクリックをトリガーにする", "Clipboard- MiddleClick Trigger", b false, UnsupportedPlatformIntegration),
-        spec!(CBTriggerDoubleLeftClick, "ダブルクリックをトリガーにする", "Clipboard- Double Left Click Trigger", b false, UnsupportedPlatformIntegration),
-        spec!(CBTriggerAnyKeyWait, "WAITをトリガーにする", "Clipboard- AnyKey Wait Trigger ", b false, UnsupportedPlatformIntegration),
-        spec!(CBTriggerInputWait, "INPUTをトリガーにする", "Clipboard- Wait for Input Trigger", b true, UnsupportedPlatformIntegration),
-        spec!(CBMaxCB, "クリップボードに貼り付ける行数", "Clipboard- Length of Clipboard", i 25, UnsupportedPlatformIntegration),
-        spec!(CBBufferSize, "総バッファサイズ", "Clipboard- Buffer Size", i 300, UnsupportedPlatformIntegration),
-        spec!(CBScrollCount, "スクロールの行数", "Clipboard- Scrolled Lines per Key", i 5, UnsupportedPlatformIntegration),
-        spec!(CBMinTimer, "クリップボードの更新間隔(ミリ秒)", "Clipboard- min time between pastes", i 800, UnsupportedPlatformIntegration),
-        spec!(RikaiEnabled, "Rikaichanを使用する", "Rikai- Enabled", b false, UnsupportedPlatformIntegration),
-        spec!(RikaiFilename, "Rikaichanのファイルパス", "Rikai- Dictionary Filename", s "Emuera-Rikai-edict.txt-eucjp", UnsupportedPlatformIntegration),
-        spec!(RikaiColorBack, "ポップアップの背景色", "Rikai- Back Color", c 0x0000_008B, UnsupportedPlatformIntegration),
-        spec!(RikaiColorText, "ポップアップの文字色", "Rikai- Text Color", c 0x00FF_FFFF, UnsupportedPlatformIntegration),
-        spec!(RikaiUseSeparateBoxes, "翻訳中の語句を強調表示する", "Rikai- Use Separate Boxes", b true, UnsupportedPlatformIntegration),
         spec!(Ctrl_Z_Enabled, "Ctrl-Zで元に戻す機能を有効にする", "Enable undo with ctrl-z", b false, PortableSemantic),
-        spec!(DebugShowWindow, "起動時にデバッグウインドウを表示する", "Show debug window on startup", b true, QueryOnlyClientPreference),
-        spec!(DebugWindowTopMost, "デバッグウインドウを最前面に表示する", "Debug window always on top", b true, QueryOnlyClientPreference),
-        spec!(DebugWindowWidth, "デバッグウィンドウ幅", "Debug window width", i 400, QueryOnlyClientPreference),
-        spec!(DebugWindowHeight, "デバッグウィンドウ高さ", "Debug window height", i 300, QueryOnlyClientPreference),
-        spec!(DebugSetWindowPos, "デバッグウィンドウ位置を指定する", "Fixed debug window starting position", b false, QueryOnlyClientPreference),
-        spec!(DebugWindowPosX, "デバッグウィンドウ位置X", "Debug window X position", i 0, QueryOnlyClientPreference),
-        spec!(DebugWindowPosY, "デバッグウィンドウ位置Y", "Debug window Y position", i 0, QueryOnlyClientPreference),
         spec!(MoneyLabel, "お金の単位", "Currency symbol", s "$", PortableSemantic),
         spec!(MoneyFirst, "単位の位置", "Currency symbol position", b true, PortableSemantic),
         spec!(LoadLabel, "起動時簡略表示", "Loading message", s "Now Loading...", PortableSemantic),
@@ -276,7 +237,6 @@ pub fn catalog() -> Vec<ConfigSpec> {
         spec!(PalamLvDef, "PALAMLVの初期値", "Default PALAMLV", il [0, 100, 500, 3000, 10000, 30000, 60000, 100_000, 150_000, 250_000], PortableSemantic),
         spec!(pbandDef, "PBANDの初期値", "Default PBAND", i 4, PortableSemantic),
         spec!(RelationDef, "RELATIONの初期値", "Default RELATION", i 0, PortableSemantic),
-        spec!(UseNewRandom, "新しい高速な乱数アルゴリズムを使う", "Use new random algorithm", b false, QueryOnlyClientPreference),
         spec!(AudioVolume, "ゲーム音量", "Game volume", i 100, QueryOnlyClientPreference),
         spec!(ReplaceFullWidthSpaces, "全角スペースを半角スペースに置換する", "Replace full-width spaces", b false, QueryOnlyClientPreference),
         spec!(CharacterWidthMode, "文字列幅計算モード", "Character width mode", e "AUTOMATIC" ["AUTOMATIC", "AMBIGUOUS_NARROW", "AMBIGUOUS_WIDE"], QueryOnlyClientPreference),
@@ -389,8 +349,7 @@ pub fn tui_application(code: &str) -> Option<ConfigApplication> {
         | "AutoSave"
         | "SaveDataNos"
         | "SystemSaveInBinary"
-        | "ZipSaveData"
-        | "EnglishConfigOutput" => Some(ConfigApplication::Restart),
+        | "ZipSaveData" => Some(ConfigApplication::Restart),
         _ => None,
     }
 }
@@ -443,8 +402,7 @@ pub fn browser_application(code: &str) -> Option<ConfigApplication> {
         | "AutoSave"
         | "SaveDataNos"
         | "SystemSaveInBinary"
-        | "ZipSaveData"
-        | "EnglishConfigOutput" => Some(ConfigApplication::Restart),
+        | "ZipSaveData" => Some(ConfigApplication::Restart),
         _ => None,
     }
 }
@@ -564,30 +522,6 @@ impl ConfigStore {
     pub fn iter(&self) -> impl Iterator<Item = (&str, &ConfigValue)> {
         self.values.iter().map(|(key, value)| (key.as_str(), value))
     }
-
-    /// Serialize the complete regular configuration in the pinned reference order.
-    #[must_use]
-    pub fn serialize_regular(&self) -> String {
-        let english = matches!(
-            self.get_code("EnglishConfigOutput"),
-            Some(ConfigValue::Boolean(true))
-        );
-        let mut output = String::new();
-        for spec in catalog() {
-            let code = spec.code.to_ascii_uppercase();
-            if !is_regular_code(&code) {
-                continue;
-            }
-            let Some(value) = self.values.get(&code) else {
-                continue;
-            };
-            output.push_str(if english { spec.english } else { spec.japanese });
-            output.push(':');
-            output.push_str(&value.config_text());
-            output.push('\n');
-        }
-        output
-    }
 }
 
 #[must_use]
@@ -597,7 +531,7 @@ pub fn is_regular_code(code: &str) -> bool {
         && !code.starts_with("DEBUG")
         && !matches!(
             code.as_str(),
-            "USENEWRANDOM" | "AUDIOVOLUME" | "REPLACEFULLWIDTHSPACES" | "CHARACTERWIDTHMODE"
+            "AUDIOVOLUME" | "REPLACEFULLWIDTHSPACES" | "CHARACTERWIDTHMODE"
         )
 }
 
@@ -731,16 +665,8 @@ mod tests {
 
     #[test]
     fn catalog_aliases_types_and_fixed_precedence_are_deterministic() {
-        assert_eq!(catalog().len(), 127, "Era configuration catalog drifted");
+        assert_eq!(catalog().len(), 87, "Era configuration catalog drifted");
         let mut store = ConfigStore::default();
-        assert_eq!(
-            store.get("描画インターフェース"),
-            Some(&ConfigValue::Enum {
-                value: "TEXTRENDERER".into(),
-                allowed: vec!["GRAPHICS".into(), "TEXTRENDERER".into(), "WINAPI".into()],
-            })
-        );
-        assert_eq!(store.get("Drawing interface"), store.get("TextDrawingMode"));
         assert_eq!(
             store.get("フォントサイズ").unwrap().script_value(),
             ScriptConfigValue::Integer(18)
@@ -763,11 +689,6 @@ mod tests {
         assert_eq!(store.get("FontSize"), Some(&ConfigValue::Integer(21)));
         store.apply("Make autosaves", "-2", false).unwrap();
         assert_eq!(store.get("AutoSave"), Some(&ConfigValue::Boolean(true)));
-        store.apply("Drawing interface", "2", false).unwrap();
-        assert_eq!(
-            store.get("TextDrawingMode").unwrap().script_value(),
-            ScriptConfigValue::String("WINAPI".into())
-        );
         store.apply("BAR character 1", "β", false).unwrap();
         assert_eq!(store.get("BarChar1"), Some(&ConfigValue::Character('β')));
         let keys = store.iter().map(|(key, _)| key).collect::<Vec<_>>();
@@ -777,11 +698,7 @@ mod tests {
             .find(|spec| spec.code == "FontSize")
             .unwrap();
         assert_eq!(font.clients, &[ConfigClient::Browser, ConfigClient::Tauri]);
-        let editor = catalog()
-            .into_iter()
-            .find(|spec| spec.code == "TextEditor")
-            .unwrap();
-        assert!(editor.clients.is_empty());
+        assert!(store.get("Drawing interface").is_none());
     }
 
     #[test]
@@ -805,7 +722,6 @@ mod tests {
             "CompatiSPChara",
             "Ctrl_Z_Enabled",
             "DisplayWarningLevel",
-            "EnglishConfigOutput",
             "FocusColor",
             "ForeColor",
             "FunctionNotCalledWarning",
@@ -899,7 +815,6 @@ mod tests {
             "CompatiSPChara",
             "Ctrl_Z_Enabled",
             "DisplayWarningLevel",
-            "EnglishConfigOutput",
             "FocusColor",
             "FontName",
             "FontSize",
@@ -965,25 +880,5 @@ mod tests {
         for code in ["SizableWindow", "SetWindowPos", "WindowPosX", "WindowPosY"] {
             assert!(!tauri_configurable(code));
         }
-    }
-
-    #[test]
-    fn regular_configuration_serialization_is_canonical_and_respects_language() {
-        let mut store = ConfigStore::default();
-        store.apply_regular("Font size", "22", false).unwrap();
-        store.apply_regular("Text color", "1,2,3", false).unwrap();
-        let japanese = store.serialize_regular();
-        assert!(japanese.contains("フォントサイズ:22\n"));
-        assert!(japanese.contains("文字色:1,2,3\n"));
-        assert!(!japanese.contains("デバッグウインドウ幅"));
-        assert!(!japanese.contains("DRAWLINE文字"));
-
-        store
-            .apply_regular("EnglishConfigOutput", "YES", false)
-            .unwrap();
-        let english = store.serialize_regular();
-        assert!(english.contains("Font size:22\n"));
-        assert!(english.contains("Text color:1,2,3\n"));
-        assert!(english.contains("Output English items in the config file:YES\n"));
     }
 }

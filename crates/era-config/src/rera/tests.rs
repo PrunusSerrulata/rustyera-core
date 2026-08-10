@@ -8,7 +8,7 @@ use super::*;
 fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
     catalog::validate_catalog();
     let specs = rera_catalog();
-    assert_eq!(specs.len(), 127);
+    assert_eq!(specs.len(), 87);
     let mappings = specs
         .iter()
         .map(|spec| (spec.code, spec.id, spec.path))
@@ -16,8 +16,6 @@ fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
     for expected in [
         ("IgnoreCase", 1, "script.ignore_case"),
         ("MaxLog", 18, "output.history_lines"),
-        ("EditorArgument", 49, "editor.arguments"),
-        ("UseNewRandom", 124, "legacy.use_new_random"),
         ("AudioVolume", 125, "audio.volume"),
         (
             "ReplaceFullWidthSpaces",
@@ -31,7 +29,50 @@ fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
             "missing pinned mapping {expected:?}"
         );
     }
-    assert_eq!(RERACONFIG_SCHEMA_VERSION, 1);
+    assert_eq!(RERACONFIG_SCHEMA_VERSION, 2);
+    let active_ids = specs.iter().map(|spec| spec.id).collect::<BTreeSet<_>>();
+    assert_eq!(retired::RETIRED_CONFIG_SPECS.len(), 40);
+    assert_eq!(
+        retired::RETIRED_CONFIG_SPECS
+            .iter()
+            .map(|spec| spec.code)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        40
+    );
+    assert_eq!(
+        retired::RETIRED_CONFIG_SPECS
+            .iter()
+            .map(|spec| spec.path)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        40
+    );
+    assert_eq!(
+        retired::RETIRED_CONFIG_SPECS
+            .iter()
+            .map(|spec| spec.id)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        40
+    );
+    assert!(
+        retired::RETIRED_CONFIG_SPECS
+            .iter()
+            .all(|spec| !active_ids.contains(&spec.id)),
+        "retired stable IDs must remain reserved"
+    );
+    for retired in [
+        "TextDrawingMode",
+        "EnglishConfigOutput",
+        "TextEditor",
+        "RikaiEnabled",
+        "CBUseClipboard",
+        "DebugShowWindow",
+        "UseNewRandom",
+    ] {
+        assert!(specs.iter().all(|spec| spec.code != retired));
+    }
     assert_eq!(
         ConfigStore::default().get_code("MaxLog"),
         Some(&ConfigValue::Integer(1000))
@@ -53,8 +94,8 @@ fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
 #[test]
 fn missing_fields_bom_and_line_endings_use_defaults() {
     for input in [
-        "[text]\nfont_size = 20\n",
-        "\u{feff}[text]\r\nfont_size = 20\r\n",
+        "[meta]\nschema_version = 2\n[text]\nfont_size = 20\n",
+        "\u{feff}[meta]\r\nschema_version = 2\r\n[text]\r\nfont_size = 20\r\n",
     ] {
         let document = ReraConfigDocument::parse(input).unwrap();
         let values = document.values().unwrap();
@@ -66,7 +107,7 @@ fn missing_fields_bom_and_line_endings_use_defaults() {
 #[test]
 fn editing_preserves_surrounding_and_inline_comments() {
     let mut document = ReraConfigDocument::parse(
-        "[text]\n# before\nfont_size = 20 # inline\n\n# adjacent\nline_height = 21\n",
+        "[meta]\nschema_version = 2\n\n[text]\n# before\nfont_size = 20 # inline\n\n# adjacent\nline_height = 21\n",
     )
     .unwrap();
     document
@@ -81,7 +122,7 @@ fn editing_preserves_surrounding_and_inline_comments() {
 #[test]
 fn locked_settings_cannot_be_changed_and_lock_comments_survive_updates() {
     let mut document = ReraConfigDocument::parse(
-        "[meta]\nlocked_settings = [\"text.font_size\"] # locked\n\n[text]\nfont_size = 20\n",
+        "[meta]\nschema_version = 2\nlocked_settings = [\"text.font_size\"] # locked\n\n[text]\nfont_size = 20\n",
     )
     .unwrap();
     let error = document
@@ -100,7 +141,7 @@ fn locked_settings_cannot_be_changed_and_lock_comments_survive_updates() {
 
 #[test]
 fn strict_validation_reports_stable_kind_and_utf8_byte_span() {
-    let input = "\u{feff}[audio]\r\nvolume = 101\r\n";
+    let input = "\u{feff}[meta]\r\nschema_version = 2\r\n[audio]\r\nvolume = 101\r\n";
     let error = ReraConfigDocument::parse(input).unwrap_err();
     assert_eq!(error.kind, ReraConfigErrorKind::OutOfRange);
     assert_eq!(error.path.as_deref(), Some("audio.volume"));
@@ -112,6 +153,7 @@ fn strict_validation_reports_stable_kind_and_utf8_byte_span() {
         "[text]\ncharacter_width_mode = \"other\"\n",
         "text = { font_size = 20 }\n",
         "text.font_size = 20\n",
+        "[meta]\nschema_version = 2\n[text]\ndrawing_method = \"textrenderer\"\n",
     ] {
         assert!(
             ReraConfigDocument::parse(invalid).is_err(),
@@ -148,20 +190,23 @@ fn legacy_migration_merges_precedence_locks_json_and_replace() {
             contents: "MONEYLABEL,円\nPALAMLVの初期値,0/10/20\n",
         },
     ]);
-    assert!(
-        migration.diagnostics.is_empty(),
-        "{:?}",
-        migration.diagnostics
+    assert_eq!(
+        migration
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            LegacyMigrationDiagnosticKind::RetiredSettingIgnored,
+            LegacyMigrationDiagnosticKind::RetiredSettingIgnored,
+        ]
     );
     assert_eq!(
         migration.values.get_code("FontSize"),
         Some(&ConfigValue::Integer(21))
     );
     assert!(migration.values.is_fixed("FontSize"));
-    assert_eq!(
-        migration.values.get_code("UseNewRandom"),
-        Some(&ConfigValue::Boolean(true))
-    );
+    assert!(migration.values.get_code("UseNewRandom").is_none());
     assert_eq!(
         migration.values.get_code("MoneyLabel"),
         Some(&ConfigValue::String("円".into()))
@@ -189,10 +234,7 @@ fn legacy_sources_cannot_modify_settings_outside_their_own_catalog() {
         migration.values.get_code("FontSize"),
         Some(&ConfigValue::Integer(18))
     );
-    assert_eq!(
-        migration.values.get_code("DebugWindowWidth"),
-        Some(&ConfigValue::Integer(640))
-    );
+    assert!(migration.values.get_code("DebugWindowWidth").is_none());
     assert_eq!(
         migration.values.get_code("MoneyLabel"),
         Some(&ConfigValue::String("円".into()))
@@ -205,6 +247,7 @@ fn legacy_sources_cannot_modify_settings_outside_their_own_catalog() {
             .collect::<Vec<_>>(),
         vec![
             LegacyMigrationDiagnosticKind::UnknownSetting,
+            LegacyMigrationDiagnosticKind::RetiredSettingIgnored,
             LegacyMigrationDiagnosticKind::UnknownSetting,
         ]
     );
@@ -212,6 +255,7 @@ fn legacy_sources_cannot_modify_settings_outside_their_own_catalog() {
         migration
             .diagnostics
             .iter()
+            .filter(|diagnostic| diagnostic.kind == LegacyMigrationDiagnosticKind::UnknownSetting)
             .all(|diagnostic| diagnostic.span.is_some())
     );
 }
@@ -228,9 +272,23 @@ fn deprecated_drawline_alias_moves_value_and_lock_to_supported_setting() {
         Some(&ConfigValue::Boolean(true))
     );
     assert!(migration.values.is_fixed("CompatiLinefeedAs1739"));
+    assert!(migration.values.get_code("CompatiDRAWLINE").is_none());
+}
+
+#[test]
+fn debug_config_cannot_change_the_drawline_compatibility_setting() {
+    let migration = migrate_legacy_configuration(&[LegacyConfigSource {
+        relative_path: "debug.config",
+        contents: "Always start DRAWLINE in a new line:YES\n",
+    }]);
     assert_eq!(
-        migration.values.get_code("CompatiDRAWLINE"),
+        migration.values.get_code("CompatiLinefeedAs1739"),
         Some(&ConfigValue::Boolean(false))
+    );
+    assert_eq!(migration.diagnostics.len(), 1);
+    assert_eq!(
+        migration.diagnostics[0].kind,
+        LegacyMigrationDiagnosticKind::RetiredSettingIgnored
     );
 }
 
@@ -261,17 +319,91 @@ fn legacy_narrow_ranges_are_normalized_and_document_matches_effective_values() {
 }
 
 #[test]
-fn legacy_editor_argument_preserves_spaces_and_reference_colon_behavior() {
+fn retired_legacy_editor_settings_are_reported_and_not_migrated() {
     let migration = migrate_legacy_configuration(&[LegacyConfigSource {
         relative_path: "emuera.config",
         contents: "Text editor command line arguments:  --line :ignored\n",
     }]);
-    assert!(migration.diagnostics.is_empty());
+    assert_eq!(migration.diagnostics.len(), 1);
     assert_eq!(
-        migration.values.get_code("EditorArgument"),
-        Some(&ConfigValue::String("  --line ".into()))
+        migration.diagnostics[0].kind,
+        LegacyMigrationDiagnosticKind::RetiredSettingIgnored
     );
+    assert!(migration.values.get_code("EditorArgument").is_none());
     assert_eq!(migration.document.values().unwrap(), migration.values);
+}
+
+#[test]
+fn schema_v1_is_upgraded_and_retired_locks_and_fields_are_removed() {
+    let document = ReraConfigDocument::parse(
+        "[meta]\nschema_version = 1\nlocked_settings = [\"text.drawing_method\", \"compatibility.drawline_starts_new_line\", \"text.font_size\"]\n\n[text]\ndrawing_method = \"winapi\"\nfont_size = 20 # keep\n\n[compatibility]\ndrawline_starts_new_line = true\n",
+    )
+    .unwrap();
+    assert!(document.was_upgraded());
+    assert_eq!(
+        document.retired_codes(),
+        &["TextDrawingMode", "CompatiDRAWLINE"]
+    );
+    let output = document.to_lf_string();
+    assert!(output.contains("schema_version = 2"));
+    assert!(output.contains("font_size = 20 # keep"));
+    assert!(output.contains("legacy_nonbutton_wrapping = true"));
+    assert!(!output.contains("drawing_method"));
+    assert!(!output.contains("drawline_starts_new_line"));
+    let values = document.values().unwrap();
+    assert!(values.is_fixed("FontSize"));
+    assert!(values.is_fixed("CompatiLinefeedAs1739"));
+}
+
+#[test]
+fn schema_v1_upgrade_keeps_metadata_validation_strict() {
+    for input in [
+        "[meta]\nschema_version = 1\nlocked_settings = [1]\n",
+        "[meta]\nschema_version = 1\nlocked_settings = [\"text.font_size\", \"text.font_size\"]\n",
+        "[meta]\nschema_version = 1\nunknown = true\n",
+    ] {
+        assert!(
+            ReraConfigDocument::parse(input).is_err(),
+            "accepted invalid version 1 metadata: {input:?}"
+        );
+    }
+
+    let error = ReraConfigDocument::parse("compatibility = { drawline_starts_new_line = true }\n")
+        .unwrap_err();
+    assert_eq!(error.kind, ReraConfigErrorKind::UnsupportedStructure);
+}
+
+#[test]
+fn every_retired_setting_is_upgraded_rejected_and_recognized_by_legacy_aliases() {
+    for spec in retired::RETIRED_CONFIG_SPECS {
+        let (section, key) = spec.path.split_once('.').unwrap();
+        let version_1 = format!("[meta]\nschema_version = 1\n\n[{section}]\n{key} = true\n");
+        let upgraded = ReraConfigDocument::parse(&version_1).unwrap();
+        assert!(upgraded.retired_codes().contains(&spec.code));
+
+        let version_2 = format!("[meta]\nschema_version = 2\n\n[{section}]\n{key} = true\n");
+        assert_eq!(
+            ReraConfigDocument::parse(&version_2).unwrap_err().kind,
+            ReraConfigErrorKind::UnknownField,
+            "schema version 2 accepted {}",
+            spec.code
+        );
+
+        if spec.code == "CompatiDRAWLINE" {
+            continue;
+        }
+        for alias in [spec.code, spec.japanese, spec.english] {
+            let contents = format!("{alias}:ignored\n");
+            let migration = migrate_legacy_configuration(&[LegacyConfigSource {
+                relative_path: "emuera.config",
+                contents: &contents,
+            }]);
+            assert!(migration.diagnostics.iter().any(|diagnostic| {
+                diagnostic.kind == LegacyMigrationDiagnosticKind::RetiredSettingIgnored
+                    && diagnostic.message.contains(spec.code)
+            }));
+        }
+    }
 }
 
 #[test]

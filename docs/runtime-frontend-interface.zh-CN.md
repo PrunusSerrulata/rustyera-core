@@ -296,7 +296,6 @@ queued_envelopes}`；state 与 C `EraDriveState` 一一对应。
 ```rust
 pub fn project_revision(&self) -> Option<u64>
 pub fn project_sorts_filenames(&self) -> Option<bool>
-pub fn project_ignored_new_random(&self) -> Option<bool>
 pub fn project_auto_save(&self) -> Option<bool>
 pub fn project_save_slot_count(&self) -> Option<u32>
 pub fn project_money_label(&self) -> Option<&str>
@@ -700,15 +699,16 @@ Diagnosis；后两者可在任意执行状态捕获，并在快照中保留不�
 恢复规则。恢复仍完整校验字节码 artifact、项目资源、locale/culture、runtime wait 和
 VM fiber 状态；状态确实可恢复时，Debug/Diagnosis 来源会产生稳定代码的 warning
 diagnostic，交由前端明确呈现。CompiledProjectCache 传输承载可持久化的 `.reraproj`
-项目文件：文件头 magic 为 `RERAPROJ`，当前单字节格式版本为 `04`，主体 payload 使用
-既有 zstd 参数和分片策略。v4 主体只保存一次 manifest 文件内容，并由它重建资源图、源码
+项目文件：文件头 magic 为 `RERAPROJ`，当前单字节格式版本为 `06`，主体 payload 使用
+既有 zstd 参数和分片策略。v6 延续 v4 主体结构，只保存一次 manifest 文件内容，并由它
+重建资源图、源码
 哈希、长度和行索引；增量状态只保存按规范函数顺序排列的 cache key，语句指纹在既有
 `Digest` 接口中使用 128 位有效内容。主体后可顺序追加 `RERACFG1` 配置事务记录；每条保存
 完整的规范化 LF `reraconfig.toml`、前一配置摘要、结果摘要和校验和，末尾不完整记录按中断
 写入处理并在下次保存前截断，完整但损坏或链不连续的记录拒绝加载。v4 cache key 因配置
 更新、客户端配置或扩展变化而不再精确、但应用事务记录后的嵌入
 manifest 的源码身份仍匹配时，runtime 直接从其中的完整 payload 重编译，不要求紧凑前端
-投影再传一次源码。版本 `01`–`03` 和旧 `RERACACH` 编译缓存不再兼容；前端仍持有源码时应按
+投影再传一次源码。版本 `01`–`05` 和旧 `RERACACH` 编译缓存不再兼容；前端仍持有源码时应按
 普通 cache miss 重新编译，没有源码的独立旧项目文件会加载失败。项目文件同时保留成功
 构建产生的项目诊断；精确命中时重放原等级、code 和 source，并在正文前添加
 `[cached] `。项目文件准备异步，首次请求可能被可恢复地拒绝为“已开始/仍在准备”，稍后

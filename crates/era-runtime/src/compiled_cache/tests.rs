@@ -125,7 +125,7 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
 
     assert_eq!(&bytes[..8], b"RERAPROJ");
-    assert_eq!(bytes[8], 5);
+    assert_eq!(bytes[8], 6);
     assert_eq!(
         decoded.key,
         project_key(
@@ -265,7 +265,7 @@ fn project_configuration_updates_append_without_rebuilding_the_cache() {
     let unchanged = prepare_project_configuration_update(
         &updated,
         usize::MAX,
-        current.as_bytes(),
+        expected.as_bytes(),
         "[audio]\r\nvolume = 42\r\n",
     )
     .unwrap();

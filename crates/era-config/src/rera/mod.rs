@@ -1,6 +1,7 @@
 mod catalog;
 mod document;
 mod migration;
+mod retired;
 mod schema;
 
 #[cfg(test)]
@@ -16,7 +17,7 @@ pub use migration::{
 };
 pub use schema::{generate_annotated_example, generate_json_schema};
 
-pub const RERACONFIG_SCHEMA_VERSION: i64 = 1;
+pub const RERACONFIG_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ByteSpan {

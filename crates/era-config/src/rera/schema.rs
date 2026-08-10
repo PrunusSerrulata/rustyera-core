@@ -35,14 +35,14 @@ pub fn generate_json_schema() -> String {
         "meta".into(),
         json!({
             "type": "object",
-            "description": "配置格式元数据。所有字段均可省略，省略时采用 schema 版本 1 且没有锁定项。",
+            "description": format!("配置格式元数据。所有字段均可省略，省略时按 schema 版本 1 输入并自动升级到版本 {RERACONFIG_SCHEMA_VERSION}，且没有锁定项。"),
             "additionalProperties": false,
             "properties": {
                 "schema_version": {
                     "type": "integer",
                     "const": RERACONFIG_SCHEMA_VERSION,
                     "default": RERACONFIG_SCHEMA_VERSION,
-                    "description": "reraconfig.toml 的格式版本。当前仅支持整数 1。"
+                    "description": format!("reraconfig.toml 的格式版本。新文件使用整数 {RERACONFIG_SCHEMA_VERSION}。")
                 },
                 "locked_settings": {
                     "type": "array",
@@ -66,7 +66,7 @@ pub fn generate_json_schema() -> String {
     }
     let root = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "urn:rustyera:reraconfig:schema:1",
+        "$id": format!("urn:rustyera:reraconfig:schema:{RERACONFIG_SCHEMA_VERSION}"),
         "title": "RustyEra reraconfig.toml",
         "description": "RustyEra 跨客户端项目配置。所有设置项均可省略，省略时采用各项统一默认值。",
         "type": "object",
@@ -90,8 +90,8 @@ pub fn generate_annotated_example() -> String {
         let section = spec.path.split_once('.').expect("catalog path is valid").0;
         grouped.entry(section).or_default().push(spec);
     }
-    let mut output = String::from(
-        "# RustyEra 跨客户端项目配置示例。所有字段都可以省略，省略时使用注释中的默认值。\n\n[meta]\n# 类型：整数；当前仅支持 1。\nschema_version = 1\n# 类型：字符串数组；列出的设置不可由客户端设置面板修改。\nlocked_settings = []\n",
+    let mut output = format!(
+        "# RustyEra 跨客户端项目配置示例。所有字段都可以省略，省略时使用注释中的默认值。\n\n[meta]\n# 类型：整数；当前仅支持 {RERACONFIG_SCHEMA_VERSION}。\nschema_version = {RERACONFIG_SCHEMA_VERSION}\n# 类型：字符串数组；列出的设置不可由客户端设置面板修改。\nlocked_settings = []\n",
     );
     for (section, specs) in grouped {
         output.push_str("\n[");

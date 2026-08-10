@@ -2,7 +2,7 @@ use era_protocol::ProtocolVersion;
 use era_runtime_protocol::{
     ExtensionArgument, ExtensionArgumentStyle, ExtensionCallableKind, ExtensionDeclaration,
     ExtensionValueType, FileCategory, FileChange, FilePayload, ProjectAnalysisRequest,
-    ReloadProject, SubmittedFile,
+    ReloadProject, RuntimeLogLevel, SubmittedFile,
 };
 
 use super::*;
@@ -25,7 +25,7 @@ fn configuration(text: &str) -> SubmittedFile {
 }
 
 #[test]
-fn semantic_configuration_is_applied_and_new_random_warns_once() {
+fn semantic_configuration_is_applied_and_retired_settings_are_reported_once() {
     let mut diagnostics = Vec::new();
     let config = parse_configuration(
         &[
@@ -45,7 +45,6 @@ fn semantic_configuration_is_applied_and_new_random_warns_once() {
     assert!(config.csv.sort_with_filename);
     assert!(!config.csv.ignore_case);
     assert!(!config.analyzer.ignore_case);
-    assert!(config.use_new_random);
     assert!(!config.auto_save);
     assert!(config.ctrl_z_enabled);
     assert!(config.allow_long_input_by_activation);
@@ -67,14 +66,20 @@ fn semantic_configuration_is_applied_and_new_random_warns_once() {
     assert_eq!(
         diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.code == "runtime.use_new_random_ignored")
+            .filter(|diagnostic| {
+                diagnostic.code == "runtime.legacy_configuration_migration"
+                    && diagnostic.message.contains("UseNewRandom")
+            })
             .count(),
         1
     );
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("UseNewRandom") && diagnostic.level == RuntimeLogLevel::Info
+    }));
 }
 
 #[test]
-fn setting_json_only_applies_reference_setting_fields() {
+fn setting_json_is_only_read_to_report_retired_reference_settings() {
     let mut diagnostics = Vec::new();
     let config = parse_configuration(
         &[SubmittedFile {
@@ -88,18 +93,16 @@ fn setting_json_only_applies_reference_setting_fields() {
         &mut diagnostics,
     )
     .semantic;
-    assert!(config.use_new_random);
     assert!(!config.allow_long_input_by_activation);
     assert_eq!(config.font_size, 18);
     assert_eq!(config.line_height, 19);
     assert!(!config.analyzer.compatible_call_event);
     assert!(!config.analyzer.compatible_function_argument_optional);
     assert!(!config.analyzer.compatible_function_argument_auto_convert);
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "runtime.use_new_random_ignored")
-    );
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "runtime.legacy_configuration_migration"
+            && diagnostic.message.contains("UseNewRandom")
+    }));
 }
 
 #[test]
@@ -108,7 +111,9 @@ fn reraconfig_takes_priority_and_legacy_sources_generate_it_only_when_absent() {
     let rera = SubmittedFile {
         relative_path: "reraconfig.toml".into(),
         category: FileCategory::Configuration,
-        payload: FilePayload::Utf8("[text]\r\nfont_size = 24\r\n".into()),
+        payload: FilePayload::Utf8(
+            "[meta]\r\nschema_version = 2\r\n[text]\r\nfont_size = 24\r\n".into(),
+        ),
         content_hash: None,
     };
     let mut diagnostics = Vec::new();
@@ -125,6 +130,34 @@ fn reraconfig_takes_priority_and_legacy_sources_generate_it_only_when_absent() {
         .expect("legacy source generates TOML");
     assert!(generated.contains("font_size = 21"));
     assert!(!generated.contains('\r'));
+}
+
+#[test]
+fn schema_v1_reraconfig_is_returned_for_atomic_client_persistence() {
+    let mut diagnostics = Vec::new();
+    let parsed = parse_configuration(
+        &[SubmittedFile {
+            relative_path: "reraconfig.toml".into(),
+            category: FileCategory::Configuration,
+            payload: FilePayload::Utf8(
+                "[meta]\nschema_version = 1\n[text]\ndrawing_method = \"winapi\"\nfont_size = 20\n"
+                    .into(),
+            ),
+            content_hash: None,
+        }],
+        &mut diagnostics,
+    );
+    let generated = parsed
+        .generated_source
+        .expect("schema version 1 must be persisted as version 2");
+    assert!(generated.contains("schema_version = 2"));
+    assert!(generated.contains("font_size = 20"));
+    assert!(!generated.contains("drawing_method"));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "runtime.reraconfig_upgraded"
+            && diagnostic.level == RuntimeLogLevel::Info
+            && diagnostic.message.contains("TextDrawingMode")
+    }));
 }
 
 #[test]

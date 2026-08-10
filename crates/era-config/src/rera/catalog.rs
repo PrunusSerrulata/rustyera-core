@@ -5,11 +5,14 @@ use toml_edit::{Array, Item, Value};
 
 use crate::{ConfigValue, catalog};
 
-use super::{ByteSpan, ReraConfigError, ReraConfigErrorKind, ReraConfigSpec, error_at};
+use super::{
+    ByteSpan, ReraConfigError, ReraConfigErrorKind, ReraConfigSpec, error_at,
+    retired::RETIRED_CONFIG_SPECS,
+};
 
 #[must_use]
 pub fn rera_catalog() -> Vec<ReraConfigSpec> {
-    catalog()
+    let specs = catalog()
         .into_iter()
         .map(|spec| {
             let (id, path, description_zh_cn, deprecated) = metadata(spec.code);
@@ -26,7 +29,13 @@ pub fn rera_catalog() -> Vec<ReraConfigSpec> {
                 deprecated,
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    debug_assert!(RETIRED_CONFIG_SPECS.iter().all(|retired| {
+        specs
+            .iter()
+            .all(|active| active.id != retired.id && active.code != retired.code)
+    }));
+    specs
 }
 
 #[cfg(test)]
@@ -230,10 +239,6 @@ fn single_character(value: &str) -> Option<char> {
 
 pub(super) fn enum_to_toml(code: &str, value: &str) -> String {
     match (code, value) {
-        ("ReduceArgumentOnLoad", "YES") => "always".into(),
-        ("ReduceArgumentOnLoad", "ONCE") => "once".into(),
-        ("ReduceArgumentOnLoad", "NO") => "never".into(),
-        ("EditorType", "USER_SETTING") => "custom".into(),
         ("useLanguage", "CHINESE_HANS") => "simplified_chinese".into(),
         ("useLanguage", "CHINESE_HANT") => "traditional_chinese".into(),
         _ => value.to_ascii_lowercase(),
@@ -256,13 +261,11 @@ fn integer_bounds(code: &str, default: &ConfigValue) -> (Option<i64>, Option<i64
         "AudioVolume" => (Some(0), Some(100)),
         "WindowX" | "WindowY" => (Some(128), Some(i64::from(i32::MAX))),
         "MaxLog" => (Some(500), Some(i64::from(i32::MAX))),
-        "PrintCPerLine" | "PrintCLength" | "ScrollHeight" | "CBBufferSize" | "CBMinTimer" => {
-            (Some(1), Some(i64::from(i32::MAX)))
-        }
+        "PrintCPerLine" | "PrintCLength" | "ScrollHeight" => (Some(1), Some(i64::from(i32::MAX))),
         "FontSize" | "LineHeight" => (Some(8), Some(i64::from(i32::MAX))),
         "DisplayWarningLevel" => (Some(0), Some(255)),
         "SaveDataNos" => (Some(20), Some(80)),
-        "LastKey" | "pbandDef" | "RelationDef" => (Some(i64::MIN), Some(i64::MAX)),
+        "pbandDef" | "RelationDef" => (Some(i64::MIN), Some(i64::MAX)),
         _ => i32_bounds,
     }
 }
@@ -295,7 +298,6 @@ fn metadata(code: &str) -> (u16, &'static str, &'static str, bool) {
         "AutoSave" => (8, "save.auto_save", "商店事件结束后执行自动保存", false),
         "UseKeyMacro" => (9, "input.keyboard_macros_enabled", "启用键盘宏", false),
         "SizableWindow" => (10, "window.resizable", "允许调整窗口大小", false),
-        "TextDrawingMode" => (11, "text.drawing_method", "选择文本绘制接口", false),
         "WindowX" => (12, "window.width", "设置游戏主视口宽度", false),
         "WindowY" => (13, "window.height", "设置游戏主视口高度", false),
         "WindowPosX" => (14, "window.position_x", "设置原生窗口起始横坐标", false),
@@ -328,12 +330,6 @@ fn metadata(code: &str) -> (u16, &'static str, &'static str, bool) {
         "FocusColor" => (26, "color.selection", "设置选中项文字颜色", false),
         "LogColor" => (27, "color.history", "设置历史日志文字颜色", false),
         "FPS" => (28, "display.frames_per_second", "设置目标刷新帧率", false),
-        "SkipFrame" => (
-            29,
-            "display.maximum_skipped_frames",
-            "保留最大跳帧设置",
-            false,
-        ),
         "ScrollHeight" => (30, "output.scroll_lines", "设置每次滚动的行数", false),
         "InfiniteLoopAlertTime" => (
             31,
@@ -345,18 +341,6 @@ fn metadata(code: &str) -> (u16, &'static str, &'static str, bool) {
             32,
             "diagnostics.minimum_warning_level",
             "过滤低于阈值的加载诊断",
-            false,
-        ),
-        "DisplayReport" => (
-            33,
-            "project.show_loading_report",
-            "加载时显示阶段报告",
-            false,
-        ),
-        "ReduceArgumentOnLoad" => (
-            34,
-            "project.reduce_arguments_on_load",
-            "控制加载时预解析参数",
             false,
         ),
         "IgnoreUncalledFunction" => (
@@ -401,12 +385,6 @@ fn metadata(code: &str) -> (u16, &'static str, &'static str, bool) {
             "按文件名稳定排序加载顺序",
             false,
         ),
-        "LastKey" => (
-            42,
-            "project.last_update_code",
-            "保存一次性参数预解析的更新代码",
-            false,
-        ),
         "SaveDataNos" => (43, "save.slots_per_page", "设置存档菜单每页槽位数", false),
         "WarnBackCompatibility" => (
             44,
@@ -424,14 +402,6 @@ fn metadata(code: &str) -> (u16, &'static str, &'static str, bool) {
             46,
             "diagnostics.system_function_override",
             "系统函数被覆盖时显示警告",
-            false,
-        ),
-        "TextEditor" => (47, "editor.command", "设置打开源码的外部编辑器", false),
-        "EditorType" => (48, "editor.argument_style", "设置编辑器行号参数风格", false),
-        "EditorArgument" => (
-            49,
-            "editor.arguments",
-            "设置传递给编辑器的自定义参数",
             false,
         ),
         "WarnNormalFunctionOverloading" => (
@@ -452,28 +422,10 @@ fn metadata(code: &str) -> (u16, &'static str, &'static str, bool) {
             "CALLNAME 为空时回退到 NAME",
             false,
         ),
-        "UseSaveFolder" => (
-            53,
-            "save.use_sav_directory",
-            "把传统存档写入 sav 目录",
-            false,
-        ),
         "CompatiRAND" => (
             54,
             "compatibility.eramaker_rand",
             "使用 eramaker RAND 兼容语义",
-            false,
-        ),
-        "CompatiDRAWLINE" => (
-            55,
-            "compatibility.drawline_starts_new_line",
-            "始终在新行执行 DRAWLINE 的旧别名",
-            true,
-        ),
-        "CompatiFunctionNoignoreCase" => (
-            56,
-            "compatibility.function_names_case_sensitive",
-            "函数和属性名称区分大小写",
             false,
         ),
         "SystemAllowFullSpace" => (
@@ -587,106 +539,8 @@ fn metadata(code: &str) -> (u16, &'static str, &'static str, bool) {
             false,
         ),
         "ZipSaveData" => (77, "save.compress_binary", "压缩传统二进制存档", false),
-        "EnglishConfigOutput" => (
-            78,
-            "legacy.write_english_config_keys",
-            "保留旧 CONFIG 英文键输出偏好",
-            true,
-        ),
-        "EmueraLang" => (79, "interface.language", "选择客户端界面语言", false),
         "EmueraIcon" => (80, "window.icon_path", "设置原生窗口图标路径", false),
-        "CBUseClipboard" => (81, "clipboard.enabled", "启用游戏文本自动复制", false),
-        "CBIgnoreTags" => (
-            82,
-            "clipboard.strip_angle_bracket_tags",
-            "复制前移除尖括号标签",
-            false,
-        ),
-        "CBReplaceTags" => (
-            83,
-            "clipboard.tag_replacement",
-            "设置被移除标签的替换文本",
-            false,
-        ),
-        "CBNewLinesOnly" => (84, "clipboard.new_lines_only", "只复制新增行", false),
-        "CBClearBuffer" => (
-            85,
-            "clipboard.clear_on_screen_refresh",
-            "刷新画面时清空复制缓冲",
-            false,
-        ),
-        "CBTriggerLeftClick" => (
-            86,
-            "clipboard.trigger_left_click",
-            "左键单击时触发复制",
-            false,
-        ),
-        "CBTriggerMiddleClick" => (
-            87,
-            "clipboard.trigger_middle_click",
-            "中键单击时触发复制",
-            false,
-        ),
-        "CBTriggerDoubleLeftClick" => (
-            88,
-            "clipboard.trigger_double_click",
-            "左键双击时触发复制",
-            false,
-        ),
-        "CBTriggerAnyKeyWait" => (89, "clipboard.trigger_wait", "进入 WAIT 时触发复制", false),
-        "CBTriggerInputWait" => (
-            90,
-            "clipboard.trigger_input",
-            "进入 INPUT 时触发复制",
-            false,
-        ),
-        "CBMaxCB" => (91, "clipboard.lines_per_copy", "限制一次复制的行数", false),
-        "CBBufferSize" => (92, "clipboard.buffer_lines", "设置复制环形缓冲容量", false),
-        "CBScrollCount" => (
-            93,
-            "clipboard.scroll_lines",
-            "设置复制历史每次滚动行数",
-            false,
-        ),
-        "CBMinTimer" => (
-            94,
-            "clipboard.minimum_interval_ms",
-            "设置两次剪贴板写入的最短间隔",
-            false,
-        ),
-        "RikaiEnabled" => (95, "dictionary.enabled", "启用 Rikaichan 词典查询", false),
-        "RikaiFilename" => (96, "dictionary.file_path", "设置 Rikaichan 词典路径", false),
-        "RikaiColorBack" => (
-            97,
-            "dictionary.background_color",
-            "设置词典弹窗背景颜色",
-            false,
-        ),
-        "RikaiColorText" => (98, "dictionary.text_color", "设置词典弹窗文字颜色", false),
-        "RikaiUseSeparateBoxes" => (
-            99,
-            "dictionary.highlight_current_phrase",
-            "高亮当前查询的原文词段",
-            false,
-        ),
         "Ctrl_Z_Enabled" => (100, "input.undo_enabled", "启用 Ctrl+Z 输入撤销", false),
-        "DebugShowWindow" => (
-            101,
-            "debug_window.show_on_start",
-            "启动时显示调试窗口",
-            false,
-        ),
-        "DebugWindowTopMost" => (102, "debug_window.always_on_top", "调试窗口保持置顶", false),
-        "DebugWindowWidth" => (103, "debug_window.width", "设置调试窗口宽度", false),
-        "DebugWindowHeight" => (104, "debug_window.height", "设置调试窗口高度", false),
-        "DebugSetWindowPos" => (
-            105,
-            "debug_window.use_saved_position",
-            "应用保存的调试窗口位置",
-            false,
-        ),
-        "DebugWindowPosX" => (106, "debug_window.position_x", "设置调试窗口横坐标", false),
-        "DebugWindowPosY" => (107, "debug_window.position_y", "设置调试窗口纵坐标", false),
         "MoneyLabel" => (108, "replacement.currency_label", "设置货币单位文本", false),
         "MoneyFirst" => (
             109,
@@ -772,12 +626,6 @@ fn metadata(code: &str) -> (u16, &'static str, &'static str, bool) {
             "replacement.default_relation",
             "设置 RELATION 默认值",
             false,
-        ),
-        "UseNewRandom" => (
-            124,
-            "legacy.use_new_random",
-            "保留旧高速随机算法开关；当前固定使用 SFMT",
-            true,
         ),
         "AudioVolume" => (125, "audio.volume", "设置游戏主音量百分比", false),
         "ReplaceFullWidthSpaces" => (

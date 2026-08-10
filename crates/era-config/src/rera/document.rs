@@ -8,6 +8,7 @@ use super::{
     ByteSpan, RERACONFIG_SCHEMA_VERSION, ReraConfigError, ReraConfigErrorKind,
     catalog::{config_to_toml, parse_toml_value, rera_catalog, validate_config_value},
     error_at, normalize_line_endings,
+    retired::{RETIRED_CONFIG_SPECS, retired_by_path},
 };
 
 #[derive(Clone, Debug)]
@@ -15,6 +16,8 @@ pub struct ReraConfigDocument {
     document: DocumentMut,
     source_offset: usize,
     source_spans: BTreeMap<String, ByteSpan>,
+    upgraded_from_previous_schema: bool,
+    retired_codes: Vec<&'static str>,
 }
 
 impl ReraConfigDocument {
@@ -28,6 +31,8 @@ impl ReraConfigDocument {
             document,
             source_offset: 0,
             source_spans: BTreeMap::new(),
+            upgraded_from_previous_schema: false,
+            retired_codes: Vec::new(),
         }
     }
 
@@ -55,10 +60,20 @@ impl ReraConfigDocument {
             )
         })?;
         let source_spans = collect_source_spans(&document, source_offset);
+        let source_version = source_schema_version(&document, source_offset, &source_spans)?;
+        let mut document = document.into_mut();
+        let retired_codes = if source_version == 1 {
+            validate_v1_meta(&document, source_offset, &source_spans)?;
+            upgrade_v1_document(&mut document)
+        } else {
+            Vec::new()
+        };
         let result = Self {
-            document: document.into_mut(),
+            document,
             source_offset,
             source_spans,
+            upgraded_from_previous_schema: source_version == 1,
+            retired_codes,
         };
         result.values()?;
         Ok(result)
@@ -68,7 +83,7 @@ impl ReraConfigDocument {
     ///
     /// # Errors
     ///
-    /// Returns an error when the document contains a field not accepted by schema version 1.
+    /// Returns an error when the document contains a field not accepted by the current schema.
     pub fn values(&self) -> Result<ConfigStore, ReraConfigError> {
         validate_meta(&self.document, self.source_offset, &self.source_spans)?;
         let specs = rera_catalog();
@@ -137,6 +152,18 @@ impl ReraConfigDocument {
             store.fixed.insert(spec.code.to_ascii_uppercase(), true);
         }
         Ok(store)
+    }
+
+    /// Whether parsing upgraded a schema version 1 document to the current schema.
+    #[must_use]
+    pub fn was_upgraded(&self) -> bool {
+        self.upgraded_from_previous_schema
+    }
+
+    /// Legacy setting codes removed while upgrading this document.
+    #[must_use]
+    pub fn retired_codes(&self) -> &[&'static str] {
+        &self.retired_codes
     }
 
     /// Set one canonical setting value while preserving unrelated formatting and comments.
@@ -343,7 +370,7 @@ fn validate_meta(
                         ReraConfigErrorKind::InvalidMetadata,
                         Some("meta.schema_version"),
                         available_span(item, "meta.schema_version", source_offset, source_spans),
-                        "仅支持整数 schema 版本 1",
+                        format!("仅支持整数 schema 版本 {RERACONFIG_SCHEMA_VERSION}"),
                     ));
                 }
             }
@@ -368,6 +395,218 @@ fn validate_meta(
         }
     }
     Ok(())
+}
+
+fn source_schema_version(
+    document: &Document<String>,
+    source_offset: usize,
+    source_spans: &BTreeMap<String, ByteSpan>,
+) -> Result<i64, ReraConfigError> {
+    let Some(meta) = document.get("meta") else {
+        return Ok(1);
+    };
+    let table = meta.as_table().ok_or_else(|| {
+        error_at(
+            ReraConfigErrorKind::UnsupportedStructure,
+            Some("meta"),
+            available_span(meta, "meta", source_offset, source_spans),
+            "meta 必须是普通 TOML 表",
+        )
+    })?;
+    let Some(version) = table.get("schema_version") else {
+        return Ok(1);
+    };
+    let value = version.as_integer().ok_or_else(|| {
+        error_at(
+            ReraConfigErrorKind::InvalidMetadata,
+            Some("meta.schema_version"),
+            available_span(version, "meta.schema_version", source_offset, source_spans),
+            "schema_version 必须是整数",
+        )
+    })?;
+    if matches!(value, 1 | RERACONFIG_SCHEMA_VERSION) {
+        Ok(value)
+    } else {
+        Err(error_at(
+            ReraConfigErrorKind::InvalidMetadata,
+            Some("meta.schema_version"),
+            available_span(version, "meta.schema_version", source_offset, source_spans),
+            format!("仅支持 schema 版本 1 和 {RERACONFIG_SCHEMA_VERSION}"),
+        ))
+    }
+}
+
+fn validate_v1_meta(
+    document: &DocumentMut,
+    source_offset: usize,
+    source_spans: &BTreeMap<String, ByteSpan>,
+) -> Result<(), ReraConfigError> {
+    let Some(meta) = document.get("meta") else {
+        return Ok(());
+    };
+    let table = meta.as_table().ok_or_else(|| {
+        error_at(
+            ReraConfigErrorKind::UnsupportedStructure,
+            Some("meta"),
+            available_span(meta, "meta", source_offset, source_spans),
+            "meta 必须是普通 TOML 表",
+        )
+    })?;
+    if table.is_dotted() {
+        return Err(error_at(
+            ReraConfigErrorKind::UnsupportedStructure,
+            Some("meta"),
+            available_span(meta, "meta", source_offset, source_spans),
+            "meta 不支持 dotted table",
+        ));
+    }
+    for (key, item) in table {
+        match key {
+            "schema_version" => {}
+            "locked_settings" => {
+                validate_v1_locked_settings(item, source_offset, source_spans)?;
+            }
+            _ => {
+                return Err(error_at(
+                    ReraConfigErrorKind::UnknownField,
+                    Some(&format!("meta.{key}")),
+                    available_span(item, &format!("meta.{key}"), source_offset, source_spans),
+                    "未知元数据字段",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_v1_locked_settings(
+    item: &Item,
+    source_offset: usize,
+    source_spans: &BTreeMap<String, ByteSpan>,
+) -> Result<(), ReraConfigError> {
+    let array = item.as_array().ok_or_else(|| {
+        error_at(
+            ReraConfigErrorKind::InvalidMetadata,
+            Some("meta.locked_settings"),
+            available_span(item, "meta.locked_settings", source_offset, source_spans),
+            "必须是字符串数组",
+        )
+    })?;
+    let mut paths = BTreeSet::new();
+    for value in array {
+        let span = value
+            .span()
+            .map(ByteSpan::from)
+            .map(|span| offset_span(span, source_offset))
+            .or_else(|| source_spans.get("meta.locked_settings").copied());
+        let path = value.as_str().ok_or_else(|| {
+            error_at(
+                ReraConfigErrorKind::InvalidMetadata,
+                Some("meta.locked_settings"),
+                span,
+                "数组项必须是字符串",
+            )
+        })?;
+        if !paths.insert(path) {
+            return Err(error_at(
+                ReraConfigErrorKind::InvalidMetadata,
+                Some("meta.locked_settings"),
+                span,
+                "不允许重复路径",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn upgrade_v1_document(document: &mut DocumentMut) -> Vec<&'static str> {
+    const DRAWLINE_PATH: &str = "compatibility.drawline_starts_new_line";
+    const REPLACEMENT_PATH: &str = "compatibility.legacy_nonbutton_wrapping";
+
+    let drawline_enabled = document
+        .get("compatibility")
+        .and_then(Item::as_table)
+        .and_then(|section| section.get("drawline_starts_new_line"))
+        .and_then(Item::as_bool)
+        .unwrap_or(false);
+    let mut locked = document
+        .get("meta")
+        .and_then(|meta| meta.get("locked_settings"))
+        .and_then(Item::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let drawline_locked = locked.remove(DRAWLINE_PATH);
+    let mut retired_codes = Vec::new();
+    for spec in RETIRED_CONFIG_SPECS {
+        let (section, key) = spec.path.split_once('.').expect("retired path is valid");
+        let removed = document
+            .get_mut(section)
+            .and_then(Item::as_table_mut)
+            .and_then(|table| table.remove(key))
+            .is_some();
+        if locked.remove(spec.path) || removed {
+            retired_codes.push(spec.code);
+        }
+    }
+    for section in RETIRED_CONFIG_SPECS
+        .iter()
+        .filter_map(|spec| spec.path.split_once('.').map(|(section, _)| section))
+        .collect::<BTreeSet<_>>()
+    {
+        if document
+            .get(section)
+            .and_then(Item::as_table)
+            .is_some_and(Table::is_empty)
+        {
+            document.remove(section);
+        }
+    }
+    if drawline_enabled {
+        let compatibility = ensure_table(document, "compatibility");
+        if let Some(existing) = compatibility.get_mut("legacy_nonbutton_wrapping") {
+            if existing.as_bool().is_some() {
+                let mut replacement = Value::from(true);
+                if let Some(existing) = existing.as_value() {
+                    replacement.decor_mut().clone_from(existing.decor());
+                }
+                *existing = Item::Value(replacement);
+            }
+        } else {
+            compatibility.insert("legacy_nonbutton_wrapping", value(true));
+        }
+    }
+    if drawline_locked {
+        locked.insert(REPLACEMENT_PATH.to_owned());
+    }
+    let meta = ensure_table(document, "meta");
+    meta.insert("schema_version", value(RERACONFIG_SCHEMA_VERSION));
+    let mut locked_settings = Array::new();
+    for path in locked {
+        if retired_by_path(&path).is_none() {
+            locked_settings.push(path);
+        }
+    }
+    meta.insert(
+        "locked_settings",
+        Item::Value(Value::Array(locked_settings)),
+    );
+    retired_codes
+}
+
+fn ensure_table<'a>(document: &'a mut DocumentMut, section: &str) -> &'a mut Table {
+    if !document.as_table().contains_key(section) {
+        document[section] = Item::Table(Table::new());
+    }
+    document
+        .get_mut(section)
+        .and_then(Item::as_table_mut)
+        .expect("created section is a table")
 }
 
 fn locked_paths(

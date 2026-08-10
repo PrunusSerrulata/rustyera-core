@@ -225,7 +225,7 @@ fn protocol_25_round_trips_configuration_profile_transactions() {
                 application: ConfigurationApplication::Hot,
             }],
             restart_pending: false,
-            generated_source: Some("[meta]\nschema_version = 1\n".into()),
+            generated_source: Some("[meta]\nschema_version = 2\n".into()),
         },
     });
     let json = serde_json::to_string(&committed).unwrap();

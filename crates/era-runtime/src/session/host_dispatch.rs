@@ -307,6 +307,16 @@ impl RuntimeSession {
                     VmValue::Integer(value)
                 } else {
                     let value = match key {
+                        key if [
+                            "TextDrawingMode",
+                            "描画インターフェース",
+                            "Drawing interface",
+                        ]
+                        .iter()
+                        .any(|alias| alias.eq_ignore_ascii_case(key.trim())) =>
+                        {
+                            "TEXTRENDERER".into()
+                        }
                         "お金の単位" | "Currency symbol" => project.money_label.clone(),
                         "起動時簡略表示" | "Loading message" => replace.load_label.clone(),
                         "DRAWLINE文字" | "DRAWLINE characters" => {

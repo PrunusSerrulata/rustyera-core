@@ -36,7 +36,7 @@ const MAGIC: &[u8; 8] = b"RERAPROJ";
 // source's artifact. The checksummed configuration journal is a separately versioned trailing
 // extension introduced with v4; changing its record semantics increments its own record version.
 // Older readers reject the extension as trailing data instead of using it as an incremental seed.
-const VERSION: u8 = 5;
+const VERSION: u8 = 6;
 const COMPRESSION_LEVEL: i32 = 3;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -94,7 +94,6 @@ pub(crate) struct CompiledSnapshotMetadata {
     project_identity: [u8; 32],
     resources: Vec<NormalizedResourceIdentity>,
     sort_with_filename: bool,
-    use_new_random_ignored: bool,
     auto_save: bool,
     ctrl_z_enabled: bool,
     allow_long_input_by_activation: bool,
@@ -122,7 +121,6 @@ impl From<&NormalizedProjectSnapshot> for CompiledSnapshotMetadata {
             project_identity: snapshot.project_identity,
             resources: snapshot.resources.clone(),
             sort_with_filename: snapshot.sort_with_filename,
-            use_new_random_ignored: snapshot.use_new_random_ignored,
             auto_save: snapshot.auto_save,
             ctrl_z_enabled: snapshot.ctrl_z_enabled,
             allow_long_input_by_activation: snapshot.allow_long_input_by_activation,
@@ -176,7 +174,6 @@ impl CompiledSnapshotMetadata {
             resources: self.resources,
             resource_graph,
             sort_with_filename: self.sort_with_filename,
-            use_new_random_ignored: self.use_new_random_ignored,
             auto_save: self.auto_save,
             ctrl_z_enabled: self.ctrl_z_enabled,
             allow_long_input_by_activation: self.allow_long_input_by_activation,
@@ -1110,7 +1107,8 @@ pub fn decode_project_file_frontend_manifest(
 /// # Errors
 ///
 /// Returns an error when the project file or requested TOML is invalid, the transfer limit is
-/// exceeded, or the optimistic-lock digest no longer matches.
+/// exceeded, or the optimistic-lock digest no longer matches and the requested contents have not
+/// already been applied.
 pub fn prepare_project_configuration_update(
     bytes: &[u8],
     maximum_bytes: usize,
@@ -1129,11 +1127,13 @@ pub fn prepare_project_configuration_update(
     apply_journal(&mut manifest, &sections.configuration_journal)
         .map_err(ProjectFileError::from)?;
     let current = configuration_digest(&manifest).map_err(ProjectFileError::from)?;
+    let requested_source = era_config::normalize_line_endings(contents);
+    let requested_digest = *blake3::hash(requested_source.as_bytes()).as_bytes();
     let expected_matches = match current {
         Some(digest) => expected_digest == digest.as_slice(),
         None => expected_digest.is_empty(),
     };
-    if !expected_matches {
+    if !expected_matches && current != Some(requested_digest) {
         return Err(ProjectFileError::from(
             "reraconfig.toml was modified by another process".to_owned(),
         ));
@@ -1143,11 +1143,7 @@ pub fn prepare_project_configuration_update(
     let append = if current == Some(source_digest) {
         Vec::new()
     } else {
-        replace_configuration(
-            &mut manifest,
-            &era_config::normalize_line_endings(contents),
-            source_digest,
-        );
+        replace_configuration(&mut manifest, &requested_source, source_digest);
         append
     };
     if sections

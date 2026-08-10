@@ -1,5 +1,6 @@
 use era_config::{
-    ConfigStore, ConfigValue, LegacyConfigSource, ReraConfigDocument, migrate_legacy_configuration,
+    ConfigStore, ConfigValue, LegacyConfigSource, LegacyMigrationDiagnosticKind,
+    ReraConfigDocument, migrate_legacy_configuration,
 };
 use era_runtime_protocol::{
     FileCategory, FilePayload, ProtocolDiagnostic, RuntimeLogLevel, SourceLocation,
@@ -34,18 +35,6 @@ pub(super) fn parse_configuration(
         values,
         ..SemanticConfig::default()
     };
-    config.use_new_random = matches!(
-        config.values.get_code("UseNewRandom"),
-        Some(ConfigValue::Boolean(true))
-    );
-    if config.use_new_random {
-        diagnostics.push(project_diagnostic(
-            "runtime.use_new_random_ignored",
-            RuntimeLogLevel::Warning,
-            "UseNewRandom=true is ignored; the pinned SFMT implementation is always used",
-            None,
-        ));
-    }
     apply_catalog_semantics(&mut config);
     ParsedConfiguration {
         semantic: config,
@@ -74,7 +63,24 @@ fn parse_reraconfig(
             let values = document
                 .values()
                 .expect("a parsed reraconfig remains valid");
-            (document, values, None)
+            let generated_source = document.was_upgraded().then(|| {
+                diagnostics.push(project_diagnostic(
+                    "runtime.reraconfig_upgraded",
+                    RuntimeLogLevel::Info,
+                    format!(
+                        "upgraded reraconfig.toml to schema version {}; retired settings: {}",
+                        era_config::RERACONFIG_SCHEMA_VERSION,
+                        if document.retired_codes().is_empty() {
+                            "none".into()
+                        } else {
+                            document.retired_codes().join(", ")
+                        }
+                    ),
+                    None,
+                ));
+                document.to_lf_string()
+            });
+            (document, values, generated_source)
         }
         Err(error) => {
             diagnostics.push(project_diagnostic(
@@ -129,7 +135,11 @@ fn migrate_configuration(
     for diagnostic in migration.diagnostics {
         diagnostics.push(project_diagnostic(
             "runtime.legacy_configuration_migration",
-            RuntimeLogLevel::Warning,
+            if diagnostic.kind == LegacyMigrationDiagnosticKind::RetiredSettingIgnored {
+                RuntimeLogLevel::Info
+            } else {
+                RuntimeLogLevel::Warning
+            },
             diagnostic.message,
             Some(SourceLocation {
                 relative_path: diagnostic.relative_path,

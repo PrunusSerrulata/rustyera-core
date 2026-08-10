@@ -1,8 +1,8 @@
 # RustyEra 跨客户端项目配置示例。所有字段都可以省略，省略时使用注释中的默认值。
 
 [meta]
-# 类型：整数；当前仅支持 1。
-schema_version = 1
+# 类型：整数；当前仅支持 2。
+schema_version = 2
 # 类型：字符串数组；列出的设置不可由客户端设置面板修改。
 locked_settings = []
 
@@ -13,36 +13,6 @@ allow_multiple_instances = true
 [audio]
 # 用途：设置游戏主音量百分比；类型：整数；范围：0..=100
 volume = 100
-
-[clipboard]
-# 用途：启用游戏文本自动复制；类型：布尔
-enabled = false
-# 用途：复制前移除尖括号标签；类型：布尔
-strip_angle_bracket_tags = false
-# 用途：设置被移除标签的替换文本；类型：字符串
-tag_replacement = "."
-# 用途：只复制新增行；类型：布尔
-new_lines_only = true
-# 用途：刷新画面时清空复制缓冲；类型：布尔
-clear_on_screen_refresh = false
-# 用途：左键单击时触发复制；类型：布尔
-trigger_left_click = true
-# 用途：中键单击时触发复制；类型：布尔
-trigger_middle_click = false
-# 用途：左键双击时触发复制；类型：布尔
-trigger_double_click = false
-# 用途：进入 WAIT 时触发复制；类型：布尔
-trigger_wait = false
-# 用途：进入 INPUT 时触发复制；类型：布尔
-trigger_input = true
-# 用途：限制一次复制的行数；类型：整数；范围：-2147483648..=2147483647
-lines_per_copy = 25
-# 用途：设置复制环形缓冲容量；类型：整数；范围：1..=2147483647
-buffer_lines = 300
-# 用途：设置复制历史每次滚动行数；类型：整数；范围：-2147483648..=2147483647
-scroll_lines = 5
-# 用途：设置两次剪贴板写入的最短间隔；类型：整数；范围：1..=2147483647
-minimum_interval_ms = 800
 
 [color]
 # 用途：设置默认文字颜色；类型：RGB 整数数组；每个分量范围：0..=255
@@ -59,10 +29,6 @@ history = [192, 192, 192]
 callname_falls_back_to_name = false
 # 用途：使用 eramaker RAND 兼容语义；类型：布尔
 eramaker_rand = false
-# 用途：始终在新行执行 DRAWLINE 的旧别名；类型：布尔
-drawline_starts_new_line = false
-# 用途：函数和属性名称区分大小写；类型：布尔
-function_names_case_sensitive = false
 # 用途：重现 1739 版以前的非按钮换行；类型：布尔
 legacy_nonbutton_wrapping = false
 # 用途：选择传统东亚编码语义；类型：字符串枚举；可选值："japanese"、"korean"、"simplified_chinese"、"traditional_chinese"
@@ -84,22 +50,6 @@ commands_enabled = false
 # 用途：执行调试命令时修改 MASTER 名称；类型：布尔
 rename_master = true
 
-[debug_window]
-# 用途：启动时显示调试窗口；类型：布尔
-show_on_start = true
-# 用途：调试窗口保持置顶；类型：布尔
-always_on_top = true
-# 用途：设置调试窗口宽度；类型：整数；范围：-2147483648..=2147483647
-width = 400
-# 用途：设置调试窗口高度；类型：整数；范围：-2147483648..=2147483647
-height = 300
-# 用途：应用保存的调试窗口位置；类型：布尔
-use_saved_position = false
-# 用途：设置调试窗口横坐标；类型：整数；范围：-2147483648..=2147483647
-position_x = 0
-# 用途：设置调试窗口纵坐标；类型：整数；范围：-2147483648..=2147483647
-position_y = 0
-
 [diagnostics]
 # 用途：过滤低于阈值的加载诊断；类型：整数；范围：0..=255
 minimum_warning_level = 1
@@ -120,31 +70,9 @@ erd_local_identifier_conflict = false
 # 用途：外部插件启用时显示警告；类型：布尔
 external_plugin_enabled = true
 
-[dictionary]
-# 用途：启用 Rikaichan 词典查询；类型：布尔
-enabled = false
-# 用途：设置 Rikaichan 词典路径；类型：字符串
-file_path = "Emuera-Rikai-edict.txt-eucjp"
-# 用途：设置词典弹窗背景颜色；类型：RGB 整数数组；每个分量范围：0..=255
-background_color = [0, 0, 139]
-# 用途：设置词典弹窗文字颜色；类型：RGB 整数数组；每个分量范围：0..=255
-text_color = [255, 255, 255]
-# 用途：高亮当前查询的原文词段；类型：布尔
-highlight_current_phrase = true
-
 [display]
 # 用途：设置目标刷新帧率；类型：整数；范围：-2147483648..=2147483647
 frames_per_second = 5
-# 用途：保留最大跳帧设置；类型：整数；范围：-2147483648..=2147483647
-maximum_skipped_frames = 3
-
-[editor]
-# 用途：设置打开源码的外部编辑器；类型：字符串
-command = "notepad"
-# 用途：设置编辑器行号参数风格；类型：字符串枚举；可选值："sakura"、"terapad"、"emeditor"、"custom"
-argument_style = "custom"
-# 用途：设置传递给编辑器的自定义参数；类型：字符串
-arguments = ""
 
 [file_io]
 # 用途：限制 LOADTEXT 和 SAVETEXT 扩展名；类型：字符串数组
@@ -163,14 +91,6 @@ undo_enabled = false
 [interface]
 # 用途：常态显示客户端菜单；类型：布尔
 menu_visible = true
-# 用途：选择客户端界面语言；类型：字符串
-language = ""
-
-[legacy]
-# 用途：保留旧 CONFIG 英文键输出偏好；类型：布尔
-write_english_config_keys = false
-# 用途：保留旧高速随机算法开关；当前固定使用 SFMT；类型：布尔
-use_new_random = false
 
 [network]
 # 用途：禁止脚本执行联网更新检查；类型：布尔
@@ -191,16 +111,10 @@ keep_buttons_on_one_line = false
 [project]
 # 用途：加载并应用 _Rename.csv；类型：布尔
 use_rename_file = false
-# 用途：加载时显示阶段报告；类型：布尔
-show_loading_report = false
-# 用途：控制加载时预解析参数；类型：字符串枚举；可选值："always"、"once"、"never"
-reduce_arguments_on_load = "never"
 # 用途：递归搜索项目子目录；类型：布尔
 search_subdirectories = false
 # 用途：按文件名稳定排序加载顺序；类型：布尔
 sort_files_by_name = false
-# 用途：保存一次性参数预解析的更新代码；类型：整数；范围：-9223372036854775808..=9223372036854775807
-last_update_code = 0
 # 用途：存在无法解析的行时仍允许启动；类型：布尔
 continue_with_parse_errors = false
 # 用途：加载并应用 ERD 扩展定义；类型：布尔
@@ -251,8 +165,6 @@ infinite_loop_warning_ms = 5000
 auto_save = true
 # 用途：设置存档菜单每页槽位数；类型：整数；范围：20..=80
 slots_per_page = 20
-# 用途：把传统存档写入 sav 目录；类型：布尔
-use_sav_directory = false
 # 用途：使用传统二进制存档格式；类型：布尔
 binary_format = false
 # 用途：压缩传统二进制存档；类型：布尔
@@ -277,8 +189,6 @@ preserve_triple_symbols_in_form = false
 continuation_newline_replacement = '" "'
 
 [text]
-# 用途：选择文本绘制接口；类型：字符串枚举；可选值："graphics"、"textrenderer"、"winapi"
-drawing_method = "textrenderer"
 # 用途：设置游戏默认字体族；类型：字符串
 font_family = "ＭＳ ゴシック"
 # 用途：设置游戏默认字号；类型：整数；范围：8..=2147483647

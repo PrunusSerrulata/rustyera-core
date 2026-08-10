@@ -1,8 +1,10 @@
+use std::collections::BTreeSet;
+
 use serde_json::Value as JsonValue;
 
 use crate::{ConfigStore, ConfigValue, is_regular_code, is_replace_code, resolve_code};
 
-use super::{ByteSpan, ReraConfigDocument, catalog::rera_catalog};
+use super::{ByteSpan, ReraConfigDocument, catalog::rera_catalog, retired::resolve_retired_code};
 
 #[derive(Clone, Copy, Debug)]
 pub struct LegacyConfigSource<'a> {
@@ -16,6 +18,7 @@ pub enum LegacyMigrationDiagnosticKind {
     UnknownSetting,
     InvalidValue,
     InvalidJson,
+    RetiredSettingIgnored,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,7 +74,7 @@ pub fn migrate_legacy_configuration(sources: &[LegacyConfigSource<'_>]) -> Legac
         );
     }
     if let Some(source) = named_source(sources, "setting.json") {
-        migrate_setting_json(source, &mut values, &mut diagnostics);
+        migrate_setting_json(source, &mut diagnostics);
     }
     if let Some(source) = preferred_source(sources, "_fixed.config", "fixed.config") {
         migrate_colon_config(
@@ -146,6 +149,7 @@ fn migrate_colon_config(
     values: &mut ConfigStore,
     diagnostics: &mut Vec<LegacyMigrationDiagnostic>,
 ) {
+    let mut retired_codes = BTreeSet::new();
     for line in legacy_lines(source.contents) {
         let content = line.text;
         if content.is_empty() || content.starts_with(';') {
@@ -161,7 +165,37 @@ fn migrate_colon_config(
             continue;
         };
         let name = content[..delimiter].trim();
-        let Some(mut code) = resolve_code(name) else {
+        if resolve_retired_code(name) == Some("CompatiDRAWLINE") {
+            if matches!(kind, LegacyColonKind::Debug) {
+                retired_codes.insert("CompatiDRAWLINE");
+                continue;
+            }
+            let raw_value = content[delimiter + 1..]
+                .split_once(':')
+                .map_or(&content[delimiter + 1..], |(value, _)| value)
+                .trim();
+            if values
+                .apply(
+                    "CompatiLinefeedAs1739",
+                    raw_value,
+                    matches!(kind, LegacyColonKind::Fixed),
+                )
+                .is_err()
+            {
+                diagnostics.push(diagnostic(
+                    source,
+                    &line,
+                    LegacyMigrationDiagnosticKind::InvalidValue,
+                    format!("无法迁移设置 {name:?}"),
+                ));
+            }
+            continue;
+        }
+        let Some(code) = resolve_code(name) else {
+            if let Some(code) = resolve_retired_code(name) {
+                retired_codes.insert(code);
+                continue;
+            }
             diagnostics.push(diagnostic(
                 source,
                 &line,
@@ -170,9 +204,6 @@ fn migrate_colon_config(
             ));
             continue;
         };
-        if code == "COMPATIDRAWLINE" {
-            code = "COMPATILINEFEEDAS1739".into();
-        }
         let permitted = match kind {
             LegacyColonKind::Regular | LegacyColonKind::Fixed => is_regular_code(&code),
             LegacyColonKind::Debug => code.starts_with("DEBUG"),
@@ -188,25 +219,11 @@ fn migrate_colon_config(
         }
 
         let fixed = matches!(kind, LegacyColonKind::Fixed);
-        if code == "EDITORARGUMENT" {
-            let remainder = &content[delimiter + 1..];
-            let raw_value = remainder
-                .split_once(':')
-                .map_or(remainder, |(value, _)| value);
-            values
-                .values
-                .insert(code, ConfigValue::String(raw_value.to_owned()));
-            continue;
-        }
         let remainder = &content[delimiter + 1..];
-        let raw_value = if code == "TEXTEDITOR" {
-            remainder.trim()
-        } else {
-            remainder
-                .split_once(':')
-                .map_or(remainder, |(value, _)| value)
-                .trim()
-        };
+        let raw_value = remainder
+            .split_once(':')
+            .map_or(remainder, |(value, _)| value)
+            .trim();
         if values.apply(&code, raw_value, fixed).is_err() {
             diagnostics.push(diagnostic(
                 source,
@@ -216,17 +233,17 @@ fn migrate_colon_config(
             ));
         }
     }
+    push_retired_diagnostic(source, retired_codes, diagnostics);
 }
 
 fn migrate_setting_json(
     source: LegacyConfigSource<'_>,
-    values: &mut ConfigStore,
     diagnostics: &mut Vec<LegacyMigrationDiagnostic>,
 ) {
     match serde_json::from_str::<JsonValue>(source.contents.trim_start_matches('\u{feff}')) {
         Ok(value) => {
-            if let Some(value) = value.get("UseNewRandom").and_then(JsonValue::as_bool) {
-                let _ = values.apply("UseNewRandom", if value { "YES" } else { "NO" }, false);
+            if value.get("UseNewRandom").is_some() {
+                push_retired_diagnostic(source, BTreeSet::from(["UseNewRandom"]), diagnostics);
             }
         }
         Err(error) => diagnostics.push(LegacyMigrationDiagnostic {
@@ -237,6 +254,26 @@ fn migrate_setting_json(
             message: format!("无法解析 JSON：{error}"),
         }),
     }
+}
+
+fn push_retired_diagnostic(
+    source: LegacyConfigSource<'_>,
+    codes: BTreeSet<&'static str>,
+    diagnostics: &mut Vec<LegacyMigrationDiagnostic>,
+) {
+    if codes.is_empty() {
+        return;
+    }
+    diagnostics.push(LegacyMigrationDiagnostic {
+        kind: LegacyMigrationDiagnosticKind::RetiredSettingIgnored,
+        relative_path: source.relative_path.into(),
+        line: None,
+        span: None,
+        message: format!(
+            "已忽略不再属于 reraconfig.toml 的旧设置：{}",
+            codes.into_iter().collect::<Vec<_>>().join(", ")
+        ),
+    });
 }
 
 fn migrate_replace(

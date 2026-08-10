@@ -437,13 +437,6 @@ impl RuntimeSession {
     }
 
     #[must_use]
-    pub fn project_ignored_new_random(&self) -> Option<bool> {
-        self.project_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.use_new_random_ignored)
-    }
-
-    #[must_use]
     pub fn project_auto_save(&self) -> Option<bool> {
         self.project_snapshot
             .as_ref()
