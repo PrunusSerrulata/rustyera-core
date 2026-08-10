@@ -25,7 +25,7 @@ mod reachability;
 mod source_support;
 mod statement_analysis;
 
-use lowering_support::{register_private_variables, source_file};
+use lowering_support::{register_function_declarations, source_file};
 use reachability::{function_semantics, reachable_functions, report_uncalled, uncalled_function};
 use source_support::{
     append_parser_diagnostics, at_function, index_sources, key, map_csv_diagnostic,
@@ -489,8 +489,9 @@ fn analyze_with_context(
         let source = &sources[definition.source_index];
         let function = &source.script.functions[definition.function_index];
         symbols.prepare_function_locals(definition.id, &function.name);
-        register_private_variables(
+        register_function_declarations(
             definition.id,
+            definition.kind,
             source,
             function,
             &mut symbols,

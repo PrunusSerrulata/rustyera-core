@@ -155,6 +155,24 @@ impl Symbols {
         }
     }
 
+    pub fn resize_era_local(&mut self, function: FunctionId, name: &str, size: usize) -> bool {
+        let key = (function, self.key(name));
+        let Some(variable) = self
+            .locals
+            .get(&key)
+            .and_then(|id| self.variables.get_mut(id.0 as usize))
+        else {
+            return false;
+        };
+        if variable.scope != VariableScope::EraFunction
+            || variable.dimensions.first().copied() == Some(0)
+        {
+            return false;
+        }
+        variable.dimensions = vec![size];
+        true
+    }
+
     pub fn register_private(
         &mut self,
         function: FunctionId,

@@ -550,6 +550,35 @@ fn era_function_local_persists_across_calls() {
 }
 
 #[test]
+fn function_local_size_directives_override_project_defaults() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRETURN RESIZED_LOCALS()\n\
+         @RESIZED_LOCALS\n#FUNCTION\n#LOCALSIZE 2500\n#LOCALSSIZE 200\n\
+         LOCAL:1000 = 7\nLOCALS:150 '= \"ok\"\n\
+         RETURNF (LOCAL:1000 == 7) && (LOCALS:150 == \"ok\")\n",
+    );
+    let resized_locals = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "RESIZED_LOCALS")
+        .expect("RESIZED_LOCALS")
+        .key;
+    let local_dimensions = artifact
+        .globals
+        .iter()
+        .filter(|global| {
+            global.owner == Some(resized_locals)
+                && global.storage == BytecodeStorage::FunctionPersistent
+        })
+        .map(|global| (global.name.as_str(), global.dimensions.as_slice()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_eq!(local_dimensions.get("LOCAL"), Some(&[2500_u64].as_slice()));
+    assert_eq!(local_dimensions.get("LOCALS"), Some(&[200_u64].as_slice()));
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(1));
+}
+
+#[test]
 fn era_function_fallthrough_resets_result_zero() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nRESULT = 9\nCALL FALLTHROUGH\nFLAG:0 = RESULT\nRETURN RESULT\n@FALLTHROUGH\nLOCAL = 1\n",

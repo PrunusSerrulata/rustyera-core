@@ -34,9 +34,9 @@ const MAGIC: &[u8; 8] = b"RERAPROJ";
 // Project files use a compact byte-sized base-format version. This is also a semantic epoch:
 // increment it whenever compiler, analyzer or project-loading behavior can change an unchanged
 // source's artifact. The checksummed configuration journal is a separately versioned trailing
-// extension to v4; changing its record semantics increments its record version. Older readers
-// reject the extension as trailing data instead of using it as an incremental compilation seed.
-const VERSION: u8 = 4;
+// extension introduced with v4; changing its record semantics increments its own record version.
+// Older readers reject the extension as trailing data instead of using it as an incremental seed.
+const VERSION: u8 = 5;
 const COMPRESSION_LEVEL: i32 = 3;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;

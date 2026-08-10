@@ -153,6 +153,28 @@ pub(crate) fn parse_private_declaration(
     .map_err(|error| error.to_string())
 }
 
+pub(crate) fn parse_integer_constant(
+    source: &str,
+    context: &dyn ParserContext,
+    constants: &BTreeMap<String, ConstantValue>,
+    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    index_resolver: &IndexResolver,
+    options: &AnalyzerOptions,
+) -> Result<i64, String> {
+    let evaluation = ConstantEvaluation {
+        constants,
+        variable_dimensions,
+        index_resolver,
+        options,
+    };
+    let value = parse_constant(strip_declaration_comment(source), context, &evaluation)
+        .map_err(|error| error.to_string())?;
+    let ConstantValue::Integer(value) = value else {
+        return Err("an integer constant expression is required".into());
+    };
+    Ok(value)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn parse_scoped_declaration(
     source: SourceId,

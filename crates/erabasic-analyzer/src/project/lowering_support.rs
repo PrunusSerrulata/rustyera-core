@@ -1,14 +1,17 @@
 use erabasic_ast::{Expr, ExprKind, Function as AstFunction, SourceKind, Statement, StatementKind};
 use erabasic_hir::{
-    FunctionId, HirArgument, HirExprKind, HirStatementKind, InstructionTarget, SemanticType,
-    SourceFile, SourceId,
+    FunctionId, FunctionKind, HirArgument, HirExprKind, HirStatementKind, InstructionTarget,
+    SemanticType, SourceFile, SourceId,
 };
 
 use crate::{
     AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerDiagnosticSeverity, AnalyzerOptions,
     catalog::Catalog,
     context::AnalysisParserContext,
-    declarations::{DeclarationInput, parse_private_declaration, parse_scoped_declaration},
+    declarations::{
+        DeclarationInput, parse_integer_constant, parse_private_declaration,
+        parse_scoped_declaration,
+    },
     expression::{ExpressionAnalyzer, IndexResolver},
     symbols::Symbols,
 };
@@ -401,8 +404,9 @@ pub(super) fn source_file(
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub(super) fn register_private_variables(
+pub(super) fn register_function_declarations(
     function_id: FunctionId,
+    function_kind: FunctionKind,
     source: &ParsedProjectSource,
     function: &AstFunction,
     symbols: &mut Symbols,
@@ -411,11 +415,12 @@ pub(super) fn register_private_variables(
     options: &AnalyzerOptions,
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) {
-    let private_directives: Vec<_> = function
-        .attributes
-        .iter()
-        .filter(|directive| matches!(directive.name.as_str(), "DIM" | "DIMS"))
-        .collect();
+    let has_declarations = function.attributes.iter().any(|directive| {
+        matches!(
+            directive.name.as_str(),
+            "DIM" | "DIMS" | "LOCALSIZE" | "LOCALSSIZE"
+        )
+    });
     let scoped_statements = function.body.iter().filter_map(|statement| {
         let StatementKind::Instruction {
             name,
@@ -431,7 +436,7 @@ pub(super) fn register_private_variables(
             raw_arguments.as_str(),
         ))
     });
-    if private_directives.is_empty() && scoped_statements.clone().next().is_none() {
+    if !has_declarations && scoped_statements.clone().next().is_none() {
         return;
     }
 
@@ -440,7 +445,100 @@ pub(super) fn register_private_variables(
     // declaration parser can actually consume it.
     let mut constants = symbols.constant_values();
     let mut variable_dimensions = symbols.variable_dimensions(function_id);
-    for directive in private_directives {
+    let mut integer_size = None;
+    let mut string_size = None;
+    for directive in &function.attributes {
+        if matches!(directive.name.as_str(), "LOCALSIZE" | "LOCALSSIZE") {
+            if function_kind == FunctionKind::Event {
+                diagnostics.push(AnalyzerDiagnostic::at(
+                    AnalyzerDiagnosticCode::InvalidDeclaration,
+                    AnalyzerDiagnosticSeverity::Warning,
+                    1,
+                    source.source.id,
+                    &source.source.relative_path,
+                    &source.text,
+                    directive.span,
+                    format!("event function ignores #{}", directive.name),
+                ));
+                continue;
+            }
+            let (variable_name, previous_size) = if directive.name == "LOCALSIZE" {
+                ("LOCAL", &mut integer_size)
+            } else {
+                ("LOCALS", &mut string_size)
+            };
+            let size = match parse_integer_constant(
+                &directive.raw_arguments,
+                context,
+                &constants,
+                &variable_dimensions,
+                index_resolver,
+                options,
+            ) {
+                Ok(size) if size > 0 && size < i64::from(i32::MAX) => {
+                    usize::try_from(size).expect("positive i32 local size fits usize")
+                }
+                Ok(size) => {
+                    diagnostics.push(AnalyzerDiagnostic::at(
+                        AnalyzerDiagnosticCode::InvalidDimension,
+                        AnalyzerDiagnosticSeverity::Warning,
+                        1,
+                        source.source.id,
+                        &source.source.relative_path,
+                        &source.text,
+                        directive.span,
+                        format!(
+                            "#{} size {size} is outside the supported range",
+                            directive.name
+                        ),
+                    ));
+                    continue;
+                }
+                Err(message) => {
+                    diagnostics.push(AnalyzerDiagnostic::at(
+                        AnalyzerDiagnosticCode::InvalidDeclaration,
+                        AnalyzerDiagnosticSeverity::Error,
+                        2,
+                        source.source.id,
+                        &source.source.relative_path,
+                        &source.text,
+                        directive.span,
+                        message,
+                    ));
+                    continue;
+                }
+            };
+            if symbols.resize_era_local(function_id, variable_name, size) {
+                if previous_size.replace(size).is_some() {
+                    diagnostics.push(AnalyzerDiagnostic::at(
+                        AnalyzerDiagnosticCode::InvalidDeclaration,
+                        AnalyzerDiagnosticSeverity::Warning,
+                        1,
+                        source.source.id,
+                        &source.source.relative_path,
+                        &source.text,
+                        directive.span,
+                        format!("#{} replaces an earlier size declaration", directive.name),
+                    ));
+                }
+                variable_dimensions.insert(key(variable_name, options.ignore_case), vec![size]);
+            } else {
+                diagnostics.push(AnalyzerDiagnostic::at(
+                    AnalyzerDiagnosticCode::InvalidDeclaration,
+                    AnalyzerDiagnosticSeverity::Error,
+                    2,
+                    source.source.id,
+                    &source.source.relative_path,
+                    &source.text,
+                    directive.span,
+                    format!("{variable_name} is prohibited by the project variable schema"),
+                ));
+            }
+            continue;
+        }
+        if !matches!(directive.name.as_str(), "DIM" | "DIMS") {
+            continue;
+        }
         let input = DeclarationInput {
             source: source.source.id,
             path: &source.source.relative_path,

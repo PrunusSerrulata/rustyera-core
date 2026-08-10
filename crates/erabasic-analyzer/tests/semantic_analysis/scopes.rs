@@ -167,6 +167,170 @@ fn private_dimensions_can_still_resolve_project_constants() {
 }
 
 #[test]
+fn local_size_directives_resolve_constants_and_update_era_local_dimensions() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![
+                source("constants.erh", "#DIM CONST LOCAL_BASE = 1200\n"),
+                source(
+                    "main.erb",
+                    "@RESIZED\n#LOCALSIZE LOCAL_BASE * 2\n#LOCALSSIZE LOCAL_BASE / 6\nRETURN\n",
+                ),
+            ],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let program = report.project.expect("analysis should produce HIR").program;
+    let function = &program.functions[0];
+    let dimensions = program
+        .variables
+        .iter()
+        .filter(|variable| {
+            variable.owner == Some(function.id)
+                && variable.scope == erabasic_hir::VariableScope::EraFunction
+        })
+        .map(|variable| (variable.name.as_str(), variable.dimensions.as_slice()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(dimensions.get("LOCAL"), Some(&[2400].as_slice()));
+    assert_eq!(dimensions.get("LOCALS"), Some(&[200].as_slice()));
+}
+
+#[test]
+fn repeated_local_size_directives_warn_and_keep_the_last_valid_size() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "main.erb",
+                "@RESIZED\n#LOCALSIZE 1200\n#LOCALSIZE 1300\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    let duplicate_warnings = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == AnalyzerDiagnosticCode::InvalidDeclaration
+                && diagnostic.severity == erabasic_analyzer::AnalyzerDiagnosticSeverity::Warning
+                && diagnostic
+                    .message
+                    .contains("replaces an earlier size declaration")
+        })
+        .count();
+    assert_eq!(duplicate_warnings, 1, "{:#?}", report.diagnostics);
+    let program = report.project.expect("analysis should produce HIR").program;
+    let function = &program.functions[0];
+    let local = program
+        .variables
+        .iter()
+        .find(|variable| variable.name == "LOCAL" && variable.owner == Some(function.id))
+        .expect("function LOCAL");
+    assert_eq!(local.dimensions, [1300]);
+}
+
+#[test]
+fn event_functions_ignore_local_size_directives() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "events.erb",
+                "@EVENTFIRST\n#LOCALSIZE 2000\nLOCAL = 1\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == AnalyzerDiagnosticCode::InvalidDeclaration
+            && diagnostic.severity == erabasic_analyzer::AnalyzerDiagnosticSeverity::Warning
+            && diagnostic
+                .message
+                .contains("event function ignores #LOCALSIZE")
+    }));
+    let program = report.project.expect("analysis should produce HIR").program;
+    let function = &program.functions[0];
+    let local = program
+        .variables
+        .iter()
+        .find(|variable| variable.name == "LOCAL" && variable.owner == Some(function.id))
+        .expect("event LOCAL");
+    assert_eq!(local.dimensions, [1000]);
+}
+
+#[test]
+fn prohibited_era_locals_stay_disabled_without_duplicate_size_warnings() {
+    let project_data = load_project(
+        &ProjectFiles {
+            csv: vec![FrontendFile {
+                relative_path: "VariableSize.csv".into(),
+                payload: CsvFilePayload::Utf8("LOCAL,-1\nLOCALS,-1\n".into()),
+            }],
+            erb: Vec::new(),
+        },
+        &CsvLoadOptions::default(),
+    )
+    .data
+    .expect("disabled local arrays should load");
+    let report = analyze_project(
+        AnalysisInput {
+            project_data,
+            sources: vec![source(
+                "main.erb",
+                "@RESIZED\n#LOCALSIZE 1200\n#LOCALSIZE 1300\n#LOCALSSIZE 120\n#LOCALSSIZE 130\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    let prohibited = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == AnalyzerDiagnosticCode::InvalidDeclaration
+                && diagnostic.severity == erabasic_analyzer::AnalyzerDiagnosticSeverity::Error
+                && diagnostic
+                    .message
+                    .contains("is prohibited by the project variable schema")
+        })
+        .count();
+    let duplicate = report.diagnostics.iter().filter(|diagnostic| {
+        diagnostic.code == AnalyzerDiagnosticCode::InvalidDeclaration
+            && diagnostic
+                .message
+                .contains("replaces an earlier size declaration")
+    });
+    assert_eq!(prohibited, 4, "{:#?}", report.diagnostics);
+    assert_eq!(duplicate.count(), 0, "{:#?}", report.diagnostics);
+    let program = report.project.expect("analysis should produce HIR").program;
+    let function = &program.functions[0];
+    for name in ["LOCAL", "LOCALS"] {
+        let variable = program
+            .variables
+            .iter()
+            .find(|variable| variable.name == name && variable.owner == Some(function.id))
+            .expect("disabled Era local");
+        assert_eq!(variable.dimensions, [0]);
+    }
+}
+
+#[test]
 fn erb_parallel_parsing_preserves_source_order_and_shared_erh_macros() {
     let input = AnalysisInput {
         project_data: empty_project(),
