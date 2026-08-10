@@ -1267,7 +1267,7 @@
       "properties": {
         "character_width_mode": {
           "default": "automatic",
-          "description": "用途：选择字符列宽计算策略；当前仅保存选项；类型：字符串枚举；可选值：\"automatic\"、\"ambiguous_narrow\"、\"ambiguous_wide\"",
+          "description": "用途：选择运行时格式化与客户端显示共用的字符列宽计算策略；automatic 在 CJK 兼容宽度基础上把无文本变体标记的 Unicode 图形符号按宽字符处理，ambiguous_narrow 和 ambiguous_wide 分别把 East Asian Ambiguous 字符按窄字符和宽字符处理；类型：字符串枚举；可选值：\"automatic\"、\"ambiguous_narrow\"、\"ambiguous_wide\"",
           "enum": [
             "automatic",
             "ambiguous_narrow",
@@ -1276,6 +1276,7 @@
           "type": "string",
           "x-rustyera-application": "hot",
           "x-rustyera-clients": [
+            "runtime",
             "tui",
             "browser",
             "tauri"

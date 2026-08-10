@@ -197,7 +197,7 @@ font_size = 18
 line_height = 19
 # 用途：把游戏输出中的全角空格显示为两个半角空格；类型：布尔
 replace_full_width_spaces = false
-# 用途：选择字符列宽计算策略；当前仅保存选项；类型：字符串枚举；可选值："automatic"、"ambiguous_narrow"、"ambiguous_wide"
+# 用途：选择运行时格式化与客户端显示共用的字符列宽计算策略；automatic 在 CJK 兼容宽度基础上把无文本变体标记的 Unicode 图形符号按宽字符处理，ambiguous_narrow 和 ambiguous_wide 分别把 East Asian Ambiguous 字符按窄字符和宽字符处理；类型：字符串枚举；可选值："automatic"、"ambiguous_narrow"、"ambiguous_wide"
 character_width_mode = "automatic"
 
 [window]

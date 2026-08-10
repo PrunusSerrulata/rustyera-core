@@ -1567,9 +1567,10 @@ impl RuntimeSession {
                     Some(request.origin.clone()),
                 );
             };
-            let value = match logical_line_string(
+            let value = match erabasic_vm::logical_line_string_with_mode(
                 pattern,
                 usize::try_from(self.line_columns).unwrap_or(usize::MAX),
+                vm.character_width_mode(),
             ) {
                 Ok(value) => value,
                 Err(message) => {

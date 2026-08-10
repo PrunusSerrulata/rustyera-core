@@ -239,7 +239,7 @@ pub fn catalog() -> Vec<ConfigSpec> {
         spec!(RelationDef, "RELATIONの初期値", "Default RELATION", i 0, PortableSemantic),
         spec!(AudioVolume, "ゲーム音量", "Game volume", i 100, QueryOnlyClientPreference),
         spec!(ReplaceFullWidthSpaces, "全角スペースを半角スペースに置換する", "Replace full-width spaces", b false, QueryOnlyClientPreference),
-        spec!(CharacterWidthMode, "文字列幅計算モード", "Character width mode", e "AUTOMATIC" ["AUTOMATIC", "AMBIGUOUS_NARROW", "AMBIGUOUS_WIDE"], QueryOnlyClientPreference),
+        spec!(CharacterWidthMode, "文字列幅計算モード", "Character width mode", e "AUTOMATIC" ["AUTOMATIC", "AMBIGUOUS_NARROW", "AMBIGUOUS_WIDE"], PortableSemantic),
     ];
     for spec in &mut specs {
         spec.clients = clients(spec.code, spec.effect);

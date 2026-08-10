@@ -95,6 +95,9 @@ impl RuntimeSession {
             self.options.vm_config,
         );
         vm.set_line_columns(self.line_columns);
+        vm.set_character_width_mode(configured_character_width_mode(
+            self.project_snapshot.as_ref(),
+        ));
         let version = decoded.state.version;
         let description = decoded.description.clone();
         let prepared = match vm.prepare_runtime_state_with_extensions(
@@ -267,6 +270,9 @@ impl RuntimeSession {
         let mut vm = RuntimeVm::commit_restore(prepared)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         vm.set_line_columns(self.line_columns);
+        vm.set_character_width_mode(configured_character_width_mode(
+            self.project_snapshot.as_ref(),
+        ));
 
         let new_epoch = self.epoch.0.max(payload.epoch).saturating_add(1);
         let mut operations = payload.operations;
@@ -290,6 +296,10 @@ impl RuntimeSession {
         self.accepted_message_ids.clear();
         self.vm = Some(vm);
         self.presentation = presentation;
+        self.presentation
+            .set_character_width_mode(configured_character_width_mode(
+                self.project_snapshot.as_ref(),
+            ));
         self.pending_presentation_update = false;
         self.operations = operations;
         self.project_snapshot
@@ -403,6 +413,9 @@ impl RuntimeSession {
         self.presentation.set_title(title);
         let mut vm = RuntimeVm::new_for_title_with_seed(artifact, self.options.vm_config, seed);
         vm.set_line_columns(self.line_columns);
+        vm.set_character_width_mode(configured_character_width_mode(
+            self.project_snapshot.as_ref(),
+        ));
         self.controller.flow = Some(SystemFlow::Title);
         let result = if self
             .controller

@@ -176,6 +176,10 @@ impl RuntimeSession {
                 .as_ref()
                 .expect("configuration project remains loaded after commit"),
         );
+        let character_width_mode = configured_character_width_mode(self.project_snapshot.as_ref());
+        if let Some(vm) = &mut self.vm {
+            vm.set_character_width_mode(character_width_mode);
+        }
         self.compiled_project_cache = None;
         self.compiled_cache_task = None;
         self.compiled_cache_failure = None;
@@ -1052,6 +1056,10 @@ impl RuntimeSession {
         self.staged_full_project_manifest = None;
         if let Some(snapshot) = &self.project_snapshot {
             self.presentation.configure_project(snapshot);
+        }
+        let character_width_mode = configured_character_width_mode(self.project_snapshot.as_ref());
+        if let Some(vm) = &mut self.vm {
+            vm.set_character_width_mode(character_width_mode);
         }
         let canvas_defaults = (
             self.presentation.default_foreground_rgb(),

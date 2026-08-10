@@ -186,6 +186,19 @@ fn new_frontend_settings_have_only_the_requested_hot_applicability() {
         .find(|spec| spec.code == "AudioVolume")
         .unwrap();
     assert!(!audio.clients.contains(&era_config::ConfigClient::Tui));
+    let width_mode = era_config::catalog()
+        .into_iter()
+        .find(|spec| spec.code == "CharacterWidthMode")
+        .unwrap();
+    assert_eq!(
+        width_mode.effect,
+        era_config::ConfigEffect::PortableSemantic
+    );
+    assert!(
+        width_mode
+            .clients
+            .contains(&era_config::ConfigClient::Runtime)
+    );
 }
 
 #[test]

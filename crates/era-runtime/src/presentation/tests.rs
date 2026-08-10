@@ -311,6 +311,7 @@ fn projection_attaches_runtime_columns_to_nested_and_fallback_text() {
         19_000,
         false,
         false,
+        erabasic_vm::CharacterWidthMode::Automatic,
     );
     let mut layouts = Vec::new();
     collect_text_layouts(&projected, &mut layouts);
@@ -320,6 +321,49 @@ fn projection_attaches_runtime_columns_to_nested_and_fallback_text() {
         3
     );
     assert!(layouts.contains(&("■……■", 8)));
+}
+
+#[test]
+fn projection_uses_the_selected_width_mode_for_console_text_but_not_html() {
+    let runs = vec![
+        plain_text("☀❤……".into(), 19_000),
+        DisplayRun::HtmlDocument {
+            document: erabasic_html::parse_document("<b>☀❤</b>").unwrap(),
+        },
+    ];
+    let automatic = super::projection::project_runs(
+        runs.clone(),
+        true,
+        true,
+        19_000,
+        true,
+        true,
+        erabasic_vm::CharacterWidthMode::Automatic,
+    );
+    let narrow = super::projection::project_runs(
+        runs,
+        true,
+        true,
+        19_000,
+        true,
+        true,
+        erabasic_vm::CharacterWidthMode::AmbiguousNarrow,
+    );
+
+    let mut automatic_layouts = Vec::new();
+    collect_text_layouts(&automatic, &mut automatic_layouts);
+    assert_eq!(automatic_layouts, [("☀", 2), ("❤", 2), ("…", 2), ("…", 2)]);
+    let mut narrow_layouts = Vec::new();
+    collect_text_layouts(&narrow, &mut narrow_layouts);
+    assert_eq!(narrow_layouts, [("☀", 1), ("❤", 1), ("…", 1), ("…", 1)]);
+    assert!(matches!(
+        automatic.last(),
+        Some(DisplayRun::HtmlDocument { .. })
+    ));
+    assert!(matches!(
+        narrow.last(),
+        Some(DisplayRun::HtmlDocument { .. })
+    ));
 }
 
 #[test]
@@ -335,6 +379,7 @@ fn projection_preserves_internal_spaces_across_adjacent_runs_with_the_same_style
         19_000,
         false,
         false,
+        erabasic_vm::CharacterWidthMode::Automatic,
     );
     let mut layouts = Vec::new();
     collect_text_layouts(&projected, &mut layouts);
@@ -396,6 +441,7 @@ fn projection_only_suppresses_alignment_space_before_double_vertical_edge() {
         19_000,
         false,
         false,
+        erabasic_vm::CharacterWidthMode::Automatic,
     );
     let mut layouts = Vec::new();
     collect_text_layouts(&projected, &mut layouts);
@@ -451,6 +497,7 @@ fn plain_separator_fallback_fills_logical_columns_with_ambiguous_patterns() {
         19_000,
         false,
         false,
+        erabasic_vm::CharacterWidthMode::Automatic,
     );
     assert!(matches!(
         projected.as_slice(),
@@ -495,13 +542,13 @@ fn temporary_empty_lines_can_be_replaced_without_frontend_state() {
 
 #[test]
 fn logical_line_string_uses_width_without_splitting_graphemes() {
-    assert_eq!(logical_line_string("界", 5), Ok("界界".into()));
+    assert_eq!(erabasic_vm::logical_line_string("界", 5), Ok("界界".into()));
     assert_eq!(
-        logical_line_string("e\u{301}", 3),
+        erabasic_vm::logical_line_string("e\u{301}", 3),
         Ok("e\u{301}e\u{301}e\u{301}".into())
     );
-    assert!(logical_line_string("\u{301}", 10).is_err());
-    assert!(logical_line_string("", 10).is_err());
+    assert!(erabasic_vm::logical_line_string("\u{301}", 10).is_err());
+    assert!(erabasic_vm::logical_line_string("", 10).is_err());
 }
 
 #[test]

@@ -325,7 +325,7 @@ pub enum DisplayRun {
         #[n(0)]
         width: PresentationLength,
     },
-    /// Frontend projection of canonical text with a runtime-owned CJK column advance.
+    /// Frontend projection of canonical text with a runtime-owned project column advance.
     /// This variant is never stored in a runtime snapshot.
     #[n(8)]
     TextLayout {

@@ -637,7 +637,7 @@ fn metadata(code: &str) -> (u16, &'static str, &'static str, bool) {
         "CharacterWidthMode" => (
             127,
             "text.character_width_mode",
-            "选择字符列宽计算策略；当前仅保存选项",
+            "选择运行时格式化与客户端显示共用的字符列宽计算策略；automatic 在 CJK 兼容宽度基础上把无文本变体标记的 Unicode 图形符号按宽字符处理，ambiguous_narrow 和 ambiguous_wide 分别把 East Asian Ambiguous 字符按窄字符和宽字符处理",
             false,
         ),
         _ => panic!("missing reraconfig metadata for {code}"),

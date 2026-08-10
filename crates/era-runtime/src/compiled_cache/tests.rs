@@ -170,9 +170,7 @@ fn native_tui_and_cooperative_browser_caches_are_byte_identical() {
     project.files.push(SubmittedFile {
         relative_path: "reraconfig.toml".into(),
         category: FileCategory::Configuration,
-        payload: FilePayload::Utf8(
-            "[meta]\nschema_version = 2\n[text]\nfont_size = 20\n".into(),
-        ),
+        payload: FilePayload::Utf8("[meta]\nschema_version = 2\n[text]\nfont_size = 20\n".into()),
         content_hash: None,
     });
     let mut tui = crate::project::build_project_with_extensions_and_progress(

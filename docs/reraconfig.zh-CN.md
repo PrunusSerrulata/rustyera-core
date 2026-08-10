@@ -31,9 +31,12 @@
 - `audio.volume`：整数 `0..=100`，默认 `100`，表示游戏主音量百分比；支持热应用。
 - `text.replace_full_width_spaces`：布尔值，默认 `false`。启用后仅由前端把游戏输出中的
   一个全角空格显示为两个半角空格，不改变 core 中的原始文本；支持热应用。
-- `text.character_width_mode`：字符串枚举，默认 `"automatic"`。当前提供
-  `"automatic"`、`"ambiguous_narrow"` 和 `"ambiguous_wide"` 三个占位策略；支持热应用，
-  但本阶段不实现具体列宽算法。
+- `text.character_width_mode`：字符串枚举，默认 `"automatic"`，可热应用。运行时格式化与
+  客户端显示共用同一逻辑列宽。`"ambiguous_narrow"` 和 `"ambiguous_wide"` 分别把 East
+  Asian Ambiguous 字符按窄字符和宽字符处理；`"automatic"` 使用兼容 Era 的 CJK/CP932
+  规则，并把没有显式文本变体标记的 Unicode 图形符号（例如 `☀`、`❤`）按宽字符处理。
+  `STRLENS`、`STRLENSU` 等具有历史编码语义的函数不受此项影响；显式 HTML 内容仍按其
+  字体和 CSS 自然布局。
 
 TUI 不暴露音量设置，因为终端音频不由 TUI 控制；浏览器和 Tauri 暴露全部三项。
 

@@ -63,8 +63,8 @@ use era_runtime_protocol::{
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
 use erabasic_vm::{
-    DEFAULT_LINE_COLUMNS, EraSaveScope, EraState, HostReady, HostWaitStability, HostWrite,
-    PlaceDescriptor, PreparedCandidateState, PreparedRuntimeState, RunBudget, RuntimeVm,
+    CharacterWidthMode, DEFAULT_LINE_COLUMNS, EraSaveScope, EraState, HostReady, HostWaitStability,
+    HostWrite, PlaceDescriptor, PreparedCandidateState, PreparedRuntimeState, RunBudget, RuntimeVm,
     SnapshotEligibility, StructuredScope, VmConfig, VmDriveMode, VmHostCompletion, VmHostRequest,
     VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
     VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot, VmValue,
@@ -84,9 +84,7 @@ use crate::key_macro::KeyMacros;
 use crate::operation::{
     CandidateSaveContinuation, PendingOperations, PendingService, PendingStorage,
 };
-use crate::presentation::{
-    PresentationModel, PresentationUpdate, display_value, logical_line_string,
-};
+use crate::presentation::{PresentationModel, PresentationUpdate, display_value};
 #[cfg(test)]
 use crate::project::build_project;
 use crate::project::{
@@ -101,6 +99,17 @@ use crate::save_adapter::{
     DecodedEraSave, decode_era_save, decode_scoped_save, encode_era_save, encode_scoped_save,
     merge_opaque_extensions, merge_structured_extensions,
 };
+
+fn configured_character_width_mode(
+    project: Option<&NormalizedProjectSnapshot>,
+) -> CharacterWidthMode {
+    match project.and_then(|project| project.configuration.get_code("CharacterWidthMode")) {
+        Some(era_config::ConfigValue::Enum { value, .. }) => {
+            CharacterWidthMode::from_config_code(value)
+        }
+        _ => CharacterWidthMode::Automatic,
+    }
+}
 
 mod core;
 mod debug_session;

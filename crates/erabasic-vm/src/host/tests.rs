@@ -59,6 +59,25 @@ fn form_width_honors_alignment_and_unicode_display_columns() {
 }
 
 #[test]
+fn form_width_uses_the_selected_project_column_policy() {
+    let width = Some(&VmValue::Integer(4));
+    let left = Some(&VmValue::Integer(1));
+    assert_eq!(
+        apply_width_with_mode("☀", width, left, crate::CharacterWidthMode::Automatic).unwrap(),
+        "☀  "
+    );
+    assert_eq!(
+        apply_width_with_mode("☀", width, left, crate::CharacterWidthMode::AmbiguousNarrow,)
+            .unwrap(),
+        "☀   "
+    );
+    assert_eq!(
+        apply_width_with_mode("…", width, left, crate::CharacterWidthMode::AmbiguousWide,).unwrap(),
+        "…  "
+    );
+}
+
+#[test]
 fn getline_repeats_ambiguous_cjk_glyphs_by_their_full_width() {
     assert_eq!(crate::logical_line_string("■", 8).unwrap(), "■■■■");
     assert_eq!(crate::logical_line_string("…", 6).unwrap(), "………");
@@ -170,6 +189,7 @@ fn times_native_multiplies_rationally_and_truncates_toward_zero() {
     let target = PlaceDescriptor::default();
     let mut native = CompilerNative {
         name: "times".into(),
+        character_width_mode: CharacterWidthModeHandle::default(),
     };
     let ready = native
         .call(NativeCallRequest {

@@ -234,6 +234,12 @@ impl PresentationModel {
             Some(ConfigValue::String(value)) => Some(value.clone()),
             _ => None,
         };
+        let character_width_mode = match project.configuration.get_code("CharacterWidthMode") {
+            Some(ConfigValue::Enum { value, .. }) => {
+                erabasic_vm::CharacterWidthMode::from_config_code(value)
+            }
+            _ => erabasic_vm::CharacterWidthMode::Automatic,
+        };
         self.settings.drawable_width =
             LogicalLength(i64::from(project.viewport_width).saturating_mul(1_000));
         self.settings.drawable_height =
@@ -255,6 +261,7 @@ impl PresentationModel {
             rgb_color(i64::from(color("FocusColor").unwrap_or(0x00ff_ff00)));
         self.apply_project_default_style(default_style);
         self.print_c_length = project.print_c_length.max(1);
+        self.set_character_width_mode(character_width_mode);
         self.trim_physical_history();
         self.delivery.dirty.settings = true;
         self.bump();

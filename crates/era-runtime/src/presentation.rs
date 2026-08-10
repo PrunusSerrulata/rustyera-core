@@ -5,7 +5,7 @@ use era_runtime_protocol::{
     ResourceReplay, SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef,
     TextStyle, TooltipFormat, TooltipSettings,
 };
-use erabasic_vm::VmValue;
+use erabasic_vm::{CharacterWidthMode, VmValue};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -56,6 +56,9 @@ pub(crate) struct PresentationModel {
     #[serde(default)]
     resource_replay_stale: bool,
     print_c_length: u32,
+    /// Derived from project configuration rather than authoritative snapshot state.
+    #[serde(skip)]
+    character_width_mode: CharacterWidthMode,
     /// Frontend delivery bookkeeping is transport state, not authoritative game state.
     #[serde(skip)]
     delivery: PresentationDelivery,
@@ -156,12 +159,20 @@ impl Default for PresentationModel {
             resources: ResourceReplay::default(),
             resource_replay_stale: false,
             print_c_length: 25,
+            character_width_mode: CharacterWidthMode::Automatic,
             delivery: PresentationDelivery::default(),
         }
     }
 }
 
 impl PresentationModel {
+    pub(crate) fn set_character_width_mode(&mut self, mode: CharacterWidthMode) {
+        if self.character_width_mode != mode {
+            self.character_width_mode = mode;
+            self.delivery.dirty.force_snapshot = true;
+        }
+    }
+
     pub(crate) const fn logical_line_count(&self) -> i64 {
         self.logical_line_count
     }
@@ -978,9 +989,9 @@ mod projection;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::projection::display_value;
 use self::projection::{
     append_html_run, append_log_run, auto_button_values, bind_auto_buttons, color_rgb,
     default_style, disable_old_buttons, enabled_button_value, project_lines, rebind_runs,
     rgb_color, run_is_empty,
 };
-pub(crate) use self::projection::{display_value, logical_line_string};

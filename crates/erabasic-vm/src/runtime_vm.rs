@@ -163,6 +163,20 @@ impl RuntimeVm {
         self.refresh_draw_line_string();
     }
 
+    /// Synchronize runtime formatting and calculated strings with project width policy.
+    pub fn set_character_width_mode(&mut self, mode: crate::CharacterWidthMode) {
+        self.natives.set_character_width_mode(mode);
+        if let Some(pending) = &mut self.pending_natives {
+            pending.set_character_width_mode(mode);
+        }
+        self.refresh_draw_line_string();
+    }
+
+    #[must_use]
+    pub fn character_width_mode(&self) -> crate::CharacterWidthMode {
+        self.natives.character_width_mode()
+    }
+
     fn refresh_draw_line_string(&mut self) {
         let pattern = self
             .vm
@@ -172,9 +186,10 @@ impl RuntimeVm {
             .replace
             .draw_line_string
             .clone();
-        let value = crate::logical_line_string(
+        let value = crate::logical_line_string_with_mode(
             &pattern,
             usize::try_from(self.line_columns).unwrap_or(usize::MAX),
+            self.character_width_mode(),
         )
         .unwrap_or(pattern);
         self.vm.set_runtime_calculated_string("DRAWLINESTR", &value);

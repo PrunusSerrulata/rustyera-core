@@ -448,6 +448,10 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
                     code: "AutoSave".into(),
                     value: "NO".into(),
                 },
+                ConfigurationChange {
+                    code: "CharacterWidthMode".into(),
+                    value: "AMBIGUOUS_NARROW".into(),
+                },
             ],
         }),
     );
@@ -494,9 +498,33 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
         .unwrap();
     assert_eq!(auto_save.value, "NO");
     assert_eq!(auto_save.effective_value, "YES");
+    let width_mode = committed
+        .entries
+        .iter()
+        .find(|entry| entry.code == "CharacterWidthMode")
+        .unwrap();
+    assert_eq!(width_mode.value, "AMBIGUOUS_NARROW");
+    assert_eq!(width_mode.effective_value, "AMBIGUOUS_NARROW");
     let snapshot = session.project_snapshot.as_ref().unwrap();
     assert_eq!(snapshot.font_size, 22);
     assert_eq!(snapshot.line_height, 24);
+    assert_eq!(
+        configured_character_width_mode(Some(snapshot)),
+        CharacterWidthMode::AmbiguousNarrow
+    );
+    session
+        .presentation
+        .append_print_text("☀❤……".into(), false, true);
+    let projected = session.presentation.snapshot();
+    let columns = projected.history.logical_lines[0]
+        .runs
+        .iter()
+        .filter_map(|run| match run {
+            DisplayRun::TextLayout { columns, .. } => Some(*columns),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(columns, [1, 1, 1, 1]);
 }
 
 #[test]

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use erabasic_bytecode::{BytecodeArtifact, RuntimeImport, SymbolKey};
@@ -150,6 +151,34 @@ pub trait NativeService: Send {
     }
 }
 
+#[derive(Clone)]
+struct CharacterWidthModeHandle(Arc<AtomicU8>);
+
+impl Default for CharacterWidthModeHandle {
+    fn default() -> Self {
+        Self(Arc::new(AtomicU8::new(0)))
+    }
+}
+
+impl CharacterWidthModeHandle {
+    fn get(&self) -> crate::CharacterWidthMode {
+        match self.0.load(Ordering::Relaxed) {
+            1 => crate::CharacterWidthMode::AmbiguousNarrow,
+            2 => crate::CharacterWidthMode::AmbiguousWide,
+            _ => crate::CharacterWidthMode::Automatic,
+        }
+    }
+
+    fn set(&self, mode: crate::CharacterWidthMode) {
+        let value = match mode {
+            crate::CharacterWidthMode::Automatic => 0,
+            crate::CharacterWidthMode::AmbiguousNarrow => 1,
+            crate::CharacterWidthMode::AmbiguousWide => 2,
+        };
+        self.0.store(value, Ordering::Relaxed);
+    }
+}
+
 #[derive(Default)]
 pub struct NativeServiceRegistry {
     services: BTreeMap<SymbolKey, Box<dyn NativeService>>,
@@ -157,6 +186,7 @@ pub struct NativeServiceRegistry {
     structured: Option<Arc<Mutex<StructuredState>>>,
     structured_keys: BTreeSet<SymbolKey>,
     extensions: erabasic_data::ExtensionData,
+    character_width_mode: CharacterWidthModeHandle,
 }
 
 type PreparedStructuredImport = (Option<Vec<u8>>, BTreeSet<(u8, String)>);
@@ -166,6 +196,7 @@ impl NativeServiceRegistry {
         let snapshots = self.snapshots()?;
         let mut fork = Self::for_artifact(artifact);
         fork.restore_snapshots(&snapshots)?;
+        fork.set_character_width_mode(self.character_width_mode.get());
         Ok(fork)
     }
 
@@ -197,7 +228,13 @@ impl NativeServiceRegistry {
             } else if matches!(name, "format_integer" | "format_string" | "times")
                 || name.starts_with("control_")
             {
-                registry.register(native.import.key, CompilerNative { name: name.into() });
+                registry.register(
+                    native.import.key,
+                    CompilerNative {
+                        name: name.into(),
+                        character_width_mode: registry.character_width_mode.clone(),
+                    },
+                );
             } else if matches!(name, "rand" | "randomize" | "initrand" | "dumprand") {
                 registry.register(
                     native.import.key,
@@ -264,6 +301,14 @@ impl NativeServiceRegistry {
 
     pub fn register(&mut self, key: SymbolKey, service: impl NativeService + 'static) -> bool {
         self.services.insert(key, Box::new(service)).is_none()
+    }
+
+    pub(crate) fn set_character_width_mode(&mut self, mode: crate::CharacterWidthMode) {
+        self.character_width_mode.set(mode);
+    }
+
+    pub(crate) fn character_width_mode(&self) -> crate::CharacterWidthMode {
+        self.character_width_mode.get()
     }
 
     pub(crate) fn call(
@@ -485,6 +530,7 @@ impl NativeServiceRegistry {
             })
             .collect();
         target.restore_snapshots(&retained)?;
+        target.set_character_width_mode(self.character_width_mode.get());
         Ok(target)
     }
 }
@@ -498,6 +544,6 @@ use core::CoreNative;
 pub use core::evaluate_pure_native;
 #[cfg(test)]
 use core::{parse_era_numeric, substring_legacy_bytes, substring_scalars};
-#[cfg(test)]
-use services::apply_width;
 use services::{CompilerNative, RandomNative};
+#[cfg(test)]
+use services::{apply_width, apply_width_with_mode};

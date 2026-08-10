@@ -3,6 +3,7 @@ use super::*;
 
 pub(super) struct CompilerNative {
     pub(super) name: String,
+    pub(super) character_width_mode: CharacterWidthModeHandle,
 }
 
 impl NativeService for CompilerNative {
@@ -12,10 +13,11 @@ impl NativeService for CompilerNative {
                 let Some(VmValue::Integer(value)) = request.arguments.first() else {
                     return Err("format_integer expects an integer".into());
                 };
-                Ok(NativeReady::value(VmValue::String(apply_width(
+                Ok(NativeReady::value(VmValue::String(apply_width_with_mode(
                     &value.to_string(),
                     request.arguments.get(1),
                     request.arguments.get(2),
+                    self.character_width_mode.get(),
                 )?)))
             }
             "format_string" => {
@@ -29,10 +31,11 @@ impl NativeService for CompilerNative {
                         return Err("format_string cannot dereference a place".into());
                     }
                 };
-                Ok(NativeReady::value(VmValue::String(apply_width(
+                Ok(NativeReady::value(VmValue::String(apply_width_with_mode(
                     &value,
                     request.arguments.get(1),
                     request.arguments.get(2),
+                    self.character_width_mode.get(),
                 )?)))
             }
             "times" => {
@@ -142,10 +145,11 @@ impl NativeService for RandomNative {
     }
 }
 
-pub(super) fn apply_width(
+pub(super) fn apply_width_with_mode(
     value: &str,
     width: Option<&VmValue>,
     alignment: Option<&VmValue>,
+    mode: crate::CharacterWidthMode,
 ) -> Result<String, String> {
     let Some(width) = width else {
         return Ok(value.into());
@@ -160,7 +164,7 @@ pub(super) fn apply_width(
         Some(_) => return Err("format alignment must be an integer".into()),
         None => false,
     };
-    let characters = crate::emuera_display_width(value);
+    let characters = crate::display_width(value, mode);
     if characters >= width {
         return Ok(value.into());
     }
@@ -170,4 +174,18 @@ pub(super) fn apply_width(
     } else {
         format!("{padding}{value}")
     })
+}
+
+#[cfg(test)]
+pub(super) fn apply_width(
+    value: &str,
+    width: Option<&VmValue>,
+    alignment: Option<&VmValue>,
+) -> Result<String, String> {
+    apply_width_with_mode(
+        value,
+        width,
+        alignment,
+        crate::CharacterWidthMode::Automatic,
+    )
 }

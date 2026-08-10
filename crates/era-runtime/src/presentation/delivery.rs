@@ -250,6 +250,7 @@ impl PresentationModel {
             self.settings.line_height.0,
             self.project_html,
             self.project_graphics,
+            self.character_width_mode,
         );
         // A snapshot is a self-contained replay baseline, not an ever-growing audit log.
         // Deltas retain exact edits until delivery; snapshots normalize the currently retained
@@ -314,6 +315,7 @@ impl PresentationModel {
             self.settings.line_height.0,
             self.project_html,
             self.project_graphics,
+            self.character_width_mode,
         );
         line
     }

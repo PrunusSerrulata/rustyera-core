@@ -2,6 +2,30 @@ use erabasic_data::LegacyEncoding;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+/// Portable logical-column policy shared by the VM and frontend projection.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CharacterWidthMode {
+    /// Era-compatible CJK width with CP932 and pictographic symbol handling.
+    #[default]
+    Automatic,
+    /// Unicode width with East Asian Ambiguous characters kept narrow.
+    AmbiguousNarrow,
+    /// Unicode CJK width with East Asian Ambiguous characters made wide.
+    AmbiguousWide,
+}
+
+impl CharacterWidthMode {
+    /// Parse the stable configuration spelling used by `CharacterWidthMode`.
+    #[must_use]
+    pub fn from_config_code(value: &str) -> Self {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "AMBIGUOUS_NARROW" => Self::AmbiguousNarrow,
+            "AMBIGUOUS_WIDE" => Self::AmbiguousWide,
+            _ => Self::Automatic,
+        }
+    }
+}
+
 /// Measure `RustyEra`'s deterministic CJK console columns.
 ///
 /// The reference `FormatPercent` uses the selected ANSI code page, while its
@@ -11,11 +35,28 @@ use unicode_width::UnicodeWidthStr;
 /// operations intentionally retain their separate code-page and UTF-16 semantics.
 #[must_use]
 pub fn emuera_display_width(value: &str) -> usize {
-    value.graphemes(true).map(emuera_grapheme_width).sum()
+    display_width(value, CharacterWidthMode::Automatic)
 }
 
-fn emuera_grapheme_width(grapheme: &str) -> usize {
-    let unicode_width = UnicodeWidthStr::width_cjk(grapheme);
+/// Measure text using an explicit project character-width policy.
+#[must_use]
+pub fn display_width(value: &str, mode: CharacterWidthMode) -> usize {
+    value
+        .graphemes(true)
+        .map(|grapheme| grapheme_width(grapheme, mode))
+        .sum()
+}
+
+fn grapheme_width(grapheme: &str, mode: CharacterWidthMode) -> usize {
+    let unicode_width = match mode {
+        CharacterWidthMode::AmbiguousNarrow => UnicodeWidthStr::width(grapheme),
+        CharacterWidthMode::Automatic | CharacterWidthMode::AmbiguousWide => {
+            UnicodeWidthStr::width_cjk(grapheme)
+        }
+    };
+    if mode != CharacterWidthMode::Automatic {
+        return unicode_width;
+    }
     let mut characters = grapheme.chars();
     let Some(character) = characters.next() else {
         return 0;
@@ -23,10 +64,13 @@ fn emuera_grapheme_width(grapheme: &str) -> usize {
     // MS Gothic gives the CP932 double-byte repertoire a full console cell even where
     // terminal-oriented Unicode width tables keep Greek and Cyrillic letters narrow.
     // Multi-scalar graphemes stay on Unicode rules so combining marks add no phantom cell.
-    if characters.next().is_none()
+    let single_scalar_cp932 = characters.next().is_none()
         && unicode_width == 1
-        && LegacyEncoding::Japanese.encoded_char_len(character) == 2
-    {
+        && LegacyEncoding::Japanese.encoded_char_len(character) == 2;
+    let pictographic = unicode_width == 1
+        && !grapheme.contains('\u{fe0e}')
+        && grapheme.chars().any(super::extended_pictographic::contains);
+    if single_scalar_cp932 || pictographic {
         2
     } else {
         unicode_width
@@ -39,13 +83,26 @@ fn emuera_grapheme_width(grapheme: &str) -> usize {
 ///
 /// Returns an error when the pattern is empty or has no positive logical width.
 pub fn logical_line_string(pattern: &str, columns: usize) -> Result<String, &'static str> {
+    logical_line_string_with_mode(pattern, columns, CharacterWidthMode::Automatic)
+}
+
+/// Repeat a pattern to a logical-column limit using an explicit width policy.
+///
+/// # Errors
+///
+/// Returns an error when the pattern is empty or has no positive logical width.
+pub fn logical_line_string_with_mode(
+    pattern: &str,
+    columns: usize,
+    mode: CharacterWidthMode,
+) -> Result<String, &'static str> {
     if pattern.is_empty() {
         return Err("GETLINESTR pattern must not be empty");
     }
     let graphemes: Vec<_> = pattern.graphemes(true).collect();
     let widths: Vec<_> = graphemes
         .iter()
-        .map(|grapheme| emuera_display_width(grapheme))
+        .map(|grapheme| display_width(grapheme, mode))
         .collect();
     if widths.iter().all(|width| *width == 0) {
         return Err("GETLINESTR pattern must have positive logical width");
@@ -97,9 +154,38 @@ mod tests {
             ("\u{200b}", 0),
             ("😀", 2),
             ("👨‍👩‍👧‍👦", 2),
+            ("☀", 2),
+            ("❤", 2),
+            ("❤❤❤❤", 8),
         ] {
             assert_eq!(emuera_display_width(text), width, "{text:?}");
         }
+    }
+
+    #[test]
+    fn width_modes_distinguish_ambiguous_and_unqualified_pictographs() {
+        assert_eq!(display_width("…γ■", CharacterWidthMode::AmbiguousNarrow), 3);
+        assert_eq!(display_width("…γ■", CharacterWidthMode::AmbiguousWide), 5);
+        assert_eq!(display_width("…γ■", CharacterWidthMode::Automatic), 6);
+        assert_eq!(display_width("☀❤", CharacterWidthMode::AmbiguousNarrow), 2);
+        assert_eq!(display_width("☀❤", CharacterWidthMode::AmbiguousWide), 2);
+        assert_eq!(display_width("☀❤", CharacterWidthMode::Automatic), 4);
+        assert_eq!(
+            display_width("☀\u{fe0e}❤\u{fe0e}", CharacterWidthMode::Automatic),
+            2
+        );
+        assert_eq!(
+            display_width("☀\u{fe0f}❤\u{fe0f}", CharacterWidthMode::Automatic),
+            4
+        );
+        assert_eq!(
+            logical_line_string_with_mode("…", 6, CharacterWidthMode::AmbiguousNarrow),
+            Ok("………………".into())
+        );
+        assert_eq!(
+            logical_line_string_with_mode("…", 6, CharacterWidthMode::AmbiguousWide),
+            Ok("………".into())
+        );
     }
 
     #[test]
