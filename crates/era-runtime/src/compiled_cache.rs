@@ -252,6 +252,8 @@ pub(crate) struct CooperativeCompiledCacheEncoder {
     manifest_encoder: Option<ManifestSectionEncoder>,
     pending_section: Option<(Vec<u8>, usize)>,
     output: Option<(Vec<u8>, blake3::Hasher)>,
+    progress_completed: u64,
+    progress_total: u64,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -615,6 +617,8 @@ impl CooperativeCompiledCacheEncoder {
             manifest_encoder: None,
             pending_section: None,
             output: None,
+            progress_completed: 0,
+            progress_total: 1,
         }
     }
 
@@ -691,31 +695,51 @@ impl CooperativeCompiledCacheEncoder {
             if end == section.len() {
                 self.pending_section = None;
                 self.next_section += 1;
-                if let (Some(plan), Some(reporter)) = (&self.plan, &self.progress) {
-                    reporter.report(crate::ProjectProgress {
-                        stage: crate::ProjectProgressStage::Packaging,
-                        completed: u64::try_from(self.next_section).unwrap_or(u64::MAX),
-                        total: u64::try_from(plan.section_count()).unwrap_or(u64::MAX),
-                    });
-                }
             }
+            self.report_cooperative_progress();
             return Ok(None);
         }
         if self.plan.is_none() {
             self.poll_layout()?;
+            self.report_cooperative_progress();
             return Ok(None);
         }
         let plan = self.plan.as_ref().expect("cache layout was planned");
         if self.next_section < plan.section_count() {
             let Some(section) = self.encode_next_section()? else {
+                self.report_cooperative_progress();
                 return Ok(None);
             };
             self.pending_section = Some((section, 0));
+            self.report_cooperative_progress();
             return Ok(None);
         }
         let (mut output, hasher) = self.output.take().expect("cache output was initialized");
         output.extend_from_slice(hasher.finalize().as_bytes());
+        if let Some(reporter) = &self.progress {
+            let completed = self.progress_completed.saturating_add(1);
+            reporter.report(crate::ProjectProgress {
+                stage: crate::ProjectProgressStage::Packaging,
+                completed,
+                total: completed,
+            });
+        }
         Ok(Some(output))
+    }
+
+    fn report_cooperative_progress(&mut self) {
+        let Some(reporter) = &self.progress else {
+            return;
+        };
+        self.progress_completed = self.progress_completed.saturating_add(1);
+        self.progress_total = self
+            .progress_total
+            .max(self.progress_completed.saturating_add(1));
+        reporter.report(crate::ProjectProgress {
+            stage: crate::ProjectProgressStage::Packaging,
+            completed: self.progress_completed,
+            total: self.progress_total,
+        });
     }
 
     fn encode_next_section(&mut self) -> Result<Option<Vec<u8>>, String> {
@@ -816,9 +840,40 @@ impl CooperativeCompiledCacheEncoder {
         hasher.update(&output);
         self.output = Some((output, hasher));
         self.planner = None;
+        self.progress_total = cooperative_work_estimate(&self.manifest, &self.artifact, &plan);
         self.plan = Some(plan);
         Ok(())
     }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn cooperative_work_estimate(
+    manifest: &ProjectManifest,
+    artifact: &ValidatedArtifact,
+    plan: &CacheLayoutPlan,
+) -> u64 {
+    let payload_quanta = manifest.files.iter().fold(0_usize, |total, file| {
+        let bytes = match &file.payload {
+            FilePayload::Utf8(value) => value.len(),
+            FilePayload::Bytes(value) => value.as_slice().len(),
+            FilePayload::IoError(error) => error.message.len(),
+        };
+        total.saturating_add(bytes.max(1).div_ceil(COOPERATIVE_MANIFEST_CHUNK_BYTES))
+    });
+    let planning_quanta = artifact
+        .artifact()
+        .functions
+        .len()
+        .saturating_add(artifact.artifact().source_map.entries.len())
+        .div_ceil(COOPERATIVE_ITEM_QUANTUM);
+    let estimate = plan
+        .section_count()
+        .saturating_mul(4)
+        .saturating_add(manifest.files.len().saturating_mul(3))
+        .saturating_add(payload_quanta.saturating_mul(3))
+        .saturating_add(planning_quanta.saturating_mul(2))
+        .saturating_add(32);
+    u64::try_from(estimate).unwrap_or(u64::MAX)
 }
 
 struct ManifestSectionEncoder {
