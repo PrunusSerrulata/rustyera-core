@@ -130,6 +130,13 @@ pub trait NativeService: Send {
     /// Returns an error when the service rejects the request or cannot produce a result.
     fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String>;
 
+    /// Whether the interpreter must snapshot this service before invoking it.
+    /// Services may opt out only when calls validate all fallible work before
+    /// committing state and never combine state mutation with VM-place writes.
+    fn requires_rollback_checkpoint(&self) -> bool {
+        true
+    }
+
     /// `None` marks state that cannot participate in a VM snapshot.
     ///
     /// # Errors
@@ -333,33 +340,18 @@ impl NativeServiceRegistry {
     }
 
     pub(crate) fn checkpoint(&self, key: SymbolKey) -> Result<Option<Vec<u8>>, String> {
-        if self.structured_keys.contains(&key) {
-            return self
-                .structured
-                .as_ref()
-                .ok_or_else(|| "structured native bundle is not registered".to_owned())?
-                .lock()
-                .map_err(|_| "structured native state lock is poisoned".to_owned())?
-                .encode()
-                .map(Some);
-        }
-        self.services
+        let service = self
+            .services
             .get(&key)
-            .ok_or_else(|| format!("native service {key:?} is not registered"))?
-            .snapshot()
+            .ok_or_else(|| format!("native service {key:?} is not registered"))?;
+        if service.requires_rollback_checkpoint() {
+            service.snapshot()
+        } else {
+            Ok(None)
+        }
     }
 
     pub(crate) fn rollback(&mut self, key: SymbolKey, state: &[u8]) -> Result<(), String> {
-        if self.structured_keys.contains(&key) {
-            let decoded = StructuredState::decode(state)?;
-            *self
-                .structured
-                .as_ref()
-                .ok_or_else(|| "structured native bundle is not registered".to_owned())?
-                .lock()
-                .map_err(|_| "structured native state lock is poisoned".to_owned())? = decoded;
-            return Ok(());
-        }
         self.services
             .get_mut(&key)
             .ok_or_else(|| format!("native service {key:?} is not registered"))?

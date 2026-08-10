@@ -286,6 +286,9 @@ impl Vm {
     }
 
     pub(crate) fn reclaim_generations(&mut self) {
+        if self.generations.len() <= 1 {
+            return;
+        }
         let active = self.active_generations();
         let obsolete: Vec<_> = self
             .generations

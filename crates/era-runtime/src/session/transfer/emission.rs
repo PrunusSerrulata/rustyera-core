@@ -149,6 +149,10 @@ impl RuntimeSession {
         value: i64,
     ) -> Result<(), RuntimeError> {
         commit_integer_result(vm, request, value)?;
+        // Every caller reports zero only when the resource graph was left unchanged.
+        if value == 0 {
+            return Ok(());
+        }
         if self.sync_resource_replay() {
             self.emit_presentation()
         } else {

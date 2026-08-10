@@ -48,6 +48,34 @@ fn deterministic_table_ids_are_monotonic() {
 }
 
 #[test]
+fn rejected_data_table_rows_do_not_consume_ids() {
+    let mut state = StructuredState::default();
+    state.data_tables.insert("table".into(), DataTable::new());
+    let request = NativeCallRequest {
+        import: erabasic_bytecode::RuntimeImport {
+            key: SymbolKey([0; 16]),
+            namespace: "test".into(),
+            name: "dt_row_add".into(),
+            abi_version: 1,
+            parameters: Vec::new(),
+            result: None,
+        },
+        arguments: vec![
+            VmValue::String("table".into()),
+            VmValue::String("missing".into()),
+            VmValue::Integer(1),
+        ],
+        places: Vec::new(),
+        implicit_places: BTreeMap::new(),
+    };
+
+    assert!(state.call_data_table("dt_row_add", &request).is_err());
+    let table = &state.data_tables["table"];
+    assert_eq!(table.next_id, 1);
+    assert!(table.rows.is_empty());
+}
+
+#[test]
 fn data_table_xml_matches_reference_dataset_shape_and_round_trips() {
     let mut table = DataTable::new();
     table.columns.extend([

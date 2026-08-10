@@ -1,4 +1,4 @@
-use erabasic_bytecode::{Digest, HostSnapshotCapability, SymbolKey};
+use erabasic_bytecode::{Digest, HostImport, HostSnapshotCapability, SymbolKey};
 use erabasic_validator::ValidatedArtifact;
 
 use crate::structured::{StructuredExtension, StructuredScope};
@@ -193,6 +193,12 @@ impl RuntimeVm {
         )
         .unwrap_or(pattern);
         self.vm.set_runtime_calculated_string("DRAWLINESTR", &value);
+    }
+
+    fn current_host_import(&self, key: SymbolKey) -> Option<&HostImport> {
+        let generation = self.vm.generations.get(&self.vm.current_generation)?;
+        let index = generation.host_import_index(key)?;
+        generation.artifact.host_imports.get(index)
     }
 
     #[must_use]
@@ -400,13 +406,7 @@ impl VmRuntimePort for RuntimeVm {
             match event {
                 crate::VmEvent::HostPending { request, .. } => {
                     if let Some(request) = requests.remove(&request) {
-                        let import = self
-                            .vm
-                            .artifact()
-                            .host_imports
-                            .iter()
-                            .find(|candidate| candidate.import.key == request.import.key)
-                            .cloned();
+                        let import = self.current_host_import(request.import.key).cloned();
                         if let Some(import) = import {
                             events.push(VmPortEvent::HostCall(VmHostRequest {
                                 id: request.id,
@@ -469,11 +469,7 @@ impl VmRuntimePort for RuntimeVm {
             })
             .ok_or(VmError::StaleHostRequest(request))?;
         let import = self
-            .vm
-            .artifact()
-            .host_imports
-            .iter()
-            .find(|candidate| candidate.import.key == wait.import.key)
+            .current_host_import(wait.import.key)
             .ok_or_else(|| VmError::InvalidState("waiting host import is missing".into()))?;
         match &completion {
             VmHostCompletion::Ready(ready) => {

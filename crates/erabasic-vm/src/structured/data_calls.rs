@@ -191,11 +191,11 @@ impl StructuredState {
         key: &str,
         request: &NativeCallRequest,
     ) -> Result<NativeReady, String> {
-        let Some(table) = self.data_tables.get_mut(key) else {
+        let Some(table) = self.data_tables.get(key) else {
             return ready_integer(-1);
         };
         let id = table.next_id;
-        table.next_id = table
+        let next_id = table
             .next_id
             .checked_add(1)
             .ok_or_else(|| "DT_ROW_ADD deterministic row id overflowed".to_owned())?;
@@ -213,6 +213,11 @@ impl StructuredState {
             }
             row.cells[column] = cell_for_column(&table.columns[column], &value)?;
         }
+        let table = self
+            .data_tables
+            .get_mut(key)
+            .expect("table remains registered while validating a row");
+        table.next_id = next_id;
         table.rows.push(row);
         ready_integer(id)
     }

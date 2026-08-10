@@ -223,6 +223,10 @@ impl crate::NativeService for StructuredNative {
         state.call(&self.name, &request)
     }
 
+    fn requires_rollback_checkpoint(&self) -> bool {
+        false
+    }
+
     // The registry serializes the shared bundle once under a stable bundle key.
     fn snapshot(&self) -> Result<Option<Vec<u8>>, String> {
         Ok(Some(Vec::new()))

@@ -856,7 +856,7 @@ fn portable_graphics_and_textbox_compatibility_paths_are_runtime_owned() {
                 relative_path: "portable.erb".into(),
                 category: FileCategory::Erb,
                 payload: FilePayload::Utf8(
-                    "@SYSTEM_TITLE\nRESULT = GCREATE(1, 2, 2)\nRESULT = GSETCOLOR(1, 4294967295, 0, -1)\nRESULT:1 = BITMAP_CACHE_ENABLE(1)\nRESULTS:40 = %HTML_TOPLAINTEXT(\"a&nbsp;b\")%\nRESULT:41 = GCREATE(7, 2, 2)\nRESULT:42 = GSETBRUSH(7, 4294901760)\nRESULT:43 = GGETBRUSH(7)\nRESULT:44 = GSETPEN(7, 4278255360, 2)\nRESULT:45 = GGETPEN(7)\nRESULT:46 = GGETPENWIDTH(7)\nRESULT:47 = GFILLRECTANGLE(7, 0, 0, 2, 2)\nRESULT:48 = GDRAWLINE(7, 0, 0, 1, 1)\nRESULT:49 = GDISPOSE(7)\nRESULT:50 = CBGCLEAR()\nRESULT:51 = GCREATE(8, 2, 2)\nRESULT:52 = GCREATEFROMFILE(8, \"../outside.png\", 1)\nRESULT:53 = GDISPOSE(8)\nRESULT:54 = GCREATEFROMFILE(9, \"\")\nRESULT:55 = GCREATEFROMFILE(10, \"\\\\\")\nRESULT:2 = MOVETEXTBOX(10, 20, 30)\nWAIT\nRETURN\n"
+                    "@SYSTEM_TITLE\nRESULT = GCREATE(1, 2, 2)\nRESULT = GSETCOLOR(1, 4294967295, 0, -1)\nRESULT:1 = BITMAP_CACHE_ENABLE(1)\nRESULTS:40 = %HTML_TOPLAINTEXT(\"a&nbsp;b\")%\nRESULT:41 = GCREATE(7, 2, 2)\nRESULT:42 = GSETBRUSH(7, 4294901760)\nRESULT:43 = GGETBRUSH(7)\nRESULT:44 = GSETPEN(7, 4278255360, 2)\nRESULT:45 = GGETPEN(7)\nRESULT:46 = GGETPENWIDTH(7)\nRESULT:47 = GFILLRECTANGLE(7, 0, 0, 2, 2)\nRESULT:48 = GDRAWLINE(7, 0, 0, 1, 1)\nRESULT:49 = GDISPOSE(7)\nRESULT:50 = CBGCLEAR()\nRESULT:51 = GCREATE(8, 2, 2)\nRESULT:52 = GCREATEFROMFILE(8, \"../outside.png\", 1)\nRESULT:53 = GDISPOSE(8)\nRESULT:54 = GCREATEFROMFILE(9, \"\")\nRESULT:55 = GCREATEFROMFILE(10, \"\\\\\")\nRESULT:2 = MOVETEXTBOX(10, 20, 30)\nWAIT\nRESULT:56 = GDISPOSE(9999)\nWAIT\nRETURN\n"
                         .into(),
                 ),
                 content_hash: None,
@@ -944,6 +944,28 @@ fn portable_graphics_and_textbox_compatibility_paths_are_runtime_owned() {
             },
         )
         .unwrap();
+    let mut no_op_messages = Vec::new();
+    for _ in 0..4 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        no_op_messages.extend(drain(&mut session));
+        if session.phase() == RuntimePhase::WaitingInput {
+            break;
+        }
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[56], None).unwrap(),
+        0
+    );
+    assert!(no_op_messages.iter().all(|message| {
+        match message {
+            RuntimeMessage::PresentationDelta(delta) => !delta
+                .operations
+                .iter()
+                .any(|operation| matches!(operation, PresentationOperation::SetResources { .. })),
+            _ => true,
+        }
+    }));
     assert_eq!(session.text_box_layout, TextBoxLayout::default());
 }
 

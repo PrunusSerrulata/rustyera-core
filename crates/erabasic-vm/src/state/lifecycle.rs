@@ -303,6 +303,9 @@ impl Vm {
                 .then_some(*id)
             })
             .collect::<BTreeSet<_>>();
+        if retired.is_empty() {
+            return 0;
+        }
         for id in &retired {
             self.fibers.remove(id);
         }
