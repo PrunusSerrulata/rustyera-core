@@ -403,6 +403,12 @@ fn deterministic_width_and_integer_format_tables_cover_era_usage() {
     assert_eq!(convert_kana_mode("アイウガ", 2), "あいうが");
     assert_eq!(convert_kana_mode("ｶﾞ ABC", 3), "が　ＡＢＣ");
     assert_eq!(format_era_integer(12_345, "#,##0"), Ok("12,345".into()));
+    assert_eq!(format_era_integer(12_345, "#####"), Ok("12345".into()));
+    assert_eq!(format_era_integer(-7, "##"), Ok("-7".into()));
+    assert_eq!(format_era_integer(0, "##"), Ok(String::new()));
+    assert_eq!(format_era_integer(12_345, "###,###"), Ok("12,345".into()));
+    assert_eq!(format_era_integer(12_345, "$#,###"), Ok("$12,345".into()));
+    assert_eq!(format_era_integer(-12_345, "$#,###"), Ok("-$12,345".into()));
     assert_eq!(format_era_integer(-7, "D3"), Ok("-007".into()));
     assert_eq!(format_era_integer(255, "X4"), Ok("00FF".into()));
     assert_eq!(format_era_integer(12_345, "0克尔"), Ok("12345克尔".into()));

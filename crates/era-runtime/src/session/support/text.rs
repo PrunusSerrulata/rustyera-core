@@ -37,45 +37,62 @@ pub(in super::super) fn format_era_integer(
             })
         }
         _ => {
-            let Some((numeric_format, literal_suffix)) = custom_decimal_format(format) else {
+            let Some((literal_prefix, numeric_format, literal_suffix)) =
+                custom_decimal_format(format)
+            else {
                 return Err("unsupported integer format");
             };
             let minimum = numeric_format
                 .chars()
                 .filter(|character| *character == '0')
                 .count();
-            let magnitude = value.unsigned_abs().to_string();
-            let mut digits = format!("{magnitude:0>minimum$}");
+            let mut digits = if value == 0 && minimum == 0 {
+                String::new()
+            } else {
+                let magnitude = value.unsigned_abs().to_string();
+                format!("{magnitude:0>minimum$}")
+            };
             if numeric_format.contains(',') {
                 digits = group_unsigned_decimal(&digits);
             }
-            let formatted = if value < 0 {
-                format!("-{digits}")
+            let formatted = format!("{literal_prefix}{digits}{literal_suffix}");
+            Ok(if value < 0 {
+                format!("-{formatted}")
             } else {
-                digits
-            };
-            Ok(format!("{formatted}{literal_suffix}"))
+                formatted
+            })
         }
     }
 }
 
-fn custom_decimal_format(format: &str) -> Option<(&str, &str)> {
-    let suffix_start = format
+fn custom_decimal_format(format: &str) -> Option<(&str, &str, &str)> {
+    let numeric_start = format
         .char_indices()
-        .find_map(|(index, character)| (!matches!(character, '#' | '0' | ',')).then_some(index))
-        .unwrap_or(format.len());
-    let (numeric_format, literal_suffix) = format.split_at(suffix_start);
-    if !numeric_format.contains('0')
-        || literal_suffix.chars().any(|character| {
-            matches!(
-                character,
-                '#' | '0' | ',' | '.' | '%' | '‰' | 'E' | 'e' | '\\' | '\'' | '"' | ';'
-            )
+        .find_map(|(index, character)| matches!(character, '#' | '0').then_some(index))?;
+    let numeric_end = format[numeric_start..]
+        .char_indices()
+        .find_map(|(index, character)| {
+            (!matches!(character, '#' | '0' | ',')).then_some(numeric_start + index)
         })
+        .unwrap_or(format.len());
+    let literal_prefix = &format[..numeric_start];
+    let numeric_format = &format[numeric_start..numeric_end];
+    let literal_suffix = &format[numeric_end..];
+    let invalid_literal = |character| {
+        matches!(
+            character,
+            '#' | '0' | ',' | '.' | '%' | '‰' | 'E' | 'e' | '\\' | '\'' | '"' | ';'
+        )
+    };
+    if !numeric_format
+        .chars()
+        .any(|character| matches!(character, '#' | '0'))
+        || literal_prefix.chars().any(invalid_literal)
+        || literal_suffix.chars().any(invalid_literal)
     {
         return None;
     }
-    Some((numeric_format, literal_suffix))
+    Some((literal_prefix, numeric_format, literal_suffix))
 }
 
 pub(in super::super) fn group_decimal(value: i64) -> String {

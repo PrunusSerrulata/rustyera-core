@@ -281,32 +281,39 @@ impl RuntimeSession {
                     transitions += 1;
                     continue;
                 };
-                synchronize_line_count(&mut self.presentation, &mut vm)?;
-                let report = vm.drive(
-                    RunBudget {
-                        maximum_instructions: remaining
-                            .min(self.options.limits.maximum_drive_instructions),
-                        maximum_host_calls: self.options.limits.maximum_pending_requests,
-                        fiber_quantum: RunBudget::default().fiber_quantum,
-                    },
-                    VmDriveMode::Normal,
-                );
-                instructions = instructions.saturating_add(report.instructions);
-                let stop = report.stop;
-                let made_progress = report.instructions != 0 || !report.events.is_empty();
-                for event in report.events {
-                    self.handle_vm_event(&mut vm, event)?;
-                }
-                vm.retire_terminal_fibers();
-                if self.operations.active_input().is_some()
-                    && !vm.has_runnable_fibers()
-                    && self.phase == RuntimePhase::Running
-                    && self.deferred_input_completion.is_none()
-                {
-                    self.set_phase(RuntimePhase::WaitingInput)?;
-                }
-                let has_runnable_fibers = vm.has_runnable_fibers();
+                let quantum = (|| {
+                    synchronize_line_count(&mut self.presentation, &mut vm)?;
+                    let report = vm.drive(
+                        RunBudget {
+                            maximum_instructions: remaining
+                                .min(self.options.limits.maximum_drive_instructions),
+                            maximum_host_calls: self.options.limits.maximum_pending_requests,
+                            fiber_quantum: RunBudget::default().fiber_quantum,
+                        },
+                        VmDriveMode::Normal,
+                    );
+                    let executed = report.instructions;
+                    let stop = report.stop;
+                    let made_progress = executed != 0 || !report.events.is_empty();
+                    for event in report.events {
+                        self.handle_vm_event(&mut vm, event)?;
+                    }
+                    vm.retire_terminal_fibers();
+                    if self.operations.active_input().is_some()
+                        && !vm.has_runnable_fibers()
+                        && self.phase == RuntimePhase::Running
+                        && self.deferred_input_completion.is_none()
+                    {
+                        self.set_phase(RuntimePhase::WaitingInput)?;
+                    }
+                    Ok::<_, RuntimeError>((executed, stop, made_progress, vm.has_runnable_fibers()))
+                })();
+                // Quantum processing can fail after the VM has been removed from the session.
+                // Reinstall it before propagating that error so a later drive cannot report
+                // the unrelated and misleading "running phase has no VM" fault.
                 self.vm = Some(vm);
+                let (executed, stop, made_progress, has_runnable_fibers) = quantum?;
+                instructions = instructions.saturating_add(executed);
                 if let Some(submission) = self.deferred_input_completion.take() {
                     self.finish_input(submission, false)?;
                 }

@@ -462,11 +462,6 @@ fn string_tag(dimensions: usize) -> Result<u8, SaveCodecError> {
 }
 
 fn element_count(dimensions: &[u32], limits: SaveCodecLimits) -> Result<usize, SaveCodecError> {
-    if dimensions.contains(&0) {
-        return Err(SaveCodecError::InvalidFormat(
-            "array dimensions must be positive".into(),
-        ));
-    }
     let count = dimensions
         .iter()
         .try_fold(1usize, |count, dimension| {
@@ -542,6 +537,12 @@ fn write_sparse_array<T>(
     is_zero: impl Fn(&T) -> bool,
     mut write_value: impl FnMut(&mut Vec<u8>, &T) -> Result<(), SaveCodecError>,
 ) -> Result<(), SaveCodecError> {
+    // Emuera writes a zero-length array as its dimensions followed directly by EoD.
+    // Avoid calling `chunks(0)` when any declared dimension is zero.
+    if values.is_empty() {
+        output.push(0xFF);
+        return Ok(());
+    }
     let row_length = dimensions.last().copied().unwrap_or(1) as usize;
     let rows_per_plane = dimensions.get(1).copied().unwrap_or(1) as usize;
     let plane_length = if dimensions.len() == 3 {
@@ -786,6 +787,55 @@ mod tests {
             decode_binary(&encoded, SaveCodecLimits::default()).unwrap(),
             document
         );
+    }
+
+    #[test]
+    fn zero_length_arrays_use_reference_end_of_data_encoding() {
+        let limits = SaveCodecLimits::default();
+        let mut integers = Vec::new();
+        write_integer_array(&mut integers, &[0], &[], limits).unwrap();
+        assert_eq!(integers, [0, 0, 0, 0, 0xFF]);
+        assert_eq!(
+            Cursor::new(&integers, limits).array(1, false).unwrap(),
+            SaveValue::Integers {
+                dimensions: vec![0],
+                values: Vec::new(),
+            }
+        );
+        assert_eq!(
+            Cursor::new_sparse(&integers, limits)
+                .array(1, false)
+                .unwrap(),
+            SaveValue::SparseIntegers {
+                dimensions: vec![0],
+                values: Vec::new(),
+            }
+        );
+
+        let mut strings = Vec::new();
+        write_string_array(&mut strings, &[2, 0], &[], limits).unwrap();
+        assert_eq!(strings, [2, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
+        assert_eq!(
+            Cursor::new(&strings, limits).array(2, true).unwrap(),
+            SaveValue::Strings {
+                dimensions: vec![2, 0],
+                values: Vec::new(),
+            }
+        );
+        assert_eq!(
+            Cursor::new_sparse(&strings, limits).array(2, true).unwrap(),
+            SaveValue::SparseStrings {
+                dimensions: vec![2, 0],
+                values: Vec::new(),
+            }
+        );
+
+        let mut value_after_empty_shape = Cursor::new_sparse(&[0, 0, 0, 0, 1, 0xFF], limits);
+        assert!(matches!(
+            value_after_empty_shape.array(1, false),
+            Err(SaveCodecError::InvalidFormat(message))
+                if message == "array data exceeds dimensions"
+        ));
     }
 
     #[test]
