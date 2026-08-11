@@ -1,0 +1,62 @@
+; Minimal XML/XPath inputs copied from eraFL's TALENT.xml,
+; SHOW_INFO_SHOW_SKILL.ERB, and modifier selector query shapes. The
+; differential-test scripts copy this file into the fixed C# reference game.
+@ORACLE_XML_XPATH
+#DIMS XML
+#DIMS KOJO
+#DIMS ORIGINAL
+#DIMS ABSOLUTE
+#DIMS INDENTED
+#DIMS VALUES, 16
+XML = %"<root><defname id='201' name='爱丽丝'><flag><ignoreMugglePenalty>TRUE</ignoreMugglePenalty></flag><category>BATTLE</category><attributes><li>MAGIC</li></attributes><overrideTargeting>1</overrideTargeting><modifier category='cost' modifiedAt='BASE' /><randomCharaTalent><appearance baseRate='4' /></randomCharaTalent></defname><defname id='208'><flag><ignoreMugglePenalty>TRUE</ignoreMugglePenalty><ignoreMugglePenalty>FALSE</ignoreMugglePenalty></flag><category>BATTLE</category><attributes><li>MELEE</li></attributes><overrideTargeting>display</overrideTargeting><randomCharaTalent><appearance baseRate='' /></randomCharaTalent></defname><defname id='210'><flag><ignoreMugglePenalty>TRUE</ignoreMugglePenalty></flag><category>PASSIVE</category><attributes><li>MAGIC</li></attributes><skillrank>UNIQUE</skillrank></defname><defname id='211'><flag><ignoreMugglePenalty>FALSE</ignoreMugglePenalty></flag><category>PASSIVE</category></defname></root>"%
+RESULT:60 = XML_GET(XML, "//defname[flag/ignoreMugglePenalty='TRUE']/@id", VALUES, 1)
+RESULTS:60 = %VALUES:0 + "," + VALUES:1 + "," + VALUES:2%
+VARSET VALUES
+RESULT:61 = XML_GET(XML, "//defname[category[text()='BATTLE']][.//attributes/li[text()='MAGIC']][.//overrideTargeting[text()='1' or text()='display']]/@id | //defname[category[text()='PASSIVE']]/@id", VALUES, 1)
+RESULTS:61 = %VALUES:0 + "," + VALUES:1 + "," + VALUES:2%
+VARSET VALUES
+RESULT:62 = XML_GET(XML, "//defname[flag/ignoreMugglePenalty!='TRUE']/@id", VALUES, 1)
+RESULTS:62 = %VALUES:0 + "," + VALUES:1%
+VARSET VALUES
+RESULT:63 = XML_GET(XML, "//defname[modifier[@category='cost' and @modifiedAt='BASE']]/@id", VALUES, 1)
+RESULTS:63 = %VALUES:0%
+VARSET VALUES
+RESULT:64 = XML_GET(XML, "//defname[not(category[text()='BATTLE'])]/@id", VALUES, 1)
+RESULTS:64 = %VALUES:0 + "," + VALUES:1%
+VARSET VALUES
+RESULT:65 = XML_GET(XML, "//defname[.//attributes/li[text()='MAGIC'] | .//skillrank[text()='UNIQUE']]/@id", VALUES, 1)
+RESULTS:65 = %VALUES:0 + "," + VALUES:1%
+VARSET VALUES
+RESULT:66 = XML_GET(XML, "//defname[category[text()='PASSIVE']]/@id | //defname[.//attributes/li[text()='MAGIC']]/@id", VALUES, 1)
+RESULTS:66 = %VALUES:0 + "," + VALUES:1 + "," + VALUES:2%
+VARSET VALUES
+RESULT:67 = XML_GET(XML, "//defname[@name='爱丽丝']/@id", VALUES, 1)
+RESULTS:67 = %VALUES:0%
+KOJO = %"<root><command id='1' actionName='ATTACK,ANY' skillDefName='FIRE' /><command id='2' actionName='REST' skillDefName='ANY' /><reqlist><level upto='2' /><level upto='5' /></reqlist><portrait id='42' name='Alice' /></root>"%
+VARSET VALUES
+RESULT:68 = XML_GET(KOJO, "//command[contains(concat(',',@actionName,','), ',ATTACK,') or contains(concat(',',@actionName,','), ',GROUP_A,') or contains(concat(',',@actionName,','), ',GROUP_B,') or contains(concat(',',@actionName,','), ',ANY,')][contains(concat(',',@skillDefName,','), ',FIRE,') or contains(concat(',',@skillDefName,','), ',ANY,')]/@id", VALUES, 1)
+RESULTS:68 = %VALUES:0%
+VARSET VALUES
+RESULT:69 = XML_GET(KOJO, "//reqlist/level[3<=@upto]/@upto", VALUES, 1)
+RESULTS:69 = %VALUES:0%
+VARSET VALUES
+RESULT:70 = XML_GET(KOJO, "//portrait[@id=42]/@name", VALUES, 1)
+RESULTS:70 = %VALUES:0%
+RESULT:71 = XML_ADDATTRIBUTE(KOJO, "//command[contains(concat(',',@actionName,','), ',ATTACK,')]", "selected", "1", 0, 1)
+VARSET VALUES
+RESULT:72 = XML_GET(KOJO, "//command[@selected='1']/@id", VALUES, 1)
+RESULTS:71 = %VALUES:0%
+ORIGINAL = %"<root>  <item id='1' />  </root>"%
+RESULT:73 = XML_ADDATTRIBUTE(ORIGINAL, "//item[@id='missing']", "selected", "1")
+RESULTS:72 = %ORIGINAL%
+VARSET VALUES
+RESULT:74 = XML_GET(XML, "//defname[randomCharaTalent/appearance/@baseRate!='']/@id", VALUES, 1)
+RESULTS:73 = %VALUES:0%
+ABSOLUTE = %"<root><func id='a' /><func id='b' /><executeAt>BEFORE_ATTACK</executeAt></root>"%
+VARSET VALUES
+RESULT:75 = XML_GET(ABSOLUTE, "//func[//executeAt[(text()='BEFORE_ATTACK')]]/@id", VALUES, 1)
+RESULTS:74 = %VALUES:0 + "," + VALUES:1%
+INDENTED = %"<layout>  <containers id='1'>    <container />  </containers></layout>"%
+RESULT:76 = XML_ADDATTRIBUTE(INDENTED, "//container", "name", "main")
+RESULTS:75 = %INDENTED%
+RETURN

@@ -141,6 +141,15 @@ impl StructuredState {
         }
         let selected = candidate.select(string_argument(request, 1)?)?;
         let selected_count = selected.len();
+        if selected_count == 0 {
+            // System.Xml only assigns an inline document back to argument 0
+            // from inside its `nodes.Count > 0` branch. In particular, a
+            // no-match eraFL mutation must not normalize the caller's XML.
+            if mutation == XmlMutation::Replace {
+                parse_xml(string_argument(request, 2)?)?;
+            }
+            return ready_integer(0);
+        }
         let set_all_index = match mutation {
             XmlMutation::Set | XmlMutation::Replace => 3,
             XmlMutation::AddNode => 4,
@@ -149,7 +158,7 @@ impl StructuredState {
         };
         let set_all = optional_integer(request, set_all_index).is_some_and(|value| value != 0);
         let apply = if selected_count <= 1 || set_all {
-            selected.clone()
+            selected
         } else {
             Vec::new()
         };
@@ -157,7 +166,6 @@ impl StructuredState {
         if selected_count == 1 && !applied {
             return ready_integer(0);
         }
-        let xml = candidate.outer_xml();
         let writes = match target {
             XmlTarget::Stored(id) => {
                 self.xml_documents.insert(id, candidate);
@@ -165,7 +173,7 @@ impl StructuredState {
             }
             XmlTarget::Inline(target) => vec![HostWrite {
                 target,
-                value: VmValue::String(xml),
+                value: VmValue::String(candidate.outer_xml()),
             }],
         };
         Ok(NativeReady {

@@ -19,6 +19,12 @@ fn xml_subset_preserves_mixed_content_and_selects_paths() {
     let selection = &document.select("/root/p/k").unwrap()[0];
     assert_eq!(document.selection_value(selection, 1), "one");
     assert_eq!(parse_xml(&document.outer_xml()).unwrap(), document);
+    assert_eq!(
+        parse_xml("<root>\n  <item />\n</root>")
+            .unwrap()
+            .outer_xml(),
+        "<root><item /></root>"
+    );
 }
 
 #[test]
@@ -37,7 +43,7 @@ fn xpath_subset_handles_descendants_attributes_and_predicates() {
             .collect::<Vec<_>>(),
         ["a", "b"]
     );
-    assert!(document.select("//p[contains(k, 'o')]").is_err());
+    assert_eq!(document.select("//p[contains(k, 'o')]").unwrap().len(), 2);
 }
 
 #[test]
@@ -59,6 +65,138 @@ fn xpath_subset_supports_descendant_existence_predicates() {
     );
     assert!(document.select("//ns:defname").is_err());
     assert!(document.select("//defname[child::modifier]").is_err());
+}
+
+#[test]
+fn erafl_xpath_relative_paths_use_xpath_node_set_equality_rules() {
+    // Minimal TALENT.xml and SKILL.xml shapes used by
+    // CC_CALC_CHARA_STATUS.ERB and SHOW_INFO_SHOW_SKILL.ERB.
+    let document = parse_xml(
+        "<root><defname id='201'><flag><ignoreMugglePenalty>TRUE</ignoreMugglePenalty></flag><randomCharaTalent><appearance baseRate='4' /></randomCharaTalent></defname><defname id='208'><flag><ignoreMugglePenalty>FALSE</ignoreMugglePenalty><ignoreMugglePenalty>TRUE</ignoreMugglePenalty></flag><randomCharaTalent><appearance baseRate='' /></randomCharaTalent></defname><defname id='210'><flag><ignoreMugglePenalty>TRUE</ignoreMugglePenalty></flag></defname></root>",
+    )
+    .unwrap();
+
+    let selected = document
+        .select("//defname[flag/ignoreMugglePenalty='TRUE']/@id")
+        .unwrap();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|selection| document.selection_value(selection, 0))
+            .collect::<Vec<_>>(),
+        ["201", "208", "210"]
+    );
+    let selected = document
+        .select("//defname[flag/ignoreMugglePenalty!='TRUE']/@id")
+        .unwrap();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|selection| document.selection_value(selection, 0))
+            .collect::<Vec<_>>(),
+        ["208"]
+    );
+    assert_eq!(
+        document
+            .select("//defname[randomCharaTalent/appearance/@baseRate!='']/@id")
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn erafl_xpath_skill_filters_support_multiple_predicates_boolean_logic_and_union() {
+    // Minimal SHOW_INFO_SHOW_SKILL.ERB 92-97 and 409-445 input shape.
+    let document = parse_xml(
+        "<root><defname id='1'><category>BATTLE</category><attributes><li>MAGIC</li></attributes><overrideTargeting>1</overrideTargeting><skillrank>UNIQUE</skillrank></defname><defname id='2'><category>BATTLE</category><attributes><li>MELEE</li></attributes><overrideTargeting>display</overrideTargeting></defname><defname id='3'><category>PASSIVE</category><attributes><li>MAGIC</li></attributes></defname></root>",
+    )
+    .unwrap();
+
+    let selected = document
+        .select(
+            "//defname[category[text()='BATTLE']][.//attributes/li[text()='MAGIC']][.//overrideTargeting[text()='1' or text()='display']]/@id | //defname[category[text()='PASSIVE']]/@id",
+        )
+        .unwrap();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|selection| document.selection_value(selection, 0))
+            .collect::<Vec<_>>(),
+        ["1", "3"]
+    );
+    let selected = document
+        .select("//defname[.//attributes/li[text()='MAGIC'] | .//skillrank[text()='UNIQUE']]/@id")
+        .unwrap();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|selection| document.selection_value(selection, 0))
+            .collect::<Vec<_>>(),
+        ["1", "3"]
+    );
+    assert_eq!(
+        document
+            .select("//defname[not(category[text()='BATTLE'])]/@id")
+            .unwrap()
+            .iter()
+            .map(|selection| document.selection_value(selection, 0))
+            .collect::<Vec<_>>(),
+        ["3"]
+    );
+}
+
+#[test]
+fn erafl_xpath_and_unicode_and_union_follow_reference_order() {
+    let document = parse_xml(
+        "<root><defname id='1' name='爱丽丝'><modifier category='cost' modifiedAt='BASE' /><attributes><li>MAGIC</li></attributes></defname><defname id='2'><category>PASSIVE</category><attributes><li>MAGIC</li></attributes></defname><defname id='3'><category>PASSIVE</category></defname></root>",
+    )
+    .unwrap();
+    let values = |query| {
+        document
+            .select(query)
+            .unwrap()
+            .iter()
+            .map(|selection| document.selection_value(selection, 0))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        values("//defname[modifier[@category='cost' and @modifiedAt='BASE']]/@id"),
+        ["1"]
+    );
+    assert_eq!(values("//defname[@name='爱丽丝']/@id"), ["1"]);
+    assert_eq!(
+        values(
+            "//defname[category[text()='PASSIVE']]/@id | //defname[.//attributes/li[text()='MAGIC']]/@id"
+        ),
+        ["1", "2", "3"]
+    );
+}
+
+#[test]
+fn erafl_xpath_kojo_contains_concat_and_numeric_relations_match_reference() {
+    let document = parse_xml(
+        "<root><command id='1' actionName='ATTACK,ANY' skillDefName='FIRE' /><command id='2' actionName='REST' skillDefName='ANY' /><reqlist><level upto='2' /><level upto='5' /></reqlist><portrait id='42' name='Alice' /></root>",
+    )
+    .unwrap();
+    let values = |query| {
+        document
+            .select(query)
+            .unwrap()
+            .iter()
+            .map(|selection| document.selection_value(selection, 0))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        values(
+            "//command[contains(concat(',',@actionName,','), ',ATTACK,') or contains(concat(',',@actionName,','), ',GROUP_A,') or contains(concat(',',@actionName,','), ',GROUP_B,') or contains(concat(',',@actionName,','), ',ANY,')][contains(concat(',',@skillDefName,','), ',FIRE,') or contains(concat(',',@skillDefName,','), ',ANY,')]/@id"
+        ),
+        ["1"]
+    );
+    assert_eq!(values("//reqlist/level[3<=@upto]/@upto"), ["5"]);
+    assert_eq!(values("//portrait[@id=42]/@name"), ["Alice"]);
 }
 
 #[test]

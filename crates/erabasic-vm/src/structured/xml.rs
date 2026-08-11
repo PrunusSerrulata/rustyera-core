@@ -5,6 +5,8 @@ use super::{
     optional_integer, optional_string, resolve_predefined_entity, string_argument,
 };
 
+mod xpath;
+
 #[allow(clippy::too_many_lines)]
 pub(super) fn parse_xml(input: &str) -> Result<XmlDocument, String> {
     let mut reader = Reader::from_str(input);
@@ -65,7 +67,13 @@ pub(super) fn parse_xml(input: &str) -> Result<XmlDocument, String> {
                     .map_err(|error| error.to_string())?
                     .into_owned();
                 if let Some(parent) = stack.last_mut() {
-                    parent.children.push(XmlChild::Text(value));
+                    // XmlDocument.PreserveWhitespace defaults to false in the
+                    // fixed Emuera reference. eraFL XML files are indented,
+                    // so formatting-only nodes must not leak into InnerXml or
+                    // mutation output.
+                    if !value.trim().is_empty() {
+                        parent.children.push(XmlChild::Text(value));
+                    }
                 } else if !value.trim().is_empty() {
                     return Err("XML text appears outside the root element".into());
                 }
@@ -125,141 +133,6 @@ pub(super) fn parse_xml(input: &str) -> Result<XmlDocument, String> {
 impl XmlDocument {
     pub(super) fn outer_xml(&self) -> String {
         self.root.outer_xml()
-    }
-
-    pub(super) fn select(&self, path: &str) -> Result<Vec<XmlSelection>, String> {
-        let path = path.trim();
-        if path.is_empty() || path == "." {
-            return Ok(vec![XmlSelection {
-                element_path: Vec::new(),
-                attribute: None,
-            }]);
-        }
-        if path.contains('|') {
-            return Err(
-                "native.xpath.unsupported: namespace and union expressions are unsupported".into(),
-            );
-        }
-        let marked = path.replace("//", "/__DESCENDANT__/");
-        let mut descendant = path.starts_with("//");
-        let mut steps = Vec::new();
-        for part in marked
-            .trim_start_matches("./")
-            .split('/')
-            .filter(|part| !part.is_empty())
-        {
-            if part == "__DESCENDANT__" {
-                descendant = true;
-                continue;
-            }
-            steps.push((descendant, parse_xpath_step(part)?));
-            descendant = false;
-        }
-        if steps.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // XmlDocument evaluates the first location step against its logical
-        // document node. This model stores only the document element, so the
-        // first step is handled specially to keep root-element selection exact.
-        let mut current = Vec::<Vec<usize>>::new();
-        for (step_index, (descendant, step)) in steps.iter().enumerate() {
-            if let XPathTest::Attribute(name) = &step.test {
-                return self.select_attributes(
-                    &current,
-                    step_index,
-                    *descendant,
-                    name,
-                    step.predicate.as_ref(),
-                );
-            }
-            let XPathTest::Element(name) = &step.test else {
-                unreachable!()
-            };
-            if step_index == 0 {
-                if *descendant {
-                    self.descendant_or_self_paths(&[], name, &mut current)?;
-                    apply_xpath_predicate(self, &mut current, step.predicate.as_ref());
-                } else if (name == "*" || self.root.name == *name)
-                    && predicate_matches(&self.root, step.predicate.as_ref())
-                {
-                    current.push(Vec::new());
-                }
-                continue;
-            }
-            let mut next = Vec::new();
-            for path in current {
-                let mut candidates = Vec::new();
-                if *descendant {
-                    self.descendant_paths(&path, name, &mut candidates)?;
-                } else {
-                    let element = self.element(&path)?;
-                    for (index, child) in element.children.iter().enumerate() {
-                        if let XmlChild::Element(child) = child
-                            && (name == "*" || child.name == *name)
-                        {
-                            let mut child_path = path.clone();
-                            child_path.push(index);
-                            candidates.push(child_path);
-                        }
-                    }
-                }
-                apply_xpath_predicate(self, &mut candidates, step.predicate.as_ref());
-                next.extend(candidates);
-            }
-            current = next;
-        }
-        Ok(current
-            .into_iter()
-            .map(|element_path| XmlSelection {
-                element_path,
-                attribute: None,
-            })
-            .collect())
-    }
-
-    fn select_attributes(
-        &self,
-        current: &[Vec<usize>],
-        step_index: usize,
-        descendant: bool,
-        name: &str,
-        predicate: Option<&XPathPredicate>,
-    ) -> Result<Vec<XmlSelection>, String> {
-        if predicate.is_some() {
-            return Err("native.xpath.unsupported: attribute steps cannot have predicates".into());
-        }
-        let mut output = std::collections::BTreeSet::new();
-        if step_index > 0 || descendant {
-            let roots = if step_index == 0 {
-                vec![Vec::new()]
-            } else {
-                current.to_vec()
-            };
-            for path in roots {
-                let mut elements = Vec::new();
-                if descendant {
-                    self.descendant_or_self_paths(&path, "*", &mut elements)?;
-                } else {
-                    elements.push(path);
-                }
-                for element_path in elements {
-                    let element = self.element(&element_path)?;
-                    for (index, (candidate, _)) in element.attributes.iter().enumerate() {
-                        if name == "*" || candidate == name {
-                            output.insert((element_path.clone(), index));
-                        }
-                    }
-                }
-            }
-        }
-        Ok(output
-            .into_iter()
-            .map(|(element_path, attribute)| XmlSelection {
-                element_path,
-                attribute: Some(attribute),
-            })
-            .collect())
     }
 
     pub(super) fn selection_value(&self, selection: &XmlSelection, style: i64) -> String {
@@ -469,160 +342,6 @@ impl XmlDocument {
     }
 }
 
-#[derive(Clone, Debug)]
-struct XPathStep {
-    test: XPathTest,
-    predicate: Option<XPathPredicate>,
-}
-
-#[derive(Clone, Debug)]
-enum XPathTest {
-    Element(String),
-    Attribute(String),
-}
-
-#[derive(Clone, Debug)]
-enum XPathPredicate {
-    Position(usize),
-    Last,
-    AttributeExists(String),
-    AttributeEquals(String, String),
-    TextEquals(String),
-    ChildEquals(String, String),
-    DescendantExists(String),
-}
-
-fn parse_xpath_step(value: &str) -> Result<XPathStep, String> {
-    let (test, predicate) = if let Some(open) = value.find('[') {
-        if !value.ends_with(']') {
-            return Err("native.xpath.unsupported: malformed predicate".into());
-        }
-        (&value[..open], Some(&value[open + 1..value.len() - 1]))
-    } else {
-        (value, None)
-    };
-    if test.is_empty() || test.contains(['(', ')', ':']) {
-        return Err("native.xpath.unsupported: unsupported node test".into());
-    }
-    let test = test.strip_prefix('@').map_or_else(
-        || XPathTest::Element(test.to_owned()),
-        |name| XPathTest::Attribute(name.to_owned()),
-    );
-    let predicate = predicate.map(parse_xpath_predicate).transpose()?;
-    Ok(XPathStep { test, predicate })
-}
-
-fn parse_xpath_predicate(value: &str) -> Result<XPathPredicate, String> {
-    let value = value.trim();
-    if value == "last()" {
-        return Ok(XPathPredicate::Last);
-    }
-    if let Ok(position) = value.parse::<usize>() {
-        return Ok(XPathPredicate::Position(position));
-    }
-    if let Some(attribute) = value.strip_prefix('@') {
-        if let Some((name, literal)) = attribute.split_once('=') {
-            let name = name.trim();
-            ensure_xpath_name(name)?;
-            return Ok(XPathPredicate::AttributeEquals(
-                name.to_owned(),
-                xpath_literal(literal)?,
-            ));
-        }
-        let attribute = attribute.trim();
-        ensure_xpath_name(attribute)?;
-        return Ok(XPathPredicate::AttributeExists(attribute.to_owned()));
-    }
-    if let Some(literal) = value.strip_prefix("text()=") {
-        return Ok(XPathPredicate::TextEquals(xpath_literal(literal)?));
-    }
-    if let Some(name) = value.strip_prefix("descendant::") {
-        let name = name.trim();
-        ensure_xpath_name(name)?;
-        return Ok(XPathPredicate::DescendantExists(name.to_owned()));
-    }
-    if let Some((child, literal)) = value.split_once('=')
-        && !child.trim().is_empty()
-    {
-        let child = child.trim();
-        ensure_xpath_name(child)?;
-        return Ok(XPathPredicate::ChildEquals(
-            child.to_owned(),
-            xpath_literal(literal)?,
-        ));
-    }
-    Err("native.xpath.unsupported: predicate is outside the fixed XPath subset".into())
-}
-
-fn ensure_xpath_name(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.contains([':', '/', '[', ']', '(', ')', '@']) {
-        Err("native.xpath.unsupported: namespace and axis expressions are unsupported".into())
-    } else {
-        Ok(())
-    }
-}
-
-pub(super) fn xpath_literal(value: &str) -> Result<String, String> {
-    let value = value.trim();
-    if value.len() >= 2
-        && ((value.starts_with('\'') && value.ends_with('\''))
-            || (value.starts_with('"') && value.ends_with('"')))
-    {
-        Ok(value[1..value.len() - 1].to_owned())
-    } else {
-        Err("native.xpath.unsupported: predicate literal must be quoted".into())
-    }
-}
-
-fn apply_xpath_predicate(
-    document: &XmlDocument,
-    candidates: &mut Vec<Vec<usize>>,
-    predicate: Option<&XPathPredicate>,
-) {
-    match predicate {
-        None => {}
-        Some(XPathPredicate::Position(position)) => {
-            let selected = position
-                .checked_sub(1)
-                .and_then(|index| candidates.get(index))
-                .cloned();
-            candidates.clear();
-            candidates.extend(selected);
-        }
-        Some(XPathPredicate::Last) => {
-            let selected = candidates.last().cloned();
-            candidates.clear();
-            candidates.extend(selected);
-        }
-        Some(predicate) => candidates.retain(|path| {
-            document
-                .element(path)
-                .is_ok_and(|element| predicate_matches(element, Some(predicate)))
-        }),
-    }
-}
-
-fn predicate_matches(element: &XmlElement, predicate: Option<&XPathPredicate>) -> bool {
-    match predicate {
-        None | Some(XPathPredicate::Position(1) | XPathPredicate::Last) => true,
-        Some(XPathPredicate::Position(_)) => false,
-        Some(XPathPredicate::AttributeExists(name)) => element
-            .attributes
-            .iter()
-            .any(|(candidate, _)| candidate == name),
-        Some(XPathPredicate::AttributeEquals(name, value)) => element
-            .attributes
-            .iter()
-            .any(|(candidate, candidate_value)| candidate == name && candidate_value == value),
-        Some(XPathPredicate::TextEquals(value)) => element.inner_text() == *value,
-        Some(XPathPredicate::ChildEquals(name, value)) => element
-            .elements_named(name)
-            .iter()
-            .any(|child| child.inner_text() == *value),
-        Some(XPathPredicate::DescendantExists(name)) => element.has_descendant_named(name),
-    }
-}
-
 pub(super) fn sorted_selections(selections: &[XmlSelection], reverse: bool) -> Vec<XmlSelection> {
     let mut result = selections.to_vec();
     if reverse {
@@ -708,15 +427,6 @@ impl XmlElement {
                 XmlChild::Element(_) | XmlChild::Text(_) => None,
             })
             .collect()
-    }
-
-    fn has_descendant_named(&self, name: &str) -> bool {
-        self.children.iter().any(|child| match child {
-            XmlChild::Element(element) => {
-                (name == "*" || element.name == name) || element.has_descendant_named(name)
-            }
-            XmlChild::Text(_) => false,
-        })
     }
 
     pub(super) fn inner_text(&self) -> String {

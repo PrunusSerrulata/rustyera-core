@@ -653,6 +653,123 @@ fn structured_xml_descendant_axes_include_root_elements_and_attributes() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Keep every Rust/C# oracle watch explicit and reviewable.
+fn erafl_xml_xpath_reference_fixture_runs_through_the_vm_host_abi() {
+    let artifact = compile_source(include_str!(
+        "../../../../tools/runtime-tester/fixture-reference/erb/xml-xpath.erb"
+    ));
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "ORACLE_XML_XPATH")
+        .expect("ORACLE_XML_XPATH")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .expect("RESULTS")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[60], None),
+        Ok(VmValue::Integer(3))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[60], None),
+        Ok(VmValue::String("201,208,210".into()))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[61], None),
+        Ok(VmValue::Integer(3))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[61], None),
+        Ok(VmValue::String("201,210,211".into()))
+    );
+    for (index, count, value) in [
+        (62, 2, "208,211"),
+        (63, 1, "201"),
+        (64, 2, "210,211"),
+        (65, 2, "201,210"),
+        (66, 3, "201,210,211"),
+        (67, 1, "201"),
+        (68, 1, "1"),
+        (69, 1, "5"),
+        (70, 1, "Alice"),
+    ] {
+        assert_eq!(
+            vm.read_variable(result, &[index], None),
+            Ok(VmValue::Integer(count))
+        );
+        assert_eq!(
+            vm.read_variable(results, &[index], None),
+            Ok(VmValue::String(value.into()))
+        );
+    }
+    assert_eq!(
+        vm.read_variable(result, &[71], None),
+        Ok(VmValue::Integer(1))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[72], None),
+        Ok(VmValue::Integer(1))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[71], None),
+        Ok(VmValue::String("1".into()))
+    );
+    assert_eq!(
+        vm.read_variable(result, &[73], None),
+        Ok(VmValue::Integer(0))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[72], None),
+        Ok(VmValue::String("<root>  <item id='1' />  </root>".into()))
+    );
+    for (index, count, result_index, value) in [
+        (74, 1, 73, "201"),
+        (75, 2, 74, "a,b"),
+        (
+            76,
+            1,
+            75,
+            "<layout><containers id=\"1\"><container name=\"main\" /></containers></layout>",
+        ),
+    ] {
+        assert_eq!(
+            vm.read_variable(result, &[index], None),
+            Ok(VmValue::Integer(count))
+        );
+        assert_eq!(
+            vm.read_variable(results, &[result_index], None),
+            Ok(VmValue::String(value.into()))
+        );
+    }
+}
+
+#[test]
 fn era_function_local_persists_across_calls() {
     let artifact = compile_source("@COUNTER\nLOCAL:0 += 1\nRESULT = LOCAL:0\nRETURN RESULT\n");
     let entry = artifact.functions[0].key;
