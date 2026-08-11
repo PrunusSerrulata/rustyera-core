@@ -64,6 +64,104 @@ fn resolves_emuera_audio_names_from_the_sound_directory() {
     assert_eq!(graph.audio_path("missing.mp3"), None);
 }
 
+#[test]
+fn content_directory_images_create_frontend_resource_backed_canvases() {
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![
+            SubmittedFile {
+                relative_path: "face.png".into(),
+                category: FileCategory::Resource,
+                payload: FilePayload::Bytes(ProtocolBytes::new(vec![1])),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "resources/face.png".into(),
+                category: FileCategory::Resource,
+                payload: FilePayload::Bytes(ProtocolBytes::new(vec![2])),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "resources/missing-metadata.png".into(),
+                category: FileCategory::Resource,
+                payload: FilePayload::Bytes(ProtocolBytes::new(vec![3])),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "resources/oversized.png".into(),
+                category: FileCategory::Resource,
+                payload: FilePayload::Bytes(ProtocolBytes::new(vec![4])),
+                content_hash: None,
+            },
+        ],
+    };
+    let (mut graph, diagnostics) = ResourceGraph::from_manifest(&manifest);
+    assert!(diagnostics.is_empty());
+    graph
+        .apply_metadata(
+            "face.png",
+            ImageMetadataResponse {
+                width: 7,
+                height: 5,
+                format: "png".into(),
+                animated: false,
+            },
+        )
+        .unwrap();
+    graph
+        .apply_metadata(
+            "resources/face.png",
+            ImageMetadataResponse {
+                width: 32,
+                height: 16,
+                format: "png".into(),
+                animated: false,
+            },
+        )
+        .unwrap();
+    graph
+        .apply_metadata(
+            "resources/oversized.png",
+            ImageMetadataResponse {
+                width: 8_193,
+                height: 1,
+                format: "png".into(),
+                animated: false,
+            },
+        )
+        .unwrap();
+
+    assert!(graph.create_canvas_from_resource(1, "face.png"));
+    assert_eq!(graph.canvas_state(1), Some((32, 16)));
+    assert!(graph.create_canvas_from_resource(2, "resources/face.png"));
+    assert_eq!(graph.canvas_state(2), Some((32, 16)));
+    assert!(!graph.create_canvas_from_resource(3, "missing-metadata.png"));
+    assert!(!graph.create_canvas_from_resource(4, "oversized.png"));
+
+    let replay = graph.replay();
+    let canvas = replay
+        .canvases
+        .iter()
+        .find(|canvas| canvas.canvas_id == 1)
+        .unwrap();
+    let CanvasReplayCommand::DrawSprite { name, .. } = &canvas.commands[0] else {
+        panic!("project resource canvas must replay through a frontend resource sprite");
+    };
+    let sprite = replay
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == *name)
+        .unwrap();
+    assert_eq!(sprite.size, [32, 16]);
+    assert_eq!(sprite.frames[0].resource_id, "resources/face.png");
+    assert!(replay.canvases.iter().all(|canvas| {
+        canvas
+            .commands
+            .iter()
+            .all(|command| !matches!(command, CanvasReplayCommand::LoadEncodedImage { .. }))
+    }));
+}
+
 use super::*;
 
 #[test]

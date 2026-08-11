@@ -437,57 +437,137 @@ impl ResourceGraph {
         self.audio_path(name).is_some()
     }
 
+    fn image_from_content_directory(&self, path: &str) -> Option<&ResourceImage> {
+        let key = path.to_ascii_lowercase();
+        if key.starts_with("resources/") {
+            return self.images.get(&key);
+        }
+        self.images
+            .get(&format!("resources/{key}"))
+            // Keep accepting explicit project-root resource paths used by older
+            // RustyEra clients after applying Emuera's ContentDir precedence.
+            .or_else(|| self.images.get(&key))
+    }
+
+    /// Static project images keep only their digest in runtime-owned canvas state.
+    /// An empty encoded payload distinguishes that stable resource reference from
+    /// GLOAD data, whose bytes must remain self-contained in the replay command.
+    fn project_image_reference(
+        &self,
+        content_digest: &[u8],
+        encoded: &[u8],
+    ) -> Option<&ResourceImage> {
+        if !encoded.is_empty() {
+            return None;
+        }
+        self.images
+            .values()
+            .find(|image| image.digest.as_slice() == content_digest)
+    }
+
     // This is deliberately one exhaustive translation table so adding an
     // internal command cannot silently omit its public replay equivalent.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn replay(&self) -> ResourceReplay {
-        ResourceReplay {
-            sprites: self
-                .sprites
-                .values()
-                .map(|sprite| SpriteReplay {
-                    name: sprite.name.clone(),
-                    size: [sprite.width, sprite.height],
-                    position: [sprite.position_x, sprite.position_y],
-                    frames: sprite
-                        .frames
-                        .iter()
-                        .map(|frame| SpriteFrameReplay {
-                            resource_id: frame.image_path.clone(),
-                            source_rectangle: [
-                                frame.source_x,
-                                frame.source_y,
-                                i32::try_from(frame.source_width.unwrap_or_default())
-                                    .unwrap_or(i32::MAX),
-                                i32::try_from(frame.source_height.unwrap_or_default())
-                                    .unwrap_or(i32::MAX),
-                            ],
-                            offset: [frame.offset_x, frame.offset_y],
-                            delay_ms: frame.delay_ms,
-                            destination_size: frame
-                                .destination_width
-                                .zip(frame.destination_height)
-                                .map(|(width, height)| [width, height]),
-                            canvas_id: frame.canvas_id,
-                        })
-                        .collect(),
-                    canvas_id: sprite.canvas_id,
-                    canvas_rectangle: sprite.canvas_rectangle.map(canvas_rect),
-                })
-                .collect(),
-            canvases: self
-                .canvases
-                .iter()
-                .map(|(canvas_id, canvas)| CanvasReplay {
-                    canvas_id: *canvas_id,
-                    size: CanvasSize {
-                        width: canvas.width,
-                        height: canvas.height,
-                    },
-                    commands: canvas
-                        .commands
-                        .iter()
-                        .map(|command| match command {
+        let mut sprites = self
+            .sprites
+            .values()
+            .map(|sprite| SpriteReplay {
+                name: sprite.name.clone(),
+                size: [sprite.width, sprite.height],
+                position: [sprite.position_x, sprite.position_y],
+                frames: sprite
+                    .frames
+                    .iter()
+                    .map(|frame| SpriteFrameReplay {
+                        resource_id: frame.image_path.clone(),
+                        source_rectangle: [
+                            frame.source_x,
+                            frame.source_y,
+                            i32::try_from(frame.source_width.unwrap_or_default())
+                                .unwrap_or(i32::MAX),
+                            i32::try_from(frame.source_height.unwrap_or_default())
+                                .unwrap_or(i32::MAX),
+                        ],
+                        offset: [frame.offset_x, frame.offset_y],
+                        delay_ms: frame.delay_ms,
+                        destination_size: frame
+                            .destination_width
+                            .zip(frame.destination_height)
+                            .map(|(width, height)| [width, height]),
+                        canvas_id: frame.canvas_id,
+                    })
+                    .collect(),
+                canvas_id: sprite.canvas_id,
+                canvas_rectangle: sprite.canvas_rectangle.map(canvas_rect),
+            })
+            .collect::<Vec<_>>();
+        let mut replay_resource_ordinal = 0_u64;
+        let canvases = self
+            .canvases
+            .iter()
+            .map(|(canvas_id, canvas)| CanvasReplay {
+                canvas_id: *canvas_id,
+                size: CanvasSize {
+                    width: canvas.width,
+                    height: canvas.height,
+                },
+                commands: canvas
+                    .commands
+                    .iter()
+                    .map(|command| {
+                        if let CanvasCommand::LoadEncodedImage {
+                            content_digest,
+                            encoded,
+                        } = command
+                            && let Some(image) =
+                                self.project_image_reference(content_digest, encoded)
+                            && let Some(metadata) = &image.metadata
+                        {
+                            let name = loop {
+                                let candidate = format!(
+                                    "__RUSTYERA_PROJECT_RESOURCE_{replay_resource_ordinal}"
+                                );
+                                replay_resource_ordinal = replay_resource_ordinal.saturating_add(1);
+                                if !sprites
+                                    .iter()
+                                    .any(|sprite| sprite.name.eq_ignore_ascii_case(&candidate))
+                                {
+                                    break candidate;
+                                }
+                            };
+                            sprites.push(SpriteReplay {
+                                name: name.clone(),
+                                size: [metadata.width, metadata.height],
+                                position: [0, 0],
+                                frames: vec![SpriteFrameReplay {
+                                    resource_id: image.relative_path.clone(),
+                                    source_rectangle: [
+                                        0,
+                                        0,
+                                        i32::try_from(metadata.width).unwrap_or(i32::MAX),
+                                        i32::try_from(metadata.height).unwrap_or(i32::MAX),
+                                    ],
+                                    offset: [0, 0],
+                                    delay_ms: 1_000,
+                                    destination_size: None,
+                                    canvas_id: None,
+                                }],
+                                canvas_id: None,
+                                canvas_rectangle: None,
+                            });
+                            return CanvasReplayCommand::DrawSprite {
+                                name,
+                                destination: canvas_rect([
+                                    0,
+                                    0,
+                                    i32::try_from(canvas.width).unwrap_or(i32::MAX),
+                                    i32::try_from(canvas.height).unwrap_or(i32::MAX),
+                                ]),
+                                color_matrix: None,
+                            };
+                        }
+                        match command {
                             CanvasCommand::Clear { argb, rectangle } => {
                                 CanvasReplayCommand::Clear {
                                     argb: *argb,
@@ -593,11 +673,15 @@ impl ResourceGraph {
                                 content_digest: content_digest.clone(),
                                 encoded: encoded.clone(),
                             },
-                        })
-                        .collect(),
-                    revision: canvas.revision,
-                })
-                .collect(),
+                        }
+                    })
+                    .collect(),
+                revision: canvas.revision,
+            })
+            .collect();
+        ResourceReplay {
+            sprites,
+            canvases,
             animation_timer_ms: self.animation_timer_ms,
         }
     }

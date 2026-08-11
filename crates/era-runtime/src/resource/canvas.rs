@@ -41,7 +41,9 @@ impl ResourceGraph {
         if self.canvases.contains_key(&id) {
             return false;
         }
-        let Some(image) = self.images.get(&path.to_ascii_lowercase()) else {
+        // With the default relative=false, GCREATEFROMFILE resolves filenames
+        // against Emuera's ContentDir, the project's resources directory.
+        let Some(image) = self.image_from_content_directory(path) else {
             return false;
         };
         let Some(metadata) = &image.metadata else {
