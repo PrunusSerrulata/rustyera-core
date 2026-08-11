@@ -41,6 +41,34 @@ fn xpath_subset_handles_descendants_attributes_and_predicates() {
 }
 
 #[test]
+fn xml_attribute_append_replaces_an_existing_name_at_the_end() {
+    let mut element = XmlElement {
+        name: "item".into(),
+        attributes: vec![
+            ("id".into(), "a".into()),
+            ("kind".into(), "old".into()),
+            ("tail".into(), "kept".into()),
+        ],
+        children: Vec::new(),
+    };
+
+    element.append_attribute("kind".into(), "new".into());
+
+    assert_eq!(
+        element.attributes,
+        vec![
+            ("id".into(), "a".into()),
+            ("tail".into(), "kept".into()),
+            ("kind".into(), "new".into()),
+        ]
+    );
+    assert_eq!(
+        element.outer_xml(),
+        "<item id=\"a\" tail=\"kept\" kind=\"new\" />"
+    );
+}
+
+#[test]
 fn deterministic_table_ids_are_monotonic() {
     let table = DataTable::new();
     assert_eq!(table.next_id, 1);

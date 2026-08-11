@@ -364,7 +364,7 @@ fn structured_data_table_treats_omitted_values_as_null_cells() {
 #[test]
 fn structured_xml_mutations_match_the_reference_fixture_subset() {
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULT:0 = XML_DOCUMENT(1, \"<root><item id='a'>one</item><item id='b'>two</item></root>\")\nRESULTS:0 = %XML_TOSTR(1)%\nRESULT:1 = XML_SET(RESULTS:0, \"//item[@id='b']\", \"changed\", 0, 1)\nRESULT:2 = XML_ADDATTRIBUTE(RESULTS:0, \"//item[@id='a']\", \"kind\", \"first\")\nRETURN RESULT\n",
+        "@SYSTEM_TITLE\nRESULT:0 = XML_DOCUMENT(1, \"<root><item id='a'>one</item><item id='b'>two</item></root>\")\nRESULTS:0 = %XML_TOSTR(1)%\nRESULT:1 = XML_SET(RESULTS:0, \"//item[@id='b']\", \"changed\", 0, 1)\nRESULT:2 = XML_ADDATTRIBUTE(RESULTS:0, \"//item[@id='a']\", \"kind\", \"first\")\nRESULT:3 = XML_ADDATTRIBUTE(RESULTS:0, \"//item[@id='a']\", \"kind\", \"last\")\nRETURN RESULT\n",
     );
     let entry = artifact.functions[0].key;
     let result = artifact
@@ -404,12 +404,150 @@ fn structured_xml_mutations_match_the_reference_fixture_subset() {
         Ok(VmValue::Integer(1))
     );
     assert_eq!(
+        vm.read_variable(result, &[3], None),
+        Ok(VmValue::Integer(1))
+    );
+    assert_eq!(
         vm.read_variable(results, &[0], None),
         Ok(VmValue::String(
-            "<root><item id=\"a\" kind=\"first\">one</item><item id=\"b\">changed</item></root>"
+            "<root><item id=\"a\" kind=\"last\">one</item><item id=\"b\">changed</item></root>"
                 .into()
         ))
     );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn erafl_ui_attribute_pipeline_preserves_the_complete_division_rectangle() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         CALL UIC_ADD(\"[border:1px][rect:10,20,300,400]\")\n\
+         CALL UIC_SET_DIVATTR(\"pos\", \"50,0\")\n\
+         #DIMS DIVS, 2\n\
+         XML_GET RESULTS:20, \"//containers[@id = '1']/container\", DIVS, 2\n\
+         RESULTS:30 '= DIVS:0\n\
+         RETURN\n\
+         @UIC_ADD(DIC_ATTRIBUTES)\n\
+         #DIMS DIC_ATTRIBUTES\n\
+         #DIMS XML\n\
+         #DIM KEY_NUM\n\
+         #DIM I\n\
+         #DIMS KEYS, 10\n\
+         XML '= \"<layout><containers id='1'></containers></layout>\"\n\
+         XML_ADDNODE XML, \"//containers[@id = '1']\", \"<container name='main'><div></div></container>\"\n\
+         DIC_ATTRIBUTES = %TOLOWER(DIC_ATTRIBUTES)%\n\
+         IF !DIC_CONTAINSKEY(DIC_ATTRIBUTES, \"xpos\")\n\
+             DIC_ATTRIBUTES += \"[xpos:0]\"\n\
+         ENDIF\n\
+         IF !DIC_CONTAINSKEY(DIC_ATTRIBUTES, \"ypos\")\n\
+             DIC_ATTRIBUTES += \"[ypos:0]\"\n\
+         ENDIF\n\
+         CALL DIC_KEYS(DIC_ATTRIBUTES)\n\
+         KEY_NUM = RESULT\n\
+         ARRAYCOPY \"RESULTS\", \"KEYS\"\n\
+         RESULTS:20 '= XML\n\
+         FOR I, 0, KEY_NUM\n\
+             CALL UIC_SET_DIVATTR(TOLOWER(KEYS:I), TOLOWER(DIC_GET(DIC_ATTRIBUTES, KEYS:I)))\n\
+         NEXT\n\
+         RETURN\n\
+         @UIC_SET_DIVATTR(ATTRIBUTE_NAME, ATTRIBUTE_VALUE)\n\
+         #DIMS ATTRIBUTE_NAME\n\
+         #DIMS ATTRIBUTE_VALUE\n\
+         #DIMS POS_VALUES, 4\n\
+         SELECTCASE ATTRIBUTE_NAME\n\
+             CASE \"width\", \"height\", \"xpos\", \"ypos\", \"size\", \"rect\", \"pos\"\n\
+             CASE \"depth\", \"color\", \"display\"\n\
+             CASE \"margin\", \"padding\", \"border\", \"bcolor\", \"radius\"\n\
+             CASEELSE\n\
+                 RETURN 0\n\
+         ENDSELECT\n\
+         IF ATTRIBUTE_NAME == \"rect\"\n\
+             SPLIT ATTRIBUTE_VALUE, \",\", POS_VALUES\n\
+             XML_ADDATTRIBUTE RESULTS:20, \"//container[@name = 'main']/div\", \"xpos\", POS_VALUES:0\n\
+             XML_ADDATTRIBUTE RESULTS:20, \"//container[@name = 'main']/div\", \"ypos\", POS_VALUES:1\n\
+             XML_ADDATTRIBUTE RESULTS:20, \"//container[@name = 'main']/div\", \"width\", POS_VALUES:2\n\
+             XML_ADDATTRIBUTE RESULTS:20, \"//container[@name = 'main']/div\", \"height\", POS_VALUES:3\n\
+         ELSEIF ATTRIBUTE_NAME == \"pos\"\n\
+             SPLIT ATTRIBUTE_VALUE, \",\", POS_VALUES\n\
+             XML_ADDATTRIBUTE RESULTS:20, \"//container[@name = 'main']/div\", \"xpos\", POS_VALUES:0\n\
+             XML_ADDATTRIBUTE RESULTS:20, \"//container[@name = 'main']/div\", \"ypos\", POS_VALUES:1\n\
+         ELSE\n\
+             XML_ADDATTRIBUTE RESULTS:20, \"//container[@name = 'main']/div\", ATTRIBUTE_NAME, ATTRIBUTE_VALUE\n\
+         ENDIF\n\
+         RETURN 1\n\
+         @DIC_CONTAINSKEY(DICTIONARY, KEY)\n\
+         #FUNCTION\n\
+         #DIMS DICTIONARY\n\
+         #DIMS KEY\n\
+         RETURNF STRFINDU(DICTIONARY, \"[\" + KEY + \":\") >= 0\n\
+         @DIC_GET(DICTIONARY, KEY)\n\
+         #FUNCTIONS\n\
+         #DIMS DICTIONARY\n\
+         #DIMS KEY\n\
+         #DIM OPEN\n\
+         #DIM CLOSE\n\
+         OPEN = STRFINDU(DICTIONARY, \"[\" + KEY + \":\")\n\
+         SIF OPEN < 0\n\
+             RETURNF \"\"\n\
+         OPEN += STRLENSU(KEY) + 2\n\
+         CLOSE = STRFINDU(DICTIONARY, \"]\", OPEN)\n\
+         RETURNF SUBSTRINGU(DICTIONARY, OPEN, CLOSE - OPEN)\n\
+         @DIC_KEYS(DICTIONARY)\n\
+         #DIMS DICTIONARY\n\
+         #DIMS PAIRS, 10\n\
+         #DIM KEY_COUNT\n\
+         #DIM INDEX\n\
+         #DIM COLON\n\
+         VARSET RESULTS\n\
+         SPLIT DICTIONARY, \"[\", PAIRS\n\
+         KEY_COUNT = RESULT\n\
+         FOR INDEX, 0, KEY_COUNT\n\
+             COLON = STRFINDU(PAIRS:INDEX, \":\")\n\
+             SIF COLON < 0\n\
+                 CONTINUE\n\
+             RESULTS:(INDEX - 1) = %SUBSTRINGU(PAIRS:INDEX, 0, COLON)%\n\
+         NEXT\n\
+         RETURN KEY_COUNT - 1\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .expect("RESULTS")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(results, &[20], None),
+        Ok(VmValue::String(
+            "<layout><containers id=\"1\"><container name=\"main\"><div border=\"1px\" width=\"300\" height=\"400\" xpos=\"50\" ypos=\"0\" /></container></containers></layout>"
+                .into()
+        ))
+    );
+    let VmValue::String(division) = vm.read_variable(results, &[30], None).unwrap() else {
+        panic!("UIC_SHOW fragment is not a string")
+    };
+    erabasic_html::parse_document(&division).expect("complete division rectangle should parse");
 }
 
 #[test]

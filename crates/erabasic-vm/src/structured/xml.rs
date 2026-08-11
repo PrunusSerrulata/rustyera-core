@@ -409,7 +409,7 @@ impl XmlDocument {
                     let element = self.element_mut(&selection.element_path)?;
                     if method == 0 {
                         if selection.attribute.is_none() {
-                            element.attributes.push((name.clone(), value.clone()));
+                            element.append_attribute(name.clone(), value.clone());
                         } else {
                             applied = false;
                         }
@@ -662,6 +662,17 @@ pub(super) fn parse_xml_fragment(value: &str) -> Result<Vec<XmlChild>, String> {
 }
 
 impl XmlElement {
+    pub(super) fn append_attribute(&mut self, name: String, value: String) {
+        if let Some(index) = self
+            .attributes
+            .iter()
+            .position(|(candidate, _)| candidate == &name)
+        {
+            self.attributes.remove(index);
+        }
+        self.attributes.push((name, value));
+    }
+
     pub(super) fn attribute(&self, name: &str) -> Option<&str> {
         self.attributes
             .iter()
