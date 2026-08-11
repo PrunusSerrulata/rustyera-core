@@ -40,7 +40,8 @@ const CACHE_MAGIC: &[u8; 8] = b"RERACACH";
 // extension introduced with v4; changing its record semantics increments its own record version.
 // Older readers reject the extension as trailing data instead of using it as an incremental seed.
 const LEGACY_PROJECT_VERSION: u8 = 6;
-const VERSION: u8 = 7;
+const PREVIOUS_PROJECT_VERSION: u8 = 7;
+const VERSION: u8 = 8;
 const PROJECT_COMPRESSION_LEVEL: i32 = 3;
 const CACHE_COMPRESSION_LEVEL: i32 = 1;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
@@ -1838,7 +1839,7 @@ fn parse_container_header(
         (kind, version),
         (
             ProjectContainerKind::FullProject,
-            LEGACY_PROJECT_VERSION | VERSION
+            LEGACY_PROJECT_VERSION | PREVIOUS_PROJECT_VERSION | VERSION
         ) | (ProjectContainerKind::CompiledCache, VERSION)
     ) {
         return Err(format!("unsupported project file version {version:02x}"));

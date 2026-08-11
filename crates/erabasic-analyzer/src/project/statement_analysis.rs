@@ -300,8 +300,11 @@ fn analyze_statement(
             let mut reparsed_values = Vec::new();
             let mut reparse_had_errors = false;
             let value = if form_assignment {
-                let mut parsed =
-                    erabasic_parser::parse_formatted_at(raw_value, value.span.start, context);
+                let mut parsed = erabasic_parser::parse_assignment_formatted_at(
+                    raw_value,
+                    value.span.start,
+                    context,
+                );
                 for diagnostic in parsed.diagnostics.drain(..) {
                     diagnostics.push(map_parser_diagnostic(
                         source.source.id,

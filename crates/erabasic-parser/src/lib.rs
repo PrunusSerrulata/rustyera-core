@@ -15,7 +15,7 @@ mod util;
 
 pub use context::{ArgumentStyle, DefaultParserContext, InstructionSpec, ParserContext};
 pub use expression::parse_expression;
-pub use formatted::parse_formatted_at;
+pub use formatted::{parse_assignment_formatted_at, parse_formatted_at};
 pub use line::{parse_expression_list_at, parse_line};
 pub use script::{parse_erb, parse_erh};
 

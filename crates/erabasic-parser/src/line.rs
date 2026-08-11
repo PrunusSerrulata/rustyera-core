@@ -8,7 +8,7 @@ use erabasic_lexer::{LexEnd, LexFlags, Token, TokenKind, lex_with};
 
 use crate::context::{ArgumentStyle, InstructionSpec, ParserContext};
 use crate::expression::ExpressionParser;
-use crate::formatted::parse_formatted_at;
+use crate::formatted::parse_assignment_formatted_at;
 use crate::util::{
     assign_op, expr_to_variable, shift_diagnostics, shift_tokens, split_top_level,
     top_level_assignment, trim_line_start,
@@ -109,8 +109,11 @@ pub(crate) fn parse_line_at(
             ) {
                 let right_start = op_token.span.end.saturating_sub(line_base);
                 let raw_right = &line[right_start..];
-                let whitespace = raw_right.len() - raw_right.trim_start().len();
-                let right_source = &raw_right[whitespace..];
+                let whitespace = raw_right.len() - raw_right.trim_start_matches([' ', '\t']).len();
+                // Emuera's FORM assignment grammar trims ASCII layout around the
+                // entire right-hand side. Spaces inside literal/form parts remain
+                // observable, while an editor's trailing space is not stored.
+                let right_source = raw_right[whitespace..].trim_end_matches([' ', '\t']);
                 let right_base = line_base + right_start + whitespace;
                 let value = if right_source.is_empty() {
                     Expr {
@@ -118,11 +121,12 @@ pub(crate) fn parse_line_at(
                         span: Span::empty(right_base),
                     }
                 } else {
-                    let mut parsed = parse_formatted_at(right_source, right_base, context);
+                    let mut parsed =
+                        parse_assignment_formatted_at(right_source, right_base, context);
                     diagnostics.append(&mut parsed.diagnostics);
                     Expr {
                         kind: parsed.value.map_or(ExprKind::Error, ExprKind::Formatted),
-                        span: Span::new(right_base, line_base + line.len()),
+                        span: Span::new(right_base, right_base + right_source.len()),
                     }
                 };
                 // The whole-line expression lexer cannot interpret the type-directed

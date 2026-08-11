@@ -505,7 +505,7 @@ fn erafl_ui_attribute_pipeline_preserves_the_complete_division_rectangle() {
              COLON = STRFINDU(PAIRS:INDEX, \":\")\n\
              SIF COLON < 0\n\
                  CONTINUE\n\
-             RESULTS:(INDEX - 1) = %SUBSTRINGU(PAIRS:INDEX, 0, COLON)%\n\
+             RESULTS:(INDEX - 1) = %SUBSTRINGU(PAIRS:INDEX, 0, COLON)% \n\
          NEXT\n\
          RETURN KEY_COUNT - 1\n",
     );

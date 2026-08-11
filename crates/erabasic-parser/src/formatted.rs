@@ -19,6 +19,34 @@ pub fn parse_formatted_at(
     output
 }
 
+/// Parse the FORM right-hand side of a plain string assignment.
+///
+/// Emuera trims ASCII spaces and tabs from the decoded outer text fragments,
+/// including whitespace produced by FORM escapes such as `\s` and `\t`.
+#[must_use]
+pub fn parse_assignment_formatted_at(
+    source: &str,
+    base: usize,
+    context: &dyn ParserContext,
+) -> ParseOutput<FormattedString> {
+    let mut output = parse_formatted_at(source, base, context);
+    if let Some(form) = output.value.as_mut() {
+        trim_outer_text(form);
+    }
+    output
+}
+
+fn trim_outer_text(form: &mut FormattedString) {
+    if let Some(FormPart::Text(text)) = form.parts.first_mut() {
+        *text = text.trim_start_matches([' ', '\t']).to_owned();
+    }
+    if let Some(FormPart::Text(text)) = form.parts.last_mut() {
+        *text = text.trim_end_matches([' ', '\t']).to_owned();
+    }
+    form.parts
+        .retain(|part| !matches!(part, FormPart::Text(text) if text.is_empty()));
+}
+
 pub(crate) fn lower_formatted(form: &FormattedToken) -> ParseOutput<FormattedString> {
     let mut diagnostics = Vec::new();
     let mut parts = Vec::new();

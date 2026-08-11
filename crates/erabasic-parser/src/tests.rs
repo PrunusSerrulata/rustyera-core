@@ -1,6 +1,7 @@
 use crate::*;
 use erabasic_ast::{
-    Alignment, Argument, AssignOp, BinaryOp, DiagnosticCode, ExprKind, FormPart, StatementKind,
+    Alignment, Argument, AssignOp, BinaryOp, DiagnosticCode, ExprKind, FormPart, Span,
+    StatementKind,
 };
 
 #[test]
@@ -141,6 +142,31 @@ fn plain_assignment_defers_form_text_lexing_to_semantic_analysis() {
         panic!("expected assignment");
     };
     assert_eq!(raw_value, "東方　カード");
+}
+
+#[test]
+fn plain_assignment_trims_decoded_ascii_edges_and_preserves_utf8_span() {
+    let source = "RESULTS:0 = \t\\s\\tvalue inner　\\S\\s \t";
+    let output = parse_line(source, &DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let statement = output.value.unwrap();
+    let StatementKind::Assignment {
+        raw_value, value, ..
+    } = statement.kind
+    else {
+        panic!("expected assignment");
+    };
+    assert_eq!(raw_value, "\\s\\tvalue inner　\\S\\s");
+    let ExprKind::Formatted(form) = value.kind else {
+        panic!("expected FORM assignment");
+    };
+    assert_eq!(form.parts, vec![FormPart::Text("value inner　　".into())]);
+    let expected_start = source.find("\\s").unwrap();
+    assert_eq!(
+        value.span,
+        Span::new(expected_start, expected_start + raw_value.len())
+    );
+    assert_eq!(statement.span, Span::new(0, source.len()));
 }
 
 #[test]

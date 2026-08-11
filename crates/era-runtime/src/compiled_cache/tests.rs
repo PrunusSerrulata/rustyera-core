@@ -125,7 +125,7 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
 
     assert_eq!(&bytes[..8], b"RERAPROJ");
-    assert_eq!(bytes[8], 7);
+    assert_eq!(bytes[8], 8);
     assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
     assert_eq!(decoded_file.identity, project_identity(&project));
     assert_eq!(decoded_file.manifest, project);
@@ -674,6 +674,23 @@ fn project_file_projection_honors_limits_and_version() {
         decode_project_file(&legacy, legacy.len()).unwrap().manifest,
         project
     );
+    let mut previous = bytes.clone();
+    previous[8] = PREVIOUS_PROJECT_VERSION;
+    let digest_offset = previous.len() - 32;
+    let digest = blake3::hash(&previous[..digest_offset]);
+    previous[digest_offset..].copy_from_slice(digest.as_bytes());
+    assert_eq!(
+        decode_project_file(&previous, previous.len())
+            .unwrap()
+            .manifest,
+        project
+    );
+    let mut stale_cache = previous.clone();
+    stale_cache[..8].copy_from_slice(b"RERACACH");
+    let error = decode(&stale_cache, stale_cache.len())
+        .err()
+        .expect("a version 7 compiled cache must be rejected");
+    assert!(error.contains("unsupported project file version 07"));
     bytes[8] = 2;
     let digest_offset = bytes.len() - 32;
     let digest = blake3::hash(&bytes[..digest_offset]);

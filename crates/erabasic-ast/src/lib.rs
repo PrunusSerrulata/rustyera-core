@@ -259,8 +259,9 @@ pub enum StatementKind {
         /// Additional comma-separated values. Semantic analysis treats these as
         /// consecutive array stores only for expression-based assignments.
         additional_values: Vec<Expr>,
-        /// Exact logical RHS text, needed because string `=` uses FORM syntax
-        /// after the target's semantic type is known.
+        /// Logical RHS text with outer ASCII spaces and tabs normalized away,
+        /// needed because string `=` uses FORM syntax after the target's
+        /// semantic type is known.
         raw_value: String,
     },
     GotoLabel {
