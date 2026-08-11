@@ -39,10 +39,11 @@ impl RuntimeSession {
         &mut self,
         reason: Option<&str>,
     ) -> Result<(), RuntimeError> {
+        let invalidated = self.undo_checkpoint.is_some() || self.undo_replay.is_some();
         self.undo_checkpoint = None;
         self.undo_replay = None;
         self.undo_token = None;
-        if let Some(message) = reason {
+        if let Some(message) = reason.filter(|_| invalidated) {
             self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                     code: "runtime.input_undo_invalidated".into(),

@@ -1023,6 +1023,11 @@ fn ready_project_reload_stages_and_commits_a_normalized_delta() {
             ..
         })
     )));
+    assert!(!messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::Diagnostic(diagnostic)
+            if diagnostic.code == "runtime.input_undo_invalidated"
+    )));
 }
 
 #[test]
