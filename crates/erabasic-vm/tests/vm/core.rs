@@ -1214,3 +1214,80 @@ fn conditional_form_trims_branch_edge_whitespace() {
         VmValue::String("kept".into())
     );
 }
+
+#[test]
+fn character_name_method_keeps_explicit_names_and_invalidates_empty_results() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         ADDVOIDCHARA\n\
+         ADDVOIDCHARA\n\
+         ADDVOIDCHARA\n\
+         TARGET = 2\n\
+         RESULTS:0 '= ANAME(1)\n\
+         NAME:0 '= \"阿零\"\n\
+         NAME:1 '= \"琉米爱尔\"\n\
+         NAME:2 '= \"奥莉薇娅\"\n\
+         RESULTS:1 '= NAME:1\n\
+         RESULTS:2 '= ANAME(1)\n\
+         RESULTS:3 '= ANAME(2, 2)\n\
+         RESULTS:4 '= CHARACTER_ROW(1)\n\
+         RESULTS:5 '= CHARACTER_ROW(2)\n\
+         RETURN RESULT\n\
+         @ANAME(CHARA_ID = -999, CHARA_NUM = 1, ARG_SHOW_GUEST_JOB_TITLE = 1)\n\
+         #FUNCTIONS\n\
+         #DIM DYNAMIC CHARA_ID\n\
+         #DIM DYNAMIC CHARA_NUM\n\
+         #DIM DYNAMIC ARG_SHOW_GUEST_JOB_TITLE\n\
+         IF CSTR:(CHARA_ID):0 != \"\"\n\
+             RETURNF @\"%CSTR:(CHARA_ID):0%\\@CHARA_NUM > 1 ? 们 # \\@\"\n\
+         ENDIF\n\
+         RETURNF @\"%NAME:(CHARA_ID)%\\@CHARA_NUM > 1 ? 们 # \\@\"\n\
+         @CHARACTER_ROW(CHARA_ID)\n\
+         #FUNCTIONS\n\
+         #DIM DYNAMIC CHARA_ID\n\
+         RETURNF @\"◆%ANAME(CHARA_ID)%（女性）\"\n",
+    );
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .unwrap()
+        .key;
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..=5)
+            .map(|index| vm.read_variable(results, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "",
+            "琉米爱尔",
+            "琉米爱尔",
+            "奥莉薇娅们",
+            "◆琉米爱尔（女性）",
+            "◆奥莉薇娅（女性）",
+        ]
+        .map(|value| VmValue::String(value.into()))
+        .to_vec()
+    );
+}
