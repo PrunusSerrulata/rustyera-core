@@ -40,6 +40,31 @@ impl Hasher for SymbolKeyHasher {
 pub(crate) type VariableHashMap =
     HashMap<SymbolKey, VariableCell, BuildHasherDefault<SymbolKeyHasher>>;
 
+pub(crate) fn shared_definition<'a>(
+    artifact: &'a BytecodeArtifact,
+    name: &str,
+) -> Option<&'a BytecodeGlobal> {
+    artifact.globals.iter().find(|definition| {
+        definition.owner.is_none()
+            && matches!(
+                definition.storage,
+                BytecodeStorage::Project | BytecodeStorage::Constant | BytecodeStorage::Calculated
+            )
+            && definition.name.eq_ignore_ascii_case(name)
+    })
+}
+
+pub(crate) fn character_definition<'a>(
+    artifact: &'a BytecodeArtifact,
+    name: &str,
+) -> Option<&'a BytecodeGlobal> {
+    artifact.globals.iter().find(|definition| {
+        definition.owner.is_none()
+            && definition.storage == BytecodeStorage::Character
+            && definition.name.eq_ignore_ascii_case(name)
+    })
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct VariableMap(VariableHashMap);
 

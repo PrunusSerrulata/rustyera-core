@@ -636,15 +636,7 @@ pub(in super::super) fn fill_runtime_variable(
 }
 
 pub(in super::super) fn reset_training_state(vm: &mut RuntimeVm) -> Result<(), RuntimeError> {
-    let artifact = vm.vm().artifact();
-    let key = |name: &str| {
-        artifact
-            .globals
-            .iter()
-            .find(|global| global.name.eq_ignore_ascii_case(name))
-            .map(|global| global.key)
-            .ok_or_else(|| RuntimeError::Internal(format!("system variable {name} is missing")))
-    };
+    let key = |name: &str| runtime_variable_key(vm, name);
     let mut writes = vec![
         VmRuntimeWrite {
             variable: key("ASSIPLAY")?,
@@ -686,7 +678,9 @@ pub(in super::super) fn reset_training_state(vm: &mut RuntimeVm) -> Result<(), R
     .collect::<Result<Vec<_>, RuntimeError>>()?;
     let character_count = vm.vm().export_era_state().characters.len();
     let stain = key("STAIN")?;
-    let stain_defaults = artifact
+    let stain_defaults = vm
+        .vm()
+        .artifact()
         .project_data
         .static_data
         .replace
@@ -764,14 +758,7 @@ pub(in super::super) fn purchase_item(
     {
         return Ok(PurchaseResult::OutOfStock);
     }
-    let find = |name: &str| {
-        artifact
-            .globals
-            .iter()
-            .find(|global| global.name.eq_ignore_ascii_case(name))
-            .map(|global| global.key)
-            .ok_or_else(|| RuntimeError::Internal(format!("system variable {name} is missing")))
-    };
+    let find = |name: &str| runtime_variable_key(vm, name);
     let sales = find("ITEMSALES")?;
     let money = find("MONEY")?;
     let items = find("ITEM")?;

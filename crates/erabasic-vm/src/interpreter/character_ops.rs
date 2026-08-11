@@ -4,6 +4,7 @@ use super::{
     BytecodeStorage, Fiber, PlaceDescriptor, Vm, VmError, VmValue, array_place, integer_argument,
     optional_index,
 };
+use crate::{character_definition, shared_definition};
 
 pub(super) fn character_series(
     vm: &Vm,
@@ -58,15 +59,9 @@ pub(super) fn execute_character_query(
         let number = integer_argument(arguments, 0)?;
         let requested_sp = operation == "getspchara"
             || matches!(arguments.get(1), Some(VmValue::Integer(value)) if *value != 0);
-        let no = artifact
-            .globals
-            .iter()
-            .find(|definition| definition.name.eq_ignore_ascii_case("NO"))
+        let no = character_definition(artifact, "NO")
             .ok_or_else(|| VmError::InvalidState("NO is not defined".into()))?;
-        let cflag = artifact
-            .globals
-            .iter()
-            .find(|definition| definition.name.eq_ignore_ascii_case("CFLAG"));
+        let cflag = character_definition(artifact, "CFLAG");
         for (index, character) in vm.memory.characters.iter().enumerate() {
             let value = character.get(&no.key).and_then(crate::VariableCell::first);
             if value != Some(VmValue::Integer(number)) {
@@ -351,10 +346,7 @@ pub(super) fn execute_character_mutation(
                     "RESET_STAIN character index is out of range".into(),
                 ));
             }
-            let definition = artifact
-                .globals
-                .iter()
-                .find(|definition| definition.name.eq_ignore_ascii_case("STAIN"))
+            let definition = character_definition(artifact, "STAIN")
                 .ok_or_else(|| VmError::InvalidState("STAIN variable is missing".into()))?;
             let cell = memory
                 .cell_mut(generation, definition, character)
@@ -399,10 +391,7 @@ pub(super) fn sort_characters(
     }
     let (definition, indices, descending) = match arguments.first() {
         None => (
-            artifact
-                .globals
-                .iter()
-                .find(|definition| definition.name.eq_ignore_ascii_case("NO"))
+            character_definition(artifact, "NO")
                 .ok_or_else(|| VmError::InvalidState("NO variable is missing".into()))?,
             Vec::new(),
             false,
@@ -411,10 +400,7 @@ pub(super) fn sort_characters(
             if order.eq_ignore_ascii_case("FORWARD") || order.eq_ignore_ascii_case("BACK") =>
         {
             (
-                artifact
-                    .globals
-                    .iter()
-                    .find(|definition| definition.name.eq_ignore_ascii_case("NO"))
+                character_definition(artifact, "NO")
                     .ok_or_else(|| VmError::InvalidState("NO variable is missing".into()))?,
                 Vec::new(),
                 order.eq_ignore_ascii_case("BACK"),
@@ -551,10 +537,7 @@ pub(super) fn read_named_integer(
     memory: &crate::Memory,
     name: &str,
 ) -> Option<i64> {
-    let definition = artifact
-        .globals
-        .iter()
-        .find(|definition| definition.name.eq_ignore_ascii_case(name))?;
+    let definition = shared_definition(artifact, name)?;
     match memory.shared.get(&definition.key)?.first()? {
         VmValue::Integer(value) => Some(value),
         _ => None,
@@ -567,10 +550,7 @@ pub(super) fn write_named_integer(
     name: &str,
     value: i64,
 ) -> Result<(), VmError> {
-    let definition = artifact
-        .globals
-        .iter()
-        .find(|definition| definition.name.eq_ignore_ascii_case(name))
+    let definition = shared_definition(artifact, name)
         .ok_or_else(|| VmError::InvalidState(format!("{name} is not defined")))?;
     let cell = memory
         .shared
@@ -585,10 +565,7 @@ fn validate_named_integer_slot(
     memory: &crate::Memory,
     name: &str,
 ) -> Result<(), VmError> {
-    let definition = artifact
-        .globals
-        .iter()
-        .find(|definition| definition.name.eq_ignore_ascii_case(name))
+    let definition = shared_definition(artifact, name)
         .ok_or_else(|| VmError::InvalidState(format!("{name} is not defined")))?;
     memory
         .shared

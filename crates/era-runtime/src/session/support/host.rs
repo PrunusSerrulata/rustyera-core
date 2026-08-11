@@ -53,18 +53,13 @@ pub(in super::super) fn commit_host_result_write(
 }
 
 pub(in super::super) fn global_place(vm: &RuntimeVm, name: &str) -> Option<PlaceDescriptor> {
-    vm.vm()
-        .artifact()
-        .globals
-        .iter()
-        .find(|global| global.name.eq_ignore_ascii_case(name))
-        .map(|global| PlaceDescriptor {
-            variable: global.key,
-            indices: vec![0; global.dimensions.len()],
-            character: None,
-            fiber: None,
-            frame: None,
-        })
+    vm.vm().global_by_name(name).map(|global| PlaceDescriptor {
+        variable: global.key,
+        indices: vec![0; global.dimensions.len()],
+        character: None,
+        fiber: None,
+        frame: None,
+    })
 }
 
 pub(in super::super) fn global_place_at(

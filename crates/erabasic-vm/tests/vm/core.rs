@@ -1353,38 +1353,155 @@ fn conditional_form_trims_branch_edge_whitespace() {
     );
 }
 
+const CHARACTER_SHADOW_SOURCE: &str = "@SHADOW\n\
+     #DIMS NAME\n\
+     #DIMS CALLNAME\n\
+     #DIMS NICKNAME\n\
+     #DIMS MASTERNAME\n\
+     #DIMS CSTR\n\
+     #DIM NO\n\
+     #DIM BASE\n\
+     #DIM CFLAG\n\
+     #DIM TARGET\n\
+     RETURN\n\
+     @SYSTEM_TITLE\n\
+     ADDCHARA 1\n\
+     ADDCHARA 2\n\
+     TARGET = 2\n\
+     RESULTS:0 '= NAME:1\n\
+     RESULTS:1 '= CALLNAME:1\n\
+     RESULTS:2 '= NICKNAME:1\n\
+     RESULTS:3 '= MASTERNAME:1\n\
+     RESULTS:4 '= CSTR:1:0\n\
+     RESULTS:5 '= ANAME(1)\n\
+     RESULTS:6 '= ANAME(2, 2)\n\
+     RESULTS:7 '= CHARACTER_ROW(1)\n\
+     RESULTS:8 '= CHARACTER_ROW(2)\n\
+     RESULTS:9 '= NAME\n\
+     RESULTS:10 '= CSTR:1:1\n\
+     RESULT:11 = NO:1\n\
+     RESULT:12 = BASE:1:0\n\
+     RESULT:13 = CFLAG:1:0\n\
+     RETURN RESULT\n\
+     @ANAME(CHARA_ID = -999, CHARA_NUM = 1, ARG_SHOW_GUEST_JOB_TITLE = 1)\n\
+     #FUNCTIONS\n\
+     #DIM DYNAMIC CHARA_ID\n\
+     #DIM DYNAMIC CHARA_NUM\n\
+     #DIM DYNAMIC ARG_SHOW_GUEST_JOB_TITLE\n\
+     IF CSTR:(CHARA_ID):0 != \"\"\n\
+         RETURNF @\"%CSTR:(CHARA_ID):0%\\@CHARA_NUM > 1 ? 们 # \\@\"\n\
+     ENDIF\n\
+     RETURNF @\"%NAME:(CHARA_ID)%\\@CHARA_NUM > 1 ? 们 # \\@\"\n\
+     @CHARACTER_ROW(CHARA_ID)\n\
+     #FUNCTIONS\n\
+     #DIM DYNAMIC CHARA_ID\n\
+     RETURNF @\"◆%ANAME(CHARA_ID)%（女性）\"\n";
+
+fn character_shadowing_artifact() -> BytecodeArtifact {
+    let loaded = load_project(
+        &ProjectFiles {
+            csv: vec![
+                FrontendFile {
+                    relative_path: "Chara/Chara1.csv".into(),
+                    payload: CsvFilePayload::Utf8(
+                        "NO,1\nNAME,琉米爱尔\nCALLNAME,露米\nNICKNAME,小露\nMASTERNAME,主人甲\nBASE,0,123\nCFLAG,0,7\nCSTR,1,称号甲\n"
+                            .into(),
+                    ),
+                },
+                FrontendFile {
+                    relative_path: "Chara/Chara2.csv".into(),
+                    payload: CsvFilePayload::Utf8(
+                        "NO,2\nNAME,奥莉薇娅\nCALLNAME,奥莉\nNICKNAME,小奥\nMASTERNAME,主人乙\n"
+                            .into(),
+                    ),
+                },
+            ],
+            erb: Vec::new(),
+        },
+        &CsvLoadOptions {
+            search_subdirectories: true,
+            ..CsvLoadOptions::default()
+        },
+    )
+    .data
+    .expect("character CSV fixtures should load");
+    let mut artifact = compile_source_with_data(CHARACTER_SHADOW_SOURCE, loaded);
+    let shadow = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SHADOW")
+        .expect("SHADOW")
+        .key;
+    // Bytecode references variables by SymbolKey, so declaration order is not
+    // semantic. Force the valid ordering captured in the EraFL snapshot.
+    artifact.refresh_ids().expect("fixture ids should refresh");
+    artifact
+        .globals
+        .sort_by_key(|definition| definition.owner != Some(shadow));
+    artifact
+}
+
+fn assert_shadowed_definitions_precede_canonical(artifact: &BytecodeArtifact) {
+    let shadow = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SHADOW")
+        .expect("SHADOW")
+        .key;
+    for name in [
+        "NAME",
+        "CALLNAME",
+        "NICKNAME",
+        "MASTERNAME",
+        "CSTR",
+        "NO",
+        "BASE",
+        "CFLAG",
+        "TARGET",
+    ] {
+        let local = artifact
+            .globals
+            .iter()
+            .position(|global| global.owner == Some(shadow) && global.name == name)
+            .unwrap_or_else(|| panic!("function-local {name}"));
+        let canonical = artifact
+            .globals
+            .iter()
+            .position(|global| global.owner.is_none() && global.name == name)
+            .unwrap_or_else(|| panic!("canonical {name}"));
+        assert!(
+            local < canonical,
+            "fixture must reproduce the declaration ordering that exposed {name} shadowing"
+        );
+    }
+}
+
+fn assert_canonical_character_name_lookup(vm: &Vm) {
+    for name in [
+        "NAME",
+        "CALLNAME",
+        "NICKNAME",
+        "MASTERNAME",
+        "CSTR",
+        "NO",
+        "BASE",
+        "CFLAG",
+    ] {
+        let definition = vm
+            .global_by_name(name)
+            .unwrap_or_else(|| panic!("canonical {name}"));
+        assert_eq!(definition.owner, None, "{name}");
+        assert_eq!(definition.storage, BytecodeStorage::Character, "{name}");
+    }
+    let target = vm.global_by_name("TARGET").expect("canonical TARGET");
+    assert_eq!(target.owner, None);
+    assert_eq!(target.storage, BytecodeStorage::Project);
+}
+
 #[test]
-fn character_name_method_keeps_explicit_names_and_invalidates_empty_results() {
-    let artifact = compile_source(
-        "@SYSTEM_TITLE\n\
-         ADDVOIDCHARA\n\
-         ADDVOIDCHARA\n\
-         ADDVOIDCHARA\n\
-         TARGET = 2\n\
-         RESULTS:0 '= ANAME(1)\n\
-         NAME:0 '= \"阿零\"\n\
-         NAME:1 '= \"琉米爱尔\"\n\
-         NAME:2 '= \"奥莉薇娅\"\n\
-         RESULTS:1 '= NAME:1\n\
-         RESULTS:2 '= ANAME(1)\n\
-         RESULTS:3 '= ANAME(2, 2)\n\
-         RESULTS:4 '= CHARACTER_ROW(1)\n\
-         RESULTS:5 '= CHARACTER_ROW(2)\n\
-         RETURN RESULT\n\
-         @ANAME(CHARA_ID = -999, CHARA_NUM = 1, ARG_SHOW_GUEST_JOB_TITLE = 1)\n\
-         #FUNCTIONS\n\
-         #DIM DYNAMIC CHARA_ID\n\
-         #DIM DYNAMIC CHARA_NUM\n\
-         #DIM DYNAMIC ARG_SHOW_GUEST_JOB_TITLE\n\
-         IF CSTR:(CHARA_ID):0 != \"\"\n\
-             RETURNF @\"%CSTR:(CHARA_ID):0%\\@CHARA_NUM > 1 ? 们 # \\@\"\n\
-         ENDIF\n\
-         RETURNF @\"%NAME:(CHARA_ID)%\\@CHARA_NUM > 1 ? 们 # \\@\"\n\
-         @CHARACTER_ROW(CHARA_ID)\n\
-         #FUNCTIONS\n\
-         #DIM DYNAMIC CHARA_ID\n\
-         RETURNF @\"◆%ANAME(CHARA_ID)%（女性）\"\n",
-    );
+fn character_csv_names_survive_same_named_function_locals() {
+    let artifact = character_shadowing_artifact();
+    assert_shadowed_definitions_precede_canonical(&artifact);
     let results = artifact
         .globals
         .iter()
@@ -1399,6 +1516,7 @@ fn character_name_method_keeps_explicit_names_and_invalidates_empty_results() {
         .key;
     let mut natives = NativeServiceRegistry::for_artifact(&artifact);
     let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    assert_canonical_character_name_lookup(&vm);
     vm.spawn_entry(entry, Vec::new()).unwrap();
     let report = vm.run_slice(
         &mut ReadyHost::default(),
@@ -1414,18 +1532,35 @@ fn character_name_method_keeps_explicit_names_and_invalidates_empty_results() {
         report.events
     );
     assert_eq!(
-        (0..=5)
+        (0..=10)
             .map(|index| vm.read_variable(results, &[index], None).unwrap())
             .collect::<Vec<_>>(),
         [
-            "",
             "琉米爱尔",
+            "露米",
+            "小露",
+            "主人甲",
+            "",
             "琉米爱尔",
             "奥莉薇娅们",
             "◆琉米爱尔（女性）",
             "◆奥莉薇娅（女性）",
+            "奥莉薇娅",
+            "称号甲",
         ]
         .map(|value| VmValue::String(value.into()))
         .to_vec()
+    );
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.owner.is_none() && global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    assert_eq!(
+        (11..=13)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        [1, 123, 7].map(VmValue::Integer).to_vec()
     );
 }

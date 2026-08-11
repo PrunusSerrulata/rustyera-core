@@ -62,7 +62,9 @@ pub use state::Vm;
 pub use structured::{StructuredExtension, StructuredScope};
 pub use value::{HostWrite, PlaceDescriptor, VmValue};
 
-pub(crate) use memory::{Memory, VariableCell, VariableMap};
+pub(crate) use memory::{
+    Memory, VariableCell, VariableMap, character_definition, shared_definition,
+};
 pub(crate) use state::{
     Fiber, FiberState, FindElementCacheKey, FindElementNeedle, ProgramGeneration, WaitingHost,
     bind_persistent_arguments, make_frame, prepare_dynamic_arguments, validate_arguments,

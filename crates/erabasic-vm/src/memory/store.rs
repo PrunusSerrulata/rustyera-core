@@ -211,7 +211,7 @@ impl Memory {
     }
 
     fn set_named_integer(&mut self, artifact: &BytecodeArtifact, name: &str, value: i64) {
-        if let Some(definition) = find_definition(artifact, name)
+        if let Some(definition) = shared_definition(artifact, name)
             && let Some(cell) = self.shared.get_mut(&definition.key)
         {
             let _ = cell.set(0, VmValue::Integer(value));
@@ -224,7 +224,7 @@ impl Memory {
         name: &str,
         value: &str,
     ) {
-        let Some(definition) = find_definition(artifact, name) else {
+        let Some(definition) = shared_definition(artifact, name) else {
             return;
         };
         if definition.storage != BytecodeStorage::Calculated
@@ -238,7 +238,7 @@ impl Memory {
     }
 
     fn set_named_string(&mut self, artifact: &BytecodeArtifact, name: &str, value: &str) {
-        if let Some(definition) = find_definition(artifact, name)
+        if let Some(definition) = shared_definition(artifact, name)
             && let Some(cell) = self.shared.get_mut(&definition.key)
         {
             let _ = cell.set(0, VmValue::String(value.into()));
@@ -246,7 +246,7 @@ impl Memory {
     }
 
     fn set_named_values(&mut self, artifact: &BytecodeArtifact, name: &str, values: &[i64]) {
-        if let Some(definition) = find_definition(artifact, name)
+        if let Some(definition) = shared_definition(artifact, name)
             && let Some(cell) = self.shared.get_mut(&definition.key)
         {
             for (index, value) in values.iter().copied().take(cell.len()).enumerate() {
@@ -261,7 +261,7 @@ impl Memory {
         name: &str,
         values: &[Option<String>],
     ) {
-        if let Some(definition) = find_definition(artifact, name)
+        if let Some(definition) = shared_definition(artifact, name)
             && let Some(cell) = self.shared.get_mut(&definition.key)
         {
             for (index, value) in values.iter().take(cell.len()).enumerate() {
@@ -271,7 +271,7 @@ impl Memory {
     }
 
     pub fn target_character(&self, artifact: &BytecodeArtifact, generation: GenerationId) -> usize {
-        self.target_character_from_definition(find_definition(artifact, "TARGET"), generation)
+        self.target_character_from_definition(shared_definition(artifact, "TARGET"), generation)
     }
 
     #[inline]
@@ -514,13 +514,6 @@ impl Memory {
     }
 }
 
-fn find_definition<'a>(artifact: &'a BytecodeArtifact, name: &str) -> Option<&'a BytecodeGlobal> {
-    artifact
-        .globals
-        .iter()
-        .find(|definition| definition.name.eq_ignore_ascii_case(name))
-}
-
 fn initialize_character(
     artifact: &BytecodeArtifact,
     cells: &mut VariableMap,
@@ -533,7 +526,7 @@ fn initialize_character(
         ("NICKNAME", VmValue::String(template.nick_name.clone())),
         ("MASTERNAME", VmValue::String(template.master_name.clone())),
     ] {
-        if let Some(definition) = find_definition(artifact, name)
+        if let Some(definition) = character_definition(artifact, name)
             && let Some(cell) = cells.get_mut(&definition.key)
         {
             let _ = cell.set(0, value);
@@ -551,7 +544,7 @@ fn initialize_character(
         ("EQUIP", &template.equip),
         ("JUEL", &template.juel),
     ] {
-        if let Some(definition) = find_definition(artifact, name)
+        if let Some(definition) = character_definition(artifact, name)
             && let Some(cell) = cells.get_mut(&definition.key)
         {
             for (index, value) in values {
@@ -561,7 +554,7 @@ fn initialize_character(
             }
         }
     }
-    if let Some(definition) = find_definition(artifact, "CSTR")
+    if let Some(definition) = character_definition(artifact, "CSTR")
         && let Some(cell) = cells.get_mut(&definition.key)
     {
         for (index, value) in &template.cstr {

@@ -142,13 +142,7 @@ pub(super) fn global_unindexed_place(
     let variable = vm
         .generations
         .get(&generation)
-        .and_then(|generation| {
-            generation
-                .artifact
-                .globals
-                .iter()
-                .find(|definition| definition.name.eq_ignore_ascii_case(name))
-        })
+        .and_then(|generation| generation.global_by_name(name))
         .ok_or_else(|| VmError::InvalidState(format!("{name} is not defined")))?;
     Ok(PlaceDescriptor {
         variable: variable.key,
@@ -562,7 +556,9 @@ pub(super) fn execute_random_place_transaction(
     let definition = artifact
         .globals
         .iter()
-        .find(|definition| definition.name.eq_ignore_ascii_case("RANDDATA"))
+        .find(|definition| {
+            definition.owner.is_none() && definition.name.eq_ignore_ascii_case("RANDDATA")
+        })
         .ok_or_else(|| "RANDDATA is not defined".to_owned())?;
     if definition.storage != BytecodeStorage::Project
         || definition.value_type != BytecodeType::Integer

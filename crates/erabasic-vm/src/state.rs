@@ -33,7 +33,10 @@ pub(crate) struct ProgramGeneration {
     literal_group_match_plans: Vec<Vec<Option<LiteralGroupMatchPlan>>>,
     function_memo_plans: Vec<Option<FunctionMemoPlan>>,
     memoized_indexed_read_plans: Vec<Option<MemoizedIndexedReadPlan>>,
+    // Canonical owner-free definitions always win system-name lookup.
     global_name_indices: HashMap<String, usize>,
+    // Runtime inspection historically exposes otherwise unique function variables.
+    runtime_name_fallback_indices: HashMap<String, usize>,
     target_global_index: Option<usize>,
     native_import_indices: HashMap<SymbolKey, usize>,
     host_import_indices: HashMap<SymbolKey, usize>,
@@ -97,11 +100,17 @@ impl ProgramGeneration {
                     .collect()
             })
             .collect();
-        let mut global_name_indices = HashMap::new();
+        let mut runtime_name_fallback_indices = HashMap::new();
         for (index, global) in artifact.globals.iter().enumerate() {
-            global_name_indices
+            runtime_name_fallback_indices
                 .entry(global.name.to_ascii_uppercase())
                 .or_insert(index);
+        }
+        let mut global_name_indices = HashMap::new();
+        for (index, global) in artifact.globals.iter().enumerate() {
+            if global.owner.is_none() {
+                global_name_indices.insert(global.name.to_ascii_uppercase(), index);
+            }
         }
         let target_global_index = global_name_indices.get("TARGET").copied();
         let mut native_import_indices = HashMap::new();
@@ -261,6 +270,7 @@ impl ProgramGeneration {
             function_memo_plans,
             memoized_indexed_read_plans,
             global_name_indices,
+            runtime_name_fallback_indices,
             target_global_index,
             native_import_indices,
             host_import_indices,
@@ -346,6 +356,7 @@ impl ProgramGeneration {
 
     pub(crate) fn global_by_name(&self, name: &str) -> Option<&erabasic_bytecode::BytecodeGlobal> {
         case_insensitive_index(&self.global_name_indices, name)
+            .or_else(|| case_insensitive_index(&self.runtime_name_fallback_indices, name))
             .and_then(|index| self.artifact.globals.get(*index))
     }
 
