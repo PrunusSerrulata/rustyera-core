@@ -135,7 +135,7 @@ impl XmlDocument {
                 attribute: None,
             }]);
         }
-        if path.contains(['|', ':']) {
+        if path.contains('|') {
             return Err(
                 "native.xpath.unsupported: namespace and union expressions are unsupported".into(),
             );
@@ -489,6 +489,7 @@ enum XPathPredicate {
     AttributeEquals(String, String),
     TextEquals(String),
     ChildEquals(String, String),
+    DescendantExists(String),
 }
 
 fn parse_xpath_step(value: &str) -> Result<XPathStep, String> {
@@ -500,7 +501,7 @@ fn parse_xpath_step(value: &str) -> Result<XPathStep, String> {
     } else {
         (value, None)
     };
-    if test.is_empty() || test.contains(['(', ')']) {
+    if test.is_empty() || test.contains(['(', ')', ':']) {
         return Err("native.xpath.unsupported: unsupported node test".into());
     }
     let test = test.strip_prefix('@').map_or_else(
@@ -521,25 +522,44 @@ fn parse_xpath_predicate(value: &str) -> Result<XPathPredicate, String> {
     }
     if let Some(attribute) = value.strip_prefix('@') {
         if let Some((name, literal)) = attribute.split_once('=') {
+            let name = name.trim();
+            ensure_xpath_name(name)?;
             return Ok(XPathPredicate::AttributeEquals(
-                name.trim().to_owned(),
+                name.to_owned(),
                 xpath_literal(literal)?,
             ));
         }
-        return Ok(XPathPredicate::AttributeExists(attribute.trim().to_owned()));
+        let attribute = attribute.trim();
+        ensure_xpath_name(attribute)?;
+        return Ok(XPathPredicate::AttributeExists(attribute.to_owned()));
     }
     if let Some(literal) = value.strip_prefix("text()=") {
         return Ok(XPathPredicate::TextEquals(xpath_literal(literal)?));
     }
+    if let Some(name) = value.strip_prefix("descendant::") {
+        let name = name.trim();
+        ensure_xpath_name(name)?;
+        return Ok(XPathPredicate::DescendantExists(name.to_owned()));
+    }
     if let Some((child, literal)) = value.split_once('=')
         && !child.trim().is_empty()
     {
+        let child = child.trim();
+        ensure_xpath_name(child)?;
         return Ok(XPathPredicate::ChildEquals(
-            child.trim().to_owned(),
+            child.to_owned(),
             xpath_literal(literal)?,
         ));
     }
     Err("native.xpath.unsupported: predicate is outside the fixed XPath subset".into())
+}
+
+fn ensure_xpath_name(value: &str) -> Result<(), String> {
+    if value.is_empty() || value.contains([':', '/', '[', ']', '(', ')', '@']) {
+        Err("native.xpath.unsupported: namespace and axis expressions are unsupported".into())
+    } else {
+        Ok(())
+    }
 }
 
 pub(super) fn xpath_literal(value: &str) -> Result<String, String> {
@@ -599,6 +619,7 @@ fn predicate_matches(element: &XmlElement, predicate: Option<&XPathPredicate>) -
             .elements_named(name)
             .iter()
             .any(|child| child.inner_text() == *value),
+        Some(XPathPredicate::DescendantExists(name)) => element.has_descendant_named(name),
     }
 }
 
@@ -687,6 +708,15 @@ impl XmlElement {
                 XmlChild::Element(_) | XmlChild::Text(_) => None,
             })
             .collect()
+    }
+
+    fn has_descendant_named(&self, name: &str) -> bool {
+        self.children.iter().any(|child| match child {
+            XmlChild::Element(element) => {
+                (name == "*" || element.name == name) || element.has_descendant_named(name)
+            }
+            XmlChild::Text(_) => false,
+        })
     }
 
     pub(super) fn inner_text(&self) -> String {

@@ -41,6 +41,27 @@ fn xpath_subset_handles_descendants_attributes_and_predicates() {
 }
 
 #[test]
+fn xpath_subset_supports_descendant_existence_predicates() {
+    let document = parse_xml(
+        "<root><defname id='direct'><modifier /></defname><defname id='nested'><group><modifier /></group></defname><defname id='none'><group /></defname></root>",
+    )
+    .unwrap();
+
+    let selected = document
+        .select("//defname[descendant::modifier]/@id")
+        .unwrap();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|selection| document.selection_value(selection, 0))
+            .collect::<Vec<_>>(),
+        ["direct", "nested"]
+    );
+    assert!(document.select("//ns:defname").is_err());
+    assert!(document.select("//defname[child::modifier]").is_err());
+}
+
+#[test]
 fn xml_attribute_append_replaces_an_existing_name_at_the_end() {
     let mut element = XmlElement {
         name: "item".into(),
