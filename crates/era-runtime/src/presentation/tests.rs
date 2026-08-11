@@ -33,6 +33,8 @@ fn project_default_style_changes_update_existing_default_runs() {
     model.append_print_text("bold".into(), false, true);
     model.set_font(Some("explicit".into()));
     model.append_print_text("explicit".into(), false, true);
+    model.reset_style();
+    model.append_separator("-".into());
 
     let mut next = model.default_style.clone();
     next.font_family = Some("project-default".into());
@@ -43,8 +45,8 @@ fn project_default_style_changes_update_existing_default_runs() {
         .lines
         .iter()
         .map(|line| match &line.runs[0] {
-            DisplayRun::Text { style, .. } => style,
-            _ => panic!("test line must contain text"),
+            DisplayRun::Text { style, .. } | DisplayRun::Separator { style, .. } => style,
+            _ => panic!("test line must contain styled text or a separator"),
         })
         .collect::<Vec<_>>();
     assert_eq!(styles[0].font_family, next.font_family);
@@ -54,7 +56,9 @@ fn project_default_style_changes_update_existing_default_runs() {
     assert!(styles[1].bold);
     assert_eq!(styles[2].font_family.as_deref(), Some("explicit"));
     assert_eq!(styles[2].font_millipixels, 20_000);
-    assert_eq!(model.delivery.dirty_lines, BTreeSet::from([1, 2, 3]));
+    assert_eq!(styles[3].font_family, next.font_family);
+    assert_eq!(styles[3].font_millipixels, 20_000);
+    assert_eq!(model.delivery.dirty_lines, BTreeSet::from([1, 2, 3, 4]));
     assert!(!model.delivery.dirty.force_snapshot);
 }
 use era_runtime_protocol::PresentationOperation;
@@ -487,10 +491,13 @@ fn projection_only_suppresses_alignment_space_before_double_vertical_edge() {
 
 #[test]
 fn plain_separator_fallback_fills_logical_columns_with_ambiguous_patterns() {
+    let mut separator_style = TextStyle::default();
+    separator_style.foreground.red = 18;
     let projected = super::projection::project_runs(
         vec![DisplayRun::Separator {
             pattern: "■A".into(),
             role: SeparatorRole::Rule,
+            style: separator_style.clone(),
         }],
         false,
         false,
@@ -501,8 +508,8 @@ fn plain_separator_fallback_fills_logical_columns_with_ambiguous_patterns() {
     );
     assert!(matches!(
         projected.as_slice(),
-        [DisplayRun::TextLayout { text, columns: 75, .. }]
-            if text == &"■A".repeat(25)
+        [DisplayRun::TextLayout { text, style, columns: 75, .. }]
+            if text == &"■A".repeat(25) && style == &separator_style
     ));
 }
 
@@ -510,12 +517,52 @@ fn plain_separator_fallback_fills_logical_columns_with_ambiguous_patterns() {
 fn separator_flushes_existing_text_to_an_independent_line() {
     let mut model = PresentationModel::default();
     model.append_print_text("prefix".into(), false, false);
+    model.set_foreground(0x12_34_56);
+    model.current_style.background = Some(rgb_color(0x65_43_21));
+    model.set_font(Some("separator-font".into()));
+    model.current_style.font_millipixels = 21_000;
+    model.set_font_style(1 | 2 | 4 | 8);
     model.append_separator("=".into());
     let snapshot = model.snapshot();
     assert_eq!(snapshot.history.logical_lines.len(), 2);
     assert!(matches!(
         &snapshot.history.logical_lines[1].runs[0],
-        DisplayRun::Separator { pattern, .. } if pattern == "="
+        DisplayRun::Separator { pattern, style, .. }
+            if pattern == "="
+                && style.foreground.red == 0x12
+                && style.foreground.green == 0x34
+                && style.foreground.blue == 0x56
+                && style.background == Some(rgb_color(0x65_43_21))
+                && style.font_family.as_deref() == Some("separator-font")
+                && style.font_millipixels == 21_000
+                && !style.bold
+                && !style.italic
+                && !style.underline
+                && !style.strikeout
+    ));
+}
+
+#[test]
+fn separator_style_defaults_when_restoring_legacy_messagepack() {
+    #[derive(Serialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum LegacyDisplayRun {
+        Separator {
+            pattern: String,
+            role: SeparatorRole,
+        },
+    }
+
+    let encoded = rmp_serde::to_vec(&LegacyDisplayRun::Separator {
+        pattern: "-".into(),
+        role: SeparatorRole::Rule,
+    })
+    .unwrap();
+    let restored: DisplayRun = rmp_serde::from_slice(&encoded).unwrap();
+    assert!(matches!(
+        restored,
+        DisplayRun::Separator { pattern, style, .. }
+            if pattern == "-" && style == TextStyle::default()
     ));
 }
 

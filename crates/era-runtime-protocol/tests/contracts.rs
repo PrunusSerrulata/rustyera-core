@@ -17,10 +17,10 @@ use era_runtime_protocol::{
     ProjectionLength, ProjectionObservation, ProjectionQueryContext, ProjectionSize,
     ProjectionTransform, RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay,
     ReturnToTitleRequest, RuntimeLog, RuntimeLogLevel, RuntimeMessage,
-    SAMPLE_CANVAS_PIXEL_OPERATION, ServiceKind, ServiceRequest, SnapshotExportPurpose,
-    StateExportCancel, StateExportChunkRequest, StateExportKind, StateExportRequest,
-    StateImportBegin, StorageNamespace, StorageOperation, StorageRequest, TextExtentRequest,
-    TextStyle, parse_document, validate_relative_path,
+    SAMPLE_CANVAS_PIXEL_OPERATION, SeparatorRole, ServiceKind, ServiceRequest,
+    SnapshotExportPurpose, StateExportCancel, StateExportChunkRequest, StateExportKind,
+    StateExportRequest, StateImportBegin, StorageNamespace, StorageOperation, StorageRequest,
+    TextExtentRequest, TextStyle, parse_document, validate_relative_path,
 };
 
 #[test]
@@ -56,6 +56,37 @@ fn protocol_26_round_trips_runtime_owned_text_advance() {
     };
 
     let bytes = encode_canonical(&run).expect("encode text layout");
+    assert_eq!(decode_canonical::<DisplayRun>(&bytes), Ok(run));
+}
+
+#[test]
+fn styled_separator_round_trips_canonical_protocol_field() {
+    let run = DisplayRun::Separator {
+        pattern: "*-".into(),
+        role: SeparatorRole::Rule,
+        style: TextStyle {
+            foreground: Color {
+                red: 18,
+                green: 52,
+                blue: 86,
+                alpha: 255,
+            },
+            background: Some(Color {
+                red: 101,
+                green: 67,
+                blue: 33,
+                alpha: 255,
+            }),
+            bold: false,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            font_family: Some("separator-font".into()),
+            font_millipixels: 21_000,
+        },
+    };
+
+    let bytes = encode_canonical(&run).expect("encode styled separator");
     assert_eq!(decode_canonical::<DisplayRun>(&bytes), Ok(run));
 }
 

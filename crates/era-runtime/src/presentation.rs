@@ -489,9 +489,17 @@ impl PresentationModel {
         if !self.pending_runs.is_empty() {
             self.commit_line();
         }
+        let mut style = self.current_style.clone();
+        // Emuera renders DRAWLINE with the active colors and font face/size, but
+        // deliberately resets the four FontStyle flags to Regular for the rule.
+        style.bold = false;
+        style.italic = false;
+        style.underline = false;
+        style.strikeout = false;
         self.pending_runs.push(DisplayRun::Separator {
             pattern,
             role: SeparatorRole::Rule,
+            style,
         });
         self.bump();
         self.commit_line();
@@ -936,7 +944,9 @@ fn replace_project_default_style(
     let mut changed = false;
     for run in runs {
         match run {
-            DisplayRun::Text { style, .. } | DisplayRun::TextLayout { style, .. } => {
+            DisplayRun::Text { style, .. }
+            | DisplayRun::TextLayout { style, .. }
+            | DisplayRun::Separator { style, .. } => {
                 changed |= replace_matching_style_defaults(style, previous, next);
             }
             DisplayRun::Button {
@@ -953,7 +963,6 @@ fn replace_project_default_style(
             DisplayRun::HtmlDocument { .. }
             | DisplayRun::Image { .. }
             | DisplayRun::Shape { .. }
-            | DisplayRun::Separator { .. }
             | DisplayRun::Space { .. } => {}
         }
     }

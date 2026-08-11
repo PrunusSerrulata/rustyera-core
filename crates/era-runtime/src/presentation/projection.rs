@@ -584,12 +584,8 @@ pub(super) fn project_runs(
                 preferred_columns,
                 options,
             )),
-            DisplayRun::Separator { pattern, .. } if !separators => {
-                projected.push(project_separator(
-                    &pattern,
-                    line_height,
-                    character_width_mode,
-                ));
+            DisplayRun::Separator { pattern, style, .. } if !separators => {
+                projected.push(project_separator(&pattern, style, character_width_mode));
             }
             DisplayRun::HtmlDocument { document } if !html => {
                 projected.push(projected_plain_text(
@@ -616,14 +612,14 @@ pub(super) fn project_runs(
 
 fn project_separator(
     pattern: &str,
-    line_height: i64,
+    style: TextStyle,
     character_width_mode: CharacterWidthMode,
 ) -> DisplayRun {
     // A fixed 75-column projection is deterministic and independent of viewport.
     let pattern = if pattern.is_empty() { "-" } else { pattern };
     let text = erabasic_vm::logical_line_string_with_mode(pattern, 75, character_width_mode)
         .unwrap_or_default();
-    projected_plain_text(text, line_height, character_width_mode)
+    text_layout(text, style, None, character_width_mode)
 }
 
 fn project_column_cell(
@@ -850,19 +846,5 @@ pub(crate) fn display_value(value: &VmValue) -> String {
 }
 
 pub(super) fn default_style() -> TextStyle {
-    TextStyle {
-        foreground: Color {
-            red: 192,
-            green: 192,
-            blue: 192,
-            alpha: 255,
-        },
-        background: None,
-        bold: false,
-        italic: false,
-        underline: false,
-        strikeout: false,
-        font_family: Some("ＭＳ ゴシック".into()),
-        font_millipixels: 18_000,
-    }
+    TextStyle::default()
 }

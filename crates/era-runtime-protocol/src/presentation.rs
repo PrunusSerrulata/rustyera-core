@@ -101,6 +101,26 @@ pub struct TextStyle {
     pub font_millipixels: u32,
 }
 
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            foreground: Color {
+                red: 192,
+                green: 192,
+                blue: 192,
+                alpha: 255,
+            },
+            background: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            font_family: Some("ＭＳ ゴシック".into()),
+            font_millipixels: 18_000,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]
@@ -319,6 +339,10 @@ pub enum DisplayRun {
         pattern: String,
         #[n(1)]
         role: SeparatorRole,
+        /// The active text style with Emuera's DRAWLINE regular-font normalization.
+        #[n(2)]
+        #[serde(default)]
+        style: TextStyle,
     },
     #[n(7)]
     Space {
