@@ -360,6 +360,22 @@ impl ProgramGeneration {
             .and_then(|index| self.artifact.globals.get(*index))
     }
 
+    pub(crate) fn scoped_variable(
+        &self,
+        function: SymbolKey,
+        name: &str,
+    ) -> Option<&erabasic_bytecode::BytecodeGlobal> {
+        self.function_locals(function)
+            .chain(self.function_statics(function))
+            .chain(
+                self.artifact
+                    .globals
+                    .iter()
+                    .filter(|global| global.owner.is_none()),
+            )
+            .find(|global| global.name.eq_ignore_ascii_case(name))
+    }
+
     pub(crate) fn target_global(&self) -> Option<&erabasic_bytecode::BytecodeGlobal> {
         self.target_global_index
             .and_then(|index| self.artifact.globals.get(index))
@@ -962,6 +978,8 @@ pub(crate) struct Frame {
     pub event_context: bool,
     /// Nested CALLEVENT handlers are sequenced in the initiating caller frame.
     pub event_dispatch: Option<EventDispatch>,
+    /// Late-bound STRFORM work owned by this frame and resumed by the scheduler.
+    pub runtime_form: Option<crate::interpreter::dynamic_form::RuntimeFormContinuation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1028,6 +1046,12 @@ impl Fiber {
     pub fn mark_progress(&mut self) {
         self.backward_branches_without_progress = 0;
         self.consecutive_budget_exhaustions = 0;
+    }
+
+    pub(crate) fn clear_runtime_forms(&mut self) {
+        for frame in &mut self.frames {
+            frame.runtime_form = None;
+        }
     }
 }
 

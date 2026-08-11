@@ -79,10 +79,14 @@ pub struct BytecodeParameter {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct BytecodeCallCompatibility {
     pub allow_event_as_normal: bool,
     pub allow_omitted_arguments: bool,
     pub auto_convert_integer_to_string: bool,
+    pub allow_full_width_space: bool,
+    pub debug_semicolon: bool,
+    pub ignore_triple_symbols: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

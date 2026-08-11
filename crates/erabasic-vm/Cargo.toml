@@ -6,9 +6,11 @@ license.workspace = true
 
 [dependencies]
 blake3.workspace = true
+erabasic-ast = { path = "../erabasic-ast" }
 erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-data = { path = "../erabasic-data" }
 erabasic-html = { path = "../erabasic-html" }
+erabasic-parser = { path = "../erabasic-parser" }
 erabasic-validator = { path = "../erabasic-validator" }
 regex.workspace = true
 quick-xml.workspace = true

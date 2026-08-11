@@ -48,10 +48,15 @@ pub enum FunctionKind {
 /// They are part of HIR rather than compiler process state because dynamic targets
 /// cannot be validated until VM execution.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct CallCompatibility {
     pub allow_event_as_normal: bool,
     pub allow_omitted_arguments: bool,
     pub auto_convert_integer_to_string: bool,
+    /// Lexer switches must survive compilation because STRFORM parses at runtime.
+    pub allow_full_width_space: bool,
+    pub debug_semicolon: bool,
+    pub ignore_triple_symbols: bool,
 }
 
 /// Reference event modifiers retained after parsing. They affect dispatch order rather

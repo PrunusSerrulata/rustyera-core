@@ -145,7 +145,7 @@ impl NativeService for RandomNative {
     }
 }
 
-pub(super) fn apply_width_with_mode(
+pub(crate) fn apply_width_with_mode(
     value: &str,
     width: Option<&VmValue>,
     alignment: Option<&VmValue>,

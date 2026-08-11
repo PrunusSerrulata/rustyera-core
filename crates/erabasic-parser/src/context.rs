@@ -100,6 +100,18 @@ impl DefaultParserContext {
     pub fn register_function(&mut self, name: impl Into<String>) {
         self.functions.insert(name.into().to_uppercase());
     }
+
+    /// Apply the project lexer switches needed when parsing late-bound FORM text.
+    pub fn set_lexer_compatibility(
+        &mut self,
+        allow_full_width_space: bool,
+        debug_semicolon: bool,
+        ignore_triple_symbols: bool,
+    ) {
+        self.lexer.allow_full_width_space = allow_full_width_space;
+        self.lexer.debug_semicolon = debug_semicolon;
+        self.lexer.ignore_triple_symbols = ignore_triple_symbols;
+    }
 }
 
 impl ParserContext for DefaultParserContext {

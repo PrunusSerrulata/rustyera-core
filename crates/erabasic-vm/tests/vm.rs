@@ -330,3 +330,5 @@ mod core;
 mod debug_snapshot;
 #[path = "vm/runtime.rs"]
 mod runtime;
+#[path = "vm/strform.rs"]
+mod strform;

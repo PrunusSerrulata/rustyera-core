@@ -1,0 +1,294 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<titledef>
+<title id = "1" defname = "TITLE_SUM_STATUS_1" titlename = "在野之能者">
+		<unlockHint>
+			当主角与非独特角色的一般属性总和达到较高水平时解锁
+		</unlockHint>
+		<titleDescription>
+			主角与非独特角色的一般属性总和600以上
+		</titleDescription>
+		<activateCondition condition = "{!IS_UNIQUE_CHARA(CHARA_ID) || CHARA_ID == MASTER}" />
+		<reqfunc funcname = "CHARA_TITLE_REQUIRE_GENERAL_STATUS_SUM" ARGS0 = "600" />
+	</title>
+
+<title id="2" defname = "TITLE_SUM_STATUS_2" titlename="在野之俊杰">
+		<unlockHint>
+			当主角与非独特角色的一般属性总和达到极高水平时解锁
+		</unlockHint>
+		<titleDescription>
+			主角与非独特角色的一般属性总和750以上
+		</titleDescription>
+		<activateCondition condition="{!IS_UNIQUE_CHARA(CHARA_ID) || CHARA_ID == MASTER}" />
+		<reqfunc funcname = "CHARA_TITLE_REQUIRE_GENERAL_STATUS_SUM" ARGS0 = "750" />
+	</title>
+
+<title id = "3" defname = "TITLE_SUM_STATUS_3" titlename = "在野之豪杰">
+		<unlockHint>
+			当主角与非独特角色的一般属性总和达到非常高水准时解锁
+		</unlockHint>
+		<titleDescription>
+			主角与非独特角色的一般属性总和900以上
+		</titleDescription>
+		<activateCondition condition="{!IS_UNIQUE_CHARA(CHARA_ID) || CHARA_ID == MASTER}" />
+		<reqfunc funcname = "CHARA_TITLE_REQUIRE_GENERAL_STATUS_SUM" ARGS0 = "900" />
+	</title>
+	
+	<title id = "4" defname = "TITLE_SUM_STATUS_4" titlename = "在野之异才">
+		<unlockHint>
+			当主角与非独特角色的一般属性总和达到极高水准时解锁
+		</unlockHint>
+		<titleDescription>
+			主角与非独特角色的一般属性总和1100以上
+		</titleDescription>
+		<activateCondition condition="{!IS_UNIQUE_CHARA(CHARA_ID) || CHARA_ID == MASTER}" />
+		<reqfunc funcname = "CHARA_TITLE_REQUIRE_GENERAL_STATUS_SUM" ARGS0 = "1100" />
+	</title>
+
+	<title id = "5" defname = "TITLE_SPECIALIST_1" titlename = "专家">
+		<unlockHint>
+			当任一一般属性达到极高水准时解锁
+		</unlockHint>
+		<titleDescription>
+			任一一般属性达到150以上
+		</titleDescription>
+		<reqfunc funcname = "CHARA_TITLE_REQUIRE_STATUS_CHECK" ARGS0 = "ANY" ARGS1 = "150" />
+	</title>
+
+<title id="15" defname="TITLE_RELATION_VALUE_1" titlename="交织之绊">
+		<unlockHint>
+			当好感度・従属度・支配度任一达到较高水平时解锁
+		</unlockHint>
+		<titleDescription>
+			好感度・従属度・支配度任一达到100,000以上
+		</titleDescription>
+		<activateCondition condition="{CHARA_ID != MASTER}" />
+		<reqfunc funcname = "CHARA_TITLE_REQUIRE_RELATION_VALUE_CHECK" ARGS0 = "ANY" ARGS1 = "100000" />
+	</title>
+
+<title id="16" defname="TITLE_RELATION_VALUE_2" titlename="斩不断的羁绊">
+		<unlockHint>
+			当好感度・従属度・支配度任一达到很高水平时解锁
+		</unlockHint>
+		<titleDescription>
+			好感度・従属度・支配度任一达到500,000以上
+		</titleDescription>
+		<activateCondition condition = "{CHARA_ID != MASTER}" />
+		<reqfunc funcname="CHARA_TITLE_REQUIRE_RELATION_VALUE_CHECK" ARGS0="ANY" ARGS1="500000" />
+	</title>
+
+<title id="17" defname="TITLE_RELATION_VALUE_3" titlename="永远的羁绊">
+		<unlockHint>
+			当好感度・従属度・支配度任一达到极高水平时解锁
+		</unlockHint>
+		<titleDescription>
+			好感度・従属度・支配度任一达到1,000,000以上
+		</titleDescription>
+		<activateCondition condition = "{CHARA_ID != MASTER}" />
+		<reqfunc funcname="CHARA_TITLE_REQUIRE_RELATION_VALUE_CHECK" ARGS0="ANY" ARGS1="1000000" />
+	</title>
+
+<title id="19" defname="TITLE_RELATION_MARRIAGE" titlename="永恒誓约">
+		<unlockHint>
+			与该角色缔结婚姻关系时解锁
+		</unlockHint>
+		<titleDescription>
+			已与该角色缔结婚姻关系
+		</titleDescription>
+		<activateCondition condition = "{CHARA_ID != MASTER}" />
+		<reqCondition condition = "{TALENT:CHARA_ID:正妻 == 1 || TALENT:CHARA_ID:妾 == 1}" />
+	</title>
+
+<title id="25" defname="TITLE_NASTY_TALENT_SUM_1" titlename="欢愉印记">
+		<unlockHint>
+			CVABMU感总值达到一定数值后解锁
+		</unlockHint>
+		<titleDescription>
+			CVABMU感总和≥60
+		</titleDescription>
+		<reqfunc funcname="CHARA_TITLE_REQUIRE_STATUS_CHECK" ARGS0="CVABMU" ARGS1="60" />
+	</title>
+
+	<title id="26" defname="TITLE_NASTY_TALENT_SUM_2" titlename="污秽之躯">
+		<unlockHint>
+			CVABMU感总值达到一定数值后解锁
+		</unlockHint>
+		<titleDescription>
+			CVABMU感总和≥90
+		</titleDescription>
+		<reqfunc funcname="CHARA_TITLE_REQUIRE_STATUS_CHECK" ARGS0="CVABMU" ARGS1="90" />
+	</title>
+
+	<title id="30" defname="TITLE_NASTY_TALENT_SUM_1" titlename="对色欲的渴望">
+		<unlockHint>
+			获得特定数量淫乱特质后解锁
+		</unlockHint>
+		<titleDescription>
+			已获得淫乱特质≥3个
+		</titleDescription>
+		<reqCondition condition="{SUM_NASTY_TALENT(CHARA_ID) >= 3}" />
+	</title>
+	
+	<title id="31" defname="TITLE_NASTY_TALENT_SUM_2" titlename="色欲的俘虏">
+		<unlockHint>
+			获得特定数量淫乱特质后解锁
+		</unlockHint>
+		<titleDescription>
+			已获得淫乱特质≥6个
+		</titleDescription>
+		<reqCondition condition="{SUM_NASTY_TALENT(CHARA_ID) >= 6}" />
+	</title>
+
+	<title id="32" defname="TITLE_NASTY_TALENT_SUM_3" titlename="色魔">
+		<unlockHint>
+			获得特定数量淫乱特质后解锁
+		</unlockHint>
+		<titleDescription>
+			已获得淫乱特质≥10个
+		</titleDescription>
+		<reqCondition condition="{SUM_NASTY_TALENT(CHARA_ID) >= 10}" />
+	</title>
+
+	<title id="33" defname="TITLE_NASTY_TALENT_SUM_4" titlename="魅魔眷属">
+		<unlockHint>
+			获得特定数量淫乱特质后解锁
+		</unlockHint>
+		<titleDescription>
+			已获得淫乱特质≥16个
+		</titleDescription>
+		<reqCondition condition="{SUM_NASTY_TALENT(CHARA_ID) >= 16}" />
+	</title>
+
+	<title id="40" defname="TITLE_MERCHANT_1" titlename="地方名士">
+		<unlockHint>
+			领地商业声望达到特定数值后解锁
+		</unlockHint>
+		<titleDescription>
+			领地商业声望≥150
+		</titleDescription>
+		<activateCondition condition="{CHARA_ID == MASTER}" />
+		<reqCondition condition="{FLAG:領地評判_商業 >= 150}" />
+	</title>
+
+	<title id="41" defname="TITLE_MERCHANT_2" titlename="闻名遐迩">
+		<unlockHint>
+			领地商业声望达到特定数值后解锁
+		</unlockHint>
+		<titleDescription>
+			领地商业声望≥300
+		</titleDescription>
+		<activateCondition condition = "{CHARA_ID == MASTER}" />
+		<reqCondition condition = "{FLAG:領地評判_商業 >= 300}" />
+	</title>
+
+	<title id="50" defname="TITLE_MONEY_1" titlename="百万富翁">
+		<unlockHint>
+			持有特定金额迪纳利后解锁
+		</unlockHint>
+		<titleDescription>
+			持有迪纳利≥1,000,000
+		</titleDescription>
+		<activateCondition condition = "{CHARA_ID == MASTER}" />
+		<reqCondition condition = "{MONEY >= 1000000}" />
+	</title>
+
+	<title id="55" defname="TITLE_MASTER_FALL_1" titlename="情场高手">
+		<unlockHint>
+			攻略角色达到特定数量后解锁
+		</unlockHint>
+		<titleDescription>
+			已攻略角色≥20名
+		</titleDescription>
+		<activateCondition condition = "{CHARA_ID == MASTER}" />
+		<reqCondition condition = "{FLAG:陥落人数 >= 20}" />
+	</title>
+
+	<title id="60" defname="100_DAYS_OF_SERVICE" titlename="老交情">
+		<unlockHint>
+			成为伙伴后经过一定时间解锁
+		</unlockHint>
+		<titleDescription>
+			成为伙伴100季以上
+		</titleDescription>
+		<activateCondition condition = "{CHARA_ID != MASTER}" />
+		<reqCondition condition = "{CFLAG:CHARA_ID:雇用期間 >= 100}" />
+	</title>
+
+	<title id="65" defname="EXTEND_ADV_SKILL_POINT_1" titlename="三星冒险者">
+		<unlockHint>
+			冒险SP扩展上限达到一定值时解锁
+		</unlockHint>
+		<titleDescription>
+			将冒险SP扩展上限提升至30点
+		</titleDescription>
+		<reqCondition condition = "{SKILL_GET_BASE_SP_EXTEND_LIMIT(CHARA_ID, スキル_大分類_冒険) >= 30}" />
+	</title>
+
+	<title id="70" defname="DICE_ROLL_SUCCEEDED_1" titlename="冒险者基本功">
+		<unlockHint>
+			骰子判定成功一定次数后解锁
+		</unlockHint>
+		<titleDescription>
+			骰子判定成功25次
+		</titleDescription>
+		<reqCondition condition = "{CFLAG:CHARA_ID:判定ロール成功回数 >= 25}" />
+	</title>
+
+	<title id = "80" defname = "DAMAGE_DEALT_1" titlename = "见习战士">
+		<unlockHint>
+			累计造成一定以上伤害后解锁（当前{CFLAG:CHARA_ID:累計与ダメージ}点）
+		</unlockHint>
+		<titleDescription>
+			累计造成伤害１００,０００点
+		</titleDescription>
+		<reqCondition condition = "{CFLAG:CHARA_ID:累計与ダメージ >= 100000}" />
+	</title>
+	<title id = "81" defname = "DAMAGE_DEALT_2" titlename = "渴求斗争之躯">
+		<unlockHint>
+			累计造成一定以上伤害后解锁（当前{CFLAG:CHARA_ID:累計与ダメージ}点）
+		</unlockHint>
+		<titleDescription>
+			累计造成伤害１,０００,０００点
+		</titleDescription>
+		<reqCondition condition = "{CFLAG:CHARA_ID:累計与ダメージ >= 1000000}" />
+	</title>
+
+	<title id = "85" defname = "DAMAGE_TAKEN_1" titlename = "荣誉负伤">
+		<unlockHint>
+			累计承受一定以上伤害后解锁（当前{CFLAG:CHARA_ID:累計被ダメージ}点）
+		</unlockHint>
+		<titleDescription>
+			累计承受伤害１００,０００点
+		</titleDescription>
+		<reqCondition condition = "{CFLAG:CHARA_ID:累計被ダメージ >= 100000}" />
+	</title>
+	<title id = "86" defname = "DAMAGE_TAKEN_2" titlename = "异能生存体">
+		<unlockHint>
+			累计承受一定以上伤害后解锁（当前{CFLAG:CHARA_ID:累計被ダメージ}点）
+		</unlockHint>
+		<titleDescription>
+			累计承受伤害１,０００,０００点
+		</titleDescription>
+		<reqCondition condition = "{CFLAG:CHARA_ID:累計被ダメージ >= 1000000}" />
+	</title>
+
+	<title id = "90" defname = "HIGH_DAMAGE_DEALT_1" titlename = "一击毙熊">
+		<unlockHint>
+			一击造成一定以上伤害后解锁（当前记录：{CFLAG:CHARA_ID:一撃最大与ダメージ}点）
+		</unlockHint>
+		<titleDescription>
+			一击造成４,０００点点以上的伤害
+		</titleDescription>
+		<reqCondition condition = "{CFLAG:CHARA_ID:一撃最大与ダメージ >= 4000}" />
+	</title>
+
+	<title id = "95" defname = "YOU_WIN_1" titlename = "百战炼磨">
+		<unlockHint>
+			战斗胜利次数达到一定以上后解锁（当前记录：{CFLAG:CHARA_ID:戦闘勝利回数}次）
+		</unlockHint>
+		<titleDescription>
+			战斗胜利次数１００次
+		</titleDescription>
+		<reqCondition condition = "{CFLAG:CHARA_ID:戦闘勝利回数 >= 100}" />
+	</title>
+
+</titledef>

@@ -15,11 +15,13 @@ use crate::{
 };
 
 mod character_ops;
+pub(crate) mod dynamic_form;
 mod extended_ops;
 mod native_ops;
 mod operand;
 
 use character_ops::{character_series, execute_character_mutation, execute_character_query};
+use dynamic_form::{RuntimeFormStep, begin_runtime_form, resume_runtime_form};
 use extended_ops::{
     array_snapshot_any_rank, execute_array_copy, execute_array_multi_sort,
     execute_array_multi_sort_ex, execute_random_place_transaction, execute_regex_match,
@@ -41,6 +43,7 @@ use operand::{
 enum StepOutcome {
     Continue,
     BulkProgress(u64),
+    DeferredNative,
     Yielded,
     Blocked,
     Completed(Option<VmValue>),
@@ -154,11 +157,30 @@ impl Vm {
                     budget_exhausted = true;
                     break;
                 }
-                if debug_checks_active && let Some(stop) = self.debug_stop_before(&fiber) {
+                let continuation_origin = fiber
+                    .frames
+                    .last()
+                    .and_then(|frame| frame.runtime_form.as_ref())
+                    .map(dynamic_form::RuntimeFormContinuation::origin);
+                if continuation_origin.is_none()
+                    && debug_checks_active
+                    && let Some(stop) = self.debug_stop_before(&fiber)
+                {
                     report.events.push(VmEvent::DebugStopped(stop));
                     break;
                 }
-                let position = match self.instruction_position(&fiber, &mut function_cursor) {
+                let position_result =
+                    if let Some((generation, function, instruction)) = continuation_origin {
+                        self.instruction_position_at(
+                            generation,
+                            function,
+                            instruction,
+                            &mut function_cursor,
+                        )
+                    } else {
+                        self.instruction_position(&fiber, &mut function_cursor)
+                    };
+                let position = match position_result {
                     Ok(position) => position,
                     Err(error) => {
                         let fallback = fiber.frames.last().map_or(
@@ -183,6 +205,7 @@ impl Vm {
                             VmFaultCode::InvalidInstruction,
                             error.to_string(),
                         );
+                        fiber.clear_runtime_forms();
                         fiber.state = FiberState::Faulted(fault.clone());
                         report.events.push(VmEvent::FiberFaulted {
                             fiber: fiber.id,
@@ -191,7 +214,8 @@ impl Vm {
                         break;
                     }
                 };
-                if position.encoded.opcode == Opcode::CallHost as u16
+                if continuation_origin.is_none()
+                    && position.encoded.opcode == Opcode::CallHost as u16
                     && report.host_calls >= budget.maximum_host_calls
                 {
                     budget_exhausted = true;
@@ -205,14 +229,30 @@ impl Vm {
                         .maximum_instructions
                         .saturating_sub(report.instructions),
                 };
-                let outcome = self.execute_instruction(
-                    &mut fiber,
-                    &position,
-                    host,
-                    natives,
-                    &mut report.host_calls,
-                    policy,
-                );
+                let outcome = if continuation_origin.is_some() {
+                    resume_runtime_form(self, &mut fiber, natives).and_then(|step| match step {
+                        RuntimeFormStep::Pending => Ok(StepOutcome::DeferredNative),
+                        RuntimeFormStep::Complete(value) => {
+                            let frame = fiber.frames.last_mut().ok_or_else(|| {
+                                StepError::new(
+                                    VmFaultCode::InvalidInstruction,
+                                    "STRFORM owner frame disappeared before completion",
+                                )
+                            })?;
+                            frame.stack.push(VmValue::String(value));
+                            Ok(StepOutcome::Continue)
+                        }
+                    })
+                } else {
+                    self.execute_instruction(
+                        &mut fiber,
+                        &position,
+                        host,
+                        natives,
+                        &mut report.host_calls,
+                        policy,
+                    )
+                };
                 let additional_instructions = match &outcome {
                     Ok(StepOutcome::BulkProgress(instructions)) => *instructions,
                     _ => 0,
@@ -236,6 +276,7 @@ impl Vm {
                             break;
                         }
                     }
+                    Ok(StepOutcome::DeferredNative) => {}
                     Ok(StepOutcome::Yielded) => {
                         fiber.mark_progress();
                         yielded = true;
@@ -277,6 +318,7 @@ impl Vm {
                         break;
                     }
                     Err(error) => {
+                        fiber.clear_runtime_forms();
                         let fault = self.make_fault(fiber.id, &position, error.code, error.message);
                         fiber.state = FiberState::Faulted(fault.clone());
                         report.events.push(VmEvent::FiberFaulted {
@@ -295,6 +337,7 @@ impl Vm {
                         VmFaultCode::RunawayExecution,
                         "backward-branch watchdog detected execution without host progress",
                     );
+                    fiber.clear_runtime_forms();
                     fiber.state = FiberState::Faulted(fault.clone());
                     report.events.push(VmEvent::FiberFaulted {
                         fiber: fiber.id,
@@ -331,6 +374,7 @@ impl Vm {
                             VmFaultCode::RunawayExecution,
                             "instruction-budget watchdog detected persistent execution without progress",
                         );
+                        fiber.clear_runtime_forms();
                         fiber.state = FiberState::Faulted(fault.clone());
                         report.events.push(VmEvent::FiberFaulted {
                             fiber: fiber.id,
@@ -370,33 +414,43 @@ impl Vm {
             .frames
             .last()
             .ok_or_else(|| VmError::InvalidState("runnable fiber has no frame".into()))?;
+        self.instruction_position_at(frame.generation, frame.function, frame.instruction, cursor)
+    }
+
+    fn instruction_position_at<'cursor>(
+        &self,
+        generation: crate::GenerationId,
+        function_key: SymbolKey,
+        instruction: usize,
+        cursor: &'cursor mut Option<FunctionCursor>,
+    ) -> Result<InstructionPosition<'cursor>, VmError> {
         if cursor
             .as_ref()
-            .is_none_or(|cursor| cursor.generation != frame.generation)
+            .is_none_or(|cursor| cursor.generation != generation)
         {
             let program =
-                Arc::clone(self.generations.get(&frame.generation).ok_or_else(|| {
+                Arc::clone(self.generations.get(&generation).ok_or_else(|| {
                     VmError::InvalidState("frame generation was reclaimed".into())
                 })?);
             let index = *program
-                .function_index(frame.function)
-                .ok_or(VmError::MissingFunction(frame.function))?;
+                .function_index(function_key)
+                .ok_or(VmError::MissingFunction(function_key))?;
             *cursor = Some(FunctionCursor {
-                generation: frame.generation,
-                function: frame.function,
+                generation,
+                function: function_key,
                 index,
                 program,
             });
         } else if cursor
             .as_ref()
-            .is_some_and(|cursor| cursor.function != frame.function)
+            .is_some_and(|cursor| cursor.function != function_key)
         {
             let cursor = cursor.as_mut().expect("the generation cursor exists");
             cursor.index = *cursor
                 .program
-                .function_index(frame.function)
-                .ok_or(VmError::MissingFunction(frame.function))?;
-            cursor.function = frame.function;
+                .function_index(function_key)
+                .ok_or(VmError::MissingFunction(function_key))?;
+            cursor.function = function_key;
         }
         let cursor = cursor
             .as_ref()
@@ -406,21 +460,19 @@ impl Vm {
             .artifact
             .functions
             .get(cursor.index)
-            .filter(|function| function.key == frame.function)
-            .ok_or(VmError::MissingFunction(frame.function))?;
+            .filter(|function| function.key == function_key)
+            .ok_or(VmError::MissingFunction(function_key))?;
         let encoded = function
             .code
-            .get(frame.instruction)
+            .get(instruction)
             .ok_or_else(|| VmError::InvalidState("instruction pointer left its function".into()))?;
         // The cursor owns the generation Arc, so this payload borrow is independent
         // of `self` and remains valid across mutable VM dispatch for this instruction.
         Ok(InstructionPosition {
-            generation: frame.generation,
-            function: frame.function,
-            instruction: frame.instruction,
-            variable: cursor
-                .program
-                .instruction_global(cursor.index, frame.instruction),
+            generation,
+            function: function_key,
+            instruction,
+            variable: cursor.program.instruction_global(cursor.index, instruction),
             encoded: DispatchInstruction {
                 opcode: encoded.opcode,
                 payload: &encoded.payload,
@@ -1185,7 +1237,34 @@ impl Vm {
                             })?;
                         let native_name = native_name.as_ref();
                         let mut rollback = None;
-                        let ready = if matches!(native_name, "initrand" | "dumprand") {
+                        let ready = if native_name == "strform" {
+                            if result_type != Some(BytecodeType::String) || arguments.len() != 1 {
+                                return Err(StepError::new(
+                                    VmFaultCode::InvalidInstruction,
+                                    "STRFORM import signature is invalid",
+                                ));
+                            }
+                            let value = arguments.first().and_then(|value| match value {
+                                VmValue::String(value) => Some(value.as_str()),
+                                _ => None,
+                            });
+                            let value = value.ok_or_else(|| {
+                                StepError::new(
+                                    VmFaultCode::TypeMismatch,
+                                    "STRFORM expects a string",
+                                )
+                            })?;
+                            begin_runtime_form(
+                                self,
+                                fiber,
+                                natives,
+                                position.generation,
+                                position.function,
+                                position.instruction,
+                                value,
+                            )?;
+                            return Ok(StepOutcome::DeferredNative);
+                        } else if matches!(native_name, "initrand" | "dumprand") {
                             execute_random_place_transaction(
                                 &mut self.memory,
                                 position.generation,
@@ -1345,28 +1424,11 @@ impl Vm {
                                 .map_err(map_vm_error)?;
                             NativeReady::default()
                         } else {
-                            let places = native_place_views(self, fiber, &arguments)
-                                .map_err(map_vm_error)?;
-                            let implicit_place_names = natives
-                                .implicit_place_names(import.key)
-                                .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
-                            let implicit_places =
-                                native_implicit_place_views(self, fiber, implicit_place_names)
-                                    .map_err(map_vm_error)?;
-                            rollback = natives
-                                .checkpoint(import.key)
-                                .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
-                            natives
-                                .call(
-                                    import.key,
-                                    NativeCallRequest {
-                                        import: target,
-                                        arguments,
-                                        places,
-                                        implicit_places,
-                                    },
-                                )
-                                .map_err(|error| StepError::new(VmFaultCode::Native, error))?
+                            let (ready, checkpoint) = self.call_registered_native(
+                                fiber, import.key, target, arguments, natives,
+                            )?;
+                            rollback = checkpoint;
+                            ready
                         };
                         let result = validate_native_ready(self, fiber, result_type, &ready)
                             .and_then(|()| {
@@ -1664,6 +1726,37 @@ impl Vm {
             ));
         }
         Ok(StepOutcome::Continue)
+    }
+
+    fn call_registered_native(
+        &mut self,
+        fiber: &mut Fiber,
+        key: SymbolKey,
+        import: erabasic_bytecode::RuntimeImport,
+        arguments: Vec<VmValue>,
+        natives: &mut NativeServiceRegistry,
+    ) -> Result<(NativeReady, Option<Vec<u8>>), StepError> {
+        let places = native_place_views(self, fiber, &arguments).map_err(map_vm_error)?;
+        let implicit_place_names = natives
+            .implicit_place_names(key)
+            .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
+        let implicit_places =
+            native_implicit_place_views(self, fiber, implicit_place_names).map_err(map_vm_error)?;
+        let rollback = natives
+            .checkpoint(key)
+            .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
+        let ready = natives
+            .call(
+                key,
+                NativeCallRequest {
+                    import,
+                    arguments,
+                    places,
+                    implicit_places,
+                },
+            )
+            .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
+        Ok((ready, rollback))
     }
 
     fn try_memoized_indexed_read(

@@ -114,15 +114,24 @@ fn non_u_substring_uses_legacy_bytes_and_advances_to_boundaries() {
 }
 
 #[test]
-fn strform_preserves_plain_runtime_text_and_rejects_unimplemented_expansion() {
+fn context_free_strform_requires_the_vm_for_runtime_expansion() {
     assert_eq!(
         evaluate_pure_native("STRFORM", vec![VmValue::String("plain text".into())]),
         Ok(VmValue::String("plain text".into()))
     );
     assert_eq!(
         evaluate_pure_native("STRFORM", vec![VmValue::String("%RESULTS%".into())]),
-        Err("STRFORM runtime expansion is not yet supported for FORM metacharacters".into())
+        Err("STRFORM template requires VM execution context".into())
     );
+    for template in [
+        "%", "{RESULT}", "}", r"\s", "***", "+++", "===", "///", "$$$",
+    ] {
+        assert_eq!(
+            evaluate_pure_native("STRFORM", vec![VmValue::String(template.into())]),
+            Err("STRFORM template requires VM execution context".into()),
+            "{template:?}",
+        );
+    }
 }
 
 #[test]

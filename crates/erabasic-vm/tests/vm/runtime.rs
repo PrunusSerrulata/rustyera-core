@@ -27,7 +27,10 @@ fn stable_wait_snapshot_round_trips_and_requires_exact_artifact() {
     let inspection = inspect_snapshot(&bytes, VmConfig::default().maximum_snapshot_bytes).unwrap();
     assert_eq!(inspection.container.magic, "RERAVMS\\0");
     assert_eq!(inspection.container.file_bytes, bytes.len() as u64);
-    assert_eq!(inspection.state["format_version"], 9);
+    assert_eq!(
+        inspection.state["format_version"],
+        erabasic_vm::SNAPSHOT_FORMAT_VERSION
+    );
     assert_eq!(
         inspection.state["artifact_id"],
         artifact.manifest.artifact_id.to_string()

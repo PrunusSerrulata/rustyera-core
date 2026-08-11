@@ -586,6 +586,9 @@ fn analyze_with_context(
         allow_event_as_normal: options.compatible_call_event,
         allow_omitted_arguments: options.compatible_function_argument_optional,
         auto_convert_integer_to_string: options.compatible_function_argument_auto_convert,
+        allow_full_width_space: options.allow_full_width_space,
+        debug_semicolon: options.debug_semicolon,
+        ignore_triple_symbols: options.ignore_triple_symbols,
     };
     program.variables = symbols.variables;
     program.functions = functions;

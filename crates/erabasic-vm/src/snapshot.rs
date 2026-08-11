@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 9;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 10;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 
@@ -665,6 +665,56 @@ fn validate_snapshot(
                 return Err(VmError::Snapshot(
                     "snapshot frame instruction is out of bounds".into(),
                 ));
+            }
+            if let Some(continuation) = &frame.runtime_form {
+                let (_, _, origin_instruction) = continuation.origin();
+                let valid_call = frame.instruction == origin_instruction.saturating_add(1)
+                    && function
+                        .code
+                        .get(origin_instruction)
+                        .is_some_and(|instruction| {
+                            if erabasic_bytecode::Opcode::try_from(instruction.opcode)
+                                != Ok(erabasic_bytecode::Opcode::CallNative)
+                            {
+                                return false;
+                            }
+                            let Some(encoded_index) = instruction.payload.get(..4) else {
+                                return false;
+                            };
+                            let mut bytes = [0; 4];
+                            bytes.copy_from_slice(encoded_index);
+                            let Some(import) = function
+                                .imports
+                                .get(u32::from_le_bytes(bytes) as usize)
+                                .filter(|import| {
+                                    import.kind == erabasic_bytecode::ImportKind::Native
+                                })
+                            else {
+                                return false;
+                            };
+                            artifact.native_imports.iter().any(|native| {
+                                native.import.key == import.key
+                                    && native.import.name.eq_ignore_ascii_case("STRFORM")
+                                    && matches!(
+                                        native.import.parameters.as_slice(),
+                                        [erabasic_bytecode::BytecodeType::String]
+                                    )
+                                    && native.import.result
+                                        == Some(erabasic_bytecode::BytecodeType::String)
+                            })
+                        });
+                if !valid_call
+                    || !continuation.valid_for_frame(
+                        frame.generation,
+                        frame.function,
+                        frame.id,
+                        config.maximum_operand_stack,
+                    )
+                {
+                    return Err(VmError::Snapshot(
+                        "snapshot STRFORM continuation is invalid".into(),
+                    ));
+                }
             }
             for definition in artifact.globals.iter().filter(|definition| {
                 definition.storage == erabasic_bytecode::BytecodeStorage::FunctionLocal

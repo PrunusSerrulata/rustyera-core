@@ -164,11 +164,8 @@ impl NativeService for CoreNative {
             }
             "strform" => {
                 let value = string(0)?;
-                if value.contains(['%', '{', '}', '\\']) {
-                    return Err(
-                        "STRFORM runtime expansion is not yet supported for FORM metacharacters"
-                            .into(),
-                    );
+                if crate::interpreter::dynamic_form::requires_runtime_form_context(value) {
+                    return Err("STRFORM template requires VM execution context".into());
                 }
                 VmValue::String(value.into())
             }

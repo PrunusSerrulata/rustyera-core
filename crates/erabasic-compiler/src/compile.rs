@@ -849,6 +849,9 @@ fn compile_project_inner(
                 .program
                 .call_compatibility
                 .auto_convert_integer_to_string,
+            allow_full_width_space: project.program.call_compatibility.allow_full_width_space,
+            debug_semicolon: project.program.call_compatibility.debug_semicolon,
+            ignore_triple_symbols: project.program.call_compatibility.ignore_triple_symbols,
         },
         project_data: project.data.clone(),
         globals: globals(&project.program.variables, &variable_keys, &function_keys),

@@ -329,6 +329,10 @@ impl NativeServiceRegistry {
             .call(request)
     }
 
+    pub(crate) fn contains(&self, key: SymbolKey) -> bool {
+        self.services.contains_key(&key)
+    }
+
     pub(crate) fn implicit_place_names(
         &self,
         key: SymbolKey,
@@ -536,6 +540,7 @@ use core::CoreNative;
 pub use core::evaluate_pure_native;
 #[cfg(test)]
 use core::{parse_era_numeric, substring_legacy_bytes, substring_scalars};
-use services::{CompilerNative, RandomNative};
 #[cfg(test)]
-use services::{apply_width, apply_width_with_mode};
+use services::apply_width;
+pub(crate) use services::apply_width_with_mode;
+use services::{CompilerNative, RandomNative};

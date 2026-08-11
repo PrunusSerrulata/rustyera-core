@@ -364,11 +364,13 @@ version = "0.3.0"
 dependencies = [
  "blake3",
  "erabasic-analyzer",
+ "erabasic-ast",
  "erabasic-bytecode",
  "erabasic-compiler",
  "erabasic-csv",
  "erabasic-data",
  "erabasic-html",
+ "erabasic-parser",
  "erabasic-validator",
  "quick-xml",
  "regex",
