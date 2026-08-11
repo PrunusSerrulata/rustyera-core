@@ -18,6 +18,10 @@ $referenceRoot = if ($env:EMUERA_REFERENCE_ROOT) {
 }
 $cliDirectory = Join-Path $referenceRoot "emuera-reference-cli"
 $fixtureDirectory = Join-Path $cliDirectory "tests"
+$xmlXPathFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/xml-xpath.erb"
+$strformTitleErbFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/strform-title.erb"
+$strformTitleErhFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/strform-title.erh"
+$strformTitleXmlFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/xml/CHARA_TITLE.xml"
 $project = Join-Path $cliDirectory "Emuera.ReferenceCli.csproj"
 if ([string]::IsNullOrWhiteSpace($Executable)) {
     & dotnet publish $project `
@@ -103,6 +107,16 @@ try {
 
     $tempGame = Join-Path ([System.IO.Path]::GetTempPath()) ("emuera-oracle-" + [guid]::NewGuid())
     Copy-Item (Join-Path $fixtureDirectory "fixture") $tempGame -Recurse
+    $configPath = Join-Path $tempGame "emuera.config"
+    $utf8Bom = [System.Text.UTF8Encoding]::new($true)
+    $configText = [System.IO.File]::ReadAllText($configPath, $utf8Bom)
+    $configText = $configText.Replace("LOADTEXTとSAVETEXTで使える拡張子:txt", "LOADTEXTとSAVETEXTで使える拡張子:txt,xml")
+    [System.IO.File]::WriteAllText($configPath, $configText, $utf8Bom)
+    Copy-Item $xmlXPathFixture (Join-Path $tempGame "erb/xml-xpath.erb")
+    Copy-Item $strformTitleErbFixture (Join-Path $tempGame "erb/strform-title.erb")
+    Copy-Item $strformTitleErhFixture (Join-Path $tempGame "erb/strform-title.erh")
+    New-Item -ItemType Directory -Path (Join-Path $tempGame "XML") -Force | Out-Null
+    Copy-Item $strformTitleXmlFixture (Join-Path $tempGame "XML/CHARA_TITLE.xml")
 
     $load = Invoke-Oracle @{ id = 6; op = "load"; gameDir = $tempGame; seed = 123456 }
     Assert-True $load.ok "fixture game failed to load"
@@ -159,7 +173,12 @@ try {
         ($project.result.functions.name -contains "ORACLE_REFLECTION") -and
         ($project.result.functions.name -contains "ORACLE_PRESENTATION") -and
         ($project.result.functions.name -contains "ORACLE_HTML_POP") -and
-        ($project.result.functions.name -contains "ORACLE_STRUCTURED")) "project function projection differs"
+        ($project.result.functions.name -contains "ORACLE_STRUCTURED") -and
+        ($project.result.functions.name -contains "ORACLE_XML_XPATH") -and
+        ($project.result.functions.name -contains "CHARA_TITLE_CEHCK_UNLOCK_TITLE") -and
+        ($project.result.functions.name -contains "IS_UNIQUE_CHARA") -and
+        ($project.result.functions.name -contains "ORACLE_STRFORM_TITLE") -and
+        ($project.result.functions.name -contains "ORACLE_STRFORM_TITLE_FOR_CHARA")) "project function projection differs"
 
     $varSize = Invoke-Oracle @{ id = "csv-varsize"; op = "eval"; source = 'VARSIZE("ABL")' }
     Assert-True ($varSize.ok -and $varSize.result.value -eq 120) "VariableSize.CSV did not resize ABL"
@@ -316,6 +335,59 @@ try {
     Assert-True ($structuredRun.result.watches.'RESULTS:1'.Contains('A&amp;B')) "DataTable data XML differs"
     Assert-True ($structuredRun.result.watches.'RESULTS:2' -eq '<root><item id="a" kind="first">one</item><item id="b">changed</item></root>') "XML mutation differs"
     Assert-True (($structuredRun.result.watches.'RESULT:4' -eq 1) -and ($structuredRun.result.watches.'RESULT:5' -eq 1)) "XML mutation counts differ"
+
+    $xmlXPathRun = Invoke-Oracle @{
+        id = "xml-xpath"
+        op = "run"
+        entry = "ORACLE_XML_XPATH"
+        watch = @("RESULT:60", "RESULT:61", "RESULT:62", "RESULT:63", "RESULT:64", "RESULT:65", "RESULT:66", "RESULT:67", "RESULT:68", "RESULT:69", "RESULT:70", "RESULT:71", "RESULT:72", "RESULT:73", "RESULT:74", "RESULT:75", "RESULT:76", "RESULTS:60", "RESULTS:61", "RESULTS:62", "RESULTS:63", "RESULTS:64", "RESULTS:65", "RESULTS:66", "RESULTS:67", "RESULTS:68", "RESULTS:69", "RESULTS:70", "RESULTS:71", "RESULTS:72", "RESULTS:73", "RESULTS:74", "RESULTS:75")
+    }
+    Assert-True ($xmlXPathRun.ok -and $xmlXPathRun.result.termination -eq "completed") "eraFL XML/XPath oracle failed"
+    Assert-True (($xmlXPathRun.result.watches.'RESULT:60' -eq 3) -and
+        ($xmlXPathRun.result.watches.'RESULT:61' -eq 3) -and
+        ($xmlXPathRun.result.watches.'RESULT:62' -eq 2) -and
+        ($xmlXPathRun.result.watches.'RESULT:63' -eq 1) -and
+        ($xmlXPathRun.result.watches.'RESULT:64' -eq 2) -and
+        ($xmlXPathRun.result.watches.'RESULT:65' -eq 2) -and
+        ($xmlXPathRun.result.watches.'RESULT:66' -eq 3) -and
+        ($xmlXPathRun.result.watches.'RESULT:67' -eq 1) -and
+        ($xmlXPathRun.result.watches.'RESULT:68' -eq 1) -and
+        ($xmlXPathRun.result.watches.'RESULT:69' -eq 1) -and
+        ($xmlXPathRun.result.watches.'RESULT:70' -eq 1) -and
+        ($xmlXPathRun.result.watches.'RESULT:71' -eq 1) -and
+        ($xmlXPathRun.result.watches.'RESULT:72' -eq 1) -and
+        ($xmlXPathRun.result.watches.'RESULT:73' -eq 0) -and
+        ($xmlXPathRun.result.watches.'RESULT:74' -eq 1) -and
+        ($xmlXPathRun.result.watches.'RESULT:75' -eq 2) -and
+        ($xmlXPathRun.result.watches.'RESULT:76' -eq 1) -and
+        ($xmlXPathRun.result.watches.'RESULTS:60' -eq "201,208,210") -and
+        ($xmlXPathRun.result.watches.'RESULTS:61' -eq "201,210,211") -and
+        ($xmlXPathRun.result.watches.'RESULTS:62' -eq "208,211") -and
+        ($xmlXPathRun.result.watches.'RESULTS:63' -eq "201") -and
+        ($xmlXPathRun.result.watches.'RESULTS:64' -eq "210,211") -and
+        ($xmlXPathRun.result.watches.'RESULTS:65' -eq "201,210") -and
+        ($xmlXPathRun.result.watches.'RESULTS:66' -eq "201,210,211") -and
+        ($xmlXPathRun.result.watches.'RESULTS:67' -eq "201") -and
+        ($xmlXPathRun.result.watches.'RESULTS:68' -eq "1") -and
+        ($xmlXPathRun.result.watches.'RESULTS:69' -eq "5") -and
+        ($xmlXPathRun.result.watches.'RESULTS:70' -eq "Alice") -and
+        ($xmlXPathRun.result.watches.'RESULTS:71' -eq "1") -and
+        ($xmlXPathRun.result.watches.'RESULTS:72' -eq "<root>  <item id='1' />  </root>") -and
+        ($xmlXPathRun.result.watches.'RESULTS:73' -eq "201") -and
+        ($xmlXPathRun.result.watches.'RESULTS:74' -eq "a,b") -and
+        ($xmlXPathRun.result.watches.'RESULTS:75' -eq '<layout><containers id="1"><container name="main" /></containers></layout>')) "eraFL XML/XPath oracle values differ"
+
+    $strformTitle = Invoke-Oracle @{
+        id = "strform-title"
+        op = "run"
+        entry = "ORACLE_STRFORM_TITLE"
+        watch = @("RESULT:80", "RESULT:81", "RESULTS:80", "RESULTS:81")
+    }
+    Assert-True ($strformTitle.ok -and $strformTitle.result.termination -eq "completed" -and
+        ($strformTitle.result.watches.'RESULT:80' -eq 0) -and
+        ($strformTitle.result.watches.'RESULT:81' -eq 1) -and
+        ($strformTitle.result.watches.'RESULTS:80' -eq "0") -and
+        ($strformTitle.result.watches.'RESULTS:81' -eq "1")) "eraFL STRFORM title condition differs"
 
     $compat12 = Invoke-Oracle @{
         id = "compat-12"
