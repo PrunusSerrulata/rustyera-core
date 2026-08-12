@@ -31,10 +31,7 @@ impl fmt::Debug for Digest {
 
 impl fmt::Display for Digest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for byte in self.0 {
-            write!(formatter, "{byte:02x}")?;
-        }
-        Ok(())
+        write_hex(formatter, &self.0)
     }
 }
 
@@ -54,11 +51,16 @@ impl SymbolKey {
 impl fmt::Debug for SymbolKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "SymbolKey(")?;
-        for byte in self.0 {
-            write!(formatter, "{byte:02x}")?;
-        }
+        write_hex(formatter, &self.0)?;
         write!(formatter, ")")
     }
+}
+
+fn write_hex(formatter: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
+    for byte in bytes {
+        write!(formatter, "{byte:02x}")?;
+    }
+    Ok(())
 }
 
 impl Serialize for SymbolKey {
