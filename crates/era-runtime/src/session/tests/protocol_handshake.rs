@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn phase_changes_emit_state_without_redundant_logs() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+
+    session.set_phase(RuntimePhase::Ready).unwrap();
+
+    let messages = drain(&mut session);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::StateChanged(state) if state.phase == RuntimePhase::Ready
+    )));
+    assert!(
+        messages
+            .iter()
+            .all(|message| !matches!(message, RuntimeMessage::Log(_)))
+    );
+}
+
+#[test]
 fn projection_observation_updates_draw_line_string_width() {
     let build = build_project(
         &ProjectManifest {

@@ -1641,6 +1641,13 @@ impl Vm {
                     .then(|| pop(&mut fiber.frames.last_mut().expect("frame exists").stack))
                     .transpose()?;
                 let returned_frame = fiber.frames.pop().expect("returning frame exists");
+                if !fiber.frames.is_empty() {
+                    // Completing a function call is finite forward progress even when the
+                    // enclosing calculation needs more than one caller-visible run budget.
+                    // Keep the backward-branch counter intact so a loop that repeatedly calls
+                    // a helper is still covered by the dedicated control-flow watchdog.
+                    fiber.consecutive_budget_exhaustions = 0;
+                }
                 if let Some(key) = self.active_function_memos.remove(&returned_frame.id)
                     && policy.allow_function_memo
                     && let Some(value) = value.as_ref()

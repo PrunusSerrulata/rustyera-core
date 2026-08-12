@@ -170,10 +170,6 @@ impl RuntimeSession {
                 epoch: self.epoch.0,
             }),
             None,
-        )?;
-        self.emit_log(
-            RuntimeLogLevel::Debug,
-            format!("Runtime phase -> {phase:?}"),
         )
     }
 

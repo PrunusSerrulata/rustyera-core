@@ -391,6 +391,54 @@ fn finite_work_spanning_many_fiber_quanta_does_not_trip_budget_watchdog() {
     )));
 }
 
+#[test]
+fn finite_work_spanning_many_budgets_makes_progress_at_function_returns() {
+    let entry = SymbolKey::derive("test.function", b"finite-caller");
+    let helper = SymbolKey::derive("test.function", b"finite-helper");
+    let mut caller = function(
+        entry,
+        "FINITE_CALLER",
+        vec![
+            opcode::call(Opcode::Call, 0, 0, None),
+            opcode::call(Opcode::Call, 0, 0, None),
+            opcode::call(Opcode::Call, 0, 0, None),
+            opcode::return_value(false),
+        ],
+    );
+    caller.imports.push(FunctionImport {
+        kind: ImportKind::Function,
+        key: helper,
+    });
+    let helper = function(helper, "FINITE_HELPER", vec![opcode::return_value(false)]);
+    let artifact = artifact(vec![caller, helper], Vec::new());
+    let mut vm = Vm::new(
+        validated(&artifact),
+        VmConfig {
+            maximum_consecutive_budget_exhaustions: 1,
+            ..VmConfig::default()
+        },
+    );
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = ReadyHost::default();
+    let mut natives = NativeServiceRegistry::default();
+    for _ in 0..4 {
+        vm.run_slice(
+            &mut host,
+            &mut natives,
+            RunBudget {
+                maximum_instructions: 2,
+                maximum_host_calls: 0,
+                fiber_quantum: 2,
+            },
+        );
+    }
+
+    assert!(matches!(
+        vm.fiber_status(fiber),
+        Some(FiberStatus::Completed(None))
+    ));
+}
+
 fn call_artifact(
     helper_value: i64,
     dimensions: Vec<u64>,
