@@ -1,24 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
-use erabasic_bytecode::{
-    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeFunctionKind, BytecodeStorage,
-    BytecodeType, Digest, ImportKind, Opcode, SourceMapEntry, SymbolKey,
-};
-use erabasic_validator::ValidatedArtifact;
-use serde::{Deserialize, Serialize};
-
 use crate::debug::DebugState;
 use crate::regex_compat::RegexCache;
 use crate::{
-    FiberId, FiberStatus, FrameId, GenerationId, HostReady, HostRequestId, HostWaitStability,
-    Memory, PlaceDescriptor, VariableCell, VariableMap, VmConfig, VmError, VmExecutionOrigin,
-    VmFault, VmValue, hot_reload::HotReloadPlan,
+    FiberId, FiberStatus, FrameId, GenerationId, HostReady, HostRequestId, Memory, PlaceDescriptor,
+    VariableCell, VariableMap, VmConfig, VmError, VmValue,
 };
 use crate::{
     PreparedRuntimeState, VmRuntimeFill, VmRuntimeRead, VmRuntimeStatePort,
     VmRuntimeStateTransaction,
 };
+use erabasic_bytecode::{
+    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeFunctionKind, BytecodeStorage,
+    BytecodeType, Digest, ImportKind, Opcode, SourceMapEntry, SymbolKey,
+};
+use erabasic_validator::ValidatedArtifact;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ProgramGeneration {
@@ -962,203 +959,18 @@ mod program_index_tests {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Frame {
-    pub id: FrameId,
-    pub generation: GenerationId,
-    pub function: SymbolKey,
-    pub instruction: usize,
-    pub stack: Vec<VmValue>,
-    pub for_loops: Vec<ForLoopState>,
-    pub select_values: Vec<VmValue>,
-    pub locals: VariableMap,
-    /// Dynamic statement calls discard method results without exposing them to Host code.
-    pub return_value_to_caller: bool,
-    /// True for an event handler and every ordinary function called beneath it.
-    pub event_context: bool,
-    /// Nested CALLEVENT handlers are sequenced in the initiating caller frame.
-    pub event_dispatch: Option<EventDispatch>,
-    /// Late-bound STRFORM work owned by this frame and resumed by the scheduler.
-    pub runtime_form: Option<crate::interpreter::dynamic_form::RuntimeFormContinuation>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct ForLoopState {
-    pub counter: PlaceDescriptor,
-    pub end: i64,
-    pub step: i64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct EventDispatchEntry {
-    pub function: SymbolKey,
-    pub single: bool,
-    pub group: u8,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct EventDispatch {
-    pub active: EventDispatchEntry,
-    pub pending: VecDeque<EventDispatchEntry>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct WaitingHost {
-    pub request: HostRequestId,
-    pub import: erabasic_bytecode::RuntimeImport,
-    pub result: Option<BytecodeType>,
-    pub stability: HostWaitStability,
-    pub rebind_payload: Vec<u8>,
-    pub origin: VmExecutionOrigin,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) enum FiberState {
-    Runnable,
-    WaitingHost(WaitingHost),
-    WaitingResume(BytecodeType),
-    Completed(Option<VmValue>),
-    Faulted(VmFault),
-    Cancelled,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Fiber {
-    pub id: FiberId,
-    pub frames: Vec<Frame>,
-    pub state: FiberState,
-    pub backward_branches_without_progress: u64,
-    pub consecutive_budget_exhaustions: u32,
-}
-
-impl Fiber {
-    pub fn public_status(&self) -> FiberStatus {
-        match &self.state {
-            FiberState::Runnable => FiberStatus::Runnable,
-            FiberState::WaitingHost(wait) => FiberStatus::WaitingHost(wait.request),
-            FiberState::WaitingResume(_) => FiberStatus::WaitingResume,
-            FiberState::Completed(value) => FiberStatus::Completed(value.clone()),
-            FiberState::Faulted(fault) => FiberStatus::Faulted(fault.clone()),
-            FiberState::Cancelled => FiberStatus::Cancelled,
-        }
-    }
-
-    pub fn mark_progress(&mut self) {
-        self.backward_branches_without_progress = 0;
-        self.consecutive_budget_exhaustions = 0;
-    }
-
-    pub(crate) fn clear_runtime_forms(&mut self) {
-        for frame in &mut self.frames {
-            frame.runtime_form = None;
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Vm {
-    pub(crate) config: VmConfig,
-    pub(crate) generations: BTreeMap<GenerationId, Arc<ProgramGeneration>>,
-    pub(crate) current_generation: GenerationId,
-    pub(crate) memory: Memory,
-    pub(crate) fibers: BTreeMap<FiberId, Fiber>,
-    pub(crate) runnable: VecDeque<FiberId>,
-    pub(crate) primary_fiber: Option<FiberId>,
-    pub(crate) next_fiber: u64,
-    pub(crate) next_frame: u64,
-    pub(crate) next_request: u64,
-    pub(crate) next_generation: u64,
-    pub(crate) pending_reload: Option<HotReloadPlan>,
-    pub(crate) debug: DebugState,
-    pub(crate) regex_cache: RegexCache,
-    pub(crate) find_element_cache: HashMap<FindElementCacheKey, i64>,
-    pub(crate) function_memo_cache: HashMap<FunctionMemoKey, FunctionMemoEntry>,
-    pub(crate) active_function_memos: HashMap<FrameId, FunctionMemoKey>,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum FindElementNeedle {
-    Integer(i64),
-    String(String),
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct FindElementCacheKey {
-    pub generation: GenerationId,
-    pub variable: SymbolKey,
-    pub revision: u64,
-    pub start: usize,
-    pub end: usize,
-    pub last: bool,
-    pub exact: bool,
-    pub needle: FindElementNeedle,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum MemoValue {
-    Integer(i64),
-    String(String),
-}
-
-impl MemoValue {
-    pub(crate) fn from_vm(value: &VmValue) -> Option<Self> {
-        match value {
-            VmValue::Integer(value) => Some(Self::Integer(*value)),
-            VmValue::String(value) => Some(Self::String(value.clone())),
-            VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct FunctionMemoKey {
-    pub generation: GenerationId,
-    pub function: SymbolKey,
-    pub arguments: Vec<MemoValue>,
-    pub dependency_revisions: Vec<u64>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct FunctionMemoPlan {
-    pub dependency_indices: Vec<usize>,
-    pub scratch_indices: Vec<usize>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct MemoizedIndexedReadPlan {
-    pub index_parameter: usize,
-    pub selector_parameter: usize,
-    pub selector_function: SymbolKey,
-    pub selector_prefix: String,
-    pub scratch: SymbolKey,
-    pub target: SymbolKey,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct BulkFillLoopPlan {
-    pub prefix: SymbolKey,
-    pub counter: SymbolKey,
-    pub target: SymbolKey,
-    pub value: VmValue,
-    pub after_loop: usize,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct LiteralGroupMatchPlan {
-    pub candidates: Vec<Arc<str>>,
-    pub after_call: usize,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct FunctionMemoEntry {
-    pub result: VmValue,
-    pub scratch: Vec<(SymbolKey, VmValue)>,
-}
-
 mod frames;
 mod lifecycle;
 mod places;
 mod runtime;
+mod runtime_types;
+
+pub use runtime_types::Vm;
+pub(crate) use runtime_types::{
+    BulkFillLoopPlan, EventDispatch, EventDispatchEntry, Fiber, FiberState, FindElementCacheKey,
+    FindElementNeedle, ForLoopState, Frame, FunctionMemoEntry, FunctionMemoKey, FunctionMemoPlan,
+    LiteralGroupMatchPlan, MemoValue, MemoizedIndexedReadPlan, WaitingHost,
+};
 
 pub(crate) use frames::{
     bind_persistent_arguments, make_frame, prepare_dynamic_arguments, validate_arguments,
