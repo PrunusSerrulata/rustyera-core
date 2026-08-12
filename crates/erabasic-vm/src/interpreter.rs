@@ -1045,13 +1045,14 @@ impl Vm {
                 })?;
                 let mut arguments = arguments;
                 for (parameter, argument) in target.parameters.iter().zip(&mut arguments) {
-                    *argument = match (parameter.value_type, argument.clone()) {
-                        (BytecodeType::Integer, VmValue::IntegerPlace(place))
-                        | (BytecodeType::String, VmValue::StringPlace(place)) => {
-                            self.read_place(fiber, &place).map_err(map_vm_error)?
-                        }
-                        _ => argument.clone(),
+                    if parameter.by_reference {
+                        continue;
+                    }
+                    let place = match argument {
+                        VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => place.clone(),
+                        _ => continue,
                     };
+                    *argument = self.read_place(fiber, &place).map_err(map_vm_error)?;
                 }
                 let arguments =
                     prepare_dynamic_arguments(target, arguments, artifact.call_compatibility)

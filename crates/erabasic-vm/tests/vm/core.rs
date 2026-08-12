@@ -112,6 +112,20 @@ fn dynamic_calls_bind_variable_arguments_as_refs_or_values_from_the_target_signa
 }
 
 #[test]
+fn dynamic_calls_convert_integer_places_for_string_value_parameters() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatible_function_argument_auto_convert = true;
+    let artifact = compile_source_with_options(
+        "@SYSTEM_TITLE\n#DIM SKILLNUM\nSKILLNUM = 7\nCALLFORM FRIEND_SKILL_DOWNBASE, SKILLNUM\nRETURN RESULT\n@FRIEND_SKILL_DOWNBASE, ARGS\nRESULTS:0 = %ARGS%\nRETURN RESULT\n",
+        &options,
+    );
+    assert_eq!(
+        run_compiled_string_result(&artifact),
+        VmValue::String("7".into())
+    );
+}
+
+#[test]
 fn while_false_branch_skips_past_wend_and_finite_loops_terminate() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\n#DIM ITERATIONS\nWHILE ITERATIONS < 3\nITERATIONS ++\nWEND\nWHILE 0\nITERATIONS = 99\nWEND\nRETURN ITERATIONS\n",
