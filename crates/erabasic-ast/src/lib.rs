@@ -72,24 +72,28 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    #[must_use]
-    pub fn error(code: DiagnosticCode, span: Span, message: impl Into<String>) -> Self {
+    fn new(
+        code: DiagnosticCode,
+        severity: Severity,
+        span: Span,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             code,
-            severity: Severity::Error,
+            severity,
             span,
             message: message.into(),
         }
     }
 
     #[must_use]
+    pub fn error(code: DiagnosticCode, span: Span, message: impl Into<String>) -> Self {
+        Self::new(code, Severity::Error, span, message)
+    }
+
+    #[must_use]
     pub fn warning(code: DiagnosticCode, span: Span, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            severity: Severity::Warning,
-            span,
-            message: message.into(),
-        }
+        Self::new(code, Severity::Warning, span, message)
     }
 }
 
