@@ -1773,19 +1773,21 @@ impl RuntimeSession {
                 .arguments
                 .first()
                 .map_or_else(String::new, display_value);
-            let mut document = match erabasic_html::parse_document(&markup) {
-                Ok(document) => document,
-                Err(error) => {
-                    return self.fault(
-                        FaultCode::VmFault,
-                        &format!(
-                            "HTML_PRINT {:?} at UTF-8 bytes {}..{}",
-                            error.kind, error.start, error.end
-                        ),
-                        Some(request.origin.clone()),
-                    );
-                }
-            };
+            let (mut document, warnings) =
+                match erabasic_html::parse_document_with_warnings(&markup) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            &format!(
+                                "HTML_PRINT {:?} at UTF-8 bytes {}..{}",
+                                error.kind, error.start, error.end
+                            ),
+                            Some(request.origin.clone()),
+                        );
+                    }
+                };
+            emit_html_warnings(self, "HTML_PRINT", &warnings, &request.origin)?;
             bind_html_document(self, &mut document)?;
             if request.arguments.get(1).map_or(0, integer_value_or_zero) != 0 {
                 self.presentation.append_html_inline(document);
@@ -1800,19 +1802,21 @@ impl RuntimeSession {
                 .arguments
                 .first()
                 .map_or_else(String::new, display_value);
-            let mut document = match erabasic_html::parse_document(&markup) {
-                Ok(document) => document,
-                Err(error) => {
-                    return self.fault(
-                        FaultCode::VmFault,
-                        &format!(
-                            "HTML_PRINT_ISLAND {:?} at UTF-8 bytes {}..{}",
-                            error.kind, error.start, error.end
-                        ),
-                        Some(request.origin.clone()),
-                    );
-                }
-            };
+            let (mut document, warnings) =
+                match erabasic_html::parse_document_with_warnings(&markup) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            &format!(
+                                "HTML_PRINT_ISLAND {:?} at UTF-8 bytes {}..{}",
+                                error.kind, error.start, error.end
+                            ),
+                            Some(request.origin.clone()),
+                        );
+                    }
+                };
+            emit_html_warnings(self, "HTML_PRINT_ISLAND", &warnings, &request.origin)?;
             bind_html_document(self, &mut document)?;
             self.presentation.append_html_island(document);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
@@ -3658,6 +3662,44 @@ fn bind_html_document(
         Ok(())
     }
     visit(session, &mut document.nodes, false)
+}
+
+fn emit_html_warnings(
+    session: &mut RuntimeSession,
+    command: &str,
+    warnings: &[erabasic_html::HtmlWarning],
+    origin: &erabasic_vm::VmExecutionOrigin,
+) -> Result<(), RuntimeError> {
+    let source = protocol_execution_origin(origin.clone()).source;
+    for warning in warnings {
+        let crossed = warning
+            .crossed
+            .iter()
+            .map(|kind| format!("<{}>", kind.tag_name()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let (code, message) = match warning.kind {
+            erabasic_html::HtmlWarningKind::CrossedClosingTag => (
+                "runtime.html.nonstandard_crossed_closing_tag",
+                format!(
+                    "{command} normalized non-standard crossed closing tag </{}> at UTF-8 bytes {}..{} across open {crossed}; use properly nested markup",
+                    warning.closing.tag_name(),
+                    warning.start,
+                    warning.end
+                ),
+            ),
+        };
+        session.emit(
+            RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                code: code.into(),
+                level: RuntimeLogLevel::Warning,
+                message,
+                source: source.clone(),
+            }),
+            None,
+        )?;
+    }
+    Ok(())
 }
 
 fn bind_last_output_buttons(session: &mut RuntimeSession) {

@@ -19,6 +19,7 @@ $referenceRoot = if ($env:EMUERA_REFERENCE_ROOT) {
 $cliDirectory = Join-Path $referenceRoot "emuera-reference-cli"
 $fixtureDirectory = Join-Path $cliDirectory "tests"
 $xmlXPathFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/xml-xpath.erb"
+$eraflHtmlCrossingFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/erafl-html-crossing.erb"
 $strformTitleErbFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/strform-title.erb"
 $strformTitleErhFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/strform-title.erh"
 $strformTitleXmlFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/xml/CHARA_TITLE.xml"
@@ -115,6 +116,7 @@ try {
     $configText = $configText.Replace("セーブデータをバイナリ形式で保存する:NO", "セーブデータをバイナリ形式で保存する:YES")
     [System.IO.File]::WriteAllText($configPath, $configText, $utf8Bom)
     Copy-Item $xmlXPathFixture (Join-Path $tempGame "erb/xml-xpath.erb")
+    Copy-Item $eraflHtmlCrossingFixture (Join-Path $tempGame "erb/erafl-html-crossing.erb")
     Copy-Item $strformTitleErbFixture (Join-Path $tempGame "erb/strform-title.erb")
     Copy-Item $strformTitleErhFixture (Join-Path $tempGame "erb/strform-title.erh")
     New-Item -ItemType Directory -Path (Join-Path $tempGame "XML") -Force | Out-Null
@@ -176,6 +178,9 @@ try {
         ($project.result.functions.name -contains "ORACLE_REFLECTION") -and
         ($project.result.functions.name -contains "ORACLE_PRESENTATION") -and
         ($project.result.functions.name -contains "ORACLE_HTML_POP") -and
+        ($project.result.functions.name -contains "ORACLE_ERAFL_HTML_CROSSING") -and
+        ($project.result.functions.name -contains "ORACLE_ERAFL_HTML_CROSSING_ISLAND") -and
+        ($project.result.functions.name -contains "ORACLE_ERAFL_HTML_NESTED") -and
         ($project.result.functions.name -contains "ORACLE_STRUCTURED") -and
         ($project.result.functions.name -contains "ORACLE_XML_XPATH") -and
         ($project.result.functions.name -contains "CHARA_TITLE_CEHCK_UNLOCK_TITLE") -and
@@ -299,6 +304,15 @@ try {
     $htmlPop = Invoke-Oracle @{ id = "html-pop"; op = "run"; entry = "ORACLE_HTML_POP"; watch = @("RESULTS:30") }
     Assert-True $htmlPop.ok "HTML_POPPRINTINGSTR function run failed"
     Assert-True ($htmlPop.result.watches.'RESULTS:30' -eq "A&lt;&amp;<button value='42'>choose</button>") "HTML_POPPRINTINGSTR differs"
+
+    $eraflHtmlCrossing = Invoke-Oracle @{
+        id = "erafl-html-crossing"
+        op = "run"
+        entry = "ORACLE_ERAFL_HTML_CROSSING"
+        watch = @("RESULTS:35")
+    }
+    Assert-True ($eraflHtmlCrossing.ok -and $eraflHtmlCrossing.result.termination -eq "completed") "eraFL crossed HTML oracle failed"
+    Assert-True ($eraflHtmlCrossing.result.watches.'RESULTS:35' -eq "<button value='[MODE:TITLE_POINT]'><font color='#EE7800'>[称号点]　</font></button><button value='[MODE:TITLE_BONUS]'><font color='#C0C0C0'>[称号加成]　</font></button>") "eraFL crossed HTML normalization differs"
 
     $presentation23 = Invoke-Oracle @{
         id = "presentation-23"

@@ -19,6 +19,7 @@ REQUEST_FILE="$WORK_DIR/requests.ndjson"
 STDERR_FILE="$WORK_DIR/wine-stderr.log"
 FIXTURE_SOURCE_DIR="$CLI_DIR/tests/fixture"
 XML_XPATH_FIXTURE="$REPO_ROOT/tools/runtime-tester/fixture-reference/erb/xml-xpath.erb"
+ERAFL_HTML_CROSSING_FIXTURE="$REPO_ROOT/tools/runtime-tester/fixture-reference/erb/erafl-html-crossing.erb"
 STRFORM_TITLE_ERB_FIXTURE="$REPO_ROOT/tools/runtime-tester/fixture-reference/erb/strform-title.erb"
 STRFORM_TITLE_ERH_FIXTURE="$REPO_ROOT/tools/runtime-tester/fixture-reference/erb/strform-title.erh"
 STRFORM_TITLE_XML_FIXTURE="$REPO_ROOT/tools/runtime-tester/fixture-reference/xml/CHARA_TITLE.xml"
@@ -45,6 +46,7 @@ cp -R "$FIXTURE_SOURCE_DIR/." "$FIXTURE_DIR"
 perl -0pi -e 's/:txt\r\n/:txt,xml\r\n/' "$FIXTURE_DIR/emuera.config"
 perl -0pi -e 's/セーブデータをバイナリ形式で保存する:NO/セーブデータをバイナリ形式で保存する:YES/' "$FIXTURE_DIR/emuera.config"
 cp "$XML_XPATH_FIXTURE" "$FIXTURE_DIR/erb/xml-xpath.erb"
+cp "$ERAFL_HTML_CROSSING_FIXTURE" "$FIXTURE_DIR/erb/erafl-html-crossing.erb"
 cp "$STRFORM_TITLE_ERB_FIXTURE" "$FIXTURE_DIR/erb/strform-title.erb"
 cp "$STRFORM_TITLE_ERH_FIXTURE" "$FIXTURE_DIR/erb/strform-title.erh"
 mkdir -p "$FIXTURE_DIR/XML"
@@ -127,6 +129,7 @@ printf '%s\n' \
     '{"id":"wine-print-family","op":"run","entry":"ORACLE_PRINT_FAMILY"}' \
     '{"id":"wine-linecount","op":"run","entry":"ORACLE_LINECOUNT","watch":["RESULT:50","RESULT:51","RESULT:52"]}' \
     '{"id":"wine-html-pop","op":"run","entry":"ORACLE_HTML_POP","watch":["RESULTS:30"]}' \
+    '{"id":"wine-erafl-html-crossing","op":"run","entry":"ORACLE_ERAFL_HTML_CROSSING","watch":["RESULTS:35"]}' \
     '{"id":"wine-presentation-23","op":"run","entry":"ORACLE_PRESENTATION_23","watch":["RESULTS:31","RESULTS:32","RESULTS:33","RESULTS:34"]}' \
     '{"id":"wine-structured","op":"run","entry":"ORACLE_STRUCTURED","watch":["RESULT:0","RESULT:1","RESULT:2","RESULT:3","RESULT:4","RESULT:5","RESULTS:0","RESULTS:1","RESULTS:2"]}' \
     '{"id":"wine-xml-xpath","op":"run","entry":"ORACLE_XML_XPATH","watch":["RESULT:60","RESULT:61","RESULT:62","RESULT:63","RESULT:64","RESULT:65","RESULT:66","RESULT:67","RESULT:68","RESULT:69","RESULT:70","RESULT:71","RESULT:72","RESULT:73","RESULT:74","RESULT:75","RESULT:76","RESULTS:60","RESULTS:61","RESULTS:62","RESULTS:63","RESULTS:64","RESULTS:65","RESULTS:66","RESULTS:67","RESULTS:68","RESULTS:69","RESULTS:70","RESULTS:71","RESULTS:72","RESULTS:73","RESULTS:74","RESULTS:75"]}' \
@@ -169,7 +172,7 @@ perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
     | tr -d '\r' >"$OUTPUT_FILE"
 
 jq -e -s '
-    length == 56 and
+    length == 57 and
     map(.id) == [
         "wine-capabilities", "wine-lex", "wine-expression", "wine-load", "wine-seeded-random",
         "wine-save", "wine-load-save", "wine-toneinput",
@@ -179,7 +182,7 @@ jq -e -s '
         "wine-csv-varsize", "wine-csv-name", "wine-csv-price", "wine-csv-str",
         "wine-csv-character", "wine-csv-gamebase", "wine-analyze", "wine-execute",
         "wine-putform", "wine-savenos",
-        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-dynamic-variables", "wine-reflection", "wine-map", "wine-presentation", "wine-print-family", "wine-linecount", "wine-html-pop", "wine-presentation-23", "wine-structured", "wine-xml-xpath", "wine-strform-title", "wine-compat-12", "wine-presentation-3", "wine-input", "wine-restart", "wine-pending-auto-button", "wine-oneinput-load", "wine-oneinput-text", "wine-oneinput-mouse-default", "wine-oneinput-long-load", "wine-oneinput-mouse-long", "wine-system-load", "wine-stopcalltrain", "wine-seed-reload", "wine-seeded-random-repeat", "wine-reset"
+        "wine-run", "wine-compat", "wine-compat-rest", "wine-native-tail", "wine-dynamic-variables", "wine-reflection", "wine-map", "wine-presentation", "wine-print-family", "wine-linecount", "wine-html-pop", "wine-erafl-html-crossing", "wine-presentation-23", "wine-structured", "wine-xml-xpath", "wine-strform-title", "wine-compat-12", "wine-presentation-3", "wine-input", "wine-restart", "wine-pending-auto-button", "wine-oneinput-load", "wine-oneinput-text", "wine-oneinput-mouse-default", "wine-oneinput-long-load", "wine-oneinput-mouse-long", "wine-system-load", "wine-stopcalltrain", "wine-seed-reload", "wine-seeded-random-repeat", "wine-reset"
     ] and
     all(.[]; .ok == true) and
     (map(select(.id == "wine-capabilities"))[0].schemaVersion == 2) and
@@ -192,7 +195,7 @@ jq -e -s '
     (map(select(.id == "wine-seeded-random"))[0].result.watches.RESULT == map(select(.id == "wine-seeded-random-repeat"))[0].result.watches.RESULT) and
     (map(select(.id == "wine-tooltip-delay"))[0].result.termination == "waitingInput") and
     (map(select(.id == "wine-load"))[0].result.output | contains(["TITLE_CHARANUM=0"])) and
-    (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["CHARA_TITLE_CEHCK_UNLOCK_TITLE", "EVENTFIRST", "IS_UNIQUE_CHARA", "ORACLE_COMPAT", "ORACLE_COMPAT_12", "ORACLE_COMPAT_REST", "ORACLE_DYNAMIC_1", "ORACLE_DYNAMIC_VARIABLES", "ORACLE_HTML_POP", "ORACLE_INPUT", "ORACLE_LINECOUNT", "ORACLE_LIST_TARGET", "ORACLE_MAP", "ORACLE_NATIVE", "ORACLE_PENDING_AUTO_BUTTON", "ORACLE_PRESENTATION", "ORACLE_PRESENTATION_23", "ORACLE_PRESENTATION_3", "ORACLE_PRINT_FAMILY", "ORACLE_REFLECTION", "ORACLE_RESTART_ABILITY", "ORACLE_RESTART_FLOW", "ORACLE_RESTART_MOVE", "ORACLE_STRFORM_TITLE", "ORACLE_STRFORM_TITLE_FOR_CHARA", "ORACLE_STRFORM_TITLE_MERCHANT_REQUIREMENT", "ORACLE_STRUCTURED", "ORACLE_TEST", "ORACLE_XML_XPATH", "SYSTEM_TITLE"]) and
+    (map(select(.id == "wine-project"))[0].result.functions | map(.name) | sort == ["CHARA_TITLE_CEHCK_UNLOCK_TITLE", "EVENTFIRST", "IS_UNIQUE_CHARA", "ORACLE_COMPAT", "ORACLE_COMPAT_12", "ORACLE_COMPAT_REST", "ORACLE_DYNAMIC_1", "ORACLE_DYNAMIC_VARIABLES", "ORACLE_ERAFL_HTML_CROSSING", "ORACLE_ERAFL_HTML_CROSSING_ISLAND", "ORACLE_ERAFL_HTML_NESTED", "ORACLE_HTML_POP", "ORACLE_INPUT", "ORACLE_LINECOUNT", "ORACLE_LIST_TARGET", "ORACLE_MAP", "ORACLE_NATIVE", "ORACLE_PENDING_AUTO_BUTTON", "ORACLE_PRESENTATION", "ORACLE_PRESENTATION_23", "ORACLE_PRESENTATION_3", "ORACLE_PRINT_FAMILY", "ORACLE_REFLECTION", "ORACLE_RESTART_ABILITY", "ORACLE_RESTART_FLOW", "ORACLE_RESTART_MOVE", "ORACLE_STRFORM_TITLE", "ORACLE_STRFORM_TITLE_FOR_CHARA", "ORACLE_STRFORM_TITLE_MERCHANT_REQUIREMENT", "ORACLE_STRUCTURED", "ORACLE_TEST", "ORACLE_XML_XPATH", "SYSTEM_TITLE"]) and
     (map(select(.id == "wine-project"))[0].result.functions | map(select(.name == "SYSTEM_TITLE"))[0].lines | map(.functionCode) | contains(["PRINTFORM", "IF", "CALL", "CALL", "ENDIF", "INPUT", "RETURN"])) and
     (map(select(.id == "wine-csv-varsize"))[0].result.value == 120) and
     (map(select(.id == "wine-csv-name"))[0].result.value == 2) and
@@ -211,6 +214,8 @@ jq -e -s '
     (map(select(.id == "wine-run"))[0].result.termination == "completed") and
     (map(select(.id == "wine-run"))[0].result.output | join("\n") | contains("ORACLE_OK")) and
     (map(select(.id == "wine-html-pop"))[0].result.watches."RESULTS:30" == "A&lt;&amp;<button value=\u002742\u0027>choose</button>") and
+    (map(select(.id == "wine-erafl-html-crossing"))[0].result.termination == "completed") and
+    (map(select(.id == "wine-erafl-html-crossing"))[0].result.watches."RESULTS:35" == "<button value=\u0027[MODE:TITLE_POINT]\u0027><font color=\u0027#EE7800\u0027>[称号点]　</font></button><button value=\u0027[MODE:TITLE_BONUS]\u0027><font color=\u0027#C0C0C0\u0027>[称号加成]　</font></button>") and
     (map(select(.id == "wine-presentation-3"))[0].result.watches."RESULT:40" == 0) and
     (map(select(.id == "wine-presentation-3"))[0].result.watches."RESULT:41" == 1) and
     (map(select(.id == "wine-presentation-3"))[0].result.watches."RESULT:42" == 1) and

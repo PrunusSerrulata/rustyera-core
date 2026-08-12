@@ -1,0 +1,107 @@
+; Exact output of SHOW_INFO_SHOW_CHARA_TITLE.ERB:67-68 after CONV_TAG2H.
+; The padding keeps HTML_PRINT at the real UIC_SHOW host-call line 96.
+; RustyEra warns while preserving Emuera's independent font/button scopes.
+; source-line padding 04
+; source-line padding 05
+; source-line padding 06
+; source-line padding 07
+; source-line padding 08
+; source-line padding 09
+; source-line padding 10
+; source-line padding 11
+; source-line padding 12
+; source-line padding 13
+; source-line padding 14
+; source-line padding 15
+; source-line padding 16
+; source-line padding 17
+; source-line padding 18
+; source-line padding 19
+; source-line padding 20
+; source-line padding 21
+; source-line padding 22
+; source-line padding 23
+; source-line padding 24
+; source-line padding 25
+; source-line padding 26
+; source-line padding 27
+; source-line padding 28
+; source-line padding 29
+; source-line padding 30
+; source-line padding 31
+; source-line padding 32
+; source-line padding 33
+; source-line padding 34
+; source-line padding 35
+; source-line padding 36
+; source-line padding 37
+; source-line padding 38
+; source-line padding 39
+; source-line padding 40
+; source-line padding 41
+; source-line padding 42
+; source-line padding 43
+; source-line padding 44
+; source-line padding 45
+; source-line padding 46
+; source-line padding 47
+; source-line padding 48
+; source-line padding 49
+; source-line padding 50
+; source-line padding 51
+; source-line padding 52
+; source-line padding 53
+; source-line padding 54
+; source-line padding 55
+; source-line padding 56
+; source-line padding 57
+; source-line padding 58
+; source-line padding 59
+; source-line padding 60
+; source-line padding 61
+; source-line padding 62
+; source-line padding 63
+; source-line padding 64
+; source-line padding 65
+; source-line padding 66
+; source-line padding 67
+; source-line padding 68
+; source-line padding 69
+; source-line padding 70
+; source-line padding 71
+; source-line padding 72
+; source-line padding 73
+; source-line padding 74
+; source-line padding 75
+; source-line padding 76
+; source-line padding 77
+; source-line padding 78
+; source-line padding 79
+; source-line padding 80
+; source-line padding 81
+; source-line padding 82
+; source-line padding 83
+; source-line padding 84
+; source-line padding 85
+; source-line padding 86
+; source-line padding 87
+; source-line padding 88
+; source-line padding 89
+; source-line padding 90
+; source-line padding 91
+; source-line padding 92
+; source-line padding 93
+; source-line padding 94
+@ORACLE_ERAFL_HTML_CROSSING
+HTML_PRINT "<font color='#EE7800'><button value='[MODE:TITLE_POINT]'>[称号点]　</font></button><font color='#C0C0C0'><button value='[MODE:TITLE_BONUS]'>[称号加成]　</font></button>", 1
+RESULTS:35 = %HTML_POPPRINTINGSTR()%
+RETURN
+
+@ORACLE_ERAFL_HTML_NESTED
+HTML_PRINT "<button value='[MODE:TITLE_POINT]'><font color='#EE7800'>[称号点]　</font></button><button value='[MODE:TITLE_BONUS]'><font color='#C0C0C0'>[称号加成]　</font></button>", 1
+RESULTS:36 = %HTML_POPPRINTINGSTR()%
+RETURN
+
+@ORACLE_ERAFL_HTML_CROSSING_ISLAND
+HTML_PRINT_ISLAND "<font color='#EE7800'><button value='[MODE:TITLE_POINT]'>[称号点]　</font></button><font color='#C0C0C0'><button value='[MODE:TITLE_BONUS]'>[称号加成]　</font></button>"
+RETURN

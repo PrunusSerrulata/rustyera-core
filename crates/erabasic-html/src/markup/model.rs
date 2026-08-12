@@ -60,7 +60,9 @@ impl HtmlElementKind {
         matches!(self, Self::Break | Self::Image | Self::Shape)
     }
 
-    pub(super) const fn name(self) -> &'static str {
+    /// Return the source-level tag name used by the Emuera console dialect.
+    #[must_use]
+    pub const fn tag_name(self) -> &'static str {
         match self {
             Self::Bold => "b",
             Self::Italic => "i",
@@ -294,4 +296,20 @@ pub struct HtmlError {
     pub kind: HtmlErrorKind,
     pub start: usize,
     pub end: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HtmlWarningKind {
+    CrossedClosingTag,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HtmlWarning {
+    pub kind: HtmlWarningKind,
+    /// Start of the non-standard closing tag in the input markup, as a UTF-8 byte offset.
+    pub start: usize,
+    /// End of the non-standard closing tag in the input markup, as a UTF-8 byte offset.
+    pub end: usize,
+    pub closing: HtmlElementKind,
+    pub crossed: Vec<HtmlElementKind>,
 }

@@ -13,8 +13,8 @@ pub use button::{ButtonSegment, split_auto_buttons};
 pub use color::named_color;
 pub use markup::{
     HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlDocument, HtmlElementKind, HtmlElementSemantic,
-    HtmlError, HtmlErrorKind, HtmlInteraction, HtmlLength, HtmlNode, parse_document,
-    serialize_document,
+    HtmlError, HtmlErrorKind, HtmlInteraction, HtmlLength, HtmlNode, HtmlWarning, HtmlWarningKind,
+    parse_document, parse_document_with_warnings, serialize_document,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
