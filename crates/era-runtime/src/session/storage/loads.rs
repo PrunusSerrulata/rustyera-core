@@ -107,7 +107,13 @@ impl RuntimeSession {
         &mut self,
         request: erabasic_vm::HostRequestId,
         bytes: &[u8],
+        storage_path: &str,
     ) -> Result<(), RuntimeError> {
+        let replay_origin = self.prepare_input_replay(ReplayOriginDetails::ExternalDataLoad {
+            storage_path: storage_path.to_owned(),
+            payload_digest: crate::input_replay::digest_hex(bytes),
+            data_type: crate::input_replay::ReplayExternalDataType::Global,
+        })?;
         let mut vm = self
             .vm
             .take()
@@ -146,7 +152,9 @@ impl RuntimeSession {
             }),
         )?;
         self.vm = Some(vm);
-        self.set_phase(RuntimePhase::Running)
+        self.set_phase(RuntimePhase::Running)?;
+        self.install_input_replay(replay_origin);
+        Ok(())
     }
 
     pub(in super::super) fn complete_ordinary_load(
@@ -216,6 +224,20 @@ impl RuntimeSession {
         load: PreparedOrdinaryLoad,
     ) -> Result<(), RuntimeError> {
         let establish_undo = self.undo_replay.is_none();
+        let replay_details = if let Some(replay) = &self.undo_replay {
+            ReplayOriginDetails::InputUndo {
+                checkpoint_slot: slot,
+                save_digest: crate::input_replay::digest_hex(bytes),
+                retained_input_count: replay.remaining.len(),
+            }
+        } else {
+            ReplayOriginDetails::OrdinarySave {
+                slot,
+                storage_path: save_slot_path(slot),
+                payload_digest: crate::input_replay::digest_hex(bytes),
+            }
+        };
+        let replay_origin = self.prepare_input_replay(replay_details)?;
         let random_before_load = establish_undo
             .then(|| {
                 self.vm
@@ -247,6 +269,7 @@ impl RuntimeSession {
         if let Some(random) = random_before_load {
             self.establish_input_undo_checkpoint(slot, bytes.to_vec(), random)?;
         }
+        self.install_input_replay(replay_origin);
         Ok(())
     }
 
@@ -254,7 +277,13 @@ impl RuntimeSession {
         &mut self,
         request: erabasic_vm::HostRequestId,
         bytes: &[u8],
+        storage_path: &str,
     ) -> Result<(), RuntimeError> {
+        let replay_origin = self.prepare_input_replay(ReplayOriginDetails::ExternalDataLoad {
+            storage_path: storage_path.to_owned(),
+            payload_digest: crate::input_replay::digest_hex(bytes),
+            data_type: crate::input_replay::ReplayExternalDataType::Character,
+        })?;
         let mut vm = self
             .vm
             .take()
@@ -307,6 +336,8 @@ impl RuntimeSession {
             }),
         )?;
         self.vm = Some(vm);
-        self.set_phase(RuntimePhase::Running)
+        self.set_phase(RuntimePhase::Running)?;
+        self.install_input_replay(replay_origin);
+        Ok(())
     }
 }

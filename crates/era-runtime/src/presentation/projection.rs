@@ -191,6 +191,127 @@ pub(super) fn enabled_button_value(run: &DisplayRun, token: InteractionToken) ->
     }
 }
 
+pub(super) struct ReplayButtonCandidate {
+    pub(super) token: InteractionToken,
+    pub(super) visible_text: String,
+    pub(super) title: Option<String>,
+    pub(super) alt_text: Option<String>,
+}
+
+pub(super) fn collect_replay_buttons(runs: &[DisplayRun], output: &mut Vec<ReplayButtonCandidate>) {
+    for run in runs {
+        match run {
+            DisplayRun::Button {
+                runs,
+                token,
+                title,
+                enabled,
+                ..
+            } => {
+                if *enabled {
+                    let mut visible_text = String::new();
+                    let mut alt_text = None;
+                    collect_replay_run_text(runs, &mut visible_text, &mut alt_text);
+                    output.push(ReplayButtonCandidate {
+                        token: *token,
+                        visible_text,
+                        title: title.clone(),
+                        alt_text,
+                    });
+                }
+                collect_replay_buttons(runs, output);
+            }
+            DisplayRun::ColumnCell { content, .. } => collect_replay_buttons(content, output),
+            DisplayRun::HtmlDocument { document } => {
+                collect_replay_html_buttons(&document.nodes, output);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_replay_run_text(
+    runs: &[DisplayRun],
+    visible_text: &mut String,
+    alt_text: &mut Option<String>,
+) {
+    for run in runs {
+        match run {
+            DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+                visible_text.push_str(text);
+            }
+            DisplayRun::Button { runs, .. } => {
+                collect_replay_run_text(runs, visible_text, alt_text);
+            }
+            DisplayRun::ColumnCell { content, .. } => {
+                collect_replay_run_text(content, visible_text, alt_text);
+            }
+            DisplayRun::HtmlDocument { document } => {
+                collect_replay_html_text(&document.nodes, visible_text);
+            }
+            DisplayRun::Image {
+                alt_text: Some(text),
+                ..
+            } => {
+                visible_text.push_str(text);
+                if alt_text.is_none() {
+                    *alt_text = Some(text.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_replay_html_buttons(
+    nodes: &[erabasic_html::HtmlNode],
+    output: &mut Vec<ReplayButtonCandidate>,
+) {
+    for node in nodes {
+        let erabasic_html::HtmlNode::Element {
+            children,
+            interaction,
+            semantic,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        if let Some(interaction) = interaction
+            && interaction.enabled
+        {
+            let mut visible_text = String::new();
+            collect_replay_html_text(children, &mut visible_text);
+            let title = match semantic {
+                erabasic_html::HtmlElementSemantic::Button { title, .. }
+                | erabasic_html::HtmlElementSemantic::NonButton { title, .. } => title.clone(),
+                _ => None,
+            };
+            output.push(ReplayButtonCandidate {
+                token: InteractionToken {
+                    epoch: interaction.epoch,
+                    id: interaction.id,
+                },
+                visible_text,
+                title,
+                alt_text: None,
+            });
+        }
+        collect_replay_html_buttons(children, output);
+    }
+}
+
+fn collect_replay_html_text(nodes: &[erabasic_html::HtmlNode], visible_text: &mut String) {
+    for node in nodes {
+        match node {
+            erabasic_html::HtmlNode::Text { text, .. } => visible_text.push_str(text),
+            erabasic_html::HtmlNode::Element { children, .. } => {
+                collect_replay_html_text(children, visible_text);
+            }
+        }
+    }
+}
+
 pub(super) fn enabled_html_button_value(
     nodes: &[erabasic_html::HtmlNode],
     token: InteractionToken,

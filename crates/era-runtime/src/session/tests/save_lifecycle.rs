@@ -194,6 +194,31 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
     assert!(loadend < eventload && eventload < shop, "{display}");
     assert!(!display.contains("unexpected-autosave"), "{display}");
     assert_eq!(restored.system_menu, SystemMenuState::Title);
+    let traditional_replay = input_replay_records(&restored).remove(0);
+    assert_eq!(traditional_replay["origin"]["kind"], "traditional_save");
+    assert_eq!(traditional_replay["step_count"], 0);
+    let replay_wait = restored
+        .operations
+        .active_input()
+        .expect("traditional restore wait")
+        .wait
+        .clone();
+    submit(
+        &mut restored,
+        6,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id: replay_wait.wait_id,
+            token: replay_wait.submission_token,
+            monotonic_time_ns: 1,
+            intent: InputIntent::Enter,
+            message_skip: false,
+        }),
+    );
+    restored.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut restored);
+    let traditional_replay = input_replay_records(&restored);
+    assert_eq!(traditional_replay[0]["step_count"], 1);
+    assert_eq!(traditional_replay[1]["action"], "enter");
 
     // Snapshots written before the load-menu state was reset can contain a
     // gameplay wait together with a stale LoadSlots marker.
@@ -336,6 +361,31 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
         old_wait.submission_token
     );
     assert_eq!(restored_wait.wait.submission_token.epoch, exact.epoch.0);
+    let snapshot_replay = input_replay_records(&exact).remove(0);
+    assert_eq!(snapshot_replay["origin"]["kind"], "vm_snapshot");
+    assert_eq!(snapshot_replay["step_count"], 0);
+    let replay_wait = exact
+        .operations
+        .active_input()
+        .expect("snapshot restore wait")
+        .wait
+        .clone();
+    submit(
+        &mut exact,
+        exact_sequence + 1,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id: replay_wait.wait_id,
+            token: replay_wait.submission_token,
+            monotonic_time_ns: 1,
+            intent: InputIntent::CommitText("9".into()),
+            message_skip: false,
+        }),
+    );
+    exact.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut exact);
+    let snapshot_replay = input_replay_records(&exact);
+    assert_eq!(snapshot_replay[0]["step_count"], 1);
+    assert_eq!(snapshot_replay[1]["action"], "text");
 }
 
 #[test]
@@ -506,6 +556,7 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
     session.vm = Some(vm);
     session.controller.flow = Some(SystemFlow::Normal);
     session.phase = RuntimePhase::Running;
+    let replay_before_save_menu = session.input_replay.encode().unwrap();
 
     let mut request = None;
     let mut observed = Vec::new();
@@ -631,6 +682,11 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
         }
     }
     assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    assert_eq!(
+        session.input_replay.encode().unwrap(),
+        replay_before_save_menu,
+        "SAVEGAME must not reset the segment"
+    );
     assert_eq!(
         read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
         7

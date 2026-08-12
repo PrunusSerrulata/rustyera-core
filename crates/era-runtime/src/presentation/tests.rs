@@ -676,6 +676,32 @@ fn plain_buttons_remain_on_the_current_logical_line() {
 }
 
 #[test]
+fn replay_button_description_uses_canonical_text_and_enabled_ordinal() {
+    let mut model = PresentationModel::default();
+    let first = InteractionToken { epoch: 4, id: 8 };
+    let second = InteractionToken { epoch: 4, id: 9 };
+    model.append_button("first".into(), ProtocolValue::Integer(7), first, None);
+    model.append_button(
+        "visible choice".into(),
+        ProtocolValue::String("semantic".into()),
+        second,
+        None,
+    );
+
+    let description = model
+        .replay_button(
+            second,
+            crate::input_replay::ReplayValue::String("semantic".into()),
+        )
+        .expect("enabled button description");
+
+    assert_eq!(description.visible_text, "visible choice");
+    assert_eq!(description.ordinal, 2);
+    assert!(description.title.is_none());
+    assert!(description.alt_text.is_none());
+}
+
+#[test]
 fn automatic_buttons_are_grouped_after_the_complete_print_buffer_is_committed() {
     let mut model = PresentationModel::default();
     model.append_print_text("[1] one  ".into(), false, false);

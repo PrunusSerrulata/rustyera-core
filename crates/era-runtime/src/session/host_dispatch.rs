@@ -1205,6 +1205,7 @@ impl RuntimeSession {
                 request,
                 PendingStorage::HostLoadGlobal {
                     request: request.id,
+                    storage_path: "global.sav".into(),
                 },
                 StorageNamespace::GlobalSave,
                 StorageOperation::Read,
@@ -1272,15 +1273,17 @@ impl RuntimeSession {
         if name == "LOADCHARA" {
             let filename =
                 dat_filename(string_argument_value(&request.arguments, 0, "LOADCHARA")?)?;
+            let storage_path = format!("chara_{filename}.dat");
             return self.issue_host_storage(
                 vm,
                 request,
                 PendingStorage::HostLoadCharacters {
                     request: request.id,
+                    storage_path: storage_path.clone(),
                 },
                 StorageNamespace::Data,
                 StorageOperation::Read,
-                format!("chara_{filename}.dat"),
+                storage_path,
             );
         }
         if name == "CHKDATA" {

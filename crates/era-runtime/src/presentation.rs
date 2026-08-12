@@ -211,6 +211,29 @@ impl PresentationModel {
             })
     }
 
+    pub(crate) fn replay_button(
+        &self,
+        token: InteractionToken,
+        value: crate::input_replay::ReplayValue,
+    ) -> Option<crate::input_replay::ReplayButton> {
+        let mut candidates = Vec::new();
+        for line in &self.lines {
+            projection::collect_replay_buttons(&line.runs, &mut candidates);
+        }
+        projection::collect_replay_buttons(&self.pending_runs, &mut candidates);
+        let (index, candidate) = candidates
+            .into_iter()
+            .enumerate()
+            .find(|(_, candidate)| candidate.token == token)?;
+        Some(crate::input_replay::ReplayButton {
+            visible_text: candidate.visible_text,
+            title: candidate.title,
+            alt_text: candidate.alt_text,
+            value,
+            ordinal: index.saturating_add(1),
+        })
+    }
+
     pub(crate) fn bind_last_line_auto_buttons(
         &mut self,
         tokens: &[InteractionToken],

@@ -100,6 +100,12 @@ impl RuntimeSession {
         ));
         let version = decoded.state.version;
         let description = decoded.description.clone();
+        let replay_digest = crate::input_replay::digest_hex(bytes);
+        let replay_origin = self.prepare_input_replay(ReplayOriginDetails::TraditionalSave {
+            payload_digest: replay_digest,
+            description: description.clone(),
+            save_version: version.to_string(),
+        })?;
         let prepared = match vm.prepare_runtime_state_with_extensions(
             VmRuntimeStateTransaction::RestoreOrdinary(Box::new(decoded.state)),
             StructuredScope::Ordinary,
@@ -120,7 +126,7 @@ impl RuntimeSession {
             .prepare_runtime_state(VmRuntimeStateTransaction::SetLastLoad {
                 version,
                 slot: -1,
-                text: description,
+                text: description.clone(),
             })
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         vm.commit_runtime_state(last_load)
@@ -149,6 +155,7 @@ impl RuntimeSession {
         }
         self.vm = Some(vm);
         self.set_phase(RuntimePhase::Running)?;
+        self.install_input_replay(replay_origin);
         self.renew_debug_grant()
     }
 
@@ -170,6 +177,21 @@ impl RuntimeSession {
                 );
             }
         };
+        let replay_digest = crate::input_replay::digest_hex(bytes);
+        let replay_snapshot_format = format!("runtime_snapshot_v{}", payload.format_version);
+        let replay_snapshot_origin = match payload.origin {
+            RuntimeSnapshotOrigin::Normal => "normal",
+            RuntimeSnapshotOrigin::Debug => "debug",
+            RuntimeSnapshotOrigin::Diagnosis => "diagnosis",
+        }
+        .to_owned();
+        let replay_project_identity = crate::input_replay::identity_hex(&payload.project_identity);
+        let replay_origin = self.prepare_input_replay(ReplayOriginDetails::VmSnapshot {
+            payload_digest: replay_digest,
+            snapshot_format: replay_snapshot_format,
+            snapshot_origin: replay_snapshot_origin,
+            original_project_identity: replay_project_identity,
+        })?;
         let artifact = self
             .artifact
             .as_ref()
@@ -388,10 +410,16 @@ impl RuntimeSession {
         }
         self.set_phase(RuntimePhase::WaitingInput)?;
         self.renew_debug_grant()?;
+        self.install_input_replay(replay_origin);
         self.emit_presentation()
     }
 
     pub(in super::super) fn start_new_game(&mut self, seed: u64) -> Result<(), RuntimeError> {
+        let trigger = self.next_new_game_trigger;
+        let replay_origin = self.prepare_input_replay(ReplayOriginDetails::NewGame {
+            seed: seed.to_string(),
+            trigger,
+        })?;
         self.random_seed = Some(seed);
         self.frontend_time_origin = None;
         if let Some(project) = &mut self.project_snapshot {
@@ -429,6 +457,8 @@ impl RuntimeSession {
             self.open_title_menu()
         };
         result?;
+        self.next_new_game_trigger = NewGameTrigger::Start;
+        self.install_input_replay(replay_origin);
         self.renew_debug_grant()
     }
 
@@ -496,6 +526,7 @@ impl RuntimeSession {
         self.undo_token = None;
         self.exit_requested = None;
         self.set_phase(RuntimePhase::Ready)?;
+        self.next_new_game_trigger = NewGameTrigger::ReturnToTitle;
         self.start(
             message_id,
             &StartRequest {

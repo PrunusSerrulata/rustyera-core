@@ -481,6 +481,13 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
             _ => None,
         })
         .unwrap();
+    let replay_header = input_replay_records(&session).remove(0);
+    assert_eq!(replay_header["origin"]["kind"], "configuration_update");
+    assert_ne!(
+        replay_header["origin"]["before_identity"],
+        replay_header["origin"]["after_identity"]
+    );
+    assert_eq!(replay_header["step_count"], 0);
     assert!(committed.restart_pending);
     for (code, value) in [("FontSize", "22"), ("LineHeight", "24")] {
         let entry = committed
@@ -1268,6 +1275,25 @@ fn ready_project_reload_stages_and_commits_a_normalized_delta() {
         RuntimeMessage::Diagnostic(diagnostic)
             if diagnostic.code == "runtime.input_undo_invalidated"
     )));
+    let replay_header = input_replay_records(&session).remove(0);
+    assert_eq!(replay_header["origin"]["kind"], "hot_reload");
+    assert_eq!(replay_header["origin"]["before_revision"], "1");
+    assert_eq!(replay_header["origin"]["after_revision"], "2");
+    assert_eq!(replay_header["step_count"], 0);
+
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::ReloadProject(ReloadProject {
+            base_revision: 2,
+            target_revision: 3,
+            changes: Vec::new(),
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    let unchanged_replay = input_replay_records(&session).remove(0);
+    assert_eq!(unchanged_replay["origin"], replay_header["origin"]);
 }
 
 #[test]

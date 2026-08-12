@@ -415,6 +415,9 @@ pub enum StateExportKind {
     /// Self-contained project container including all runtime inputs and binary resources.
     #[n(3)]
     FullProjectFile,
+    /// UTF-8 JSON Lines describing the current manual-path semantic input segment.
+    #[n(4)]
+    InputReplay,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

@@ -223,11 +223,40 @@ fn return_to_title_reuses_the_loaded_artifact_without_project_loading() {
             .artifact_id,
         expected
     );
+    let messages = drain(&mut session);
     assert!(
-        drain(&mut session)
+        messages
             .iter()
             .all(|message| !matches!(message, RuntimeMessage::ProjectLoadReport(_)))
     );
+    let entropy_request = messages
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ServiceRequest(request)
+                if request.operation == RANDOM_SEED_OPERATION =>
+            {
+                Some(request.request_id)
+            }
+            _ => None,
+        })
+        .expect("return-to-title entropy request");
+    session
+        .handle_message(
+            100,
+            RuntimeMessage::ServiceResponse(ServiceResponse {
+                request_id: entropy_request,
+                result: ServiceResult::Ready {
+                    payload: ProtocolBytes::new(
+                        encode_canonical(&RandomSeedResponse { seed: 9 }).unwrap(),
+                    ),
+                },
+            }),
+        )
+        .unwrap();
+    let replay_header = input_replay_records(&session).remove(0);
+    assert_eq!(replay_header["origin"]["kind"], "new_game");
+    assert_eq!(replay_header["origin"]["seed"], "9");
+    assert_eq!(replay_header["origin"]["trigger"], "return_to_title");
 }
 
 #[test]

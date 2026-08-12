@@ -157,6 +157,18 @@ impl NormalizedProjectSnapshot {
     }
 }
 
+pub(crate) fn refresh_project_identity(
+    snapshot: &mut NormalizedProjectSnapshot,
+    artifact: &ValidatedArtifact,
+) {
+    let mut config = configuration::semantic_config(snapshot.editable_configuration.clone());
+    config.money_label.clone_from(&snapshot.money_label);
+    config.money_first = snapshot.money_first;
+    config.maximum_shop_items = snapshot.maximum_shop_items;
+    snapshot.project_identity =
+        project_identity(artifact, &config, &snapshot.resources, &snapshot.extensions);
+}
+
 fn profile_default(
     spec: &era_config::ConfigSpec,
     profile: ConfigurationClientProfile,

@@ -104,6 +104,14 @@ fn projected_presentation_text(snapshot: &PresentationSnapshot) -> String {
         .join("\n")
 }
 
+fn input_replay_records(session: &RuntimeSession) -> Vec<serde_json::Value> {
+    std::str::from_utf8(&session.input_replay.encode().expect("encode input replay"))
+        .expect("input replay is UTF-8")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("parse input replay record"))
+        .collect()
+}
+
 fn submit_debug(session: &mut RuntimeSession, sequence: u64, message: &DebugMessage) {
     let envelope = message
         .envelope(
@@ -122,6 +130,7 @@ mod debug_flow;
 mod host_runtime;
 mod host_system;
 mod input_flow;
+mod input_replay;
 mod key_macro_input;
 mod protocol_handshake;
 mod protocol_project;

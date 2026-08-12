@@ -79,6 +79,9 @@ use crate::host::{
     ClockOperation, ExternalCompletion, PendingInput, PointerCoordinate, PostInputAction,
     ProjectionStringOperation, input_wait,
 };
+use crate::input_replay::{
+    InputReplayHistory, NewGameTrigger, ReplayOrigin, ReplayOriginDetails, ReplayProject,
+};
 use crate::input_set::{InputSegment, preprocess_input};
 use crate::key_macro::KeyMacros;
 use crate::operation::{
@@ -404,6 +407,8 @@ pub struct RuntimeSession {
     logical_time_ns: u64,
     frontend_time_origin: Option<(u64, u64)>,
     random_seed: Option<u64>,
+    input_replay: InputReplayHistory,
+    next_new_game_trigger: NewGameTrigger,
     negotiated_features: BTreeSet<RuntimeFeature>,
     configuration_profile: ConfigurationClientProfile,
     inbound: VecDeque<(u64, InboundMessage)>,
@@ -520,6 +525,7 @@ struct PreparedOrdinaryLoad {
 struct PendingProjectReload {
     build: crate::project::ProjectBuild,
     previous_phase: RuntimePhase,
+    replay_origin: Option<ReplayOrigin>,
 }
 
 struct PendingConfigurationUpdate {

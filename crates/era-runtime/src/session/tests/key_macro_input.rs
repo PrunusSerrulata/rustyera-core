@@ -12,6 +12,14 @@ fn repeated_input_set_executes_every_segment_across_enter_waits() {
     assert_eq!(runtime_integer(&session, "LEARNED"), 2);
     assert!(session.queued_input.is_empty());
     assert!(!session.message_skip);
+    assert_eq!(
+        input_replay_records(&session)
+            .into_iter()
+            .skip(1)
+            .map(|record| record["action"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        ["text", "enter", "text", "enter"]
+    );
 }
 
 #[test]
@@ -25,6 +33,9 @@ fn invalid_segment_does_not_discard_the_following_valid_segment() {
 
     assert_eq!(runtime_integer(&session, "ACCEPTED"), 1);
     assert!(session.queued_input.is_empty());
+    let records = input_replay_records(&session);
+    assert_eq!(records[0]["step_count"], 1);
+    assert_eq!(records[1]["result"]["value"], "412");
 }
 
 #[test]
@@ -347,6 +358,7 @@ fn rejected_and_recalled_inputs_do_not_leak_message_skip() {
     session.drive(RuntimeDriveBudget::default()).unwrap();
     assert_rejection(&mut session, CommandErrorCode::StaleRequest);
     assert!(!session.message_skip);
+    assert_eq!(input_replay_records(&session)[0]["step_count"], 0);
 }
 
 #[test]

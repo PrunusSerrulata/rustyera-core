@@ -74,6 +74,7 @@ impl RuntimeSession {
                             pending.message_id,
                             reload.build,
                             reload.previous_phase,
+                            reload.replay_origin,
                         );
                     }
                     self.emit(

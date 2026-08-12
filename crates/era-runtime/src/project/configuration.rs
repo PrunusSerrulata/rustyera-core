@@ -31,16 +31,21 @@ pub(super) fn parse_configuration(
         Some(file) => parse_reraconfig(file, diagnostics),
         None => migrate_configuration(files, diagnostics),
     };
-    let mut config = SemanticConfig {
-        values,
-        ..SemanticConfig::default()
-    };
-    apply_catalog_semantics(&mut config);
+    let config = semantic_config(values);
     ParsedConfiguration {
         semantic: config,
         document,
         generated_source,
     }
+}
+
+pub(super) fn semantic_config(values: ConfigStore) -> SemanticConfig {
+    let mut config = SemanticConfig {
+        values,
+        ..SemanticConfig::default()
+    };
+    apply_catalog_semantics(&mut config);
+    config
 }
 
 fn parse_reraconfig(

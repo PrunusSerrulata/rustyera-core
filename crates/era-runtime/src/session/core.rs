@@ -79,6 +79,8 @@ impl RuntimeSession {
             logical_time_ns: 0,
             frontend_time_origin: None,
             random_seed: None,
+            input_replay: InputReplayHistory::default(),
+            next_new_game_trigger: NewGameTrigger::Start,
             negotiated_features: BTreeSet::new(),
             configuration_profile: ConfigurationClientProfile::Reference,
             inbound: VecDeque::new(),
@@ -169,6 +171,36 @@ impl RuntimeSession {
             full_project_task: None,
             full_project_failure: None,
         }
+    }
+
+    pub(in super::super) fn prepare_input_replay(
+        &self,
+        details: ReplayOriginDetails,
+    ) -> Result<ReplayOrigin, RuntimeError> {
+        let snapshot = self.project_snapshot.as_ref().ok_or_else(|| {
+            RuntimeError::Internal("input replay has no loaded project identity".into())
+        })?;
+        Ok(self.input_replay_for_project(details, snapshot))
+    }
+
+    pub(in super::super) fn input_replay_for_project(
+        &self,
+        details: ReplayOriginDetails,
+        snapshot: &NormalizedProjectSnapshot,
+    ) -> ReplayOrigin {
+        ReplayOrigin {
+            details,
+            project: ReplayProject {
+                revision: snapshot.manifest.project_revision.to_string(),
+                identity: crate::input_replay::identity_hex(&snapshot.project_identity),
+                locale: self.selected_locale.clone(),
+            },
+        }
+    }
+
+    pub(in super::super) fn install_input_replay(&mut self, origin: ReplayOrigin) {
+        self.input_replay
+            .establish(origin, self.options.limits.maximum_transfer_bytes);
     }
 
     /// Install or clear a side-effect-free project workload progress observer.

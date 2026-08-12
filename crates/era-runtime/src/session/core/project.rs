@@ -156,21 +156,10 @@ impl RuntimeSession {
                 "configuration project changed before commit",
             );
         }
-        let configuration = {
-            let snapshot = self.project_snapshot.as_mut().ok_or_else(|| {
-                RuntimeError::Internal("configuration project disappeared before commit".into())
-            })?;
-            commit_configuration_manifest(
-                snapshot,
-                &pending.contents,
-                &pending.prepared_source_digest,
-            );
-            snapshot.editable_configuration = pending.values;
-            snapshot.configuration_document = pending.document;
-            snapshot.generated_configuration_source = None;
-            apply_hot_configuration(snapshot, &pending.changed_codes);
-            snapshot.configuration_snapshot()
-        };
+        let (next_snapshot, replay_origin) =
+            self.build_committed_configuration_snapshot(pending)?;
+        let configuration = next_snapshot.configuration_snapshot();
+        self.project_snapshot = Some(next_snapshot);
         self.presentation.configure_project(
             self.project_snapshot
                 .as_ref()
@@ -195,6 +184,9 @@ impl RuntimeSession {
         {
             self.invalidate_input_undo(Some("Ctrl-Z was disabled by a hot configuration update"))?;
         }
+        if let Some(origin) = replay_origin {
+            self.install_input_replay(origin);
+        }
         self.emit(
             RuntimeMessage::ConfigurationUpdateCommitted(ConfigurationUpdateCommitted {
                 configuration,
@@ -202,6 +194,48 @@ impl RuntimeSession {
             Some(message_id),
         )?;
         self.emit_presentation()
+    }
+
+    fn build_committed_configuration_snapshot(
+        &self,
+        pending: PendingConfigurationUpdate,
+    ) -> Result<(NormalizedProjectSnapshot, Option<ReplayOrigin>), RuntimeError> {
+        let changed_codes = pending.changed_codes.iter().cloned().collect::<Vec<_>>();
+        let artifact = self.artifact.as_ref().ok_or_else(|| {
+            RuntimeError::Internal("configuration commit has no loaded artifact".into())
+        })?;
+        let mut snapshot = self
+            .project_snapshot
+            .as_ref()
+            .ok_or_else(|| {
+                RuntimeError::Internal("configuration project disappeared before commit".into())
+            })?
+            .clone();
+        let before_revision = snapshot.manifest.project_revision.to_string();
+        let before_identity = crate::input_replay::identity_hex(&snapshot.project_identity);
+        commit_configuration_manifest(
+            &mut snapshot,
+            &pending.contents,
+            &pending.prepared_source_digest,
+        );
+        snapshot.editable_configuration = pending.values;
+        snapshot.configuration_document = pending.document;
+        snapshot.generated_configuration_source = None;
+        apply_hot_configuration(&mut snapshot, &pending.changed_codes);
+        crate::project::refresh_project_identity(&mut snapshot, artifact);
+        let replay_origin = (!changed_codes.is_empty()).then(|| {
+            self.input_replay_for_project(
+                ReplayOriginDetails::ConfigurationUpdate {
+                    before_revision,
+                    before_identity,
+                    after_revision: snapshot.manifest.project_revision.to_string(),
+                    after_identity: crate::input_replay::identity_hex(&snapshot.project_identity),
+                    changed_codes,
+                },
+                &snapshot,
+            )
+        });
+        Ok((snapshot, replay_origin))
     }
 
     pub(in super::super) fn observe_projection(
@@ -273,12 +307,12 @@ impl RuntimeSession {
         let Some(selected) = negotiate_version(hello.runtime_versions, supported) else {
             self.emit_log(
                 RuntimeLogLevel::Error,
-                "runtime protocol negotiation failed: runtime protocol 26.0 is required",
+                "runtime protocol negotiation failed: runtime protocol 29.0 is required",
             )?;
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 26.0 is required".into(),
+                    message: "runtime protocol 29.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -959,6 +993,24 @@ impl RuntimeSession {
             next.resource_graph
                 .inherit_runtime_graph(&previous.resource_graph);
         }
+        let replay_origin = if reload.changes.is_empty() {
+            None
+        } else {
+            let details = replay_hot_reload_origin(
+                reload,
+                self.project_snapshot
+                    .as_ref()
+                    .expect("reload base was checked"),
+                build
+                    .snapshot
+                    .as_ref()
+                    .ok_or_else(|| RuntimeError::Internal("reload result has no project".into()))?,
+            )?;
+            Some(self.input_replay_for_project(
+                details,
+                build.snapshot.as_ref().expect("reload result was checked"),
+            ))
+        };
         let metadata = build
             .snapshot
             .as_ref()
@@ -998,11 +1050,12 @@ impl RuntimeSession {
                 reload: Some(PendingProjectReload {
                     build,
                     previous_phase,
+                    replay_origin,
                 }),
             });
             return self.emit_project_image_metadata_requests();
         }
-        self.commit_project_reload(message_id, build, previous_phase)
+        self.commit_project_reload(message_id, build, previous_phase, replay_origin)
     }
 
     pub(in super::super) fn commit_project_reload(
@@ -1010,6 +1063,7 @@ impl RuntimeSession {
         message_id: u64,
         mut build: crate::project::ProjectBuild,
         previous_phase: RuntimePhase,
+        replay_origin: Option<ReplayOrigin>,
     ) -> Result<(), RuntimeError> {
         let target = build
             .artifact
@@ -1097,6 +1151,9 @@ impl RuntimeSession {
         self.invalidate_input_undo(Some(
             "successful bytecode hot reload invalidated the Ctrl-Z checkpoint",
         ))?;
+        if let Some(origin) = replay_origin {
+            self.install_input_replay(origin);
+        }
         self.emit(
             RuntimeMessage::ProjectLoadReport(build.report),
             Some(message_id),
@@ -1105,6 +1162,47 @@ impl RuntimeSession {
         self.renew_debug_grant()?;
         self.emit_presentation()
     }
+}
+
+fn replay_hot_reload_origin(
+    reload: &ReloadProject,
+    before: &NormalizedProjectSnapshot,
+    after: &NormalizedProjectSnapshot,
+) -> Result<ReplayOriginDetails, RuntimeError> {
+    let changes = reload
+        .changes
+        .iter()
+        .map(|change| {
+            let (operation, category, relative_path) = match change {
+                era_runtime_protocol::FileChange::Upsert { file } => (
+                    crate::input_replay::ReplayFileOperation::Upsert,
+                    file.category,
+                    file.relative_path.as_str(),
+                ),
+                era_runtime_protocol::FileChange::Remove {
+                    category,
+                    relative_path,
+                } => (
+                    crate::input_replay::ReplayFileOperation::Remove,
+                    *category,
+                    relative_path.as_str(),
+                ),
+            };
+            Ok(crate::input_replay::ReplayFileChange {
+                operation,
+                relative_path: era_runtime_protocol::validate_relative_path(relative_path)?,
+                category: category.into(),
+            })
+        })
+        .collect::<Result<Vec<_>, era_protocol::ProtocolError>>()
+        .map_err(RuntimeError::Protocol)?;
+    Ok(ReplayOriginDetails::HotReload {
+        before_revision: before.manifest.project_revision.to_string(),
+        before_identity: crate::input_replay::identity_hex(&before.project_identity),
+        after_revision: after.manifest.project_revision.to_string(),
+        after_identity: crate::input_replay::identity_hex(&after.project_identity),
+        changes,
+    })
 }
 
 struct ValidatedConfigurationUpdate {

@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.7`、公共信封 `2.0`、Runtime 协议 `28.0`。源码入口：
+> C ABI `3.7`、公共信封 `2.0`、Runtime 协议 `29.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.7 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 24.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 29.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -686,7 +686,8 @@ presentation query 的 `context` 是 presentation/environment/projection-space �
 
 ### 9.3 状态传输
 
-kind：TraditionalSave、VmSnapshot、CompiledProjectCache。完整描述符是
+kind：TraditionalSave、VmSnapshot、CompiledProjectCache、FullProjectFile、InputReplay。
+其中 InputReplay 只允许导出，导入必须明确拒绝。完整描述符是
 `transfer_id, kind, total_bytes, digest`（精确 32 字节 BLAKE3）和 `artifact_id?`。
 
 导出：请求 kind → `Ready{descriptor}` 或 `Ineligible{reasons}` → 从 offset 0 连续请求
@@ -717,6 +718,36 @@ v7 之前的 `RERACACH` 编译缓存不再兼容；前端仍持有源码时应�
 构建产生的项目诊断；精确命中时重放原等级、code 和 source，并在正文前添加
 `[cached] `。项目文件准备异步，首次请求可能被可恢复地拒绝为“已开始/仍在准备”，稍后
 再请求。
+
+`InputReplay` 导出 UTF-8、无 BOM、每对象一行且以换行结尾的
+`input-replay.jsonl`。首行是 schema 1 的 `header`，固定标明
+`fidelity="manual_path"`、可用状态、步骤数、当前时间线来源和限制；后续是从 1 编号的
+`step`。每个 `origin` 都包含 `project={revision,identity,locale}`，并使用下列稳定的 `kind`
+与专有字段：
+
+- `new_game`：`seed,trigger`，trigger 为 `start` 或 `return_to_title`；
+- `traditional_save`：`payload_digest,description,save_version`；
+- `ordinary_save`：`slot,storage_path,payload_digest`；
+- `vm_snapshot`：`payload_digest,snapshot_format,snapshot_origin,original_project_identity`；
+- `hot_reload`：前后 revision/identity，以及包含 operation、relative_path、category 的
+  `changes`；
+- `input_undo`：`checkpoint_slot,save_digest,retained_input_count`；
+- `configuration_update`：前后 revision/identity 与 `changed_codes`；
+- `external_data_load`：`storage_path,payload_digest,data_type`，data_type 为 `global` 或
+  `character`。
+
+起始存档、快照或外部数据载荷本身不在归档中。步骤的 action 固定为 `enter`、`any_key`、
+`text`、`button`、`continue`、`primitive` 或 `timeout`，并记录 wait_kind、实际语义 result 与
+message_skip。按钮额外记录当时规范展示中的 visible_text、title、alt_text、语义 value 和
+可用选择中的 1-based ordinal。步骤只记录 runtime 实际接受并生效的语义输入，按钮描述取自
+输入失效前的规范展示；
+interaction token、session/epoch、wait/message ID 和绝对路径均不写入。所有 `u64` 和可能超出
+JavaScript 安全范围的整数使用十进制字符串；步骤序号、计数、ordinal 和存档 slot 使用
+JSON number，摘要使用小写 BLAKE3 十六进制。历史最多
+4096 步，预计编码大小最多为 `min(16 MiB, maximum_transfer_bytes)`；超限时当前片段变为
+`status="unavailable"`、`reason="history_limit_exceeded"`，下一次成功的时间线边界重新开始记录。
+该数据只用于人工路径重现：开发者必须先取得相同起始状态，外部时间、设备和服务结果不保证
+完全确定。
 
 开发和诊断工具可调用
 `inspect_runtime_snapshot(bytes, maximum_bytes) -> RuntimeSnapshotInspection`，复用正式

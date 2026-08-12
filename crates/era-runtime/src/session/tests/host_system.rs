@@ -630,6 +630,37 @@ fn input_undo_records_only_accepted_scalar_input_after_a_checkpoint() {
     assert_ne!(session.phase, RuntimePhase::Faulted);
     assert!(session.undo_checkpoint.as_ref().unwrap().inputs.is_empty());
     assert_eq!(session.input_undo_state().available_steps, 0);
+    let records = input_replay_records(&session);
+    assert_eq!(records[0]["origin"]["kind"], "input_undo");
+    assert_eq!(records[0]["origin"]["retained_input_count"], 0);
+    assert_eq!(records[0]["step_count"], 0);
+    assert_eq!(
+        records.len(),
+        1,
+        "automatic Ctrl-Z replay must not write steps"
+    );
+    let wait = session
+        .operations
+        .active_input()
+        .expect("post-undo wait")
+        .wait
+        .clone();
+    submit(
+        &mut session,
+        5,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id: wait.wait_id,
+            token: wait.submission_token,
+            monotonic_time_ns: 1,
+            intent: InputIntent::Enter,
+            message_skip: false,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    let records = input_replay_records(&session);
+    assert_eq!(records[0]["step_count"], 1);
+    assert_eq!(records[1]["action"], "enter");
 }
 
 #[test]

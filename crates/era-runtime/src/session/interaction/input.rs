@@ -139,7 +139,7 @@ impl RuntimeSession {
         let Some(submission) = self.input_value_with_visible_button(
             &pending,
             input.token,
-            intent,
+            intent.clone(),
             allow_long_activation,
         ) else {
             return self.reject(
@@ -149,7 +149,13 @@ impl RuntimeSession {
             );
         };
         self.message_skip = submitted_message_skip;
-        self.finish_input(submission, false)
+        let replay = self.replay_step_draft(&pending, &intent, &submission, submitted_message_skip);
+        self.finish_input(submission, false)?;
+        if let Some(replay) = replay {
+            self.input_replay
+                .record(replay, self.options.limits.maximum_transfer_bytes);
+        }
+        Ok(())
     }
 
     fn recall_key_macro(
@@ -226,11 +232,16 @@ impl RuntimeSession {
             .operations
             .active_input()
             .expect("active wait is unchanged");
-        let Some(submission) = input_value(pending, token, intent, false) else {
+        let Some(submission) = input_value(pending, token, intent.clone(), false) else {
             return Ok(());
         };
         self.message_skip = segment.message_skip;
+        let replay = self.replay_step_draft(pending, &intent, &submission, segment.message_skip);
         self.finish_input(submission, false)?;
+        if let Some(replay) = replay {
+            self.input_replay
+                .record(replay, self.options.limits.maximum_transfer_bytes);
+        }
         Ok(())
     }
 
@@ -382,7 +393,11 @@ impl RuntimeSession {
             self.emit_presentation()?;
         }
         if timed_out {
-            let pending = self.operations.active_input().expect("checked above");
+            let pending = self
+                .operations
+                .active_input()
+                .expect("checked above")
+                .clone();
             if let Some(message) = &pending.wait.timeout_message {
                 self.presentation.append_text(message.clone(), false);
             }
@@ -400,9 +415,81 @@ impl RuntimeSession {
                         .map_or(VmValue::Integer(0), protocol_to_vm),
                 )
             };
+            let replay = crate::input_replay::ReplayStepDraft {
+                action: crate::input_replay::ReplayAction::Timeout,
+                wait_kind: pending.wait.kind.into(),
+                result: match &submission {
+                    InputSubmission::Value(value) => {
+                        crate::input_replay::ReplayValue::from_vm(value)
+                    }
+                    InputSubmission::Primitive(_) => None,
+                },
+                message_skip: self.message_skip,
+                text: None,
+                button: None,
+                primitive: match &submission {
+                    InputSubmission::Primitive(result) => {
+                        Some(crate::input_replay::ReplayPrimitive::from_result(
+                            result.fields,
+                            result
+                                .selection
+                                .as_ref()
+                                .and_then(crate::input_replay::ReplayValue::from_vm),
+                        ))
+                    }
+                    InputSubmission::Value(_) => None,
+                },
+            };
             self.finish_input(submission, true)?;
+            self.input_replay
+                .record(replay, self.options.limits.maximum_transfer_bytes);
         }
         Ok(())
+    }
+
+    fn replay_step_draft(
+        &self,
+        pending: &PendingInput,
+        intent: &InputIntent,
+        submission: &InputSubmission,
+        message_skip: bool,
+    ) -> Option<crate::input_replay::ReplayStepDraft> {
+        let action = crate::input_replay::action_for_intent(intent)?;
+        let result = match submission {
+            InputSubmission::Value(value) => crate::input_replay::ReplayValue::from_vm(value),
+            InputSubmission::Primitive(_) => None,
+        };
+        let text = match intent {
+            InputIntent::AnyKey(value) | InputIntent::CommitText(value) => Some(value.clone()),
+            _ => None,
+        };
+        let button = match intent {
+            InputIntent::Activate(token) => {
+                Some(self.presentation.replay_button(*token, result.clone()?)?)
+            }
+            _ => None,
+        };
+        let primitive = match (intent, submission) {
+            (InputIntent::Primitive(_), InputSubmission::Primitive(result)) => {
+                Some(crate::input_replay::ReplayPrimitive::from_result(
+                    result.fields,
+                    result
+                        .selection
+                        .as_ref()
+                        .and_then(crate::input_replay::ReplayValue::from_vm),
+                ))
+            }
+            _ => None,
+        };
+        Some(crate::input_replay::ReplayStepDraft {
+            action,
+            wait_kind: pending.wait.kind.into(),
+            result,
+            message_skip,
+            text,
+            button,
+            primitive,
+        })
     }
 
     #[allow(clippy::too_many_lines)]

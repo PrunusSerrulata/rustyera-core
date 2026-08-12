@@ -1284,6 +1284,10 @@ fn matching_timed_input_wins_over_queued_timer_and_starts_message_skip() {
             .iter()
             .any(|line| projected_line_text(line).contains("got=9"))
     );
+    let replay = input_replay_records(&session);
+    assert_eq!(replay[0]["step_count"], 1);
+    assert_eq!(replay[1]["action"], "text");
+    assert_eq!(replay[1]["result"]["value"], "42");
 }
 
 #[test]

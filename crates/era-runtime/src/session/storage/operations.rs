@@ -213,19 +213,27 @@ impl RuntimeSession {
                 // DELDATA is explicitly idempotent in the reference runtime.
                 self.resume_storage_host(request, Vec::new())
             }
-            (PendingStorage::HostLoadGlobal { request }, StorageResult::Error { error })
+            (PendingStorage::HostLoadGlobal { request, .. }, StorageResult::Error { error })
                 if error.kind == FrontendIoErrorKind::NotFound =>
             {
                 let writes = self.result_write(0)?;
                 self.resume_storage_host(request, writes)
             }
-            (PendingStorage::HostLoadGlobal { request }, StorageResult::Read { data, .. }) => {
-                self.complete_global_load(request, data.as_slice())
-            }
-            (PendingStorage::HostLoadCharacters { request }, StorageResult::Read { data, .. }) => {
-                self.complete_character_load(request, data.as_slice())
-            }
-            (PendingStorage::HostLoadCharacters { request }, StorageResult::Error { .. }) => {
+            (
+                PendingStorage::HostLoadGlobal {
+                    request,
+                    storage_path,
+                },
+                StorageResult::Read { data, .. },
+            ) => self.complete_global_load(request, data.as_slice(), &storage_path),
+            (
+                PendingStorage::HostLoadCharacters {
+                    request,
+                    storage_path,
+                },
+                StorageResult::Read { data, .. },
+            ) => self.complete_character_load(request, data.as_slice(), &storage_path),
+            (PendingStorage::HostLoadCharacters { request, .. }, StorageResult::Error { .. }) => {
                 let writes = self.result_write(0)?;
                 self.resume_storage_host(request, writes)
             }

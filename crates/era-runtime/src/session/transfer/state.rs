@@ -231,6 +231,50 @@ impl RuntimeSession {
                 Some(message_id),
             );
         }
+        if request.kind == StateExportKind::InputReplay {
+            if self.outbound_transfer.is_some() {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "another state export is already active",
+                );
+            }
+            let bytes = self
+                .input_replay
+                .encode()
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            if u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+                > self.options.limits.maximum_transfer_bytes
+            {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::ResourceLimit,
+                    "input replay exceeds the negotiated transfer limit",
+                );
+            }
+            let transfer_id = self.allocate_transfer();
+            let descriptor = StateTransferDescriptor {
+                transfer_id,
+                kind: request.kind,
+                total_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                digest: ProtocolBytes::new(blake3::hash(&bytes).as_bytes().to_vec()),
+                artifact_id: None,
+            };
+            self.outbound_transfer = Some(OutboundStateTransfer {
+                descriptor: descriptor.clone(),
+                bytes: Arc::new(bytes),
+                next_offset: 0,
+            });
+            return self.emit(
+                RuntimeMessage::StateExportReady(StateExportReady {
+                    kind: request.kind,
+                    result: StateExportResult::Ready {
+                        transfer: descriptor,
+                    },
+                }),
+                Some(message_id),
+            );
+        }
         let unrestricted_snapshot = request.kind == StateExportKind::VmSnapshot
             && request.snapshot_purpose != SnapshotExportPurpose::Normal;
         let stable_wait = self.operations.active_input().is_some_and(|pending| {
@@ -376,7 +420,9 @@ impl RuntimeSession {
                     })
                     .map_err(RuntimeError::Internal)?
                 }
-                StateExportKind::CompiledProjectCache | StateExportKind::FullProjectFile => {
+                StateExportKind::CompiledProjectCache
+                | StateExportKind::FullProjectFile
+                | StateExportKind::InputReplay => {
                     unreachable!("handled above")
                 }
             };
@@ -649,7 +695,9 @@ impl RuntimeSession {
                 self.full_project_failure = None;
                 self.staged_full_project_manifest = None;
             }
-            StateExportKind::TraditionalSave | StateExportKind::VmSnapshot => {}
+            StateExportKind::TraditionalSave
+            | StateExportKind::VmSnapshot
+            | StateExportKind::InputReplay => {}
         }
     }
 
@@ -658,6 +706,13 @@ impl RuntimeSession {
         message_id: u64,
         request: StateImportBegin,
     ) -> Result<(), RuntimeError> {
+        if request.kind == StateExportKind::InputReplay {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "input replay is export-only and cannot be imported",
+            );
+        }
         if self.inbound_transfer.is_some() {
             return self.reject(
                 message_id,

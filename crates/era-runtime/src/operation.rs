@@ -68,9 +68,11 @@ pub(crate) enum PendingStorage {
     },
     HostLoadGlobal {
         request: HostRequestId,
+        storage_path: String,
     },
     HostLoadCharacters {
         request: HostRequestId,
+        storage_path: String,
     },
     HostCheck {
         request: HostRequestId,
