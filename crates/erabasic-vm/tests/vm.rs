@@ -328,6 +328,8 @@ mod characters;
 mod core;
 #[path = "vm/debug_snapshot.rs"]
 mod debug_snapshot;
+#[path = "vm/replace.rs"]
+mod replace;
 #[path = "vm/runtime.rs"]
 mod runtime;
 #[path = "vm/strform.rs"]

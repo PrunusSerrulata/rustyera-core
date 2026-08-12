@@ -339,7 +339,7 @@ impl NativeService for CoreNative {
                 }
                 VmValue::Integer(i64::try_from(level).unwrap_or(i64::MAX))
             }
-            "replace" => VmValue::String(string(0)?.replace(string(1)?, string(2)?)),
+            "replace" => VmValue::String(replace_text(&request)?),
             "escape" => VmValue::String(regex::escape(string(0)?)),
             "charatu" => {
                 let position = usize::try_from(integer(1)?).unwrap_or(usize::MAX);
@@ -382,6 +382,65 @@ impl NativeService for CoreNative {
             _ => return Err(format!("unknown core-native service {}", self.name)),
         };
         Ok(NativeReady::value(result))
+    }
+}
+
+fn replace_text(request: &NativeCallRequest) -> Result<String, String> {
+    let input = request_string(request, 0)?;
+    let pattern = request_string(request, 1)?;
+    let mode = match request.arguments.get(3) {
+        None => 0,
+        Some(VmValue::Integer(value)) => *value,
+        Some(_) => return Err("REPLACE argument 4 must be integer".into()),
+    };
+    if mode == 2 {
+        return Ok(input.replace(pattern, request_string(request, 2)?));
+    }
+
+    let regex = regex::Regex::new(pattern)
+        .map_err(|error| format!("REPLACE argument 2 is not a regex: {error}"))?;
+    if mode == 1 {
+        let replacements = request
+            .places
+            .iter()
+            .find(|place| place.argument_index == 2)
+            .ok_or("REPLACE mode 1 argument 3 must be a string array")?
+            .values
+            .iter()
+            .map(|value| match value {
+                VmValue::String(value) => Ok(value.as_str()),
+                _ => Err("REPLACE mode 1 argument 3 must be a string array".to_owned()),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut index = 0;
+        return Ok(regex
+            .replace_all(input, |_: &regex::Captures<'_>| {
+                let replacement = replacements.get(index).copied().unwrap_or_default();
+                index += 1;
+                replacement
+            })
+            .into_owned());
+    }
+
+    Ok(regex
+        .replace_all(input, request_string(request, 2)?)
+        .into_owned())
+}
+
+fn request_string(request: &NativeCallRequest, index: usize) -> Result<&str, String> {
+    match request.arguments.get(index) {
+        Some(VmValue::String(value)) => Ok(value),
+        Some(VmValue::StringPlace(_)) => request
+            .places
+            .iter()
+            .find(|place| place.argument_index == index)
+            .and_then(|place| place.values.first())
+            .and_then(|value| match value {
+                VmValue::String(value) => Some(value.as_str()),
+                _ => None,
+            })
+            .ok_or_else(|| format!("REPLACE argument {} string place is unreadable", index + 1)),
+        _ => Err(format!("REPLACE argument {} must be string", index + 1)),
     }
 }
 

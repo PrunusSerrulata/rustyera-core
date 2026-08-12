@@ -20,6 +20,9 @@ $cliDirectory = Join-Path $referenceRoot "emuera-reference-cli"
 $fixtureDirectory = Join-Path $cliDirectory "tests"
 $xmlXPathFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/xml-xpath.erb"
 $eraflHtmlCrossingFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/erafl-html-crossing.erb"
+$eraflTooltipErbFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/erafl-title-bonus-tooltip.erb"
+$eraflTooltipErhFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/erafl-title-bonus-tooltip.erh"
+$eraflTooltipXmlFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/xml/CHARA_TITLE_BONUS_TOOLTIP.xml"
 $strformTitleErbFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/strform-title.erb"
 $strformTitleErhFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/strform-title.erh"
 $strformTitleXmlFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/xml/CHARA_TITLE.xml"
@@ -117,10 +120,13 @@ try {
     [System.IO.File]::WriteAllText($configPath, $configText, $utf8Bom)
     Copy-Item $xmlXPathFixture (Join-Path $tempGame "erb/xml-xpath.erb")
     Copy-Item $eraflHtmlCrossingFixture (Join-Path $tempGame "erb/erafl-html-crossing.erb")
+    Copy-Item $eraflTooltipErbFixture (Join-Path $tempGame "erb/erafl-title-bonus-tooltip.erb")
+    Copy-Item $eraflTooltipErhFixture (Join-Path $tempGame "erb/erafl-title-bonus-tooltip.erh")
     Copy-Item $strformTitleErbFixture (Join-Path $tempGame "erb/strform-title.erb")
     Copy-Item $strformTitleErhFixture (Join-Path $tempGame "erb/strform-title.erh")
     New-Item -ItemType Directory -Path (Join-Path $tempGame "XML") -Force | Out-Null
     Copy-Item $strformTitleXmlFixture (Join-Path $tempGame "XML/CHARA_TITLE.xml")
+    Copy-Item $eraflTooltipXmlFixture (Join-Path $tempGame "XML/CHARA_TITLE_BONUS_TOOLTIP.xml")
     Copy-Item $strformTitleFlagFixture (Join-Path $tempGame "csv/FLAG.CSV")
 
     $load = Invoke-Oracle @{ id = 6; op = "load"; gameDir = $tempGame; seed = 123456 }
@@ -181,6 +187,7 @@ try {
         ($project.result.functions.name -contains "ORACLE_ERAFL_HTML_CROSSING") -and
         ($project.result.functions.name -contains "ORACLE_ERAFL_HTML_CROSSING_ISLAND") -and
         ($project.result.functions.name -contains "ORACLE_ERAFL_HTML_NESTED") -and
+        ($project.result.functions.name -contains "ORACLE_ERAFL_TITLE_BONUS_TOOLTIP") -and
         ($project.result.functions.name -contains "ORACLE_STRUCTURED") -and
         ($project.result.functions.name -contains "ORACLE_XML_XPATH") -and
         ($project.result.functions.name -contains "CHARA_TITLE_CEHCK_UNLOCK_TITLE") -and
@@ -409,6 +416,19 @@ try {
         ($strformTitle.result.watches.'RESULT:85' -eq 1) -and
         ($strformTitle.result.watches.'RESULTS:80' -eq "0") -and
         ($strformTitle.result.watches.'RESULTS:81' -eq "1")) "eraFL STRFORM title condition differs"
+
+    $eraflTooltip = Invoke-Oracle @{
+        id = "erafl-title-bonus-tooltip"
+        op = "run"
+        entry = "ORACLE_ERAFL_TITLE_BONUS_TOOLTIP"
+        watch = @("RESULTS:90", "RESULTS:91", "RESULTS:92", "RESULTS:93", "RESULTS:94")
+    }
+    Assert-True ($eraflTooltip.ok -and $eraflTooltip.result.termination -eq "completed" -and
+        ($eraflTooltip.result.watches.'RESULTS:90' -eq "属性:暴击率加成+4％") -and
+        ($eraflTooltip.result.watches.'RESULTS:91' -eq "属性:暴击加成+8％") -and
+        ($eraflTooltip.result.watches.'RESULTS:92' -eq "【所持素質<魔術師>】<魔術師>导致的防御力惩罚降低5％，减伤值惩罚降低10％\n【所持素質<神聖術師>】<神聖術師>导致的攻击力惩罚降低5％\n【所持素質<魔人>】<魔人>导致的魔力惩罚降低5％\n【未持有魔術系天赋】魔力计算惩罚降低15％") -and
+        ($eraflTooltip.result.watches.'RESULTS:93' -eq "Ax By C") -and
+        ($eraflTooltip.result.watches.'RESULTS:94' -eq "a-b")) "eraFL title bonus tooltip formatting differs"
 
     $compat12 = Invoke-Oracle @{
         id = "compat-12"

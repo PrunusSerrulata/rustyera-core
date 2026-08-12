@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Exact eraFL title-bonus nodes reached by runtime_20260812-100656.snapshot. -->
+<titleBonusdef>
+    <titleBonus defname="STATUS_BONUS_ADD_CRT_1" name="暴击率上昇Ⅰ" category="BATTLE1" posX="0" posY="0">
+        <description>
+			属性:暴击率加成+[$VALUE:CRITICAL_BONUS]％
+		</description>
+        <modifier category="TITLE_BONUS_CRITICAL_RATE_ADD" modifiedAt="CC_CALC_CHARA_STATUS">
+            <modifierFunction>COMMON_ADD</modifierFunction>
+            <value label="RATE" dispIdName="CRITICAL_BONUS">
+                <li>4</li>
+            </value>
+        </modifier>
+    </titleBonus>
+
+    <titleBonus defname="STATUS_BONUS_ADD_CRT_2" name="暴击率上昇Ⅱ" category="BATTLE1" posX="0" posY="2">
+        <description>
+			属性:暴击加成+[$VALUE:CRITICAL_BONUS]％
+		</description>
+        <reqBonus defname="STATUS_BONUS_ADD_CRT_D_1" />
+        <modifier category="TITLE_BONUS_CRITICAL_RATE_ADD" modifiedAt="CC_CALC_CHARA_STATUS">
+            <modifierFunction>COMMON_ADD</modifierFunction>
+            <value label="RATE" dispIdName="CRITICAL_BONUS">
+                <li>8</li>
+            </value>
+        </modifier>
+    </titleBonus>
+
+    <titleBonus defname="MAG_MASTERY_1" name="魔力掌控Ⅰ" category="BATTLE1" posX="4" posY="1">
+        <description>
+			【所持素質&lt;魔術師&gt;】&lt;魔術師&gt;导致的防御力惩罚降低[$VALUE:DEF_BONUS]％，减伤值惩罚降低[$VALUE:ARMOR_BONUS]％\n
+			【所持素質&lt;神聖術師&gt;】&lt;神聖術師&gt;导致的攻击力惩罚降低[$VALUE:HOLY_ATK_BONUS]％\n
+			【所持素質&lt;魔人&gt;】&lt;魔人&gt;导致的魔力惩罚降低[$VALUE:MAJIN_MAG_BONUS]％\n
+			【未持有魔術系天赋】魔力计算惩罚降低15％
+		</description>
+        <reqBonus defname="STATUS_BONUS_ADD_MAG_1" />
+        <modifier category="TALENT_DEF_MULTI" modifiedAt="CC_CALC_CHARA_STATUS">
+            <modifyCondition>{HAS_TALENT(CHARA_ID, &quot;魔術師&quot;)}</modifyCondition>
+            <modifierFunction>COMMON_ADD</modifierFunction>
+            <value label="RATE" dispIdName="DEF_BONUS"><li>5</li></value>
+        </modifier>
+        <modifier category="TALENT_ARMOR_MULTI" modifiedAt="CC_CALC_CHARA_STATUS">
+            <modifyCondition>{HAS_TALENT(CHARA_ID, &quot;魔術師&quot;)}</modifyCondition>
+            <modifierFunction>COMMON_ADD</modifierFunction>
+            <value label="RATE" dispIdName="ARMOR_BONUS"><li>10</li></value>
+        </modifier>
+        <modifier category="TALENT_ATK_MULTI" modifiedAt="CC_CALC_CHARA_STATUS">
+            <modifyCondition>{HAS_TALENT(CHARA_ID, &quot;神聖術師&quot;)}</modifyCondition>
+            <modifierFunction>COMMON_ADD</modifierFunction>
+            <value label="RATE" dispIdName="HOLY_ATK_BONUS"><li>5</li></value>
+        </modifier>
+        <modifier category="TALENT_MAG_MULTI" modifiedAt="CC_CALC_CHARA_STATUS">
+            <modifyCondition>{HAS_TALENT(CHARA_ID, &quot;魔人&quot;)}</modifyCondition>
+            <modifierFunction>COMMON_ADD</modifierFunction>
+            <value label="RATE" dispIdName="MAJIN_MAG_BONUS"><li>5</li></value>
+        </modifier>
+    </titleBonus>
+</titleBonusdef>

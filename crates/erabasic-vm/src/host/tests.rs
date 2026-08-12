@@ -276,3 +276,103 @@ fn regex_string_natives_match_non_overlapping_reference_semantics() {
         Some(VmValue::String("a\\+b".into()))
     );
 }
+
+#[test]
+fn replace_native_uses_reference_regex_literal_and_array_modes() {
+    let request = |arguments: Vec<VmValue>, places: Vec<NativePlaceView>| NativeCallRequest {
+        import: RuntimeImport {
+            key: SymbolKey([0; 16]),
+            namespace: "test".into(),
+            name: "replace".into(),
+            abi_version: 1,
+            parameters: vec![],
+            result: None,
+        },
+        arguments,
+        places,
+        implicit_places: BTreeMap::new(),
+    };
+    let mut native = CoreNative {
+        name: "replace".into(),
+        legacy_encoding: LegacyEncoding::default(),
+    };
+    let replace = |native: &mut CoreNative, request| native.call(request).unwrap().value.unwrap();
+
+    assert_eq!(
+        replace(
+            &mut native,
+            request(
+                vec![
+                    VmValue::String("属性:暴击率加成+[$VALUE:CRITICAL_BONUS]％".into()),
+                    VmValue::String(r"\[\$VALUE:CRITICAL_BONUS\]".into()),
+                    VmValue::String("4".into()),
+                ],
+                vec![],
+            ),
+        ),
+        VmValue::String("属性:暴击率加成+4％".into())
+    );
+    assert_eq!(
+        replace(
+            &mut native,
+            request(
+                vec![
+                    VmValue::String("<img src='portrait'>".into()),
+                    VmValue::String("(<img.+?>)".into()),
+                    VmValue::String("[$1]".into()),
+                ],
+                vec![],
+            ),
+        ),
+        VmValue::String("[<img src='portrait'>]".into())
+    );
+    assert_eq!(
+        replace(
+            &mut native,
+            request(
+                vec![
+                    VmValue::String("a+b".into()),
+                    VmValue::String("+".into()),
+                    VmValue::String("-".into()),
+                    VmValue::Integer(2),
+                ],
+                vec![],
+            ),
+        ),
+        VmValue::String("a-b".into())
+    );
+
+    let replacements = PlaceDescriptor::default();
+    assert_eq!(
+        replace(
+            &mut native,
+            request(
+                vec![
+                    VmValue::String("A1 B2 C3".into()),
+                    VmValue::String(r"\d".into()),
+                    VmValue::StringPlace(Box::new(replacements.clone())),
+                    VmValue::Integer(1),
+                ],
+                vec![NativePlaceView {
+                    argument_index: 2,
+                    target: replacements,
+                    values: vec![VmValue::String("x".into()), VmValue::String("y".into()),],
+                }],
+            ),
+        ),
+        VmValue::String("Ax By C".into())
+    );
+    assert!(
+        native
+            .call(request(
+                vec![
+                    VmValue::String("text".into()),
+                    VmValue::String("[".into()),
+                    VmValue::String("x".into()),
+                ],
+                vec![],
+            ))
+            .unwrap_err()
+            .starts_with("REPLACE argument 2 is not a regex:")
+    );
+}
