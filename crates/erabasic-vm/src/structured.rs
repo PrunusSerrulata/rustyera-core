@@ -321,7 +321,7 @@ impl StructuredState {
         &self,
         declarations: &ExtensionData,
         scope: StructuredScope,
-    ) -> Result<Vec<StructuredExtension>, String> {
+    ) -> Vec<StructuredExtension> {
         let (maps, xmls, tables) = match scope {
             StructuredScope::Ordinary => (
                 &declarations.save_maps,
@@ -355,13 +355,12 @@ impl StructuredState {
             if let Some(table) = self.data_tables.get(key) {
                 output.push(StructuredExtension::DataTable {
                     key: key.clone(),
-                    schema: serde_json::to_string(&table.columns)
-                        .map_err(|error| error.to_string())?,
-                    data: serde_json::to_string(table).map_err(|error| error.to_string())?,
+                    schema: data_table_schema_xml(key, table),
+                    data: data_table_data_xml(key, table),
                 });
             }
         }
-        Ok(output)
+        output
     }
 
     pub(crate) fn import_extensions(
@@ -398,21 +397,7 @@ impl StructuredState {
                     imported.insert((0x21, key.clone()));
                 }
                 StructuredExtension::DataTable { key, schema, data } if tables.contains(key) => {
-                    let columns: Vec<Column> =
-                        serde_json::from_str(schema).map_err(|error| error.to_string())?;
-                    let mut table: DataTable =
-                        serde_json::from_str(data).map_err(|error| error.to_string())?;
-                    if table.columns != columns {
-                        return Err(format!("DataTable extension {key} schema differs"));
-                    }
-                    table.next_id = table
-                        .rows
-                        .iter()
-                        .map(|row| row.id)
-                        .max()
-                        .unwrap_or(0)
-                        .checked_add(1)
-                        .ok_or_else(|| format!("DataTable extension {key} row id overflowed"))?;
+                    let table = decode_data_table_extension(key, schema, data)?;
                     self.data_tables.insert(key.clone(), table);
                     imported.insert((0x22, key.clone()));
                 }
@@ -580,6 +565,33 @@ impl StructuredState {
             _ => Err(format!("unsupported map native {name}")),
         }
     }
+}
+
+fn decode_data_table_extension(key: &str, schema: &str, data: &str) -> Result<DataTable, String> {
+    let mut table = if schema.trim_start().starts_with('<') {
+        let schema = parse_data_table_schema(key, schema)?;
+        parse_data_table_xml(key, &schema, data)?
+    } else {
+        // RustyEra briefly wrote its internal serde representation before the
+        // reference-compatible DataSet XML boundary was implemented. Keep those
+        // saves loadable, but never emit this legacy representation again.
+        let columns: Vec<Column> =
+            serde_json::from_str(schema).map_err(|error| error.to_string())?;
+        let table: DataTable = serde_json::from_str(data).map_err(|error| error.to_string())?;
+        if table.columns != columns {
+            return Err(format!("DataTable extension {key} schema differs"));
+        }
+        table
+    };
+    table.next_id = table
+        .rows
+        .iter()
+        .map(|row| row.id)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| format!("DataTable extension {key} row id overflowed"))?;
+    Ok(table)
 }
 
 mod data_calls;

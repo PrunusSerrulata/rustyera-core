@@ -402,10 +402,10 @@ impl NativeServiceRegistry {
         self.structured.as_ref().map_or_else(
             || Ok(Vec::new()),
             |structured| {
-                structured
+                let structured = structured
                     .lock()
-                    .map_err(|_| "structured native state lock is poisoned".to_owned())?
-                    .export_extensions(&self.extensions, scope)
+                    .map_err(|_| "structured native state lock is poisoned".to_owned())?;
+                Ok(structured.export_extensions(&self.extensions, scope))
             },
         )
     }

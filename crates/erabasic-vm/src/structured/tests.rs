@@ -397,3 +397,55 @@ fn extension_scopes_clear_and_import_without_touching_other_scopes() {
     assert_eq!(state.maps["save"].entries, vec![("a".into(), "1".into())]);
     assert!(!state.maps.contains_key("undeclared"));
 }
+
+#[test]
+fn data_table_save_extensions_write_reference_xml_and_read_legacy_json() {
+    let declarations = ExtensionData {
+        save_data_tables: BTreeSet::from(["table".into()]),
+        ..ExtensionData::default()
+    };
+    let mut table = DataTable::new();
+    table.columns.push(Column {
+        name: "name".into(),
+        value_type: DataType::String,
+        nullable: true,
+    });
+    table.rows.push(DataRow {
+        id: 4,
+        cells: vec![Cell::Null, Cell::String("saved".into())],
+    });
+    let mut state = StructuredState::default();
+    state.data_tables.insert("table".into(), table.clone());
+
+    let exported = state.export_extensions(&declarations, StructuredScope::Ordinary);
+    let StructuredExtension::DataTable { key, schema, data } = &exported[0] else {
+        panic!("expected a DataTable extension");
+    };
+    assert_eq!(key, "table");
+    assert!(schema.starts_with("<?xml"));
+    assert!(data.starts_with("<DocumentElement>"));
+
+    let mut xml_import = StructuredState::default();
+    assert_eq!(
+        xml_import
+            .import_extensions(&declarations, StructuredScope::Ordinary, &exported)
+            .unwrap(),
+        BTreeSet::from([(0x22, "table".into())])
+    );
+    assert_eq!(xml_import.data_tables["table"].columns, table.columns);
+    assert_eq!(xml_import.data_tables["table"].rows, table.rows);
+    assert_eq!(xml_import.data_tables["table"].next_id, 5);
+
+    let legacy = StructuredExtension::DataTable {
+        key: "table".into(),
+        schema: serde_json::to_string(&table.columns).unwrap(),
+        data: serde_json::to_string(&table).unwrap(),
+    };
+    let mut legacy_import = StructuredState::default();
+    legacy_import
+        .import_extensions(&declarations, StructuredScope::Ordinary, &[legacy])
+        .unwrap();
+    assert_eq!(legacy_import.data_tables["table"].columns, table.columns);
+    assert_eq!(legacy_import.data_tables["table"].rows, table.rows);
+    assert_eq!(legacy_import.data_tables["table"].next_id, 5);
+}
