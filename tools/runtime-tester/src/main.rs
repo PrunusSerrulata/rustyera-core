@@ -1482,7 +1482,8 @@ fn escape_html(source: &str) -> String {
 
 fn display_text(run: &era_runtime_protocol::DisplayRun) -> String {
     match run {
-        era_runtime_protocol::DisplayRun::Text { text, .. } => text.clone(),
+        era_runtime_protocol::DisplayRun::Text { text, .. }
+        | era_runtime_protocol::DisplayRun::TextLayout { text, .. } => text.clone(),
         era_runtime_protocol::DisplayRun::Button { runs, value, .. } => format!(
             "[{} => {value:?}]",
             runs.iter().map(display_text).collect::<String>()
@@ -1618,12 +1619,11 @@ fn audit_wire_limits() -> WireLimits {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_project_files, decode_project_text, diagnostics_with_level,
+        collect_project_files, decode_project_text, diagnostics_with_level, display_text,
         headless_html_printed_str,
     };
     use era_runtime_protocol::{
-        Color, DisplayLine, DisplayRun, LineAlignment, ProtocolDiagnostic, RuntimeLogLevel,
-        TextStyle,
+        DisplayLine, DisplayRun, LineAlignment, ProtocolDiagnostic, RuntimeLogLevel, TextStyle,
     };
     use std::fs;
 
@@ -1641,16 +1641,7 @@ mod tests {
             alignment,
             runs: vec![DisplayRun::Text {
                 text: text.into(),
-                style: TextStyle {
-                    foreground: Color::default(),
-                    background: None,
-                    bold: false,
-                    italic: false,
-                    underline: false,
-                    strikeout: false,
-                    font_family: None,
-                    font_millipoints: 12_000,
-                },
+                style: TextStyle::default(),
                 system_text: None,
             }],
         }
@@ -1755,5 +1746,17 @@ mod tests {
             "<p align='left'><nobr>old</nobr></p>"
         );
         assert_eq!(headless_html_printed_str(&lines, 2), "");
+    }
+
+    #[test]
+    fn display_text_accepts_frontend_projected_text_layout_runs() {
+        let run = DisplayRun::TextLayout {
+            text: "projected".into(),
+            style: TextStyle::default(),
+            system_text: None,
+            columns: 9,
+        };
+
+        assert_eq!(display_text(&run), "projected");
     }
 }
