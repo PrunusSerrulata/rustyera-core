@@ -13,6 +13,10 @@ use crate::{
     expression::IndexResolver, symbols::is_reserved,
 };
 
+mod registrations;
+
+use registrations::add_registrations;
+
 pub(crate) struct DeclarationInput<'a> {
     pub source: SourceId,
     pub path: &'a str,
@@ -960,27 +964,6 @@ fn evaluate_binary(
         }
     };
     Ok(ConstantValue::Integer(value))
-}
-
-fn add_registrations(schema: &VariableSchema, registrations: &mut Vec<UserIndexRegistration>) {
-    if schema.dimensions.len() == 1 {
-        registrations.push(UserIndexRegistration {
-            variable_name: schema.id.name().to_owned(),
-            source_stem: schema.id.name().to_owned(),
-            dimension: None,
-            length: schema.dimensions[0],
-        });
-    } else {
-        for (index, length) in schema.dimensions.iter().copied().enumerate() {
-            let dimension = index + 1;
-            registrations.push(UserIndexRegistration {
-                variable_name: schema.id.name().to_owned(),
-                source_stem: format!("{}@{dimension}", schema.id.name()),
-                dimension: Some(dimension),
-                length,
-            });
-        }
-    }
 }
 
 fn normalize(name: &str, ignore_case: bool) -> String {
