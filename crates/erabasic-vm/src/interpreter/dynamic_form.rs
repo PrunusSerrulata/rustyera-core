@@ -873,14 +873,136 @@ fn parse_runtime_form(
             format!("STRFORM expansion failed: {message}"),
         ));
     }
-    let formatted = parsed.value.ok_or_else(|| {
+    let mut formatted = parsed.value.ok_or_else(|| {
         StepError::new(
             VmFaultCode::Native,
             "STRFORM expansion produced no formatted string",
         )
     })?;
+    resolve_named_indices(program, function, &mut formatted, 0)?;
     let nodes = validate_form(vm, natives, generation, function, &formatted, node_limit)?;
     Ok((formatted, nodes))
+}
+
+fn resolve_named_indices(
+    program: &crate::ProgramGeneration,
+    function: SymbolKey,
+    formatted: &mut FormattedString,
+    depth: usize,
+) -> Result<(), StepError> {
+    if depth > MAX_RUNTIME_FORM_NESTING {
+        return Err(resource_limit(
+            "STRFORM named-index resolution exceeds the nesting limit",
+        ));
+    }
+    for part in &mut formatted.parts {
+        match part {
+            FormPart::Text(_) | FormPart::Triple { .. } => {}
+            FormPart::StringInterpolation {
+                expression, width, ..
+            }
+            | FormPart::IntegerInterpolation {
+                expression, width, ..
+            } => {
+                resolve_expression_named_indices(program, function, expression, depth + 1)?;
+                if let Some(width) = width {
+                    resolve_expression_named_indices(program, function, width, depth + 1)?;
+                }
+            }
+            FormPart::Conditional {
+                condition,
+                then_value,
+                else_value,
+                ..
+            } => {
+                resolve_expression_named_indices(program, function, condition, depth + 1)?;
+                resolve_named_indices(program, function, then_value, depth + 1)?;
+                if let Some(else_value) = else_value {
+                    resolve_named_indices(program, function, else_value, depth + 1)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_expression_named_indices(
+    program: &crate::ProgramGeneration,
+    function: SymbolKey,
+    expression: &mut Expr,
+    depth: usize,
+) -> Result<(), StepError> {
+    if depth > MAX_RUNTIME_FORM_NESTING {
+        return Err(resource_limit(
+            "STRFORM named-index resolution exceeds the nesting limit",
+        ));
+    }
+    match &mut expression.kind {
+        ExprKind::Integer(_) | ExprKind::String(_) | ExprKind::Identifier(_) | ExprKind::Error => {}
+        ExprKind::Variable { name, indices } => {
+            for index in indices.iter_mut() {
+                resolve_expression_named_indices(program, function, index, depth + 1)?;
+            }
+            let Some(definition) = program.scoped_variable(function, name) else {
+                return Ok(());
+            };
+            let dimensions = definition.dimensions.len();
+            let explicit_character =
+                definition.storage == BytecodeStorage::Character && indices.len() > dimensions;
+            for (position, index) in indices.iter_mut().enumerate() {
+                if explicit_character && position == 0 {
+                    continue;
+                }
+                let ExprKind::Identifier(candidate) = &index.kind else {
+                    continue;
+                };
+                // Emuera gives an in-scope variable or zero-argument function precedence over
+                // the symbolic CSV key used by an array subscript.
+                if program.scoped_variable(function, candidate).is_some() {
+                    continue;
+                }
+                if program.function_by_name(candidate).is_some() {
+                    index.kind = ExprKind::Call {
+                        name: candidate.clone(),
+                        args: Vec::new(),
+                    };
+                    continue;
+                }
+                if let Some(value) =
+                    super::native_ops::resolve_named_index_value(program, name, candidate)
+                {
+                    index.kind = ExprKind::Integer(value);
+                }
+            }
+        }
+        ExprKind::Call { args, .. } => {
+            for argument in args.iter_mut().flatten() {
+                resolve_expression_named_indices(program, function, argument, depth + 1)?;
+            }
+        }
+        ExprKind::Unary { operand, .. }
+        | ExprKind::Postfix { operand, .. }
+        | ExprKind::Group(operand) => {
+            resolve_expression_named_indices(program, function, operand, depth + 1)?;
+        }
+        ExprKind::Binary { left, right, .. } => {
+            resolve_expression_named_indices(program, function, left, depth + 1)?;
+            resolve_expression_named_indices(program, function, right, depth + 1)?;
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            resolve_expression_named_indices(program, function, condition, depth + 1)?;
+            resolve_expression_named_indices(program, function, then_expr, depth + 1)?;
+            resolve_expression_named_indices(program, function, else_expr, depth + 1)?;
+        }
+        ExprKind::Formatted(formatted) => {
+            resolve_named_indices(program, function, formatted, depth + 1)?;
+        }
+    }
+    Ok(())
 }
 
 // Validation is an exhaustive, iterative walk over every supported FORM AST node.

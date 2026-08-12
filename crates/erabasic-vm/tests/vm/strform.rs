@@ -6,11 +6,27 @@ const ERAFL_TITLE_ERH: &str =
     include_str!("../../../../tools/runtime-tester/fixture-reference/erb/strform-title.erh");
 const ERAFL_TITLE_XML: &str =
     include_str!("../../../../tools/runtime-tester/fixture-reference/xml/CHARA_TITLE.xml");
+const ERAFL_TITLE_FLAG_CSV: &str =
+    include_str!("../../../../tools/runtime-tester/fixture-reference/csv/FLAG.CSV");
 
 fn compile_erafl_title_fixture() -> BytecodeArtifact {
+    let data = load_project(
+        &ProjectFiles {
+            csv: vec![FrontendFile {
+                relative_path: "FLAG.CSV".into(),
+                payload: CsvFilePayload::Utf8(ERAFL_TITLE_FLAG_CSV.into()),
+            }],
+            erb: Vec::new(),
+        },
+        &CsvLoadOptions::default(),
+    )
+    .data
+    .expect("the real eraFL FLAG row should load");
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.system_save_in_binary = true;
     let analysis = analyze_project(
         AnalysisInput {
-            project_data: project_data(),
+            project_data: data,
             sources: vec![
                 ProjectSource {
                     relative_path: "strform-title.erh".into(),
@@ -22,11 +38,11 @@ fn compile_erafl_title_fixture() -> BytecodeArtifact {
                 },
             ],
         },
-        &AnalyzerOptions::analysis_mode(),
+        &options,
         &ExtensionRegistry::default(),
     );
     assert!(
-        analysis.project.is_some(),
+        analysis.project.is_some() && analysis.diagnostics.is_empty(),
         "archive-derived analysis: {:#?}",
         analysis.diagnostics
     );
@@ -107,6 +123,23 @@ fn erafl_archive_fixture_matches_the_reference_cli_termination_and_watches() {
         ERAFL_TITLE_ERB.contains("RETURNF NO:(ARG:0) < MAX_FIXED_CHARA"),
         "the regression must retain eraFL's real IS_UNIQUE_CHARA"
     );
+    assert_eq!(
+        ERAFL_TITLE_FLAG_CSV.trim(),
+        "500,領地評判_商業",
+        "the regression must retain the real eraFL Flag.csv mapping"
+    );
+    assert!(
+        ERAFL_TITLE_XML.contains("{FLAG:領地評判_商業 >= 150}"),
+        "the regression must retain the archive's real title requirement"
+    );
+    assert!(
+        ERAFL_TITLE_XML.contains("{FLAG:領地評判_商業 >= 300}"),
+        "the regression must retain the next real merchant-title boundary"
+    );
+    assert!(
+        ERAFL_TITLE_ERB.contains("IF !TOINT(STRFORM(TITLE_REQCONDITION))"),
+        "the regression must retain the faulting CHARA_TITLE.ERB line 66"
+    );
 
     let artifact = compile_erafl_title_fixture();
     let entry = artifact
@@ -128,6 +161,10 @@ fn erafl_archive_fixture_matches_the_reference_cli_termination_and_watches() {
     let watches = [
         ("RESULT:80", vm.read_variable(result, &[80], None)),
         ("RESULT:81", vm.read_variable(result, &[81], None)),
+        ("RESULT:82", vm.read_variable(result, &[82], None)),
+        ("RESULT:83", vm.read_variable(result, &[83], None)),
+        ("RESULT:84", vm.read_variable(result, &[84], None)),
+        ("RESULT:85", vm.read_variable(result, &[85], None)),
         ("RESULTS:80", vm.read_variable(results, &[80], None)),
         ("RESULTS:81", vm.read_variable(results, &[81], None)),
     ];
@@ -136,6 +173,10 @@ fn erafl_archive_fixture_matches_the_reference_cli_termination_and_watches() {
         [
             ("RESULT:80", Ok(VmValue::Integer(0))),
             ("RESULT:81", Ok(VmValue::Integer(1))),
+            ("RESULT:82", Ok(VmValue::Integer(0))),
+            ("RESULT:83", Ok(VmValue::Integer(1))),
+            ("RESULT:84", Ok(VmValue::Integer(0))),
+            ("RESULT:85", Ok(VmValue::Integer(1))),
             ("RESULTS:80", Ok(VmValue::String("0".into()))),
             ("RESULTS:81", Ok(VmValue::String("1".into()))),
         ],
@@ -297,6 +338,46 @@ RETURNF STRFORM("%VALUE%")
     let (vm, report) = run_entry(&artifact, VmConfig::default());
     assert_eq!(report.stop, erabasic_vm::VmRunStop::Idle);
     for (index, expected) in [(0, "global"), (1, "local"), (2, "static")] {
+        assert_eq!(
+            vm.read_variable(results, &[index], None),
+            Ok(VmValue::String(expected.into()))
+        );
+    }
+}
+
+#[test]
+fn runtime_form_named_indices_prefer_variables_then_functions_then_csv_keys() {
+    let mut data = project_data();
+    let flag = data
+        .static_data
+        .name_tables
+        .get_mut(&erabasic_data::NameTableKind::Flag)
+        .expect("FLAG name table");
+    flag.lookup.insert("INDEX_FUNCTION".into(), 7);
+    flag.lookup.insert("INDEX_VARIABLE".into(), 8);
+    flag.lookup.insert("INDEX_KEY".into(), 7);
+    let artifact = compile_source_with_data(
+        r#"@SYSTEM_TITLE
+#DIM DYNAMIC INDEX_VARIABLE
+INDEX_VARIABLE = 10
+FLAG:7 = 70
+FLAG:8 = 80
+FLAG:9 = 90
+FLAG:10 = 100
+RESULTS:0 '= STRFORM("{FLAG:INDEX_VARIABLE}")
+RESULTS:1 '= STRFORM("{FLAG:INDEX_FUNCTION}")
+RESULTS:2 '= STRFORM("{FLAG:INDEX_KEY}")
+RETURN
+@INDEX_FUNCTION
+#FUNCTION
+RETURNF 9
+"#,
+        data,
+    );
+    let results = named_key(&artifact, "RESULTS");
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert_eq!(report.stop, erabasic_vm::VmRunStop::Idle);
+    for (index, expected) in [(0, "100"), (1, "90"), (2, "70")] {
         assert_eq!(
             vm.read_variable(results, &[index], None),
             Ok(VmValue::String(expected.into()))

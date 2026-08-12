@@ -22,6 +22,7 @@ $xmlXPathFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-refer
 $strformTitleErbFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/strform-title.erb"
 $strformTitleErhFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/erb/strform-title.erh"
 $strformTitleXmlFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/xml/CHARA_TITLE.xml"
+$strformTitleFlagFixture = Join-Path $repositoryRoot "tools/runtime-tester/fixture-reference/csv/FLAG.CSV"
 $project = Join-Path $cliDirectory "Emuera.ReferenceCli.csproj"
 if ([string]::IsNullOrWhiteSpace($Executable)) {
     & dotnet publish $project `
@@ -111,12 +112,14 @@ try {
     $utf8Bom = [System.Text.UTF8Encoding]::new($true)
     $configText = [System.IO.File]::ReadAllText($configPath, $utf8Bom)
     $configText = $configText.Replace("LOADTEXTとSAVETEXTで使える拡張子:txt", "LOADTEXTとSAVETEXTで使える拡張子:txt,xml")
+    $configText = $configText.Replace("セーブデータをバイナリ形式で保存する:NO", "セーブデータをバイナリ形式で保存する:YES")
     [System.IO.File]::WriteAllText($configPath, $configText, $utf8Bom)
     Copy-Item $xmlXPathFixture (Join-Path $tempGame "erb/xml-xpath.erb")
     Copy-Item $strformTitleErbFixture (Join-Path $tempGame "erb/strform-title.erb")
     Copy-Item $strformTitleErhFixture (Join-Path $tempGame "erb/strform-title.erh")
     New-Item -ItemType Directory -Path (Join-Path $tempGame "XML") -Force | Out-Null
     Copy-Item $strformTitleXmlFixture (Join-Path $tempGame "XML/CHARA_TITLE.xml")
+    Copy-Item $strformTitleFlagFixture (Join-Path $tempGame "csv/FLAG.CSV")
 
     $load = Invoke-Oracle @{ id = 6; op = "load"; gameDir = $tempGame; seed = 123456 }
     Assert-True $load.ok "fixture game failed to load"
@@ -381,11 +384,15 @@ try {
         id = "strform-title"
         op = "run"
         entry = "ORACLE_STRFORM_TITLE"
-        watch = @("RESULT:80", "RESULT:81", "RESULTS:80", "RESULTS:81")
+        watch = @("RESULT:80", "RESULT:81", "RESULT:82", "RESULT:83", "RESULT:84", "RESULT:85", "RESULTS:80", "RESULTS:81")
     }
     Assert-True ($strformTitle.ok -and $strformTitle.result.termination -eq "completed" -and
         ($strformTitle.result.watches.'RESULT:80' -eq 0) -and
         ($strformTitle.result.watches.'RESULT:81' -eq 1) -and
+        ($strformTitle.result.watches.'RESULT:82' -eq 0) -and
+        ($strformTitle.result.watches.'RESULT:83' -eq 1) -and
+        ($strformTitle.result.watches.'RESULT:84' -eq 0) -and
+        ($strformTitle.result.watches.'RESULT:85' -eq 1) -and
         ($strformTitle.result.watches.'RESULTS:80' -eq "0") -and
         ($strformTitle.result.watches.'RESULTS:81' -eq "1")) "eraFL STRFORM title condition differs"
 

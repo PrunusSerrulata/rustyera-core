@@ -637,19 +637,26 @@ fn lookup_named_index(
         .ok_or_else(|| {
             VmError::InvalidArguments("named index variable is not project-visible".into())
         })?;
-    let kind = name_table_kind(name);
-    let value = kind
-        .and_then(|kind| {
-            program
-                .artifact
-                .project_data
-                .static_data
-                .name_tables
-                .get(&kind)
-        })
-        .and_then(|table| table.lookup.get(key))
-        .map(|index| i64::from(*index));
+    let value = resolve_named_index_value(program, name, key);
     Ok((name.into(), key.clone(), dimension, value))
+}
+
+pub(in super::super) fn resolve_named_index_value(
+    program: &crate::state::ProgramGeneration,
+    variable: &str,
+    key: &str,
+) -> Option<i64> {
+    let kind = name_table_kind(variable)?;
+    program
+        .artifact
+        .project_data
+        .static_data
+        .name_tables
+        .get(&kind)?
+        .lookup
+        .get(key)
+        .copied()
+        .map(i64::from)
 }
 
 fn name_table_kind(name: &str) -> Option<erabasic_data::NameTableKind> {
