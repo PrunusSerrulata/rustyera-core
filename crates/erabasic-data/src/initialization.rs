@@ -72,12 +72,20 @@ pub struct SaveCompatibility {
 
 impl SaveCompatibility {
     #[must_use]
-    pub fn accepts(&self, saved_code: i64, saved_version: i64) -> bool {
-        let code_matches = saved_code == 0 || saved_code == self.unique_code;
-        let version_matches = (!self.version_defined && saved_version != 1000)
+    pub fn unique_code_matches(&self, saved_code: i64) -> bool {
+        saved_code == 0 || saved_code == self.unique_code
+    }
+
+    #[must_use]
+    pub fn version_matches(&self, saved_version: i64) -> bool {
+        (!self.version_defined && saved_version != 1000)
             || self.compatible_min_version <= saved_version
-            || self.version == saved_version;
-        code_matches && version_matches
+            || self.version == saved_version
+    }
+
+    #[must_use]
+    pub fn accepts(&self, saved_code: i64, saved_version: i64) -> bool {
+        self.unique_code_matches(saved_code) && self.version_matches(saved_version)
     }
 }
 

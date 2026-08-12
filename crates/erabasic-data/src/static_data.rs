@@ -205,14 +205,21 @@ impl GameBase {
 
     #[must_use]
     pub fn unique_code_matches(&self, saved_code: i64) -> bool {
-        saved_code == 0 || saved_code == self.unique_code
+        self.save_compatibility().unique_code_matches(saved_code)
     }
 
     #[must_use]
     pub fn version_matches(&self, saved_version: i64) -> bool {
-        (!self.version_defined && saved_version != 1000)
-            || self.compatible_min_version <= saved_version
-            || self.version == saved_version
+        self.save_compatibility().version_matches(saved_version)
+    }
+
+    fn save_compatibility(&self) -> SaveCompatibility {
+        SaveCompatibility {
+            unique_code: self.unique_code,
+            version: self.version,
+            version_defined: self.version_defined,
+            compatible_min_version: self.compatible_min_version,
+        }
     }
 }
 
@@ -385,12 +392,7 @@ impl ProjectData {
             defaults_before_overlay: RuntimeDefaults::from_project(self),
             clear_characters_before_overlay: true,
             copy_and_truncate_arrays: true,
-            compatibility: SaveCompatibility {
-                unique_code: self.static_data.game_base.unique_code,
-                version: self.static_data.game_base.version,
-                version_defined: self.static_data.game_base.version_defined,
-                compatible_min_version: self.static_data.game_base.compatible_min_version,
-            },
+            compatibility: self.static_data.game_base.save_compatibility(),
         }
     }
 }
