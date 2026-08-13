@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use erabasic_ast::{Alignment, BinaryOp, Expr, ExprKind, FormPart, FormattedString, UnaryOp};
-use erabasic_bytecode::{BytecodeFunctionKind, BytecodeStorage, BytecodeType, SymbolKey};
+use erabasic_bytecode::{BytecodeFunctionKind, BytecodeType, SymbolKey};
 use erabasic_parser::{DefaultParserContext, parse_formatted_at};
 use serde::{Deserialize, Serialize};
 
@@ -12,8 +12,10 @@ use crate::{
 };
 
 mod frontend;
+mod support;
 
 use frontend::parse_runtime_form;
+use support::{binary_tag, owner_frame, owner_frame_mut, resource_limit, unary_tag, unsupported};
 const MAX_RUNTIME_FORM_BYTES: usize = 1024 * 1024;
 const MAX_RUNTIME_FORM_NESTING: usize = 256;
 
@@ -707,208 +709,5 @@ impl RuntimeFormContinuation {
             )
         })?);
         Ok(())
-    }
-
-    fn read_variable(
-        &self,
-        vm: &Vm,
-        fiber: &Fiber,
-        name: &str,
-        indices: &[u64],
-    ) -> Result<VmValue, StepError> {
-        let generation = vm.generations.get(&self.generation).ok_or_else(|| {
-            StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
-        })?;
-        let definition = generation
-            .scoped_variable(self.function, name)
-            .ok_or_else(|| {
-                StepError::new(
-                    VmFaultCode::MissingSymbol,
-                    format!("STRFORM variable {name} is missing"),
-                )
-            })?;
-        let character = if definition.storage == BytecodeStorage::Character {
-            Some(if indices.len() > definition.dimensions.len() {
-                indices[0]
-            } else {
-                vm.target_character_for_generation(self.generation) as u64
-            })
-        } else {
-            None
-        };
-        let value_indices = if character.is_some() && indices.len() > definition.dimensions.len() {
-            &indices[1..]
-        } else {
-            indices
-        };
-        vm.read_variable_resolved(
-            fiber,
-            self.generation,
-            definition,
-            value_indices,
-            character,
-            (definition.storage == BytecodeStorage::FunctionLocal).then_some(self.frame),
-        )
-        .map_err(map_vm_error)
-    }
-
-    fn take_indices(&mut self, count: usize) -> Result<Vec<u64>, StepError> {
-        self.take_values(count)?
-            .into_iter()
-            .map(|value| match value {
-                VmValue::Integer(value) => u64::try_from(value).map_err(|_| {
-                    StepError::new(VmFaultCode::Bounds, "STRFORM variable index is negative")
-                }),
-                _ => Err(StepError::new(
-                    VmFaultCode::TypeMismatch,
-                    "STRFORM variable index is not an integer",
-                )),
-            })
-            .collect()
-    }
-
-    fn take_values(&mut self, count: usize) -> Result<Vec<VmValue>, StepError> {
-        let start = self.values.len().checked_sub(count).ok_or_else(|| {
-            StepError::new(
-                VmFaultCode::InvalidInstruction,
-                "STRFORM value stack underflow",
-            )
-        })?;
-        Ok(self.values.drain(start..).collect())
-    }
-
-    fn pop_value(&mut self, message: &str) -> Result<VmValue, StepError> {
-        self.values
-            .pop()
-            .ok_or_else(|| StepError::new(VmFaultCode::InvalidInstruction, message))
-    }
-
-    fn pop_integer(&mut self, message: &str) -> Result<i64, StepError> {
-        let VmValue::Integer(value) = self.pop_value(message)? else {
-            return Err(StepError::new(VmFaultCode::TypeMismatch, message));
-        };
-        Ok(value)
-    }
-
-    fn output_mut(&mut self) -> Result<&mut String, StepError> {
-        self.outputs.last_mut().ok_or_else(|| {
-            StepError::new(
-                VmFaultCode::InvalidInstruction,
-                "STRFORM output stack is empty",
-            )
-        })
-    }
-
-    fn append_output(&mut self, value: &str) -> Result<(), StepError> {
-        let retained = self.retained_string_bytes()?;
-        if retained
-            .checked_add(value.len())
-            .is_none_or(|bytes| bytes > MAX_RUNTIME_FORM_BYTES)
-        {
-            return Err(resource_limit("STRFORM output exceeds the runtime limit"));
-        }
-        self.output_mut()?.push_str(value);
-        Ok(())
-    }
-
-    fn retained_string_bytes(&self) -> Result<usize, StepError> {
-        self.outputs
-            .iter()
-            .map(String::len)
-            .chain(self.values.iter().filter_map(|value| match value {
-                VmValue::String(value) => Some(value.len()),
-                _ => None,
-            }))
-            .try_fold(0usize, usize::checked_add)
-            .ok_or_else(|| resource_limit("STRFORM retained string size overflowed"))
-    }
-
-    fn check_resources(&self, vm: &Vm) -> Result<(), StepError> {
-        if self.work.len() > vm.config.maximum_operand_stack
-            || self.values.len() > vm.config.maximum_operand_stack
-            || self.outputs.len() > MAX_RUNTIME_FORM_NESTING
-        {
-            return Err(resource_limit("STRFORM continuation exceeds VM limits"));
-        }
-        if self.retained_string_bytes()? > MAX_RUNTIME_FORM_BYTES {
-            return Err(resource_limit(
-                "STRFORM retained strings exceed the runtime limit",
-            ));
-        }
-        Ok(())
-    }
-}
-
-fn owner_frame(fiber: &Fiber, frame: FrameId) -> Result<&crate::state::Frame, StepError> {
-    fiber
-        .frames
-        .iter()
-        .find(|candidate| candidate.id == frame)
-        .ok_or_else(|| {
-            StepError::new(
-                VmFaultCode::InvalidInstruction,
-                "STRFORM owner frame is missing",
-            )
-        })
-}
-
-fn owner_frame_mut(
-    fiber: &mut Fiber,
-    frame: FrameId,
-) -> Result<&mut crate::state::Frame, StepError> {
-    fiber
-        .frames
-        .iter_mut()
-        .find(|candidate| candidate.id == frame)
-        .ok_or_else(|| {
-            StepError::new(
-                VmFaultCode::InvalidInstruction,
-                "STRFORM owner frame is missing",
-            )
-        })
-}
-
-fn unsupported(message: impl Into<String>) -> StepError {
-    StepError::new(VmFaultCode::Native, message)
-}
-
-fn resource_limit(message: impl Into<String>) -> StepError {
-    StepError::new(VmFaultCode::ResourceLimit, message)
-}
-
-const fn unary_tag(op: UnaryOp) -> u8 {
-    match op {
-        UnaryOp::Plus => 0,
-        UnaryOp::Minus => 1,
-        UnaryOp::LogicalNot => 2,
-        UnaryOp::BitNot => 3,
-        UnaryOp::PreIncrement => 4,
-        UnaryOp::PreDecrement => 5,
-    }
-}
-
-const fn binary_tag(op: BinaryOp) -> u8 {
-    match op {
-        BinaryOp::Multiply => 0,
-        BinaryOp::Divide => 1,
-        BinaryOp::Modulo => 2,
-        BinaryOp::Add => 3,
-        BinaryOp::Subtract => 4,
-        BinaryOp::ShiftLeft => 5,
-        BinaryOp::ShiftRight => 6,
-        BinaryOp::Less => 7,
-        BinaryOp::LessEqual => 8,
-        BinaryOp::Greater => 9,
-        BinaryOp::GreaterEqual => 10,
-        BinaryOp::Equal => 11,
-        BinaryOp::NotEqual => 12,
-        BinaryOp::BitAnd => 13,
-        BinaryOp::BitXor => 14,
-        BinaryOp::BitOr => 15,
-        BinaryOp::LogicalAnd => 16,
-        BinaryOp::LogicalXor => 17,
-        BinaryOp::LogicalOr => 18,
-        BinaryOp::Nand => 19,
-        BinaryOp::Nor => 20,
     }
 }

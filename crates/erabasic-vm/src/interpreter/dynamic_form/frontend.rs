@@ -1,5 +1,6 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use erabasic_bytecode::BytecodeStorage;
 pub(super) fn parse_runtime_form(
     vm: &Vm,
     natives: &NativeServiceRegistry,
