@@ -11,6 +11,10 @@ use crate::{
     VmStopToken,
 };
 
+mod pagination;
+
+use pagination::page_bounds;
+
 #[derive(Clone, Debug)]
 struct StepPlan {
     fiber: FiberId,
@@ -423,12 +427,7 @@ impl VmDebugInspect for Vm {
         limit: usize,
     ) -> Result<VmDebugPage<VmDebugFiber>, VmError> {
         self.validate_stop(stop)?;
-        let start = cursor.unwrap_or(0);
-        if limit == 0 || limit > 1024 {
-            return Err(VmError::InvalidArguments(
-                "invalid debugger page size".into(),
-            ));
-        }
+        let (start, limit) = page_bounds(cursor, limit)?;
         let values = self
             .fibers
             .values()
@@ -491,11 +490,7 @@ impl VmDebugInspect for Vm {
         limit: usize,
     ) -> Result<VmDebugPage<VmDebugOperand>, VmError> {
         self.validate_stop(stop)?;
-        if limit == 0 || limit > 1024 {
-            return Err(VmError::InvalidArguments(
-                "invalid debugger page size".into(),
-            ));
-        }
+        let (start, limit) = page_bounds(cursor, limit)?;
         let frame = self
             .fibers
             .get(&fiber)
@@ -504,7 +499,6 @@ impl VmDebugInspect for Vm {
             .iter()
             .find(|value| value.id == frame)
             .ok_or_else(|| VmError::InvalidArguments("unknown debugger frame".into()))?;
-        let start = cursor.unwrap_or(0);
         let values = frame
             .stack
             .iter()
@@ -530,11 +524,7 @@ impl VmDebugInspect for Vm {
         limit: usize,
     ) -> Result<VmDebugPage<VmDebugVariable>, VmError> {
         self.validate_stop(stop)?;
-        if limit == 0 || limit > 1024 {
-            return Err(VmError::InvalidArguments(
-                "invalid debugger page size".into(),
-            ));
-        }
+        let (start, limit) = page_bounds(cursor, limit)?;
         let mut references = Vec::new();
         for (generation_id, generation) in &self.generations {
             for definition in &generation.artifact.globals {
@@ -587,7 +577,6 @@ impl VmDebugInspect for Vm {
                 }
             }
         }
-        let start = cursor.unwrap_or(0);
         let consumed = start.saturating_add(limit).min(references.len());
         let values = references
             .get(start..consumed)
