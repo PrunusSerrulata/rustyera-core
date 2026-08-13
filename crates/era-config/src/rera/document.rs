@@ -11,8 +11,10 @@ use super::{
     retired::{RETIRED_CONFIG_SPECS, retired_by_path},
 };
 
+mod locked;
 mod source;
 
+use locked::{locked_paths, validate_v1_locked_settings};
 use source::{available_span, collect_source_spans, offset_span, shift_error};
 
 #[derive(Clone, Debug)]
@@ -337,11 +339,6 @@ impl ReraConfigDocument {
     }
 }
 
-struct LockedPath {
-    path: String,
-    span: Option<ByteSpan>,
-}
-
 fn validate_meta(
     document: &DocumentMut,
     source_offset: usize,
@@ -483,46 +480,6 @@ fn validate_v1_meta(
     Ok(())
 }
 
-fn validate_v1_locked_settings(
-    item: &Item,
-    source_offset: usize,
-    source_spans: &BTreeMap<String, ByteSpan>,
-) -> Result<(), ReraConfigError> {
-    let array = item.as_array().ok_or_else(|| {
-        error_at(
-            ReraConfigErrorKind::InvalidMetadata,
-            Some("meta.locked_settings"),
-            available_span(item, "meta.locked_settings", source_offset, source_spans),
-            "必须是字符串数组",
-        )
-    })?;
-    let mut paths = BTreeSet::new();
-    for value in array {
-        let span = value
-            .span()
-            .map(ByteSpan::from)
-            .map(|span| offset_span(span, source_offset))
-            .or_else(|| source_spans.get("meta.locked_settings").copied());
-        let path = value.as_str().ok_or_else(|| {
-            error_at(
-                ReraConfigErrorKind::InvalidMetadata,
-                Some("meta.locked_settings"),
-                span,
-                "数组项必须是字符串",
-            )
-        })?;
-        if !paths.insert(path) {
-            return Err(error_at(
-                ReraConfigErrorKind::InvalidMetadata,
-                Some("meta.locked_settings"),
-                span,
-                "不允许重复路径",
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn upgrade_v1_document(document: &mut DocumentMut) -> Vec<&'static str> {
     const DRAWLINE_PATH: &str = "compatibility.drawline_starts_new_line";
     const REPLACEMENT_PATH: &str = "compatibility.legacy_nonbutton_wrapping";
@@ -611,55 +568,4 @@ fn ensure_table<'a>(document: &'a mut DocumentMut, section: &str) -> &'a mut Tab
         .get_mut(section)
         .and_then(Item::as_table_mut)
         .expect("created section is a table")
-}
-
-fn locked_paths(
-    document: &DocumentMut,
-    source_offset: usize,
-    source_spans: &BTreeMap<String, ByteSpan>,
-) -> Result<Vec<LockedPath>, ReraConfigError> {
-    let Some(item) = document
-        .get("meta")
-        .and_then(|meta| meta.get("locked_settings"))
-    else {
-        return Ok(Vec::new());
-    };
-    let array = item.as_array().ok_or_else(|| {
-        error_at(
-            ReraConfigErrorKind::InvalidMetadata,
-            Some("meta.locked_settings"),
-            available_span(item, "meta.locked_settings", source_offset, source_spans),
-            "必须是字符串数组",
-        )
-    })?;
-    let mut paths = BTreeSet::new();
-    let mut locked = Vec::new();
-    for value in array {
-        let span = value
-            .span()
-            .map(ByteSpan::from)
-            .map(|span| offset_span(span, source_offset))
-            .or_else(|| source_spans.get("meta.locked_settings").copied());
-        let path = value.as_str().ok_or_else(|| {
-            error_at(
-                ReraConfigErrorKind::InvalidMetadata,
-                Some("meta.locked_settings"),
-                span,
-                "数组项必须是字符串",
-            )
-        })?;
-        if !paths.insert(path.to_owned()) {
-            return Err(error_at(
-                ReraConfigErrorKind::InvalidMetadata,
-                Some("meta.locked_settings"),
-                span,
-                "不允许重复路径",
-            ));
-        }
-        locked.push(LockedPath {
-            path: path.to_owned(),
-            span,
-        });
-    }
-    Ok(locked)
 }
