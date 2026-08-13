@@ -166,17 +166,17 @@ pub struct ProjectProgress {
 
 #[derive(Clone)]
 pub struct ProjectProgressReporter {
-    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    #[cfg(not(target_arch = "wasm32"))]
     callback: Arc<dyn Fn(ProjectProgress) + Send + Sync>,
-    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    #[cfg(not(target_arch = "wasm32"))]
     gate: Arc<std::sync::Mutex<ProjectProgressGate>>,
-    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    #[cfg(not(target_arch = "wasm32"))]
     started_at: Instant,
-    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    #[cfg(target_arch = "wasm32")]
     callback: std::rc::Rc<dyn Fn(ProjectProgress)>,
-    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    #[cfg(target_arch = "wasm32")]
     gate: std::rc::Rc<std::cell::RefCell<ProjectProgressGate>>,
-    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    #[cfg(target_arch = "wasm32")]
     started_at: Instant,
 }
 
@@ -217,7 +217,7 @@ impl ProjectProgressGate {
 }
 
 impl ProjectProgressReporter {
-    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn new(callback: impl Fn(ProjectProgress) + Send + Sync + 'static) -> Self {
         Self {
@@ -227,7 +227,7 @@ impl ProjectProgressReporter {
         }
     }
 
-    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    #[cfg(target_arch = "wasm32")]
     #[must_use]
     pub fn new(callback: impl Fn(ProjectProgress) + 'static) -> Self {
         Self {
@@ -238,7 +238,7 @@ impl ProjectProgressReporter {
     }
 
     pub(crate) fn report(&self, progress: ProjectProgress) {
-        #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             let mut gate = self
                 .gate
@@ -250,7 +250,7 @@ impl ProjectProgressReporter {
                 (self.callback)(progress);
             }
         }
-        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+        #[cfg(target_arch = "wasm32")]
         if self
             .gate
             .borrow_mut()

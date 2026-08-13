@@ -6,7 +6,7 @@ use erabasic_csv::{CsvLoadOptions, resolve_deferred_indices};
 use erabasic_data::ProjectData;
 use erabasic_hir::{FunctionKind, Program, SourceFile};
 use erabasic_parser::{parse_erb, parse_erh};
-#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+#[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -158,16 +158,16 @@ impl<'a> ProgressCounter<'a> {
     }
 }
 
-#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub trait AnalysisProgressCallback: Fn(AnalysisProgress) + Sync {}
 
-#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+#[cfg(not(target_arch = "wasm32"))]
 impl<T> AnalysisProgressCallback for T where T: Fn(AnalysisProgress) + Sync {}
 
-#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+#[cfg(target_arch = "wasm32")]
 pub trait AnalysisProgressCallback: Fn(AnalysisProgress) {}
 
-#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+#[cfg(target_arch = "wasm32")]
 impl<T> AnalysisProgressCallback for T where T: Fn(AnalysisProgress) {}
 
 #[must_use]
@@ -248,7 +248,7 @@ fn analyze_project_inner(
     // ERH parsing above establishes the shared macro and variable environment.
     // ERB parsing never mutates it, so each worker receives a cheap copy-on-write
     // context and indexed collection preserves the source/diagnostic order.
-    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    #[cfg(not(target_arch = "wasm32"))]
     let erb_outputs = erb_sources
         .into_par_iter()
         .map(|source| {
@@ -258,7 +258,7 @@ fn analyze_project_inner(
             (source, output)
         })
         .collect::<Vec<_>>();
-    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    #[cfg(target_arch = "wasm32")]
     let erb_outputs = erb_sources
         .into_iter()
         .map(|source| {
@@ -547,12 +547,12 @@ fn analyze_with_context(
         analyzing_progress.advance();
         (hir, function_diagnostics)
     };
-    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    #[cfg(not(target_arch = "wasm32"))]
     let analyzed_functions = definitions
         .par_iter()
         .map(analyze_definition)
         .collect::<Vec<_>>();
-    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    #[cfg(target_arch = "wasm32")]
     let analyzed_functions = definitions
         .iter()
         .map(analyze_definition)
