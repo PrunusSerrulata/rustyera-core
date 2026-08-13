@@ -2,11 +2,8 @@ use std::io::Read;
 
 use flate2::read::GzDecoder;
 
+use crate::format::{HEADER, VERSION, ZIP_HEADER};
 use crate::{SaveCodecError, SaveCodecLimits, SaveFileKind, SaveFormat, SaveMetadata};
-
-const HEADER: u64 = 0x0A1A_0A0D_4152_4589;
-const ZIP_HEADER: u64 = 0x0A50_495A_4152_4589;
-const VERSION: u32 = 1808;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SaveMetadataInspection {

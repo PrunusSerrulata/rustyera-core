@@ -4,6 +4,7 @@
 //! all filesystem errors remain frontend responsibilities.
 
 mod binary;
+mod format;
 mod metadata;
 mod model;
 mod text;

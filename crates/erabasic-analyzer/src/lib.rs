@@ -10,6 +10,8 @@ mod control_flow;
 mod declarations;
 mod diagnostic;
 mod expression;
+mod identifiers;
+mod index_resolver;
 mod input;
 mod options;
 mod portability;

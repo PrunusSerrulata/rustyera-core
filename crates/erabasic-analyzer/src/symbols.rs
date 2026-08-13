@@ -6,7 +6,9 @@ use erabasic_hir::{
     VariableScope,
 };
 
-use crate::{declarations::DeclaredVariable, options::AnalyzerOptions};
+use crate::{
+    declarations::DeclaredVariable, identifiers::identifier_key, options::AnalyzerOptions,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct FunctionSymbol {
@@ -261,11 +263,7 @@ impl Symbols {
     }
 
     fn key(&self, name: &str) -> String {
-        if self.ignore_case {
-            name.to_ascii_uppercase()
-        } else {
-            name.to_owned()
-        }
+        identifier_key(name, self.ignore_case)
     }
 }
 

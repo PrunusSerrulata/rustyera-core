@@ -178,7 +178,7 @@ fn apply_character_field(
         "ISASSI" | "助手" => {}
         "MARK" | "刻印" => assign_integer(
             "MARK",
-            NameTableKind::Mark,
+            Some(NameTableKind::Mark),
             &mut character.mark,
             tokens,
             schema,
@@ -188,7 +188,7 @@ fn apply_character_field(
         ),
         "EXP" | "経験" => assign_integer(
             "EXP",
-            NameTableKind::Exp,
+            Some(NameTableKind::Exp),
             &mut character.exp,
             tokens,
             schema,
@@ -198,7 +198,7 @@ fn apply_character_field(
         ),
         "ABL" | "能力" => assign_integer(
             "ABL",
-            NameTableKind::Abl,
+            Some(NameTableKind::Abl),
             &mut character.abl,
             tokens,
             schema,
@@ -208,7 +208,7 @@ fn apply_character_field(
         ),
         "BASE" | "基礎" => assign_integer(
             "MAXBASE",
-            NameTableKind::Base,
+            Some(NameTableKind::Base),
             &mut character.max_base,
             tokens,
             schema,
@@ -218,7 +218,7 @@ fn apply_character_field(
         ),
         "TALENT" | "素質" => assign_integer(
             "TALENT",
-            NameTableKind::Talent,
+            Some(NameTableKind::Talent),
             &mut character.talent,
             tokens,
             schema,
@@ -226,17 +226,19 @@ fn apply_character_field(
             line,
             diagnostics,
         ),
-        "RELATION" | "相性" => assign_integer_without_names(
+        "RELATION" | "相性" => assign_integer(
             "RELATION",
+            None,
             &mut character.relation,
             tokens,
             schema,
+            tables,
             line,
             diagnostics,
         ),
         "CFLAG" | "フラグ" => assign_integer(
             "CFLAG",
-            NameTableKind::Cflag,
+            Some(NameTableKind::Cflag),
             &mut character.cflag,
             tokens,
             schema,
@@ -246,7 +248,7 @@ fn apply_character_field(
         ),
         "EQUIP" | "装着物" => assign_integer(
             "EQUIP",
-            NameTableKind::Equip,
+            Some(NameTableKind::Equip),
             &mut character.equip,
             tokens,
             schema,
@@ -256,7 +258,7 @@ fn apply_character_field(
         ),
         "JUEL" | "珠" => assign_integer(
             "JUEL",
-            NameTableKind::Palam,
+            Some(NameTableKind::Palam),
             &mut character.juel,
             tokens,
             schema,
@@ -298,7 +300,7 @@ fn apply_character_field(
 #[allow(clippy::too_many_arguments)]
 fn assign_integer(
     variable: &str,
-    kind: NameTableKind,
+    kind: Option<NameTableKind>,
     target: &mut BTreeMap<usize, i64>,
     tokens: &[&str],
     schema: &ProjectSchema,
@@ -306,27 +308,8 @@ fn assign_integer(
     line: &crate::reader::EnabledLine,
     diagnostics: &mut Vec<CsvDiagnostic>,
 ) {
-    let table = tables.get(&kind);
+    let table = kind.and_then(|kind| tables.get(&kind));
     let index = resolve_character_index(variable, tokens[1], schema, table, line, diagnostics);
-    let Some(index) = index else { return };
-    let value = tokens
-        .get(2)
-        .and_then(|value| parse_era_integer(value))
-        .unwrap_or(1);
-    if target.insert(index, value).is_some() {
-        duplicate_field(variable, index, line, diagnostics);
-    }
-}
-
-fn assign_integer_without_names(
-    variable: &str,
-    target: &mut BTreeMap<usize, i64>,
-    tokens: &[&str],
-    schema: &ProjectSchema,
-    line: &crate::reader::EnabledLine,
-    diagnostics: &mut Vec<CsvDiagnostic>,
-) {
-    let index = resolve_character_index(variable, tokens[1], schema, None, line, diagnostics);
     let Some(index) = index else { return };
     let value = tokens
         .get(2)

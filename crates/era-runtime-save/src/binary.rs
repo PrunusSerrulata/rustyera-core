@@ -7,14 +7,12 @@ use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 
 use cursor::Cursor;
 
+use crate::format::{HEADER, VERSION, ZIP_HEADER};
 use crate::{
     OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveEntry, SaveExtension,
     SaveFileKind, SaveFormat, SaveMetadata, SaveValue,
 };
 
-const HEADER: u64 = 0x0A1A_0A0D_4152_4589;
-const ZIP_HEADER: u64 = 0x0A50_495A_4152_4589;
-const VERSION: u32 = 1808;
 const EOF: u8 = 0xFF;
 const EOC: u8 = 0xFE;
 const SEPARATOR: u8 = 0xFD;

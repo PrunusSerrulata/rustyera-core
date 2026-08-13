@@ -7,7 +7,7 @@ use erabasic_data::ProjectSchema;
 use erabasic_lexer::{LexerConfig, MacroTable};
 use erabasic_parser::{InstructionSpec, ParserContext};
 
-use crate::{catalog::Catalog, options::AnalyzerOptions};
+use crate::{catalog::Catalog, identifiers::identifier_key, options::AnalyzerOptions};
 
 #[derive(Clone)]
 pub(crate) struct AnalysisParserContext {
@@ -28,13 +28,7 @@ impl AnalysisParserContext {
         functions: impl IntoIterator<Item = String>,
         options: &AnalyzerOptions,
     ) -> Self {
-        let normalize = |name: &str| {
-            if options.ignore_case {
-                name.to_ascii_uppercase()
-            } else {
-                name.to_owned()
-            }
-        };
+        let normalize = |name: &str| identifier_key(name, options.ignore_case);
         let mut instructions: BTreeMap<_, _> = catalog
             .instructions
             .iter()
@@ -82,11 +76,7 @@ impl AnalysisParserContext {
     }
 
     fn key(&self, name: &str) -> String {
-        if self.ignore_case {
-            name.to_ascii_uppercase()
-        } else {
-            name.to_owned()
-        }
+        identifier_key(name, self.ignore_case)
     }
 }
 

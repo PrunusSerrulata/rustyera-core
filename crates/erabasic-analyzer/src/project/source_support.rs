@@ -313,11 +313,7 @@ pub(super) fn at_function(
 }
 
 pub(super) fn key(name: &str, ignore_case: bool) -> String {
-    if ignore_case {
-        name.to_ascii_uppercase()
-    } else {
-        name.to_owned()
-    }
+    crate::identifiers::identifier_key(name, ignore_case)
 }
 
 fn normalize_path(path: &str) -> Option<String> {
