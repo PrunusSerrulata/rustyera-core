@@ -12,46 +12,16 @@ use crate::{
     NativeServiceRegistry, ProgramGeneration, Vm, VmConfig, VmError, VmHost,
 };
 
+mod model;
+
+pub use self::model::{
+    SnapshotBlocker, SnapshotContainerInspection, SnapshotEligibility, SnapshotInspection,
+};
+
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
 pub const SNAPSHOT_FORMAT_VERSION: u32 = 10;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
-
-/// Container metadata and decoded state from a validated execution snapshot.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct SnapshotInspection {
-    pub container: SnapshotContainerInspection,
-    pub state: Value,
-}
-
-/// Header information from a validated execution snapshot container.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct SnapshotContainerInspection {
-    pub magic: String,
-    pub format_version: u32,
-    pub file_bytes: u64,
-    pub compressed_payload_bytes: u64,
-    pub uncompressed_payload_bytes: u64,
-    pub payload_blake3: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SnapshotBlocker {
-    PendingHotReload,
-    PrimaryFiberNotSnapshotStable,
-    RunnableFiber(FiberId),
-    TransientHostWait(FiberId),
-    AwaitResume(FiberId),
-    OldGenerationFrame(FiberId, GenerationId),
-    LegacyGenerationState,
-    NativeService(String),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SnapshotEligibility {
-    Eligible,
-    Ineligible(Vec<SnapshotBlocker>),
-}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct VmSnapshot {
