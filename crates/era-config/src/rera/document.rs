@@ -11,6 +11,10 @@ use super::{
     retired::{RETIRED_CONFIG_SPECS, retired_by_path},
 };
 
+mod source;
+
+use source::{available_span, collect_source_spans, offset_span, shift_error};
+
 #[derive(Clone, Debug)]
 pub struct ReraConfigDocument {
     document: DocumentMut,
@@ -658,58 +662,4 @@ fn locked_paths(
         });
     }
     Ok(locked)
-}
-
-fn available_span(
-    item: &Item,
-    path: &str,
-    source_offset: usize,
-    source_spans: &BTreeMap<String, ByteSpan>,
-) -> Option<ByteSpan> {
-    item.span()
-        .map(ByteSpan::from)
-        .map(|span| offset_span(span, source_offset))
-        .or_else(|| source_spans.get(path).copied())
-}
-
-fn shift_error(
-    mut error: ReraConfigError,
-    source_offset: usize,
-    fallback_span: Option<ByteSpan>,
-) -> ReraConfigError {
-    error.span = error
-        .span
-        .map(|span| offset_span(span, source_offset))
-        .or(fallback_span);
-    error
-}
-
-fn collect_source_spans(
-    document: &Document<String>,
-    source_offset: usize,
-) -> BTreeMap<String, ByteSpan> {
-    let mut spans = BTreeMap::new();
-    for (section, item) in document.iter() {
-        if let Some(span) = item.span() {
-            spans.insert(section.to_owned(), offset_span(span.into(), source_offset));
-        }
-        if let Some(table) = item.as_table() {
-            for (key, field) in table {
-                if let Some(span) = field.span() {
-                    spans.insert(
-                        format!("{section}.{key}"),
-                        offset_span(span.into(), source_offset),
-                    );
-                }
-            }
-        }
-    }
-    spans
-}
-
-fn offset_span(span: ByteSpan, offset: usize) -> ByteSpan {
-    ByteSpan {
-        start: span.start + offset,
-        end: span.end + offset,
-    }
 }
