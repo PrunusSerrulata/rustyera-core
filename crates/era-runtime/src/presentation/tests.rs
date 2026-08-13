@@ -1,5 +1,7 @@
 use super::projection::plain_text;
 use super::*;
+use era_runtime_protocol::{PresentationDelta, PresentationSnapshot, ResourceReplay};
+use serde::Serialize;
 
 fn display_text(run: &DisplayRun) -> Option<&str> {
     match run {

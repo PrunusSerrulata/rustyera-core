@@ -1,97 +1,16 @@
 use era_runtime_protocol::{
-    AudioState, CellAlignment, Color, DisplayLine, DisplayRun, InputWait, InteractionToken,
-    LineAlignment, LogicalLength, MediaPlacement, PresentationDelta, PresentationHistoryOperation,
-    PresentationLength, PresentationSettings, PresentationSnapshot, ProtocolValue, RationalOpacity,
-    ResourceReplay, SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef,
-    TextStyle, TooltipSettings,
+    CellAlignment, DisplayLine, DisplayRun, InteractionToken, LineAlignment, LogicalLength,
+    MediaPlacement, PresentationHistoryOperation, PresentationLength, ProtocolValue,
+    RationalOpacity, SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef,
+    TextStyle,
 };
 use erabasic_vm::{CharacterWidthMode, VmValue};
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-const fn dirty_line_count() -> bool {
-    true
-}
+mod model;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[allow(clippy::struct_excessive_bools)]
-pub(crate) struct PresentationModel {
-    revision: u64,
-    title: String,
-    lines: Vec<DisplayLine>,
-    history_operations: Vec<PresentationHistoryOperation>,
-    pending_runs: Vec<DisplayRun>,
-    pending_plain_runs: BTreeSet<usize>,
-    last_committed_plain_runs: BTreeSet<usize>,
-    pending_temporary: bool,
-    input_wait: Option<InputWait>,
-    next_line: u64,
-    logical_line_count: i64,
-    /// The calculated VM variable is synchronized lazily before execution resumes.
-    #[serde(skip, default = "dirty_line_count")]
-    line_count_dirty: bool,
-    settings: PresentationSettings,
-    project_column_cells: bool,
-    project_separators: bool,
-    project_html: bool,
-    project_graphics: bool,
-    project_audio: bool,
-    current_style: TextStyle,
-    default_style: TextStyle,
-    default_background: Color,
-    current_alignment: LineAlignment,
-    redraw_enabled: bool,
-    button_generation: u64,
-    replace_next_temporary: bool,
-    html_island: Vec<erabasic_html::HtmlDocument>,
-    backgrounds: Vec<MediaPlacement>,
-    /// CBG layers are distinct from SETBGIMAGE backgrounds in Emuera. They share
-    /// the portable frontend projection, but commands must be able to clear either
-    /// collection without disturbing the other.
-    #[serde(default)]
-    client_backgrounds: Vec<MediaPlacement>,
-    audio: Vec<AudioState>,
-    tooltip: TooltipSettings,
-    resources: ResourceReplay,
-    #[serde(default)]
-    resource_replay_stale: bool,
-    print_c_length: u32,
-    /// Derived from project configuration rather than authoritative snapshot state.
-    #[serde(skip)]
-    character_width_mode: CharacterWidthMode,
-    /// Frontend delivery bookkeeping is transport state, not authoritative game state.
-    #[serde(skip)]
-    delivery: PresentationDelivery,
-}
-
-#[derive(Clone, Debug, Default)]
-struct PresentationDelivery {
-    revision: Option<u64>,
-    history_index: usize,
-    pending_line_id: Option<u64>,
-    dirty_lines: BTreeSet<u64>,
-    dirty: PresentationDirty,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-#[allow(clippy::struct_excessive_bools)]
-struct PresentationDirty {
-    title: bool,
-    backgrounds: bool,
-    audio: bool,
-    input_wait: bool,
-    settings: bool,
-    tooltip: bool,
-    resources: bool,
-    html_island: bool,
-    redraw: bool,
-    force_snapshot: bool,
-}
-
-pub(crate) enum PresentationUpdate {
-    Snapshot(Box<PresentationSnapshot>),
-    Delta(PresentationDelta),
-}
+use self::model::{PresentationDelivery, PresentationDirty};
+pub(crate) use self::model::{PresentationModel, PresentationUpdate};
 
 impl Default for PresentationModel {
     fn default() -> Self {
