@@ -6,6 +6,8 @@ use era_runtime_protocol::{
 };
 
 use super::*;
+use era_runtime_protocol::ConfigurationApplication;
+use erabasic_data::LegacyEncoding;
 
 #[test]
 fn only_erd_sources_are_forwarded_to_the_deferred_index_loader() {
