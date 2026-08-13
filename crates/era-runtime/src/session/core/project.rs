@@ -307,12 +307,12 @@ impl RuntimeSession {
         let Some(selected) = negotiate_version(hello.runtime_versions, supported) else {
             self.emit_log(
                 RuntimeLogLevel::Error,
-                "runtime protocol negotiation failed: runtime protocol 29.0 is required",
+                "runtime protocol negotiation failed: runtime protocol 30.0 is required",
             )?;
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 29.0 is required".into(),
+                    message: "runtime protocol 30.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -661,7 +661,7 @@ impl RuntimeSession {
         let mut build = match self.build_project_from_cache(request, cache_bytes.as_deref()) {
             Ok(build) => build,
             Err(report) => {
-                self.emit(RuntimeMessage::ProjectLoadReport(report), Some(message_id))?;
+                self.emit(RuntimeMessage::ProjectLoadReport(*report), Some(message_id))?;
                 return self.set_phase(RuntimePhase::Ready);
             }
         };
@@ -790,7 +790,7 @@ impl RuntimeSession {
         &self,
         request: &ProjectLoadRequest,
         cache_bytes: Option<&[u8]>,
-    ) -> Result<ProjectBuild, ProjectLoadReport> {
+    ) -> Result<ProjectBuild, Box<ProjectLoadReport>> {
         let maximum =
             usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
         let mut cache_warning = None;
@@ -835,16 +835,16 @@ impl RuntimeSession {
                             },
                         );
                     }
-                    return Err(report);
+                    return Err(Box::new(report));
                 };
                 if manifest_contains_omitted_payloads(manifest) {
-                    return Err(project_payload_required_report(
+                    return Err(Box::new(project_payload_required_report(
                         request.identity.project_revision,
-                    ));
+                    )));
                 }
                 let actual_identity = crate::compiled_cache::project_identity(manifest);
                 if actual_identity.source_digest != request.identity.source_digest {
-                    return Err(ProjectLoadReport {
+                    return Err(Box::new(ProjectLoadReport {
                         project_revision: request.identity.project_revision,
                         success: false,
                         diagnostics: vec![ProtocolDiagnostic {
@@ -856,7 +856,8 @@ impl RuntimeSession {
                         }],
                         payload_required: false,
                         configuration: None,
-                    });
+                        game_information: None,
+                    }));
                 }
                 let previous_incremental = cached
                     .as_ref()
@@ -1362,6 +1363,7 @@ fn project_payload_required_report(project_revision: u64) -> ProjectLoadReport {
         }],
         payload_required: true,
         configuration: None,
+        game_information: None,
     }
 }
 
@@ -1381,6 +1383,7 @@ fn exact_cached_project(
         message: "loaded the exact compiled project cache".into(),
         source: None,
     });
+    let game_information = crate::project::project_game_information(&exact.artifact);
     ProjectBuild {
         artifact: Some(exact.artifact),
         incremental: exact.incremental,
@@ -1390,6 +1393,7 @@ fn exact_cached_project(
             diagnostics: exact.diagnostics,
             payload_required: false,
             configuration: None,
+            game_information: Some(Box::new(game_information)),
         },
         snapshot: Some(exact.snapshot),
     }

@@ -142,6 +142,21 @@ pub struct ProtocolDiagnostic {
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
+pub struct ProjectGameInformation {
+    #[n(0)]
+    pub title: Option<String>,
+    #[n(1)]
+    pub author: Option<String>,
+    #[n(2)]
+    pub version: Option<String>,
+    #[n(3)]
+    pub year: Option<String>,
+    #[n(4)]
+    pub information: Option<String>,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
 pub struct ProjectLoadReport {
     #[n(0)]
     pub project_revision: u64,
@@ -154,6 +169,8 @@ pub struct ProjectLoadReport {
     pub payload_required: bool,
     #[n(4)]
     pub configuration: Option<crate::ProjectConfigurationSnapshot>,
+    #[n(5)]
+    pub game_information: Option<Box<ProjectGameInformation>>,
 }
 
 /// One-shot project analysis that never replaces the active runtime project.

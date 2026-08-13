@@ -70,9 +70,9 @@ pub use presentation::{
 };
 pub use project::{
     FileCategory, FileChange, FilePayload, FrontendIoError, FrontendIoErrorKind,
-    ProjectAnalysisReport, ProjectAnalysisRequest, ProjectIdentity, ProjectLoadReport,
-    ProjectLoadRequest, ProjectManifest, ProtocolDiagnostic, ReloadProject, SourceLocation,
-    SubmittedFile, validate_relative_path,
+    ProjectAnalysisReport, ProjectAnalysisRequest, ProjectGameInformation, ProjectIdentity,
+    ProjectLoadReport, ProjectLoadRequest, ProjectManifest, ProtocolDiagnostic, ReloadProject,
+    SourceLocation, SubmittedFile, validate_relative_path,
 };
 pub use service::{
     CancelExternalRequest, CanvasPixelRequest, CanvasPixelResponse, DECODE_CANVAS_IMAGE_OPERATION,

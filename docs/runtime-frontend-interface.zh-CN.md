@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.7`、公共信封 `2.0`、Runtime 协议 `29.0`。源码入口：
+> C ABI `3.7`、公共信封 `2.0`、Runtime 协议 `30.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.7 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 29.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 30.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -451,7 +451,7 @@ Warning、Error。前端可以筛选、着色和添加到达时间，但不得�
 | `ProjectManifest` | `project_revision:u64`, `files[]` | 文件顺序是协议输入的一部分，runtime 内部做确定性处理 |
 | `ProjectIdentity` | `project_revision`, `source_digest` | digest 由完整规范项目身份产生 |
 | `ProjectLoadRequest` | `identity`, `manifest?`, `compiled_cache_transfer_id?` | cache key 不精确但其嵌入 manifest 身份匹配时直接重编译；缓存无效或源码身份不同且未带 manifest 时才报告 `payload_required=true` |
-| `ProjectLoadReport` | `project_revision`, `success`, `diagnostics[]`, `payload_required` | `success=false` 时不要 Start |
+| `ProjectLoadReport` | `project_revision`, `success`, `diagnostics[]`, `payload_required`, `configuration?`, `game_information?` | `success=false` 时不要 Start；`game_information` 是从已解析 `GameBase.csv` 投影的可选展示信息 |
 | `ProjectAnalysisRequest` | `manifest`, `selected_erb_paths[]`, `debug_mode` | 一次性分析，不替换项目 |
 | `ProjectAnalysisReport` | `project_revision`, `success`, `diagnostics[]`, `analyzed_erb_paths[]` | 仅报告 |
 | `ReloadProject` | `base_revision`, `target_revision`, `changes[]` | change 是 `Upsert{file}` 或 `Remove{category,path}` |

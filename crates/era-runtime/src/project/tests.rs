@@ -325,6 +325,60 @@ fn project_build_populates_analyzer_diagnostic_line_and_byte_column() {
 }
 
 #[test]
+fn project_load_report_projects_only_defined_gamebase_information() {
+    let build = build_project(
+        &ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "CSV/GameBase.csv".into(),
+                category: FileCategory::Csv,
+                payload: FilePayload::Utf8(
+                    "タイトル,Demo\n作者,Author\nバージョン,1001\n製作年,2026\n追加情報,Notes\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        },
+        None,
+    );
+
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    assert_eq!(
+        build.report.game_information,
+        Some(Box::new(ProjectGameInformation {
+            title: Some("Demo".into()),
+            author: Some("Author".into()),
+            version: Some("1.001".into()),
+            year: Some("2026".into()),
+            information: Some("Notes".into()),
+        }))
+    );
+
+    let missing = build_project(
+        &ProjectManifest {
+            project_revision: 2,
+            files: vec![SubmittedFile {
+                relative_path: "GAMEBASE.CSV".into(),
+                category: FileCategory::Csv,
+                payload: FilePayload::Utf8("タイトル,Demo\n作者,   \n".into()),
+                content_hash: None,
+            }],
+        },
+        None,
+    );
+    assert_eq!(
+        missing.report.game_information,
+        Some(Box::new(ProjectGameInformation {
+            title: Some("Demo".into()),
+            author: None,
+            version: None,
+            year: None,
+            information: None,
+        }))
+    );
+}
+
+#[test]
 fn focused_eratw_system_slices_exercise_runtime_owned_save_flows() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games/eraTW/ERB");
     for (relative, required) in [

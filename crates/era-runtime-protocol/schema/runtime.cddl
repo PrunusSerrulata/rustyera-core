@@ -76,7 +76,12 @@ project-manifest = { 0: uint, 1: [* any] }
 project-identity = { 0: uint, 1: bstr }
 project-load-request = { 0: project-identity, ? 1: project-manifest / null, ? 2: uint / null }
 project-load-report = {
-  0: uint, 1: bool, 2: [* any], 3: bool, ? 4: project-configuration-snapshot / null
+  0: uint, 1: bool, 2: [* any], 3: bool, ? 4: project-configuration-snapshot / null,
+  ? 5: project-game-information / null
+}
+project-game-information = {
+  ? 0: tstr / null, ? 1: tstr / null, ? 2: tstr / null,
+  ? 3: tstr / null, ? 4: tstr / null
 }
 reload-project = { 0: uint, 1: uint, 2: [* any] }
 project-analysis-request = { 0: project-manifest, 1: [* tstr], 2: bool }
@@ -192,7 +197,7 @@ runtime-resynchronized = {
   ? 8: project-configuration-snapshot / null
 }
 command-rejected = { 0: uint, 1: tstr, 2: bool, 3: any / null }
-; Runtime protocol 29 retains backend-authoritative log severity.
+; Runtime protocol 30 publishes parsed GameBase information in project load reports.
 runtime-log-level = 0..3 ; Debug, Info, Warning, Error
 protocol-diagnostic = { 0: tstr, 1: runtime-log-level, 2: tstr, 3: any / null }
 runtime-log = { 0: runtime-log-level, 1: tstr }

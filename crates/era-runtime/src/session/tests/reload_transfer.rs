@@ -974,12 +974,22 @@ fn rejected_or_explicit_project_load_discards_a_host_staged_manifest() {
 fn exact_compiled_cache_load_does_not_require_a_manifest() {
     let manifest = ProjectManifest {
         project_revision: 1,
-        files: vec![SubmittedFile {
-            relative_path: "main.erb".into(),
-            category: FileCategory::Erb,
-            payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
-            content_hash: None,
-        }],
+        files: vec![
+            SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "CSV/GAMEBASE.CSV".into(),
+                category: FileCategory::Csv,
+                payload: FilePayload::Utf8(
+                    "タイトル,Cached Demo\n作者,   \nバージョン,1001\n".into(),
+                ),
+                content_hash: None,
+            },
+        ],
     };
     let mut initial = crate::project::build_project(&manifest, None);
     assert!(initial.report.success, "{:?}", initial.report.diagnostics);
@@ -1023,6 +1033,10 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
     assert!(cached.report.success);
     assert!(!cached.report.payload_required);
     assert_eq!(cached.report.project_revision, 8);
+    assert_eq!(
+        cached.report.game_information,
+        initial.report.game_information
+    );
     let replayed = cached
         .report
         .diagnostics

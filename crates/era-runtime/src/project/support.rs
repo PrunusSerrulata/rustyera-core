@@ -158,6 +158,7 @@ pub(super) fn failed_with_incremental(
             diagnostics,
             payload_required: false,
             configuration: None,
+            game_information: None,
         },
         snapshot: None,
     }

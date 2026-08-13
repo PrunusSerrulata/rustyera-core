@@ -10,8 +10,9 @@ use era_runtime_protocol::{
     CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ConfigurationApplication,
     ConfigurationClientProfile, ConfigurationValueKind, FileCategory, FileChange, FilePayload,
     ProjectAnalysisReport, ProjectAnalysisRequest, ProjectConfigurationEntry,
-    ProjectConfigurationSnapshot, ProjectLoadReport, ProjectManifest, ProtocolDiagnostic,
-    ReloadProject, RuntimeLogLevel, SourceLocation, SubmittedFile, validate_relative_path,
+    ProjectConfigurationSnapshot, ProjectGameInformation, ProjectLoadReport, ProjectManifest,
+    ProtocolDiagnostic, ReloadProject, RuntimeLogLevel, SourceLocation, SubmittedFile,
+    validate_relative_path,
 };
 use erabasic_analyzer::{
     AnalysisInput, AnalysisProgressStage, AnalyzerDiagnosticSeverity, AnalyzerOptions,
@@ -55,6 +56,21 @@ pub(crate) struct ProjectBuild {
     pub(crate) incremental: IncrementalState,
     pub(crate) report: ProjectLoadReport,
     pub(crate) snapshot: Option<NormalizedProjectSnapshot>,
+}
+
+pub(crate) fn project_game_information(artifact: &ValidatedArtifact) -> ProjectGameInformation {
+    let game_base = &artifact.artifact().project_data.static_data.game_base;
+    let present = |value: &str| (!value.trim().is_empty()).then(|| value.to_owned());
+    ProjectGameInformation {
+        title: present(&game_base.title),
+        author: present(&game_base.author),
+        // An explicitly declared zero is still project metadata; an absent version is not.
+        version: game_base
+            .version_defined
+            .then(|| game_base.script_version_text()),
+        year: present(&game_base.year),
+        information: present(&game_base.info),
+    }
 }
 
 #[derive(Clone)]
@@ -669,6 +685,7 @@ fn build_project_inner_with_extensions(
                 diagnostics,
                 payload_required: false,
                 configuration: None,
+                game_information: None,
             },
             snapshot: None,
         };
@@ -821,6 +838,7 @@ fn build_project_inner_with_extensions(
             content_hash: Some(digest),
         });
     }
+    let game_information = project_game_information(&artifact);
     ProjectBuild {
         artifact: Some(artifact),
         incremental,
@@ -830,6 +848,7 @@ fn build_project_inner_with_extensions(
             diagnostics,
             payload_required: false,
             configuration: None,
+            game_information: Some(Box::new(game_information)),
         },
         snapshot: Some(NormalizedProjectSnapshot {
             manifest: Arc::new(normalized_manifest),
