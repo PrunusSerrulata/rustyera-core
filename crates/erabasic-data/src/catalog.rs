@@ -1,34 +1,10 @@
 use std::collections::BTreeMap;
 
-use crate::{
-    IndexSpaceSchema, NameTableKind, Persistence, ProjectSchema, StorageScope, ValueType,
-    VariableId, VariableSchema,
-};
+use crate::{IndexSpaceSchema, NameTableKind, Persistence, ProjectSchema, StorageScope, ValueType};
 
-#[allow(clippy::too_many_arguments)]
-fn add(
-    variables: &mut BTreeMap<String, VariableSchema>,
-    name: &str,
-    value_type: ValueType,
-    storage: StorageScope,
-    dimensions: &[usize],
-    mutable: bool,
-    persistence: Persistence,
-    can_forbid: bool,
-) {
-    variables.insert(
-        name.to_owned(),
-        VariableSchema {
-            id: VariableId::builtin(name),
-            value_type,
-            storage,
-            dimensions: dimensions.to_vec(),
-            mutable,
-            persistence,
-            can_forbid,
-        },
-    );
-}
+mod builder;
+
+use builder::add;
 
 /// Build the fixed variable catalog from the pinned `VariableCode.cs` reference.
 ///
