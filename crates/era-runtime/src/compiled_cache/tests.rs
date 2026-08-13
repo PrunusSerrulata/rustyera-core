@@ -166,23 +166,40 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
 
 #[test]
 fn native_tui_and_cooperative_browser_caches_are_byte_identical() {
-    let mut project = manifest("@SYSTEM_TITLE\nPRINTL shared cache\nRETURN\n", 1);
-    project.files.push(SubmittedFile {
+    let mut initial = manifest("@SYSTEM_TITLE\nPRINTL cache v1\nRETURN\n", 1);
+    initial.files.push(SubmittedFile {
         relative_path: "reraconfig.toml".into(),
         category: FileCategory::Configuration,
         payload: FilePayload::Utf8("[meta]\nschema_version = 2\n[text]\nfont_size = 20\n".into()),
         content_hash: None,
     });
-    let mut tui = crate::project::build_project_with_extensions_and_progress(
-        &project,
+    let first = crate::project::build_project_with_extensions_and_progress(
+        &initial,
         None,
         None,
         &[],
         ConfigurationClientProfile::Tui,
         None,
     );
+    assert!(first.report.success, "{:?}", first.report.diagnostics);
+
+    let mut reloaded = initial.clone();
+    reloaded.project_revision = 2;
+    reloaded.files[0].payload =
+        FilePayload::Utf8("@SYSTEM_TITLE\nPRINTL cache v2\nRETURN\n".into());
+    let mut browser_cold = reloaded.clone();
+    // A browser can reach the same source generation through a different number of reloads.
+    browser_cold.project_revision = 9;
+    let mut tui = crate::project::build_project_with_extensions_and_progress(
+        &reloaded,
+        Some(&first.incremental),
+        first.artifact.as_ref().map(ValidatedArtifact::artifact),
+        &[],
+        ConfigurationClientProfile::Tui,
+        None,
+    );
     let mut browser = crate::project::build_project_with_extensions_and_progress(
-        &project,
+        &browser_cold,
         None,
         None,
         &[],
@@ -217,13 +234,30 @@ fn native_tui_and_cooperative_browser_caches_are_byte_identical() {
     .unwrap();
 
     assert_eq!(native, cooperative);
-    assert_eq!(
-        decode(&native, native.len())
-            .unwrap()
-            .snapshot
-            .configuration_profile,
-        ConfigurationClientProfile::Reference
-    );
+    let decoded = decode(&native, native.len()).unwrap();
+    assert_eq!(decoded.snapshot.configuration_profile, ConfigurationClientProfile::Reference);
+    assert_eq!(decoded.snapshot.manifest.project_revision, COMPILED_CACHE_PROJECT_REVISION);
+}
+
+#[test]
+fn full_project_keeps_its_project_revision() {
+    let project = manifest("@SYSTEM_TITLE\nRETURN\n", 7);
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let bytes = encode_full_project_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+
+    let decoded = decode_project_file(&bytes, bytes.len()).unwrap();
+    assert_eq!(decoded.identity.project_revision, 7);
+    assert_eq!(decoded.manifest.project_revision, 7);
 }
 
 #[test]

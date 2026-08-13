@@ -34,6 +34,11 @@ use configuration_update::{
 
 const PROJECT_MAGIC: &[u8; 8] = b"RERAPROJ";
 const CACHE_MAGIC: &[u8; 8] = b"RERACACH";
+// Cache identity is source based. A project revision is only a frontend/runtime-session epoch, so
+// persisting it would make otherwise identical native and browser caches differ after no-op or
+// differently scoped reload histories. Full project files keep their real revision because they
+// are portable project snapshots rather than derived compiler caches.
+const COMPILED_CACHE_PROJECT_REVISION: u64 = 0;
 // Project files use a compact byte-sized base-format version. This is also a semantic epoch:
 // increment it whenever compiler, analyzer or project-loading behavior can change an unchanged
 // source's artifact. The checksummed configuration journal is a separately versioned trailing
@@ -1512,7 +1517,8 @@ fn encode_project_file_header(
         .map_err(|_| "project identity digest is not 32 bytes")?;
     output.extend_from_slice(kind.magic());
     output.push(VERSION);
-    output.extend_from_slice(&identity.project_revision.to_le_bytes());
+    let project_revision = container_project_revision(kind, identity.project_revision);
+    output.extend_from_slice(&project_revision.to_le_bytes());
     output.extend_from_slice(&source_digest);
     output.extend_from_slice(&project_key(identity, extensions));
     output.extend_from_slice(
@@ -1526,6 +1532,13 @@ fn encode_project_file_header(
             .to_le_bytes(),
     );
     Ok(())
+}
+
+fn container_project_revision(kind: ProjectContainerKind, project_revision: u64) -> u64 {
+    match kind {
+        ProjectContainerKind::CompiledCache => COMPILED_CACHE_PROJECT_REVISION,
+        ProjectContainerKind::FullProject => project_revision,
+    }
 }
 
 pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<DecodedCompiledCache, String> {

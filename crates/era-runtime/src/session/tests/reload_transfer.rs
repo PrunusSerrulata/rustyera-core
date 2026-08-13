@@ -1223,61 +1223,56 @@ fn compiled_cache_is_reused_across_configuration_profiles() {
             content_hash: None,
         }],
     };
-    let mut initial = crate::project::build_project_with_extensions_and_progress(
-        &manifest,
-        None,
-        None,
-        &[],
-        ConfigurationClientProfile::Tui,
-        None,
-    );
-    assert!(initial.report.success, "{:?}", initial.report.diagnostics);
-    initial.incremental.compact();
-    let cache = crate::compiled_cache::encode_compiled_cache_for_test(
-        &manifest,
-        &[],
-        initial.artifact.as_ref().unwrap(),
-        &initial.incremental,
-        initial.snapshot.as_ref().unwrap(),
-        &initial.report.diagnostics,
-    )
-    .unwrap();
-    let mut identity = crate::compiled_cache::project_identity(&manifest);
-    identity.project_revision = 9;
-    let mut compact_manifest = manifest.clone();
-    compact_manifest.project_revision = 9;
-    compact_manifest.files[0].content_hash = Some(ProtocolBytes::new(
-        blake3::hash(b"@SYSTEM_TITLE\nRETURN\n").as_bytes().to_vec(),
-    ));
-    compact_manifest.files[0].payload = FilePayload::Utf8(String::new());
-    let mut session = RuntimeSession::new(RuntimeOptions::default());
-    session.configuration_profile = ConfigurationClientProfile::Browser;
-
-    let build = session
-        .build_project_from_cache(
-            &ProjectLoadRequest {
-                identity,
-                manifest: Some(compact_manifest),
-                compiled_cache_transfer_id: None,
-            },
-            Some(&cache),
+    for (producer, consumer) in [
+        (ConfigurationClientProfile::Tui, ConfigurationClientProfile::Browser),
+        (ConfigurationClientProfile::Browser, ConfigurationClientProfile::Tui),
+    ] {
+        let mut initial = crate::project::build_project_with_extensions_and_progress(
+            &manifest, None, None, &[], producer, None,
+        );
+        assert!(initial.report.success, "{:?}", initial.report.diagnostics);
+        initial.incremental.compact();
+        let cache = crate::compiled_cache::encode_compiled_cache_for_test(
+            &manifest,
+            &[],
+            initial.artifact.as_ref().unwrap(),
+            &initial.incremental,
+            initial.snapshot.as_ref().unwrap(),
+            &initial.report.diagnostics,
         )
-        .expect("a host-neutral compiled cache should load in a browser session");
+        .unwrap();
+        let mut identity = crate::compiled_cache::project_identity(&manifest);
+        identity.project_revision = 9;
+        let mut compact_manifest = manifest.clone();
+        compact_manifest.project_revision = 9;
+        compact_manifest.files[0].content_hash = Some(ProtocolBytes::new(
+            blake3::hash(b"@SYSTEM_TITLE\nRETURN\n").as_bytes().to_vec(),
+        ));
+        compact_manifest.files[0].payload = FilePayload::Utf8(String::new());
+        let mut session = RuntimeSession::new(RuntimeOptions::default());
+        session.configuration_profile = consumer;
 
-    assert!(build.report.success);
-    assert!(!build.report.payload_required);
-    assert_eq!(build.report.project_revision, 9);
-    assert!(
-        build
+        let build = session
+            .build_project_from_cache(
+                &ProjectLoadRequest {
+                    identity,
+                    manifest: Some(compact_manifest),
+                    compiled_cache_transfer_id: None,
+                },
+                Some(&cache),
+            )
+            .expect("a host-neutral compiled cache should load in either frontend profile");
+
+        assert!(build.report.success);
+        assert!(!build.report.payload_required);
+        assert_eq!(build.report.project_revision, 9);
+        assert!(build
             .report
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "runtime.compiled_cache_hit")
-    );
-    assert_eq!(
-        build.snapshot.unwrap().configuration_profile,
-        ConfigurationClientProfile::Browser
-    );
+            .any(|diagnostic| diagnostic.code == "runtime.compiled_cache_hit"));
+        assert_eq!(build.snapshot.unwrap().configuration_profile, consumer);
+    }
 }
 
 #[test]
