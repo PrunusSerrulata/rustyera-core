@@ -1,4 +1,5 @@
-use super::{EOC, EOF, SEPARATOR, element_count};
+use super::encode::element_count;
+use super::{EOC, EOF, SEPARATOR};
 use crate::{SaveCodecError, SaveCodecLimits, SaveEntry, SaveValue};
 
 pub(super) struct Cursor<'a> {
