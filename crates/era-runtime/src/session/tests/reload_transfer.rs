@@ -1017,7 +1017,12 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
     .unwrap();
     let mut identity = crate::compiled_cache::project_identity(&manifest);
     identity.project_revision = 8;
-    let session = RuntimeSession::new(RuntimeOptions::default());
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = Arc::clone(&progress);
+    session.project_progress_reporter = Some(ProjectProgressReporter::new(move |value| {
+        observed.lock().unwrap().push(value);
+    }));
 
     let cached = session
         .build_project_from_cache(
@@ -1050,6 +1055,31 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
     );
     assert_eq!(replayed.source.as_ref().unwrap().byte_end, 13);
     assert_eq!(cached.snapshot.unwrap().manifest.project_revision, 8);
+    assert_exact_cache_preparing_progress(&progress);
+}
+
+fn assert_exact_cache_preparing_progress(progress: &Arc<std::sync::Mutex<Vec<ProjectProgress>>>) {
+    let values = progress.lock().unwrap();
+    let preparing: Vec<_> = values
+        .iter()
+        .filter(|value| value.stage == ProjectProgressStage::Preparing)
+        .copied()
+        .collect();
+    assert_eq!(
+        preparing,
+        [
+            ProjectProgress {
+                stage: ProjectProgressStage::Preparing,
+                completed: 0,
+                total: 1,
+            },
+            ProjectProgress {
+                stage: ProjectProgressStage::Preparing,
+                completed: 1,
+                total: 1,
+            },
+        ]
+    );
 }
 
 #[test]

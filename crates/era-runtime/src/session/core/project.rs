@@ -811,10 +811,11 @@ impl RuntimeSession {
         let expected_key =
             crate::compiled_cache::project_key(&request.identity, &self.extension_declarations);
         let mut build = match cached {
-            Some(exact) if exact.key == expected_key => exact_cached_project(
+            Some(exact) if exact.key == expected_key => exact_cached_project_with_progress(
                 exact,
                 request.identity.project_revision,
                 self.configuration_profile,
+                self.project_progress_reporter.as_ref(),
             ),
             cached => {
                 let embedded_manifest = cached.as_ref().and_then(|value| {
@@ -1355,6 +1356,20 @@ fn manifest_contains_omitted_payloads(manifest: &ProjectManifest) -> bool {
     })
 }
 
+fn report_project_progress_boundary(
+    reporter: Option<&ProjectProgressReporter>,
+    stage: ProjectProgressStage,
+    complete: bool,
+) {
+    if let Some(reporter) = reporter {
+        reporter.report(ProjectProgress {
+            stage,
+            completed: u64::from(complete),
+            total: 1,
+        });
+    }
+}
+
 fn project_payload_required_report(project_revision: u64) -> ProjectLoadReport {
     ProjectLoadReport {
         project_revision,
@@ -1401,4 +1416,16 @@ fn exact_cached_project(
         },
         snapshot: Some(exact.snapshot),
     }
+}
+
+fn exact_cached_project_with_progress(
+    exact: crate::compiled_cache::DecodedCompiledCache,
+    project_revision: u64,
+    configuration_profile: ConfigurationClientProfile,
+    progress: Option<&ProjectProgressReporter>,
+) -> ProjectBuild {
+    report_project_progress_boundary(progress, ProjectProgressStage::Preparing, false);
+    let build = exact_cached_project(exact, project_revision, configuration_profile);
+    report_project_progress_boundary(progress, ProjectProgressStage::Preparing, true);
+    build
 }
