@@ -12,7 +12,7 @@ use erabasic_hir::Function;
 use erabasic_validator::{
     ValidatedArtifact, ValidationContext, validate_compiler_output, validate_hir,
 };
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -737,18 +737,45 @@ fn compile_project_inner(
         .sum();
     let mut lowered_source_entries = Vec::with_capacity(source_entry_count);
     let mut functions = Vec::with_capacity(materialized.len());
-    let mut cached = BTreeMap::new();
     // Function identities include a deterministic ordinal and are therefore
     // unique. Their canonical output order does not need stable sorting.
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    materialized.par_sort_unstable_by_key(|entry| entry.function.key);
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     materialized.sort_unstable_by_key(|entry| entry.function.key);
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    let cached_entries = materialized
+        .par_iter()
+        .map(|entry| {
+            (
+                entry.function.key,
+                if compact_cache {
+                    compact_cached_function(entry)
+                } else {
+                    cached_function(entry)
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    let cached_entries = materialized
+        .iter()
+        .map(|entry| {
+            (
+                entry.function.key,
+                if compact_cache {
+                    compact_cached_function(entry)
+                } else {
+                    cached_function(entry)
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut cached = BTreeMap::new();
     finalizing_progress.checkpoint();
-    for entry in materialized {
+    for (entry, (cached_key, cached_entry)) in materialized.into_iter().zip(cached_entries) {
         let key = entry.function.key;
-        let cached_entry = if compact_cache {
-            compact_cached_function(&entry)
-        } else {
-            cached_function(&entry)
-        };
+        debug_assert_eq!(key, cached_key);
         for import in entry.native_imports {
             let key = import.import.key;
             if let Some(index) = native_import_indices.get(&key).copied() {
@@ -774,10 +801,11 @@ fn compile_project_inner(
     }
     native_imports.sort_unstable_by_key(|value| value.import.key);
     host_imports.sort_unstable_by_key(|value| value.import.key);
-    let mut fingerprint_order = Vec::with_capacity(lowered_source_entries.len());
-    for (chunk_index, chunk) in lowered_source_entries.chunks(65_536).enumerate() {
-        let base = chunk_index.saturating_mul(65_536);
-        fingerprint_order.extend(chunk.iter().enumerate().map(|(index, entry)| {
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    let mut fingerprint_order = lowered_source_entries
+        .par_iter()
+        .enumerate()
+        .map(|(index, entry)| {
             debug_assert!(
                 entry.statement_fingerprint.0[16..]
                     .iter()
@@ -785,13 +813,31 @@ fn compile_project_inner(
             );
             let mut prefix = [0; 16];
             prefix.copy_from_slice(&entry.statement_fingerprint.0[..16]);
-            (prefix, base + index)
-        }));
-        finalizing_progress.checkpoint();
-    }
+            (prefix, index)
+        })
+        .collect::<Vec<_>>();
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    let mut fingerprint_order = lowered_source_entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            debug_assert!(
+                entry.statement_fingerprint.0[16..]
+                    .iter()
+                    .all(|byte| *byte == 0)
+            );
+            let mut prefix = [0; 16];
+            prefix.copy_from_slice(&entry.statement_fingerprint.0[..16]);
+            (prefix, index)
+        })
+        .collect::<Vec<_>>();
+    finalizing_progress.checkpoint();
     // Equal fingerprints receive the same interned index, so their source-entry
     // order is irrelevant here; the original entry order is restored through the
     // index side table below.
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    fingerprint_order.par_sort_unstable_by_key(|entry| entry.0);
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     fingerprint_order.sort_unstable_by_key(|entry| entry.0);
     finalizing_progress.checkpoint();
     let mut statement_fingerprints = Vec::new();
@@ -812,34 +858,37 @@ fn compile_project_inner(
         finalizing_progress.checkpoint();
     }
     drop(fingerprint_order);
-    let mut source_entries = Vec::with_capacity(source_entry_count);
-    let mut lowered_source_entries = lowered_source_entries.into_iter();
-    let mut fingerprint_indices = fingerprint_indices.into_iter();
-    loop {
-        let mut consumed = 0usize;
-        for _ in 0..65_536 {
-            let (Some(entry), Some(statement_fingerprint)) =
-                (lowered_source_entries.next(), fingerprint_indices.next())
-            else {
-                break;
-            };
-            source_entries.push(SourceMapEntry {
-                function: entry.function,
-                code_start: entry.code_start,
-                code_end: entry.code_end,
-                byte_start: entry.byte_start,
-                byte_end: entry.byte_end,
-                statement_fingerprint,
-                origin_chain: entry.origin_chain,
-                source_index: entry.source_index,
-            });
-            consumed += 1;
-        }
-        if consumed == 0 {
-            break;
-        }
-        finalizing_progress.checkpoint();
-    }
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    let source_entries = lowered_source_entries
+        .into_par_iter()
+        .zip(fingerprint_indices.into_par_iter())
+        .map(|(entry, statement_fingerprint)| SourceMapEntry {
+            function: entry.function,
+            code_start: entry.code_start,
+            code_end: entry.code_end,
+            byte_start: entry.byte_start,
+            byte_end: entry.byte_end,
+            statement_fingerprint,
+            origin_chain: entry.origin_chain,
+            source_index: entry.source_index,
+        })
+        .collect::<Vec<_>>();
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    let source_entries = lowered_source_entries
+        .into_iter()
+        .zip(fingerprint_indices)
+        .map(|(entry, statement_fingerprint)| SourceMapEntry {
+            function: entry.function,
+            code_start: entry.code_start,
+            code_end: entry.code_end,
+            byte_start: entry.byte_start,
+            byte_end: entry.byte_end,
+            statement_fingerprint,
+            origin_chain: entry.origin_chain,
+            source_index: entry.source_index,
+        })
+        .collect::<Vec<_>>();
+    finalizing_progress.checkpoint();
     let artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(compiler_options),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility {

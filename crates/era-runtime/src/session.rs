@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use era_debug_protocol::{DebugMessage, DebugResponse, DebugScope, GrantToken, ScriptOutputChunk};
 use era_protocol::{
@@ -150,6 +151,9 @@ pub enum ProjectProgressStage {
     Finalizing,
     Preparing,
     Packaging,
+    CacheParsing,
+    CacheDecoding,
+    CacheValidating,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -164,8 +168,52 @@ pub struct ProjectProgress {
 pub struct ProjectProgressReporter {
     #[cfg(not(target_arch = "wasm32"))]
     callback: Arc<dyn Fn(ProjectProgress) + Send + Sync>,
+    #[cfg(not(target_arch = "wasm32"))]
+    gate: Arc<std::sync::Mutex<ProjectProgressGate>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    started_at: Instant,
     #[cfg(target_arch = "wasm32")]
     callback: std::rc::Rc<dyn Fn(ProjectProgress)>,
+    #[cfg(target_arch = "wasm32")]
+    gate: std::rc::Rc<std::cell::RefCell<ProjectProgressGate>>,
+    #[cfg(target_arch = "wasm32")]
+    started_at: Instant,
+}
+
+#[derive(Default)]
+struct ProjectProgressGate {
+    last: Option<ProjectProgress>,
+    last_emitted_at: Option<Duration>,
+}
+
+impl ProjectProgressGate {
+    const INTERVAL: Duration = Duration::from_millis(34);
+
+    fn accepts(&mut self, progress: ProjectProgress, now: Duration) -> bool {
+        if self.last == Some(progress) {
+            return false;
+        }
+        let boundary = progress.completed == 0 || progress.completed >= progress.total;
+        let stage_changed = self
+            .last
+            .is_none_or(|previous| previous.stage != progress.stage);
+        if !stage_changed
+            && self
+                .last
+                .is_some_and(|previous| progress.completed < previous.completed)
+        {
+            return false;
+        }
+        let interval_elapsed = self
+            .last_emitted_at
+            .is_none_or(|previous| now.saturating_sub(previous) >= Self::INTERVAL);
+        let accepts = stage_changed || boundary || interval_elapsed;
+        if accepts {
+            self.last = Some(progress);
+            self.last_emitted_at = Some(now);
+        }
+        accepts
+    }
 }
 
 impl ProjectProgressReporter {
@@ -174,6 +222,8 @@ impl ProjectProgressReporter {
     pub fn new(callback: impl Fn(ProjectProgress) + Send + Sync + 'static) -> Self {
         Self {
             callback: Arc::new(callback),
+            gate: Arc::new(std::sync::Mutex::new(ProjectProgressGate::default())),
+            started_at: Instant::now(),
         }
     }
 
@@ -182,11 +232,168 @@ impl ProjectProgressReporter {
     pub fn new(callback: impl Fn(ProjectProgress) + 'static) -> Self {
         Self {
             callback: std::rc::Rc::new(callback),
+            gate: std::rc::Rc::new(std::cell::RefCell::new(ProjectProgressGate::default())),
+            started_at: Instant::now(),
         }
     }
 
     pub(crate) fn report(&self, progress: ProjectProgress) {
-        (self.callback)(progress);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut gate = self
+                .gate
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if gate.accepts(progress, self.started_at.elapsed()) {
+                // Serialize the callback with acceptance so concurrent producers cannot
+                // reorder accepted updates while crossing an FFI or IPC boundary.
+                (self.callback)(progress);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self
+            .gate
+            .borrow_mut()
+            .accepts(progress, self.started_at.elapsed())
+        {
+            (self.callback)(progress);
+        }
+    }
+}
+
+#[cfg(test)]
+mod progress_reporter_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier, Mutex};
+
+    use super::*;
+
+    #[test]
+    fn project_progress_coalesces_duplicates_and_keeps_stage_boundaries() {
+        let reports = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&reports);
+        let reporter = ProjectProgressReporter::new(move |progress| {
+            observed.lock().unwrap().push(progress);
+        });
+        for completed in 0..=1_000 {
+            let progress = ProjectProgress {
+                stage: ProjectProgressStage::Compiling,
+                completed,
+                total: 1_000,
+            };
+            reporter.report(progress);
+            reporter.report(progress);
+        }
+        reporter.report(ProjectProgress {
+            stage: ProjectProgressStage::Finalizing,
+            completed: 0,
+            total: 10,
+        });
+        reporter.report(ProjectProgress {
+            stage: ProjectProgressStage::Finalizing,
+            completed: 10,
+            total: 10,
+        });
+
+        let reports = reports.lock().unwrap();
+        assert_eq!(reports.first().unwrap().completed, 0);
+        assert_eq!(
+            reports[reports.len() - 2].stage,
+            ProjectProgressStage::Finalizing
+        );
+        assert_eq!(reports[reports.len() - 2].completed, 0);
+        assert_eq!(reports.last().unwrap().completed, 10);
+        assert!(reports.len() <= 4);
+        assert!(reports.windows(2).all(|pair| pair[0] != pair[1]));
+    }
+
+    #[test]
+    fn project_progress_gate_uses_time_and_preserves_boundaries() {
+        let mut gate = ProjectProgressGate::default();
+        let compiling = |completed, total| ProjectProgress {
+            stage: ProjectProgressStage::Compiling,
+            completed,
+            total,
+        };
+
+        assert!(gate.accepts(compiling(0, 100), Duration::ZERO));
+        assert!(!gate.accepts(compiling(1, 100), Duration::from_millis(33)));
+        assert!(gate.accepts(compiling(2, 100), Duration::from_millis(34)));
+        assert!(!gate.accepts(compiling(1, 100), Duration::from_secs(1)));
+        assert!(gate.accepts(compiling(100, 100), Duration::from_millis(35)));
+        assert!(!gate.accepts(compiling(100, 100), Duration::from_secs(2)));
+
+        let zero_total = ProjectProgress {
+            stage: ProjectProgressStage::Preparing,
+            completed: 0,
+            total: 0,
+        };
+        assert!(gate.accepts(zero_total, Duration::from_millis(35)));
+        assert!(!gate.accepts(zero_total, Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn project_progress_callback_is_serialized_across_threads() {
+        const THREADS: usize = 8;
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum_active = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let callback_active = Arc::clone(&active);
+        let callback_maximum = Arc::clone(&maximum_active);
+        let callback_observed = Arc::clone(&observed);
+        let reporter = Arc::new(ProjectProgressReporter::new(move |progress| {
+            let current = callback_active.fetch_add(1, Ordering::SeqCst) + 1;
+            callback_maximum.fetch_max(current, Ordering::SeqCst);
+            std::thread::yield_now();
+            callback_observed.lock().unwrap().push(progress);
+            callback_active.fetch_sub(1, Ordering::SeqCst);
+        }));
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles = (0..THREADS)
+            .map(|index| {
+                let reporter = Arc::clone(&reporter);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    reporter.report(ProjectProgress {
+                        stage: if index % 2 == 0 {
+                            ProjectProgressStage::Parsing
+                        } else {
+                            ProjectProgressStage::Analyzing
+                        },
+                        completed: 0,
+                        total: 1,
+                    });
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(maximum_active.load(Ordering::SeqCst), 1);
+        assert!(!observed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn project_progress_reporter_allows_an_intermediate_after_the_interval() {
+        let reports = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&reports);
+        let reporter = ProjectProgressReporter::new(move |progress| {
+            observed.lock().unwrap().push(progress);
+        });
+        reporter.report(ProjectProgress {
+            stage: ProjectProgressStage::Compiling,
+            completed: 0,
+            total: 100,
+        });
+        std::thread::sleep(ProjectProgressGate::INTERVAL);
+        reporter.report(ProjectProgress {
+            stage: ProjectProgressStage::Compiling,
+            completed: 1,
+            total: 100,
+        });
+        assert_eq!(reports.lock().unwrap().len(), 2);
     }
 }
 

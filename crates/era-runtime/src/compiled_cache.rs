@@ -1541,9 +1541,22 @@ fn container_project_revision(kind: ProjectContainerKind, project_revision: u64)
     }
 }
 
+#[cfg(test)]
 pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<DecodedCompiledCache, String> {
+    decode_with_progress(bytes, maximum_bytes, None)
+}
+
+pub(crate) fn decode_with_progress(
+    bytes: &[u8],
+    maximum_bytes: usize,
+    progress: Option<&crate::ProjectProgressReporter>,
+) -> Result<DecodedCompiledCache, String> {
+    report_decode_stage(progress, crate::ProjectProgressStage::CacheParsing, 0);
     let sections = parse_cache_sections(bytes, maximum_bytes)?;
+    report_decode_stage(progress, crate::ProjectProgressStage::CacheParsing, 1);
+    report_decode_stage(progress, crate::ProjectProgressStage::CacheDecoding, 0);
     let parts = decode_cache_parts(&sections)?;
+    report_decode_stage(progress, crate::ProjectProgressStage::CacheDecoding, 1);
     let artifact = BytecodeArtifact {
         manifest: parts.metadata.manifest,
         call_compatibility: parts.metadata.call_compatibility,
@@ -1559,6 +1572,7 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<DecodedCompil
             entries: parts.source_entries,
         },
     };
+    report_decode_stage(progress, crate::ProjectProgressStage::CacheValidating, 0);
     let unvalidated = artifact.into_unvalidated();
     let context = ValidationContext::for_artifact(unvalidated.artifact());
     let validation = validate_bytecode(unvalidated, &context);
@@ -1568,6 +1582,7 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<DecodedCompil
             |value| value.message.clone(),
         )
     })?;
+    report_decode_stage(progress, crate::ProjectProgressStage::CacheValidating, 1);
     let incremental = IncrementalState::from_compact_cache_keys(
         artifact.artifact(),
         parts.incremental_cache_keys,
@@ -1579,6 +1594,20 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<DecodedCompil
         snapshot: parts.snapshot,
         diagnostics: parts.diagnostics,
     })
+}
+
+fn report_decode_stage(
+    progress: Option<&crate::ProjectProgressReporter>,
+    stage: crate::ProjectProgressStage,
+    completed: u64,
+) {
+    if let Some(progress) = progress {
+        progress.report(crate::ProjectProgress {
+            stage,
+            completed,
+            total: 1,
+        });
+    }
 }
 
 /// Decode the identity and exact frontend-submitted manifest embedded in a project file.
@@ -1930,77 +1959,59 @@ fn parse_configuration_journal(
     parse_journal(bytes, digest_end)
 }
 
+#[derive(Clone, Copy, Default)]
+struct CacheDecodeDelays {
+    source_records: std::time::Duration,
+    source_entries: std::time::Duration,
+    independent: std::time::Duration,
+}
+
+struct IndependentCacheParts {
+    metadata: CompiledCacheMetadata,
+    globals: Vec<BytecodeGlobal>,
+    incremental_cache_keys: Vec<Digest>,
+    project_data: erabasic_data::ProjectData,
+    fingerprints: Vec<Digest>,
+    snapshot: CompiledSnapshotMetadata,
+    diagnostics: Vec<ProtocolDiagnostic>,
+}
+
+fn cache_decode_delay(delay: std::time::Duration) {
+    #[cfg(test)]
+    std::thread::sleep(delay);
+    #[cfg(not(test))]
+    debug_assert!(delay.is_zero());
+}
+
 fn decode_cache_parts(sections: &CompiledCacheSections<'_>) -> Result<DecodedCacheParts, String> {
-    let (primary, secondary) = rayon::join(
-        || {
-            let (diagnostics, manifest) = rayon::join(
-                || decode_section::<Vec<ProtocolDiagnostic>>(&sections.diagnostics),
-                || decode_manifest_section(&sections.manifest, sections.identity.project_revision),
-            );
-            let (metadata, globals) = rayon::join(
-                || decode_section::<CompiledCacheMetadata>(&sections.metadata),
-                || decode_section::<Vec<BytecodeGlobal>>(&sections.globals),
-            );
-            Ok::<_, String>((diagnostics?, manifest?, metadata?, globals?))
-        },
-        || {
-            let ((incremental_cache_keys, project_data), (fingerprints, function_chunks)) =
-                rayon::join(
-                    || {
-                        rayon::join(
-                            || decode_incremental_section(&sections.incremental),
-                            || decode_section::<erabasic_data::ProjectData>(&sections.project_data),
-                        )
-                    },
-                    || {
-                        rayon::join(
-                            || decode_digest_section(&sections.fingerprints),
-                            || decode_function_sections(&sections.functions),
-                        )
-                    },
-                );
-            Ok::<_, String>((
-                incremental_cache_keys?,
-                project_data?,
-                fingerprints?,
-                function_chunks?,
-            ))
-        },
-    );
-    let (diagnostics, mut manifest, metadata, globals) = primary?;
-    if project_identity(&manifest) != sections.identity {
-        return Err("project file identity does not match its embedded manifest".into());
-    }
-    apply_journal(&mut manifest, &sections.configuration_journal)?;
-    let (incremental_cache_keys, project_data, fingerprints, function_chunks) = secondary?;
-    let mut functions = Vec::with_capacity(function_chunks.iter().map(Vec::len).sum());
-    for mut chunk in function_chunks {
-        functions.append(&mut chunk);
-    }
-    let ((sources, snapshot), source_chunks) = rayon::join(
+    decode_cache_parts_with_delays(sections, CacheDecodeDelays::default())
+}
+
+fn decode_cache_parts_with_delays(
+    sections: &CompiledCacheSections<'_>,
+    delays: CacheDecodeDelays,
+) -> Result<DecodedCacheParts, String> {
+    let (manifest_and_sources, (functions_and_entries, independent)) = rayon::join(
+        || decode_manifest_and_sources(sections, delays.source_records),
         || {
             rayon::join(
-                || {
-                    if sections.kind == ProjectContainerKind::CompiledCache
-                        && sections.version == VERSION
-                    {
-                        decode_compact_source_record_section(&sections.sources, &manifest)
-                    } else {
-                        decode_source_record_section(&sections.sources, &manifest)
-                    }
-                },
-                || decode_section::<CompiledSnapshotMetadata>(&sections.snapshot),
+                || decode_functions_and_entries(sections, delays.source_entries),
+                || decode_independent_cache_parts(sections, delays.independent),
             )
         },
-        || decode_source_sections(&sections.source_entries, &functions),
     );
-    let sources = sources?;
-    let snapshot = snapshot?.into_snapshot(manifest)?;
-    let source_chunks = source_chunks?;
-    let mut entries = Vec::with_capacity(source_chunks.iter().map(Vec::len).sum());
-    for mut chunk in source_chunks {
-        entries.append(&mut chunk);
-    }
+    let (manifest, sources) = manifest_and_sources?;
+    let (functions, entries) = functions_and_entries?;
+    let IndependentCacheParts {
+        metadata,
+        globals,
+        incremental_cache_keys,
+        project_data,
+        fingerprints,
+        snapshot,
+        diagnostics,
+    } = independent?;
+    let snapshot = snapshot.into_snapshot(manifest)?;
     Ok(DecodedCacheParts {
         metadata,
         globals,
@@ -2015,12 +2026,106 @@ fn decode_cache_parts(sections: &CompiledCacheSections<'_>) -> Result<DecodedCac
     })
 }
 
+fn decode_manifest_and_sources(
+    sections: &CompiledCacheSections<'_>,
+    delay: std::time::Duration,
+) -> Result<(ProjectManifest, Vec<SourceRecord>), String> {
+    let mut manifest =
+        decode_manifest_section(&sections.manifest, sections.identity.project_revision)
+            .map_err(|error| format!("manifest section: {error}"))?;
+    if project_identity(&manifest) != sections.identity {
+        return Err("project file identity does not match its embedded manifest".into());
+    }
+    apply_journal(&mut manifest, &sections.configuration_journal)?;
+    cache_decode_delay(delay);
+    let sources =
+        if sections.kind == ProjectContainerKind::CompiledCache && sections.version == VERSION {
+            decode_compact_source_record_section(&sections.sources, &manifest)
+        } else {
+            decode_source_record_section(&sections.sources, &manifest)
+        }
+        .map_err(|error| format!("source-record section: {error}"))?;
+    Ok((manifest, sources))
+}
+
+fn decode_functions_and_entries(
+    sections: &CompiledCacheSections<'_>,
+    delay: std::time::Duration,
+) -> Result<(Vec<BytecodeFunction>, Vec<SourceMapEntry>), String> {
+    let functions = decode_function_sections(&sections.functions)?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    cache_decode_delay(delay);
+    let entries = decode_source_sections(&sections.source_entries, &functions)?
+        .into_iter()
+        .flatten()
+        .collect();
+    Ok((functions, entries))
+}
+
+fn decode_independent_cache_parts(
+    sections: &CompiledCacheSections<'_>,
+    delay: std::time::Duration,
+) -> Result<IndependentCacheParts, String> {
+    cache_decode_delay(delay);
+    let ((metadata, globals), (diagnostics, snapshot)) = rayon::join(
+        || {
+            rayon::join(
+                || decode_named_section("metadata", &sections.metadata),
+                || decode_named_section("globals", &sections.globals),
+            )
+        },
+        || {
+            rayon::join(
+                || decode_named_section("diagnostics", &sections.diagnostics),
+                || decode_named_section("snapshot", &sections.snapshot),
+            )
+        },
+    );
+    let ((incremental_cache_keys, project_data), fingerprints) = rayon::join(
+        || {
+            rayon::join(
+                || {
+                    decode_incremental_section(&sections.incremental)
+                        .map_err(|error| format!("incremental section: {error}"))
+                },
+                || decode_named_section("project-data", &sections.project_data),
+            )
+        },
+        || {
+            decode_digest_section(&sections.fingerprints)
+                .map_err(|error| format!("fingerprint section: {error}"))
+        },
+    );
+    Ok(IndependentCacheParts {
+        metadata: metadata?,
+        globals: globals?,
+        incremental_cache_keys: incremental_cache_keys?,
+        project_data: project_data?,
+        fingerprints: fingerprints?,
+        snapshot: snapshot?,
+        diagnostics: diagnostics?,
+    })
+}
+
+fn decode_named_section<T>(name: &str, section: &EncodedSectionRef<'_>) -> Result<T, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    decode_section(section).map_err(|error| format!("{name} section: {error}"))
+}
+
 fn decode_function_sections(
     sections: &[EncodedSectionRef<'_>],
 ) -> Result<Vec<Vec<BytecodeFunction>>, String> {
     sections
         .par_iter()
-        .map(decode_section::<Vec<BytecodeFunction>>)
+        .enumerate()
+        .map(|(index, section)| {
+            decode_section::<Vec<BytecodeFunction>>(section)
+                .map_err(|error| format!("function section {index}: {error}"))
+        })
         .collect()
 }
 
@@ -2030,7 +2135,11 @@ fn decode_source_sections(
 ) -> Result<Vec<Vec<SourceMapEntry>>, String> {
     sections
         .par_iter()
-        .map(|section| decode_source_section(section, functions))
+        .enumerate()
+        .map(|(index, section)| {
+            decode_source_section(section, functions)
+                .map_err(|error| format!("source-entry section {index}: {error}"))
+        })
         .collect()
 }
 

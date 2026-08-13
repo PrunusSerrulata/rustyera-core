@@ -164,6 +164,123 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     );
 }
 
+fn small_compiled_cache() -> Vec<u8> {
+    let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    encode_compiled_cache_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap()
+}
+
+#[test]
+fn parallel_cache_decode_reports_failures_in_dependency_order() {
+    static INVALID_SECTION: [u8; 1] = [0xff];
+    let bytes = small_compiled_cache();
+    let invalid = || EncodedSectionRef {
+        decoded_length: 1,
+        compressed: &INVALID_SECTION,
+    };
+
+    for _ in 0..16 {
+        let mut sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
+        sections.manifest = invalid();
+        sections.metadata = invalid();
+        let Err(error) = decode_cache_parts(&sections) else {
+            panic!("corrupt manifest unexpectedly decoded");
+        };
+        assert!(
+            error.starts_with("manifest section:"),
+            "manifest dependency must win independently of task completion order"
+        );
+
+        let mut sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
+        sections.sources = invalid();
+        sections.metadata = invalid();
+        let Err(error) = decode_cache_parts(&sections) else {
+            panic!("corrupt source records unexpectedly decoded");
+        };
+        assert!(
+            error.starts_with("source-record section:"),
+            "source records must win over independent sections"
+        );
+
+        let mut sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
+        assert!(!sections.functions.is_empty());
+        sections.functions[0] = invalid();
+        sections.metadata = invalid();
+        let Err(error) = decode_cache_parts(&sections) else {
+            panic!("corrupt function section unexpectedly decoded");
+        };
+        assert!(
+            error.starts_with("function section 0:"),
+            "function dependencies must win over independent sections"
+        );
+    }
+}
+
+#[test]
+fn source_sections_decode_without_an_independent_section_barrier() {
+    let bytes = small_compiled_cache();
+    let sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(3)
+        .build()
+        .unwrap();
+    let started = std::time::Instant::now();
+    pool.install(|| {
+        decode_cache_parts_with_delays(
+            &sections,
+            CacheDecodeDelays {
+                source_records: std::time::Duration::from_millis(250),
+                source_entries: std::time::Duration::from_millis(250),
+                independent: std::time::Duration::from_millis(250),
+            },
+        )
+        .unwrap();
+    });
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(425),
+        "source decoding waited for the independent section group"
+    );
+}
+
+#[test]
+fn cache_decode_reports_structured_stage_boundaries() {
+    let bytes = small_compiled_cache();
+    let reports = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = Arc::clone(&reports);
+    let reporter = crate::ProjectProgressReporter::new(move |progress| {
+        observed.lock().unwrap().push(progress);
+    });
+
+    decode_with_progress(&bytes, bytes.len(), Some(&reporter)).unwrap();
+
+    let reports = reports.lock().unwrap();
+    let expected = [
+        crate::ProjectProgressStage::CacheParsing,
+        crate::ProjectProgressStage::CacheDecoding,
+        crate::ProjectProgressStage::CacheValidating,
+    ];
+    for stage in expected {
+        let stage_reports = reports
+            .iter()
+            .filter(|progress| progress.stage == stage)
+            .collect::<Vec<_>>();
+        assert_eq!(stage_reports.len(), 2, "{stage:?}");
+        assert_eq!(stage_reports[0].completed, 0);
+        assert_eq!(stage_reports[1].completed, 1);
+        assert_eq!(stage_reports[1].total, 1);
+    }
+}
+
 #[test]
 fn native_tui_and_cooperative_browser_caches_are_byte_identical() {
     let mut initial = manifest("@SYSTEM_TITLE\nPRINTL cache v1\nRETURN\n", 1);
@@ -243,6 +360,45 @@ fn native_tui_and_cooperative_browser_caches_are_byte_identical() {
         decoded.snapshot.manifest.project_revision,
         COMPILED_CACHE_PROJECT_REVISION
     );
+}
+
+#[test]
+fn single_and_multi_threaded_builds_are_byte_identical() {
+    let mut source = "@SYSTEM_TITLE\nRETURN\n".to_owned();
+    for index in 0..256 {
+        writeln!(source, "@IDENTITY_{index}\nPRINTL {index}\nRETURN").unwrap();
+    }
+    let project = manifest(&source, 1);
+    let build = |threads| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut build = crate::project::build_project(&project, None);
+                assert!(build.report.success, "{:?}", build.report.diagnostics);
+                build.incremental.compact();
+                let artifact = build.artifact.as_ref().unwrap();
+                let bytes = encode_compiled_cache_for_test(
+                    &project,
+                    &[],
+                    artifact,
+                    &build.incremental,
+                    build.snapshot.as_ref().unwrap(),
+                    &build.report.diagnostics,
+                )
+                .unwrap();
+                (
+                    artifact.artifact().manifest.program_version.execution_id,
+                    artifact.artifact().manifest.artifact_id,
+                    artifact.artifact().source_map.clone(),
+                    build.report.diagnostics,
+                    bytes,
+                )
+            })
+    };
+
+    assert_eq!(build(1), build(4));
 }
 
 #[test]

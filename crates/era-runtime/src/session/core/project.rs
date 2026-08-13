@@ -795,15 +795,19 @@ impl RuntimeSession {
             usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
         let mut cache_warning = None;
         let cached =
-            cache_bytes.and_then(
-                |bytes| match crate::compiled_cache::decode(bytes, maximum) {
+            cache_bytes.and_then(|bytes| {
+                match crate::compiled_cache::decode_with_progress(
+                    bytes,
+                    maximum,
+                    self.project_progress_reporter.as_ref(),
+                ) {
                     Ok(value) => Some(value),
                     Err(error) => {
                         cache_warning = Some(error);
                         None
                     }
-                },
-            );
+                }
+            });
         let expected_key =
             crate::compiled_cache::project_key(&request.identity, &self.extension_declarations);
         let mut build = match cached {

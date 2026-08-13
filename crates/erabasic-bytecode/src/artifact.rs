@@ -1,4 +1,5 @@
 use erabasic_data::ProjectData;
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -181,22 +182,23 @@ pub struct BytecodeArtifact {
 impl BytecodeArtifact {
     /// Canonical ordering is part of the compiler ABI and is applied before hashing.
     pub fn canonicalize(&mut self) {
-        self.manifest.required_features.sort();
+        sort_if_needed_by_key(&mut self.manifest.required_features, Clone::clone);
         self.manifest.required_features.dedup();
-        self.globals.sort_by_key(|global| global.key);
-        self.native_imports.sort_by_key(|import| import.import.key);
-        self.host_imports.sort_by_key(|import| import.import.key);
-        self.functions.sort_by_key(|function| function.key);
+        sort_if_needed_by_key(&mut self.globals, |global| global.key);
+        sort_if_needed_by_key(&mut self.native_imports, |import| import.import.key);
+        sort_if_needed_by_key(&mut self.host_imports, |import| import.import.key);
+        sort_if_needed_by_key(&mut self.functions, |function| function.key);
         for function in &mut self.functions {
-            function
-                .labels
-                .sort_by_key(|label| (label.name.to_ascii_uppercase(), label.name.clone()));
+            sort_if_needed_by_key(&mut function.labels, |label| {
+                (label.name.to_ascii_uppercase(), label.name.clone())
+            });
         }
-        self.event_groups
-            .sort_by_key(|group| (group.name.to_ascii_uppercase(), group.name.clone()));
-        self.source_map
-            .entries
-            .sort_by_key(|entry| (entry.function, entry.code_start, entry.code_end));
+        sort_if_needed_by_key(&mut self.event_groups, |group| {
+            (group.name.to_ascii_uppercase(), group.name.clone())
+        });
+        sort_if_needed_by_key(&mut self.source_map.entries, |entry| {
+            (entry.function, entry.code_start, entry.code_end)
+        });
     }
 
     /// Recompute execution and artifact identities after canonical ordering.
@@ -206,37 +208,101 @@ impl BytecodeArtifact {
     /// Returns an error if one of the canonical section values cannot be encoded.
     pub fn refresh_ids(&mut self) -> Result<(), serde_json::Error> {
         self.canonicalize();
-        let versions = canonical_digest(
-            "rustyera.bytecode.identity.versions.v2",
-            &(
-                self.manifest.isa_version,
-                self.manifest.compiler_abi,
-                self.manifest.native_abi,
-                self.manifest.program_version.vm_abi,
-                self.manifest.program_version.host_abi,
-                &self.manifest.compiler_options,
-                &self.manifest.required_features,
-            ),
-        )?;
-        let project =
-            canonical_digest("rustyera.bytecode.identity.project.v2", &self.project_data)?;
-        let globals = canonical_digest("rustyera.bytecode.identity.globals.v2", &self.globals)?;
-        let native =
-            canonical_digest("rustyera.bytecode.identity.native.v2", &self.native_imports)?;
-        let host = canonical_digest("rustyera.bytecode.identity.host.v2", &self.host_imports)?;
-        let functions = parallel_binary_digest(
-            "rustyera.bytecode.identity.functions.v4",
-            "rustyera.bytecode.identity.function-chunk.v4",
-            &self.functions,
-            256,
-            encode_function_chunk,
+        let execution_id = self.execution_identity()?;
+        self.manifest.program_version.execution_id = execution_id;
+        let sources = self.source_identity()?;
+        self.manifest.artifact_id = Digest::hash(
+            "rustyera.bytecode.artifact.v2",
+            &[&execution_id.0, &sources.0],
         );
-        let events = canonical_digest("rustyera.bytecode.identity.events.v2", &self.event_groups)?;
-        let call_compatibility = canonical_digest(
-            "rustyera.bytecode.identity.call-compatibility.v2",
-            &self.call_compatibility,
-        )?;
-        let execution_id = Digest::hash(
+        Ok(())
+    }
+
+    fn execution_identity(&self) -> Result<Digest, serde_json::Error> {
+        let (left, right) = identity_join(
+            || {
+                identity_join(
+                    || {
+                        identity_join(
+                            || self.versions_identity(),
+                            || {
+                                canonical_digest(
+                                    "rustyera.bytecode.identity.project.v2",
+                                    &self.project_data,
+                                )
+                            },
+                        )
+                    },
+                    || {
+                        identity_join(
+                            || {
+                                canonical_digest(
+                                    "rustyera.bytecode.identity.globals.v2",
+                                    &self.globals,
+                                )
+                            },
+                            || {
+                                canonical_digest(
+                                    "rustyera.bytecode.identity.native.v2",
+                                    &self.native_imports,
+                                )
+                            },
+                        )
+                    },
+                )
+            },
+            || {
+                identity_join(
+                    || {
+                        identity_join(
+                            || {
+                                canonical_digest(
+                                    "rustyera.bytecode.identity.host.v2",
+                                    &self.host_imports,
+                                )
+                            },
+                            || {
+                                parallel_binary_digest(
+                                    "rustyera.bytecode.identity.functions.v4",
+                                    "rustyera.bytecode.identity.function-chunk.v4",
+                                    &self.functions,
+                                    256,
+                                    encode_function_chunk,
+                                )
+                            },
+                        )
+                    },
+                    || {
+                        identity_join(
+                            || {
+                                canonical_digest(
+                                    "rustyera.bytecode.identity.events.v2",
+                                    &self.event_groups,
+                                )
+                            },
+                            || {
+                                canonical_digest(
+                                    "rustyera.bytecode.identity.call-compatibility.v2",
+                                    &self.call_compatibility,
+                                )
+                            },
+                        )
+                    },
+                )
+            },
+        );
+        let ((versions, project), (globals, native)) = left;
+        let ((host, functions), (events, call_compatibility)) = right;
+        let (versions, project, globals, native, host, events, call_compatibility) = (
+            versions?,
+            project?,
+            globals?,
+            native?,
+            host?,
+            events?,
+            call_compatibility?,
+        );
+        Ok(Digest::hash(
             "rustyera.bytecode.execution.v2",
             &[
                 &versions.0,
@@ -248,43 +314,74 @@ impl BytecodeArtifact {
                 &events.0,
                 &call_compatibility.0,
             ],
-        );
-        self.manifest.program_version.execution_id = execution_id;
+        ))
+    }
 
-        let source_records = canonical_digest(
-            "rustyera.bytecode.identity.source-records.v3",
-            &self.source_map.sources,
-        )?;
-        let statement_fingerprints = binary_digest_sequence(
-            "rustyera.bytecode.identity.statement-fingerprints.v4",
-            &self.source_map.statement_fingerprints,
+    fn versions_identity(&self) -> Result<Digest, serde_json::Error> {
+        canonical_digest(
+            "rustyera.bytecode.identity.versions.v2",
+            &(
+                self.manifest.isa_version,
+                self.manifest.compiler_abi,
+                self.manifest.native_abi,
+                self.manifest.program_version.vm_abi,
+                self.manifest.program_version.host_abi,
+                &self.manifest.compiler_options,
+                &self.manifest.required_features,
+            ),
+        )
+    }
+
+    fn source_identity(&self) -> Result<Digest, serde_json::Error> {
+        let (source_records, (statement_fingerprints, source_entries)) = identity_join(
+            || {
+                canonical_digest(
+                    "rustyera.bytecode.identity.source-records.v3",
+                    &self.source_map.sources,
+                )
+            },
+            || {
+                identity_join(
+                    || {
+                        binary_digest_sequence(
+                            "rustyera.bytecode.identity.statement-fingerprints.v4",
+                            &self.source_map.statement_fingerprints,
+                        )
+                    },
+                    || {
+                        parallel_binary_digest(
+                            "rustyera.bytecode.identity.source-entries.v4",
+                            "rustyera.bytecode.identity.source-entry-chunk.v4",
+                            &self.source_map.entries,
+                            65_536,
+                            encode_source_entry_chunk,
+                        )
+                    },
+                )
+            },
         );
-        let source_entries = parallel_binary_digest(
-            "rustyera.bytecode.identity.source-entries.v4",
-            "rustyera.bytecode.identity.source-entry-chunk.v4",
-            &self.source_map.entries,
-            65_536,
-            encode_source_entry_chunk,
-        );
-        let sources = Digest::hash(
+        let source_records = source_records?;
+        Ok(Digest::hash(
             "rustyera.bytecode.identity.sources.v4",
             &[
                 &source_records.0,
                 &statement_fingerprints.0,
                 &source_entries.0,
             ],
-        );
-        self.manifest.artifact_id = Digest::hash(
-            "rustyera.bytecode.artifact.v2",
-            &[&execution_id.0, &sources.0],
-        );
-        Ok(())
+        ))
     }
 
     #[must_use]
     pub fn into_unvalidated(self) -> UnvalidatedArtifact {
         UnvalidatedArtifact(self)
     }
+}
+
+fn sort_if_needed_by_key<T, K: Ord>(values: &mut [T], key: impl Fn(&T) -> K + Copy) {
+    if values.windows(2).all(|pair| key(&pair[0]) <= key(&pair[1])) {
+        return;
+    }
+    values.sort_by_key(key);
 }
 
 fn canonical_digest<T: Serialize + ?Sized>(
@@ -298,6 +395,24 @@ fn canonical_digest<T: Serialize + ?Sized>(
     Ok(Digest(*writer.hasher.finalize().as_bytes()))
 }
 
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+fn identity_join<A, B, RA: Send, RB: Send>(left: A, right: B) -> (RA, RB)
+where
+    A: FnOnce() -> RA + Send,
+    B: FnOnce() -> RB + Send,
+{
+    rayon::join(left, right)
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+fn identity_join<A, B, RA, RB>(left: A, right: B) -> (RA, RB)
+where
+    A: FnOnce() -> RA,
+    B: FnOnce() -> RB,
+{
+    (left(), right())
+}
+
 fn parallel_binary_digest<T: Sync>(
     domain: &str,
     chunk_domain: &str,
@@ -305,8 +420,18 @@ fn parallel_binary_digest<T: Sync>(
     chunk_size: usize,
     encode_chunk: fn(&[T], &mut Vec<u8>),
 ) -> Digest {
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     let chunks = values
         .par_chunks(chunk_size)
+        .map(|chunk| {
+            let mut encoded = Vec::new();
+            encode_chunk(chunk, &mut encoded);
+            Digest::hash(chunk_domain, &[&encoded])
+        })
+        .collect::<Vec<_>>();
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    let chunks = values
+        .chunks(chunk_size)
         .map(|chunk| {
             let mut encoded = Vec::new();
             encode_chunk(chunk, &mut encoded);
@@ -323,6 +448,55 @@ fn binary_digest_sequence(domain: &str, values: &[Digest]) -> Digest {
         encoded.extend_from_slice(&value.0);
     }
     Digest::hash(domain, &[&encoded])
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    fn encode_u64_chunk(values: &[u64], output: &mut Vec<u8>) {
+        append_length(output, values.len());
+        for value in values {
+            output.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn parallel_binary_identity_preserves_serial_chunk_order() {
+        let values = (0_u64..10_003).rev().collect::<Vec<_>>();
+        let parallel = parallel_binary_digest(
+            "test.sequence",
+            "test.chunk",
+            &values,
+            127,
+            encode_u64_chunk,
+        );
+        let serial_chunks = values
+            .chunks(127)
+            .map(|chunk| {
+                let mut encoded = Vec::new();
+                encode_u64_chunk(chunk, &mut encoded);
+                Digest::hash("test.chunk", &[&encoded])
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            parallel,
+            binary_digest_sequence("test.sequence", &serial_chunks)
+        );
+    }
+
+    #[test]
+    fn ordered_canonicalization_is_idempotent() {
+        let mut values = vec![(1_u8, "a"), (2, "b"), (3, "c")];
+        sort_if_needed_by_key(&mut values, |value| value.0);
+        let once = values.clone();
+        sort_if_needed_by_key(&mut values, |value| value.0);
+        assert_eq!(values, once);
+
+        values.swap(0, 2);
+        sort_if_needed_by_key(&mut values, |value| value.0);
+        assert_eq!(values, once);
+    }
 }
 
 /// Canonical binary identity encoding for the bytecode section.

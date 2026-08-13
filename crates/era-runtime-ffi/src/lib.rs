@@ -5,7 +5,7 @@
 
 use std::ffi::{c_char, c_void};
 
-pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 7 };
+pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 8 };
 pub const ERA_RUNTIME_GET_API_SYMBOL: &str = "era_runtime_get_api";
 
 pub const ERA_DEBUG_SCOPE_VARIABLES_READ: u64 = 1 << 0;
@@ -155,6 +155,9 @@ pub enum EraProjectProgressStage {
     Finalizing = 7,
     Preparing = 8,
     Packaging = 9,
+    CacheParsing = 10,
+    CacheDecoding = 11,
+    CacheValidating = 12,
 }
 
 #[repr(C)]
@@ -200,6 +203,8 @@ pub type EraFunctionPointer = *const c_void;
 /// successful commit writes the transfer ID.
 /// `reserved[6]` in ABI 3.6 prepares an append-only project-configuration journal record. Its
 /// owned output starts with the little-endian `u64` truncation offset followed by bytes to append.
+/// `reserved[7]` in ABI 3.8 stages one CBOR-encoded project manifest for the next source-only
+/// project-load command. The implementation copies and decodes the input before returning.
 #[repr(C)]
 pub struct EraRuntimeApi {
     pub struct_size: u32,

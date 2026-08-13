@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.7`、公共信封 `2.0`、Runtime 协议 `30.0`。源码入口：
+> C ABI `3.8`、公共信封 `2.0`、Runtime 协议 `30.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -18,7 +18,7 @@
 
 | 层 | 当前稳定性 | 用途 |
 | --- | --- | --- |
-| C ABI 3.7 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
+| C ABI 3.8 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
 | Runtime 协议 30.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
@@ -87,7 +87,7 @@ get_api → create → ClientHello → ServerHello
                                                 destroy
 ```
 
-## 3. C ABI 3.7
+## 3. C ABI 3.8
 
 ### 3.1 数据结构
 
@@ -185,7 +185,11 @@ create=`EraCreateOptions`，drive=`EraDriveOptions`，poll/release/last-error=
   `.reraproj`、`reraconfig.toml` 的乐观锁摘要和新 TOML，返回一个 runtime-owned buffer：
   前 8 字节是小端 `u64` 截断位置，余下字节是应追加的紧凑配置事务记录。前端先把中断写入
   留下的不完整尾部截断到该位置，再追加余下字节并持久化；无需重新生成项目主体。完整记录
-  带前置配置摘要、结果摘要和校验和，加载时按序验证。该入口不执行文件 I/O。
+  带前置配置摘要、结果摘要和校验和，加载时按序验证。该入口不执行文件 I/O；
+- ABI 3.8 的 `reserved[7]` 是 `EraSessionStageProjectManifestFn`。它在调用返回前复制并
+  解码一份确定性 CBOR `ProjectManifest`，暂存给紧随其后的源码项目加载请求。加载请求仍
+  通过公共协议提交身份与顺序，暂存入口不推进 Runtime；旧前端或旧动态库继续使用把 manifest
+  放入 `ProjectLoad` 的既有路径。
 
 项目进度阶段的 C ABI 数值保持追加兼容：`SCANNING` 至 `VALIDATING` 为 0–6，ABI 3.3
 追加的 `FINALIZING = 7` 表示函数编译完成后的缓存合并、源码映射整理、结构验证与身份计算；

@@ -10,7 +10,7 @@ use std::ffi::{c_char, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Mutex, OnceLock};
 
-use era_protocol::SessionId;
+use era_protocol::{SessionId, decode_canonical};
 use era_runtime::{
     ProjectProgressReporter, ProjectProgressStage, RuntimeDriveBudget, RuntimeDriveState,
     RuntimeOptions, RuntimeSession,
@@ -83,6 +83,7 @@ pub unsafe extern "C" fn era_runtime_get_api(
         reserved[4] = session_allocate_compiled_cache as *const () as *mut c_void;
         reserved[5] = session_commit_compiled_cache as *const () as *mut c_void;
         reserved[6] = prepare_project_configuration_update as *const () as *mut c_void;
+        reserved[7] = session_stage_project_manifest as *const () as *mut c_void;
         let api = EraRuntimeApi {
             struct_size: u32::try_from(std::mem::size_of::<EraRuntimeApi>()).unwrap_or(u32::MAX),
             abi_version: ERA_RUNTIME_ABI_VERSION,
@@ -101,6 +102,63 @@ pub unsafe extern "C" fn era_runtime_get_api(
         // for one complete EraRuntimeApi value.
         unsafe { out_api.write(api) };
         EraStatus::Ok
+    })
+}
+
+extern "C" fn session_stage_project_manifest(
+    header: EraCallHeader,
+    handle: EraSessionHandle,
+    input: EraByteSlice,
+) -> EraStatus {
+    ffi_status(|| {
+        if !valid_header::<EraCallHeader>(header) || invalid_byte_slice(input) {
+            return EraStatus::InvalidArgument;
+        }
+        let maximum_bytes = {
+            let registry = lock_registry();
+            let Some(record) = registry.sessions.get(&handle.value) else {
+                return EraStatus::InvalidHandle;
+            };
+            usize::try_from(record.runtime.maximum_transfer_bytes()).unwrap_or(usize::MAX)
+        };
+        if input.len > maximum_bytes {
+            if let Some(record) = lock_registry().sessions.get_mut(&handle.value) {
+                record.last_error = "project manifest exceeds the negotiated transfer limit".into();
+            }
+            return EraStatus::ResourceLimit;
+        }
+        let bytes = if input.len == 0 {
+            &[]
+        } else {
+            // SAFETY: the pointer/length pair was validated and is borrowed only while this
+            // synchronous entry point decodes the manifest.
+            unsafe { std::slice::from_raw_parts(input.data, input.len) }
+        };
+        let manifest = match decode_canonical(bytes) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                if let Some(record) = lock_registry().sessions.get_mut(&handle.value) {
+                    record.last_error = error.to_string();
+                    return EraStatus::InvalidArgument;
+                }
+                return EraStatus::InvalidHandle;
+            }
+        };
+        let mut registry = lock_registry();
+        let Some(record) = registry.sessions.get_mut(&handle.value) else {
+            return EraStatus::InvalidHandle;
+        };
+        match record.runtime.stage_project_manifest(manifest) {
+            Ok(()) => EraStatus::Ok,
+            Err(era_runtime::RuntimeError::Busy(message)) => {
+                record.last_error = message.into();
+                EraStatus::Busy
+            }
+            Err(error) => {
+                record.last_error = error.to_string();
+                EraStatus::InternalError
+            }
+        }
     })
 }
 
@@ -435,6 +493,9 @@ const fn project_progress_stage(stage: ProjectProgressStage) -> EraProjectProgre
         ProjectProgressStage::Finalizing => EraProjectProgressStage::Finalizing,
         ProjectProgressStage::Preparing => EraProjectProgressStage::Preparing,
         ProjectProgressStage::Packaging => EraProjectProgressStage::Packaging,
+        ProjectProgressStage::CacheParsing => EraProjectProgressStage::CacheParsing,
+        ProjectProgressStage::CacheDecoding => EraProjectProgressStage::CacheDecoding,
+        ProjectProgressStage::CacheValidating => EraProjectProgressStage::CacheValidating,
     }
 }
 
@@ -743,6 +804,7 @@ mod tests {
         assert!(!api.reserved[4].is_null());
         assert!(!api.reserved[5].is_null());
         assert!(!api.reserved[6].is_null());
+        assert!(!api.reserved[7].is_null());
     }
 
     #[test]
@@ -922,6 +984,125 @@ mod tests {
             EraStatus::Ok
         );
         assert_ne!(transfer_id, 0);
+        assert_eq!(
+            session_destroy(EraCallHeader::for_type::<EraCallHeader>(), handle),
+            EraStatus::Ok
+        );
+    }
+
+    #[test]
+    fn c_boundary_stages_one_cbor_project_manifest_without_an_envelope() {
+        let options = EraCreateOptions::default();
+        let mut handle = EraSessionHandle::default();
+        assert_eq!(
+            session_create(options.header, &raw const options, &raw mut handle),
+            EraStatus::Ok
+        );
+        // { 0: project_revision = 1, 1: files = [] }
+        let manifest = [0xa2_u8, 0x00, 0x01, 0x01, 0x80];
+        let input = EraByteSlice {
+            data: manifest.as_ptr(),
+            len: manifest.len(),
+        };
+        assert_eq!(
+            session_stage_project_manifest(
+                EraCallHeader::for_type::<EraCallHeader>(),
+                handle,
+                input,
+            ),
+            EraStatus::Ok
+        );
+        assert_eq!(
+            session_stage_project_manifest(
+                EraCallHeader::for_type::<EraCallHeader>(),
+                handle,
+                input,
+            ),
+            EraStatus::Busy
+        );
+        assert_eq!(
+            session_destroy(EraCallHeader::for_type::<EraCallHeader>(), handle),
+            EraStatus::Ok
+        );
+    }
+
+    #[test]
+    fn project_manifest_staging_validates_handle_and_limit_before_reading_input() {
+        let dangling = EraByteSlice {
+            data: std::ptr::dangling(),
+            len: usize::MAX,
+        };
+        assert_eq!(
+            session_stage_project_manifest(
+                EraCallHeader::for_type::<EraCallHeader>(),
+                EraSessionHandle { value: u64::MAX },
+                dangling,
+            ),
+            EraStatus::InvalidHandle
+        );
+        let options = EraCreateOptions::default();
+        let mut handle = EraSessionHandle::default();
+        assert_eq!(
+            session_create(options.header, &raw const options, &raw mut handle),
+            EraStatus::Ok
+        );
+        assert_eq!(
+            session_stage_project_manifest(
+                EraCallHeader::for_type::<EraCallHeader>(),
+                handle,
+                dangling,
+            ),
+            EraStatus::ResourceLimit
+        );
+        assert_eq!(
+            session_destroy(EraCallHeader::for_type::<EraCallHeader>(), handle),
+            EraStatus::Ok
+        );
+    }
+
+    #[test]
+    fn project_manifest_staging_rejects_noncanonical_or_malformed_cbor() {
+        let options = EraCreateOptions::default();
+        let mut handle = EraSessionHandle::default();
+        assert_eq!(
+            session_create(options.header, &raw const options, &raw mut handle),
+            EraStatus::Ok
+        );
+        let invalid = [
+            // A legal manifest followed by a trailing data item.
+            vec![0xa2, 0x00, 0x01, 0x01, 0x80, 0x00],
+            // project_revision=1 encoded with a non-minimal integer width.
+            vec![0xa2, 0x00, 0x18, 0x01, 0x01, 0x80],
+            // Canonical fields in descending rather than bytewise key order.
+            vec![0xa2, 0x01, 0x80, 0x00, 0x01],
+            // Truncated files array.
+            vec![0xa2, 0x00, 0x01, 0x01, 0x81],
+        ];
+        for bytes in invalid {
+            assert_eq!(
+                session_stage_project_manifest(
+                    EraCallHeader::for_type::<EraCallHeader>(),
+                    handle,
+                    EraByteSlice {
+                        data: bytes.as_ptr(),
+                        len: bytes.len(),
+                    },
+                ),
+                EraStatus::InvalidArgument
+            );
+        }
+        let manifest = [0xa2_u8, 0x00, 0x01, 0x01, 0x80];
+        assert_eq!(
+            session_stage_project_manifest(
+                EraCallHeader::for_type::<EraCallHeader>(),
+                handle,
+                EraByteSlice {
+                    data: manifest.as_ptr(),
+                    len: manifest.len(),
+                },
+            ),
+            EraStatus::Ok
+        );
         assert_eq!(
             session_destroy(EraCallHeader::for_type::<EraCallHeader>(), handle),
             EraStatus::Ok

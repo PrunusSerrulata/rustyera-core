@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define ERA_RUNTIME_ABI_MAJOR 3u
-#define ERA_RUNTIME_ABI_MINOR 7u
+#define ERA_RUNTIME_ABI_MINOR 8u
 
 #define ERA_DEBUG_SCOPE_VARIABLES_READ (UINT64_C(1) << 0)
 #define ERA_DEBUG_SCOPE_VARIABLES_WRITE (UINT64_C(1) << 1)
@@ -79,7 +79,10 @@ typedef enum EraProjectProgressStage {
     ERA_PROJECT_PROGRESS_VALIDATING = 6,
     ERA_PROJECT_PROGRESS_FINALIZING = 7,
     ERA_PROJECT_PROGRESS_PREPARING = 8,
-    ERA_PROJECT_PROGRESS_PACKAGING = 9
+    ERA_PROJECT_PROGRESS_PACKAGING = 9,
+    ERA_PROJECT_PROGRESS_CACHE_PARSING = 10,
+    ERA_PROJECT_PROGRESS_CACHE_DECODING = 11,
+    ERA_PROJECT_PROGRESS_CACHE_VALIDATING = 12
 } EraProjectProgressStage;
 
 typedef struct EraProjectProgress {
@@ -110,6 +113,8 @@ typedef EraStatus (*EraSessionAllocateCompiledCacheFn)(EraCallHeader, EraSession
                                                         size_t, EraOwnedBuffer *);
 typedef EraStatus (*EraSessionCommitCompiledCacheFn)(EraCallHeader, EraSessionHandle,
                                                       EraOwnedBuffer, uint64_t *);
+typedef EraStatus (*EraSessionStageProjectManifestFn)(EraCallHeader, EraSessionHandle,
+                                                       EraByteSlice);
 
 typedef EraStatus (*EraSessionCreateFn)(EraCallHeader, const EraCreateOptions *, EraSessionHandle *);
 typedef EraStatus (*EraSessionSubmitFn)(EraCallHeader, EraSessionHandle, EraByteSlice);
@@ -137,7 +142,8 @@ typedef struct EraRuntimeApi {
        ABI 3.4: reserved[3] is EraSessionStageCompiledCacheFn.
        ABI 3.5: reserved[4] is EraSessionAllocateCompiledCacheFn and reserved[5] is
                 EraSessionCommitCompiledCacheFn.
-       ABI 3.6: reserved[6] is EraPrepareProjectConfigurationUpdateFn. */
+       ABI 3.6: reserved[6] is EraPrepareProjectConfigurationUpdateFn.
+       ABI 3.8: reserved[7] is EraSessionStageProjectManifestFn. */
     void *reserved[8];
 } EraRuntimeApi;
 
