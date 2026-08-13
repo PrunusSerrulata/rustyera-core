@@ -9,6 +9,12 @@ use crate::{
     tables::at_line,
 };
 
+mod value;
+
+use value::{
+    character_csv_number, duplicate_field, equal_keyword, index_out_of_range, parse_era_integer,
+};
+
 pub(crate) fn load_characters(
     files: &FileIndex,
     schema: &ProjectSchema,
@@ -394,60 +400,6 @@ fn resolve_character_index(
     Some(index)
 }
 
-fn parse_era_integer(value: &str) -> Option<i64> {
-    let mut value = value;
-    let mut sign = 1_i64;
-    if let Some(rest) = value.strip_prefix('+') {
-        value = rest;
-    } else if let Some(rest) = value.strip_prefix('-') {
-        value = rest;
-        sign = -1;
-    }
-    if let Some(hex) = value
-        .strip_prefix("0x")
-        .or_else(|| value.strip_prefix("0X"))
-    {
-        let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
-        return (!digits.is_empty())
-            .then(|| {
-                i64::from_str_radix(&digits, 16)
-                    .ok()
-                    .map(|number| number * sign)
-            })
-            .flatten();
-    }
-    if let Some(binary) = value
-        .strip_prefix("0b")
-        .or_else(|| value.strip_prefix("0B"))
-    {
-        let digits: String = binary
-            .chars()
-            .take_while(|character| matches!(character, '0' | '1'))
-            .collect();
-        return (!digits.is_empty())
-            .then(|| {
-                i64::from_str_radix(&digits, 2)
-                    .ok()
-                    .map(|number| number * sign)
-            })
-            .flatten();
-    }
-    let digits: String = value.chars().take_while(char::is_ascii_digit).collect();
-    (!digits.is_empty())
-        .then(|| digits.parse::<i64>().ok().map(|number| number * sign))
-        .flatten()
-}
-
-fn character_csv_number(path: &str) -> i64 {
-    let upper = ascii_fold(path);
-    let Some(start) = upper.find("CHARA") else {
-        return 0;
-    };
-    let suffix = &path[start + "CHARA".len()..];
-    let digits: String = suffix.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().unwrap_or(0)
-}
-
 fn diagnose_duplicate_characters(
     characters: &[CharacterTemplate],
     options: &CsvLoadOptions,
@@ -475,37 +427,4 @@ fn diagnose_duplicate_characters(
             ));
         }
     }
-}
-
-fn equal_keyword(left: &str, right: &str, ignore_case: bool) -> bool {
-    if ignore_case {
-        left.eq_ignore_ascii_case(right)
-    } else {
-        left == right
-    }
-}
-
-fn duplicate_field(
-    variable: &str,
-    index: usize,
-    line: &crate::reader::EnabledLine,
-    diagnostics: &mut Vec<CsvDiagnostic>,
-) {
-    diagnostics.push(at_line(
-        CsvDiagnosticCode::DuplicateCharacterField,
-        CsvDiagnosticSeverity::Warning,
-        1,
-        line,
-        format!("{variable}:{index} is defined more than once; the last value wins"),
-    ));
-}
-
-fn index_out_of_range(text: &str, line: &crate::reader::EnabledLine) -> CsvDiagnostic {
-    at_line(
-        CsvDiagnosticCode::IndexOutOfRange,
-        CsvDiagnosticSeverity::Warning,
-        1,
-        line,
-        format!("character array index {text:?} is out of range"),
-    )
 }
