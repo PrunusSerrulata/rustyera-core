@@ -413,16 +413,16 @@ pub struct CompileProgress {
     pub total: usize,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
 pub trait CompileProgressCallback: Fn(CompileProgress) + Sync {}
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
 impl<T> CompileProgressCallback for T where T: Fn(CompileProgress) + Sync {}
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
 pub trait CompileProgressCallback: Fn(CompileProgress) {}
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
 impl<T> CompileProgressCallback for T where T: Fn(CompileProgress) {}
 
 #[must_use]
@@ -623,7 +623,7 @@ fn compile_project_inner(
         build
     };
     let compile_functions = || {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
         {
             project
                 .program
@@ -632,7 +632,7 @@ fn compile_project_inner(
                 .map(compile_one)
                 .collect::<Vec<_>>()
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
         {
             project
                 .program
@@ -645,7 +645,7 @@ fn compile_project_inner(
     // Cache hashing and lowering are both function-local. Running them in one
     // indexed parallel iterator preserves deterministic input order while
     // avoiding a serial hashing pass before worker threads can start lowering.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     let function_builds = if let Some(jobs) = options.jobs {
         match rayon::ThreadPoolBuilder::new()
             .num_threads(jobs.max(1))
@@ -668,7 +668,7 @@ fn compile_project_inner(
     } else {
         compile_functions()
     };
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     let function_builds = compile_functions();
     compiling_progress.finish();
     let source_entry_count = function_builds
