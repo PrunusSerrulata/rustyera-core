@@ -1224,11 +1224,22 @@ fn compiled_cache_is_reused_across_configuration_profiles() {
         }],
     };
     for (producer, consumer) in [
-        (ConfigurationClientProfile::Tui, ConfigurationClientProfile::Browser),
-        (ConfigurationClientProfile::Browser, ConfigurationClientProfile::Tui),
+        (
+            ConfigurationClientProfile::Tui,
+            ConfigurationClientProfile::Browser,
+        ),
+        (
+            ConfigurationClientProfile::Browser,
+            ConfigurationClientProfile::Tui,
+        ),
     ] {
         let mut initial = crate::project::build_project_with_extensions_and_progress(
-            &manifest, None, None, &[], producer, None,
+            &manifest,
+            None,
+            None,
+            &[],
+            producer,
+            None,
         );
         assert!(initial.report.success, "{:?}", initial.report.diagnostics);
         initial.incremental.compact();
@@ -1266,11 +1277,13 @@ fn compiled_cache_is_reused_across_configuration_profiles() {
         assert!(build.report.success);
         assert!(!build.report.payload_required);
         assert_eq!(build.report.project_revision, 9);
-        assert!(build
-            .report
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "runtime.compiled_cache_hit"));
+        assert!(
+            build
+                .report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "runtime.compiled_cache_hit")
+        );
         assert_eq!(build.snapshot.unwrap().configuration_profile, consumer);
     }
 }

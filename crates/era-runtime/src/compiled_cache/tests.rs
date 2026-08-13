@@ -235,8 +235,14 @@ fn native_tui_and_cooperative_browser_caches_are_byte_identical() {
 
     assert_eq!(native, cooperative);
     let decoded = decode(&native, native.len()).unwrap();
-    assert_eq!(decoded.snapshot.configuration_profile, ConfigurationClientProfile::Reference);
-    assert_eq!(decoded.snapshot.manifest.project_revision, COMPILED_CACHE_PROJECT_REVISION);
+    assert_eq!(
+        decoded.snapshot.configuration_profile,
+        ConfigurationClientProfile::Reference
+    );
+    assert_eq!(
+        decoded.snapshot.manifest.project_revision,
+        COMPILED_CACHE_PROJECT_REVISION
+    );
 }
 
 #[test]
