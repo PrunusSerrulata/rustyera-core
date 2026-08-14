@@ -69,6 +69,9 @@ fn grapheme_width(grapheme: &str, mode: CharacterWidthMode) -> usize {
     let single_scalar_cp932 = characters.next().is_none()
         && unicode_width == 1
         && LegacyEncoding::Japanese.encoded_char_len(character) == 2;
+    // Emuera's console navigation triangles keep the half-cell advance of its UI font even
+    // though CP932 and emoji-oriented Unicode data classify them as wide symbols.
+    let narrow_navigation_triangle = matches!(character, '\u{25b6}' | '\u{25c0}');
     // Era table layouts use box-drawing characters as full console cells even for
     // variants outside CP932. Block elements are deliberately excluded: games use
     // them as half-width progress-bar segments.
@@ -76,7 +79,7 @@ fn grapheme_width(grapheme: &str, mode: CharacterWidthMode) -> usize {
     let pictographic = unicode_width == 1
         && !grapheme.contains('\u{fe0e}')
         && grapheme.chars().any(super::extended_pictographic::contains);
-    if single_scalar_cp932 || box_drawing || pictographic {
+    if !narrow_navigation_triangle && (single_scalar_cp932 || box_drawing || pictographic) {
         2
     } else {
         unicode_width
@@ -156,6 +159,7 @@ mod tests {
             ("´", 2),
             ("║", 2),
             ("▅", 1),
+            ("◀▶", 2),
             ("ﾄ", 1),
             ("｡", 1),
             ("e\u{301}", 1),
