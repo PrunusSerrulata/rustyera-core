@@ -7,7 +7,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
 use era_debug_protocol::{DebugMessage, DebugResponse, DebugScope, GrantToken, ScriptOutputChunk};
 use era_protocol::{
@@ -177,7 +179,7 @@ pub struct ProjectProgressReporter {
     #[cfg(target_arch = "wasm32")]
     gate: std::rc::Rc<std::cell::RefCell<ProjectProgressGate>>,
     #[cfg(target_arch = "wasm32")]
-    started_at: Instant,
+    elapsed: std::rc::Rc<dyn Fn() -> Duration>,
 }
 
 #[derive(Default)]
@@ -227,13 +229,33 @@ impl ProjectProgressReporter {
         }
     }
 
+    /// Create a reporter with a host clock, retaining the native monotonic clock off WebAssembly.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn new_with_elapsed(
+        callback: impl Fn(ProjectProgress) + Send + Sync + 'static,
+        _elapsed: impl Fn() -> Duration + 'static,
+    ) -> Self {
+        Self::new(callback)
+    }
+
     #[cfg(target_arch = "wasm32")]
     #[must_use]
     pub fn new(callback: impl Fn(ProjectProgress) + 'static) -> Self {
+        Self::new_with_elapsed(callback, || Duration::ZERO)
+    }
+
+    /// Create a WebAssembly reporter with a host-provided monotonic elapsed clock.
+    #[cfg(target_arch = "wasm32")]
+    #[must_use]
+    pub fn new_with_elapsed(
+        callback: impl Fn(ProjectProgress) + 'static,
+        elapsed: impl Fn() -> Duration + 'static,
+    ) -> Self {
         Self {
             callback: std::rc::Rc::new(callback),
             gate: std::rc::Rc::new(std::cell::RefCell::new(ProjectProgressGate::default())),
-            started_at: Instant::now(),
+            elapsed: std::rc::Rc::new(elapsed),
         }
     }
 
@@ -251,11 +273,7 @@ impl ProjectProgressReporter {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        if self
-            .gate
-            .borrow_mut()
-            .accepts(progress, self.started_at.elapsed())
-        {
+        if self.gate.borrow_mut().accepts(progress, (self.elapsed)()) {
             (self.callback)(progress);
         }
     }

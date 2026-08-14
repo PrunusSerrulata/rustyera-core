@@ -83,6 +83,11 @@ fn generated_configuration_can_be_confirmed_before_the_next_edit() {
         })
         .expect("version 1 project publishes upgraded configuration");
     assert!(initial.generated_source.is_some());
+    assert_eq!(
+        initial.source_digest.as_slice(),
+        blake3::hash(original.as_bytes()).as_bytes(),
+        "an existing configuration upgrade must retain its overwrite precondition",
+    );
 
     submit(
         &mut session,
