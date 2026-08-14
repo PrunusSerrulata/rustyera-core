@@ -278,7 +278,17 @@ pub(in super::super) fn execute_getnum(
     fiber: &Fiber,
     arguments: &[VmValue],
 ) -> Result<VmValue, VmError> {
-    let (_, _, _, value) = lookup_named_index(vm, fiber, arguments)?;
+    let (variable, key, program) = lookup_named_index_target(vm, fiber, arguments)?;
+    let source_dimension = named_index_dimension(arguments)?;
+    let data_dimension = if source_dimension > 0 {
+        source_dimension - 1
+    } else {
+        source_dimension
+    };
+    let Ok(data_dimension) = usize::try_from(data_dimension) else {
+        return Ok(VmValue::Integer(-1));
+    };
+    let value = resolve_named_index_value(program, &variable, &key, data_dimension);
     Ok(VmValue::Integer(value.unwrap_or(-1)))
 }
 
@@ -351,7 +361,11 @@ pub(in super::super) fn execute_index_by_name(
     fiber: &Fiber,
     arguments: &[VmValue],
 ) -> Result<VmValue, VmError> {
-    let (variable, key, dimension, value) = lookup_named_index(vm, fiber, arguments)?;
+    let (variable, key, program) = lookup_named_index_target(vm, fiber, arguments)?;
+    let dimension = named_index_dimension(arguments)?;
+    let value = usize::try_from(dimension).ok().and_then(|data_dimension| {
+        resolve_named_index_value(program, &variable, &key, data_dimension)
+    });
     let value = value.ok_or_else(|| {
         VmError::InvalidArguments(format!(
             "{variable} has no named index {key:?} in dimension {dimension}"
@@ -461,16 +475,32 @@ fn resolve_dynamic_variable_target(
                 "SETVAR target {variable_name:?} is read-only"
             )));
         }
-        let table = name_table_kind(&definition.name).and_then(|kind| {
-            program
-                .artifact
-                .project_data
-                .static_data
-                .name_tables
-                .get(&kind)
-        });
+        let components = components.collect::<Vec<_>>();
+        let explicit_character = definition.storage == BytecodeStorage::Character
+            && components.len() > definition.dimensions.len();
         let indices = components
-            .map(|component| set_var_index(table, &definition.name, component))
+            .into_iter()
+            .enumerate()
+            .map(|(position, component)| {
+                let table = if explicit_character && position == 0 {
+                    None
+                } else {
+                    let data_dimension = position.saturating_sub(usize::from(explicit_character));
+                    erabasic_data::NameTableKind::for_data_variable(
+                        &definition.name,
+                        data_dimension,
+                    )
+                    .and_then(|kind| {
+                        program
+                            .artifact
+                            .project_data
+                            .static_data
+                            .name_tables
+                            .get(&kind)
+                    })
+                };
+                set_var_index(table, &definition.name, component)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         (definition, indices)
     };
@@ -602,11 +632,21 @@ pub(in super::super) fn execute_encode_to_uni_result(
     Ok(())
 }
 
-fn lookup_named_index(
-    vm: &Vm,
+fn named_index_dimension(arguments: &[VmValue]) -> Result<i64, VmError> {
+    match arguments.get(2) {
+        None => Ok(0),
+        Some(VmValue::Integer(value)) => Ok(*value),
+        Some(_) => Err(VmError::InvalidArguments(
+            "named index dimension is not an integer".into(),
+        )),
+    }
+}
+
+fn lookup_named_index_target<'a>(
+    vm: &'a Vm,
     fiber: &Fiber,
     arguments: &[VmValue],
-) -> Result<(String, String, i64, Option<i64>), VmError> {
+) -> Result<(String, String, &'a crate::state::ProgramGeneration), VmError> {
     let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = arguments.first() else {
         return Err(VmError::InvalidArguments(
             "named index argument 1 is not a variable reference".into(),
@@ -616,15 +656,6 @@ fn lookup_named_index(
         return Err(VmError::InvalidArguments(
             "named index key is not a string".into(),
         ));
-    };
-    let dimension = match arguments.get(2) {
-        None => 0,
-        Some(VmValue::Integer(value)) => *value,
-        Some(_) => {
-            return Err(VmError::InvalidArguments(
-                "named index dimension is not an integer".into(),
-            ));
-        }
     };
     let generation = fiber.frames.last().expect("frame exists").generation;
     let program = vm
@@ -637,16 +668,16 @@ fn lookup_named_index(
         .ok_or_else(|| {
             VmError::InvalidArguments("named index variable is not project-visible".into())
         })?;
-    let value = resolve_named_index_value(program, name, key);
-    Ok((name.into(), key.clone(), dimension, value))
+    Ok((name.into(), key.clone(), program))
 }
 
 pub(in super::super) fn resolve_named_index_value(
     program: &crate::state::ProgramGeneration,
     variable: &str,
     key: &str,
+    dimension: usize,
 ) -> Option<i64> {
-    let kind = name_table_kind(variable)?;
+    let kind = erabasic_data::NameTableKind::for_data_variable(variable, dimension)?;
     program
         .artifact
         .project_data
@@ -657,47 +688,4 @@ pub(in super::super) fn resolve_named_index_value(
         .get(key)
         .copied()
         .map(i64::from)
-}
-
-fn name_table_kind(name: &str) -> Option<erabasic_data::NameTableKind> {
-    fn exact(name: &str) -> Option<erabasic_data::NameTableKind> {
-        match name {
-            "ABL" => Some(erabasic_data::NameTableKind::Abl),
-            "EXP" => Some(erabasic_data::NameTableKind::Exp),
-            "TALENT" => Some(erabasic_data::NameTableKind::Talent),
-            "PALAM" => Some(erabasic_data::NameTableKind::Palam),
-            "TRAIN" => Some(erabasic_data::NameTableKind::Train),
-            "MARK" => Some(erabasic_data::NameTableKind::Mark),
-            "ITEM" | "ITEMSALES" | "ITEMPRICE" | "ITEMNAME" => {
-                Some(erabasic_data::NameTableKind::Item)
-            }
-            "BASE" | "MAXBASE" | "LOSEBASE" | "DOWNBASE" => {
-                Some(erabasic_data::NameTableKind::Base)
-            }
-            "SOURCE" => Some(erabasic_data::NameTableKind::Source),
-            "EX" => Some(erabasic_data::NameTableKind::Ex),
-            "STR" | "STRNAME" => Some(erabasic_data::NameTableKind::Strname),
-            "EQUIP" => Some(erabasic_data::NameTableKind::Equip),
-            "TEQUIP" => Some(erabasic_data::NameTableKind::Tequip),
-            "FLAG" => Some(erabasic_data::NameTableKind::Flag),
-            "TFLAG" => Some(erabasic_data::NameTableKind::Tflag),
-            "CFLAG" => Some(erabasic_data::NameTableKind::Cflag),
-            "TCVAR" => Some(erabasic_data::NameTableKind::Tcvar),
-            "CSTR" => Some(erabasic_data::NameTableKind::Cstr),
-            "STAIN" => Some(erabasic_data::NameTableKind::Stain),
-            "TSTR" => Some(erabasic_data::NameTableKind::Tstr),
-            "SAVESTR" => Some(erabasic_data::NameTableKind::Savestr),
-            "GLOBAL" => Some(erabasic_data::NameTableKind::Global),
-            "GLOBALS" => Some(erabasic_data::NameTableKind::Globals),
-            "DAY" => Some(erabasic_data::NameTableKind::Day),
-            "TIME" => Some(erabasic_data::NameTableKind::Time),
-            "MONEY" => Some(erabasic_data::NameTableKind::Money),
-            _ => None,
-        }
-    }
-
-    exact(name).or_else(|| {
-        let normalized = name.to_ascii_uppercase();
-        (normalized != name).then(|| exact(&normalized)).flatten()
-    })
 }

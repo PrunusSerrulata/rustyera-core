@@ -133,8 +133,12 @@ fn resolve_expression_named_indices(
                     };
                     continue;
                 }
+                let data_dimension = position.saturating_sub(usize::from(explicit_character));
                 if let Some(value) = crate::interpreter::native_ops::resolve_named_index_value(
-                    program, name, candidate,
+                    program,
+                    name,
+                    candidate,
+                    data_dimension,
                 ) {
                     index.kind = ExprKind::Integer(value);
                 }

@@ -350,6 +350,23 @@ fn getnum_resolves_the_referenced_builtin_name_table_at_runtime() {
 }
 
 #[test]
+fn getnum_runtime_source_dimension_matches_constant_evaluation() {
+    let mut data = project_data();
+    data.static_data
+        .name_tables
+        .get_mut(&erabasic_data::NameTableKind::Palam)
+        .unwrap()
+        .lookup
+        .insert("快Ｃ".into(), 17);
+    let artifact = compile_source_with_data(
+        "@SYSTEM_TITLE\n#DIM CONST COMPILED = GETNUM(CUP, \"快Ｃ\", 1)\nRESULT = COMPILED * 100 + GETNUM(CUP, \"快Ｃ\", 1)\nRETURN RESULT\n",
+        data,
+    );
+
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(1_717));
+}
+
+#[test]
 fn erdname_resolves_a_user_defined_index_name_at_runtime() {
     let mut data = project_data();
     data.static_data.deferred_indices.resolved.insert(
@@ -483,6 +500,23 @@ fn runtime_string_indices_use_strict_name_resolution() {
         "{:#?}",
         report.events
     );
+}
+
+#[test]
+fn runtime_string_indices_use_shared_builtin_name_tables() {
+    let mut data = project_data();
+    data.static_data
+        .name_tables
+        .get_mut(&erabasic_data::NameTableKind::Palam)
+        .unwrap()
+        .lookup
+        .insert("快Ｃ".into(), 17);
+    let artifact = compile_source_with_data(
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nCUP:0:17 = 9\nRESULTS:0 '= \"快Ｃ\"\nRESULT = CUP:0:(RESULTS:0)\nRETURN RESULT\n",
+        data,
+    );
+
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(9));
 }
 
 #[test]

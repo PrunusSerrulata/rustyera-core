@@ -676,6 +676,23 @@ fn dynamic_variable_methods_resolve_local_global_and_named_places() {
 }
 
 #[test]
+fn dynamic_variable_methods_resolve_character_named_indices() {
+    let mut data = project_data();
+    data.static_data
+        .name_tables
+        .get_mut(&erabasic_data::NameTableKind::Palam)
+        .unwrap()
+        .lookup
+        .insert("快Ｃ".into(), 17);
+    let artifact = compile_source_with_data(
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nSETVAR \"CUP:0:快Ｃ\", 8\nRESULT = GETVAR(\"CUP:0:快Ｃ\")\nRETURN RESULT\n",
+        data,
+    );
+
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(8));
+}
+
+#[test]
 fn omitted_substring_and_statement_encodetouni_match_reference_results() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\n\

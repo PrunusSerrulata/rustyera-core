@@ -108,6 +108,62 @@ impl NameTableKind {
             Self::Money => "MONEYNAME",
         }
     }
+
+    /// Built-in data variables whose symbolic indices use this CSV name table.
+    #[must_use]
+    pub const fn data_variables(self) -> &'static [&'static str] {
+        match self {
+            Self::Abl => &["ABL"],
+            Self::Exp => &["EXP"],
+            Self::Talent => &["TALENT"],
+            Self::Palam => &["PALAM", "UP", "DOWN", "JUEL", "GOTJUEL", "CUP", "CDOWN"],
+            Self::Train => &["TRAIN"],
+            Self::Mark => &["MARK"],
+            // ITEM.csv names are shared by every item-indexed built-in variable.
+            Self::Item => &["ITEM", "ITEMSALES", "ITEMPRICE", "ITEMNAME"],
+            Self::Base => &["BASE", "MAXBASE", "LOSEBASE", "DOWNBASE"],
+            Self::Source => &["SOURCE"],
+            Self::Ex => &["EX", "NOWEX"],
+            // STR.CSV contains initial string values. Symbolic STR indices come from
+            // STRNAME.CSV in the reference implementation.
+            Self::Str => &[],
+            Self::Equip => &["EQUIP"],
+            Self::Tequip => &["TEQUIP"],
+            Self::Flag => &["FLAG"],
+            Self::Tflag => &["TFLAG"],
+            Self::Cflag => &["CFLAG"],
+            Self::Tcvar => &["TCVAR"],
+            Self::Cstr => &["CSTR"],
+            Self::Stain => &["STAIN"],
+            Self::Cdflag1 | Self::Cdflag2 => &["CDFLAG"],
+            Self::Strname => &["STR", "STRNAME"],
+            Self::Tstr => &["TSTR"],
+            Self::Savestr => &["SAVESTR"],
+            Self::Global => &["GLOBAL"],
+            Self::Globals => &["GLOBALS"],
+            Self::Day => &["DAY"],
+            Self::Time => &["TIME"],
+            Self::Money => &["MONEY"],
+        }
+    }
+
+    /// Zero-based data dimension to which this name table applies.
+    #[must_use]
+    pub const fn data_dimension(self) -> usize {
+        if matches!(self, Self::Cdflag2) { 1 } else { 0 }
+    }
+
+    /// Find the CSV name table used by a built-in variable data dimension.
+    #[must_use]
+    pub fn for_data_variable(variable: &str, dimension: usize) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| {
+            kind.data_dimension() == dimension
+                && kind
+                    .data_variables()
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(variable))
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

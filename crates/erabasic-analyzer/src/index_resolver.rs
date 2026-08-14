@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use erabasic_data::{LegacyEncoding, NameTableKind, ProjectData};
+use erabasic_data::{LegacyEncoding, ProjectData};
 
 #[derive(Default)]
 pub(crate) struct IndexResolver {
@@ -13,13 +13,13 @@ impl IndexResolver {
     pub fn new(project: &ProjectData) -> Self {
         let mut result = Self::default();
         for (kind, table) in &project.static_data.name_tables {
-            let dimension = dimension_for_kind(*kind);
+            let dimension = kind.data_dimension();
             let lookup: BTreeMap<_, _> = table
                 .lookup
                 .iter()
                 .map(|(name, index)| (name.clone(), i64::from(*index)))
                 .collect();
-            for variable in data_variables_for_kind(*kind) {
+            for variable in kind.data_variables() {
                 result
                     .tables
                     .insert(((*variable).to_owned(), dimension), lookup.clone());
@@ -78,44 +78,4 @@ impl IndexResolver {
     pub(crate) fn legacy_encoded_len(&self, value: &str) -> usize {
         self.legacy_encoding.encoded_len(value)
     }
-}
-
-fn data_variables_for_kind(kind: NameTableKind) -> &'static [&'static str] {
-    match kind {
-        NameTableKind::Abl => &["ABL"],
-        NameTableKind::Exp => &["EXP"],
-        NameTableKind::Talent => &["TALENT"],
-        NameTableKind::Palam => &["PALAM", "UP", "DOWN", "JUEL", "GOTJUEL", "CUP", "CDOWN"],
-        NameTableKind::Train => &["TRAIN"],
-        NameTableKind::Mark => &["MARK"],
-        // ITEM.csv names are shared by every item-indexed built-in variable.
-        NameTableKind::Item => &["ITEM", "ITEMSALES", "ITEMPRICE", "ITEMNAME"],
-        NameTableKind::Base => &["BASE", "MAXBASE", "LOSEBASE", "DOWNBASE"],
-        NameTableKind::Source => &["SOURCE"],
-        NameTableKind::Ex => &["EX", "NOWEX"],
-        // STR.CSV contains initial string values. Symbolic STR indices come from
-        // STRNAME.CSV in the reference implementation.
-        NameTableKind::Str => &[],
-        NameTableKind::Equip => &["EQUIP"],
-        NameTableKind::Tequip => &["TEQUIP"],
-        NameTableKind::Flag => &["FLAG"],
-        NameTableKind::Tflag => &["TFLAG"],
-        NameTableKind::Cflag => &["CFLAG"],
-        NameTableKind::Tcvar => &["TCVAR"],
-        NameTableKind::Cstr => &["CSTR"],
-        NameTableKind::Stain => &["STAIN"],
-        NameTableKind::Cdflag1 | NameTableKind::Cdflag2 => &["CDFLAG"],
-        NameTableKind::Strname => &["STR", "STRNAME"],
-        NameTableKind::Tstr => &["TSTR"],
-        NameTableKind::Savestr => &["SAVESTR"],
-        NameTableKind::Global => &["GLOBAL"],
-        NameTableKind::Globals => &["GLOBALS"],
-        NameTableKind::Day => &["DAY"],
-        NameTableKind::Time => &["TIME"],
-        NameTableKind::Money => &["MONEY"],
-    }
-}
-
-fn dimension_for_kind(kind: NameTableKind) -> usize {
-    usize::from(kind == NameTableKind::Cdflag2)
 }

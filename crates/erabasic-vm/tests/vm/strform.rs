@@ -386,6 +386,34 @@ RETURNF 9
 }
 
 #[test]
+fn runtime_form_resolves_character_data_names_after_the_character_index() {
+    let mut data = project_data();
+    data.static_data
+        .name_tables
+        .get_mut(&erabasic_data::NameTableKind::Palam)
+        .expect("PALAM name table")
+        .lookup
+        .insert("快Ｃ".into(), 17);
+    let artifact = compile_source_with_data(
+        r#"@SYSTEM_TITLE
+ADDVOIDCHARA
+CUP:0:17 = 9
+RESULTS:0 '= STRFORM("{CUP:0:快Ｃ}")
+RETURN
+"#,
+        data,
+    );
+    let results = named_key(&artifact, "RESULTS");
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+
+    assert_eq!(report.stop, erabasic_vm::VmRunStop::Idle);
+    assert_eq!(
+        vm.read_variable(results, &[0], None),
+        Ok(VmValue::String("9".into()))
+    );
+}
+
+#[test]
 fn unsupported_runtime_form_is_rejected_before_any_user_side_effect() {
     let artifact = compile_source(
         r#"@SYSTEM_TITLE

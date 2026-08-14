@@ -19,6 +19,27 @@ fn fixed_catalog_contains_reference_shapes_and_scopes() {
 }
 
 #[test]
+fn builtin_name_tables_cover_shared_variables_and_dimensions() {
+    assert_eq!(
+        NameTableKind::for_data_variable("CUP", 0),
+        Some(NameTableKind::Palam)
+    );
+    assert_eq!(
+        NameTableKind::for_data_variable("cup", 0),
+        Some(NameTableKind::Palam)
+    );
+    assert_eq!(
+        NameTableKind::for_data_variable("CDFLAG", 0),
+        Some(NameTableKind::Cdflag1)
+    );
+    assert_eq!(
+        NameTableKind::for_data_variable("CDFLAG", 1),
+        Some(NameTableKind::Cdflag2)
+    );
+    assert_eq!(NameTableKind::for_data_variable("CUP", 1), None);
+}
+
+#[test]
 fn name_lookup_uses_first_name_then_non_shadowing_aliases() {
     let mut table = NameTable::empty(4);
     table.names[0] = Some("same".into());
