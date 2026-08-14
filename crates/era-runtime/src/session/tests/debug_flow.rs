@@ -417,6 +417,20 @@ fn deterministic_width_and_integer_format_tables_cover_era_usage() {
 }
 
 #[test]
+fn tostr_custom_sections_select_positive_negative_and_zero_formats() {
+    assert_eq!(format_era_integer(12, "+#0;-#0"), Ok("+12".into()));
+    assert_eq!(format_era_integer(-12, "+#0;-#0"), Ok("-12".into()));
+    assert_eq!(format_era_integer(0, "+#0;-#0"), Ok("+0".into()));
+    assert_eq!(format_era_integer(12, "P#0;N#0;Z0"), Ok("P12".into()));
+    assert_eq!(format_era_integer(-12, "P#0;N#0;Z0"), Ok("N12".into()));
+    assert_eq!(format_era_integer(0, "P#0;N#0;Z0"), Ok("Z0".into()));
+    assert_eq!(
+        format_era_integer(0, "0;0;0;0"),
+        Err("unsupported integer format")
+    );
+}
+
+#[test]
 fn reference_bar_and_portable_named_colors_are_deterministic() {
     assert_eq!(make_bar(5, 10, 4, '*', '.'), Ok("[**..]".into()));
     assert_eq!(

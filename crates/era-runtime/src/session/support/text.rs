@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 pub(in super::super) fn format_era_integer(
     value: i64,
     format: &str,
@@ -37,6 +39,10 @@ pub(in super::super) fn format_era_integer(
             })
         }
         _ => {
+            let Some((format, prepend_negative_sign)) = custom_decimal_section(format, value)
+            else {
+                return Err("unsupported integer format");
+            };
             let Some((literal_prefix, numeric_format, literal_suffix)) =
                 custom_decimal_format(format)
             else {
@@ -56,12 +62,28 @@ pub(in super::super) fn format_era_integer(
                 digits = group_unsigned_decimal(&digits);
             }
             let formatted = format!("{literal_prefix}{digits}{literal_suffix}");
-            Ok(if value < 0 {
+            Ok(if prepend_negative_sign {
                 format!("-{formatted}")
             } else {
                 formatted
             })
         }
+    }
+}
+
+fn custom_decimal_section(format: &str, value: i64) -> Option<(&str, bool)> {
+    let mut sections = format.split(';');
+    let positive = sections.next()?;
+    let negative = sections.next();
+    let zero = sections.next();
+    if sections.next().is_some() {
+        return None;
+    }
+
+    match value.cmp(&0) {
+        Ordering::Less => Some((negative.unwrap_or(positive), negative.is_none())),
+        Ordering::Equal => Some((zero.unwrap_or(positive), false)),
+        Ordering::Greater => Some((positive, false)),
     }
 }
 
