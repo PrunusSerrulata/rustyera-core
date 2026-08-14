@@ -216,6 +216,7 @@ fn encode_native_section(index: usize, plan: &NativeSectionPlan<'_>) -> Result<V
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn weighted_function_ranges(functions: &[BytecodeFunction]) -> Vec<Range<usize>> {
     if functions.is_empty() {
         return Vec::new();
@@ -242,6 +243,7 @@ fn weighted_function_ranges(functions: &[BytecodeFunction]) -> Vec<Range<usize>>
     ranges
 }
 
+#[cfg(any(not(target_arch = "wasm32"), test))]
 pub(super) fn encode_manifest_section(
     manifest: &ProjectManifest,
     kind: ProjectContainerKind,
