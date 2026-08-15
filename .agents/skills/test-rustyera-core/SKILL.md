@@ -17,6 +17,13 @@ description: Validate changes in the rustyera-core repository with scope-appropr
 - Start each distinct full test suite at most once per task. If it exposes a failure, repair it and
   rerun only the smallest directly affected test target, never the full suite again. Report the
   original full-suite result separately from the targeted post-fix result.
+- Run every command that may outlive its initial tool response in a persistent PTY. Start it with
+  `exec_command` using `tty: true` and a short yield, retain the returned `session_id`, and poll only
+  with `write_stdin` at intervals no longer than 30 seconds until an explicit exit code is observed.
+  Do not resume a yielded exec cell with a separate wait call: the cell may be reclaimed before its
+  result is collected. If a PTY session disappears without an exit code, report the command as
+  unverified; never restart a full suite, and rerun a targeted command only when the suite rules
+  permit it.
 - Every end-to-end, long-running, and reference-oracle flow must emit a complete observable-state
   snapshot every 5 seconds. Include every HTML element when an HTML client is involved. Compare
   snapshots without timestamps and other reporting-only metadata; if two consecutive snapshots
