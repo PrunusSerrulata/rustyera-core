@@ -186,6 +186,7 @@ fn handshake_selects_only_implemented_features() {
         panic!("expected server hello");
     };
     assert_eq!(hello.selected_version, RUNTIME_PROTOCOL_VERSION);
+    assert_eq!(hello.implementation_version, crate::VERSION);
     assert!(hello.features.contains(&RuntimeFeature::TimedInput));
     assert!(!hello.features.contains(&RuntimeFeature::Audio));
     assert_eq!(hello.selected_capabilities.storage, capabilities().storage);

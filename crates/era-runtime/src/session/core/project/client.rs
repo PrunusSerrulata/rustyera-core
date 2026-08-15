@@ -69,15 +69,16 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         let supported = VersionRange::exact(RUNTIME_PROTOCOL_VERSION);
         let Some(selected) = negotiate_version(hello.runtime_versions, supported) else {
+            let message = format!(
+                "runtime protocol {}.{} is required",
+                RUNTIME_PROTOCOL_VERSION.major, RUNTIME_PROTOCOL_VERSION.minor
+            );
             self.emit_log(
                 RuntimeLogLevel::Error,
-                "runtime protocol negotiation failed: runtime protocol 31.0 is required",
+                format!("runtime protocol negotiation failed: {message}"),
             )?;
             return self.emit(
-                RuntimeMessage::VersionRejected(VersionRejected {
-                    supported,
-                    message: "runtime protocol 31.0 is required".into(),
-                }),
+                RuntimeMessage::VersionRejected(VersionRejected { supported, message }),
                 Some(message_id),
             );
         };
@@ -151,6 +152,7 @@ impl RuntimeSession {
                 selected_capabilities,
                 selected_locale: self.selected_locale.clone(),
                 configuration_profile,
+                implementation_version: crate::VERSION.into(),
             }),
             Some(message_id),
         )?;

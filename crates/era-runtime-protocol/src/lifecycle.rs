@@ -111,6 +111,9 @@ pub struct ServerHello {
     /// Echoed only when the Runtime supports the requested configuration profile.
     #[n(7)]
     pub configuration_profile: Option<ConfigurationClientProfile>,
+    /// Product version embedded in the serving runtime implementation.
+    #[n(8)]
+    pub implementation_version: String,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

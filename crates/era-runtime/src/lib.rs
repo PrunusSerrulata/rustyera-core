@@ -4,6 +4,9 @@
 //! rendering, audio, or operating-system input work. Those operations cross the
 //! versioned frontend protocol and are committed only after correlated responses.
 
+/// Product version embedded in this runtime build.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 mod compiled_cache;
 mod controller;
 mod host;
