@@ -147,7 +147,7 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
         RuntimeMessage::StateImportBegin(StateImportBegin {
             kind: StateExportKind::TraditionalSave,
             total_bytes: u64::try_from(bytes.len()).unwrap(),
-            digest: descriptor.digest,
+            digest: Some(descriptor.digest),
             artifact_id: None,
         }),
     );
@@ -171,7 +171,10 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
     submit(
         &mut restored,
         4,
-        RuntimeMessage::StateImportCommit(StateImportCommit { transfer_id }),
+        RuntimeMessage::StateImportCommit(StateImportCommit {
+            transfer_id,
+            digest: None,
+        }),
     );
     restored.drive(RuntimeDriveBudget::default()).unwrap();
     drain(&mut restored);
@@ -305,7 +308,7 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
         RuntimeMessage::StateImportBegin(StateImportBegin {
             kind: StateExportKind::VmSnapshot,
             total_bytes: u64::try_from(snapshot_bytes.len()).unwrap(),
-            digest: snapshot_descriptor.digest,
+            digest: Some(snapshot_descriptor.digest),
             artifact_id: snapshot_descriptor.artifact_id,
         }),
     );
@@ -333,7 +336,10 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
     submit(
         &mut exact,
         exact_sequence,
-        RuntimeMessage::StateImportCommit(StateImportCommit { transfer_id }),
+        RuntimeMessage::StateImportCommit(StateImportCommit {
+            transfer_id,
+            digest: None,
+        }),
     );
     exact_sequence += 1;
     exact.drive(RuntimeDriveBudget::default()).unwrap();

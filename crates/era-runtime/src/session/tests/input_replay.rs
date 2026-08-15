@@ -147,7 +147,7 @@ fn input_replay_import_is_rejected_before_allocating_a_transfer() {
         RuntimeMessage::StateImportBegin(StateImportBegin {
             kind: StateExportKind::InputReplay,
             total_bytes: 2,
-            digest: ProtocolBytes::new(vec![0; 32]),
+            digest: Some(ProtocolBytes::new(vec![0; 32])),
             artifact_id: None,
         }),
     );

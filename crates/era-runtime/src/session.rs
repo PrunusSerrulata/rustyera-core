@@ -558,6 +558,7 @@ enum SystemMenuState {
 struct InboundStateTransfer {
     descriptor: StateTransferDescriptor,
     bytes: Vec<u8>,
+    hasher: Option<blake3::Hasher>,
     committed: bool,
 }
 

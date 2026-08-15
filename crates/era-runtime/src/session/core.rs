@@ -651,7 +651,7 @@ impl RuntimeSession {
             }
             RuntimeMessage::StateImportChunk(chunk) => self.append_state_import(message_id, &chunk),
             RuntimeMessage::StateImportCommit(commit) => {
-                self.commit_state_import(message_id, commit)
+                self.commit_state_import(message_id, &commit)
             }
             RuntimeMessage::StateExportChunkRequest(request) => {
                 self.read_state_export(message_id, request)

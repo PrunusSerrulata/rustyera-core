@@ -253,6 +253,9 @@ pub enum StateExportKind {
     /// UTF-8 JSON Lines describing the current manual-path semantic input segment.
     #[n(4)]
     InputReplay,
+    /// Canonical CBOR `ProjectManifest` input used only to stage an explicit full-project export.
+    #[n(5)]
+    FullProjectManifest,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -348,7 +351,7 @@ pub struct StateImportBegin {
     #[n(1)]
     pub total_bytes: u64,
     #[n(2)]
-    pub digest: ProtocolBytes,
+    pub digest: Option<ProtocolBytes>,
     #[n(3)]
     pub artifact_id: Option<ProtocolBytes>,
 }
@@ -371,11 +374,15 @@ pub struct StateImportChunk {
     pub data: ProtocolBytes,
 }
 
-#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct StateImportCommit {
     #[n(0)]
     pub transfer_id: u64,
+    /// Final digest for one-pass streamed inputs. Exactly one of the begin or commit digests must
+    /// be present.
+    #[n(1)]
+    pub digest: Option<ProtocolBytes>,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

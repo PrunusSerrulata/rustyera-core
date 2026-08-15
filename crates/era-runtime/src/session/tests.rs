@@ -2,7 +2,9 @@ use era_debug_protocol::{
     AuthorizedDebugRequest, DEBUG_PROTOCOL_VERSION, DebugCommand, DebugHello, DebugMessage,
     DebugRevoke, DebugScope, GrantToken,
 };
-use era_protocol::{Channel, Envelope, ProtocolBytes, decode_envelope, encode_envelope};
+use era_protocol::{
+    Channel, Envelope, ProtocolBytes, decode_envelope, encode_canonical, encode_envelope,
+};
 use era_runtime_protocol::{
     CanvasReplayCommand, DisplayLine, DisplayRun, FileCategory, FileChange, FilePayload,
     PresentationOperation, PresentationSnapshot, ProjectIdentity, ProjectManifest,
@@ -75,6 +77,53 @@ fn drain(session: &mut RuntimeSession) -> Vec<RuntimeMessage> {
         messages.push(RuntimeMessage::from_envelope(&envelope).expect("decode message"));
     }
     messages
+}
+
+fn negotiated_session() -> RuntimeSession {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["ja".into()],
+            configuration_profile: None,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    session
+}
+
+fn begin_state_import(
+    session: &mut RuntimeSession,
+    sequence: u64,
+    kind: StateExportKind,
+    total_bytes: u64,
+    digest: Option<ProtocolBytes>,
+) -> u64 {
+    submit(
+        session,
+        sequence,
+        RuntimeMessage::StateImportBegin(StateImportBegin {
+            kind,
+            total_bytes,
+            digest,
+            artifact_id: None,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::StateImportAccepted(value) => Some(value.transfer_id),
+            _ => None,
+        })
+        .expect("state import should be accepted")
 }
 
 fn projected_run_text(run: &DisplayRun) -> String {

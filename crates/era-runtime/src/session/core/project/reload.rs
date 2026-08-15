@@ -414,7 +414,7 @@ pub(super) fn manifest_contains_omitted_payloads(manifest: &ProjectManifest) -> 
         let empty_payload = match &file.payload {
             FilePayload::Utf8(value) => value.is_empty(),
             FilePayload::Bytes(value) => value.as_slice().is_empty(),
-            FilePayload::IoError(_) => false,
+            FilePayload::IoError(_) | FilePayload::ExternalResource(_) => false,
         };
         empty_payload && expected.as_slice() != blake3::hash(&[]).as_bytes()
     })

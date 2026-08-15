@@ -8,6 +8,13 @@ impl RuntimeSession {
         message_id: u64,
         request: StateExportRequest,
     ) -> Result<(), RuntimeError> {
+        if request.kind == StateExportKind::FullProjectManifest {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "full project manifest is import-only and cannot be exported",
+            );
+        }
         if request.kind != StateExportKind::VmSnapshot
             && request.snapshot_purpose != SnapshotExportPurpose::Normal
         {
@@ -360,7 +367,8 @@ impl RuntimeSession {
                 }
                 StateExportKind::CompiledProjectCache
                 | StateExportKind::FullProjectFile
-                | StateExportKind::InputReplay => {
+                | StateExportKind::InputReplay
+                | StateExportKind::FullProjectManifest => {
                     unreachable!("handled above")
                 }
             };

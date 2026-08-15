@@ -199,6 +199,11 @@ fn prepare_files(manifest: &ProjectManifest) -> Result<Vec<PreparedFile>, Extrac
                     "project source {relative_path:?} contains an I/O error"
                 )));
             }
+            (_, FilePayload::ExternalResource(_)) => {
+                return Err(ExtractError::new(format!(
+                    "project asset {relative_path:?} does not contain embedded bytes"
+                )));
+            }
         };
         if let Some(expected) = &file.content_hash
             && expected.as_slice() != blake3::hash(&contents).as_bytes()

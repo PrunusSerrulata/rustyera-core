@@ -173,13 +173,13 @@ service-response = { 0: uint, 1: any }
 ; These include typed HTML, physical-history serialization,
 ; canvas image decode/PNG encode, ProjectionQueryContext, HTML measurement,
 ; TextExtent and CanvasPixel request/response maps.
-state-export-kind = 0..4
+state-export-kind = 0..5
 state-export-request = { 0: state-export-kind, 1: uint }
 state-export-ready = { 0: state-export-kind, 1: any }
-state-import-begin = { 0: state-export-kind, 1: uint, 2: bstr, 3: bstr / null }
+state-import-begin = { 0: state-export-kind, 1: uint, ? 2: bstr, ? 3: bstr / null }
 state-import-accepted = { 0: uint }
 state-import-chunk = { 0: uint, 1: uint, 2: bstr }
-state-import-commit = { 0: uint }
+state-import-commit = { 0: uint, ? 1: bstr }
 state-import-ready = { 0: uint, 1: state-export-kind }
 state-export-chunk-request = { 0: uint, 1: uint, 2: uint }
 state-export-chunk = { 0: uint, 1: uint, 2: bstr, 3: bool }

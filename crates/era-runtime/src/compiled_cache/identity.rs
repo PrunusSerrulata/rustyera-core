@@ -37,6 +37,9 @@ pub(crate) fn project_identity(manifest: &ProjectManifest) -> ProjectIdentity {
             || match &file.payload {
                 FilePayload::Utf8(text) => *blake3::hash(text.as_bytes()).as_bytes(),
                 FilePayload::Bytes(bytes) => *blake3::hash(bytes.as_slice()).as_bytes(),
+                FilePayload::ExternalResource(resource) => {
+                    *blake3::hash(&resource.byte_length.to_le_bytes()).as_bytes()
+                }
                 FilePayload::IoError(error) => *blake3::hash(error.message.as_bytes()).as_bytes(),
             },
             |value| {
@@ -72,6 +75,9 @@ pub(crate) fn validate_full_project_manifest(
         let payload = match &file.payload {
             FilePayload::Utf8(text) => text.as_bytes(),
             FilePayload::Bytes(bytes) => bytes.as_slice(),
+            FilePayload::ExternalResource(_) => {
+                return Err("full project manifest contains an external resource".into());
+            }
             FilePayload::IoError(_) => {
                 return Err("full project manifest contains an unreadable file".into());
             }

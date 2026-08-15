@@ -71,12 +71,12 @@ impl RuntimeSession {
         let Some(selected) = negotiate_version(hello.runtime_versions, supported) else {
             self.emit_log(
                 RuntimeLogLevel::Error,
-                "runtime protocol negotiation failed: runtime protocol 30.0 is required",
+                "runtime protocol negotiation failed: runtime protocol 31.0 is required",
             )?;
             return self.emit(
                 RuntimeMessage::VersionRejected(VersionRejected {
                     supported,
-                    message: "runtime protocol 30.0 is required".into(),
+                    message: "runtime protocol 31.0 is required".into(),
                 }),
                 Some(message_id),
             );
@@ -231,7 +231,7 @@ impl RuntimeSession {
             FilePayload::IoError(error) if error.kind == FrontendIoErrorKind::NotFound => {
                 self.key_macros = KeyMacros::default();
             }
-            FilePayload::IoError(_) | FilePayload::Bytes(_) => {
+            FilePayload::IoError(_) | FilePayload::Bytes(_) | FilePayload::ExternalResource(_) => {
                 return self.reject(
                     message_id,
                     CommandErrorCode::InvalidValue,

@@ -35,6 +35,7 @@ impl RuntimeSession {
                 artifact_id: None,
             },
             bytes,
+            hasher: None,
             committed: true,
         });
         Ok(transfer_id)

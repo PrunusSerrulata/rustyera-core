@@ -131,6 +131,9 @@ pub(super) fn manifest_payload_hash(payload: &FilePayload) -> blake3::Hash {
     match payload {
         FilePayload::Utf8(text) => blake3::hash(text.as_bytes()),
         FilePayload::Bytes(bytes) => blake3::hash(bytes.as_slice()),
+        FilePayload::ExternalResource(_) => {
+            unreachable!("external resources are omitted from compact caches")
+        }
         FilePayload::IoError(_) => unreachable!(),
     }
 }

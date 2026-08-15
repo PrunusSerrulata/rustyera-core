@@ -1203,7 +1203,7 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
         RuntimeMessage::StateImportBegin(StateImportBegin {
             kind: StateExportKind::TraditionalSave,
             total_bytes: save.as_slice().len() as u64,
-            digest,
+            digest: Some(digest),
             artifact_id: None,
         }),
     );
@@ -1232,7 +1232,10 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
         &mut session,
         4,
         Some(1),
-        RuntimeMessage::StateImportCommit(StateImportCommit { transfer_id }),
+        RuntimeMessage::StateImportCommit(StateImportCommit {
+            transfer_id,
+            digest: None,
+        }),
     );
     drive(&mut session);
     let committed = drain(&mut session);

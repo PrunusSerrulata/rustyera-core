@@ -19,8 +19,8 @@ use era_runtime_protocol::{
     ReturnToTitleRequest, RuntimeLog, RuntimeLogLevel, RuntimeMessage,
     SAMPLE_CANVAS_PIXEL_OPERATION, SeparatorRole, ServiceKind, ServiceRequest,
     SnapshotExportPurpose, StateExportCancel, StateExportChunkRequest, StateExportKind,
-    StateExportRequest, StateImportBegin, StorageNamespace, StorageOperation, StorageRequest,
-    TextExtentRequest, TextStyle, parse_document, validate_relative_path,
+    StateExportRequest, StateImportBegin, StateImportCommit, StorageNamespace, StorageOperation,
+    StorageRequest, TextExtentRequest, TextStyle, parse_document, validate_relative_path,
 };
 
 #[test]
@@ -161,7 +161,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(30, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(31, 0));
 }
 
 #[test]
@@ -284,7 +284,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(30, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(31, 0));
 }
 
 #[test]
@@ -293,7 +293,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(30, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(31, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -459,7 +459,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(30, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(31, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -498,7 +498,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(30, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(31, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 
@@ -545,11 +545,33 @@ fn state_transfers_are_versioned_and_chunked() {
     let begin = RuntimeMessage::StateImportBegin(StateImportBegin {
         kind: StateExportKind::TraditionalSave,
         total_bytes: 4096,
-        digest: ProtocolBytes::new([7; 32]),
+        digest: Some(ProtocolBytes::new([7; 32])),
         artifact_id: None,
     });
     let encoded = begin.encode_payload().expect("encode state import");
     assert_eq!(RuntimeMessage::decode_payload(62, &encoded), Ok(begin));
+
+    let streamed_begin = RuntimeMessage::StateImportBegin(StateImportBegin {
+        kind: StateExportKind::FullProjectManifest,
+        total_bytes: 8192,
+        digest: None,
+        artifact_id: None,
+    });
+    let encoded = streamed_begin
+        .encode_payload()
+        .expect("encode streamed import");
+    assert_eq!(
+        RuntimeMessage::decode_payload(62, &encoded),
+        Ok(streamed_begin)
+    );
+    let commit = RuntimeMessage::StateImportCommit(StateImportCommit {
+        transfer_id: 9,
+        digest: Some(ProtocolBytes::new([8; 32])),
+    });
+    let encoded = commit
+        .encode_payload()
+        .expect("encode streamed import commit");
+    assert_eq!(RuntimeMessage::decode_payload(65, &encoded), Ok(commit));
 
     let read = RuntimeMessage::StateExportChunkRequest(StateExportChunkRequest {
         transfer_id: 9,
@@ -579,7 +601,7 @@ fn state_transfers_are_versioned_and_chunked() {
     assert_eq!(RuntimeMessage::decode_payload(71, &encoded), Ok(cancel));
 
     let schema = include_str!("../schema/runtime.cddl");
-    assert!(schema.contains("state-export-kind = 0..4"));
+    assert!(schema.contains("state-export-kind = 0..5"));
     assert!(schema.contains("state-import-begin = { 0: state-export-kind"));
 }
 

@@ -131,6 +131,7 @@ struct CompiledCacheSections<'a> {
 pub(crate) struct CompiledSnapshotMetadata {
     project_identity: [u8; 32],
     resources: Vec<NormalizedResourceIdentity>,
+    resource_graph: ResourceGraph,
     sort_with_filename: bool,
     auto_save: bool,
     ctrl_z_enabled: bool,
@@ -158,6 +159,7 @@ impl From<&NormalizedProjectSnapshot> for CompiledSnapshotMetadata {
         Self {
             project_identity: snapshot.project_identity,
             resources: snapshot.resources.clone(),
+            resource_graph: snapshot.resource_graph.clone(),
             sort_with_filename: snapshot.sort_with_filename,
             auto_save: snapshot.auto_save,
             ctrl_z_enabled: snapshot.ctrl_z_enabled,
@@ -187,13 +189,7 @@ impl From<&NormalizedProjectSnapshot> for CompiledSnapshotMetadata {
 
 impl CompiledSnapshotMetadata {
     fn into_snapshot(self, manifest: ProjectManifest) -> Result<NormalizedProjectSnapshot, String> {
-        let (resource_graph, diagnostics) = ResourceGraph::from_manifest(&manifest);
-        if let Some(diagnostic) = diagnostics.into_iter().find(|value| value.error) {
-            return Err(format!(
-                "embedded project resources cannot be rebuilt: {}",
-                diagnostic.message
-            ));
-        }
+        let resource_graph = self.resource_graph;
         let configuration_document = manifest
             .files
             .iter()
@@ -541,6 +537,7 @@ fn identity_payload(file: &SubmittedFile) -> &[u8] {
     match &file.payload {
         FilePayload::Utf8(text) => text.as_bytes(),
         FilePayload::Bytes(bytes) => bytes.as_slice(),
+        FilePayload::ExternalResource(_) => &[],
         FilePayload::IoError(error) => error.message.as_bytes(),
     }
 }

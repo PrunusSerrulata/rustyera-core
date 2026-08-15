@@ -216,7 +216,7 @@ pub(super) fn compact_frontend_manifest(
             let payload = match &file.payload {
                 FilePayload::Utf8(text) => text.as_bytes(),
                 FilePayload::Bytes(bytes) => bytes.as_slice(),
-                FilePayload::IoError(_) => continue,
+                FilePayload::IoError(_) | FilePayload::ExternalResource(_) => continue,
             };
             file.content_hash = Some(ProtocolBytes::new(
                 blake3::hash(payload).as_bytes().to_vec(),
@@ -231,6 +231,7 @@ pub(super) fn compact_frontend_manifest(
             FilePayload::Utf8(text) => text.clear(),
             FilePayload::Bytes(bytes) => *bytes = ProtocolBytes::new(Vec::new()),
             FilePayload::IoError(error) => error.message.clear(),
+            FilePayload::ExternalResource(_) => {}
         }
     }
 }

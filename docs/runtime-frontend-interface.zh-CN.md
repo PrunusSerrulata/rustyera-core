@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.8`、公共信封 `2.0`、Runtime 协议 `30.0`。源码入口：
+> C ABI `3.8`、公共信封 `2.0`、Runtime 协议 `31.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.8 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 30.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 31.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -424,7 +424,7 @@ payload 使用 minicbor enum 形式 `[tag, [value]]`；无值变体为 `[tag, []
 | 60 | `StateExportRequest` | 61 `StateExportReady` |
 | 62/64/65 | import begin/chunk/commit | 63 accepted、66 ready |
 | 67 | `StateExportChunkRequest` | 68 chunk |
-| 70 | `FullProjectManifest` | — |
+| 70 | `FullProjectManifest` | —；仅保留给进程内兼容入口，跨进程客户端使用 kind 5 状态导入 |
 | 71 | `StateExportCancel` | — |
 | 69 | `StateTransferCancel` | 取消指定传输 |
 | 90 | `ShutdownRequest` | 91 `ShutdownReady` |
@@ -451,7 +451,8 @@ Warning、Error。前端可以筛选、着色和添加到达时间，但不得�
 | --- | --- | --- |
 | `FrontendIoError` | `kind`, `message`, `platform_code?` | kind：NotFound、PermissionDenied、InvalidData、Interrupted、ReadOnly、AlreadyExists、Other、Conflict |
 | `SubmittedFile` | `relative_path`, `category`, `payload`, `content_hash?` | category：Csv/Erh/Erb/ResourceManifest/Resource/Configuration；hash 是可空 opaque bytes |
-| `FilePayload` | `Utf8(String)` / `Bytes` / `IoError` | 源码直接 UTF-8；不要提交本地绝对路径 |
+| `FilePayload` | `Utf8(String)` / `Bytes` / `ExternalResource` / `IoError` | 源码直接 UTF-8；不要提交本地绝对路径 |
+| `ExternalResource` | `byte_length:u64`, `image_metadata?` | 只可用于 Resource；正文留在前端，runtime 按资源 ID 通过 service 按需读取；图片元数据有效时可免除启动期探测 |
 | `ProjectManifest` | `project_revision:u64`, `files[]` | 文件顺序是协议输入的一部分，runtime 内部做确定性处理 |
 | `ProjectIdentity` | `project_revision`, `source_digest` | digest 由完整规范项目身份产生 |
 | `ProjectLoadRequest` | `identity`, `manifest?`, `compiled_cache_transfer_id?` | cache key 不精确但其嵌入 manifest 身份匹配时直接重编译；缓存无效或源码身份不同且未带 manifest 时才报告 `payload_required=true` |
@@ -690,8 +691,9 @@ presentation query 的 `context` 是 presentation/environment/projection-space �
 
 ### 9.3 状态传输
 
-kind：TraditionalSave、VmSnapshot、CompiledProjectCache、FullProjectFile、InputReplay。
-其中 InputReplay 只允许导出，导入必须明确拒绝。完整描述符是
+kind：TraditionalSave、VmSnapshot、CompiledProjectCache、FullProjectFile、InputReplay、
+FullProjectManifest。其中 InputReplay 和 FullProjectFile 只允许导出，
+FullProjectManifest 只允许导入。完整描述符是
 `transfer_id, kind, total_bytes, digest`（精确 32 字节 BLAKE3）和 `artifact_id?`。
 
 导出：请求 kind → `Ready{descriptor}` 或 `Ineligible{reasons}` → 从 offset 0 连续请求
@@ -699,8 +701,20 @@ kind：TraditionalSave、VmSnapshot、CompiledProjectCache、FullProjectFile、I
 实际 chunk 还会受 negotiated payload 上限约束。
 
 导入：`StateImportBegin` → Accepted(id) → 从 offset 0 发送非空、无间隙 chunk →
-Commit → runtime 校验大小/digest/artifact → Ready → `Start` 引用已提交 ID。session
-同时只允许一个同方向传输，大小受 `maximum_transfer_bytes` 限制。
+Commit → runtime 校验大小/digest/artifact → Ready → `Start` 引用已提交 ID。普通导入在
+Begin 携带 32 字节 BLAKE3，Commit 不携带 digest；FullProjectManifest 的 Begin 不携带
+digest，宿主边生成边计算并在 Commit 携带 32 字节 BLAKE3。两种位置不得同时使用或遗漏。
+FullProjectManifest 的每个 host chunk 最多 4 MiB，宿主总大小上限为 1 GiB，同时仍受协商
+`maximum_transfer_bytes` 约束；runtime 只在完整校验规范 CBOR 后暂存，随后才允许请求
+FullProjectFile。session 同时只允许一个同方向传输；导出忙时 Commit 可稍后原样重试，
+格式错误则清理该入站传输。
+
+源码目录的启动 manifest 必须把图片、音频等 Resource 表示成 ExternalResource，只提交
+路径、类别、长度、内容摘要和可用的图片元数据，不把资源正文计入启动信封或 C ABI manifest
+暂存。各客户端都应使用相同的资源 ID/摘要规则，并在首次真正使用资源时通过 service 读取；
+读取后重新校验长度、BLAKE3 和扫描时的文件签名。导出自包含项目或诊断包时，客户端在临时
+spool 中按文件顺序补入资源正文，再按上述 FullProjectManifest 流程传输；不得先在内存中
+构造完整 manifest。旧的 tag 70 直接暂存只供同进程宿主兼容，不是独立客户端的传输方案。
 
 Traditional save 与普通 VM snapshot 只可在没有 deadline 的稳定输入 wait、没有外部
 请求和短暂 effect 时精确导出。VM snapshot 的 `snapshot_purpose` 为 Normal、Debug 或
@@ -789,14 +803,14 @@ JSON number，摘要使用小写 BLAKE3 十六进制。历史最多
   `Normal|Debug|Diagnosis`，非 VM snapshot 必须使用 Normal；
   `StateExportReady {kind,result}`；result 是
   `Ready{transfer}` 或 `Ineligible{reasons[]}`；
-- `StateImportBegin {kind,total_bytes,digest,artifact_id?}`；
+- `StateImportBegin {kind,total_bytes,digest?,artifact_id?}`；
   `StateImportAccepted {transfer_id}`；
   `StateImportChunk {transfer_id,offset,data}`；
-  `StateImportCommit {transfer_id}`；
+  `StateImportCommit {transfer_id,digest?}`；
   `StateImportReady {transfer_id,kind}`；
 - `StateExportChunkRequest {transfer_id,offset,maximum_bytes}`；
   `StateExportChunk {transfer_id,offset,data,complete}`；
-- `FullProjectManifest {manifest}` 暂存用户主动导出所需的完整运行输入；
+- `FullProjectManifest {manifest}` 是进程内兼容暂存入口；独立客户端必须使用 kind 5 导入；
   `StateExportCancel {kind}` 可取消尚在准备或传输中的指定导出。
 - `CompiledProjectCache` 使用内部 `RERACACH` v7 容器和低压缩率，省略可由宿主直接读取的
   脚本正文及图片、音频正文；`FullProjectFile` 使用自包含 `RERAPROJ` v7 容器。

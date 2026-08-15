@@ -346,7 +346,7 @@ fn state_import_rejects_out_of_order_chunks_and_bad_digests() {
         RuntimeMessage::StateImportBegin(StateImportBegin {
             kind: StateExportKind::TraditionalSave,
             total_bytes: 3,
-            digest: ProtocolBytes::new([0; 32]),
+            digest: Some(ProtocolBytes::new([0; 32])),
             artifact_id: None,
         }),
     );
@@ -389,7 +389,10 @@ fn state_import_rejects_out_of_order_chunks_and_bad_digests() {
     submit(
         &mut session,
         4,
-        RuntimeMessage::StateImportCommit(StateImportCommit { transfer_id }),
+        RuntimeMessage::StateImportCommit(StateImportCommit {
+            transfer_id,
+            digest: None,
+        }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
     assert!(drain(&mut session).iter().any(|message| matches!(
@@ -399,6 +402,290 @@ fn state_import_rejects_out_of_order_chunks_and_bad_digests() {
             ..
         })
     )));
+}
+
+#[test]
+fn full_project_manifest_import_accepts_commit_digest() {
+    let mut session = negotiated_session();
+    let manifest = ProjectManifest {
+        project_revision: 7,
+        files: Vec::new(),
+    };
+    let bytes = encode_canonical(&manifest).unwrap();
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::StateImportBegin(StateImportBegin {
+            kind: StateExportKind::FullProjectManifest,
+            total_bytes: bytes.len() as u64,
+            digest: None,
+            artifact_id: None,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let transfer_id = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::StateImportAccepted(value) => Some(value.transfer_id),
+            _ => None,
+        })
+        .unwrap();
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::StateImportChunk(StateImportChunk {
+            transfer_id,
+            offset: 0,
+            data: ProtocolBytes::new(bytes[..2].to_vec()),
+        }),
+    );
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::StateImportChunk(StateImportChunk {
+            transfer_id,
+            offset: 2,
+            data: ProtocolBytes::new(bytes[2..].to_vec()),
+        }),
+    );
+    submit(
+        &mut session,
+        4,
+        RuntimeMessage::StateImportCommit(StateImportCommit {
+            transfer_id,
+            digest: Some(ProtocolBytes::new(blake3::hash(&bytes).as_bytes().to_vec())),
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::StateImportReady(StateImportReady {
+            kind: StateExportKind::FullProjectManifest,
+            ..
+        })
+    )));
+    assert_eq!(session.staged_full_project_manifest, Some(manifest));
+}
+
+#[test]
+fn state_import_begin_enforces_digest_placement() {
+    let mut session = negotiated_session();
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::StateImportBegin(StateImportBegin {
+            kind: StateExportKind::FullProjectManifest,
+            total_bytes: 1,
+            digest: Some(ProtocolBytes::new([0; 32])),
+            artifact_id: None,
+        }),
+    );
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::StateImportBegin(StateImportBegin {
+            kind: StateExportKind::TraditionalSave,
+            total_bytes: 1,
+            digest: None,
+            artifact_id: None,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert_eq!(
+        drain(&mut session)
+            .iter()
+            .filter(|message| matches!(message, RuntimeMessage::CommandRejected(_)))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn state_import_commit_enforces_digest_placement() {
+    let mut session = negotiated_session();
+    let transfer_id = begin_state_import(
+        &mut session,
+        1,
+        StateExportKind::FullProjectManifest,
+        1,
+        None,
+    );
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::StateImportChunk(StateImportChunk {
+            transfer_id,
+            offset: 0,
+            data: ProtocolBytes::new([0xff]),
+        }),
+    );
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::StateImportCommit(StateImportCommit {
+            transfer_id,
+            digest: None,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(CommandRejected {
+            code: CommandErrorCode::InvalidValue,
+            ..
+        })
+    )));
+
+    let mut session = negotiated_session();
+    let ordinary = [b'x'];
+    let transfer_id = begin_state_import(
+        &mut session,
+        1,
+        StateExportKind::TraditionalSave,
+        1,
+        Some(ProtocolBytes::new(
+            blake3::hash(&ordinary).as_bytes().to_vec(),
+        )),
+    );
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::StateImportChunk(StateImportChunk {
+            transfer_id,
+            offset: 0,
+            data: ProtocolBytes::new(ordinary),
+        }),
+    );
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::StateImportCommit(StateImportCommit {
+            transfer_id,
+            digest: Some(ProtocolBytes::new(blake3::hash(&ordinary).as_bytes().to_vec())),
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(CommandRejected {
+            code: CommandErrorCode::InvalidValue,
+            ..
+        })
+    )));
+}
+
+#[test]
+fn full_project_manifest_import_cleans_up_malformed_cbor() {
+    let mut session = negotiated_session();
+    let malformed = [0xff];
+    let transfer_id = begin_state_import(
+        &mut session,
+        1,
+        StateExportKind::FullProjectManifest,
+        malformed.len() as u64,
+        None,
+    );
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::StateImportChunk(StateImportChunk {
+            transfer_id,
+            offset: 0,
+            data: ProtocolBytes::new(malformed),
+        }),
+    );
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::StateImportCommit(StateImportCommit {
+            transfer_id,
+            digest: Some(ProtocolBytes::new(blake3::hash(&malformed).as_bytes().to_vec())),
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(CommandRejected {
+            code: CommandErrorCode::InvalidValue,
+            ..
+        })
+    )));
+    assert!(session.inbound_transfer.is_none());
+}
+
+#[test]
+fn full_project_manifest_busy_commit_is_retryable() {
+    let mut session = negotiated_session();
+    let manifest = ProjectManifest {
+        project_revision: 9,
+        files: Vec::new(),
+    };
+    let bytes = encode_canonical(&manifest).unwrap();
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::StateImportBegin(StateImportBegin {
+            kind: StateExportKind::FullProjectManifest,
+            total_bytes: bytes.len() as u64,
+            digest: None,
+            artifact_id: None,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let transfer_id = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::StateImportAccepted(value) => Some(value.transfer_id),
+            _ => None,
+        })
+        .unwrap();
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::StateImportChunk(StateImportChunk {
+            transfer_id,
+            offset: 0,
+            data: ProtocolBytes::new(bytes.clone()),
+        }),
+    );
+    session.staged_full_project_manifest = Some(ProjectManifest {
+        project_revision: 8,
+        files: Vec::new(),
+    });
+    let commit = StateImportCommit {
+        transfer_id,
+        digest: Some(ProtocolBytes::new(blake3::hash(&bytes).as_bytes().to_vec())),
+    };
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::StateImportCommit(commit.clone()),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(CommandRejected {
+            code: CommandErrorCode::InvalidState,
+            ..
+        })
+    )));
+    assert!(session.inbound_transfer.is_some());
+
+    session.staged_full_project_manifest = None;
+    submit(
+        &mut session,
+        4,
+        RuntimeMessage::StateImportCommit(commit),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::StateImportReady(StateImportReady {
+            kind: StateExportKind::FullProjectManifest,
+            ..
+        })
+    )));
+    assert_eq!(session.staged_full_project_manifest, Some(manifest));
 }
 
 #[test]

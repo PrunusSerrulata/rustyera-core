@@ -452,7 +452,7 @@ fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
         let original_payload = match &original.payload {
             FilePayload::Utf8(value) => value.as_bytes(),
             FilePayload::Bytes(value) => value.as_slice(),
-            FilePayload::IoError(_) => unreachable!(),
+            FilePayload::IoError(_) | FilePayload::ExternalResource(_) => unreachable!(),
         };
         assert_eq!(
             decoded.content_hash.as_ref().map(ProtocolBytes::as_slice),

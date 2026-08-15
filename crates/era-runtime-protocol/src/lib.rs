@@ -69,7 +69,7 @@ pub use presentation::{
     TooltipFormatFlag, TooltipSettings,
 };
 pub use project::{
-    FileCategory, FileChange, FilePayload, FrontendIoError, FrontendIoErrorKind,
+    ExternalResource, FileCategory, FileChange, FilePayload, FrontendIoError, FrontendIoErrorKind,
     ProjectAnalysisReport, ProjectAnalysisRequest, ProjectGameInformation, ProjectIdentity,
     ProjectLoadReport, ProjectLoadRequest, ProjectManifest, ProtocolDiagnostic, ReloadProject,
     SourceLocation, SubmittedFile, validate_relative_path,

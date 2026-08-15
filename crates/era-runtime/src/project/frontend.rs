@@ -15,10 +15,12 @@ pub(super) fn csv_file(path: String, payload: FilePayload) -> CsvFrontendFile {
         relative_path: path,
         payload: match payload {
             FilePayload::Utf8(value) => CsvFilePayload::Utf8(value),
-            FilePayload::Bytes(_) => CsvFilePayload::IoError(CsvIoError {
-                kind: CsvIoErrorKind::InvalidData,
-                message: "CSV and EraBasic sources must be submitted as UTF-8".into(),
-            }),
+            FilePayload::Bytes(_) | FilePayload::ExternalResource(_) => {
+                CsvFilePayload::IoError(CsvIoError {
+                    kind: CsvIoErrorKind::InvalidData,
+                    message: "CSV and EraBasic sources must be submitted as UTF-8".into(),
+                })
+            }
             FilePayload::IoError(error) => CsvFilePayload::IoError(CsvIoError {
                 kind: csv_error_kind(error.kind),
                 message: error.message,
@@ -32,10 +34,12 @@ pub(super) fn analyzer_source(path: String, payload: FilePayload) -> ProjectSour
         relative_path: path,
         payload: match payload {
             FilePayload::Utf8(value) => SourcePayload::Utf8(value),
-            FilePayload::Bytes(_) => SourcePayload::IoError(SourceIoError {
-                kind: SourceIoErrorKind::InvalidData,
-                message: "EraBasic sources must be submitted as UTF-8".into(),
-            }),
+            FilePayload::Bytes(_) | FilePayload::ExternalResource(_) => {
+                SourcePayload::IoError(SourceIoError {
+                    kind: SourceIoErrorKind::InvalidData,
+                    message: "EraBasic sources must be submitted as UTF-8".into(),
+                })
+            }
             FilePayload::IoError(error) => SourcePayload::IoError(SourceIoError {
                 kind: analyzer_error_kind(error.kind),
                 message: error.message,
@@ -74,7 +78,7 @@ pub(super) fn payload_hash(payload: &FilePayload) -> Option<blake3::Hash> {
     match payload {
         FilePayload::Utf8(value) => Some(blake3::hash(value.as_bytes())),
         FilePayload::Bytes(value) => Some(blake3::hash(value.as_slice())),
-        FilePayload::IoError(_) => None,
+        FilePayload::ExternalResource(_) | FilePayload::IoError(_) => None,
     }
 }
 

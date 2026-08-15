@@ -32,7 +32,16 @@ pub(super) fn normalize_resource(
             ));
             return None;
         }
-        FilePayload::Utf8(_) | FilePayload::Bytes(_) => {}
+        FilePayload::ExternalResource(_) if category != FileCategory::Resource => {
+            diagnostics.push(project_diagnostic(
+                "runtime.invalid_external_resource",
+                RuntimeLogLevel::Error,
+                "external resource payloads are only valid for binary resources",
+                location,
+            ));
+            return None;
+        }
+        FilePayload::Utf8(_) | FilePayload::Bytes(_) | FilePayload::ExternalResource(_) => {}
         FilePayload::IoError(error) => {
             diagnostics.push(project_diagnostic(
                 "runtime.frontend_io_error",
@@ -127,12 +136,14 @@ pub(super) fn inspect_deferred_file(
             "configuration and resource manifests must be submitted as UTF-8",
             Some(location()),
         )),
-        FilePayload::Utf8(_) | FilePayload::Bytes(_) => diagnostics.push(project_diagnostic(
-            code,
-            RuntimeLogLevel::Warning,
-            message,
-            Some(location()),
-        )),
+        FilePayload::Utf8(_) | FilePayload::Bytes(_) | FilePayload::ExternalResource(_) => {
+            diagnostics.push(project_diagnostic(
+                code,
+                RuntimeLogLevel::Warning,
+                message,
+                Some(location()),
+            ));
+        }
     }
 }
 

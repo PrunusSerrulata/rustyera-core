@@ -1,8 +1,8 @@
-use era_protocol::ProtocolVersion;
+use era_protocol::{ProtocolBytes, ProtocolVersion};
 use era_runtime_protocol::{
     ExtensionArgument, ExtensionArgumentStyle, ExtensionCallableKind, ExtensionDeclaration,
-    ExtensionValueType, FileCategory, FileChange, FilePayload, ProjectAnalysisRequest,
-    ReloadProject, RuntimeLogLevel, SubmittedFile,
+    ExtensionValueType, ExternalResource, FileCategory, FileChange, FilePayload,
+    ImageMetadataResponse, ProjectAnalysisRequest, ReloadProject, RuntimeLogLevel, SubmittedFile,
 };
 
 use super::*;
@@ -24,6 +24,72 @@ fn configuration(text: &str) -> SubmittedFile {
         payload: FilePayload::Utf8(text.into()),
         content_hash: None,
     }
+}
+
+#[test]
+fn external_resource_metadata_avoids_startup_service_request() {
+    let bytes = b"not transferred at startup";
+    let digest = blake3::hash(bytes);
+    let build = build_project(
+        &ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "resources/image.png".into(),
+                category: FileCategory::Resource,
+                payload: FilePayload::ExternalResource(ExternalResource {
+                    byte_length: bytes.len() as u64,
+                    image_metadata: Some(ImageMetadataResponse {
+                        width: 64,
+                        height: 32,
+                        format: "png".into(),
+                        animated: false,
+                    }),
+                }),
+                content_hash: Some(ProtocolBytes::new(digest.as_bytes().to_vec())),
+            }],
+        },
+        None,
+    );
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    let graph = build.snapshot.unwrap().resource_graph;
+    assert!(graph.metadata_requests().is_empty());
+    assert_eq!(graph.embedded_project_bytes(), 0);
+}
+
+#[test]
+fn invalid_external_resource_metadata_falls_back_to_lazy_service_detection() {
+    let bytes = b"not transferred at startup";
+    let digest = blake3::hash(bytes);
+    let build = build_project(
+        &ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "resources/image.png".into(),
+                category: FileCategory::Resource,
+                payload: FilePayload::ExternalResource(ExternalResource {
+                    byte_length: bytes.len() as u64,
+                    image_metadata: Some(ImageMetadataResponse {
+                        width: 0,
+                        height: 32,
+                        format: "invalid".into(),
+                        animated: false,
+                    }),
+                }),
+                content_hash: Some(ProtocolBytes::new(digest.as_bytes().to_vec())),
+            }],
+        },
+        None,
+    );
+
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    assert!(build.report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "runtime.invalid_image_metadata"
+            && diagnostic.level == RuntimeLogLevel::Warning
+    }));
+    assert_eq!(
+        build.snapshot.unwrap().resource_graph.metadata_requests(),
+        vec![("resources/image.png".into(), *digest.as_bytes())]
+    );
 }
 
 #[test]

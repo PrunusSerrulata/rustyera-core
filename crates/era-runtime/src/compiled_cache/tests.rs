@@ -239,15 +239,15 @@ fn source_sections_decode_without_an_independent_section_barrier() {
         decode_cache_parts_with_delays(
             &sections,
             CacheDecodeDelays {
-                source_records: std::time::Duration::from_millis(250),
-                source_entries: std::time::Duration::from_millis(250),
-                independent: std::time::Duration::from_millis(250),
+                source_records: std::time::Duration::from_millis(500),
+                source_entries: std::time::Duration::from_millis(500),
+                independent: std::time::Duration::from_millis(500),
             },
         )
         .unwrap();
     });
     assert!(
-        started.elapsed() < std::time::Duration::from_millis(425),
+        started.elapsed() < std::time::Duration::from_millis(850),
         "source decoding waited for the independent section group"
     );
 }

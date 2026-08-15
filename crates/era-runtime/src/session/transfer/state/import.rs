@@ -7,11 +7,14 @@ impl RuntimeSession {
         message_id: u64,
         request: StateImportBegin,
     ) -> Result<(), RuntimeError> {
-        if request.kind == StateExportKind::InputReplay {
+        if matches!(
+            request.kind,
+            StateExportKind::InputReplay | StateExportKind::FullProjectFile
+        ) {
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidValue,
-                "input replay is export-only and cannot be imported",
+                "the requested state kind is export-only and cannot be imported",
             );
         }
         if self.inbound_transfer.is_some() {
@@ -28,11 +31,21 @@ impl RuntimeSession {
                 "state import exceeds the negotiated transfer limit",
             );
         }
-        if request.digest.as_slice().len() != blake3::OUT_LEN {
+        let streamed_manifest = request.kind == StateExportKind::FullProjectManifest;
+        if request.digest.is_some() == streamed_manifest
+            || request
+                .digest
+                .as_ref()
+                .is_some_and(|digest| digest.as_slice().len() != blake3::OUT_LEN)
+        {
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidValue,
-                "state import digest must contain 32 bytes",
+                if streamed_manifest {
+                    "full project manifest digest must be supplied at commit"
+                } else {
+                    "state import begin digest must contain 32 bytes"
+                },
             );
         }
         match usize::try_from(request.total_bytes) {
@@ -51,11 +64,14 @@ impl RuntimeSession {
                 transfer_id,
                 kind: request.kind,
                 total_bytes: request.total_bytes,
-                digest: request.digest,
+                digest: request
+                    .digest
+                    .unwrap_or_else(|| ProtocolBytes::new(Vec::new())),
                 artifact_id: request.artifact_id,
             },
             // Grow with accepted chunks instead of trusting a potentially huge declaration.
             bytes: Vec::new(),
+            hasher: Some(blake3::Hasher::new()),
             committed: false,
         });
         self.emit(
@@ -107,15 +123,18 @@ impl RuntimeSession {
             .try_reserve(chunk.data.as_slice().len())
             .map_err(|_| RuntimeError::ResourceLimit("state import allocation failed"))?;
         transfer.bytes.extend_from_slice(chunk.data.as_slice());
+        if let Some(hasher) = &mut transfer.hasher {
+            hasher.update(chunk.data.as_slice());
+        }
         Ok(())
     }
 
     pub(in super::super::super) fn commit_state_import(
         &mut self,
         message_id: u64,
-        commit: StateImportCommit,
+        commit: &StateImportCommit,
     ) -> Result<(), RuntimeError> {
-        let Some(transfer) = self.inbound_transfer.as_mut() else {
+        let Some(transfer) = self.inbound_transfer.as_ref() else {
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidState,
@@ -129,9 +148,23 @@ impl RuntimeSession {
                 "state import transfer is stale",
             );
         }
-        if u64::try_from(transfer.bytes.len()).unwrap_or(u64::MAX)
-            != transfer.descriptor.total_bytes
-            || transfer.descriptor.digest.as_slice() != blake3::hash(&transfer.bytes).as_bytes()
+        let commit_digest = commit.digest.as_ref();
+        let streamed_manifest = transfer.descriptor.kind == StateExportKind::FullProjectManifest;
+        let expected_digest = if streamed_manifest {
+            commit_digest.map(ProtocolBytes::as_slice)
+        } else if commit_digest.is_none() {
+            Some(transfer.descriptor.digest.as_slice())
+        } else {
+            None
+        };
+        let actual_digest = transfer
+            .hasher
+            .as_ref()
+            .map_or_else(|| blake3::hash(&transfer.bytes), blake3::Hasher::finalize);
+        if expected_digest.is_none_or(|digest| digest.len() != blake3::OUT_LEN)
+            || u64::try_from(transfer.bytes.len()).unwrap_or(u64::MAX)
+                != transfer.descriptor.total_bytes
+            || expected_digest != Some(actual_digest.as_bytes().as_slice())
         {
             return self.reject(
                 message_id,
@@ -139,8 +172,39 @@ impl RuntimeSession {
                 "state import length or digest does not match its descriptor",
             );
         }
-        transfer.committed = true;
         let kind = transfer.descriptor.kind;
+        if kind == StateExportKind::FullProjectManifest {
+            if self.full_project_task.is_some()
+                || self.outbound_transfer.is_some()
+                || self.staged_full_project_manifest.is_some()
+            {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "a project export is already active",
+                );
+            }
+            let bytes = self
+                .inbound_transfer
+                .take()
+                .expect("validated full manifest import exists")
+                .bytes;
+            let manifest: ProjectManifest = match decode_canonical(&bytes) {
+                Ok(manifest) => manifest,
+                Err(_) => {
+                    return self.reject(
+                        message_id,
+                        CommandErrorCode::InvalidValue,
+                        "full project manifest is not valid canonical CBOR",
+                    );
+                }
+            };
+            self.full_project_failure = None;
+            self.full_project_file = None;
+            self.staged_full_project_manifest = Some(manifest);
+        } else if let Some(transfer) = self.inbound_transfer.as_mut() {
+            transfer.committed = true;
+        }
         self.emit(
             RuntimeMessage::StateImportReady(StateImportReady {
                 transfer_id: commit.transfer_id,

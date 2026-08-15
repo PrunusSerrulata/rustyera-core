@@ -232,7 +232,8 @@ impl RuntimeSession {
             }
             StateExportKind::TraditionalSave
             | StateExportKind::VmSnapshot
-            | StateExportKind::InputReplay => {}
+            | StateExportKind::InputReplay
+            | StateExportKind::FullProjectManifest => {}
         }
     }
 }

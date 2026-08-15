@@ -280,6 +280,7 @@ fn cooperative_work_estimate(
         let bytes = match &file.payload {
             FilePayload::Utf8(value) => value.len(),
             FilePayload::Bytes(value) => value.as_slice().len(),
+            FilePayload::ExternalResource(_) => 0,
             FilePayload::IoError(error) => error.message.len(),
         };
         total.saturating_add(bytes.max(1).div_ceil(COOPERATIVE_MANIFEST_CHUNK_BYTES))
@@ -340,6 +341,14 @@ impl ManifestSectionEncoder {
         let payload = match &file.payload {
             FilePayload::Utf8(text) => text.as_bytes(),
             FilePayload::Bytes(bytes) => bytes.as_slice(),
+            FilePayload::ExternalResource(_)
+                if self.kind == ProjectContainerKind::CompiledCache =>
+            {
+                &[]
+            }
+            FilePayload::ExternalResource(_) => {
+                return Err("full project files cannot contain external resources".into());
+            }
             FilePayload::IoError(_) => {
                 return Err("project files with I/O errors cannot be cached".into());
             }

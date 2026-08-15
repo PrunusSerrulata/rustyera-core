@@ -2,7 +2,7 @@ use era_protocol::{ProtocolBytes, ProtocolError, ProtocolErrorCode};
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::RuntimeLogLevel;
+use crate::{ImageMetadataResponse, RuntimeLogLevel};
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(index_only)]
@@ -65,6 +65,19 @@ pub enum FilePayload {
     Bytes(#[n(0)] ProtocolBytes),
     #[n(2)]
     IoError(#[n(0)] FrontendIoError),
+    /// A host-owned binary resource whose bytes remain outside Runtime until presentation or
+    /// an explicit full-project export needs them.
+    #[n(3)]
+    ExternalResource(#[n(0)] ExternalResource),
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ExternalResource {
+    #[n(0)]
+    pub byte_length: u64,
+    #[n(1)]
+    pub image_metadata: Option<ImageMetadataResponse>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

@@ -281,9 +281,37 @@ fn build_project_inner_with_extensions(
             );
             continue;
         }
-        let payload_digest = payload_hash(&file.payload);
-        if let (Some(expected), Some(actual)) =
-            (file.content_hash.as_ref(), payload_digest.as_ref())
+        let payload_digest = match &file.payload {
+            FilePayload::ExternalResource(_) => file.content_hash.as_ref().and_then(|digest| {
+                <[u8; 32]>::try_from(digest.as_slice())
+                    .ok()
+                    .map(blake3::Hash::from_bytes)
+            }),
+            payload => payload_hash(payload),
+        };
+        if matches!(file.payload, FilePayload::ExternalResource(_)) && payload_digest.is_none() {
+            diagnostics.push(project_diagnostic(
+                "runtime.invalid_external_resource_digest",
+                RuntimeLogLevel::Error,
+                "external resources require a 32-byte content hash",
+                Some(SourceLocation {
+                    relative_path: path.clone(),
+                    byte_start: 0,
+                    byte_end: 0,
+                    line: None,
+                    byte_column: None,
+                }),
+            ));
+            report_fraction(
+                progress,
+                ProjectProgressStage::Normalizing,
+                file_index + 1,
+                file_count,
+            );
+            continue;
+        }
+        let actual_hash = payload_hash(&file.payload);
+        if let (Some(expected), Some(actual)) = (file.content_hash.as_ref(), actual_hash.as_ref())
             && expected.as_slice() != actual.as_bytes()
         {
             diagnostics.push(project_diagnostic(

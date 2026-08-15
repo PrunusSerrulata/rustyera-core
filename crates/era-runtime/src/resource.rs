@@ -184,6 +184,7 @@ impl ResourceGraph {
         self.images.values().map(|image| image.bytes.len()).sum()
     }
 
+    #[cfg(test)]
     pub(crate) fn from_manifest(manifest: &ProjectManifest) -> (Self, Vec<ResourceDiagnostic>) {
         Self::from_manifest_with_progress(manifest, |_, _| {})
     }
@@ -207,6 +208,7 @@ impl ResourceGraph {
     ) -> (Self, Vec<ResourceDiagnostic>) {
         let mut graph = Self::default();
         let mut diagnostics = Vec::new();
+        let mut preloaded_metadata = Vec::new();
         let total = Self::work_item_count(manifest);
         let mut completed = 0;
         progress(completed, total);
@@ -219,6 +221,7 @@ impl ResourceGraph {
                 && let Some(bytes) = match &file.payload {
                     FilePayload::Utf8(value) => Some(value.as_bytes()),
                     FilePayload::Bytes(value) => Some(value.as_slice()),
+                    FilePayload::ExternalResource(_) => Some(&[][..]),
                     FilePayload::IoError(_) => None,
                 }
             {
@@ -227,6 +230,11 @@ impl ResourceGraph {
                     .as_ref()
                     .and_then(|hash| <[u8; 32]>::try_from(hash.as_slice()).ok())
                     .unwrap_or_else(|| *blake3::hash(bytes).as_bytes());
+                if let FilePayload::ExternalResource(resource) = &file.payload
+                    && let Some(metadata) = resource.image_metadata.clone()
+                {
+                    preloaded_metadata.push((path.clone(), metadata));
+                }
                 graph.images.insert(
                     path.to_ascii_lowercase(),
                     ResourceImage {
@@ -260,6 +268,17 @@ impl ResourceGraph {
             parse_resource_manifest(&mut graph, &mut diagnostics, &manifest.relative_path, text);
             completed += 1;
             progress(completed, total);
+        }
+        for (path, metadata) in preloaded_metadata {
+            if let Err(message) = graph.apply_metadata(&path, metadata) {
+                diagnostics.push(ResourceDiagnostic {
+                    code: "runtime.invalid_image_metadata",
+                    path,
+                    line: None,
+                    message,
+                    error: false,
+                });
+            }
         }
         (graph, diagnostics)
     }
@@ -298,6 +317,12 @@ impl ResourceGraph {
     ) -> Result<(), String> {
         if metadata.width == 0 || metadata.height == 0 {
             return Err("image metadata dimensions must be positive".into());
+        }
+        if !matches!(
+            metadata.format.as_str(),
+            "png" | "bmp" | "gif" | "jpeg" | "webp"
+        ) {
+            return Err("image metadata format is unsupported".into());
         }
         let image = self
             .images
