@@ -63,6 +63,7 @@ use era_runtime_protocol::{
     UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest, UpdateCheckResponse, VersionRejected,
     WaitChange, WaitKind, WaitStability,
 };
+use era_runtime_protocol::{ClientPreferenceLayers, ClientPreferencesApplied, ConfigurationChange};
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
 use erabasic_vm::{
@@ -75,7 +76,7 @@ use erabasic_vm::{
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
-use era_runtime_protocol::{CONFIG_BROWSER, CONFIG_TUI, ConfigurationChange};
+use era_runtime_protocol::{CONFIG_BROWSER, CONFIG_TUI};
 
 use crate::controller::{SystemController, SystemFlow, SystemStep};
 use crate::host::{

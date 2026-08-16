@@ -37,7 +37,7 @@ use self::frontend::{
 use self::model::SemanticConfig;
 pub(crate) use self::model::{
     NormalizedProjectSnapshot, NormalizedResourceIdentity, profile_applicability,
-    profile_application,
+    profile_application, profile_preference_eligible,
 };
 use self::support::{
     failed, failed_with_incremental, inspect_deferred_file, normalize_resource,

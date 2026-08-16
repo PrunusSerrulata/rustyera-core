@@ -451,6 +451,31 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
             .find(|entry| entry.code == "FontSize")
             .is_some_and(|entry| entry.preference_eligible)
     );
+    assert_eq!(
+        initial
+            .entries
+            .iter()
+            .filter(|entry| entry.preference_eligible)
+            .map(|entry| entry.code.as_str())
+            .collect::<BTreeSet<_>>(),
+        [
+            "AudioVolume",
+            "BackColor",
+            "ButtonWrap",
+            "FocusColor",
+            "FontName",
+            "FontSize",
+            "ForeColor",
+            "LineHeight",
+            "ReplaceFullWidthSpaces",
+            "ScrollHeight",
+            "UseMenu",
+            "UseMouse",
+        ]
+        .into_iter()
+        .collect(),
+        "browser preferences must expose only the planned client-only surface"
+    );
     let identity_before_preferences = session.project_snapshot.as_ref().unwrap().project_identity;
 
     session
@@ -499,7 +524,7 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
             .find(|entry| entry.code == code)
             .unwrap();
         assert_eq!(entry.effective_value, project_value);
-        assert_eq!(entry.client_effective_value, client_value);
+        assert_eq!(entry.client_effective_value, client_value, "{code}");
     }
     let snapshot_after_preferences = session.project_snapshot.as_ref().unwrap();
     assert_eq!(

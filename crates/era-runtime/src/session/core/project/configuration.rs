@@ -326,12 +326,16 @@ fn normalize_client_preferences(
             };
             if spec.effect != era_config::ConfigEffect::QueryOnlyClientPreference
                 || !spec.clients.contains(&client)
+                || !crate::project::profile_preference_eligible(profile, spec.code)
                 || !seen.insert(spec.code.to_ascii_uppercase())
             {
                 return Err("client preferences contain an unsupported or duplicate setting");
             }
             let mut values = snapshot.configuration.clone();
-            if values.apply(spec.code, &change.value, false).is_err() {
+            if values
+                .apply_client_override(spec.code, &change.value)
+                .is_err()
+            {
                 return Err("client preferences contain an invalid value");
             }
             let value = values
@@ -367,13 +371,13 @@ pub(super) fn resolve_client_configuration(
         }
         snapshot
             .client_configuration
-            .apply(&change.code, &change.value, false)
+            .apply_client_override(&change.code, &change.value)
             .expect("normalized global client preference remains valid");
     }
     for change in &preferences.project {
         snapshot
             .client_configuration
-            .apply(&change.code, &change.value, false)
+            .apply_client_override(&change.code, &change.value)
             .expect("normalized project client preference remains valid");
     }
 }

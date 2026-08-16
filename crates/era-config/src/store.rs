@@ -105,6 +105,20 @@ impl ConfigStore {
         Ok(())
     }
 
+    /// Apply a client-only projection even when the project source locked the setting.
+    /// This changes neither the source lock nor explicit-source tracking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigParseError`] for an unknown setting or invalid value.
+    pub fn apply_client_override(&mut self, name: &str, raw: &str) -> Result<(), ConfigParseError> {
+        let code = resolve_code(name).ok_or(ConfigParseError::UnknownKey)?;
+        let current = self.values.get(&code).ok_or(ConfigParseError::UnknownKey)?;
+        let parsed = parse_like(&code, current, raw)?;
+        self.values.insert(code, parsed);
+        Ok(())
+    }
+
     /// Apply an emuera/default/fixed config assignment. Replace and debug items live
     /// in different reference files and therefore are not accepted here.
     ///

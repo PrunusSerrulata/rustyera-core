@@ -92,8 +92,7 @@ impl NormalizedProjectSnapshot {
                 let applicability = protocol_applicability(spec.clients);
                 let preference_eligible = spec.effect
                     == era_config::ConfigEffect::QueryOnlyClientPreference
-                    && profile_applicability(self.configuration_profile)
-                        .is_some_and(|flag| applicability & flag != 0);
+                    && profile_preference_eligible(self.configuration_profile, spec.code);
                 (applicability != 0).then(|| ProjectConfigurationEntry {
                     code: spec.code.into(),
                     japanese: spec.japanese.into(),
@@ -158,6 +157,40 @@ pub(crate) fn profile_application(
         ConfigurationApplication::Hot
     } else {
         ConfigurationApplication::Restart
+    }
+}
+
+pub(crate) fn profile_preference_eligible(profile: ConfigurationClientProfile, code: &str) -> bool {
+    let browser = matches!(
+        code,
+        "UseMenu"
+            | "UseMouse"
+            | "ScrollHeight"
+            | "ButtonWrap"
+            | "FontName"
+            | "FontSize"
+            | "LineHeight"
+            | "ForeColor"
+            | "BackColor"
+            | "FocusColor"
+            | "AudioVolume"
+            | "ReplaceFullWidthSpaces"
+    );
+    match profile {
+        ConfigurationClientProfile::Tui => matches!(
+            code,
+            "UseMouse"
+                | "ButtonWrap"
+                | "ForeColor"
+                | "BackColor"
+                | "FocusColor"
+                | "ReplaceFullWidthSpaces"
+        ),
+        ConfigurationClientProfile::Browser => browser,
+        ConfigurationClientProfile::Tauri => {
+            browser || matches!(code, "WindowMaximixed" | "WindowX" | "WindowY")
+        }
+        ConfigurationClientProfile::Reference => false,
     }
 }
 

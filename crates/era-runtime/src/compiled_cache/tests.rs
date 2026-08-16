@@ -164,19 +164,17 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
             .iter()
             .all(|fingerprint| fingerprint.0[16..] == [0; 16])
     );
+    let mut revised = project.clone();
+    revised.project_revision = 9;
     assert_eq!(
         project_key(&project_identity(&project), &[]),
-        project_key(
-            &project_identity(&manifest("@SYSTEM_TITLE\nRETURN\n", 9)),
-            &[]
-        )
+        project_key(&project_identity(&revised), &[])
     );
+    let mut changed = project.clone();
+    changed.files[0].payload = FilePayload::Utf8("@SYSTEM_TITLE\nPRINTL changed\nRETURN\n".into());
     assert_ne!(
         project_key(&project_identity(&project), &[]),
-        project_key(
-            &project_identity(&manifest("@SYSTEM_TITLE\nPRINTL changed\nRETURN\n", 1)),
-            &[]
-        )
+        project_key(&project_identity(&changed), &[])
     );
 }
 
