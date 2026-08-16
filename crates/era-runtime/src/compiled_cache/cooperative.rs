@@ -374,7 +374,7 @@ impl ManifestSectionEncoder {
                 writer
                     .write_all(&[
                         file.category as u8,
-                        u8::from(matches!(&file.payload, FilePayload::Bytes(_))),
+                        u8::from(file.category == FileCategory::Resource),
                         u8::from(omitted),
                     ])
                     .map_err(|error| error.to_string())?;

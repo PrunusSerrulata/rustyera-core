@@ -1,6 +1,8 @@
 use std::fmt::Write as _;
 
-use era_runtime_protocol::{ConfigurationClientProfile, FileCategory, FilePayload, SubmittedFile};
+use era_runtime_protocol::{
+    ConfigurationClientProfile, ExternalResource, FileCategory, FilePayload, SubmittedFile,
+};
 
 use super::*;
 
@@ -481,6 +483,53 @@ fn compact_cache_omits_source_and_binary_payloads_but_remains_loadable() {
         build.snapshot.as_ref().unwrap().project_identity
     );
     assert!(decode_project_file(&compact, 64 * 1024 * 1024).is_err());
+}
+
+#[test]
+fn compact_cache_encodes_omitted_external_resources_as_binary_payloads() {
+    let mut project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let resource = b"external resource";
+    let digest = blake3::hash(resource);
+    project.files.push(SubmittedFile {
+        relative_path: "resources/title.png".into(),
+        category: FileCategory::Resource,
+        payload: FilePayload::ExternalResource(ExternalResource {
+            byte_length: resource.len() as u64,
+            image_metadata: None,
+        }),
+        content_hash: Some(ProtocolBytes::new(digest.as_bytes().to_vec())),
+    });
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+
+    let compact = encode_compiled_cache_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let decoded = decode(&compact, 64 * 1024 * 1024).unwrap();
+
+    assert_eq!(
+        decoded.snapshot.manifest.files[1].category,
+        FileCategory::Resource
+    );
+    assert_eq!(
+        decoded.snapshot.manifest.files[1]
+            .content_hash
+            .as_ref()
+            .unwrap()
+            .as_slice(),
+        digest.as_bytes()
+    );
+    assert!(matches!(
+        &decoded.snapshot.manifest.files[1].payload,
+        FilePayload::Bytes(bytes) if bytes.as_slice().is_empty()
+    ));
 }
 
 #[test]
