@@ -190,6 +190,9 @@ impl From<&NormalizedProjectSnapshot> for CompiledSnapshotMetadata {
 impl CompiledSnapshotMetadata {
     fn into_snapshot(self, manifest: ProjectManifest) -> Result<NormalizedProjectSnapshot, String> {
         let resource_graph = self.resource_graph;
+        // Explicit-source markers are deliberately not serialized in the cache. Rebuild them
+        // from the authoritative project files so preference precedence is identical on a hit.
+        let editable_configuration = crate::project::project_configuration_values(&manifest.files);
         let configuration_document = manifest
             .files
             .iter()
@@ -205,6 +208,7 @@ impl CompiledSnapshotMetadata {
                         .map_err(|error| error.to_string())
                 },
             )?;
+        let client_configuration = self.configuration.clone();
         Ok(NormalizedProjectSnapshot {
             manifest: std::sync::Arc::new(manifest),
             project_identity: self.project_identity,
@@ -228,7 +232,8 @@ impl CompiledSnapshotMetadata {
             print_c_length: self.print_c_length,
             configuration_profile: self.configuration_profile,
             configuration: self.configuration,
-            editable_configuration: self.editable_configuration,
+            client_configuration,
+            editable_configuration,
             configuration_document,
             generated_configuration_source: None,
             extensions: self.extensions,

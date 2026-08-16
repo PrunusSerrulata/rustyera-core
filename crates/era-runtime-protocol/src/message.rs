@@ -6,14 +6,14 @@ use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AdvanceTime, CancelExternalRequest, ClientHello, ClientStateChanged, CommandRejected,
-    ConfigurationUpdateCommitted, ConfigurationUpdatePrepared, DeviceStateChanged,
-    EffectAcknowledgement, EffectBatch, ExitRequested, ExtensionRegistrySubmit,
-    FinalizeConfigurationUpdate, FrontendInput, FullProjectManifest, InputUndoRequest,
-    InputUndoState, KeyMacroCommand, KeyMacroProfileSubmit, KeyMacroState,
-    PrepareConfigurationUpdate, PresentationDelta, PresentationSnapshot, ProjectAnalysisReport,
-    ProjectAnalysisRequest, ProjectLoadReport, ProjectLoadRequest, ProjectManifest,
-    ProjectionObservation, ProjectionState, ProtocolDiagnostic, ReloadProject,
+    AdvanceTime, CancelExternalRequest, ClientHello, ClientPreferenceLayers,
+    ClientPreferencesApplied, ClientStateChanged, CommandRejected, ConfigurationUpdateCommitted,
+    ConfigurationUpdatePrepared, DeviceStateChanged, EffectAcknowledgement, EffectBatch,
+    ExitRequested, ExtensionRegistrySubmit, FinalizeConfigurationUpdate, FrontendInput,
+    FullProjectManifest, InputUndoRequest, InputUndoState, KeyMacroCommand, KeyMacroProfileSubmit,
+    KeyMacroState, PrepareConfigurationUpdate, PresentationDelta, PresentationSnapshot,
+    ProjectAnalysisReport, ProjectAnalysisRequest, ProjectLoadReport, ProjectLoadRequest,
+    ProjectManifest, ProjectionObservation, ProjectionState, ProtocolDiagnostic, ReloadProject,
     ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault, RuntimeLog, RuntimePhase,
     RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceRequest, ServiceResponse,
     ShutdownReady, ShutdownRequest, StartRequest, StateExportCancel, StateExportChunk,
@@ -22,7 +22,7 @@ use crate::{
     StorageRequest, StorageResponse, VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(32, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(33, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -94,6 +94,10 @@ pub enum RuntimeMessage {
     FinalizeConfigurationUpdate(#[n(0)] FinalizeConfigurationUpdate),
     #[n(27)]
     ConfigurationUpdateCommitted(#[n(0)] ConfigurationUpdateCommitted),
+    #[n(28)]
+    ApplyClientPreferences(#[n(0)] ClientPreferenceLayers),
+    #[n(29)]
+    ClientPreferencesApplied(#[n(0)] ClientPreferencesApplied),
     #[n(30)]
     Input(#[n(0)] FrontendInput),
     #[n(31)]
@@ -199,6 +203,8 @@ impl RuntimeMessage {
             Self::ConfigurationUpdatePrepared(_) => 25,
             Self::FinalizeConfigurationUpdate(_) => 26,
             Self::ConfigurationUpdateCommitted(_) => 27,
+            Self::ApplyClientPreferences(_) => 28,
+            Self::ClientPreferencesApplied(_) => 29,
             Self::Input(_) => 30,
             Self::AdvanceTime(_) => 31,
             Self::WaitChanged(_) => 32,

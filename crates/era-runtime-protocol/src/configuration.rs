@@ -82,6 +82,30 @@ pub struct ProjectConfigurationEntry {
     pub effective_value: String,
     #[n(10)]
     pub application: ConfigurationApplication,
+    /// Whether this field is a client-only preference for the selected profile.
+    #[n(11)]
+    pub preference_eligible: bool,
+    /// Presentation value after project/global client preference layering.
+    #[n(12)]
+    pub client_effective_value: String,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ClientPreferenceLayers {
+    #[n(0)]
+    pub project_revision: u64,
+    #[n(1)]
+    pub global: Vec<ConfigurationChange>,
+    #[n(2)]
+    pub project: Vec<ConfigurationChange>,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ClientPreferencesApplied {
+    #[n(0)]
+    pub configuration: ProjectConfigurationSnapshot,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

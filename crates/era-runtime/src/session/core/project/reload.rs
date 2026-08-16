@@ -164,6 +164,11 @@ impl RuntimeSession {
         build.incremental.compact();
         self.incremental = Arc::new(build.incremental);
         self.project_snapshot = build.snapshot;
+        if let (Some(snapshot), Some(preferences)) =
+            (&mut self.project_snapshot, &self.client_preferences)
+        {
+            resolve_client_configuration(snapshot, preferences);
+        }
         self.compiled_cache_diagnostics = build
             .report
             .diagnostics

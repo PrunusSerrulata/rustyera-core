@@ -70,6 +70,19 @@ mod tests {
     }
 
     #[test]
+    fn explicit_source_tracking_is_derived_and_not_serialized() {
+        let document =
+            ReraConfigDocument::parse("[meta]\nschema_version = 2\n\n[text]\nfont_size = 21\n")
+                .unwrap();
+        let store = document.values().unwrap();
+        assert!(store.is_specified("FontSize"));
+        let encoded = serde_json::to_value(&store).unwrap();
+        assert!(encoded.get("specified").is_none());
+        let decoded: ConfigStore = serde_json::from_value(encoded).unwrap();
+        assert!(!decoded.is_specified("FontSize"));
+    }
+
+    #[test]
     fn tui_profile_has_exact_surface_defaults_and_application_policies() {
         let exposed = catalog()
             .into_iter()

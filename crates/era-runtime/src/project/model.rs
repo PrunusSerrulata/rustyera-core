@@ -42,6 +42,8 @@ pub(crate) struct NormalizedProjectSnapshot {
     pub(crate) configuration_profile: ConfigurationClientProfile,
     /// Complete query-visible configuration, including client-only compatibility values.
     pub(crate) configuration: ConfigStore,
+    /// Client presentation projection after applying non-semantic preference layers.
+    pub(crate) client_configuration: ConfigStore,
     /// Complete editable TOML values; the protocol applies each client's UI whitelist.
     pub(crate) editable_configuration: ConfigStore,
     pub(crate) configuration_document: ReraConfigDocument,
@@ -86,7 +88,12 @@ impl NormalizedProjectSnapshot {
             .filter_map(|spec| {
                 let value = self.editable_configuration.get_code(spec.code)?;
                 let effective = self.configuration.get_code(spec.code)?;
+                let client_effective = self.client_configuration.get_code(spec.code)?;
                 let applicability = protocol_applicability(spec.clients);
+                let preference_eligible = spec.effect
+                    == era_config::ConfigEffect::QueryOnlyClientPreference
+                    && profile_applicability(self.configuration_profile)
+                        .is_some_and(|flag| applicability & flag != 0);
                 (applicability != 0).then(|| ProjectConfigurationEntry {
                     code: spec.code.into(),
                     japanese: spec.japanese.into(),
@@ -102,6 +109,8 @@ impl NormalizedProjectSnapshot {
                     default_value: profile_default(&spec, self.configuration_profile).config_text(),
                     effective_value: effective.config_text(),
                     application: profile_application(spec.code, self.configuration_profile),
+                    preference_eligible,
+                    client_effective_value: client_effective.config_text(),
                 })
             })
             .collect::<Vec<_>>();

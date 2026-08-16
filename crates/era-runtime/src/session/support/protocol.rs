@@ -326,5 +326,6 @@ pub(in super::super) fn debugger_suspends_message(message: &RuntimeMessage) -> b
             | RuntimeMessage::FullProjectManifest(_)
             | RuntimeMessage::StateExportCancel(_)
             | RuntimeMessage::ReloadProject(_)
+            | RuntimeMessage::ApplyClientPreferences(_)
     )
 }

@@ -400,12 +400,23 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
             project_revision: 1,
-            files: vec![SubmittedFile {
-                relative_path: "main.erb".into(),
-                category: FileCategory::Erb,
-                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
-                content_hash: None,
-            }],
+            files: vec![
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                    content_hash: None,
+                },
+                SubmittedFile {
+                    relative_path: "reraconfig.toml".into(),
+                    category: FileCategory::Configuration,
+                    payload: FilePayload::Utf8(
+                        "[meta]\nschema_version = 2\nlocked_settings = [\"input.mouse_enabled\"]\n\n[input]\nmouse_enabled = false\n\n[text]\nfont_size = 21\nline_height = 21\n"
+                            .into(),
+                    ),
+                    content_hash: None,
+                },
+            ],
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -432,6 +443,77 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
             .unwrap()
             .value,
         "5"
+    );
+    assert!(
+        initial
+            .entries
+            .iter()
+            .find(|entry| entry.code == "FontSize")
+            .is_some_and(|entry| entry.preference_eligible)
+    );
+    let identity_before_preferences = session.project_snapshot.as_ref().unwrap().project_identity;
+
+    session
+        .handle_message(
+            100,
+            RuntimeMessage::ApplyClientPreferences(ClientPreferenceLayers {
+                project_revision: initial.project_revision,
+                global: vec![
+                    ConfigurationChange {
+                        code: "FontSize".into(),
+                        value: "20".into(),
+                    },
+                    ConfigurationChange {
+                        code: "UseMouse".into(),
+                        value: "NO".into(),
+                    },
+                ],
+                project: vec![
+                    ConfigurationChange {
+                        code: "UseMouse".into(),
+                        value: "YES".into(),
+                    },
+                    ConfigurationChange {
+                        code: "LineHeight".into(),
+                        value: "23".into(),
+                    },
+                ],
+            }),
+        )
+        .unwrap();
+    let preferred = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ClientPreferencesApplied(value) => Some(value.configuration),
+            _ => None,
+        })
+        .expect("client preference layers are applied");
+    for (code, project_value, client_value) in [
+        ("FontSize", "21", "21"),
+        ("UseMouse", "NO", "YES"),
+        ("LineHeight", "21", "23"),
+    ] {
+        let entry = preferred
+            .entries
+            .iter()
+            .find(|entry| entry.code == code)
+            .unwrap();
+        assert_eq!(entry.effective_value, project_value);
+        assert_eq!(entry.client_effective_value, client_value);
+    }
+    let snapshot_after_preferences = session.project_snapshot.as_ref().unwrap();
+    assert_eq!(
+        snapshot_after_preferences.project_identity,
+        identity_before_preferences
+    );
+    assert_eq!(
+        snapshot_after_preferences
+            .configuration
+            .get_code("FontSize"),
+        snapshot_after_preferences
+            .editable_configuration
+            .get_code("FontSize"),
+        "client preferences must not mutate semantic project configuration"
     );
 
     submit(
@@ -503,6 +585,26 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
         assert_eq!(entry.value, value);
         assert_eq!(entry.effective_value, value);
     }
+    assert_eq!(
+        committed
+            .entries
+            .iter()
+            .find(|entry| entry.code == "FontSize")
+            .unwrap()
+            .client_effective_value,
+        "22",
+        "an explicit project setting must replace the global preference"
+    );
+    assert_eq!(
+        committed
+            .entries
+            .iter()
+            .find(|entry| entry.code == "LineHeight")
+            .unwrap()
+            .client_effective_value,
+        "23",
+        "a project preference must replace an explicit project setting"
+    );
     let auto_save = committed
         .entries
         .iter()

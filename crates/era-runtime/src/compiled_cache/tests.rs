@@ -108,7 +108,13 @@ fn cooperative_planning_bounds_manifest_and_function_traversal() {
 
 #[test]
 fn compiled_project_cache_round_trips_and_keys_source_content() {
-    let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let mut project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    project.files.push(SubmittedFile {
+        relative_path: "reraconfig.toml".into(),
+        category: FileCategory::Configuration,
+        payload: FilePayload::Utf8("[meta]\nschema_version = 2\n\n[text]\nfont_size = 21\n".into()),
+        content_hash: None,
+    });
     let mut build = crate::project::build_project(&project, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
@@ -129,6 +135,16 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
     assert_eq!(decoded_file.identity, project_identity(&project));
     assert_eq!(decoded_file.manifest, project);
+    assert!(
+        decoded
+            .snapshot
+            .editable_configuration
+            .is_specified("FontSize")
+    );
+    assert_eq!(
+        decoded.snapshot.client_configuration.get_code("FontSize"),
+        decoded.snapshot.configuration.get_code("FontSize")
+    );
     assert_eq!(decoded.diagnostics, build.report.diagnostics);
     assert_eq!(decoded.incremental, build.incremental);
     assert_eq!(

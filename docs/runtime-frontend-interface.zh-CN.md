@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.8`、公共信封 `2.0`、Runtime 协议 `32.0`。源码入口：
+> C ABI `3.8`、公共信封 `2.0`、Runtime 协议 `33.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.8 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 32.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 33.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -412,6 +412,9 @@ payload 使用 minicbor enum 形式 `[tag, [value]]`；无值变体为 `[tag, []
 | 19 | `ProjectLoad` | 可先命中 opaque 编译缓存，否则要求 manifest |
 | 20 | `Start` | 新游戏或已提交的 save/snapshot |
 | 23 | `ReturnToTitle` | 丢弃活动时间线但复用项目 |
+| 24 | `PrepareConfigurationUpdate` | 25 验证并序列化项目设置事务 |
+| 26 | `FinalizeConfigurationUpdate` | 27 提交或中止项目设置事务 |
+| 28 | `ApplyClientPreferences` | 29 `ClientPreferencesApplied`；只改变客户端展示画像 |
 | 30 | `Input` | 消费当前 wait/token |
 | 31 | `AdvanceTime` | 推进 deadline/countdown |
 | 33 | `DeviceStateChanged` | 更新设备采样时间 |
@@ -431,7 +434,8 @@ payload 使用 minicbor enum 形式 `[tag, [value]]`；无值变体为 `[tag, []
 | 93 | `Acknowledge` | 累计释放 Runtime 输出 journal |
 | 94 | `Resynchronize` | 96 完整聚合状态，随后仍存续的 effects |
 
-runtime → 前端还会主动发送：21 `StateChanged`、22 `ExitRequested`、32 `WaitChanged`、
+runtime → 前端还会主动发送：21 `StateChanged`、22 `ExitRequested`、29
+`ClientPreferencesApplied`、32 `WaitChanged`、
 36 `ProjectionState`、38 undo、40 `PresentationSnapshot`、41 `PresentationDelta`、
 42 `EffectBatch`、50 `StorageRequest`、52 `ServiceRequest`、54
 `CancelExternalRequest`、92 `Fault`、95 `CommandRejected`、97 `Diagnostic`、98 `Log`。
@@ -468,6 +472,14 @@ column 都是 UTF-8 byte，不是字符数或 UTF-16 code unit；`line` 和 `byt
 byte column，前端可用提交的 UTF-8 源码按 `byte_start..byte_end` 显示源码行和精确
 标记范围。`ProtocolDiagnostic` 字段为 `code`、Debug/Info/Warning/Error 等级、
 `message`、`source?`。
+
+`ProjectLoadReport.configuration.entries[]` 同时携带项目设置值、runtime 有效值、
+`preference_eligible` 和 `client_effective_value`。客户端只可把当前 profile 中标为
+`preference_eligible` 的字段放入 `ApplyClientPreferences`。两层均使用稀疏
+`ConfigurationChange[]`，解析顺序为项目偏好、明确项目设置、全局偏好、profile 默认值；
+项目偏好可以覆盖锁定项目设置。runtime 只把结果写入独立的客户端展示画像，不改变语义
+配置、项目身份、脚本查询结果、存档或游戏状态。偏好更新可以热应用；项目加载或项目设置
+事务提交后，runtime 会用最近一次偏好层重新计算画像。
 
 ### 7.2 输入
 

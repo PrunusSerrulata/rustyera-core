@@ -17,11 +17,11 @@ mod service;
 mod value;
 
 pub use configuration::{
-    CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ConfigurationApplication,
-    ConfigurationChange, ConfigurationClientProfile, ConfigurationUpdateCommitted,
-    ConfigurationUpdateOutcome, ConfigurationUpdatePrepared, ConfigurationValueKind,
-    FinalizeConfigurationUpdate, PrepareConfigurationUpdate, ProjectConfigurationEntry,
-    ProjectConfigurationSnapshot,
+    CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ClientPreferenceLayers,
+    ClientPreferencesApplied, ConfigurationApplication, ConfigurationChange,
+    ConfigurationClientProfile, ConfigurationUpdateCommitted, ConfigurationUpdateOutcome,
+    ConfigurationUpdatePrepared, ConfigurationValueKind, FinalizeConfigurationUpdate,
+    PrepareConfigurationUpdate, ProjectConfigurationEntry, ProjectConfigurationSnapshot,
 };
 pub use effect::{
     AudioEffect, AudioEffectAction, EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind,

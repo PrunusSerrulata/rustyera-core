@@ -143,7 +143,7 @@ impl ReraConfigDocument {
                         self.source_spans.get(spec.path).copied(),
                     )
                 })?;
-                store.values.insert(spec.code.to_ascii_uppercase(), parsed);
+                store.assign_explicit(spec.code, parsed);
             }
         }
         for locked in locked_paths(&self.document, self.source_offset, &self.source_spans)? {

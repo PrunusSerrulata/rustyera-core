@@ -218,19 +218,19 @@ impl PresentationModel {
     ) {
         use era_config::ConfigValue;
 
-        let integer = |code| match project.configuration.get_code(code) {
+        let integer = |code| match project.client_configuration.get_code(code) {
             Some(ConfigValue::Integer(value)) => Some(*value),
             _ => None,
         };
-        let boolean = |code| match project.configuration.get_code(code) {
+        let boolean = |code| match project.client_configuration.get_code(code) {
             Some(ConfigValue::Boolean(value)) => Some(*value),
             _ => None,
         };
-        let color = |code| match project.configuration.get_code(code) {
+        let color = |code| match project.client_configuration.get_code(code) {
             Some(ConfigValue::Color(value)) => Some(*value),
             _ => None,
         };
-        let font = match project.configuration.get_code("FontName") {
+        let font = match project.client_configuration.get_code("FontName") {
             Some(ConfigValue::String(value)) => Some(value.clone()),
             _ => None,
         };
@@ -240,12 +240,27 @@ impl PresentationModel {
             }
             _ => erabasic_vm::CharacterWidthMode::Automatic,
         };
+        let viewport_width = integer("WindowX")
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(project.viewport_width)
+            .max(128);
+        let viewport_height = integer("WindowY")
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(project.viewport_height)
+            .max(128);
+        let font_size = integer("FontSize")
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(project.font_size)
+            .max(8);
+        let line_height = integer("LineHeight")
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(project.line_height)
+            .max(font_size);
         self.settings.drawable_width =
-            LogicalLength(i64::from(project.viewport_width).saturating_mul(1_000));
+            LogicalLength(i64::from(viewport_width).saturating_mul(1_000));
         self.settings.drawable_height =
-            LogicalLength(i64::from(project.viewport_height).saturating_mul(1_000));
-        self.settings.line_height =
-            LogicalLength(i64::from(project.line_height).saturating_mul(1_000));
+            LogicalLength(i64::from(viewport_height).saturating_mul(1_000));
+        self.settings.line_height = LogicalLength(i64::from(line_height).saturating_mul(1_000));
         self.settings.maximum_physical_lines = integer("MaxLog")
             .and_then(|value| u32::try_from(value).ok())
             .map_or(5_000, |value| value.max(500));
@@ -253,7 +268,7 @@ impl PresentationModel {
         self.settings.legacy_nonbutton_wrap = boolean("CompatiLinefeedAs1739").unwrap_or(false);
         let mut default_style = self.default_style.clone();
         default_style.font_family = font;
-        default_style.font_millipixels = project.font_size.saturating_mul(1_000);
+        default_style.font_millipixels = font_size.saturating_mul(1_000);
         default_style.foreground = rgb_color(i64::from(color("ForeColor").unwrap_or(0x00c0_c0c0)));
         self.default_background = rgb_color(i64::from(color("BackColor").unwrap_or(0)));
         self.settings.background = self.default_background;

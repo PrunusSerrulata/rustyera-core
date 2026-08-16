@@ -161,7 +161,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(32, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(33, 0));
 }
 
 #[test]
@@ -207,7 +207,7 @@ fn protocol_23_carries_compiled_cache_loads_and_in_session_title_returns() {
 }
 
 #[test]
-fn protocol_25_round_trips_configuration_profile_transactions() {
+fn protocol_33_round_trips_configuration_and_client_preference_transactions() {
     assert_eq!(
         decode_canonical::<ConfigurationClientProfile>(
             &encode_canonical(&ConfigurationClientProfile::Tui).unwrap()
@@ -255,6 +255,8 @@ fn protocol_25_round_trips_configuration_profile_transactions() {
                 default_value: "1000".into(),
                 effective_value: "1200".into(),
                 application: ConfigurationApplication::Hot,
+                preference_eligible: false,
+                client_effective_value: "1200".into(),
             }],
             restart_pending: false,
             generated_source: Some("[meta]\nschema_version = 2\n".into()),
@@ -270,6 +272,23 @@ fn protocol_25_round_trips_configuration_profile_transactions() {
         RuntimeMessage::decode_payload(27, &committed.encode_payload().unwrap()),
         Ok(committed)
     );
+
+    let preferences = RuntimeMessage::ApplyClientPreferences(ClientPreferenceLayers {
+        project_revision: 9,
+        global: vec![ConfigurationChange {
+            code: "UseMouse".into(),
+            value: "NO".into(),
+        }],
+        project: vec![ConfigurationChange {
+            code: "FontSize".into(),
+            value: "22".into(),
+        }],
+    });
+    assert_eq!(preferences.tag(), 28);
+    assert_eq!(
+        RuntimeMessage::decode_payload(28, &preferences.encode_payload().unwrap()),
+        Ok(preferences)
+    );
 }
 
 #[test]
@@ -284,7 +303,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(32, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(33, 0));
 }
 
 #[test]
@@ -293,7 +312,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(32, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(33, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -459,7 +478,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(32, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(33, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -498,7 +517,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(32, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(33, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 

@@ -83,6 +83,7 @@ impl RuntimeSession {
             next_new_game_trigger: NewGameTrigger::Start,
             negotiated_features: BTreeSet::new(),
             configuration_profile: ConfigurationClientProfile::Reference,
+            client_preferences: None,
             inbound: VecDeque::new(),
             outbound: VecDeque::new(),
             outbound_journal: BTreeMap::new(),
@@ -673,6 +674,9 @@ impl RuntimeSession {
             RuntimeMessage::FinalizeConfigurationUpdate(request) => {
                 self.finalize_configuration_update(message_id, request)
             }
+            RuntimeMessage::ApplyClientPreferences(request) => {
+                self.apply_client_preferences(message_id, request)
+            }
             RuntimeMessage::ShutdownRequest(_) => {
                 self.clear_staged_project_manifest();
                 self.shutdown(message_id)
@@ -693,6 +697,7 @@ impl RuntimeSession {
             | RuntimeMessage::ProjectAnalysisReport(_)
             | RuntimeMessage::ConfigurationUpdatePrepared(_)
             | RuntimeMessage::ConfigurationUpdateCommitted(_)
+            | RuntimeMessage::ClientPreferencesApplied(_)
             | RuntimeMessage::KeyMacroStateChanged(_)
             | RuntimeMessage::StateChanged(_)
             | RuntimeMessage::ExitRequested(_)

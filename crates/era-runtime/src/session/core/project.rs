@@ -7,6 +7,8 @@ mod configuration;
 mod load;
 mod reload;
 
+use configuration::resolve_client_configuration;
+
 use reload::{
     apply_hot_configuration, commit_configuration_manifest, exact_cached_project_with_progress,
     manifest_contains_omitted_payloads, project_payload_required_report,

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +8,10 @@ use crate::{ConfigValue, catalog, tui_default, web_default};
 pub struct ConfigStore {
     pub(crate) values: BTreeMap<String, ConfigValue>,
     pub(crate) fixed: BTreeMap<String, bool>,
+    // Source tracking is derived from project configuration documents. It is intentionally
+    // excluded from persistent compiler-cache payloads so the cache wire layout stays stable.
+    #[serde(skip, default)]
+    pub(crate) specified: BTreeSet<String>,
 }
 
 impl Default for ConfigStore {
@@ -19,11 +23,18 @@ impl Default for ConfigStore {
         Self {
             values,
             fixed: BTreeMap::new(),
+            specified: BTreeSet::new(),
         }
     }
 }
 
 impl ConfigStore {
+    pub(crate) fn assign_explicit(&mut self, code: &str, value: ConfigValue) {
+        let code = code.to_ascii_uppercase();
+        self.values.insert(code.clone(), value);
+        self.specified.insert(code);
+    }
+
     /// Construct the catalog with Textual-specific defaults before project files apply.
     #[must_use]
     pub fn with_tui_defaults() -> Self {
@@ -67,6 +78,12 @@ impl ConfigStore {
             .unwrap_or(false)
     }
 
+    /// Whether a project configuration source explicitly assigned this catalog entry.
+    #[must_use]
+    pub fn is_specified(&self, code: &str) -> bool {
+        self.specified.contains(&code.to_ascii_uppercase())
+    }
+
     /// Apply one `name:value` assignment. Unknown keys and invalid values are rejected.
     ///
     /// # Errors
@@ -81,6 +98,7 @@ impl ConfigStore {
         let current = self.values.get(&code).ok_or(ConfigParseError::UnknownKey)?;
         let parsed = parse_like(&code, current, raw)?;
         self.values.insert(code.clone(), parsed);
+        self.specified.insert(code.clone());
         if fixed {
             self.fixed.insert(code, true);
         }

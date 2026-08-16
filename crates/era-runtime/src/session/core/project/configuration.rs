@@ -195,6 +195,59 @@ impl RuntimeSession {
         self.emit_presentation()
     }
 
+    pub(in super::super::super) fn apply_client_preferences(
+        &mut self,
+        message_id: u64,
+        request: ClientPreferenceLayers,
+    ) -> Result<(), RuntimeError> {
+        let Some(snapshot) = self.project_snapshot.as_ref() else {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "client preferences require a loaded project",
+            );
+        };
+        if snapshot.manifest.project_revision != request.project_revision {
+            return self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "client preference project revision is stale",
+            );
+        }
+        let normalized =
+            match normalize_client_preferences(snapshot, request, self.configuration_profile) {
+                Ok(value) => value,
+                Err(message) => {
+                    return self.reject(message_id, CommandErrorCode::InvalidValue, message);
+                }
+            };
+        let snapshot = self
+            .project_snapshot
+            .as_mut()
+            .expect("validated client preference project remains loaded");
+        resolve_client_configuration(snapshot, &normalized);
+        self.client_preferences = Some(normalized);
+        self.presentation.configure_project(snapshot);
+        let canvas_defaults = (
+            self.presentation.default_foreground_rgb(),
+            self.presentation.default_background_rgb(),
+            self.presentation.font(),
+            u8::try_from(self.presentation.style_bits()).unwrap_or_default(),
+        );
+        snapshot.resource_graph.configure_canvas_defaults(
+            canvas_defaults.0,
+            canvas_defaults.1,
+            canvas_defaults.2,
+            canvas_defaults.3,
+        );
+        let configuration = snapshot.configuration_snapshot();
+        self.emit(
+            RuntimeMessage::ClientPreferencesApplied(ClientPreferencesApplied { configuration }),
+            Some(message_id),
+        )?;
+        self.emit_presentation()
+    }
+
     fn build_committed_configuration_snapshot(
         &self,
         pending: PendingConfigurationUpdate,
@@ -221,6 +274,11 @@ impl RuntimeSession {
         snapshot.configuration_document = pending.document;
         snapshot.generated_configuration_source = None;
         apply_hot_configuration(&mut snapshot, &pending.changed_codes);
+        if let Some(preferences) = &self.client_preferences {
+            resolve_client_configuration(&mut snapshot, preferences);
+        } else {
+            snapshot.client_configuration = snapshot.configuration.clone();
+        }
         crate::project::refresh_project_identity(&mut snapshot, artifact);
         let replay_origin = (!changed_codes.is_empty()).then(|| {
             self.input_replay_for_project(
@@ -235,5 +293,87 @@ impl RuntimeSession {
             )
         });
         Ok((snapshot, replay_origin))
+    }
+}
+
+fn normalize_client_preferences(
+    snapshot: &NormalizedProjectSnapshot,
+    request: ClientPreferenceLayers,
+    profile: ConfigurationClientProfile,
+) -> Result<ClientPreferenceLayers, &'static str> {
+    fn normalize_layer(
+        snapshot: &NormalizedProjectSnapshot,
+        changes: Vec<ConfigurationChange>,
+        profile: ConfigurationClientProfile,
+    ) -> Result<Vec<ConfigurationChange>, &'static str> {
+        let client = match profile {
+            ConfigurationClientProfile::Tui => era_config::ConfigClient::Tui,
+            ConfigurationClientProfile::Browser => era_config::ConfigClient::Browser,
+            ConfigurationClientProfile::Tauri => era_config::ConfigClient::Tauri,
+            ConfigurationClientProfile::Reference => {
+                return Err("reference clients do not support client preferences");
+            }
+        };
+        let catalog = era_config::catalog();
+        let mut seen = BTreeSet::new();
+        let mut normalized = Vec::with_capacity(changes.len());
+        for change in changes {
+            let Some(spec) = catalog
+                .iter()
+                .find(|spec| spec.code.eq_ignore_ascii_case(&change.code))
+            else {
+                return Err("client preferences contain an unknown setting");
+            };
+            if spec.effect != era_config::ConfigEffect::QueryOnlyClientPreference
+                || !spec.clients.contains(&client)
+                || !seen.insert(spec.code.to_ascii_uppercase())
+            {
+                return Err("client preferences contain an unsupported or duplicate setting");
+            }
+            let mut values = snapshot.configuration.clone();
+            if values.apply(spec.code, &change.value, false).is_err() {
+                return Err("client preferences contain an invalid value");
+            }
+            let value = values
+                .get_code(spec.code)
+                .expect("catalog preference has a parsed value");
+            let mut validation = era_config::ReraConfigDocument::empty();
+            if validation.set_code(spec.code, value).is_err() {
+                return Err("client preferences contain an out-of-range value");
+            }
+            normalized.push(ConfigurationChange {
+                code: spec.code.into(),
+                value: value.config_text(),
+            });
+        }
+        Ok(normalized)
+    }
+
+    Ok(ClientPreferenceLayers {
+        project_revision: request.project_revision,
+        global: normalize_layer(snapshot, request.global, profile)?,
+        project: normalize_layer(snapshot, request.project, profile)?,
+    })
+}
+
+pub(super) fn resolve_client_configuration(
+    snapshot: &mut NormalizedProjectSnapshot,
+    preferences: &ClientPreferenceLayers,
+) {
+    snapshot.client_configuration = snapshot.configuration.clone();
+    for change in &preferences.global {
+        if snapshot.editable_configuration.is_specified(&change.code) {
+            continue;
+        }
+        snapshot
+            .client_configuration
+            .apply(&change.code, &change.value, false)
+            .expect("normalized global client preference remains valid");
+    }
+    for change in &preferences.project {
+        snapshot
+            .client_configuration
+            .apply(&change.code, &change.value, false)
+            .expect("normalized project client preference remains valid");
     }
 }

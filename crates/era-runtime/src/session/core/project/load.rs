@@ -54,6 +54,7 @@ impl RuntimeSession {
         self.full_project_file = None;
         self.full_project_task = None;
         self.full_project_failure = None;
+        self.client_preferences = None;
         self.staged_full_project_manifest = None;
         self.set_phase(RuntimePhase::LoadingProject)?;
         let mut build = match self.build_project_from_cache(request, cache_bytes.as_deref()) {

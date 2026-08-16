@@ -637,6 +637,7 @@ pub struct RuntimeSession {
     next_new_game_trigger: NewGameTrigger,
     negotiated_features: BTreeSet<RuntimeFeature>,
     configuration_profile: ConfigurationClientProfile,
+    client_preferences: Option<ClientPreferenceLayers>,
     inbound: VecDeque<(u64, InboundMessage)>,
     outbound: VecDeque<Vec<u8>>,
     outbound_journal: BTreeMap<u64, Vec<u8>>,

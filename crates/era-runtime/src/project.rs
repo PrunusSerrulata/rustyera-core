@@ -52,6 +52,13 @@ pub(crate) fn is_root_configuration_file(file: &SubmittedFile) -> bool {
             .eq_ignore_ascii_case("reraconfig.toml")
 }
 
+pub(crate) fn project_configuration_values(files: &[SubmittedFile]) -> era_config::ConfigStore {
+    let mut diagnostics = Vec::new();
+    configuration::parse_configuration(files, &mut diagnostics)
+        .semantic
+        .values
+}
+
 pub(crate) struct ProjectBuild {
     pub(crate) artifact: Option<ValidatedArtifact>,
     pub(crate) incremental: IncrementalState,
@@ -401,6 +408,7 @@ fn build_project_inner_with_extensions(
     };
     data.static_data.legacy_encoding = config.legacy_encoding;
     let editable_configuration = config.values.clone();
+    let client_configuration = config.values.clone();
     apply_replace_configuration(&config.values, &mut data.static_data.replace);
     config
         .money_label
@@ -668,6 +676,7 @@ fn build_project_inner_with_extensions(
             print_c_length: config.print_c_length,
             configuration_profile,
             configuration: config.values,
+            client_configuration,
             editable_configuration,
             configuration_document,
             generated_configuration_source,
