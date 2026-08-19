@@ -324,6 +324,11 @@ fn project_file_projection_honors_limits_and_version() {
         decode_project_file(&legacy, legacy.len()).unwrap().manifest,
         project
     );
+    let mut streamed_legacy = ProjectFileStreamDecoder::new(legacy.len(), legacy.len()).unwrap();
+    for byte in legacy.chunks(1) {
+        streamed_legacy.append(byte).unwrap();
+    }
+    assert_eq!(streamed_legacy.finish().unwrap().project.manifest, project);
     let mut previous = bytes.clone();
     previous[8] = PREVIOUS_PROJECT_VERSION;
     let digest_offset = previous.len() - 32;
@@ -335,6 +340,20 @@ fn project_file_projection_honors_limits_and_version() {
             .manifest,
         project
     );
+    let mut streamed_previous =
+        ProjectFileStreamDecoder::new(previous.len(), previous.len()).unwrap();
+    for byte in previous.chunks(1) {
+        streamed_previous.append(byte).unwrap();
+    }
+    assert_eq!(
+        streamed_previous.finish().unwrap().project.manifest,
+        project
+    );
+    let mut streamed_current = ProjectFileStreamDecoder::new(bytes.len(), bytes.len()).unwrap();
+    for byte in bytes.chunks(1) {
+        streamed_current.append(byte).unwrap();
+    }
+    assert_eq!(streamed_current.finish().unwrap().project.manifest, project);
     let mut stale_cache = previous.clone();
     stale_cache[..8].copy_from_slice(b"RERACACH");
     let error = decode(&stale_cache, stale_cache.len())

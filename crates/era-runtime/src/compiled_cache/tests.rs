@@ -439,6 +439,115 @@ fn full_project_keeps_its_project_revision() {
 }
 
 #[test]
+fn streamed_project_file_decode_skips_compiled_sections_and_preserves_journal() {
+    let project = manifest(
+        &format!(";{}\n@SYSTEM_TITLE\nRETURN\n", "source".repeat(16_000)),
+        7,
+    );
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let mut bytes = encode_full_project_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let (first_record, first_digest) = encode_record(None, "[audio]\nvolume = 10\n").unwrap();
+    let (final_record, final_digest) =
+        encode_record(Some(first_digest), "[audio]\nvolume = 42\n").unwrap();
+    let (interrupted_record, _) =
+        encode_record(Some(final_digest), "[audio]\nvolume = 80\n").unwrap();
+    let sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
+    let embedded_identity = sections.identity.clone();
+    let manifest_compressed_bytes = sections.manifest.compressed.len();
+    bytes.extend_from_slice(&first_record);
+    bytes.extend_from_slice(&final_record);
+    bytes.extend_from_slice(&interrupted_record[..interrupted_record.len() / 2]);
+    let expected = decode_project_file(&bytes, bytes.len()).unwrap();
+    let mut decoder = ProjectFileStreamDecoder::new(bytes.len(), bytes.len()).unwrap();
+    let mut maximum_retained = 0;
+    for chunk in bytes.chunks(13) {
+        decoder.append(chunk).unwrap();
+        maximum_retained = maximum_retained.max(decoder.retained_bytes());
+    }
+    let decoded = decoder.finish().unwrap();
+
+    assert_eq!(decoded.project, expected);
+    assert_eq!(decoded.file_digest, *blake3::hash(&bytes).as_bytes());
+    let maximum_record_bytes = first_record.len().max(final_record.len());
+    let retained_bound = stream::HEADER_BYTES
+        + manifest_compressed_bytes
+        + maximum_record_bytes * 2
+        + 13;
+    assert!(maximum_retained <= retained_bound);
+    assert_ne!(decoded.project.identity, embedded_identity);
+    assert!(decoded.project.manifest.files.iter().any(|file| {
+        file.relative_path == "reraconfig.toml"
+            && file.payload == FilePayload::Utf8("[audio]\nvolume = 42\n".into())
+    }));
+}
+
+#[test]
+fn streamed_project_file_decode_rejects_corrupt_incomplete_and_oversized_inputs() {
+    let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let bytes = encode_full_project_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+
+    let mut incomplete = ProjectFileStreamDecoder::new(bytes.len(), bytes.len()).unwrap();
+    incomplete.append(&bytes[..bytes.len() - 1]).unwrap();
+    assert!(incomplete.finish().is_err());
+
+    let mut corrupt = bytes.clone();
+    corrupt[bytes.len() - 33] ^= 1;
+    let mut decoder = ProjectFileStreamDecoder::new(corrupt.len(), corrupt.len()).unwrap();
+    assert!(decoder.append(&corrupt).is_err());
+
+    let mut oversized_section = bytes.clone();
+    let mut section_offset = stream::HEADER_BYTES;
+    for _ in 0..MANIFEST_SECTION_INDEX {
+        let compressed_length = usize::try_from(u64::from_le_bytes(
+            oversized_section[section_offset + 8..section_offset + 16]
+                .try_into()
+                .unwrap(),
+        ))
+        .unwrap();
+        section_offset += 16 + compressed_length;
+    }
+    oversized_section[section_offset + 8..section_offset + 16]
+        .copy_from_slice(&u64::MAX.to_le_bytes());
+    let mut decoder =
+        ProjectFileStreamDecoder::new(oversized_section.len(), oversized_section.len()).unwrap();
+    assert!(decoder.append(&oversized_section).is_err());
+    assert_eq!(decoder.retained_bytes(), stream::HEADER_BYTES);
+
+    let mut oversized_decoded_section = bytes.clone();
+    oversized_decoded_section[stream::HEADER_BYTES..stream::HEADER_BYTES + 8]
+        .copy_from_slice(&u64::MAX.to_le_bytes());
+    let mut decoder = ProjectFileStreamDecoder::new(
+        oversized_decoded_section.len(),
+        oversized_decoded_section.len(),
+    )
+    .unwrap();
+    assert!(decoder.append(&oversized_decoded_section).is_err());
+
+    assert!(ProjectFileStreamDecoder::new(bytes.len(), bytes.len() - 1).is_err());
+}
+
+#[test]
 fn compact_cache_omits_source_and_binary_payloads_but_remains_loadable() {
     let mut project = manifest(
         &format!("@SYSTEM_TITLE\nPRINTL {}\nRETURN\n", "x".repeat(64_000)),

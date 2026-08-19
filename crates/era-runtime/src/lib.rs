@@ -22,8 +22,9 @@ mod save_adapter;
 mod session;
 
 pub use compiled_cache::{
-    DecodedProjectFile, ProjectConfigurationUpdate, ProjectFileError, decode_project_file,
-    decode_project_file_frontend_manifest, prepare_project_configuration_update,
+    DecodedProjectFile, DecodedProjectFileStream, ProjectConfigurationUpdate, ProjectFileError,
+    ProjectFileStreamDecoder, decode_project_file, decode_project_file_frontend_manifest,
+    prepare_project_configuration_update,
 };
 pub use runtime_snapshot::{
     RUNTIME_SNAPSHOT_INSPECTION_SCHEMA_VERSION, RuntimeSnapshotContainerInspection,

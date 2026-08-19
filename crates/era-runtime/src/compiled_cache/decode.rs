@@ -278,6 +278,7 @@ pub(super) fn parse_cache_sections(
         &snapshot,
         &diagnostics,
     ];
+    debug_assert_eq!(fixed_sections.len(), FIXED_SECTION_COUNT);
     let decoded_bytes = fixed_sections
         .into_iter()
         .chain(&functions)
@@ -327,7 +328,8 @@ fn parse_container_header(
         return Err("compiled project cache exceeds the transfer limit".into());
     }
     let magic_length = PROJECT_MAGIC.len();
-    let minimum = magic_length + 1 + 8 + 32 + 32 + 4 + 4 + 9 * 16 + 32;
+    let minimum =
+        magic_length + 1 + 8 + 32 + 32 + 4 + 4 + FIXED_SECTION_COUNT * 16 + 32;
     if bytes.len() < minimum {
         return Err("project file has an invalid header".into());
     }

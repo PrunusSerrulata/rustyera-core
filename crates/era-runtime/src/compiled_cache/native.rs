@@ -109,7 +109,7 @@ fn encode_native_container(input: NativeContainerInput) -> Result<Vec<u8>, Strin
         .collect::<std::collections::BTreeMap<_, _>>();
     let function_ranges = weighted_function_ranges(&bytecode.functions);
     let source_ranges = equal_ranges(bytecode.source_map.entries.len());
-    let section_count = 9 + function_ranges.len() + source_ranges.len();
+    let section_count = FIXED_SECTION_COUNT + function_ranges.len() + source_ranges.len();
     let completed = AtomicU64::new(0);
     let plan = NativeSectionPlan {
         kind,
@@ -162,7 +162,7 @@ fn encode_native_section(index: usize, plan: &NativeSectionPlan<'_>) -> Result<V
     if plan.cancelled.load(Ordering::Relaxed) {
         return Err("compiled cache build cancelled".to_owned());
     }
-    let function_start = 9;
+    let function_start = FIXED_SECTION_COUNT;
     let source_start = function_start + plan.function_ranges.len();
     let cancelled = Some(plan.cancelled);
     match index {
@@ -199,7 +199,7 @@ fn encode_native_section(index: usize, plan: &NativeSectionPlan<'_>) -> Result<V
             plan.kind,
             cancelled,
         ),
-        6 => encode_manifest_section(plan.manifest, plan.kind, cancelled),
+        MANIFEST_SECTION_INDEX => encode_manifest_section(plan.manifest, plan.kind, cancelled),
         7 => encode_section(plan.snapshot, plan.kind, cancelled),
         8 => encode_section(plan.diagnostics, plan.kind, cancelled),
         value if value < source_start => encode_section(

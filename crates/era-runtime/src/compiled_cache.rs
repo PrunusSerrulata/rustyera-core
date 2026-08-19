@@ -28,8 +28,8 @@ use crate::resource::ResourceGraph;
 mod configuration_update;
 
 use configuration_update::{
-    ConfigurationJournal, apply_journal, configuration_digest, encode_record, parse_journal,
-    replace_configuration,
+    ConfigurationJournal, StreamingConfigurationJournal, apply_journal, configuration_digest,
+    encode_record, parse_journal, replace_configuration,
 };
 
 const PROJECT_MAGIC: &[u8; 8] = b"RERAPROJ";
@@ -50,6 +50,8 @@ const VERSION: u8 = 8;
 const PROJECT_COMPRESSION_LEVEL: i32 = 3;
 const CACHE_COMPRESSION_LEVEL: i32 = 1;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
+const FIXED_SECTION_COUNT: usize = 9;
+const MANIFEST_SECTION_INDEX: usize = 6;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const SOURCE_SECTION_MAGIC: &[u8; 4] = b"RSM2";
 const DIGEST_SECTION_MAGIC: &[u8; 4] = b"RDI2";
@@ -651,6 +653,7 @@ mod decode;
 mod identity;
 mod native;
 mod sections;
+mod stream;
 
 use cooperative::ManifestSectionEncoder;
 #[cfg(test)]
@@ -660,6 +663,7 @@ pub use decode::{
     decode_project_file, decode_project_file_frontend_manifest,
     prepare_project_configuration_update,
 };
+pub use stream::{DecodedProjectFileStream, ProjectFileStreamDecoder};
 #[cfg(test)]
 pub(crate) use identity::{encode_compiled_cache_for_test, encode_full_project_for_test};
 pub(crate) use identity::{project_identity, project_key, validate_full_project_manifest};

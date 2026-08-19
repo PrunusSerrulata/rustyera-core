@@ -169,7 +169,7 @@ impl CooperativeCompiledCacheEncoder {
 
     fn encode_next_section(&mut self) -> Result<Option<Vec<u8>>, String> {
         let plan = self.plan.as_ref().expect("cache layout was planned");
-        let function_start = 9;
+        let function_start = FIXED_SECTION_COUNT;
         let source_start = function_start + plan.function_ranges.len();
         let cancelled = self.cancelled.as_deref();
         let section = match self.next_section {
@@ -206,7 +206,7 @@ impl CooperativeCompiledCacheEncoder {
                 self.kind,
                 cancelled,
             )?,
-            6 => {
+            MANIFEST_SECTION_INDEX => {
                 let encoder = self
                     .manifest_encoder
                     .get_or_insert(ManifestSectionEncoder::new(
