@@ -474,16 +474,16 @@ fn streamed_project_file_decode_skips_compiled_sections_and_preserves_journal() 
         decoder.append(chunk).unwrap();
         maximum_retained = maximum_retained.max(decoder.retained_bytes());
     }
-    let decoded = decoder.finish().unwrap();
+    let streamed = decoder.finish().unwrap();
 
-    assert_eq!(decoded.project, expected);
-    assert_eq!(decoded.file_digest, *blake3::hash(&bytes).as_bytes());
+    assert_eq!(streamed.project, expected);
+    assert_eq!(streamed.file_digest, *blake3::hash(&bytes).as_bytes());
     let maximum_record_bytes = first_record.len().max(final_record.len());
     let retained_bound =
         stream::HEADER_BYTES + manifest_compressed_bytes + maximum_record_bytes * 2 + 13;
     assert!(maximum_retained <= retained_bound);
-    assert_ne!(decoded.project.identity, embedded_identity);
-    assert!(decoded.project.manifest.files.iter().any(|file| {
+    assert_ne!(streamed.project.identity, embedded_identity);
+    assert!(streamed.project.manifest.files.iter().any(|file| {
         file.relative_path == "reraconfig.toml"
             && file.payload == FilePayload::Utf8("[audio]\nvolume = 42\n".into())
     }));
