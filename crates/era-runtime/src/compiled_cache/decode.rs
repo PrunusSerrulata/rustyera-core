@@ -411,7 +411,7 @@ fn require_full_project(sections: &CompiledCacheSections<'_>) -> Result<(), Proj
 fn parse_configuration_journal(
     bytes: &[u8],
     digest_offset: usize,
-) -> Result<ConfigurationJournal<'_>, String> {
+) -> Result<ConfigurationJournal, String> {
     let digest_end = digest_offset
         .checked_add(32)
         .ok_or("compiled project cache digest offset overflows")?;

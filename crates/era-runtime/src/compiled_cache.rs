@@ -125,7 +125,7 @@ struct CompiledCacheSections<'a> {
     diagnostics: EncodedSectionRef<'a>,
     functions: Vec<EncodedSectionRef<'a>>,
     source_entries: Vec<EncodedSectionRef<'a>>,
-    configuration_journal: ConfigurationJournal<'a>,
+    configuration_journal: ConfigurationJournal,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

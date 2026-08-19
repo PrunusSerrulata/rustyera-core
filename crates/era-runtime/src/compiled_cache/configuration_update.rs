@@ -166,7 +166,7 @@ pub(super) fn apply_journal(
     manifest: &mut ProjectManifest,
     journal: &ConfigurationJournal,
 ) -> Result<(), String> {
-    let Some(final_update) = journal.final_update else {
+    let Some(final_update) = &journal.final_update else {
         return Ok(());
     };
     let current = configuration_digest(manifest)?;
