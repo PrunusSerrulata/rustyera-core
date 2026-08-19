@@ -710,6 +710,7 @@ pub struct RuntimeSession {
     inbound_transfer: Option<InboundStateTransfer>,
     outbound_transfer: Option<OutboundStateTransfer>,
     staged_project_manifest: Option<ProjectManifest>,
+    staged_project_file_cache: Option<crate::compiled_cache::DecodedCompiledCache>,
     staged_full_project_manifest: Option<ProjectManifest>,
     pending_project_load: Option<PendingProjectLoad>,
     pending_candidate_commit: Option<PendingCandidateCommit>,

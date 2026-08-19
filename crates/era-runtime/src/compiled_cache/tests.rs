@@ -546,6 +546,51 @@ fn streamed_project_file_decode_rejects_corrupt_incomplete_and_oversized_inputs(
 }
 
 #[test]
+fn project_file_cache_externalizes_resources_and_compacts_runtime_sources() {
+    let mut project = manifest("@SYSTEM_TITLE\nPRINTL cached\nRETURN\n", 3);
+    project.files.push(SubmittedFile {
+        relative_path: "resources/title.bin".into(),
+        category: FileCategory::Resource,
+        payload: FilePayload::Bytes(ProtocolBytes::new(vec![1, 2, 3, 4])),
+        content_hash: None,
+    });
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let bytes = encode_full_project_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+
+    let (cache, frontend) =
+        decode_project_file_cache_with_progress(&bytes, bytes.len(), None).unwrap();
+    let frontend_source = &frontend.manifest.files[0];
+    let frontend_resource = &frontend.manifest.files[1];
+    assert!(matches!(&frontend_source.payload, FilePayload::Utf8(value) if value.is_empty()));
+    assert!(matches!(
+        &frontend_resource.payload,
+        FilePayload::Bytes(value) if value.as_slice() == [1, 2, 3, 4]
+    ));
+    let runtime_source = &cache.snapshot.manifest.files[0];
+    let runtime_resource = &cache.snapshot.manifest.files[1];
+    assert!(matches!(&runtime_source.payload, FilePayload::Utf8(value) if value.is_empty()));
+    assert!(matches!(
+        &runtime_resource.payload,
+        FilePayload::ExternalResource(resource) if resource.byte_length == 4
+    ));
+    assert_eq!(project_identity(&frontend.manifest), frontend.identity);
+    assert_eq!(
+        project_identity(&cache.snapshot.manifest),
+        frontend.identity
+    );
+}
+
+#[test]
 fn compact_cache_omits_source_and_binary_payloads_but_remains_loadable() {
     let mut project = manifest(
         &format!("@SYSTEM_TITLE\nPRINTL {}\nRETURN\n", "x".repeat(64_000)),

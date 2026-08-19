@@ -160,6 +160,7 @@ impl RuntimeSession {
             inbound_transfer: None,
             outbound_transfer: None,
             staged_project_manifest: None,
+            staged_project_file_cache: None,
             staged_full_project_manifest: None,
             pending_project_load: None,
             pending_candidate_commit: None,

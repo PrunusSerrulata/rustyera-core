@@ -79,6 +79,7 @@ fn identity_only_project_load_requests_payload_after_a_cache_miss() {
             compiled_cache_transfer_id: None,
         },
         None,
+        None,
     ) else {
         panic!("an identity without an exact cache needs source payloads");
     };
@@ -282,6 +283,7 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
                 compiled_cache_transfer_id: None,
             },
             Some(&cache),
+            None,
         )
         .expect("an exact cache loads from source identity alone");
 
@@ -366,6 +368,7 @@ fn host_staged_exact_cache_uses_the_normal_project_load_contract() {
                 compiled_cache_transfer_id: None,
             },
             Some(&cache),
+            None,
         )
         .unwrap()
         .report;
@@ -565,6 +568,7 @@ fn compiled_cache_is_reused_across_configuration_profiles() {
                     compiled_cache_transfer_id: None,
                 },
                 Some(&cache),
+                None,
             )
             .expect("a host-neutral compiled cache should load in either frontend profile");
 
@@ -641,6 +645,7 @@ fn journaled_configuration_rebuilds_instead_of_exact_hitting_the_old_artifact() 
                 compiled_cache_transfer_id: None,
             },
             Some(&cache),
+            None,
         )
         .expect("journaled embedded manifest can safely rebuild the project");
 
@@ -665,4 +670,3 @@ fn journaled_configuration_rebuilds_instead_of_exact_hitting_the_old_artifact() 
             ))
     );
 }
-

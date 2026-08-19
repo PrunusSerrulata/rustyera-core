@@ -8,6 +8,7 @@ impl RuntimeSession {
         request: &ProjectLoadRequest,
     ) -> Result<(), RuntimeError> {
         let staged_manifest = self.staged_project_manifest.take();
+        let staged_cache = self.staged_project_file_cache.take();
         if !matches!(
             self.phase,
             RuntimePhase::Negotiating | RuntimePhase::Ready | RuntimePhase::Faulted
@@ -57,13 +58,14 @@ impl RuntimeSession {
         self.client_preferences = None;
         self.staged_full_project_manifest = None;
         self.set_phase(RuntimePhase::LoadingProject)?;
-        let mut build = match self.build_project_from_cache(request, cache_bytes.as_deref()) {
-            Ok(build) => build,
-            Err(report) => {
-                self.emit(RuntimeMessage::ProjectLoadReport(*report), Some(message_id))?;
-                return self.set_phase(RuntimePhase::Ready);
-            }
-        };
+        let mut build =
+            match self.build_project_from_cache(request, cache_bytes.as_deref(), staged_cache) {
+                Ok(build) => build,
+                Err(report) => {
+                    self.emit(RuntimeMessage::ProjectLoadReport(*report), Some(message_id))?;
+                    return self.set_phase(RuntimePhase::Ready);
+                }
+            };
         build.incremental.compact();
         let exact_cache_hit = build
             .report
@@ -189,24 +191,10 @@ impl RuntimeSession {
         &self,
         request: &ProjectLoadRequest,
         cache_bytes: Option<&[u8]>,
+        staged_cache: Option<crate::compiled_cache::DecodedCompiledCache>,
     ) -> Result<ProjectBuild, Box<ProjectLoadReport>> {
-        let maximum =
-            usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
-        let mut cache_warning = None;
-        let cached =
-            cache_bytes.and_then(|bytes| {
-                match crate::compiled_cache::decode_with_progress(
-                    bytes,
-                    maximum,
-                    self.project_progress_reporter.as_ref(),
-                ) {
-                    Ok(value) => Some(value),
-                    Err(error) => {
-                        cache_warning = Some(error);
-                        None
-                    }
-                }
-            });
+        let (cached, mut cache_warning) =
+            self.decode_project_cache_candidate(cache_bytes, staged_cache);
         let expected_key =
             crate::compiled_cache::project_key(&request.identity, &self.extension_declarations);
         let mut build = match cached {
@@ -290,6 +278,32 @@ impl RuntimeSession {
             });
         }
         Ok(build)
+    }
+
+    fn decode_project_cache_candidate(
+        &self,
+        cache_bytes: Option<&[u8]>,
+        staged_cache: Option<crate::compiled_cache::DecodedCompiledCache>,
+    ) -> (
+        Option<crate::compiled_cache::DecodedCompiledCache>,
+        Option<String>,
+    ) {
+        if let Some(cache) = staged_cache {
+            return (Some(cache), None);
+        }
+        let Some(bytes) = cache_bytes else {
+            return (None, None);
+        };
+        let maximum =
+            usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
+        match crate::compiled_cache::decode_with_progress(
+            bytes,
+            maximum,
+            self.project_progress_reporter.as_ref(),
+        ) {
+            Ok(cache) => (Some(cache), None),
+            Err(error) => (None, Some(error)),
+        }
     }
 
     pub(in super::super::super) fn finish_project_load(

@@ -14,7 +14,7 @@ impl RuntimeSession {
         &mut self,
         manifest: ProjectManifest,
     ) -> Result<(), RuntimeError> {
-        if self.staged_project_manifest.is_some() {
+        if self.staged_project_manifest.is_some() || self.staged_project_file_cache.is_some() {
             return Err(RuntimeError::Busy(
                 "another project manifest is already staged",
             ));
@@ -26,6 +26,41 @@ impl RuntimeSession {
     /// Discard a host-staged source manifest whose project-load command was not submitted.
     pub fn clear_staged_project_manifest(&mut self) {
         self.staged_project_manifest = None;
+        self.staged_project_file_cache = None;
+    }
+
+    /// Decode a portable project file and stage its validated compiled artifact for the next load.
+    ///
+    /// The returned manifest owns resource payloads needed by an external frontend. The staged
+    /// snapshot retains only identity-bearing metadata and external resource descriptors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when another host payload is staged or the project file is invalid.
+    pub fn stage_project_file_cache(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<crate::DecodedProjectFile, RuntimeError> {
+        if self.staged_project_manifest.is_some() || self.staged_project_file_cache.is_some() {
+            return Err(RuntimeError::Busy(
+                "another project payload is already staged",
+            ));
+        }
+        let maximum =
+            usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
+        let (cache, frontend) = crate::compiled_cache::decode_project_file_cache_with_progress(
+            bytes,
+            maximum,
+            self.project_progress_reporter.as_ref(),
+        )
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        self.staged_project_file_cache = Some(cache);
+        Ok(frontend)
+    }
+
+    /// Discard a decoded host-staged project file whose load command was not submitted.
+    pub fn clear_staged_project_file_cache(&mut self) {
+        self.staged_project_file_cache = None;
     }
 
     pub(in super::super::super) fn prepare_configuration_update(

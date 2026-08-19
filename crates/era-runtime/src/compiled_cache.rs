@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use era_protocol::ProtocolBytes;
 use era_runtime_protocol::{
-    ConfigurationClientProfile, ExtensionDeclaration, FileCategory, FilePayload, ProjectIdentity,
-    ProjectManifest, ProtocolDiagnostic, SubmittedFile, validate_relative_path,
+    ConfigurationClientProfile, ExtensionDeclaration, ExternalResource, FileCategory, FilePayload,
+    ProjectIdentity, ProjectManifest, ProtocolDiagnostic, SubmittedFile, validate_relative_path,
 };
 use erabasic_bytecode::{
     ArtifactManifest, BytecodeArtifact, BytecodeCallCompatibility, BytecodeEventGroup,
@@ -658,11 +658,11 @@ mod stream;
 use cooperative::ManifestSectionEncoder;
 #[cfg(test)]
 pub(crate) use decode::decode;
-pub(crate) use decode::decode_with_progress;
 pub use decode::{
     decode_project_file, decode_project_file_frontend_manifest,
     prepare_project_configuration_update,
 };
+pub(crate) use decode::{decode_project_file_cache_with_progress, decode_with_progress};
 #[cfg(test)]
 pub(crate) use identity::{encode_compiled_cache_for_test, encode_full_project_for_test};
 pub(crate) use identity::{project_identity, project_key, validate_full_project_manifest};

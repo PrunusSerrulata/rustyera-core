@@ -14,8 +14,15 @@ pub(crate) fn decode_with_progress(
     report_decode_stage(progress, crate::ProjectProgressStage::CacheParsing, 0);
     let sections = parse_cache_sections(bytes, maximum_bytes)?;
     report_decode_stage(progress, crate::ProjectProgressStage::CacheParsing, 1);
+    decode_sections_with_progress(&sections, progress)
+}
+
+fn decode_sections_with_progress(
+    sections: &CompiledCacheSections<'_>,
+    progress: Option<&crate::ProjectProgressReporter>,
+) -> Result<DecodedCompiledCache, String> {
     report_decode_stage(progress, crate::ProjectProgressStage::CacheDecoding, 0);
-    let parts = decode_cache_parts(&sections)?;
+    let parts = decode_cache_parts(sections)?;
     report_decode_stage(progress, crate::ProjectProgressStage::CacheDecoding, 1);
     let artifact = BytecodeArtifact {
         manifest: parts.metadata.manifest,
@@ -54,6 +61,99 @@ pub(crate) fn decode_with_progress(
         snapshot: parts.snapshot,
         diagnostics: parts.diagnostics,
     })
+}
+
+pub(crate) fn decode_project_file_cache_with_progress(
+    bytes: &[u8],
+    maximum_bytes: usize,
+    progress: Option<&crate::ProjectProgressReporter>,
+) -> Result<(DecodedCompiledCache, DecodedProjectFile), ProjectFileError> {
+    report_decode_stage(progress, crate::ProjectProgressStage::CacheParsing, 0);
+    let sections = parse_cache_sections(bytes, maximum_bytes).map_err(ProjectFileError::from)?;
+    require_full_project(&sections)?;
+    report_decode_stage(progress, crate::ProjectProgressStage::CacheParsing, 1);
+    let mut cache =
+        decode_sections_with_progress(&sections, progress).map_err(ProjectFileError::from)?;
+    let frontend = externalize_project_file_manifest(&mut cache.snapshot.manifest)?;
+    Ok((cache, frontend))
+}
+
+fn externalize_project_file_manifest(
+    runtime_manifest: &mut std::sync::Arc<ProjectManifest>,
+) -> Result<DecodedProjectFile, ProjectFileError> {
+    let runtime = std::sync::Arc::make_mut(runtime_manifest);
+    ensure_manifest_hashes(runtime);
+    let identity = project_identity(runtime);
+    let mut frontend_files = Vec::with_capacity(runtime.files.len());
+    for file in &mut runtime.files {
+        let frontend_payload = if file.category == FileCategory::Resource {
+            match &file.payload {
+                FilePayload::Bytes(bytes) => {
+                    let descriptor = FilePayload::ExternalResource(ExternalResource {
+                        byte_length: u64::try_from(bytes.as_slice().len()).map_err(|_| {
+                            ProjectFileError::from("project resource is too large".to_owned())
+                        })?,
+                        image_metadata: None,
+                    });
+                    std::mem::replace(&mut file.payload, descriptor)
+                }
+                payload => payload.clone(),
+            }
+        } else {
+            let frontend = empty_payload(&file.payload);
+            file.payload = empty_payload(&file.payload);
+            frontend
+        };
+        frontend_files.push(SubmittedFile {
+            relative_path: file.relative_path.clone(),
+            category: file.category,
+            payload: frontend_payload,
+            content_hash: file.content_hash.clone(),
+        });
+    }
+    let frontend = ProjectManifest {
+        project_revision: runtime.project_revision,
+        files: frontend_files,
+    };
+    if project_identity(runtime) != identity || project_identity(&frontend) != identity {
+        return Err(ProjectFileError::from(
+            "project-file projection changed the project identity".to_owned(),
+        ));
+    }
+    Ok(DecodedProjectFile {
+        identity,
+        manifest: frontend,
+    })
+}
+
+fn ensure_manifest_hashes(manifest: &mut ProjectManifest) {
+    for file in &mut manifest.files {
+        if file.content_hash.is_some() {
+            continue;
+        }
+        file.content_hash = match &file.payload {
+            FilePayload::Utf8(value) => Some(ProtocolBytes::new(
+                blake3::hash(value.as_bytes()).as_bytes().to_vec(),
+            )),
+            FilePayload::Bytes(value) => Some(ProtocolBytes::new(
+                blake3::hash(value.as_slice()).as_bytes().to_vec(),
+            )),
+            FilePayload::IoError(_) | FilePayload::ExternalResource(_) => None,
+        };
+    }
+}
+
+fn empty_payload(payload: &FilePayload) -> FilePayload {
+    match payload {
+        FilePayload::Utf8(_) => FilePayload::Utf8(String::new()),
+        FilePayload::Bytes(_) => FilePayload::Bytes(ProtocolBytes::default()),
+        FilePayload::IoError(error) => {
+            let mut error = error.clone();
+            error.message.clear();
+            FilePayload::IoError(error)
+        }
+        FilePayload::ExternalResource(resource) => FilePayload::ExternalResource(resource.clone()),
+    }
 }
 
 fn report_decode_stage(
@@ -206,22 +306,13 @@ pub(super) fn compact_frontend_manifest(
     manifest: &mut ProjectManifest,
     diagnostics: &[ProtocolDiagnostic],
 ) {
+    ensure_manifest_hashes(manifest);
     let diagnostic_sources = diagnostics
         .iter()
         .filter_map(|diagnostic| diagnostic.source.as_ref())
         .map(|source| source.relative_path.to_lowercase())
         .collect::<BTreeSet<_>>();
     for file in &mut manifest.files {
-        if file.content_hash.is_none() {
-            let payload = match &file.payload {
-                FilePayload::Utf8(text) => text.as_bytes(),
-                FilePayload::Bytes(bytes) => bytes.as_slice(),
-                FilePayload::IoError(_) | FilePayload::ExternalResource(_) => continue,
-            };
-            file.content_hash = Some(ProtocolBytes::new(
-                blake3::hash(payload).as_bytes().to_vec(),
-            ));
-        }
         if file.category == FileCategory::Resource
             || diagnostic_sources.contains(&file.relative_path.to_lowercase())
         {
