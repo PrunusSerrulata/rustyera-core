@@ -167,16 +167,10 @@ impl ProjectFileStreamDecoder {
 
     #[cfg(test)]
     pub(crate) fn retained_bytes(&self) -> usize {
-        self.header.capacity()
-            + self.manifest_compressed.capacity()
-            + self.journal.retained_bytes()
+        self.header.capacity() + self.manifest_compressed.capacity() + self.journal.retained_bytes()
     }
 
-    fn append_header(
-        &mut self,
-        bytes: &[u8],
-        cursor: &mut usize,
-    ) -> Result<(), ProjectFileError> {
+    fn append_header(&mut self, bytes: &[u8], cursor: &mut usize) -> Result<(), ProjectFileError> {
         let length = (HEADER_BYTES - self.header.len()).min(bytes.len() - *cursor);
         let input = &bytes[*cursor..*cursor + length];
         self.header.extend_from_slice(input);
@@ -196,26 +190,32 @@ impl ProjectFileStreamDecoder {
             return Err(error("project file has an invalid header"));
         }
         let version = self.header[PROJECT_MAGIC.len()];
-        if !matches!(version, LEGACY_PROJECT_VERSION | PREVIOUS_PROJECT_VERSION | VERSION) {
-            return Err(error(&format!("unsupported project file version {version:02x}")));
+        if !matches!(
+            version,
+            LEGACY_PROJECT_VERSION | PREVIOUS_PROJECT_VERSION | VERSION
+        ) {
+            return Err(error(&format!(
+                "unsupported project file version {version:02x}"
+            )));
         }
         let mut cursor = PROJECT_MAGIC.len() + 1;
-        let project_revision = read_u64(&self.header, &mut cursor).map_err(ProjectFileError::from)?;
+        let project_revision =
+            read_u64(&self.header, &mut cursor).map_err(ProjectFileError::from)?;
         let source_digest = self.header[cursor..cursor + 32].to_vec();
         cursor += 32;
         cursor += 32; // The compiled-cache key is not needed for a source-only load.
-        let function_sections = usize::try_from(
-            read_u32(&self.header, &mut cursor).map_err(ProjectFileError::from)?,
-        )
-        .map_err(|_| error("compiled cache function section count is not addressable"))?;
-        let source_sections = usize::try_from(
-            read_u32(&self.header, &mut cursor).map_err(ProjectFileError::from)?,
-        )
-        .map_err(|_| error("compiled cache source section count is not addressable"))?;
+        let function_sections =
+            usize::try_from(read_u32(&self.header, &mut cursor).map_err(ProjectFileError::from)?)
+                .map_err(|_| error("compiled cache function section count is not addressable"))?;
+        let source_sections =
+            usize::try_from(read_u32(&self.header, &mut cursor).map_err(ProjectFileError::from)?)
+                .map_err(|_| error("compiled cache source section count is not addressable"))?;
         if function_sections > TARGET_PARALLEL_SECTIONS.saturating_mul(2)
             || source_sections > TARGET_PARALLEL_SECTIONS
         {
-            return Err(error("compiled project cache has too many parallel sections"));
+            return Err(error(
+                "compiled project cache has too many parallel sections",
+            ));
         }
         self.section_count = FIXED_SECTION_COUNT
             .checked_add(function_sections)
@@ -233,8 +233,7 @@ impl ProjectFileStreamDecoder {
         bytes: &[u8],
         cursor: &mut usize,
     ) -> Result<(), ProjectFileError> {
-        let length =
-            (SECTION_HEADER_BYTES - self.section_header_len).min(bytes.len() - *cursor);
+        let length = (SECTION_HEADER_BYTES - self.section_header_len).min(bytes.len() - *cursor);
         let input = &bytes[*cursor..*cursor + length];
         self.section_header[self.section_header_len..self.section_header_len + length]
             .copy_from_slice(input);
@@ -323,11 +322,7 @@ impl ProjectFileStreamDecoder {
         };
     }
 
-    fn append_digest(
-        &mut self,
-        bytes: &[u8],
-        cursor: &mut usize,
-    ) -> Result<(), ProjectFileError> {
+    fn append_digest(&mut self, bytes: &[u8], cursor: &mut usize) -> Result<(), ProjectFileError> {
         let length = (CONTAINER_DIGEST_BYTES - self.digest_len).min(bytes.len() - *cursor);
         self.digest[self.digest_len..self.digest_len + length]
             .copy_from_slice(&bytes[*cursor..*cursor + length]);

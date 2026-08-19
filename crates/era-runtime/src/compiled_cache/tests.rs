@@ -479,10 +479,8 @@ fn streamed_project_file_decode_skips_compiled_sections_and_preserves_journal() 
     assert_eq!(decoded.project, expected);
     assert_eq!(decoded.file_digest, *blake3::hash(&bytes).as_bytes());
     let maximum_record_bytes = first_record.len().max(final_record.len());
-    let retained_bound = stream::HEADER_BYTES
-        + manifest_compressed_bytes
-        + maximum_record_bytes * 2
-        + 13;
+    let retained_bound =
+        stream::HEADER_BYTES + manifest_compressed_bytes + maximum_record_bytes * 2 + 13;
     assert!(maximum_retained <= retained_bound);
     assert_ne!(decoded.project.identity, embedded_identity);
     assert!(decoded.project.manifest.files.iter().any(|file| {

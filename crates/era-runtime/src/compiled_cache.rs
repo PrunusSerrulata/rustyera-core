@@ -663,7 +663,6 @@ pub use decode::{
     decode_project_file, decode_project_file_frontend_manifest,
     prepare_project_configuration_update,
 };
-pub use stream::{DecodedProjectFileStream, ProjectFileStreamDecoder};
 #[cfg(test)]
 pub(crate) use identity::{encode_compiled_cache_for_test, encode_full_project_for_test};
 pub(crate) use identity::{project_identity, project_key, validate_full_project_manifest};
@@ -675,6 +674,7 @@ pub(crate) use native::{
 };
 #[allow(clippy::wildcard_imports)]
 use sections::*;
+pub use stream::{DecodedProjectFileStream, ProjectFileStreamDecoder};
 
 #[cfg(test)]
 use decode::{

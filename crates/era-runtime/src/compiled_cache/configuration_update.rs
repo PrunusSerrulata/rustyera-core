@@ -32,10 +32,7 @@ pub(super) struct StreamingConfigurationJournal {
     final_update: Option<ConfigurationUpdateRef>,
 }
 
-pub(super) fn parse_journal(
-    bytes: &[u8],
-    base_end: usize,
-) -> Result<ConfigurationJournal, String> {
+pub(super) fn parse_journal(bytes: &[u8], base_end: usize) -> Result<ConfigurationJournal, String> {
     let mut stream = StreamingConfigurationJournal::default();
     stream.append(&bytes[base_end..])?;
     stream.finish(base_end)
@@ -121,11 +118,8 @@ fn record_length(bytes: &[u8]) -> Result<usize, String> {
     if flags & !FLAG_PREVIOUS_SOURCE != 0 || bytes[10..12] != [0, 0] {
         return Err("project configuration record has unsupported flags".into());
     }
-    let source_length = u32::from_le_bytes(
-        bytes[12..16]
-            .try_into()
-            .expect("four-byte source length"),
-    ) as usize;
+    let source_length =
+        u32::from_le_bytes(bytes[12..16].try_into().expect("four-byte source length")) as usize;
     FIXED_PREFIX_BYTES
         .checked_add(source_length)
         .and_then(|length| length.checked_add(FIXED_SUFFIX_BYTES))
@@ -334,9 +328,7 @@ mod tests {
                 .contains("broken digest chain")
         );
 
-        let mut invalid_tail = encode_record(None, "[audio]\nvolume = 42\n")
-            .unwrap()
-            .0;
+        let mut invalid_tail = encode_record(None, "[audio]\nvolume = 42\n").unwrap().0;
         invalid_tail.extend_from_slice(b"NO");
         assert!(
             parse_journal(&invalid_tail, 0)
