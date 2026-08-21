@@ -42,6 +42,58 @@ impl ReraConfigDocument {
         }
     }
 
+    /// Materialize one canonical current-schema document from typed catalog values.
+    ///
+    /// Unlike editing a parsed source document, this does not depend on the source schema or
+    /// historical TOML node types. Values which do not match the current catalog are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store is incomplete, contains retired/unknown entries, or has a
+    /// value whose type, enum domain, or range differs from the current catalog.
+    pub fn from_values(values: &ConfigStore) -> Result<Self, ReraConfigError> {
+        let specs = rera_catalog();
+        let known_codes = specs
+            .iter()
+            .map(|spec| spec.code.to_ascii_uppercase())
+            .collect::<BTreeSet<_>>();
+        if let Some(code) = values
+            .values
+            .keys()
+            .chain(values.fixed.keys())
+            .chain(values.specified.iter())
+            .find(|code| !known_codes.contains(*code))
+        {
+            return Err(error_at(
+                ReraConfigErrorKind::UnknownField,
+                Some(code),
+                None,
+                "设置目录包含未知 code",
+            ));
+        }
+
+        let mut document = Self::empty();
+        let mut locked_codes = Vec::new();
+        for spec in specs {
+            let setting = values.get_code(spec.code).ok_or_else(|| {
+                error_at(
+                    ReraConfigErrorKind::InvalidValue,
+                    Some(spec.path),
+                    None,
+                    "设置目录缺少值",
+                )
+            })?;
+            if setting != &spec.default || values.is_fixed(spec.code) {
+                document.set_code_unchecked(spec.code, setting)?;
+            }
+            if values.is_fixed(spec.code) {
+                locked_codes.push(spec.code.to_owned());
+            }
+        }
+        document.set_locked_codes_unchecked(locked_codes)?;
+        Ok(document)
+    }
+
     /// Parse and strictly validate one UTF-8 `reraconfig.toml` document.
     ///
     /// Both LF and CRLF are accepted. Error spans always refer to UTF-8 byte offsets in the

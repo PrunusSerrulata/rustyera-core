@@ -197,13 +197,20 @@ impl RuntimeSession {
             self.decode_project_cache_candidate(cache_bytes, staged_cache);
         let expected_key =
             crate::compiled_cache::project_key(&request.identity, &self.extension_declarations);
+        let configuration_warning = cached
+            .as_ref()
+            .and_then(compiled_cache_configuration_warning);
+        let cache_compatible = configuration_warning.is_none();
+        cache_warning = configuration_warning.or(cache_warning);
         let mut build = match cached {
-            Some(exact) if exact.key == expected_key => exact_cached_project_with_progress(
-                exact,
-                request.identity.project_revision,
-                self.configuration_profile,
-                self.project_progress_reporter.as_ref(),
-            ),
+            Some(exact) if exact.key == expected_key && cache_compatible => {
+                exact_cached_project_with_progress(
+                    exact,
+                    request.identity.project_revision,
+                    self.configuration_profile,
+                    self.project_progress_reporter.as_ref(),
+                )
+            }
             cached => {
                 let embedded_manifest = cached.as_ref().and_then(|value| {
                     let mut manifest = value.snapshot.manifest.as_ref().clone();
@@ -212,7 +219,8 @@ impl RuntimeSession {
                         == request.identity.source_digest)
                         .then_some(manifest)
                 });
-                let Some(manifest) = embedded_manifest.or(request.manifest) else {
+                let manifest = prefer_complete_manifest(request.manifest, embedded_manifest);
+                let Some(manifest) = manifest else {
                     let mut report =
                         project_payload_required_report(request.identity.project_revision);
                     if let Some(error) = cache_warning.take() {
@@ -250,11 +258,11 @@ impl RuntimeSession {
                         game_information: None,
                     }));
                 }
-                let previous_incremental = cached
+                let reusable_cache = cached.as_ref().filter(|_| cache_compatible);
+                let previous_incremental = reusable_cache
                     .as_ref()
                     .map_or(self.incremental.as_ref(), |value| &value.incremental);
-                let previous_artifact = cached
-                    .as_ref()
+                let previous_artifact = reusable_cache
                     .map(|value| value.artifact.artifact())
                     .or_else(|| self.vm.as_ref().map(|vm| vm.vm().artifact()))
                     .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
@@ -362,5 +370,25 @@ impl RuntimeSession {
         self.sync_resource_replay();
         self.emit(RuntimeMessage::ProjectLoadReport(report), Some(message_id))?;
         self.set_phase(RuntimePhase::Ready)
+    }
+}
+
+fn compiled_cache_configuration_warning(
+    cached: &crate::compiled_cache::DecodedCompiledCache,
+) -> Option<String> {
+    era_config::ReraConfigDocument::from_values(&cached.snapshot.configuration)
+        .err()
+        .map(|error| {
+            format!("compiled cache configuration does not match the current catalog: {error}")
+        })
+}
+
+fn prefer_complete_manifest(
+    submitted: Option<ProjectManifest>,
+    embedded: Option<ProjectManifest>,
+) -> Option<ProjectManifest> {
+    match submitted {
+        Some(manifest) if !manifest_contains_omitted_payloads(&manifest) => Some(manifest),
+        submitted => embedded.or(submitted),
     }
 }

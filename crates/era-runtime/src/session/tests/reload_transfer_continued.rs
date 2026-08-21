@@ -942,6 +942,86 @@ fn compiled_cache_is_reused_across_configuration_profiles() {
 }
 
 #[test]
+fn compiled_cache_with_a_stale_configuration_type_is_rebuilt_from_sources() {
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![
+            SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "reraconfig.toml".into(),
+                category: FileCategory::Configuration,
+                payload: FilePayload::Utf8(
+                    "[meta]\nschema_version = 3\n\n[interface]\nmenu_mode = \"auto\"\n".into(),
+                ),
+                content_hash: None,
+            },
+        ],
+    };
+    let mut initial = build_project_with_extensions_and_progress(
+        &manifest,
+        None,
+        None,
+        &[],
+        ConfigurationClientProfile::Tui,
+        None,
+    );
+    assert!(initial.report.success, "{:?}", initial.report.diagnostics);
+    let snapshot = initial.snapshot.as_mut().unwrap();
+    let mut serialized = serde_json::to_value(&snapshot.configuration).unwrap();
+    serialized["values"]["USEMENU"] = serde_json::json!({ "Boolean": true });
+    snapshot.configuration = serde_json::from_value(serialized).unwrap();
+    initial.incremental.compact();
+    let cache = crate::compiled_cache::encode_compiled_cache_for_test(
+        &manifest,
+        &[],
+        initial.artifact.as_ref().unwrap(),
+        &initial.incremental,
+        snapshot,
+        &initial.report.diagnostics,
+    )
+    .unwrap();
+
+    let identity = crate::compiled_cache::project_identity(&manifest);
+    let rebuilt = RuntimeSession::new(RuntimeOptions::default())
+        .build_project_from_cache(
+            ProjectLoadRequest {
+                identity,
+                manifest: Some(manifest),
+                compiled_cache_transfer_id: None,
+            },
+            Some(&cache),
+            None,
+        )
+        .expect("an incompatible cache should be rebuilt from its project sources");
+
+    assert!(rebuilt.report.success, "{:?}", rebuilt.report.diagnostics);
+    assert!(rebuilt.report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "runtime.compiled_cache_ignored"
+            && diagnostic.message.contains("interface.menu_mode")
+    }));
+    assert!(rebuilt
+        .report
+        .diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.code != "runtime.compiled_cache_hit"));
+    let configuration = rebuilt.snapshot.unwrap().configuration_snapshot();
+    assert!(!configuration.restart_pending);
+    assert_eq!(
+        configuration
+            .entries
+            .iter()
+            .find(|entry| entry.code == "UseMenu")
+            .map(|entry| entry.effective_value.as_str()),
+        Some("AUTO")
+    );
+}
+
+#[test]
 fn journaled_configuration_rebuilds_instead_of_exact_hitting_the_old_artifact() {
     let old_configuration = "[audio]\nvolume = 100\n";
     let manifest = ProjectManifest {

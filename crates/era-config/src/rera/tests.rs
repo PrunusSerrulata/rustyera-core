@@ -436,6 +436,26 @@ fn schema_v2_menu_visibility_is_upgraded_to_menu_mode() {
 }
 
 #[test]
+fn canonical_materialization_rejects_values_from_an_old_catalog_type() {
+    let mut serialized = serde_json::to_value(ConfigStore::default()).unwrap();
+    serialized["values"]["USEMENU"] = serde_json::json!({ "Boolean": true });
+    let stale: ConfigStore = serde_json::from_value(serialized).unwrap();
+
+    let error = ReraConfigDocument::from_values(&stale).unwrap_err();
+    assert_eq!(error.kind, ReraConfigErrorKind::InvalidType);
+    assert_eq!(error.path.as_deref(), Some("interface.menu_mode"));
+
+    let current = ConfigStore::default();
+    assert_eq!(
+        ReraConfigDocument::from_values(&current)
+            .unwrap()
+            .values()
+            .unwrap(),
+        current
+    );
+}
+
+#[test]
 fn schema_v2_menu_upgrade_preserves_unrelated_lock_formatting() {
     let input = "[meta]\nschema_version = 2\nlocked_settings = [\n  \"text.font_size\", # font\n  \"interface.menu_visible\", # menu\n  \"input.mouse_enabled\", # mouse\n] # locks\n\n[interface]\nmenu_visible = true # value\n";
     let expected = input

@@ -271,20 +271,8 @@ fn pending_configuration_export_sources(
         return Ok(None);
     }
     let pending_source = snapshot.configuration_document.to_lf_string();
-    let mut active_document = snapshot.configuration_document.clone();
-    for spec in era_config::catalog() {
-        let Some(editable) = snapshot.editable_configuration.get_code(spec.code) else {
-            continue;
-        };
-        let Some(active) = snapshot.configuration.get_code(spec.code) else {
-            continue;
-        };
-        if editable != active {
-            active_document
-                .set_code(spec.code, active)
-                .map_err(|error| format!("cannot materialize active configuration: {error}"))?;
-        }
-    }
+    let active_document = era_config::ReraConfigDocument::from_values(&snapshot.configuration)
+        .map_err(|error| format!("cannot materialize active configuration: {error}"))?;
     Ok(Some((active_document.to_lf_string(), pending_source)))
 }
 
