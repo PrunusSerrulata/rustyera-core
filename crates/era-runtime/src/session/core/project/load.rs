@@ -7,6 +7,7 @@ impl RuntimeSession {
         message_id: u64,
         mut request: ProjectLoadRequest,
     ) -> Result<(), RuntimeError> {
+        let previous_phase = self.phase;
         let staged_manifest = self.staged_project_manifest.take();
         let staged_cache = self.staged_project_file_cache.take();
         if !matches!(
@@ -39,23 +40,13 @@ impl RuntimeSession {
             }
             None => None,
         };
-        // Loading a new project invalidates both a completed cache and any detached result
-        // still being produced for the previous project identity.
-        self.compiled_project_cache = None;
-        self.compiled_cache_task = None;
-        self.compiled_cache_failure = None;
-        self.full_project_file = None;
-        self.full_project_task = None;
-        self.full_project_failure = None;
-        self.client_preferences = None;
-        self.staged_full_project_manifest = None;
         self.set_phase(RuntimePhase::LoadingProject)?;
         let mut build =
             match self.build_project_from_cache(request, cache_bytes.as_deref(), staged_cache) {
                 Ok(build) => build,
                 Err(report) => {
                     self.emit(RuntimeMessage::ProjectLoadReport(*report), Some(message_id))?;
-                    return self.set_phase(RuntimePhase::Ready);
+                    return self.set_phase(previous_phase);
                 }
             };
         build.incremental.compact();
@@ -64,7 +55,7 @@ impl RuntimeSession {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "runtime.compiled_cache_hit");
-        self.compiled_project_cache = if exact_cache_hit
+        let compiled_project_cache = if exact_cache_hit
             && cache_bytes
                 .as_deref()
                 .is_some_and(|bytes| bytes.starts_with(b"RERACACH"))
@@ -77,31 +68,37 @@ impl RuntimeSession {
             // and must not add a multi-second zstd pass to the cold-start critical path.
             None
         };
-        self.compiled_cache_diagnostics = build
-            .report
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| !diagnostic.code.starts_with("runtime.compiled_cache_"))
-            .cloned()
-            .collect();
-        self.incremental = Arc::new(build.incremental);
-        self.artifact = build.artifact;
-        self.project_snapshot = build.snapshot;
-        let metadata = self
-            .project_snapshot
+        let metadata = build
+            .snapshot
             .as_ref()
             .map(|snapshot| snapshot.resource_graph.metadata_requests())
             .unwrap_or_default();
-        if !build.report.success || metadata.is_empty() {
-            return self.finish_project_load(message_id, build.report);
+        if !build.report.success {
+            self.emit(
+                RuntimeMessage::ProjectLoadReport(build.report),
+                Some(message_id),
+            )?;
+            return self.set_phase(previous_phase);
         }
-        self.begin_project_image_metadata(message_id, build.report, metadata)
+        let candidate = PendingColdProjectLoad {
+            build,
+            previous_phase,
+            compiled_project_cache,
+        };
+        if metadata.is_empty() {
+            return self.commit_cold_project_load(message_id, candidate);
+        }
+        self.begin_project_image_metadata(
+            message_id,
+            PendingProjectCandidate::Cold(candidate),
+            metadata,
+        )
     }
 
     fn begin_project_image_metadata(
         &mut self,
         message_id: u64,
-        mut report: ProjectLoadReport,
+        mut candidate: PendingProjectCandidate,
         metadata: Vec<(String, [u8; 32])>,
     ) -> Result<(), RuntimeError> {
         if self
@@ -109,6 +106,14 @@ impl RuntimeSession {
             .get(&(ServiceKind::Image, IMAGE_METADATA_OPERATION.into()))
             != Some(&IMAGE_METADATA_OPERATION_VERSION)
         {
+            let (previous_phase, report) = match &mut candidate {
+                PendingProjectCandidate::Cold(candidate) => {
+                    (candidate.previous_phase, &mut candidate.build.report)
+                }
+                PendingProjectCandidate::Reload(candidate) => {
+                    (candidate.previous_phase, &mut candidate.build.report)
+                }
+            };
             report.success = false;
             report.diagnostics.push(ProtocolDiagnostic {
                 code: "runtime.missing_image_metadata_service".into(),
@@ -116,7 +121,11 @@ impl RuntimeSession {
                 message: "resource sprites require the negotiated image_metadata service".into(),
                 source: None,
             });
-            return self.finish_project_load(message_id, report);
+            self.emit(
+                RuntimeMessage::ProjectLoadReport(report.clone()),
+                Some(message_id),
+            )?;
+            return self.set_phase(previous_phase);
         }
         let remaining_metadata = metadata
             .iter()
@@ -124,10 +133,9 @@ impl RuntimeSession {
             .collect();
         self.pending_project_load = Some(PendingProjectLoad {
             message_id,
-            report,
             remaining_metadata,
             queued_metadata: metadata.into(),
-            reload: None,
+            candidate,
         });
         self.emit_project_image_metadata_requests()
     }
@@ -256,6 +264,7 @@ impl RuntimeSession {
                     previous_artifact,
                     &self.extension_declarations,
                     self.configuration_profile,
+                    self.options.retain_project_source_payloads,
                     self.project_progress_reporter.as_ref(),
                 )
             }
@@ -267,6 +276,11 @@ impl RuntimeSession {
                 message: error,
                 source: None,
             });
+        }
+        if !self.options.retain_project_source_payloads
+            && let Some(snapshot) = &mut build.snapshot
+        {
+            crate::project::release_snapshot_manifest_payloads(snapshot);
         }
         Ok(build)
     }
@@ -297,48 +311,56 @@ impl RuntimeSession {
         }
     }
 
-    pub(in super::super::super) fn finish_project_load(
+    pub(in super::super::super) fn commit_cold_project_load(
         &mut self,
         message_id: u64,
-        mut report: ProjectLoadReport,
+        candidate: PendingColdProjectLoad,
     ) -> Result<(), RuntimeError> {
-        if report.success {
-            self.undo_checkpoint = None;
-            self.undo_replay = None;
-            self.undo_token = None;
-            if let Some(snapshot) = &self.project_snapshot {
-                report.configuration = Some(snapshot.configuration_snapshot());
-                self.key_macros.set_enabled(matches!(
-                    snapshot.configuration.get_code("UseKeyMacro"),
-                    Some(era_config::ConfigValue::Boolean(true))
-                ));
-                self.presentation.configure_project(snapshot);
-            }
-            let canvas_defaults = (
-                self.presentation.default_foreground_rgb(),
-                self.presentation.default_background_rgb(),
-                self.presentation.font(),
-                u8::try_from(self.presentation.style_bits()).unwrap_or_default(),
-            );
-            if let Some(snapshot) = &mut self.project_snapshot {
-                snapshot.resource_graph.configure_canvas_defaults(
-                    canvas_defaults.0,
-                    canvas_defaults.1,
-                    canvas_defaults.2,
-                    canvas_defaults.3,
-                );
-            }
-            self.sync_resource_replay();
-        } else {
-            self.artifact = None;
-            self.project_snapshot = None;
+        let mut report = candidate.build.report;
+        self.compiled_project_cache = candidate.compiled_project_cache;
+        self.compiled_cache_task = None;
+        self.compiled_cache_failure = None;
+        self.full_project_file = None;
+        self.full_project_task = None;
+        self.full_project_failure = None;
+        self.client_preferences = None;
+        self.staged_full_project_manifest = None;
+        self.compiled_cache_diagnostics = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| !diagnostic.code.starts_with("runtime.compiled_cache_"))
+            .cloned()
+            .collect();
+        self.incremental = Arc::new(candidate.build.incremental);
+        self.artifact = candidate.build.artifact;
+        self.project_snapshot = candidate.build.snapshot;
+        self.undo_checkpoint = None;
+        self.undo_replay = None;
+        self.undo_token = None;
+        if let Some(snapshot) = &self.project_snapshot {
+            report.configuration = Some(snapshot.configuration_snapshot());
+            self.key_macros.set_enabled(matches!(
+                snapshot.configuration.get_code("UseKeyMacro"),
+                Some(era_config::ConfigValue::Boolean(true))
+            ));
+            self.presentation.configure_project(snapshot);
         }
-        let success = report.success;
+        let canvas_defaults = (
+            self.presentation.default_foreground_rgb(),
+            self.presentation.default_background_rgb(),
+            self.presentation.font(),
+            u8::try_from(self.presentation.style_bits()).unwrap_or_default(),
+        );
+        if let Some(snapshot) = &mut self.project_snapshot {
+            snapshot.resource_graph.configure_canvas_defaults(
+                canvas_defaults.0,
+                canvas_defaults.1,
+                canvas_defaults.2,
+                canvas_defaults.3,
+            );
+        }
+        self.sync_resource_replay();
         self.emit(RuntimeMessage::ProjectLoadReport(report), Some(message_id))?;
-        self.set_phase(if success {
-            RuntimePhase::Ready
-        } else {
-            RuntimePhase::Faulted
-        })
+        self.set_phase(RuntimePhase::Ready)
     }
 }

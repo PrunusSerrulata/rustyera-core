@@ -307,6 +307,7 @@ impl RuntimeSession {
         );
         snapshot.editable_configuration = pending.values;
         snapshot.configuration_document = pending.document;
+        snapshot.configuration_source_digest = pending.prepared_source_digest;
         snapshot.generated_configuration_source = None;
         apply_hot_configuration(&mut snapshot, &pending.changed_codes);
         if let Some(preferences) = &self.client_preferences {

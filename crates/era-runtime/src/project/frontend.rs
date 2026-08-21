@@ -1,8 +1,7 @@
 //! Adapters from submitted frontend files to the CSV and analyzer input contracts.
 
 use era_runtime_protocol::{
-    FilePayload, FrontendIoErrorKind, ProjectManifest, ProtocolDiagnostic, RuntimeLogLevel,
-    SourceLocation, validate_relative_path,
+    FilePayload, FrontendIoErrorKind, ProtocolDiagnostic, RuntimeLogLevel, SourceLocation,
 };
 use erabasic_analyzer::{ProjectSource, SourceIoError, SourceIoErrorKind, SourcePayload};
 use erabasic_csv::{
@@ -82,22 +81,7 @@ pub(super) fn payload_hash(payload: &FilePayload) -> Option<blake3::Hash> {
     }
 }
 
-pub(super) fn manifest_source_texts(
-    manifest: &ProjectManifest,
-) -> std::collections::BTreeMap<String, &str> {
-    manifest
-        .files
-        .iter()
-        .filter_map(|file| {
-            let FilePayload::Utf8(text) = &file.payload else {
-                return None;
-            };
-            let path = validate_relative_path(&file.relative_path).ok()?;
-            Some((path.to_ascii_lowercase(), text.as_str()))
-        })
-        .collect()
-}
-
+#[cfg(test)]
 pub(super) fn project_source_location(
     relative_path: String,
     byte_start: usize,
@@ -118,6 +102,36 @@ pub(super) fn project_source_location(
         (
             Some(line),
             Some(u64::try_from(clamped_start - line_start).unwrap_or(u64::MAX)),
+        )
+    });
+    SourceLocation {
+        relative_path,
+        byte_start: u64::try_from(byte_start).unwrap_or(u64::MAX),
+        byte_end: u64::try_from(byte_end).unwrap_or(u64::MAX),
+        line,
+        byte_column,
+    }
+}
+
+pub(super) fn indexed_project_source_location(
+    relative_path: String,
+    byte_start: usize,
+    byte_end: usize,
+    fallback_line: Option<u64>,
+    source: Option<&erabasic_hir::SourceFile>,
+) -> SourceLocation {
+    let (line, byte_column) = source.map_or((fallback_line, None), |source| {
+        let clamped_start = u64::try_from(byte_start)
+            .unwrap_or(u64::MAX)
+            .min(source.byte_len);
+        let line_index = source
+            .line_starts
+            .partition_point(|line_start| *line_start <= clamped_start)
+            .saturating_sub(1);
+        let line_start = source.line_starts.get(line_index).copied().unwrap_or(0);
+        (
+            Some(u64::try_from(line_index).unwrap_or(u64::MAX)),
+            Some(clamped_start.saturating_sub(line_start)),
         )
     });
     SourceLocation {

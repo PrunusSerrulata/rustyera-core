@@ -139,6 +139,12 @@ pub struct RuntimeOptions {
     pub vm_config: VmConfig,
     /// Creator-owned upper bound for [`DebugScope`] discriminants.
     pub debug_scope_mask: u64,
+    /// Keep complete project file payloads in the reload snapshot after a successful build.
+    ///
+    /// Constrained hosts that can rematerialize an authorized project may disable this and submit
+    /// a complete payload set for each reload. Paths, hashes, resource descriptors, and revisions
+    /// remain available in the compact snapshot.
+    pub retain_project_source_payloads: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -434,6 +440,7 @@ impl Default for RuntimeOptions {
             wire_limits: WireLimits::default(),
             vm_config: VmConfig::default(),
             debug_scope_mask: 0,
+            retain_project_source_payloads: true,
         }
     }
 }
@@ -740,10 +747,29 @@ pub(crate) struct UndoReplay {
 
 struct PendingProjectLoad {
     message_id: u64,
-    report: ProjectLoadReport,
     remaining_metadata: BTreeSet<String>,
     queued_metadata: VecDeque<(String, [u8; 32])>,
-    reload: Option<PendingProjectReload>,
+    candidate: PendingProjectCandidate,
+}
+
+enum PendingProjectCandidate {
+    Cold(PendingColdProjectLoad),
+    Reload(PendingProjectReload),
+}
+
+impl PendingProjectCandidate {
+    fn build_mut(&mut self) -> &mut crate::project::ProjectBuild {
+        match self {
+            Self::Cold(candidate) => &mut candidate.build,
+            Self::Reload(candidate) => &mut candidate.build,
+        }
+    }
+}
+
+struct PendingColdProjectLoad {
+    build: crate::project::ProjectBuild,
+    previous_phase: RuntimePhase,
+    compiled_project_cache: Option<Arc<Vec<u8>>>,
 }
 
 struct PreparedOrdinaryLoad {

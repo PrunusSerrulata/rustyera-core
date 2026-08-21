@@ -3,8 +3,8 @@
 use era_config::{ConfigStore, ReraConfigDocument};
 use era_runtime_protocol::{
     CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ConfigurationApplication,
-    ConfigurationClientProfile, ConfigurationValueKind, FileCategory, FilePayload,
-    ProjectConfigurationEntry, ProjectConfigurationSnapshot, ProjectManifest,
+    ConfigurationClientProfile, ConfigurationValueKind, FileCategory, ProjectConfigurationEntry,
+    ProjectConfigurationSnapshot, ProjectManifest,
 };
 use erabasic_analyzer::AnalyzerOptions;
 use erabasic_csv::CsvLoadOptions;
@@ -13,8 +13,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::resource::ResourceGraph;
-
-use super::is_root_configuration_file;
 
 #[derive(Clone)]
 #[allow(clippy::struct_excessive_bools)]
@@ -47,6 +45,7 @@ pub(crate) struct NormalizedProjectSnapshot {
     /// Complete editable TOML values; the protocol applies each client's UI whitelist.
     pub(crate) editable_configuration: ConfigStore,
     pub(crate) configuration_document: ReraConfigDocument,
+    pub(crate) configuration_source_digest: era_protocol::ProtocolBytes,
     pub(crate) generated_configuration_source: Option<String>,
     pub(crate) extensions:
         std::collections::BTreeMap<String, era_runtime_protocol::ExtensionDeclaration>,
@@ -54,28 +53,6 @@ pub(crate) struct NormalizedProjectSnapshot {
 
 impl NormalizedProjectSnapshot {
     pub(crate) fn configuration_snapshot(&self) -> ProjectConfigurationSnapshot {
-        let mut configuration_files = self
-            .manifest
-            .files
-            .iter()
-            .filter(|file| is_root_configuration_file(file));
-        let source = configuration_files.next();
-        let generated_from_legacy =
-            self.generated_configuration_source.is_some() && configuration_files.next().is_none();
-        let source_digest = if generated_from_legacy {
-            era_protocol::ProtocolBytes::new(Vec::new())
-        } else {
-            source
-                .and_then(|file| match &file.payload {
-                    FilePayload::Utf8(text) => Some(era_protocol::ProtocolBytes::new(
-                        blake3::hash(era_config::normalize_line_endings(text).as_bytes())
-                            .as_bytes()
-                            .to_vec(),
-                    )),
-                    _ => None,
-                })
-                .unwrap_or_else(|| era_protocol::ProtocolBytes::new(Vec::new()))
-        };
         let entries = era_config::catalog()
             .into_iter()
             .filter(|spec| {
@@ -118,7 +95,7 @@ impl NormalizedProjectSnapshot {
             .any(|entry| entry.value != entry.effective_value);
         ProjectConfigurationSnapshot {
             project_revision: self.manifest.project_revision,
-            source_digest,
+            source_digest: self.configuration_source_digest.clone(),
             entries,
             restart_pending,
             generated_source: self

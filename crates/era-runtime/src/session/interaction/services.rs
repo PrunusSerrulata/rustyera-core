@@ -25,15 +25,17 @@ impl RuntimeSession {
                             "image metadata completion has no pending project".into(),
                         )
                     })?;
-                    let snapshot = match pending.reload.as_mut() {
-                        Some(reload) => reload.build.snapshot.as_mut(),
-                        None => self.project_snapshot.as_mut(),
-                    }
-                    .ok_or_else(|| {
-                        RuntimeError::Internal(
-                            "image metadata completion has no resource graph".into(),
-                        )
-                    })?;
+                    let snapshot =
+                        pending
+                            .candidate
+                            .build_mut()
+                            .snapshot
+                            .as_mut()
+                            .ok_or_else(|| {
+                                RuntimeError::Internal(
+                                    "image metadata completion has no resource graph".into(),
+                                )
+                            })?;
                     snapshot
                         .resource_graph
                         .apply_metadata(&relative_path, metadata)
@@ -48,8 +50,9 @@ impl RuntimeSession {
                     .remaining_metadata
                     .remove(&relative_path.to_ascii_lowercase());
                 if let Err(message) = result {
-                    pending.report.success = false;
-                    pending.report.diagnostics.push(ProtocolDiagnostic {
+                    let report = &mut pending.candidate.build_mut().report;
+                    report.success = false;
+                    report.diagnostics.push(ProtocolDiagnostic {
                         code: "runtime.invalid_image_metadata".into(),
                         level: RuntimeLogLevel::Error,
                         message,
@@ -66,24 +69,34 @@ impl RuntimeSession {
             self.emit_project_image_metadata_requests()?;
             let pending = self.pending_project_load.as_mut().expect("checked above");
             if pending.remaining_metadata.is_empty() {
-                let mut pending = self.pending_project_load.take().expect("checked above");
-                if let Some(mut reload) = pending.reload.take() {
-                    reload.build.report = pending.report;
-                    if reload.build.report.success {
-                        return self.commit_project_reload(
-                            pending.message_id,
-                            reload.build,
-                            reload.previous_phase,
-                            reload.replay_origin,
-                        );
+                let pending = self.pending_project_load.take().expect("checked above");
+                match pending.candidate {
+                    PendingProjectCandidate::Reload(reload) => {
+                        if reload.build.report.success {
+                            return self.commit_project_reload(
+                                pending.message_id,
+                                reload.build,
+                                reload.previous_phase,
+                                reload.replay_origin,
+                            );
+                        }
+                        self.emit(
+                            RuntimeMessage::ProjectLoadReport(reload.build.report),
+                            Some(pending.message_id),
+                        )?;
+                        return self.set_phase(reload.previous_phase);
                     }
-                    self.emit(
-                        RuntimeMessage::ProjectLoadReport(reload.build.report),
-                        Some(pending.message_id),
-                    )?;
-                    return self.set_phase(reload.previous_phase);
+                    PendingProjectCandidate::Cold(candidate) => {
+                        if candidate.build.report.success {
+                            return self.commit_cold_project_load(pending.message_id, candidate);
+                        }
+                        self.emit(
+                            RuntimeMessage::ProjectLoadReport(candidate.build.report),
+                            Some(pending.message_id),
+                        )?;
+                        return self.set_phase(candidate.previous_phase);
+                    }
                 }
-                return self.finish_project_load(pending.message_id, pending.report);
             }
             return Ok(());
         }

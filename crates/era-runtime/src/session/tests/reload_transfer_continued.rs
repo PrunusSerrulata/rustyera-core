@@ -139,6 +139,273 @@ fn cold_project_load_reuses_the_owned_manifest_source_allocation() {
 }
 
 #[test]
+fn low_memory_project_load_releases_source_payloads_but_preserves_identity() {
+    let source = String::from("@SYSTEM_TITLE\nPRINTL MEMORY_STABLE\nRETURN\n");
+    let digest = ProtocolBytes::new(blake3::hash(source.as_bytes()).as_bytes().to_vec());
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8(source),
+            content_hash: Some(digest),
+        }],
+    };
+    let identity = crate::compiled_cache::project_identity(&manifest);
+    let mut session = RuntimeSession::new(RuntimeOptions {
+        retain_project_source_payloads: false,
+        ..RuntimeOptions::default()
+    });
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::Ready;
+    session.stage_project_manifest(manifest).unwrap();
+
+    session
+        .load_project(
+            40,
+            ProjectLoadRequest {
+                identity: identity.clone(),
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+
+    let snapshot = session.project_snapshot.as_ref().expect("the project should load");
+    assert_eq!(snapshot.manifest.project_revision, 1);
+    assert_eq!(crate::compiled_cache::project_identity(&snapshot.manifest), identity);
+    assert!(matches!(
+        &snapshot.manifest.files[0].payload,
+        FilePayload::Utf8(source) if source.is_empty() && source.capacity() == 0
+    ));
+}
+
+#[test]
+fn low_memory_full_payload_reload_remains_sparse_and_uses_the_new_source() {
+    let initial = "@SYSTEM_TITLE\nPRINTL OLD\nRETURN\n";
+    let initial_digest = ProtocolBytes::new(blake3::hash(initial.as_bytes()).as_bytes().to_vec());
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8(initial.into()),
+            content_hash: Some(initial_digest),
+        }],
+    };
+    let identity = crate::compiled_cache::project_identity(&manifest);
+    let mut session = RuntimeSession::new(RuntimeOptions {
+        retain_project_source_payloads: false,
+        ..RuntimeOptions::default()
+    });
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::Ready;
+    session.stage_project_manifest(manifest).unwrap();
+    session
+        .load_project(
+            40,
+            ProjectLoadRequest {
+                identity,
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+    let _ = drain(&mut session);
+
+    let changed = "@SYSTEM_TITLE\nPRINTL NEW\nRETURN\n";
+    let changed_digest = ProtocolBytes::new(blake3::hash(changed.as_bytes()).as_bytes().to_vec());
+    session
+        .reload_project(
+            41,
+            &ReloadProject {
+                base_revision: 1,
+                target_revision: 2,
+                changes: vec![FileChange::Upsert {
+                    file: SubmittedFile {
+                        relative_path: "main.erb".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8(changed.into()),
+                        content_hash: Some(changed_digest.clone()),
+                    },
+                }],
+            },
+        )
+        .unwrap();
+
+    let snapshot = session.project_snapshot.as_ref().expect("the reload should commit");
+    assert_eq!(snapshot.manifest.project_revision, 2);
+    assert!(matches!(
+        &snapshot.manifest.files[0].payload,
+        FilePayload::Utf8(source) if source.is_empty() && source.capacity() == 0
+    ));
+    assert_eq!(snapshot.manifest.files[0].content_hash, Some(changed_digest));
+    assert_eq!(
+        session
+            .artifact
+            .as_ref()
+            .unwrap()
+            .artifact()
+            .source_map
+            .sources[0]
+            .content_hash
+            .0,
+        *blake3::hash(changed.as_bytes()).as_bytes()
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn low_memory_configuration_commit_preserves_sparse_sources_and_allows_full_reload() {
+    let main = "@SYSTEM_TITLE\nRETURN\n";
+    let other = "@OTHER\nRETURN\n";
+    let configuration = "[meta]\nschema_version = 2\n[text]\nfont_size = 20\n";
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![
+            SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(main.into()),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "other.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(other.into()),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "reraconfig.toml".into(),
+                category: FileCategory::Configuration,
+                payload: FilePayload::Utf8(configuration.into()),
+                content_hash: None,
+            },
+        ],
+    };
+    let identity = crate::compiled_cache::project_identity(&manifest);
+    let mut session = RuntimeSession::new(RuntimeOptions {
+        retain_project_source_payloads: false,
+        ..RuntimeOptions::default()
+    });
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::Ready;
+    session.configuration_profile = ConfigurationClientProfile::Tui;
+    session.stage_project_manifest(manifest).unwrap();
+    session
+        .load_project(
+            50,
+            ProjectLoadRequest {
+                identity,
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+    let initial_configuration = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ProjectLoadReport(report) if report.success => report.configuration,
+            _ => None,
+        })
+        .expect("configuration snapshot");
+    assert_eq!(
+        initial_configuration.source_digest.as_slice(),
+        blake3::hash(era_config::normalize_line_endings(configuration).as_bytes()).as_bytes()
+    );
+    let initial_identity = session
+        .project_snapshot
+        .as_ref()
+        .unwrap()
+        .project_identity;
+    session
+        .prepare_configuration_update(
+            51,
+            &PrepareConfigurationUpdate {
+                project_revision: 1,
+                expected_source_digest: initial_configuration.source_digest,
+                changes: vec![ConfigurationChange {
+                    code: "MaxLog".into(),
+                    value: "777".into(),
+                }],
+            },
+        )
+        .unwrap();
+    let prepared = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ConfigurationUpdatePrepared(value) => Some(value),
+            _ => None,
+        })
+        .expect("configuration preparation");
+    session
+        .finalize_configuration_update(
+            52,
+            FinalizeConfigurationUpdate {
+                preparation_message_id: 51,
+                outcome: ConfigurationUpdateOutcome::Commit,
+            },
+        )
+        .unwrap();
+    let _ = drain(&mut session);
+    let committed = session.project_snapshot.as_ref().unwrap();
+    assert_eq!(
+        committed.configuration_snapshot().source_digest,
+        prepared.prepared_source_digest
+    );
+    assert_ne!(committed.project_identity, initial_identity);
+    assert!(committed.manifest.files.iter().filter(|file| {
+        matches!(file.category, FileCategory::Erb | FileCategory::Erh | FileCategory::Csv)
+    }).all(|file| matches!(&file.payload, FilePayload::Utf8(value) if value.is_empty())));
+
+    session
+        .reload_project(
+            53,
+            &ReloadProject {
+                base_revision: 1,
+                target_revision: 2,
+                changes: vec![
+                    FileChange::Upsert {
+                        file: SubmittedFile {
+                            relative_path: "main.erb".into(),
+                            category: FileCategory::Erb,
+                            payload: FilePayload::Utf8(main.into()),
+                            content_hash: None,
+                        },
+                    },
+                    FileChange::Upsert {
+                        file: SubmittedFile {
+                            relative_path: "other.erb".into(),
+                            category: FileCategory::Erb,
+                            payload: FilePayload::Utf8(other.into()),
+                            content_hash: None,
+                        },
+                    },
+                    FileChange::Upsert {
+                        file: SubmittedFile {
+                            relative_path: "reraconfig.toml".into(),
+                            category: FileCategory::Configuration,
+                            payload: FilePayload::Utf8(prepared.contents),
+                            content_hash: None,
+                        },
+                    },
+                ],
+            },
+        )
+        .unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ProjectLoadReport(report) if report.success && report.project_revision == 2
+    )));
+    let reloaded = session.project_snapshot.as_ref().unwrap();
+    assert_eq!(reloaded.manifest.project_revision, 2);
+    assert!(reloaded.manifest.files.iter().all(|file| matches!(
+        &file.payload,
+        FilePayload::Utf8(value) if value.is_empty() && value.capacity() == 0
+    )));
+}
+
+#[test]
 fn host_staged_manifest_is_owned_busy_single_use_and_identity_checked() {
     let manifest = ProjectManifest {
         project_revision: 4,
@@ -266,6 +533,7 @@ fn rejected_or_explicit_project_load_discards_a_host_staged_manifest() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn exact_compiled_cache_load_does_not_require_a_manifest() {
     let manifest = ProjectManifest {
         project_revision: 1,
@@ -282,6 +550,20 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
                 payload: FilePayload::Utf8(
                     "タイトル,Cached Demo\n作者,   \nバージョン,1001\n".into(),
                 ),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "reraconfig.toml".into(),
+                category: FileCategory::Configuration,
+                payload: FilePayload::Utf8(
+                    "[meta]\r\nschema_version = 2\r\n[text]\r\nfont_size = 20\r\n".into(),
+                ),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "resources/sprites.csv".into(),
+                category: FileCategory::ResourceManifest,
+                payload: FilePayload::Utf8("; no sprites\n".into()),
                 content_hash: None,
             },
         ],
@@ -312,7 +594,26 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
     .unwrap();
     let mut identity = crate::compiled_cache::project_identity(&manifest);
     identity.project_revision = 8;
-    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    let expected_configuration_digest = initial
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .configuration_snapshot()
+        .source_digest;
+    assert_eq!(
+        expected_configuration_digest.as_slice(),
+        blake3::hash(
+            era_config::normalize_line_endings(
+                "[meta]\r\nschema_version = 2\r\n[text]\r\nfont_size = 20\r\n"
+            )
+            .as_bytes()
+        )
+        .as_bytes()
+    );
+    let mut session = RuntimeSession::new(RuntimeOptions {
+        retain_project_source_payloads: false,
+        ..RuntimeOptions::default()
+    });
     let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
     let observed = Arc::clone(&progress);
     session.project_progress_reporter = Some(ProjectProgressReporter::new(move |value| {
@@ -350,7 +651,17 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
         "[cached] warning retained with compiled output"
     );
     assert_eq!(replayed.source.as_ref().unwrap().byte_end, 13);
-    assert_eq!(cached.snapshot.unwrap().manifest.project_revision, 8);
+    let cached_snapshot = cached.snapshot.unwrap();
+    assert_eq!(cached_snapshot.manifest.project_revision, 8);
+    assert_eq!(
+        cached_snapshot.configuration_snapshot().source_digest,
+        expected_configuration_digest
+    );
+    assert!(cached_snapshot.manifest.files.iter().all(|file| match &file.payload {
+        FilePayload::Utf8(value) => value.is_empty() && value.capacity() == 0,
+        FilePayload::Bytes(value) => value.as_slice().is_empty(),
+        FilePayload::IoError(_) | FilePayload::ExternalResource(_) => true,
+    }));
     assert_exact_cache_preparing_progress(&progress);
 }
 

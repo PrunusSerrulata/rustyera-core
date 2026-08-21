@@ -48,6 +48,7 @@ impl RuntimeSession {
             previous_artifact,
             &self.extension_declarations,
             self.configuration_profile,
+            self.options.retain_project_source_payloads,
             self.project_progress_reporter.as_ref(),
         );
         if !build.report.success {
@@ -111,13 +112,11 @@ impl RuntimeSession {
                 .iter()
                 .map(|(path, _)| path.to_ascii_lowercase())
                 .collect();
-            let report = build.report.clone();
             self.pending_project_load = Some(PendingProjectLoad {
                 message_id,
-                report,
                 remaining_metadata,
                 queued_metadata: metadata.into(),
-                reload: Some(PendingProjectReload {
+                candidate: PendingProjectCandidate::Reload(PendingProjectReload {
                     build,
                     previous_phase,
                     replay_origin,

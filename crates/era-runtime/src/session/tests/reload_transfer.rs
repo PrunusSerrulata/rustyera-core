@@ -363,7 +363,11 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
 
 #[test]
 fn full_project_export_preempts_cache_streams_chunks_and_cancels_cleanly() {
-    let (mut session, manifest, _) = cooperative_cache_session();
+    let (mut session, manifest, _) = low_memory_cooperative_cache_session();
+    assert!(matches!(
+        &session.project_snapshot.as_ref().unwrap().manifest.files[0].payload,
+        FilePayload::Utf8(value) if value.is_empty() && value.capacity() == 0
+    ));
     let cache_manifest = Arc::clone(&session.project_snapshot.as_ref().unwrap().manifest);
     session.compiled_cache_task = Some(ProjectContainerTask::Cooperative {
         encoder: Box::new(cooperative_cache_encoder(&session, cache_manifest)),
@@ -382,6 +386,10 @@ fn full_project_export_preempts_cache_streams_chunks_and_cancels_cleanly() {
             },
         )
         .unwrap();
+    assert!(matches!(
+        &session.staged_full_project_manifest.as_ref().unwrap().files[0].payload,
+        FilePayload::Utf8(value) if value.contains("@SYSTEM_TITLE")
+    ));
     session
         .export_state(
             101,
@@ -599,6 +607,19 @@ fn queued_input_is_processed_before_one_cooperative_cache_quantum() {
 }
 
 fn cooperative_cache_session() -> (RuntimeSession, ProjectManifest, ProjectIdentity) {
+    cooperative_cache_session_with_options(RuntimeOptions::default())
+}
+
+fn low_memory_cooperative_cache_session() -> (RuntimeSession, ProjectManifest, ProjectIdentity) {
+    cooperative_cache_session_with_options(RuntimeOptions {
+        retain_project_source_payloads: false,
+        ..RuntimeOptions::default()
+    })
+}
+
+fn cooperative_cache_session_with_options(
+    options: RuntimeOptions,
+) -> (RuntimeSession, ProjectManifest, ProjectIdentity) {
     let manifest = ProjectManifest {
         project_revision: 1,
         files: vec![
@@ -617,7 +638,7 @@ fn cooperative_cache_session() -> (RuntimeSession, ProjectManifest, ProjectIdent
         ],
     };
     let identity = crate::compiled_cache::project_identity(&manifest);
-    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    let mut session = RuntimeSession::new(options);
     session.state = SessionState::Active;
     session.phase = RuntimePhase::Ready;
     session.epoch = SessionEpoch(1);

@@ -192,6 +192,8 @@ impl From<&NormalizedProjectSnapshot> for CompiledSnapshotMetadata {
 impl CompiledSnapshotMetadata {
     fn into_snapshot(self, manifest: ProjectManifest) -> Result<NormalizedProjectSnapshot, String> {
         let resource_graph = self.resource_graph;
+        let configuration_source_digest =
+            crate::project::project_configuration_source_digest(&manifest.files);
         // Explicit-source markers are deliberately not serialized in the cache. Rebuild them
         // from the authoritative project files so preference precedence is identical on a hit.
         let editable_configuration = crate::project::project_configuration_values(&manifest.files);
@@ -237,6 +239,7 @@ impl CompiledSnapshotMetadata {
             client_configuration,
             editable_configuration,
             configuration_document,
+            configuration_source_digest,
             generated_configuration_source: None,
             extensions: self.extensions,
         })

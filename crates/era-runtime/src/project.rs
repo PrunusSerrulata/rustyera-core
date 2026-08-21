@@ -30,9 +30,10 @@ use crate::{ProjectProgress, ProjectProgressReporter, ProjectProgressStage};
 
 use self::configuration::{apply_replace_configuration, parse_configuration};
 use self::extensions::{category_relative_path, is_deferred_index_source, prepare_extensions};
+#[cfg(test)]
+use self::frontend::project_source_location;
 use self::frontend::{
-    analyzer_source, csv_file, manifest_source_texts, payload_hash, project_diagnostic,
-    project_source_location,
+    analyzer_source, csv_file, indexed_project_source_location, payload_hash, project_diagnostic,
 };
 use self::model::SemanticConfig;
 pub(crate) use self::model::{
@@ -57,6 +58,80 @@ pub(crate) fn project_configuration_values(files: &[SubmittedFile]) -> era_confi
     configuration::parse_configuration(files, &mut diagnostics)
         .semantic
         .values
+}
+
+pub(crate) fn project_configuration_source_digest(
+    files: &[SubmittedFile],
+) -> era_protocol::ProtocolBytes {
+    files
+        .iter()
+        .find(|file| is_root_configuration_file(file))
+        .and_then(|file| match &file.payload {
+            FilePayload::Utf8(text) => Some(era_protocol::ProtocolBytes::new(
+                blake3::hash(era_config::normalize_line_endings(text).as_bytes())
+                    .as_bytes()
+                    .to_vec(),
+            )),
+            _ => None,
+        })
+        .unwrap_or_else(|| era_protocol::ProtocolBytes::new(Vec::new()))
+}
+
+fn release_manifest_payloads(
+    manifest: &mut ProjectManifest,
+    release: impl Fn(FileCategory) -> bool,
+) {
+    for file in &mut manifest.files {
+        if !release(file.category) {
+            continue;
+        }
+        ensure_manifest_hash(file);
+        match &mut file.payload {
+            FilePayload::Utf8(value) => {
+                *value = String::new();
+            }
+            FilePayload::Bytes(value) => {
+                *value = era_protocol::ProtocolBytes::new(Vec::new());
+            }
+            FilePayload::IoError(_) | FilePayload::ExternalResource(_) => {}
+        }
+    }
+}
+
+pub(crate) fn release_snapshot_manifest_payloads(snapshot: &mut NormalizedProjectSnapshot) {
+    let manifest = Arc::get_mut(&mut snapshot.manifest)
+        .expect("a newly built project snapshot must uniquely own its manifest");
+    release_manifest_payloads(manifest, |_| true);
+}
+
+fn ensure_manifest_hash(file: &mut SubmittedFile) {
+    match &file.payload {
+        FilePayload::Utf8(value) => {
+            file.content_hash.get_or_insert_with(|| {
+                era_protocol::ProtocolBytes::new(blake3::hash(value.as_bytes()).as_bytes().to_vec())
+            });
+        }
+        FilePayload::Bytes(value) => {
+            file.content_hash.get_or_insert_with(|| {
+                era_protocol::ProtocolBytes::new(blake3::hash(value.as_slice()).as_bytes().to_vec())
+            });
+        }
+        FilePayload::IoError(_) | FilePayload::ExternalResource(_) => {}
+    }
+}
+
+fn take_manifest_payload(file: &mut SubmittedFile) -> FilePayload {
+    ensure_manifest_hash(file);
+    match &file.payload {
+        FilePayload::Utf8(_) => {
+            std::mem::replace(&mut file.payload, FilePayload::Utf8(String::new()))
+        }
+        FilePayload::Bytes(_) => std::mem::replace(
+            &mut file.payload,
+            FilePayload::Bytes(era_protocol::ProtocolBytes::new(Vec::new())),
+        ),
+        FilePayload::IoError(_) | FilePayload::ExternalResource(_) => file.payload.clone(),
+    }
 }
 
 pub(crate) struct ProjectBuild {
@@ -137,6 +212,7 @@ pub(crate) fn build_project_with_extensions_and_progress(
         false,
         extensions,
         configuration_profile,
+        true,
         progress,
     )
 }
@@ -147,6 +223,7 @@ pub(crate) fn build_owned_project_with_extensions_and_progress(
     previous_artifact: Option<&BytecodeArtifact>,
     extensions: &[era_runtime_protocol::ExtensionDeclaration],
     configuration_profile: ConfigurationClientProfile,
+    retain_project_source_payloads: bool,
     progress: Option<&ProjectProgressReporter>,
 ) -> ProjectBuild {
     build_project_inner_with_extensions(
@@ -157,6 +234,7 @@ pub(crate) fn build_owned_project_with_extensions_and_progress(
         false,
         extensions,
         configuration_profile,
+        retain_project_source_payloads,
         progress,
     )
 }
@@ -180,6 +258,7 @@ pub(crate) fn analyze_submitted_project_with_extensions(
         request.debug_mode,
         extensions,
         configuration_profile,
+        true,
         None,
     );
     let mut analyzed_erb_paths = request
@@ -213,6 +292,7 @@ fn build_project_inner(
         false,
         &[],
         ConfigurationClientProfile::Reference,
+        true,
         None,
     )
 }
@@ -230,6 +310,7 @@ fn build_project_inner_with_extensions(
     analysis_debug_mode: bool,
     extension_declarations: &[era_runtime_protocol::ExtensionDeclaration],
     configuration_profile: ConfigurationClientProfile,
+    retain_project_source_payloads: bool,
     progress: Option<&ProjectProgressReporter>,
 ) -> ProjectBuild {
     // Cold loads already own the decoded manifest. Keep that allocation as the authoritative
@@ -242,10 +323,37 @@ fn build_project_inner_with_extensions(
         0,
         normalized_manifest.files.len(),
     );
-    let source_texts = manifest_source_texts(&normalized_manifest);
     let (extensions, host_registry, extension_map) =
         prepare_extensions(extension_declarations, &mut diagnostics);
-    let mut files = normalized_manifest.files.clone();
+    let configuration_source_digest =
+        project_configuration_source_digest(&normalized_manifest.files);
+    let mut files = if retain_project_source_payloads {
+        normalized_manifest.files.clone()
+    } else {
+        normalized_manifest
+            .files
+            .iter_mut()
+            .map(|file| {
+                let payload = if matches!(
+                    file.category,
+                    FileCategory::Erb
+                        | FileCategory::Erh
+                        | FileCategory::Csv
+                        | FileCategory::Configuration
+                ) {
+                    take_manifest_payload(file)
+                } else {
+                    file.payload.clone()
+                };
+                SubmittedFile {
+                    relative_path: file.relative_path.clone(),
+                    category: file.category,
+                    payload,
+                    content_hash: file.content_hash.clone(),
+                }
+            })
+            .collect()
+    };
     let parsed_configuration = parse_configuration(&files, &mut diagnostics);
     let mut config = parsed_configuration.semantic;
     let configuration_document = parsed_configuration.document;
@@ -472,15 +580,19 @@ fn build_project_inner_with_extensions(
     };
     diagnostics.extend(analysis.diagnostics.iter().map(|diagnostic| {
         let source = diagnostic.source.as_ref().map(|source| {
-            let text = source_texts
-                .get(&source.relative_path.to_ascii_lowercase())
-                .copied();
-            project_source_location(
+            let indexed = analysis.project.as_ref().and_then(|project| {
+                project.program.sources.iter().find(|candidate| {
+                    candidate
+                        .relative_path
+                        .eq_ignore_ascii_case(&source.relative_path)
+                })
+            });
+            indexed_project_source_location(
                 source.relative_path.clone(),
                 source.byte_start,
                 source.byte_end,
                 Some(u64::from(source.physical_line)),
-                text,
+                indexed,
             )
         });
         ProtocolDiagnostic {
@@ -558,15 +670,17 @@ fn build_project_inner_with_extensions(
                 .iter()
                 .find(|source| source.id == location.source)
                 .map_or_else(String::new, |source| source.relative_path.clone());
-            let text = source_texts
-                .get(&relative_path.to_ascii_lowercase())
-                .copied();
-            project_source_location(
+            let indexed = project
+                .program
+                .sources
+                .iter()
+                .find(|source| source.relative_path.eq_ignore_ascii_case(&relative_path));
+            indexed_project_source_location(
                 relative_path,
                 location.span.start,
                 location.span.end,
                 None,
-                text,
+                indexed,
             )
         });
         ProtocolDiagnostic {
@@ -580,8 +694,17 @@ fn build_project_inner_with_extensions(
             source,
         }
     }));
-    let incremental = compile.incremental_state;
-    let Some(artifact) = compile.artifact else {
+    // The HIR is no longer needed after compiler diagnostics are projected. Release it before
+    // resource preparation so a constrained WASM heap can reuse those allocations for startup.
+    drop(project);
+    let erabasic_compiler::ValidatedCompileReport {
+        artifact,
+        incremental_state: incremental,
+        diagnostics: _,
+        patch: _,
+        stats: _,
+    } = compile;
+    let Some(artifact) = artifact else {
         return failed_with_incremental(
             normalized_manifest.project_revision,
             diagnostics,
@@ -597,6 +720,27 @@ fn build_project_inner_with_extensions(
             diagnostics,
             incremental,
         );
+    }
+    if let Some(contents) = &generated_configuration_source {
+        let digest =
+            era_protocol::ProtocolBytes::new(blake3::hash(contents.as_bytes()).as_bytes().to_vec());
+        normalized_manifest.files.push(SubmittedFile {
+            relative_path: "reraconfig.toml".into(),
+            category: FileCategory::Configuration,
+            payload: FilePayload::Utf8(contents.clone()),
+            content_hash: Some(digest),
+        });
+    }
+    if !retain_project_source_payloads {
+        release_manifest_payloads(&mut normalized_manifest, |category| {
+            matches!(
+                category,
+                FileCategory::Erb
+                    | FileCategory::Erh
+                    | FileCategory::Csv
+                    | FileCategory::Configuration
+            )
+        });
     }
     // The compiler structurally validated this exact in-process value before
     // refreshing its identities. Avoid repeating that full artifact walk at the
@@ -666,16 +810,8 @@ fn build_project_inner_with_extensions(
         preparing_total,
         preparing_total,
     );
-    drop(source_texts);
-    if let Some(contents) = &generated_configuration_source {
-        let digest =
-            era_protocol::ProtocolBytes::new(blake3::hash(contents.as_bytes()).as_bytes().to_vec());
-        normalized_manifest.files.push(SubmittedFile {
-            relative_path: "reraconfig.toml".into(),
-            category: FileCategory::Configuration,
-            payload: FilePayload::Utf8(contents.clone()),
-            content_hash: Some(digest),
-        });
+    if !retain_project_source_payloads {
+        release_manifest_payloads(&mut normalized_manifest, |_| true);
     }
     let game_information = project_game_information(&artifact);
     ProjectBuild {
@@ -715,6 +851,7 @@ fn build_project_inner_with_extensions(
             client_configuration,
             editable_configuration,
             configuration_document,
+            configuration_source_digest,
             generated_configuration_source,
             extensions: extension_map,
         }),
