@@ -589,7 +589,21 @@ fn full_project_manifest_import_accepts_commit_digest() {
             ..
         })
     )));
-    assert_eq!(session.staged_full_project_manifest, Some(manifest));
+    let staged = session.staged_full_project_manifest.as_ref().unwrap();
+    assert_eq!(staged.manifest, manifest);
+    assert_eq!(staged.source_transfer_id, Some(transfer_id));
+
+    submit(
+        &mut session,
+        5,
+        RuntimeMessage::StateTransferCancel(StateTransferCancel { transfer_id }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().all(|message| !matches!(
+        message,
+        RuntimeMessage::CommandRejected(_)
+    )));
+    assert!(session.staged_full_project_manifest.is_none());
 }
 
 #[test]
@@ -773,9 +787,12 @@ fn full_project_manifest_busy_commit_is_retryable() {
             data: ProtocolBytes::new(bytes.clone()),
         }),
     );
-    session.staged_full_project_manifest = Some(ProjectManifest {
-        project_revision: 8,
-        files: Vec::new(),
+    session.staged_full_project_manifest = Some(StagedFullProjectManifest {
+        source_transfer_id: None,
+        manifest: ProjectManifest {
+            project_revision: 8,
+            files: Vec::new(),
+        },
     });
     let commit = StateImportCommit {
         transfer_id,
@@ -810,7 +827,14 @@ fn full_project_manifest_busy_commit_is_retryable() {
             ..
         })
     )));
-    assert_eq!(session.staged_full_project_manifest, Some(manifest));
+    assert_eq!(
+        session
+            .staged_full_project_manifest
+            .as_ref()
+            .unwrap()
+            .manifest,
+        manifest
+    );
 }
 
 #[test]

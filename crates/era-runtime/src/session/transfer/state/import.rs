@@ -184,24 +184,21 @@ impl RuntimeSession {
                     "a project export is already active",
                 );
             }
-            let bytes = self
-                .inbound_transfer
-                .take()
-                .expect("validated full manifest import exists")
-                .bytes;
-            let manifest: ProjectManifest = match decode_canonical(&bytes) {
-                Ok(manifest) => manifest,
-                Err(_) => {
-                    return self.reject(
-                        message_id,
-                        CommandErrorCode::InvalidValue,
-                        "full project manifest is not valid canonical CBOR",
-                    );
-                }
+            let Ok(manifest) = decode_canonical::<ProjectManifest>(&transfer.bytes) else {
+                self.inbound_transfer = None;
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "full project manifest is not valid canonical CBOR",
+                );
             };
+            self.inbound_transfer = None;
             self.full_project_failure = None;
             self.full_project_file = None;
-            self.staged_full_project_manifest = Some(manifest);
+            self.staged_full_project_manifest = Some(StagedFullProjectManifest {
+                source_transfer_id: Some(commit.transfer_id),
+                manifest,
+            });
         } else if let Some(transfer) = self.inbound_transfer.as_mut() {
             transfer.committed = true;
         }
@@ -303,7 +300,11 @@ impl RuntimeSession {
             .outbound_transfer
             .as_ref()
             .is_some_and(|transfer| transfer.descriptor.transfer_id == cancel.transfer_id);
-        if !inbound && !outbound {
+        let staged_full_project = self
+            .staged_full_project_manifest
+            .as_ref()
+            .is_some_and(|staged| staged.source_transfer_id == Some(cancel.transfer_id));
+        if !inbound && !outbound && !staged_full_project {
             return self.reject(
                 message_id,
                 CommandErrorCode::StaleRequest,
@@ -315,6 +316,9 @@ impl RuntimeSession {
         }
         if outbound {
             self.outbound_transfer = None;
+        }
+        if staged_full_project {
+            self.staged_full_project_manifest = None;
         }
         Ok(())
     }

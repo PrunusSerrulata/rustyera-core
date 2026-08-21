@@ -17,6 +17,7 @@ struct NativeContainerInput {
     snapshot: CompiledSnapshotMetadata,
     diagnostics: Vec<ProtocolDiagnostic>,
     control: ProjectContainerControl,
+    trailing_data: Vec<u8>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -55,19 +56,24 @@ pub(crate) fn encode_cancellable(
             cancelled,
             progress: None,
         },
+        trailing_data: Vec::new(),
     })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn encode_full_project_cancellable(
-    manifest: Arc<ProjectManifest>,
-    extensions: Vec<ExtensionDeclaration>,
-    artifact: ValidatedArtifact,
-    incremental: Arc<IncrementalState>,
-    snapshot: CompiledSnapshotMetadata,
-    diagnostics: Vec<ProtocolDiagnostic>,
+    plan: FullProjectEncodingPlan,
     control: ProjectContainerControl,
 ) -> Result<Vec<u8>, String> {
+    let FullProjectEncodingPlan {
+        manifest,
+        extensions,
+        artifact,
+        incremental,
+        snapshot,
+        diagnostics,
+        configuration_journal,
+    } = plan;
     encode_native_container(NativeContainerInput {
         kind: ProjectContainerKind::FullProject,
         manifest,
@@ -77,6 +83,7 @@ pub(crate) fn encode_full_project_cancellable(
         snapshot,
         diagnostics,
         control,
+        trailing_data: configuration_journal,
     })
 }
 
@@ -94,6 +101,7 @@ fn encode_native_container(input: NativeContainerInput) -> Result<Vec<u8>, Strin
             cancelled,
             progress,
         },
+        trailing_data,
     } = input;
     if cancelled.load(Ordering::Relaxed) {
         return Err("compiled cache build cancelled".into());
@@ -154,6 +162,7 @@ fn encode_native_container(input: NativeContainerInput) -> Result<Vec<u8>, Strin
         output.extend_from_slice(&section);
     }
     output.extend_from_slice(blake3::hash(&output).as_bytes());
+    output.extend_from_slice(&trailing_data);
     Ok(output)
 }
 

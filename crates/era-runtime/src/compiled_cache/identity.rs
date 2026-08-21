@@ -65,6 +65,13 @@ pub(crate) fn validate_full_project_manifest(
     if &project_identity(manifest) != expected_identity {
         return Err("project files changed after the active project was loaded".into());
     }
+    validate_full_project_sources(manifest, sources)
+}
+
+pub(crate) fn validate_full_project_sources(
+    manifest: &ProjectManifest,
+    sources: &[SourceRecord],
+) -> Result<(), String> {
     let mut paths = BTreeSet::new();
     for file in &manifest.files {
         let path =
@@ -131,6 +138,7 @@ pub(crate) fn encode_full_project_for_test(
         diagnostics: diagnostics.to_vec(),
         cancelled: None,
         progress: None,
+        trailing_data: Vec::new(),
     });
     loop {
         if let Some(bytes) = encoder.step()? {

@@ -55,7 +55,10 @@ impl RuntimeSession {
         }
         self.full_project_failure = None;
         self.full_project_file = None;
-        self.staged_full_project_manifest = Some(request.manifest);
+        self.staged_full_project_manifest = Some(StagedFullProjectManifest {
+            source_transfer_id: None,
+            manifest: request.manifest,
+        });
         Ok(())
     }
 

@@ -531,6 +531,7 @@ fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_error
             diagnostics: build.report.diagnostics.clone(),
             cancelled: None,
             progress: None,
+            trailing_data: Vec::new(),
         });
         loop {
             match encoder.step() {

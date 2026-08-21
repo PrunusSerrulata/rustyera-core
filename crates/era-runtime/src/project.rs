@@ -161,12 +161,23 @@ pub(crate) fn refresh_project_identity(
     snapshot: &mut NormalizedProjectSnapshot,
     artifact: &ValidatedArtifact,
 ) {
-    let mut config = configuration::semantic_config(snapshot.editable_configuration.clone());
+    snapshot.project_identity = project_identity_for_configuration(
+        snapshot,
+        artifact,
+        snapshot.editable_configuration.clone(),
+    );
+}
+
+pub(crate) fn project_identity_for_configuration(
+    snapshot: &NormalizedProjectSnapshot,
+    artifact: &ValidatedArtifact,
+    configuration: era_config::ConfigStore,
+) -> [u8; 32] {
+    let mut config = configuration::semantic_config(configuration);
     config.money_label.clone_from(&snapshot.money_label);
     config.money_first = snapshot.money_first;
     config.maximum_shop_items = snapshot.maximum_shop_items;
-    snapshot.project_identity =
-        project_identity(artifact, &config, &snapshot.resources, &snapshot.extensions);
+    project_identity(artifact, &config, &snapshot.resources, &snapshot.extensions)
 }
 
 // Keeping the pipeline in one function makes the atomic artifact/report outcome visible;

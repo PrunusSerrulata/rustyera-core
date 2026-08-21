@@ -67,36 +67,12 @@ impl RuntimeSession {
     }
 
     pub(super) fn start_full_project_build(&mut self) -> Result<(), String> {
-        let artifact = self
-            .artifact
-            .clone()
-            .ok_or_else(|| "full project build has no loaded artifact".to_owned())?;
-        let snapshot = self
-            .project_snapshot
-            .as_ref()
-            .ok_or_else(|| "full project build has no project snapshot".to_owned())?;
-        if snapshot.configuration_snapshot().restart_pending {
-            return Err("full project export requires restarting pending configuration".into());
-        }
-        let manifest = self
-            .staged_full_project_manifest
-            .take()
-            .unwrap_or_else(|| snapshot.manifest.as_ref().clone());
-        crate::compiled_cache::validate_full_project_manifest(
-            &manifest,
-            &crate::compiled_cache::project_identity(&snapshot.manifest),
-            &artifact.artifact().source_map.sources,
-        )?;
+        let plan = self.prepare_full_project_encoding_plan()?;
         // A user-requested full export takes precedence over speculative cache preparation.
         // Dropping the cache task signals cancellation without coupling game interaction to it.
         self.compiled_cache_task = None;
         self.compiled_project_cache = None;
         self.compiled_cache_failure = None;
-        let manifest = Arc::new(manifest);
-        let snapshot = crate::compiled_cache::CompiledSnapshotMetadata::from(snapshot);
-        let extensions = self.extension_declarations.clone();
-        let incremental = Arc::clone(&self.incremental);
-        let diagnostics = self.compiled_cache_diagnostics.clone();
         let progress = self.project_progress_reporter.clone();
         self.full_project_failure = None;
         if let Some(reporter) = &self.project_progress_reporter {
@@ -114,12 +90,7 @@ impl RuntimeSession {
                 .name("rustyera-full-project".into())
                 .spawn(move || {
                     crate::compiled_cache::encode_full_project_cancellable(
-                        manifest,
-                        extensions,
-                        artifact,
-                        incremental,
-                        snapshot,
-                        diagnostics,
+                        plan,
                         crate::compiled_cache::ProjectContainerControl {
                             cancelled: worker_cancelled,
                             progress,
@@ -137,19 +108,74 @@ impl RuntimeSession {
             self.full_project_task = Some(ProjectContainerTask::Cooperative {
                 encoder: Box::new(
                     crate::compiled_cache::CooperativeCompiledCacheEncoder::new_full_project(
-                        manifest,
-                        extensions,
-                        artifact,
-                        incremental,
-                        snapshot,
-                        diagnostics,
-                        None,
-                        progress,
+                        plan, None, progress,
                     ),
                 ),
             });
         }
         Ok(())
+    }
+
+    fn prepare_full_project_encoding_plan(
+        &mut self,
+    ) -> Result<crate::compiled_cache::FullProjectEncodingPlan, String> {
+        let artifact = self
+            .artifact
+            .clone()
+            .ok_or_else(|| "full project build has no loaded artifact".to_owned())?;
+        let snapshot = self
+            .project_snapshot
+            .as_ref()
+            .ok_or_else(|| "full project build has no project snapshot".to_owned())?;
+        let mut manifest = self.staged_full_project_manifest.take().map_or_else(
+            || snapshot.manifest.as_ref().clone(),
+            |staged| staged.manifest,
+        );
+        crate::compiled_cache::validate_full_project_manifest(
+            &manifest,
+            &crate::compiled_cache::project_identity(&snapshot.manifest),
+            &artifact.artifact().source_map.sources,
+        )?;
+        let (export_snapshot, journal_record) = if let Some((active_source, pending_source)) =
+            pending_configuration_export_sources(snapshot)?
+        {
+            let active_digest = install_export_configuration(&mut manifest, &active_source)?;
+            crate::compiled_cache::validate_full_project_sources(
+                &manifest,
+                &artifact.artifact().source_map.sources,
+            )?;
+            let active_configuration = snapshot.configuration.clone();
+            let project_identity = crate::project::project_identity_for_configuration(
+                snapshot,
+                &artifact,
+                active_configuration.clone(),
+            );
+            (
+                crate::compiled_cache::CompiledSnapshotMetadata::for_full_project_export(
+                    snapshot,
+                    project_identity,
+                    active_configuration,
+                ),
+                crate::compiled_cache::encode_project_configuration_journal_record(
+                    active_digest,
+                    &pending_source,
+                )?,
+            )
+        } else {
+            (
+                crate::compiled_cache::CompiledSnapshotMetadata::from(snapshot),
+                Vec::new(),
+            )
+        };
+        Ok(crate::compiled_cache::FullProjectEncodingPlan {
+            manifest: Arc::new(manifest),
+            extensions: self.extension_declarations.clone(),
+            artifact,
+            incremental: Arc::clone(&self.incremental),
+            snapshot: export_snapshot,
+            diagnostics: self.compiled_cache_diagnostics.clone(),
+            configuration_journal: journal_record,
+        })
     }
 
     pub(in super::super::super) fn poll_compiled_cache_task(
@@ -236,6 +262,45 @@ impl RuntimeSession {
             | StateExportKind::FullProjectManifest => {}
         }
     }
+}
+
+fn pending_configuration_export_sources(
+    snapshot: &crate::project::NormalizedProjectSnapshot,
+) -> Result<Option<(String, String)>, String> {
+    if !snapshot.configuration_snapshot().restart_pending {
+        return Ok(None);
+    }
+    let pending_source = snapshot.configuration_document.to_lf_string();
+    let mut active_document = snapshot.configuration_document.clone();
+    for spec in era_config::catalog() {
+        let Some(editable) = snapshot.editable_configuration.get_code(spec.code) else {
+            continue;
+        };
+        let Some(active) = snapshot.configuration.get_code(spec.code) else {
+            continue;
+        };
+        if editable != active {
+            active_document
+                .set_code(spec.code, active)
+                .map_err(|error| format!("cannot materialize active configuration: {error}"))?;
+        }
+    }
+    Ok(Some((active_document.to_lf_string(), pending_source)))
+}
+
+fn install_export_configuration(
+    manifest: &mut ProjectManifest,
+    source: &str,
+) -> Result<[u8; 32], String> {
+    let digest = *blake3::hash(source.as_bytes()).as_bytes();
+    let file = manifest
+        .files
+        .iter_mut()
+        .find(|file| crate::project::is_root_configuration_file(file))
+        .ok_or_else(|| "pending configuration has no project source".to_owned())?;
+    file.payload = FilePayload::Utf8(source.to_owned());
+    file.content_hash = Some(ProtocolBytes::new(digest.to_vec()));
+    Ok(digest)
 }
 
 fn poll_project_container_task(

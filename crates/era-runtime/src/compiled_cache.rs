@@ -32,6 +32,13 @@ use configuration_update::{
     encode_record, parse_journal, replace_configuration,
 };
 
+pub(crate) fn encode_project_configuration_journal_record(
+    previous_digest: [u8; 32],
+    source: &str,
+) -> Result<Vec<u8>, String> {
+    encode_record(Some(previous_digest), source).map(|(record, _)| record)
+}
+
 const PROJECT_MAGIC: &[u8; 8] = b"RERAPROJ";
 const CACHE_MAGIC: &[u8; 8] = b"RERACACH";
 // Cache identity is source based. A project revision is only a frontend/runtime-session epoch, so
@@ -190,6 +197,38 @@ impl From<&NormalizedProjectSnapshot> for CompiledSnapshotMetadata {
 }
 
 impl CompiledSnapshotMetadata {
+    pub(crate) fn for_full_project_export(
+        snapshot: &NormalizedProjectSnapshot,
+        project_identity: [u8; 32],
+        configuration: era_config::ConfigStore,
+    ) -> Self {
+        Self {
+            project_identity,
+            resources: snapshot.resources.clone(),
+            resource_graph: snapshot.resource_graph.clone(),
+            sort_with_filename: snapshot.sort_with_filename,
+            auto_save: snapshot.auto_save,
+            ctrl_z_enabled: snapshot.ctrl_z_enabled,
+            allow_long_input_by_activation: snapshot.allow_long_input_by_activation,
+            save_in_binary: snapshot.save_in_binary,
+            compress_save: snapshot.compress_save,
+            save_slot_count: snapshot.save_slot_count,
+            money_label: snapshot.money_label.clone(),
+            money_first: snapshot.money_first,
+            maximum_shop_items: snapshot.maximum_shop_items,
+            viewport_width: snapshot.viewport_width,
+            viewport_height: snapshot.viewport_height,
+            font_size: snapshot.font_size,
+            line_height: snapshot.line_height,
+            print_c_per_line: snapshot.print_c_per_line,
+            print_c_length: snapshot.print_c_length,
+            configuration_profile: ConfigurationClientProfile::Reference,
+            configuration: configuration.clone(),
+            editable_configuration: configuration,
+            extensions: snapshot.extensions.clone(),
+        }
+    }
+
     fn into_snapshot(self, manifest: ProjectManifest) -> Result<NormalizedProjectSnapshot, String> {
         let resource_graph = self.resource_graph;
         let configuration_source_digest =
@@ -246,6 +285,16 @@ impl CompiledSnapshotMetadata {
     }
 }
 
+pub(crate) struct FullProjectEncodingPlan {
+    pub(crate) manifest: Arc<ProjectManifest>,
+    pub(crate) extensions: Vec<ExtensionDeclaration>,
+    pub(crate) artifact: ValidatedArtifact,
+    pub(crate) incremental: Arc<IncrementalState>,
+    pub(crate) snapshot: CompiledSnapshotMetadata,
+    pub(crate) diagnostics: Vec<ProtocolDiagnostic>,
+    pub(crate) configuration_journal: Vec<u8>,
+}
+
 /// Incremental cache encoder used by single-threaded hosts such as WebAssembly workers.
 ///
 /// The canonical layout is planned once, manifest payloads and final assembly are byte-quantized,
@@ -267,6 +316,7 @@ pub(crate) struct CooperativeCompiledCacheEncoder {
     manifest_encoder: Option<ManifestSectionEncoder>,
     pending_section: Option<(Vec<u8>, usize)>,
     output: Option<(Vec<u8>, blake3::Hasher)>,
+    trailing_data: Vec<u8>,
     progress_completed: u64,
     progress_total: u64,
 }
@@ -282,6 +332,7 @@ struct CooperativeEncoderInput {
     diagnostics: Vec<ProtocolDiagnostic>,
     cancelled: Option<Arc<AtomicBool>>,
     progress: Option<crate::ProjectProgressReporter>,
+    trailing_data: Vec<u8>,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -668,7 +719,9 @@ pub use decode::{
 pub(crate) use decode::{decode_project_file_cache_with_progress, decode_with_progress};
 #[cfg(test)]
 pub(crate) use identity::{encode_compiled_cache_for_test, encode_full_project_for_test};
-pub(crate) use identity::{project_identity, project_key, validate_full_project_manifest};
+pub(crate) use identity::{
+    project_identity, project_key, validate_full_project_manifest, validate_full_project_sources,
+};
 #[cfg(any(target_arch = "wasm32", test))]
 use native::encode_project_file_header;
 #[cfg(not(target_arch = "wasm32"))]

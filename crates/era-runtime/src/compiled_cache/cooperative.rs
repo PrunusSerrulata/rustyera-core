@@ -23,6 +23,7 @@ impl CooperativeCompiledCacheEncoder {
             diagnostics,
             cancelled,
             progress: None,
+            trailing_data: Vec::new(),
         })
     }
 
@@ -42,6 +43,7 @@ impl CooperativeCompiledCacheEncoder {
             manifest_encoder: None,
             pending_section: None,
             output: None,
+            trailing_data: input.trailing_data,
             progress_completed: 0,
             progress_total: 1,
         }
@@ -70,20 +72,25 @@ impl CooperativeCompiledCacheEncoder {
             diagnostics,
             cancelled,
             progress: None,
+            trailing_data: Vec::new(),
         })
     }
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn new_full_project(
-        manifest: Arc<ProjectManifest>,
-        extensions: Vec<ExtensionDeclaration>,
-        artifact: ValidatedArtifact,
-        incremental: Arc<IncrementalState>,
-        snapshot: CompiledSnapshotMetadata,
-        diagnostics: Vec<ProtocolDiagnostic>,
+        plan: FullProjectEncodingPlan,
         cancelled: Option<Arc<AtomicBool>>,
         progress: Option<crate::ProjectProgressReporter>,
     ) -> Self {
+        let FullProjectEncodingPlan {
+            manifest,
+            extensions,
+            artifact,
+            incremental,
+            snapshot,
+            diagnostics,
+            configuration_journal,
+        } = plan;
         Self::new_for_kind(CooperativeEncoderInput {
             kind: ProjectContainerKind::FullProject,
             manifest,
@@ -97,6 +104,7 @@ impl CooperativeCompiledCacheEncoder {
             diagnostics,
             cancelled,
             progress,
+            trailing_data: configuration_journal,
         })
     }
 
@@ -141,6 +149,7 @@ impl CooperativeCompiledCacheEncoder {
         }
         let (mut output, hasher) = self.output.take().expect("cache output was initialized");
         output.extend_from_slice(hasher.finalize().as_bytes());
+        output.append(&mut self.trailing_data);
         if let Some(reporter) = &self.progress {
             let completed = self.progress_completed.saturating_add(1);
             reporter.report(crate::ProjectProgress {

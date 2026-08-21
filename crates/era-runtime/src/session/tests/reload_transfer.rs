@@ -387,7 +387,13 @@ fn full_project_export_preempts_cache_streams_chunks_and_cancels_cleanly() {
         )
         .unwrap();
     assert!(matches!(
-        &session.staged_full_project_manifest.as_ref().unwrap().files[0].payload,
+        &session
+            .staged_full_project_manifest
+            .as_ref()
+            .unwrap()
+            .manifest
+            .files[0]
+            .payload,
         FilePayload::Utf8(value) if value.contains("@SYSTEM_TITLE")
     ));
     session
@@ -407,15 +413,7 @@ fn full_project_export_preempts_cache_streams_chunks_and_cancels_cleanly() {
             if message == "full project preparation started"
     )));
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while session.full_project_task.is_some() {
-        session.poll_full_project_task();
-        assert!(
-            std::time::Instant::now() < deadline,
-            "full project worker did not finish"
-        );
-        std::thread::yield_now();
-    }
+    finish_full_project_build(&mut session);
     let reports = progress.lock().unwrap();
     assert!(reports.iter().any(|value| {
         value.stage == ProjectProgressStage::Packaging && value.total > 1 && value.completed > 0
@@ -461,6 +459,159 @@ fn full_project_export_preempts_cache_streams_chunks_and_cancels_cleanly() {
     assert!(session.outbound_transfer.is_none());
     assert!(session.full_project_task.is_none());
     assert!(session.staged_full_project_manifest.is_none());
+}
+
+fn finish_full_project_build(session: &mut RuntimeSession) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while session.full_project_task.is_some() {
+        session.poll_full_project_task();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "full project worker did not finish"
+        );
+        std::thread::yield_now();
+    }
+}
+
+fn commit_restart_pending_configuration(session: &mut RuntimeSession) -> (ProjectIdentity, String) {
+    let current = session
+        .project_snapshot
+        .as_ref()
+        .unwrap()
+        .configuration_snapshot();
+    session
+        .prepare_configuration_update(
+            100,
+            &PrepareConfigurationUpdate {
+                project_revision: current.project_revision,
+                expected_source_digest: current.source_digest,
+                changes: vec![ConfigurationChange {
+                    code: "AutoSave".into(),
+                    value: "NO".into(),
+                }],
+            },
+        )
+        .unwrap();
+    assert!(drain(session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ConfigurationUpdatePrepared(value) if value.restart_required
+    )));
+    session
+        .finalize_configuration_update(
+            101,
+            FinalizeConfigurationUpdate {
+                preparation_message_id: 100,
+                outcome: ConfigurationUpdateOutcome::Commit,
+            },
+        )
+        .unwrap();
+    let committed = drain(session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ConfigurationUpdateCommitted(value) => Some(value.configuration),
+            _ => None,
+        })
+        .expect("restart configuration is committed");
+    assert!(committed.restart_pending);
+    let manifest = session.project_snapshot.as_ref().unwrap().manifest.as_ref();
+    let identity = crate::compiled_cache::project_identity(manifest);
+    let source = manifest
+        .files
+        .iter()
+        .find(|file| file.relative_path.eq_ignore_ascii_case("reraconfig.toml"))
+        .and_then(|file| match &file.payload {
+            FilePayload::Utf8(source) => Some(source.clone()),
+            _ => None,
+        })
+        .expect("committed configuration is present in the pending manifest");
+    (identity, source)
+}
+
+fn assert_journaled_configuration_reopens(
+    session: &RuntimeSession,
+    pending_identity: &ProjectIdentity,
+    pending_source: &str,
+) {
+    let bytes = session.full_project_file.as_ref().unwrap();
+    let decoded = crate::compiled_cache::decode_project_file(bytes, bytes.len()).unwrap();
+    assert_eq!(&decoded.identity, pending_identity);
+    let decoded_source = decoded
+        .manifest
+        .files
+        .iter()
+        .find(|file| file.relative_path.eq_ignore_ascii_case("reraconfig.toml"))
+        .and_then(|file| match &file.payload {
+            FilePayload::Utf8(source) => Some(source),
+            _ => None,
+        })
+        .expect("exported project retains the pending configuration source");
+    assert_eq!(decoded_source, pending_source);
+    let rebuilt = RuntimeSession::new(RuntimeOptions::default())
+        .build_project_from_cache(
+            ProjectLoadRequest {
+                identity: decoded.identity,
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+            Some(bytes),
+            None,
+        )
+        .expect("journaled configuration rebuilds from the embedded project sources");
+    assert!(rebuilt.report.success, "{:?}", rebuilt.report.diagnostics);
+    assert!(
+        rebuilt
+            .report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "runtime.compiled_cache_hit")
+    );
+    assert!(
+        !rebuilt
+            .snapshot
+            .unwrap()
+            .configuration_snapshot()
+            .restart_pending
+    );
+}
+
+#[test]
+fn full_project_export_journals_configuration_that_is_pending_restart() {
+    let (mut session, _, _) = cooperative_cache_session();
+    session.configuration_profile = ConfigurationClientProfile::Tui;
+    session
+        .project_snapshot
+        .as_mut()
+        .unwrap()
+        .configuration_profile = ConfigurationClientProfile::Tui;
+    let (pending_identity, pending_source) = commit_restart_pending_configuration(&mut session);
+    let manifest = session
+        .project_snapshot
+        .as_ref()
+        .unwrap()
+        .manifest
+        .as_ref()
+        .clone();
+    session
+        .stage_full_project_manifest(102, FullProjectManifest { manifest })
+        .unwrap();
+    session
+        .export_state(
+            103,
+            StateExportRequest {
+                kind: StateExportKind::FullProjectFile,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
+            },
+        )
+        .unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::CommandRejected(CommandRejected { message, .. })
+            if message == "full project preparation started"
+    )));
+    finish_full_project_build(&mut session);
+    assert!(session.full_project_task.is_none());
+    assert!(session.full_project_failure.is_none());
+    assert_journaled_configuration_reopens(&session, &pending_identity, &pending_source);
 }
 
 #[test]

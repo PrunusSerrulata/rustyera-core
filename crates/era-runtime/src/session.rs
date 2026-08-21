@@ -579,6 +579,12 @@ struct OutboundStateTransfer {
     next_offset: u64,
 }
 
+#[derive(Debug)]
+struct StagedFullProjectManifest {
+    source_transfer_id: Option<u64>,
+    manifest: ProjectManifest,
+}
+
 enum ProjectContainerTask {
     #[cfg(not(target_arch = "wasm32"))]
     Native {
@@ -720,7 +726,7 @@ pub struct RuntimeSession {
     outbound_transfer: Option<OutboundStateTransfer>,
     staged_project_manifest: Option<ProjectManifest>,
     staged_project_file_cache: Option<crate::compiled_cache::DecodedCompiledCache>,
-    staged_full_project_manifest: Option<ProjectManifest>,
+    staged_full_project_manifest: Option<StagedFullProjectManifest>,
     pending_project_load: Option<PendingProjectLoad>,
     pending_candidate_commit: Option<PendingCandidateCommit>,
     candidate_clock: Option<LocalDateTimeResponse>,
