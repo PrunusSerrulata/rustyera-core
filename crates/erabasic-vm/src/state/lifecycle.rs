@@ -97,15 +97,61 @@ impl Vm {
         Self::new_with_memory(artifact, config, true)
     }
 
+    pub(crate) fn new_for_title_with_progress(
+        artifact: ValidatedArtifact,
+        config: VmConfig,
+        progress: &mut dyn FnMut(VmPreparationProgress),
+    ) -> Self {
+        Self::new_with_memory_and_progress(artifact, config, true, Some(progress))
+    }
+
     fn new_with_memory(artifact: ValidatedArtifact, config: VmConfig, title_state: bool) -> Self {
+        Self::new_with_memory_and_progress(artifact, config, title_state, None)
+    }
+
+    fn new_with_memory_and_progress(
+        artifact: ValidatedArtifact,
+        config: VmConfig,
+        title_state: bool,
+        mut progress: Option<&mut dyn FnMut(VmPreparationProgress)>,
+    ) -> Self {
         let artifact = artifact.into_shared();
+        let memory_total = if title_state {
+            u64::try_from(artifact.globals.len())
+                .unwrap_or(u64::MAX - 1)
+                .saturating_add(1)
+                .max(1)
+        } else {
+            1
+        };
+        report_vm_preparation(
+            &mut progress,
+            VmPreparationStage::InitializingMemory,
+            0,
+            memory_total,
+        );
         let memory = if title_state {
-            Memory::title(&artifact)
+            Memory::title_with_progress(&artifact, &mut |completed, total| {
+                report_vm_preparation(
+                    &mut progress,
+                    VmPreparationStage::InitializingMemory,
+                    completed,
+                    total,
+                );
+            })
         } else {
             Memory::new_game(&artifact)
         };
+        if !title_state {
+            report_vm_preparation(
+                &mut progress,
+                VmPreparationStage::InitializingMemory,
+                memory_total,
+                memory_total,
+            );
+        }
         let generation = GenerationId(1);
-        let program = Arc::new(ProgramGeneration::new(artifact));
+        let program = Arc::new(ProgramGeneration::new_with_progress(artifact, progress));
         Self {
             config,
             generations: BTreeMap::from([(generation, program)]),

@@ -1,4 +1,45 @@
 use super::*;
+
+#[test]
+fn title_startup_reports_memory_before_program_indexing_with_monotonic_progress() {
+    let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
+    let mut events = Vec::new();
+    let _runtime = RuntimeVm::new_for_title_with_seed_and_progress(
+        validated(&artifact),
+        VmConfig::default(),
+        1,
+        &mut |event| events.push(event),
+    );
+
+    let first_indexing = events
+        .iter()
+        .position(|event| event.stage == VmPreparationStage::IndexingProgram)
+        .expect("program indexing progress");
+    assert!(
+        events[..first_indexing]
+            .iter()
+            .all(|event| event.stage == VmPreparationStage::InitializingMemory)
+    );
+    for stage in [
+        VmPreparationStage::InitializingMemory,
+        VmPreparationStage::IndexingProgram,
+    ] {
+        let stage_events = events
+            .iter()
+            .filter(|event| event.stage == stage)
+            .collect::<Vec<_>>();
+        assert_eq!(stage_events.first().map(|event| event.completed), Some(0));
+        assert_eq!(
+            stage_events.last().map(|event| event.completed),
+            stage_events.last().map(|event| event.total)
+        );
+        assert!(
+            stage_events
+                .windows(2)
+                .all(|events| events[0].completed <= events[1].completed)
+        );
+    }
+}
 #[test]
 fn era_function_local_persists_across_calls() {
     let artifact = compile_source("@COUNTER\nLOCAL:0 += 1\nRESULT = LOCAL:0\nRETURN RESULT\n");

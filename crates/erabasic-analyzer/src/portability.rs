@@ -9,13 +9,18 @@ use erabasic_hir::{
 
 use crate::catalog::CallablePortability;
 use crate::{
-    AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerDiagnosticSeverity, ParsedProjectSource,
+    AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerDiagnosticSeverity,
     builtin_callable_portability,
 };
 
+pub(crate) struct DiagnosticSource<'a> {
+    pub source: &'a erabasic_hir::SourceFile,
+    pub text: &'a str,
+}
+
 pub(crate) fn analyze(
     program: &Program,
-    sources: &[ParsedProjectSource],
+    sources: &[DiagnosticSource<'_>],
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) {
     let persistence = program
@@ -69,7 +74,7 @@ fn summarize_return_taint(program: &Program) -> BTreeMap<FunctionId, bool> {
 
 fn emit_diagnostics(
     program: &Program,
-    sources: &[ParsedProjectSource],
+    sources: &[DiagnosticSource<'_>],
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
     persistence: &BTreeMap<VariableId, Persistence>,
     return_taint: &BTreeMap<FunctionId, bool>,
@@ -199,7 +204,7 @@ fn expression_tainted(
 
 fn emit_expression_notices(
     expression: &HirExpr,
-    sources: &[ParsedProjectSource],
+    sources: &[DiagnosticSource<'_>],
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) {
     match &expression.kind {
@@ -253,7 +258,7 @@ fn emit_expression_notices(
 
 fn emit_formatted_notices(
     value: &HirFormattedString,
-    sources: &[ParsedProjectSource],
+    sources: &[DiagnosticSource<'_>],
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) {
     for part in &value.parts {
@@ -285,7 +290,7 @@ fn emit_formatted_notices(
 
 fn emit_argument_notices(
     argument: &HirArgument,
-    sources: &[ParsedProjectSource],
+    sources: &[DiagnosticSource<'_>],
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) {
     match argument {
@@ -385,7 +390,7 @@ fn is_dependency_sink(name: &str) -> bool {
 }
 
 fn source_notice(
-    sources: &[ParsedProjectSource],
+    sources: &[DiagnosticSource<'_>],
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
     location: SourceLocation,
     name: &str,
@@ -401,7 +406,7 @@ fn source_notice(
 }
 
 fn dependency(
-    sources: &[ParsedProjectSource],
+    sources: &[DiagnosticSource<'_>],
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
     location: SourceLocation,
     message: impl Into<String>,
@@ -417,7 +422,7 @@ fn dependency(
 }
 
 fn emit(
-    sources: &[ParsedProjectSource],
+    sources: &[DiagnosticSource<'_>],
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
     location: SourceLocation,
     code: AnalyzerDiagnosticCode,
@@ -436,7 +441,7 @@ fn emit(
         0,
         location.source,
         &source.source.relative_path,
-        &source.text,
+        source.text,
         location.span,
         message,
     ));

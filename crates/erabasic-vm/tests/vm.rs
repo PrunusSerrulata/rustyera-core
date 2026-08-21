@@ -20,8 +20,8 @@ use erabasic_vm::{
     HostRebindRequest, HostWaitStability, NativeServiceRegistry, RunBudget, RuntimeVm,
     SnapshotBlocker, SnapshotEligibility, Vm, VmBreakpoint, VmBreakpointLocation, VmConfig,
     VmDebugControl, VmDebugInspect, VmDebugVariableWrite, VmDriveMode, VmEvent, VmFaultCode,
-    VmHost, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction,
-    VmSnapshot, VmStepKind, VmValue, inspect_snapshot,
+    VmHost, VmPreparationStage, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
+    VmRuntimeStateTransaction, VmSnapshot, VmStepKind, VmValue, inspect_snapshot,
 };
 use unicode_width::UnicodeWidthStr;
 

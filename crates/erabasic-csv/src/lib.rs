@@ -20,5 +20,5 @@ mod variable_size;
 pub use deferred::resolve_deferred_indices;
 pub use diagnostic::{CsvDiagnostic, CsvDiagnosticCode, CsvDiagnosticSeverity, CsvSourceLocation};
 pub use input::{FilePayload, FrontendFile, FrontendIoError, FrontendIoErrorKind, ProjectFiles};
-pub use loader::{CsvLoadReport, load_project};
+pub use loader::{CsvLoadReport, load_project, load_project_owned};
 pub use options::CsvLoadOptions;

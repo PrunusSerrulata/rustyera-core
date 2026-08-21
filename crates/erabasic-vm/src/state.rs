@@ -32,9 +32,9 @@ pub(crate) struct ProgramGeneration {
     // This map is lookup-only; authoritative globals remain canonically ordered
     // in the artifact, so hash iteration can never affect serialized output.
     global_indices: HashMap<SymbolKey, usize>,
-    variable_global_indices: Vec<Vec<Option<usize>>>,
-    bulk_fill_loop_plans: Vec<Vec<Option<BulkFillLoopPlan>>>,
-    literal_group_match_plans: Vec<Vec<Option<LiteralGroupMatchPlan>>>,
+    variable_global_indices: Vec<Vec<u32>>,
+    bulk_fill_loop_plans: Vec<Vec<(u32, BulkFillLoopPlan)>>,
+    literal_group_match_plans: Vec<Vec<(u32, LiteralGroupMatchPlan)>>,
     function_memo_plans: Vec<Option<FunctionMemoPlan>>,
     memoized_indexed_read_plans: Vec<Option<MemoizedIndexedReadPlan>>,
     // Canonical owner-free definitions always win system-name lookup.
@@ -47,23 +47,63 @@ pub(crate) struct ProgramGeneration {
     normalized_native_names: Vec<Arc<str>>,
     function_static_indices: BTreeMap<SymbolKey, Vec<usize>>,
     function_local_indices: BTreeMap<SymbolKey, Vec<usize>>,
-    instruction_source_indices: BTreeMap<SymbolKey, Vec<u32>>,
+    instruction_source_indices: Vec<Vec<u32>>,
 }
 
 const NO_SOURCE_MAP_ENTRY: u32 = u32::MAX;
+const NO_GLOBAL_INDEX: u32 = u32::MAX;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VmPreparationStage {
+    InitializingMemory,
+    IndexingProgram,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmPreparationProgress {
+    pub stage: VmPreparationStage,
+    pub completed: u64,
+    pub total: u64,
+}
 
 impl ProgramGeneration {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn new(artifact: Arc<BytecodeArtifact>) -> Self {
+        Self::new_with_progress(artifact, None)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn new_with_progress(
+        artifact: Arc<BytecodeArtifact>,
+        mut progress: Option<&mut dyn FnMut(VmPreparationProgress)>,
+    ) -> Self {
+        let function_work = u64::try_from(artifact.functions.len()).unwrap_or(u64::MAX);
+        let global_work = u64::try_from(artifact.globals.len()).unwrap_or(u64::MAX);
+        let total_work = function_work
+            .saturating_mul(9)
+            .saturating_add(global_work.saturating_mul(4))
+            .max(1);
+        let mut completed_work = 0;
+        let mut next_checkpoint = 1;
+        report_vm_preparation(
+            &mut progress,
+            VmPreparationStage::IndexingProgram,
+            0,
+            total_work,
+        );
         // Era projects commonly contain tens of thousands of functions. Resolving the
         // active function with a linear scan for every instruction makes otherwise
         // lightweight EraBasic execution quadratic in the project size.
-        let function_indices = artifact
-            .functions
-            .iter()
-            .enumerate()
-            .map(|(index, function)| (function.key, index))
-            .collect();
+        let mut function_indices = HashMap::with_capacity(artifact.functions.len());
+        for (index, function) in artifact.functions.iter().enumerate() {
+            function_indices.insert(function.key, index);
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
+        }
         let mut function_name_indices = HashMap::new();
         for (index, function) in artifact.functions.iter().enumerate() {
             // Dynamic lookup follows the artifact order when duplicate declarations
@@ -71,50 +111,78 @@ impl ProgramGeneration {
             function_name_indices
                 .entry(function.name.to_ascii_uppercase())
                 .or_insert(index);
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
         }
-        let global_indices: HashMap<SymbolKey, usize> = artifact
-            .globals
-            .iter()
-            .enumerate()
-            .map(|(index, global)| (global.key, index))
-            .collect();
-        let variable_global_indices: Vec<Vec<Option<usize>>> = artifact
-            .functions
-            .iter()
-            .map(|function| {
+        let mut global_indices = HashMap::with_capacity(artifact.globals.len());
+        for (index, global) in artifact.globals.iter().enumerate() {
+            global_indices.insert(global.key, index);
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
+        }
+        let mut variable_global_indices = Vec::with_capacity(artifact.functions.len());
+        for function in &artifact.functions {
+            variable_global_indices.push(
                 function
                     .code
                     .iter()
                     .map(|instruction| {
-                        matches!(
+                        if matches!(
                             Opcode::try_from(instruction.opcode),
                             Ok(Opcode::LoadVariable | Opcode::StoreVariable | Opcode::MakePlace)
-                        )
-                        .then(|| {
+                        ) {
                             instruction
                                 .payload
-                                .get(..16)?
-                                .try_into()
-                                .ok()
+                                .get(..16)
+                                .and_then(|bytes| bytes.try_into().ok())
                                 .map(SymbolKey)
                                 .and_then(|key| global_indices.get(&key).copied())
-                        })
-                        .flatten()
+                                .and_then(|index| u32::try_from(index).ok())
+                                .unwrap_or(NO_GLOBAL_INDEX)
+                        } else {
+                            NO_GLOBAL_INDEX
+                        }
                     })
-                    .collect()
-            })
-            .collect();
+                    .collect(),
+            );
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
+        }
         let mut runtime_name_fallback_indices = HashMap::new();
         for (index, global) in artifact.globals.iter().enumerate() {
             runtime_name_fallback_indices
                 .entry(global.name.to_ascii_uppercase())
                 .or_insert(index);
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
         }
         let mut global_name_indices = HashMap::new();
         for (index, global) in artifact.globals.iter().enumerate() {
             if global.owner.is_none() {
                 global_name_indices.insert(global.name.to_ascii_uppercase(), index);
             }
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
         }
         let target_global_index = global_name_indices.get("TARGET").copied();
         let mut native_import_indices = HashMap::new();
@@ -134,29 +202,34 @@ impl ProgramGeneration {
                 .entry(import.import.key)
                 .or_insert(index);
         }
-        let bulk_fill_loop_plans = artifact
-            .functions
-            .iter()
-            .enumerate()
-            .map(|(function_index, function)| {
+        let mut bulk_fill_loop_plans = Vec::with_capacity(artifact.functions.len());
+        for (function_index, function) in artifact.functions.iter().enumerate() {
+            bulk_fill_loop_plans.push(
                 (0..function.code.len())
-                    .map(|instruction| {
+                    .filter_map(|instruction| {
                         simple_bulk_fill_loop(
                             &artifact,
                             function_index,
                             instruction,
                             &variable_global_indices,
                         )
+                        .zip(u32::try_from(instruction).ok())
+                        .map(|(plan, index)| (index, plan))
                     })
-                    .collect()
-            })
-            .collect();
-        let literal_group_match_plans = artifact
-            .functions
-            .iter()
-            .map(|function| {
+                    .collect(),
+            );
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
+        }
+        let mut literal_group_match_plans = Vec::with_capacity(artifact.functions.len());
+        for function in &artifact.functions {
+            literal_group_match_plans.push(
                 (0..function.code.len())
-                    .map(|instruction| {
+                    .filter_map(|instruction| {
                         literal_group_match(
                             &artifact,
                             function,
@@ -164,32 +237,50 @@ impl ProgramGeneration {
                             &native_import_indices,
                             &normalized_native_names,
                         )
+                        .zip(u32::try_from(instruction).ok())
+                        .map(|(plan, index)| (index, plan))
                     })
-                    .collect()
-            })
-            .collect();
+                    .collect(),
+            );
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
+        }
         let function_memo_plans = build_function_memo_plans(
             &artifact,
             &variable_global_indices,
             &native_import_indices,
             &host_import_indices,
             &normalized_native_names,
+            || {
+                advance_vm_preparation(
+                    &mut progress,
+                    &mut completed_work,
+                    total_work,
+                    &mut next_checkpoint,
+                );
+            },
         );
-        let memoized_indexed_read_plans = artifact
-            .functions
-            .iter()
-            .enumerate()
-            .map(|(function_index, function)| {
-                memoized_indexed_read(
-                    &artifact,
-                    function_index,
-                    function,
-                    &variable_global_indices,
-                    &function_indices,
-                    &function_memo_plans,
-                )
-            })
-            .collect();
+        let mut memoized_indexed_read_plans = Vec::with_capacity(artifact.functions.len());
+        for (function_index, function) in artifact.functions.iter().enumerate() {
+            memoized_indexed_read_plans.push(memoized_indexed_read(
+                &artifact,
+                function_index,
+                function,
+                &variable_global_indices,
+                &function_indices,
+                &function_memo_plans,
+            ));
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
+        }
         let mut function_static_indices = BTreeMap::<SymbolKey, Vec<usize>>::new();
         let mut function_local_indices = BTreeMap::<SymbolKey, Vec<usize>>::new();
         let mut function_names_by_key = BTreeMap::<SymbolKey, String>::new();
@@ -201,6 +292,12 @@ impl ProgramGeneration {
                 .entry(normalized)
                 .or_default()
                 .push(function.key);
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
         }
         for (index, global) in artifact.globals.iter().enumerate() {
             if global.storage == BytecodeStorage::FunctionStatic
@@ -229,40 +326,67 @@ impl ProgramGeneration {
             {
                 function_local_indices.entry(owner).or_default().push(index);
             }
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
         }
-        // Resolve serialized source-map precedence once per generation. Filling only empty
-        // instruction slots preserves `SourceMap::resolve`'s first-matching-entry behavior.
-        // A u32 sentinel is sufficient for the validator's source-map limit and is one quarter
-        // the size of `Option<usize>` on 64-bit targets. Offsets are built one function at a time
-        // so startup does not retain another project-wide index beside the permanent projection.
-        let mut source_entries = BTreeMap::<SymbolKey, Vec<(u32, &SourceMapEntry)>>::new();
-        for (index, entry) in artifact.source_map.entries.iter().enumerate() {
-            source_entries.entry(entry.function).or_default().push((
-                u32::try_from(index).expect("validated source-map index fits u32"),
-                entry,
-            ));
-        }
-        let instruction_source_indices = artifact
-            .functions
-            .iter()
-            .map(|function| {
-                let mut offset = 0_u64;
-                let offsets = function
-                    .code
+        drop(function_names_by_key);
+        drop(function_keys_by_name);
+        // Validated artifacts store source entries in canonical function order. Consume each
+        // contiguous function range directly so startup never retains a project-wide vector of
+        // entry references beside the permanent projection. Filling only empty instruction slots
+        // preserves `SourceMap::resolve`'s first match. A u32 sentinel is sufficient for the
+        // validator's source-map limit and is one quarter the size of `Option<usize>` on 64-bit.
+        let source_entries = &artifact.source_map.entries;
+        let mut source_cursor = 0;
+        let mut instruction_source_indices = Vec::with_capacity(artifact.functions.len());
+        for function in &artifact.functions {
+            let source_start = source_cursor;
+            while source_cursor < source_entries.len()
+                && source_entries[source_cursor].function == function.key
+            {
+                source_cursor += 1;
+            }
+            let mut offset = 0_u64;
+            let offsets = function
+                .code
+                .iter()
+                .map(|instruction| {
+                    let current = offset;
+                    offset = offset.saturating_add(instruction.encoded_len());
+                    current
+                })
+                .collect::<Vec<_>>();
+            instruction_source_indices.push(index_source_entries(
+                &offsets,
+                source_entries[source_start..source_cursor]
                     .iter()
-                    .map(|instruction| {
-                        let current = offset;
-                        offset = offset.saturating_add(instruction.encoded_len());
-                        current
-                    })
-                    .collect::<Vec<_>>();
-                let indices = index_source_entries(
-                    &offsets,
-                    source_entries.get(&function.key).map_or(&[], Vec::as_slice),
-                );
-                (function.key, indices)
-            })
-            .collect();
+                    .enumerate()
+                    .map(|(offset, entry)| {
+                        (
+                            u32::try_from(source_start + offset)
+                                .expect("validated source-map index fits u32"),
+                            entry,
+                        )
+                    }),
+            ));
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
+        }
+        debug_assert_eq!(source_cursor, source_entries.len());
+        report_vm_preparation(
+            &mut progress,
+            VmPreparationStage::IndexingProgram,
+            total_work,
+            total_work,
+        );
         Self {
             artifact,
             function_indices,
@@ -317,7 +441,8 @@ impl ProgramGeneration {
             .get(function_index)?
             .get(instruction)
             .copied()
-            .flatten()
+            .filter(|index| *index != NO_GLOBAL_INDEX)
+            .map(|index| index as usize)
             .and_then(|index| self.artifact.globals.get(index))
     }
 
@@ -340,10 +465,7 @@ impl ProgramGeneration {
         instruction: usize,
     ) -> Option<&BulkFillLoopPlan> {
         let index = *self.function_index(function)?;
-        self.bulk_fill_loop_plans
-            .get(index)?
-            .get(instruction)?
-            .as_ref()
+        sparse_instruction_plan(self.bulk_fill_loop_plans.get(index)?, instruction)
     }
 
     pub(crate) fn literal_group_match_plan(
@@ -352,10 +474,7 @@ impl ProgramGeneration {
         instruction: usize,
     ) -> Option<&LiteralGroupMatchPlan> {
         let index = *self.function_index(function)?;
-        self.literal_group_match_plans
-            .get(index)?
-            .get(instruction)?
-            .as_ref()
+        sparse_instruction_plan(self.literal_group_match_plans.get(index)?, instruction)
     }
 
     pub(crate) fn global_by_name(&self, name: &str) -> Option<&erabasic_bytecode::BytecodeGlobal> {
@@ -424,14 +543,174 @@ impl ProgramGeneration {
         function: SymbolKey,
         instruction: usize,
     ) -> Option<erabasic_bytecode::ResolvedSourceLocation> {
+        let function_index = *self.function_index(function)?;
         let entry = self
             .instruction_source_indices
-            .get(&function)?
+            .get(function_index)?
             .get(instruction)
             .copied()
             .filter(|index| *index != NO_SOURCE_MAP_ENTRY)
             .and_then(|index| self.artifact.source_map.entries.get(index as usize))?;
         self.artifact.source_map.resolve_entry(entry)
+    }
+}
+
+fn report_vm_preparation(
+    progress: &mut Option<&mut dyn FnMut(VmPreparationProgress)>,
+    stage: VmPreparationStage,
+    completed: u64,
+    total: u64,
+) {
+    if let Some(progress) = progress {
+        progress(VmPreparationProgress {
+            stage,
+            completed,
+            total,
+        });
+    }
+}
+
+fn advance_vm_preparation(
+    progress: &mut Option<&mut dyn FnMut(VmPreparationProgress)>,
+    completed: &mut u64,
+    total: u64,
+    next_checkpoint: &mut u64,
+) {
+    *completed = completed.saturating_add(1).min(total);
+    let checkpoint = completed.saturating_mul(100) / total.max(1);
+    if checkpoint >= *next_checkpoint || *completed == total {
+        report_vm_preparation(
+            progress,
+            VmPreparationStage::IndexingProgram,
+            *completed,
+            total,
+        );
+        *next_checkpoint = checkpoint.saturating_add(1);
+    }
+}
+
+fn sparse_instruction_plan<T>(plans: &[(u32, T)], instruction: usize) -> Option<&T> {
+    let instruction = u32::try_from(instruction).ok()?;
+    let index = plans
+        .binary_search_by_key(&instruction, |(instruction, _)| *instruction)
+        .ok()?;
+    Some(&plans[index].1)
+}
+
+#[cfg(test)]
+mod compact_generation_index_tests {
+    use super::*;
+    use erabasic_analyzer::{
+        AnalysisInput, AnalyzerOptions, ExtensionRegistry, ProjectSource, SourcePayload,
+        analyze_project,
+    };
+    use erabasic_compiler::{CompilerOptions, compile_project, default_host_registry};
+    use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
+
+    fn compiled_generation_fixture() -> BytecodeArtifact {
+        let project_data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+            .data
+            .expect("default project data");
+        let analysis = analyze_project(
+            AnalysisInput {
+                project_data,
+                sources: vec![ProjectSource {
+                    relative_path: "main.erb".into(),
+                    payload: SourcePayload::Utf8(
+                        "@SYSTEM_TITLE\n#DIMS VALUE\nVALUE '= \"keep\"\n\
+                         RESULT = GROUPMATCH(VALUE, \"keep\", \"other\", \"keep\")\n\
+                         CALL CLEAR_ROW(2, 0)\nRETURN\n\
+                         @CLEAR_ROW(ARG, VALUE)\n#DIM VALUE\n#LOCALSIZE 1\n\
+                         FOR LOCAL, 0, 4\nDA:ARG:LOCAL = 0\nNEXT\nRETURN\n"
+                            .into(),
+                    ),
+                }],
+            },
+            &AnalyzerOptions::default(),
+            &ExtensionRegistry::default(),
+        );
+        assert!(analysis.project.is_some(), "{:#?}", analysis.diagnostics);
+        let compile = compile_project(
+            analysis.project.as_ref().expect("analyzed project"),
+            &CompilerOptions::default(),
+            &default_host_registry(),
+            None,
+        );
+        assert!(compile.artifact.is_some(), "{:#?}", compile.diagnostics);
+        compile.artifact.expect("compiled artifact")
+    }
+
+    #[test]
+    fn sparse_instruction_lookup_preserves_exact_instruction_identity() {
+        let plans = [(2, "first"), (19, "second")];
+        assert_eq!(sparse_instruction_plan(&plans, 2), Some(&"first"));
+        assert_eq!(sparse_instruction_plan(&plans, 19), Some(&"second"));
+        assert_eq!(sparse_instruction_plan(&plans, 18), None);
+        assert_eq!(sparse_instruction_plan(&plans, usize::MAX), None);
+    }
+
+    #[test]
+    fn compact_instruction_indices_use_four_bytes_per_slot() {
+        assert_eq!(std::mem::size_of::<u32>(), 4);
+        assert!(std::mem::size_of::<u32>() < std::mem::size_of::<Option<usize>>());
+    }
+
+    #[test]
+    fn real_generation_preserves_sparse_fastpaths_globals_sources_and_progress() {
+        let artifact = Arc::new(compiled_generation_fixture());
+        let mut progress = Vec::new();
+        let generation = ProgramGeneration::new_with_progress(
+            Arc::clone(&artifact),
+            Some(&mut |event| progress.push(event)),
+        );
+
+        assert!(
+            generation
+                .bulk_fill_loop_plans
+                .iter()
+                .any(|plans| !plans.is_empty())
+        );
+        assert!(
+            generation
+                .literal_group_match_plans
+                .iter()
+                .any(|plans| !plans.is_empty())
+        );
+        let mut saw_global = false;
+        let mut saw_sentinel = false;
+        for (function_index, function) in artifact.functions.iter().enumerate() {
+            let mut code_offset = 0;
+            for (instruction_index, instruction) in function.code.iter().enumerate() {
+                let expected_source = artifact.source_map.resolve(function.key, code_offset);
+                assert_eq!(
+                    generation.source_location(function.key, instruction_index),
+                    expected_source
+                );
+                code_offset = code_offset.saturating_add(instruction.encoded_len());
+
+                if generation
+                    .instruction_global(function_index, instruction_index)
+                    .is_some()
+                {
+                    saw_global = true;
+                } else {
+                    saw_sentinel = true;
+                }
+            }
+        }
+        assert!(saw_global);
+        assert!(saw_sentinel);
+        assert_eq!(progress.first().map(|event| event.completed), Some(0));
+        assert_eq!(
+            progress.last().map(|event| (event.completed, event.total)),
+            progress.last().map(|event| (event.total, event.total))
+        );
+        assert!(progress.windows(2).all(|events| {
+            events[0].stage == VmPreparationStage::IndexingProgram
+                && events[1].stage == VmPreparationStage::IndexingProgram
+                && events[0].completed <= events[1].completed
+                && events[0].total == events[1].total
+        }));
     }
 }
 

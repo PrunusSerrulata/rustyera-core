@@ -49,11 +49,21 @@ impl Memory {
     }
 
     pub fn title(artifact: &BytecodeArtifact) -> Self {
-        let mut result = Self::empty(artifact);
+        Self::title_with_progress(artifact, &mut |_, _| {})
+    }
+
+    pub(crate) fn title_with_progress(
+        artifact: &BytecodeArtifact,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Self {
+        let global_count = u64::try_from(artifact.globals.len()).unwrap_or(u64::MAX - 1);
+        let total = global_count.saturating_add(1).max(1);
+        let mut result = Self::empty_with_progress(artifact, total, progress);
         // Emuera initializes ordinary variable defaults before SYSTEM_TITLE, but
         // ResetData and the initial CSV characters are deferred until the player
         // actually selects "new game" from the built-in title flow.
         result.apply_runtime_defaults(artifact, &artifact.project_data.new_game_seed().defaults);
+        progress(total, total);
         result
     }
 
@@ -87,9 +97,14 @@ impl Memory {
         );
     }
 
-    pub fn empty(artifact: &BytecodeArtifact) -> Self {
+    fn empty_with_progress(
+        artifact: &BytecodeArtifact,
+        total: u64,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Self {
         let mut result = Self::default();
-        for definition in &artifact.globals {
+        let mut next_checkpoint = 1;
+        for (index, definition) in artifact.globals.iter().enumerate() {
             match definition.storage {
                 BytecodeStorage::Project
                 | BytecodeStorage::Constant
@@ -102,6 +117,12 @@ impl Memory {
                 | BytecodeStorage::FunctionPersistent
                 | BytecodeStorage::FunctionLocal
                 | BytecodeStorage::Character => {}
+            }
+            let completed = u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1);
+            let checkpoint = completed.saturating_mul(100) / total.max(1);
+            if checkpoint >= next_checkpoint || completed == total {
+                progress(completed, total);
+                next_checkpoint = checkpoint.saturating_add(1);
             }
         }
         result

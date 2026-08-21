@@ -163,6 +163,8 @@ pub enum ProjectProgressStage {
     CacheParsing,
     CacheDecoding,
     CacheValidating,
+    InitializingMemory,
+    IndexingProgram,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

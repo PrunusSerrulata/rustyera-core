@@ -117,8 +117,10 @@ fn every_c_enum_discriminant_is_fixed() {
             EraProjectProgressStage::CacheParsing as u32,
             EraProjectProgressStage::CacheDecoding as u32,
             EraProjectProgressStage::CacheValidating as u32,
+            EraProjectProgressStage::InitializingMemory as u32,
+            EraProjectProgressStage::IndexingProgram as u32,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     );
 }
 
@@ -126,11 +128,11 @@ fn every_c_enum_discriminant_is_fixed() {
 fn checked_header_matches_version_function_table_and_reserved_slots() {
     let header = include_str!("../include/era_runtime.h");
     assert!(header.contains("#define ERA_RUNTIME_ABI_MAJOR 3u"));
-    assert!(header.contains("#define ERA_RUNTIME_ABI_MINOR 8u"));
+    assert!(header.contains("#define ERA_RUNTIME_ABI_MINOR 9u"));
     assert!(header.contains(ERA_RUNTIME_GET_API_SYMBOL));
     assert_eq!(
         ERA_RUNTIME_ABI_VERSION,
-        EraAbiVersion { major: 3, minor: 8 }
+        EraAbiVersion { major: 3, minor: 9 }
     );
 
     for field in [

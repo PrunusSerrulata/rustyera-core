@@ -390,5 +390,7 @@ const fn project_progress_stage(stage: ProjectProgressStage) -> EraProjectProgre
         ProjectProgressStage::CacheParsing => EraProjectProgressStage::CacheParsing,
         ProjectProgressStage::CacheDecoding => EraProjectProgressStage::CacheDecoding,
         ProjectProgressStage::CacheValidating => EraProjectProgressStage::CacheValidating,
+        ProjectProgressStage::InitializingMemory => EraProjectProgressStage::InitializingMemory,
+        ProjectProgressStage::IndexingProgram => EraProjectProgressStage::IndexingProgram,
     }
 }

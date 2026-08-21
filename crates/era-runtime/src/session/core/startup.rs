@@ -439,7 +439,30 @@ impl RuntimeSession {
             .title
             .clone();
         self.presentation.set_title(title);
-        let mut vm = RuntimeVm::new_for_title_with_seed(artifact, self.options.vm_config, seed);
+        let reporter = self.project_progress_reporter.clone();
+        let mut report_preparation = |progress: erabasic_vm::VmPreparationProgress| {
+            let Some(reporter) = &reporter else {
+                return;
+            };
+            reporter.report(ProjectProgress {
+                stage: match progress.stage {
+                    erabasic_vm::VmPreparationStage::InitializingMemory => {
+                        ProjectProgressStage::InitializingMemory
+                    }
+                    erabasic_vm::VmPreparationStage::IndexingProgram => {
+                        ProjectProgressStage::IndexingProgram
+                    }
+                },
+                completed: progress.completed,
+                total: progress.total,
+            });
+        };
+        let mut vm = RuntimeVm::new_for_title_with_seed_and_progress(
+            artifact,
+            self.options.vm_config,
+            seed,
+            &mut report_preparation,
+        );
         vm.set_line_columns(self.line_columns);
         vm.set_character_width_mode(configured_character_width_mode(
             self.project_snapshot.as_ref(),

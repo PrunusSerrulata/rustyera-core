@@ -1,6 +1,6 @@
 use erabasic_csv::{
     CsvDiagnosticCode, CsvLoadOptions, FilePayload, FrontendFile, FrontendIoError,
-    FrontendIoErrorKind, ProjectFiles, load_project, resolve_deferred_indices,
+    FrontendIoErrorKind, ProjectFiles, load_project, load_project_owned, resolve_deferred_indices,
 };
 use erabasic_data::{CharacterSelection, NameTableKind, UserIndexRegistration};
 
@@ -18,6 +18,23 @@ fn full_project_options() -> CsvLoadOptions {
         compatible_sp_character: true,
         ..CsvLoadOptions::default()
     }
+}
+
+#[test]
+fn owned_loader_preserves_borrowed_results_and_diagnostics() {
+    let files = ProjectFiles {
+        csv: vec![
+            file("GAMEBASE.CSV", "コード,42\nタイトル,所有権\n"),
+            file("../invalid.csv", "0,ignored\n"),
+            file("nested/ITEM.csv", "1,potion,50\n"),
+        ],
+        erb: vec![file("nested/lookup.erd", "1,name\n")],
+    };
+    let options = full_project_options();
+    assert_eq!(
+        load_project_owned(files.clone(), &options),
+        load_project(&files, &options),
+    );
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -195,6 +196,22 @@ fn analyze_project_inner(
     extensions: &ExtensionRegistry,
     progress: Option<&dyn AnalysisProgressCallback>,
 ) -> AnalysisReport {
+    analyze_project_inner_with_source_lifecycle(
+        input,
+        options,
+        extensions,
+        progress,
+        cfg!(target_arch = "wasm32"),
+    )
+}
+
+fn analyze_project_inner_with_source_lifecycle(
+    input: AnalysisInput,
+    options: &AnalyzerOptions,
+    extensions: &ExtensionRegistry,
+    progress: Option<&dyn AnalysisProgressCallback>,
+    consume_owned_ast: bool,
+) -> AnalysisReport {
     let mut diagnostics = Vec::new();
     if !validate_extensions(extensions, &mut diagnostics) {
         return AnalysisReport {
@@ -288,13 +305,14 @@ fn analyze_project_inner(
     }
     analyze_with_context(
         input.project_data,
-        &parsed,
+        Cow::Owned(parsed),
         options,
         extensions,
         &catalog,
         &context,
         diagnostics,
         progress,
+        consume_owned_ast,
     )
 }
 
@@ -332,26 +350,28 @@ pub fn analyze_parsed_project(
     }
     analyze_with_context(
         project_data,
-        sources,
+        Cow::Borrowed(sources),
         options,
         extensions,
         &catalog,
         &context,
         diagnostics,
         None,
+        false,
     )
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn analyze_with_context(
     mut project_data: ProjectData,
-    sources: &[ParsedProjectSource],
+    mut sources: Cow<'_, [ParsedProjectSource]>,
     options: &AnalyzerOptions,
     _extensions: &ExtensionRegistry,
     catalog: &Catalog,
     context: &AnalysisParserContext,
     mut diagnostics: Vec<AnalyzerDiagnostic>,
     progress: Option<&dyn AnalysisProgressCallback>,
+    consume_owned_ast: bool,
 ) -> AnalysisReport {
     let declarations: Vec<_> = sources
         .iter()
@@ -410,9 +430,11 @@ fn analyze_with_context(
             diagnostics.push(map_csv_diagnostic(diagnostic));
         }
     }
+    drop(declarations);
 
     let index_resolver = IndexResolver::new(&project_data);
     let mut symbols = Symbols::new(&project_data, &declaration_output.variables, options);
+    drop(declaration_output);
     let mut definitions = Vec::new();
     for (source_index, source) in sources.iter().enumerate() {
         if source.source.kind != SourceKind::Erb {
@@ -481,7 +503,7 @@ fn analyze_with_context(
         }
     }
 
-    let reachable = reachable_functions(sources, &definitions, &symbols, options);
+    let reachable = reachable_functions(sources.as_ref(), &definitions, &symbols, options);
     for definition in &definitions {
         if !should_analyze_function(definition, &reachable, options) {
             continue;
@@ -508,9 +530,9 @@ fn analyze_with_context(
         definitions.len(),
         progress,
     );
-    let analyze_definition = |definition: &FunctionDefinition| {
-        let source = &sources[definition.source_index];
-        let function = &source.script.functions[definition.function_index];
+    let analyze_definition = |definition: &FunctionDefinition,
+                              source: &ParsedProjectSource,
+                              function: &erabasic_ast::Function| {
         let mut function_diagnostics = Vec::new();
         // A same-name normal function after the first one can never be selected
         // by Emuera's non-event dictionary. Keep its identity for deterministic
@@ -547,22 +569,6 @@ fn analyze_with_context(
         analyzing_progress.advance();
         (hir, function_diagnostics)
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    let analyzed_functions = definitions
-        .par_iter()
-        .map(analyze_definition)
-        .collect::<Vec<_>>();
-    #[cfg(target_arch = "wasm32")]
-    let analyzed_functions = definitions
-        .iter()
-        .map(analyze_definition)
-        .collect::<Vec<_>>();
-    let mut functions = Vec::with_capacity(analyzed_functions.len());
-    for (function, function_diagnostics) in analyzed_functions {
-        functions.push(function);
-        diagnostics.extend(function_diagnostics);
-    }
-
     for source in sources
         .iter()
         .filter(|source| source.source.kind == SourceKind::Erb)
@@ -581,6 +587,65 @@ fn analyze_with_context(
         }
     }
 
+    let mut functions = Vec::with_capacity(definitions.len());
+    if consume_owned_ast {
+        match &mut sources {
+            Cow::Owned(sources) => {
+                let mut definitions = definitions.into_iter().peekable();
+                for (source_index, source) in sources.iter_mut().enumerate() {
+                    if source.source.kind != SourceKind::Erb {
+                        source.script.declarations = Vec::new();
+                        source.script.top_level = Vec::new();
+                        continue;
+                    }
+                    let ast_functions = std::mem::take(&mut source.script.functions);
+                    for (function_index, function) in ast_functions.into_iter().enumerate() {
+                        let Some(definition) = definitions.next_if(|definition| {
+                            definition.source_index == source_index
+                                && definition.function_index == function_index
+                        }) else {
+                            continue;
+                        };
+                        let (function, function_diagnostics) =
+                            analyze_definition(&definition, source, &function);
+                        functions.push(function);
+                        diagnostics.extend(function_diagnostics);
+                    }
+                    // The source text and compact line index remain available for
+                    // diagnostics, while the much larger AST allocation is returned
+                    // before the next source contributes HIR.
+                    source.script.declarations = Vec::new();
+                    source.script.top_level = Vec::new();
+                }
+                debug_assert!(definitions.next().is_none());
+            }
+            Cow::Borrowed(_) => unreachable!("only owned parser output can be consumed"),
+        }
+    } else {
+        #[cfg(not(target_arch = "wasm32"))]
+        let analyzed_functions = definitions
+            .par_iter()
+            .map(|definition| {
+                let source = &sources[definition.source_index];
+                let function = &source.script.functions[definition.function_index];
+                analyze_definition(definition, source, function)
+            })
+            .collect::<Vec<_>>();
+        #[cfg(target_arch = "wasm32")]
+        let analyzed_functions = definitions
+            .iter()
+            .map(|definition| {
+                let source = &sources[definition.source_index];
+                let function = &source.script.functions[definition.function_index];
+                analyze_definition(definition, source, function)
+            })
+            .collect::<Vec<_>>();
+        for (function, function_diagnostics) in analyzed_functions {
+            functions.push(function);
+            diagnostics.extend(function_diagnostics);
+        }
+    }
+
     let mut program = Program::new(sources.iter().map(|source| source.source.clone()).collect());
     program.call_compatibility = erabasic_hir::CallCompatibility {
         allow_event_as_normal: options.compatible_call_event,
@@ -592,7 +657,14 @@ fn analyze_with_context(
     };
     program.variables = symbols.variables;
     program.functions = functions;
-    crate::portability::analyze(&program, sources, &mut diagnostics);
+    let diagnostic_sources = sources
+        .iter()
+        .map(|source| crate::portability::DiagnosticSource {
+            source: &source.source,
+            text: &source.text,
+        })
+        .collect::<Vec<_>>();
+    crate::portability::analyze(&program, &diagnostic_sources, &mut diagnostics);
     diagnostics.sort_by_key(|diagnostic| {
         diagnostic.source.as_ref().map_or(
             (u32::MAX, usize::MAX, diagnostic.reference_level),
@@ -611,5 +683,135 @@ fn analyze_with_context(
             program,
         }),
         diagnostics,
+    }
+}
+
+#[cfg(test)]
+mod source_lifecycle_tests {
+    use super::*;
+    use crate::{ProjectSource, SourcePayload};
+    use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
+    use erabasic_hir::SourceId;
+
+    fn input(sources: &[(&str, &str)]) -> AnalysisInput {
+        AnalysisInput {
+            project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+                .data
+                .expect("default project data"),
+            sources: sources
+                .iter()
+                .map(|(relative_path, text)| ProjectSource {
+                    relative_path: (*relative_path).into(),
+                    payload: SourcePayload::Utf8((*text).into()),
+                })
+                .collect(),
+        }
+    }
+
+    fn assert_progressive_owned_analysis_matches_parallel(input: AnalysisInput) {
+        let options = AnalyzerOptions::analysis_mode();
+        let extensions = ExtensionRegistry::default();
+        let parallel = analyze_project_inner_with_source_lifecycle(
+            input.clone(),
+            &options,
+            &extensions,
+            None,
+            false,
+        );
+        let progressive =
+            analyze_project_inner_with_source_lifecycle(input, &options, &extensions, None, true);
+        assert_eq!(progressive, parallel);
+    }
+
+    fn parsed_sources(project_data: &ProjectData) -> Vec<ParsedProjectSource> {
+        let catalog = Catalog::build(&ExtensionRegistry::default());
+        let options = AnalyzerOptions::analysis_mode();
+        let mut context = AnalysisParserContext::new(
+            &project_data.schema,
+            &catalog,
+            std::iter::empty(),
+            &options,
+        );
+        let header_text = "#DIM CONST SIZE = 3\n";
+        let header = parse_erh(header_text, &mut context)
+            .value
+            .expect("header AST");
+        let script_text = "PRINT top level\n@SYSTEM_TITLE\nRESULT = SIZE + CLIENTWIDTH()\nRETURN\n";
+        let script = parse_erb(script_text, &mut context)
+            .value
+            .expect("script AST");
+        vec![
+            ParsedProjectSource {
+                source: source_file(SourceId(0), "vars.erh".into(), SourceKind::Erh, header_text),
+                text: header_text.into(),
+                script: header,
+            },
+            ParsedProjectSource {
+                source: source_file(SourceId(1), "main.erb".into(), SourceKind::Erb, script_text),
+                text: script_text.into(),
+                script,
+            },
+        ]
+    }
+
+    #[test]
+    fn borrowed_and_owned_preserved_ast_paths_return_identical_reports() {
+        let project_data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+            .data
+            .expect("default project data");
+        let sources = parsed_sources(&project_data);
+        let options = AnalyzerOptions::analysis_mode();
+        let extensions = ExtensionRegistry::default();
+        let borrowed =
+            analyze_parsed_project(project_data.clone(), &sources, &options, &extensions);
+        let catalog = Catalog::build(&extensions);
+        let mut context = AnalysisParserContext::new(
+            &project_data.schema,
+            &catalog,
+            sources
+                .iter()
+                .flat_map(|source| source.script.functions.iter())
+                .map(|function| function.name.clone()),
+            &options,
+        );
+        for source in sources
+            .iter()
+            .filter(|source| source.source.kind == SourceKind::Erh)
+        {
+            let _ = parse_erh(&source.text, &mut context);
+        }
+        let owned = analyze_with_context(
+            project_data,
+            Cow::Owned(sources),
+            &options,
+            &extensions,
+            &catalog,
+            &context,
+            Vec::new(),
+            None,
+            false,
+        );
+
+        assert_eq!(owned, borrowed);
+    }
+
+    #[test]
+    fn progressive_owned_analysis_preserves_hir_and_diagnostic_order() {
+        assert_progressive_owned_analysis_matches_parallel(input(&[
+            ("変数.erh", "#DIM CONST SIZE = 3\n"),
+            (
+                "main.erb",
+                "PRINT top level\n@SYSTEM_TITLE\nRESULT = SIZE + CLIENTWIDTH()\nRETURN\n",
+            ),
+            ("unused.erb", "@UNUSED\nPRINT あいう\nRETURN\n"),
+        ]));
+    }
+
+    #[test]
+    fn progressive_owned_analysis_handles_sparse_duplicate_definitions() {
+        assert_progressive_owned_analysis_matches_parallel(input(&[
+            ("first.erb", "@SYSTEM_TITLE\nRETURN\n@SAME\nRETURN\n"),
+            ("second.erb", "@SAME\nPRINT duplicate\nRETURN\n"),
+        ]));
     }
 }

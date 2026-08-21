@@ -24,7 +24,22 @@ pub struct CsvLoadReport {
 pub fn load_project(files: &ProjectFiles, options: &CsvLoadOptions) -> CsvLoadReport {
     let mut diagnostics = Vec::new();
     let index = FileIndex::build(files, &mut diagnostics);
+    load_index(index, options, diagnostics)
+}
 
+/// Load a complete virtual project while moving its submitted path and content allocations.
+#[must_use]
+pub fn load_project_owned(files: ProjectFiles, options: &CsvLoadOptions) -> CsvLoadReport {
+    let mut diagnostics = Vec::new();
+    let index = FileIndex::build_owned(files, &mut diagnostics);
+    load_index(index, options, diagnostics)
+}
+
+fn load_index(
+    index: FileIndex,
+    options: &CsvLoadOptions,
+    mut diagnostics: Vec<CsvDiagnostic>,
+) -> CsvLoadReport {
     let replace = load_replace(index.csv_file("_Replace.csv"), options, &mut diagnostics);
     let rename = load_rename(index.csv_file("_Rename.csv"), options, &mut diagnostics);
     let (game_base, game_base_fatal) =
@@ -52,6 +67,7 @@ pub fn load_project(files: &ProjectFiles, options: &CsvLoadOptions) -> CsvLoadRe
         load_characters(&index, &schema, &name_tables, options, &mut diagnostics);
     let extensions = load_extensions(&index, options, &mut diagnostics);
     let deferred_indices = collect_deferred_indices(&index, options);
+    drop(index);
 
     CsvLoadReport {
         data: Some(ProjectData {

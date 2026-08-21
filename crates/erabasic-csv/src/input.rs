@@ -61,26 +61,53 @@ pub(crate) struct FileIndex {
 
 impl FileIndex {
     pub fn build(files: &ProjectFiles, diagnostics: &mut Vec<CsvDiagnostic>) -> Self {
+        Self::build_from(
+            files.csv.iter().cloned(),
+            files.erb.iter().cloned(),
+            diagnostics,
+        )
+    }
+
+    pub fn build_owned(files: ProjectFiles, diagnostics: &mut Vec<CsvDiagnostic>) -> Self {
+        Self::build_from(files.csv, files.erb, diagnostics)
+    }
+
+    fn build_from(
+        csv: impl IntoIterator<Item = FrontendFile>,
+        erb: impl IntoIterator<Item = FrontendFile>,
+        diagnostics: &mut Vec<CsvDiagnostic>,
+    ) -> Self {
         let mut result = Self::default();
         let mut input_order = 0;
-        for (root, entries) in [(FileRoot::Csv, &files.csv), (FileRoot::Erb, &files.erb)] {
-            for entry in entries {
-                let Some(path) = normalize_path(&entry.relative_path) else {
-                    diagnostics.push(CsvDiagnostic::new(
-                        CsvDiagnosticCode::InvalidPath,
-                        CsvDiagnosticSeverity::Error,
-                        2,
-                        &entry.relative_path,
-                        None,
-                        "paths must be relative and may not contain '..'",
-                    ));
-                    input_order += 1;
-                    continue;
-                };
-                let FilePayload::Utf8(content) = &entry.payload else {
-                    if let FilePayload::IoError(error) = &entry.payload
-                        && error.kind != FrontendIoErrorKind::NotFound
-                    {
+        result.append(FileRoot::Csv, csv, diagnostics, &mut input_order);
+        result.append(FileRoot::Erb, erb, diagnostics, &mut input_order);
+        result
+    }
+
+    fn append(
+        &mut self,
+        root: FileRoot,
+        entries: impl IntoIterator<Item = FrontendFile>,
+        diagnostics: &mut Vec<CsvDiagnostic>,
+        input_order: &mut usize,
+    ) {
+        for entry in entries {
+            let Some(path) = normalize_path(&entry.relative_path) else {
+                diagnostics.push(CsvDiagnostic::new(
+                    CsvDiagnosticCode::InvalidPath,
+                    CsvDiagnosticSeverity::Error,
+                    2,
+                    &entry.relative_path,
+                    None,
+                    "paths must be relative and may not contain '..'",
+                ));
+                *input_order += 1;
+                continue;
+            };
+            let content = match entry.payload {
+                FilePayload::Utf8(content) => content,
+                FilePayload::IoError(error) => {
+                    if error.kind != FrontendIoErrorKind::NotFound {
                         diagnostics.push(CsvDiagnostic::new(
                             CsvDiagnosticCode::IoError,
                             CsvDiagnosticSeverity::Error,
@@ -90,38 +117,37 @@ impl FileIndex {
                             format!("frontend I/O error: {}", error.message),
                         ));
                     }
-                    input_order += 1;
-                    continue;
-                };
-                let root_key = match root {
-                    FileRoot::Csv => 0,
-                    FileRoot::Erb => 1,
-                };
-                let key = (root_key, ascii_fold(&path));
-                if result.by_key.contains_key(&key) {
-                    diagnostics.push(CsvDiagnostic::new(
-                        CsvDiagnosticCode::DuplicatePath,
-                        CsvDiagnosticSeverity::Error,
-                        2,
-                        &path,
-                        None,
-                        "duplicate normalized path; the first file is used",
-                    ));
-                    input_order += 1;
+                    *input_order += 1;
                     continue;
                 }
-                let index = result.files.len();
-                result.files.push(IndexedFile {
-                    root,
-                    path,
-                    content: content.to_owned(),
-                    input_order,
-                });
-                result.by_key.insert(key, index);
-                input_order += 1;
+            };
+            let root_key = match root {
+                FileRoot::Csv => 0,
+                FileRoot::Erb => 1,
+            };
+            let key = (root_key, ascii_fold(&path));
+            if self.by_key.contains_key(&key) {
+                diagnostics.push(CsvDiagnostic::new(
+                    CsvDiagnosticCode::DuplicatePath,
+                    CsvDiagnosticSeverity::Error,
+                    2,
+                    &path,
+                    None,
+                    "duplicate normalized path; the first file is used",
+                ));
+                *input_order += 1;
+                continue;
             }
+            let index = self.files.len();
+            self.files.push(IndexedFile {
+                root,
+                path,
+                content,
+                input_order: *input_order,
+            });
+            self.by_key.insert(key, index);
+            *input_order += 1;
         }
-        result
     }
 
     pub fn csv_file(&self, path: &str) -> Option<&IndexedFile> {

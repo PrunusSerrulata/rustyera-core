@@ -4,7 +4,7 @@ pub(super) fn simple_bulk_fill_loop(
     artifact: &BytecodeArtifact,
     function_index: usize,
     instruction: usize,
-    variable_global_indices: &[Vec<Option<usize>>],
+    variable_global_indices: &[Vec<u32>],
 ) -> Option<BulkFillLoopPlan> {
     let function = artifact.functions.get(function_index)?;
     let code = function
@@ -37,9 +37,9 @@ pub(super) fn simple_bulk_fill_loop(
         return None;
     }
     let globals = variable_global_indices.get(function_index)?;
-    let prefix_index = globals.get(instruction + 2).copied().flatten()?;
-    let counter_index = globals.get(instruction + 3).copied().flatten()?;
-    let target_index = globals.get(instruction + 5).copied().flatten()?;
+    let prefix_index = compact_global_index(globals, instruction + 2)?;
+    let counter_index = compact_global_index(globals, instruction + 3)?;
+    let target_index = compact_global_index(globals, instruction + 5)?;
     let prefix = artifact.globals.get(prefix_index)?;
     let counter = artifact.globals.get(counter_index)?;
     let target = artifact.globals.get(target_index)?;
@@ -113,7 +113,7 @@ pub(super) fn memoized_indexed_read(
     artifact: &BytecodeArtifact,
     function_index: usize,
     function: &BytecodeFunction,
-    variable_global_indices: &[Vec<Option<usize>>],
+    variable_global_indices: &[Vec<u32>],
     function_indices: &HashMap<SymbolKey, usize>,
     function_memo_plans: &[Option<FunctionMemoPlan>],
 ) -> Option<MemoizedIndexedReadPlan> {
@@ -135,9 +135,9 @@ pub(super) fn memoized_indexed_read(
     {
         return None;
     }
-    let index_global = variables[tail]?;
-    let scratch_global = variables[tail + 1]?;
-    let target_global = variables[tail + 2]?;
+    let index_global = compact_global_index(variables, tail)?;
+    let scratch_global = compact_global_index(variables, tail + 1)?;
+    let target_global = compact_global_index(variables, tail + 2)?;
     let index_parameter = function
         .parameters
         .iter()
@@ -172,7 +172,7 @@ pub(super) fn memoized_indexed_read(
         {
             continue;
         }
-        let selector_global = variables[call_index - 1]?;
+        let selector_global = compact_global_index(variables, call_index - 1)?;
         let Some(selector_parameter) = function
             .parameters
             .iter()
@@ -210,10 +210,11 @@ pub(super) fn memoized_indexed_read(
 
 pub(super) fn build_function_memo_plans(
     artifact: &BytecodeArtifact,
-    variable_global_indices: &[Vec<Option<usize>>],
+    variable_global_indices: &[Vec<u32>],
     native_import_indices: &HashMap<SymbolKey, usize>,
     host_import_indices: &HashMap<SymbolKey, usize>,
     normalized_native_names: &[Arc<str>],
+    mut advance: impl FnMut(),
 ) -> Vec<Option<FunctionMemoPlan>> {
     artifact
         .functions
@@ -231,6 +232,7 @@ pub(super) fn build_function_memo_plans(
             )
         })
         .map(|candidate| {
+            advance();
             candidate.map(|candidate| FunctionMemoPlan {
                 dependency_indices: candidate.dependencies.into_iter().collect(),
                 scratch_indices: candidate.replay.into_iter().collect(),
@@ -248,7 +250,7 @@ struct FunctionMemoAnalysis {
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn analyze_function_memo(
     artifact: &BytecodeArtifact,
-    variable_global_indices: &[Vec<Option<usize>>],
+    variable_global_indices: &[Vec<u32>],
     native_import_indices: &HashMap<SymbolKey, usize>,
     host_import_indices: &HashMap<SymbolKey, usize>,
     normalized_native_names: &[Arc<str>],
@@ -274,7 +276,8 @@ fn analyze_function_memo(
         .enumerate()
         .filter_map(|(instruction, encoded)| {
             (Opcode::try_from(encoded.opcode).ok()? == Opcode::StoreVariable)
-                .then_some(variables[instruction]?)
+                .then(|| compact_global_index(variables, instruction))
+                .flatten()
         })
         .filter(|index| {
             let definition = &artifact.globals[*index];
@@ -302,7 +305,7 @@ fn analyze_function_memo(
         let opcode = Opcode::try_from(instruction.opcode).ok()?;
         match opcode {
             Opcode::LoadVariable | Opcode::MakePlace => {
-                let index = variables[instruction_index]?;
+                let index = compact_global_index(variables, instruction_index)?;
                 let definition = &artifact.globals[index];
                 if function
                     .parameters
@@ -321,7 +324,7 @@ fn analyze_function_memo(
                 }
             }
             Opcode::StoreVariable => {
-                let index = variables[instruction_index]?;
+                let index = compact_global_index(variables, instruction_index)?;
                 if scratch.contains(&index) {
                     if read_payload_u16(&instruction.payload, 16)? != 0 {
                         return None;
@@ -401,7 +404,7 @@ fn analyze_function_memo(
 
 fn scratch_is_definitely_initialized(
     function: &BytecodeFunction,
-    variables: &[Option<usize>],
+    variables: &[u32],
     scratch: &BTreeSet<usize>,
 ) -> bool {
     scratch.iter().all(|scratch| {
@@ -417,7 +420,7 @@ fn scratch_is_definitely_initialized(
             let Ok(opcode) = Opcode::try_from(instruction.opcode) else {
                 return false;
             };
-            let variable = variables.get(instruction_index).copied().flatten();
+            let variable = compact_global_index(variables, instruction_index);
             if variable == Some(*scratch) {
                 if opcode == Opcode::LoadVariable && !initialized || opcode == Opcode::MakePlace {
                     return false;
@@ -468,9 +471,17 @@ fn read_payload_u32(payload: &[u8], offset: usize) -> Option<u32> {
         .map(u32::from_le_bytes)
 }
 
-pub(super) fn index_source_entries(
+fn compact_global_index(indices: &[u32], instruction: usize) -> Option<usize> {
+    indices
+        .get(instruction)
+        .copied()
+        .filter(|index| *index != NO_GLOBAL_INDEX)
+        .map(|index| index as usize)
+}
+
+pub(super) fn index_source_entries<'a>(
     offsets: &[u64],
-    entries: &[(u32, &SourceMapEntry)],
+    entries: impl IntoIterator<Item = (u32, &'a SourceMapEntry)>,
 ) -> Vec<u32> {
     let mut indices = vec![NO_SOURCE_MAP_ENTRY; offsets.len()];
     for (index, entry) in entries {
@@ -478,7 +489,7 @@ pub(super) fn index_source_entries(
         let end = offsets.partition_point(|offset| *offset < entry.code_end);
         for slot in &mut indices[start..end] {
             if *slot == NO_SOURCE_MAP_ENTRY {
-                *slot = *index;
+                *slot = index;
             }
         }
     }
@@ -510,6 +521,13 @@ mod program_index_tests {
     }
 
     #[test]
+    fn compact_global_index_rejects_missing_and_sentinel_slots() {
+        assert_eq!(compact_global_index(&[4, NO_GLOBAL_INDEX, 9], 0), Some(4));
+        assert_eq!(compact_global_index(&[4, NO_GLOBAL_INDEX, 9], 1), None);
+        assert_eq!(compact_global_index(&[4, NO_GLOBAL_INDEX, 9], 3), None);
+    }
+
+    #[test]
     fn compact_source_index_preserves_first_matching_entry() {
         let function = SymbolKey::derive("source-index-test", b"function");
         let broad = SourceMapEntry {
@@ -527,7 +545,7 @@ mod program_index_tests {
             code_end: 7,
             ..broad.clone()
         };
-        let indices = index_source_entries(&[0, 2, 5, 7, 10], &[(3, &broad), (4, &overlapping)]);
+        let indices = index_source_entries(&[0, 2, 5, 7, 10], [(3, &broad), (4, &overlapping)]);
 
         assert_eq!(indices, [NO_SOURCE_MAP_ENTRY, 3, 3, 3, NO_SOURCE_MAP_ENTRY]);
         assert_eq!(std::mem::size_of_val(&indices[0]), 4);

@@ -21,7 +21,7 @@ use erabasic_compiler::{
     CompilerOptions, IncrementalState, compile_owned_validated_project_with_artifact,
     compile_owned_validated_project_with_artifact_and_progress,
 };
-use erabasic_csv::{CsvDiagnosticSeverity, ProjectFiles, load_project};
+use erabasic_csv::{CsvDiagnosticSeverity, CsvLoadReport, ProjectFiles, load_project_owned};
 use erabasic_validator::ValidatedArtifact;
 use std::sync::Arc;
 
@@ -518,25 +518,34 @@ fn build_project_inner_with_extensions(
     }
 
     report_progress(progress, ProjectProgressStage::LoadingData, 0, 1);
-    let csv = load_project(&csv_files, &config.csv);
+    let CsvLoadReport {
+        data,
+        diagnostics: csv_diagnostics,
+    } = load_project_owned(csv_files, &config.csv);
     report_progress(progress, ProjectProgressStage::LoadingData, 1, 1);
-    diagnostics.extend(csv.diagnostics.iter().map(|diagnostic| ProtocolDiagnostic {
-        code: format!("csv.{:?}", diagnostic.code).to_ascii_lowercase(),
-        level: match diagnostic.severity {
-            CsvDiagnosticSeverity::Notice => RuntimeLogLevel::Info,
-            CsvDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
-            CsvDiagnosticSeverity::Error | CsvDiagnosticSeverity::Fatal => RuntimeLogLevel::Error,
-        },
-        message: diagnostic.message.clone(),
-        source: diagnostic.source.as_ref().map(|source| SourceLocation {
-            relative_path: source.relative_path.clone(),
-            byte_start: source.byte_start as u64,
-            byte_end: source.byte_end as u64,
-            line: Some(u64::from(source.physical_line)),
-            byte_column: None,
-        }),
-    }));
-    let Some(mut data) = csv.data else {
+    diagnostics.extend(
+        csv_diagnostics
+            .into_iter()
+            .map(|diagnostic| ProtocolDiagnostic {
+                code: format!("csv.{:?}", diagnostic.code).to_ascii_lowercase(),
+                level: match diagnostic.severity {
+                    CsvDiagnosticSeverity::Notice => RuntimeLogLevel::Info,
+                    CsvDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
+                    CsvDiagnosticSeverity::Error | CsvDiagnosticSeverity::Fatal => {
+                        RuntimeLogLevel::Error
+                    }
+                },
+                message: diagnostic.message,
+                source: diagnostic.source.map(|source| SourceLocation {
+                    relative_path: source.relative_path,
+                    byte_start: source.byte_start as u64,
+                    byte_end: source.byte_end as u64,
+                    line: Some(u64::from(source.physical_line)),
+                    byte_column: None,
+                }),
+            }),
+    );
+    let Some(mut data) = data else {
         return failed(normalized_manifest.project_revision, diagnostics, previous);
     };
     data.static_data.legacy_encoding = config.legacy_encoding;
@@ -579,9 +588,13 @@ fn build_project_inner_with_extensions(
     } else {
         analyze_project(analysis_input, &analyzer_options, &extensions)
     };
-    diagnostics.extend(analysis.diagnostics.iter().map(|diagnostic| {
-        let source = diagnostic.source.as_ref().map(|source| {
-            let indexed = analysis.project.as_ref().and_then(|project| {
+    let erabasic_analyzer::AnalysisReport {
+        project,
+        diagnostics: analysis_diagnostics,
+    } = analysis;
+    diagnostics.extend(analysis_diagnostics.into_iter().map(|diagnostic| {
+        let source = diagnostic.source.map(|source| {
+            let indexed = project.as_ref().and_then(|project| {
                 project.program.sources.iter().find(|candidate| {
                     candidate
                         .relative_path
@@ -589,7 +602,7 @@ fn build_project_inner_with_extensions(
                 })
             });
             indexed_project_source_location(
-                source.relative_path.clone(),
+                source.relative_path,
                 source.byte_start,
                 source.byte_end,
                 Some(u64::from(source.physical_line)),
@@ -605,11 +618,11 @@ fn build_project_inner_with_extensions(
                     RuntimeLogLevel::Error
                 }
             },
-            message: diagnostic.message.clone(),
+            message: diagnostic.message,
             source,
         }
     }));
-    let Some(project) = analysis.project else {
+    let Some(project) = project else {
         return failed(normalized_manifest.project_revision, diagnostics, previous);
     };
     if analysis_selection.is_some() {
@@ -667,14 +680,20 @@ fn build_project_inner_with_extensions(
             previous_artifact,
         )
     };
-    let compile_sources = compile
-        .artifact
+    let erabasic_compiler::ValidatedCompileReport {
+        artifact,
+        incremental_state: incremental,
+        diagnostics: compile_diagnostics,
+        patch: _,
+        stats: _,
+    } = compile;
+    let compile_sources = artifact
         .as_ref()
         .map_or(diagnostic_sources.as_slice(), |artifact| {
             artifact.artifact().source_map.sources.as_slice()
         });
     let compile_source_index = frontend::CompilerSourceIndex::new(&source_ids);
-    diagnostics.extend(compile.diagnostics.iter().map(|diagnostic| {
+    diagnostics.extend(compile_diagnostics.into_iter().map(|diagnostic| {
         let source = diagnostic.location.map(|location| {
             let indexed = compile_source_index.get(compile_sources, location.source);
             let relative_path =
@@ -693,17 +712,13 @@ fn build_project_inner_with_extensions(
                 erabasic_compiler::CompilerDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
                 erabasic_compiler::CompilerDiagnosticSeverity::Error => RuntimeLogLevel::Error,
             },
-            message: diagnostic.message.clone(),
+            message: diagnostic.message,
             source,
         }
     }));
-    let erabasic_compiler::ValidatedCompileReport {
-        artifact,
-        incremental_state: incremental,
-        diagnostics: _,
-        patch: _,
-        stats: _,
-    } = compile;
+    drop(compile_source_index);
+    drop(source_ids);
+    drop(diagnostic_sources);
     let Some(artifact) = artifact else {
         return failed_with_incremental(
             normalized_manifest.project_revision,

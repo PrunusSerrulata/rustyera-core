@@ -58,7 +58,7 @@ pub use snapshot::{
     SNAPSHOT_FORMAT_VERSION, SNAPSHOT_MAGIC, SnapshotBlocker, SnapshotContainerInspection,
     SnapshotEligibility, SnapshotInspection, VmSnapshot, inspect_snapshot,
 };
-pub use state::Vm;
+pub use state::{Vm, VmPreparationProgress, VmPreparationStage};
 pub use structured::{StructuredExtension, StructuredScope};
 pub use value::{HostWrite, PlaceDescriptor, VmValue};
 

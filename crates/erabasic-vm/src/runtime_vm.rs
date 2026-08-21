@@ -157,6 +157,24 @@ impl RuntimeVm {
         runtime
     }
 
+    #[must_use]
+    pub fn new_for_title_with_seed_and_progress(
+        artifact: ValidatedArtifact,
+        config: VmConfig,
+        seed: u64,
+        progress: &mut dyn FnMut(crate::VmPreparationProgress),
+    ) -> Self {
+        let natives = NativeServiceRegistry::for_artifact_with_seed(artifact.artifact(), seed);
+        let mut runtime = Self {
+            vm: Vm::new_for_title_with_progress(artifact, config, progress),
+            natives,
+            pending_natives: None,
+            line_columns: DEFAULT_LINE_COLUMNS,
+        };
+        runtime.refresh_draw_line_string();
+        runtime
+    }
+
     /// Synchronize calculated line-width state with the current frontend projection.
     pub fn set_line_columns(&mut self, columns: u32) {
         self.line_columns = columns.max(1);
