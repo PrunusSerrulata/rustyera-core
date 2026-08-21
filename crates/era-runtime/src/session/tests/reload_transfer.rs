@@ -287,7 +287,7 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
     session
         .load_project(
             99,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity,
                 manifest: Some(manifest),
                 compiled_cache_transfer_id: None,
@@ -624,7 +624,7 @@ fn cooperative_cache_session() -> (RuntimeSession, ProjectManifest, ProjectIdent
     session
         .load_project(
             99,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity: identity.clone(),
                 manifest: Some(manifest.clone()),
                 compiled_cache_transfer_id: None,
@@ -732,7 +732,7 @@ fn cooperative_cache_failure_is_unique_and_project_replacement_cancels_work() {
     session
         .load_project(
             100,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity,
                 manifest: Some(manifest),
                 compiled_cache_transfer_id: None,

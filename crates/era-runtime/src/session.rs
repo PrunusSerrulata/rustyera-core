@@ -92,12 +92,12 @@ use crate::operation::{
     CandidateSaveContinuation, PendingOperations, PendingService, PendingStorage,
 };
 use crate::presentation::{PresentationModel, PresentationUpdate, display_value};
-#[cfg(test)]
-use crate::project::build_project;
 use crate::project::{
     NormalizedProjectSnapshot, ProjectBuild, apply_project_delta,
-    build_project_with_extensions_and_progress,
+    build_owned_project_with_extensions_and_progress,
 };
+#[cfg(test)]
+use crate::project::{build_project, build_project_with_extensions_and_progress};
 use crate::runtime_snapshot::{
     self, CULTURE_TABLE_VERSION, RUNTIME_SNAPSHOT_FORMAT_VERSION, RuntimeSnapshotOrigin,
     RuntimeSnapshotPayload,

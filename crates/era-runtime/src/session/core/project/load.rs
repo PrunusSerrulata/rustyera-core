@@ -5,7 +5,7 @@ impl RuntimeSession {
     pub(in super::super::super) fn load_project(
         &mut self,
         message_id: u64,
-        request: &ProjectLoadRequest,
+        mut request: ProjectLoadRequest,
     ) -> Result<(), RuntimeError> {
         let staged_manifest = self.staged_project_manifest.take();
         let staged_cache = self.staged_project_file_cache.take();
@@ -19,20 +19,12 @@ impl RuntimeSession {
                 "project loading requires an idle runtime",
             );
         }
-        let staged_request;
-        let request = if request.manifest.is_none()
+        if request.manifest.is_none()
             && request.compiled_cache_transfer_id.is_none()
             && let Some(manifest) = staged_manifest
         {
-            staged_request = ProjectLoadRequest {
-                identity: request.identity.clone(),
-                manifest: Some(manifest),
-                compiled_cache_transfer_id: None,
-            };
-            &staged_request
-        } else {
-            request
-        };
+            request.manifest = Some(manifest);
+        }
         let cache_bytes = match request.compiled_cache_transfer_id {
             Some(transfer_id) => {
                 let Some(bytes) = self.consume_state_import(
@@ -189,7 +181,7 @@ impl RuntimeSession {
 
     pub(in super::super::super) fn build_project_from_cache(
         &self,
-        request: &ProjectLoadRequest,
+        request: ProjectLoadRequest,
         cache_bytes: Option<&[u8]>,
         staged_cache: Option<crate::compiled_cache::DecodedCompiledCache>,
     ) -> Result<ProjectBuild, Box<ProjectLoadReport>> {
@@ -212,8 +204,7 @@ impl RuntimeSession {
                         == request.identity.source_digest)
                         .then_some(manifest)
                 });
-                let Some(manifest) = embedded_manifest.as_ref().or(request.manifest.as_ref())
-                else {
+                let Some(manifest) = embedded_manifest.or(request.manifest) else {
                     let mut report =
                         project_payload_required_report(request.identity.project_revision);
                     if let Some(error) = cache_warning.take() {
@@ -229,12 +220,12 @@ impl RuntimeSession {
                     }
                     return Err(Box::new(report));
                 };
-                if manifest_contains_omitted_payloads(manifest) {
+                if manifest_contains_omitted_payloads(&manifest) {
                     return Err(Box::new(project_payload_required_report(
                         request.identity.project_revision,
                     )));
                 }
-                let actual_identity = crate::compiled_cache::project_identity(manifest);
+                let actual_identity = crate::compiled_cache::project_identity(&manifest);
                 if actual_identity.source_digest != request.identity.source_digest {
                     return Err(Box::new(ProjectLoadReport {
                         project_revision: request.identity.project_revision,
@@ -259,7 +250,7 @@ impl RuntimeSession {
                     .map(|value| value.artifact.artifact())
                     .or_else(|| self.vm.as_ref().map(|vm| vm.vm().artifact()))
                     .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
-                build_project_with_extensions_and_progress(
+                build_owned_project_with_extensions_and_progress(
                     manifest,
                     Some(previous_incremental),
                     previous_artifact,

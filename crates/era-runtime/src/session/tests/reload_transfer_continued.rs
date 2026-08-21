@@ -34,7 +34,7 @@ fn project_load_rejects_an_uncommitted_cache_without_changing_phase() {
     session
         .load_project(
             99,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity: ProjectIdentity {
                     project_revision: 1,
                     source_digest: ProtocolBytes::new(vec![0; 32]),
@@ -73,7 +73,7 @@ fn identity_only_project_load_requests_payload_after_a_cache_miss() {
     let session = RuntimeSession::new(RuntimeOptions::default());
 
     let Err(report) = session.build_project_from_cache(
-        &ProjectLoadRequest {
+        ProjectLoadRequest {
             identity,
             manifest: None,
             compiled_cache_transfer_id: None,
@@ -92,6 +92,50 @@ fn identity_only_project_load_requests_payload_after_a_cache_miss() {
             .iter()
             .any(|diagnostic| diagnostic.code == "runtime.project_payload_required")
     );
+}
+
+#[test]
+fn cold_project_load_reuses_the_owned_manifest_source_allocation() {
+    let source = String::from("@SYSTEM_TITLE\nPRINTL MEMORY_STABLE\nRETURN\n");
+    let source_pointer = source.as_ptr();
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8(source),
+            content_hash: None,
+        }],
+    };
+    let identity = crate::compiled_cache::project_identity(&manifest);
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.state = SessionState::Active;
+    session.phase = RuntimePhase::Ready;
+    session.stage_project_manifest(manifest).unwrap();
+
+    session
+        .load_project(
+            40,
+            ProjectLoadRequest {
+                identity,
+                manifest: None,
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+
+    let FilePayload::Utf8(retained) = &session
+        .project_snapshot
+        .as_ref()
+        .expect("the project should load")
+        .manifest
+        .files[0]
+        .payload
+    else {
+        panic!("the retained script payload should remain UTF-8");
+    };
+    assert_eq!(retained, "@SYSTEM_TITLE\nPRINTL MEMORY_STABLE\nRETURN\n");
+    assert_eq!(retained.as_ptr(), source_pointer);
 }
 
 #[test]
@@ -117,7 +161,7 @@ fn host_staged_manifest_is_owned_busy_single_use_and_identity_checked() {
     session
         .load_project(
             41,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity: identity.clone(),
                 manifest: None,
                 compiled_cache_transfer_id: None,
@@ -137,7 +181,7 @@ fn host_staged_manifest_is_owned_busy_single_use_and_identity_checked() {
     session
         .load_project(
             42,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity: identity.clone(),
                 manifest: None,
                 compiled_cache_transfer_id: None,
@@ -157,7 +201,7 @@ fn host_staged_manifest_is_owned_busy_single_use_and_identity_checked() {
     session
         .load_project(
             43,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity: ProjectIdentity {
                     project_revision: identity.project_revision,
                     source_digest: ProtocolBytes::new(vec![0; 32]),
@@ -197,7 +241,7 @@ fn rejected_or_explicit_project_load_discards_a_host_staged_manifest() {
     session
         .load_project(
             51,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity: identity.clone(),
                 manifest: None,
                 compiled_cache_transfer_id: None,
@@ -211,7 +255,7 @@ fn rejected_or_explicit_project_load_discards_a_host_staged_manifest() {
     session
         .load_project(
             52,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity,
                 manifest: Some(manifest),
                 compiled_cache_transfer_id: None,
@@ -277,7 +321,7 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
 
     let cached = session
         .build_project_from_cache(
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity,
                 manifest: None,
                 compiled_cache_transfer_id: None,
@@ -362,7 +406,7 @@ fn host_staged_exact_cache_uses_the_normal_project_load_contract() {
     let expected_session = RuntimeSession::new(RuntimeOptions::default());
     let expected = expected_session
         .build_project_from_cache(
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity: identity.clone(),
                 manifest: None,
                 compiled_cache_transfer_id: None,
@@ -381,7 +425,7 @@ fn host_staged_exact_cache_uses_the_normal_project_load_contract() {
     session
         .load_project(
             44,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity,
                 manifest: None,
                 compiled_cache_transfer_id: Some(transfer_id),
@@ -414,7 +458,7 @@ fn host_staged_exact_cache_uses_the_normal_project_load_contract() {
     session
         .load_project(
             45,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity: crate::compiled_cache::project_identity(&manifest),
                 manifest: None,
                 compiled_cache_transfer_id: Some(transfer_id),
@@ -437,7 +481,7 @@ fn host_staged_exact_cache_uses_the_normal_project_load_contract() {
     mismatch
         .load_project(
             46,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity: ProjectIdentity {
                     project_revision: manifest.project_revision,
                     source_digest: ProtocolBytes::new(vec![0; 32]),
@@ -474,7 +518,7 @@ fn host_staged_corrupt_cache_reports_a_normal_cache_miss() {
     session
         .load_project(
             51,
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity: ProjectIdentity {
                     project_revision: 9,
                     source_digest: ProtocolBytes::new(vec![0; 32]),
@@ -530,7 +574,7 @@ fn compiled_cache_is_reused_across_configuration_profiles() {
             ConfigurationClientProfile::Tui,
         ),
     ] {
-        let mut initial = crate::project::build_project_with_extensions_and_progress(
+        let mut initial = build_project_with_extensions_and_progress(
             &manifest,
             None,
             None,
@@ -562,7 +606,7 @@ fn compiled_cache_is_reused_across_configuration_profiles() {
 
         let build = session
             .build_project_from_cache(
-                &ProjectLoadRequest {
+                ProjectLoadRequest {
                     identity,
                     manifest: Some(compact_manifest),
                     compiled_cache_transfer_id: None,
@@ -639,7 +683,7 @@ fn journaled_configuration_rebuilds_instead_of_exact_hitting_the_old_artifact() 
     let session = RuntimeSession::new(RuntimeOptions::default());
     let rebuilt = session
         .build_project_from_cache(
-            &ProjectLoadRequest {
+            ProjectLoadRequest {
                 identity: request_identity,
                 manifest: None,
                 compiled_cache_transfer_id: None,

@@ -586,14 +586,14 @@ impl RuntimeSession {
                 let identity = crate::compiled_cache::project_identity(&manifest);
                 self.load_project(
                     message_id,
-                    &ProjectLoadRequest {
+                    ProjectLoadRequest {
                         identity,
                         manifest: Some(manifest),
                         compiled_cache_transfer_id: None,
                     },
                 )
             }
-            RuntimeMessage::ProjectLoad(request) => self.load_project(message_id, &request),
+            RuntimeMessage::ProjectLoad(request) => self.load_project(message_id, request),
             RuntimeMessage::ReturnToTitle(_) => self.return_to_title(message_id),
             RuntimeMessage::ProjectAnalysisRequest(request) => {
                 self.analyze_project(message_id, &request)

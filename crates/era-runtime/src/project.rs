@@ -120,8 +120,29 @@ pub(crate) fn build_project_with_extensions(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn build_project_with_extensions_and_progress(
     manifest: &ProjectManifest,
+    previous: Option<&IncrementalState>,
+    previous_artifact: Option<&BytecodeArtifact>,
+    extensions: &[era_runtime_protocol::ExtensionDeclaration],
+    configuration_profile: ConfigurationClientProfile,
+    progress: Option<&ProjectProgressReporter>,
+) -> ProjectBuild {
+    build_project_inner_with_extensions(
+        manifest.clone(),
+        previous,
+        previous_artifact,
+        None,
+        false,
+        extensions,
+        configuration_profile,
+        progress,
+    )
+}
+
+pub(crate) fn build_owned_project_with_extensions_and_progress(
+    manifest: ProjectManifest,
     previous: Option<&IncrementalState>,
     previous_artifact: Option<&BytecodeArtifact>,
     extensions: &[era_runtime_protocol::ExtensionDeclaration],
@@ -152,7 +173,7 @@ pub(crate) fn analyze_submitted_project_with_extensions(
         .map(|path| path.to_ascii_lowercase())
         .collect::<std::collections::BTreeSet<_>>();
     let build = build_project_inner_with_extensions(
-        &request.manifest,
+        request.manifest.clone(),
         None,
         None,
         Some(&selected),
@@ -185,7 +206,7 @@ fn build_project_inner(
     analysis_selection: Option<&std::collections::BTreeSet<String>>,
 ) -> ProjectBuild {
     build_project_inner_with_extensions(
-        manifest,
+        manifest.clone(),
         previous,
         None,
         analysis_selection,
@@ -202,7 +223,7 @@ fn build_project_inner(
     reason = "the atomic build pipeline keeps all identity-affecting inputs explicit"
 )]
 fn build_project_inner_with_extensions(
-    manifest: &ProjectManifest,
+    manifest: ProjectManifest,
     previous: Option<&IncrementalState>,
     previous_artifact: Option<&BytecodeArtifact>,
     analysis_selection: Option<&std::collections::BTreeSet<String>>,
@@ -211,17 +232,20 @@ fn build_project_inner_with_extensions(
     configuration_profile: ConfigurationClientProfile,
     progress: Option<&ProjectProgressReporter>,
 ) -> ProjectBuild {
+    // Cold loads already own the decoded manifest. Keep that allocation as the authoritative
+    // reload snapshot so the end of compilation does not clone every source payload at once.
+    let mut normalized_manifest = manifest;
     let mut diagnostics = Vec::new();
     report_progress(
         progress,
         ProjectProgressStage::Normalizing,
         0,
-        manifest.files.len(),
+        normalized_manifest.files.len(),
     );
-    let source_texts = manifest_source_texts(manifest);
+    let source_texts = manifest_source_texts(&normalized_manifest);
     let (extensions, host_registry, extension_map) =
         prepare_extensions(extension_declarations, &mut diagnostics);
-    let mut files = manifest.files.clone();
+    let mut files = normalized_manifest.files.clone();
     let parsed_configuration = parse_configuration(&files, &mut diagnostics);
     let mut config = parsed_configuration.semantic;
     let configuration_document = parsed_configuration.document;
@@ -404,7 +428,7 @@ fn build_project_inner_with_extensions(
         }),
     }));
     let Some(mut data) = csv.data else {
-        return failed(manifest.project_revision, diagnostics, previous);
+        return failed(normalized_manifest.project_revision, diagnostics, previous);
     };
     data.static_data.legacy_encoding = config.legacy_encoding;
     let editable_configuration = config.values.clone();
@@ -473,7 +497,7 @@ fn build_project_inner_with_extensions(
         }
     }));
     let Some(project) = analysis.project else {
-        return failed(manifest.project_revision, diagnostics, previous);
+        return failed(normalized_manifest.project_revision, diagnostics, previous);
     };
     if analysis_selection.is_some() {
         let success = !diagnostics
@@ -483,7 +507,7 @@ fn build_project_inner_with_extensions(
             artifact: None,
             incremental: IncrementalState::default(),
             report: ProjectLoadReport {
-                project_revision: manifest.project_revision,
+                project_revision: normalized_manifest.project_revision,
                 success,
                 diagnostics,
                 payload_required: false,
@@ -558,13 +582,21 @@ fn build_project_inner_with_extensions(
     }));
     let incremental = compile.incremental_state;
     let Some(artifact) = compile.artifact else {
-        return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
+        return failed_with_incremental(
+            normalized_manifest.project_revision,
+            diagnostics,
+            incremental,
+        );
     };
     let success = !diagnostics
         .iter()
         .any(|diagnostic| diagnostic.level == RuntimeLogLevel::Error);
     if !success {
-        return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
+        return failed_with_incremental(
+            normalized_manifest.project_revision,
+            diagnostics,
+            incremental,
+        );
     }
     // The compiler structurally validated this exact in-process value before
     // refreshing its identities. Avoid repeating that full artifact walk at the
@@ -572,7 +604,7 @@ fn build_project_inner_with_extensions(
     report_progress(progress, ProjectProgressStage::Validating, 0, 1);
     report_progress(progress, ProjectProgressStage::Validating, 1, 1);
 
-    let preparing_total = ResourceGraph::work_item_count(manifest).saturating_add(2);
+    let preparing_total = ResourceGraph::work_item_count(&normalized_manifest).saturating_add(2);
     report_progress(
         progress,
         ProjectProgressStage::Preparing,
@@ -591,7 +623,7 @@ fn build_project_inner_with_extensions(
         preparing_total,
     );
     let (resource_graph, resource_diagnostics) =
-        ResourceGraph::from_manifest_with_progress(manifest, |completed, _| {
+        ResourceGraph::from_manifest_with_progress(&normalized_manifest, |completed, _| {
             report_fraction(
                 progress,
                 ProjectProgressStage::Preparing,
@@ -621,7 +653,11 @@ fn build_project_inner_with_extensions(
         .iter()
         .any(|diagnostic| diagnostic.level == RuntimeLogLevel::Error);
     if !success {
-        return failed_with_incremental(manifest.project_revision, diagnostics, incremental);
+        return failed_with_incremental(
+            normalized_manifest.project_revision,
+            diagnostics,
+            incremental,
+        );
     }
     let project_identity = project_identity(&artifact, &config, &resources, &extension_map);
     report_progress(
@@ -630,7 +666,7 @@ fn build_project_inner_with_extensions(
         preparing_total,
         preparing_total,
     );
-    let mut normalized_manifest = manifest.clone();
+    drop(source_texts);
     if let Some(contents) = &generated_configuration_source {
         let digest =
             era_protocol::ProtocolBytes::new(blake3::hash(contents.as_bytes()).as_bytes().to_vec());
@@ -646,7 +682,7 @@ fn build_project_inner_with_extensions(
         artifact: Some(artifact),
         incremental,
         report: ProjectLoadReport {
-            project_revision: manifest.project_revision,
+            project_revision: normalized_manifest.project_revision,
             success,
             diagnostics,
             payload_required: false,

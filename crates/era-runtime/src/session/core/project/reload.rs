@@ -42,8 +42,8 @@ impl RuntimeSession {
             .as_ref()
             .map(|vm| vm.vm().artifact())
             .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
-        let mut build = build_project_with_extensions_and_progress(
-            &manifest,
+        let mut build = build_owned_project_with_extensions_and_progress(
+            manifest,
             Some(self.incremental.as_ref()),
             previous_artifact,
             &self.extension_declarations,
