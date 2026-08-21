@@ -6,8 +6,8 @@ use era_protocol::{
     Channel, Envelope, ProtocolBytes, decode_envelope, encode_canonical, encode_envelope,
 };
 use era_runtime_protocol::{
-    CanvasReplayCommand, DisplayLine, DisplayRun, FileCategory, FileChange, FilePayload,
-    PresentationOperation, PresentationSnapshot, ProjectIdentity, ProjectManifest,
+    CanvasReplayCommand, ConfigurationValueKind, DisplayLine, DisplayRun, FileCategory, FileChange,
+    FilePayload, PresentationOperation, PresentationSnapshot, ProjectIdentity, ProjectManifest,
     ProjectionLength, ProjectionSize, ProjectionTransform, SubmittedFile,
 };
 use erabasic_vm::VmDebugInspect;

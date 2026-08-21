@@ -259,7 +259,7 @@ fn low_memory_full_payload_reload_remains_sparse_and_uses_the_new_source() {
 fn low_memory_configuration_commit_preserves_sparse_sources_and_allows_full_reload() {
     let main = "@SYSTEM_TITLE\nRETURN\n";
     let other = "@OTHER\nRETURN\n";
-    let configuration = "[meta]\nschema_version = 2\n[text]\nfont_size = 20\n";
+    let configuration = "[meta]\nschema_version = 3\n[text]\nfont_size = 20\n";
     let manifest = ProjectManifest {
         project_revision: 1,
         files: vec![
@@ -556,7 +556,7 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
                 relative_path: "reraconfig.toml".into(),
                 category: FileCategory::Configuration,
                 payload: FilePayload::Utf8(
-                    "[meta]\r\nschema_version = 2\r\n[text]\r\nfont_size = 20\r\n".into(),
+                    "[meta]\r\nschema_version = 3\r\n[text]\r\nfont_size = 20\r\n".into(),
                 ),
                 content_hash: None,
             },
@@ -604,7 +604,7 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
         expected_configuration_digest.as_slice(),
         blake3::hash(
             era_config::normalize_line_endings(
-                "[meta]\r\nschema_version = 2\r\n[text]\r\nfont_size = 20\r\n"
+                "[meta]\r\nschema_version = 3\r\n[text]\r\nfont_size = 20\r\n"
             )
             .as_bytes()
         )

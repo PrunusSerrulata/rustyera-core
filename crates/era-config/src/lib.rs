@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn explicit_source_tracking_is_derived_and_not_serialized() {
         let document =
-            ReraConfigDocument::parse("[meta]\nschema_version = 2\n\n[text]\nfont_size = 21\n")
+            ReraConfigDocument::parse("[meta]\nschema_version = 3\n\n[text]\nfont_size = 21\n")
                 .unwrap();
         let store = document.values().unwrap();
         assert!(store.is_specified("FontSize"));
@@ -80,6 +80,39 @@ mod tests {
         assert!(encoded.get("specified").is_none());
         let decoded: ConfigStore = serde_json::from_value(encoded).unwrap();
         assert!(!decoded.is_specified("FontSize"));
+    }
+
+    #[test]
+    fn menu_visibility_defaults_to_auto_and_accepts_legacy_boolean_values() {
+        let allowed = vec!["SHOW".into(), "AUTO".into(), "HIDE".into()];
+        let mut store = ConfigStore::with_web_defaults();
+        assert_eq!(
+            store.get_code("UseMenu"),
+            Some(&ConfigValue::Enum {
+                value: "AUTO".into(),
+                allowed: allowed.clone(),
+            })
+        );
+
+        for (input, expected) in [
+            ("YES", "AUTO"),
+            ("TRUE", "AUTO"),
+            ("1", "AUTO"),
+            ("NO", "HIDE"),
+            ("FALSE", "HIDE"),
+            ("0", "HIDE"),
+            ("SHOW", "SHOW"),
+        ] {
+            store.apply("UseMenu", input, false).unwrap();
+            assert_eq!(
+                store.get_code("UseMenu"),
+                Some(&ConfigValue::Enum {
+                    value: expected.into(),
+                    allowed: allowed.clone(),
+                }),
+                "failed to normalize {input}",
+            );
+        }
     }
 
     #[test]

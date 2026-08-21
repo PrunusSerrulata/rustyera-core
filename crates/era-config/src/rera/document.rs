@@ -69,16 +69,22 @@ impl ReraConfigDocument {
         let source_version = source_schema_version(&document, source_offset, &source_spans)?;
         let mut document = document.into_mut();
         let retired_codes = if source_version == 1 {
-            validate_v1_meta(&document, source_offset, &source_spans)?;
+            validate_previous_meta(&document, source_offset, &source_spans)?;
             upgrade_v1_document(&mut document)
         } else {
             Vec::new()
         };
+        if source_version == 2 {
+            validate_previous_meta(&document, source_offset, &source_spans)?;
+        }
+        if source_version < RERACONFIG_SCHEMA_VERSION {
+            upgrade_v2_document(&mut document);
+        }
         let result = Self {
             document,
             source_offset,
             source_spans,
-            upgraded_from_previous_schema: source_version == 1,
+            upgraded_from_previous_schema: source_version < RERACONFIG_SCHEMA_VERSION,
             retired_codes,
         };
         result.values()?;
@@ -160,7 +166,7 @@ impl ReraConfigDocument {
         Ok(store)
     }
 
-    /// Whether parsing upgraded a schema version 1 document to the current schema.
+    /// Whether parsing upgraded an older document to the current schema.
     #[must_use]
     pub fn was_upgraded(&self) -> bool {
         self.upgraded_from_previous_schema
@@ -425,19 +431,19 @@ fn source_schema_version(
             "schema_version 必须是整数",
         )
     })?;
-    if matches!(value, 1 | RERACONFIG_SCHEMA_VERSION) {
+    if (1..=RERACONFIG_SCHEMA_VERSION).contains(&value) {
         Ok(value)
     } else {
         Err(error_at(
             ReraConfigErrorKind::InvalidMetadata,
             Some("meta.schema_version"),
             available_span(version, "meta.schema_version", source_offset, source_spans),
-            format!("仅支持 schema 版本 1 和 {RERACONFIG_SCHEMA_VERSION}"),
+            format!("仅支持 schema 版本 1 到 {RERACONFIG_SCHEMA_VERSION}"),
         ))
     }
 }
 
-fn validate_v1_meta(
+fn validate_previous_meta(
     document: &DocumentMut,
     source_offset: usize,
     source_spans: &BTreeMap<String, ByteSpan>,
@@ -546,7 +552,7 @@ fn upgrade_v1_document(document: &mut DocumentMut) -> Vec<&'static str> {
         locked.insert(REPLACEMENT_PATH.to_owned());
     }
     let meta = ensure_table(document, "meta");
-    meta.insert("schema_version", value(RERACONFIG_SCHEMA_VERSION));
+    meta.insert("schema_version", value(2));
     let mut locked_settings = Array::new();
     for path in locked {
         if retired_by_path(&path).is_none() {
@@ -558,6 +564,37 @@ fn upgrade_v1_document(document: &mut DocumentMut) -> Vec<&'static str> {
         Item::Value(Value::Array(locked_settings)),
     );
     retired_codes
+}
+
+fn upgrade_v2_document(document: &mut DocumentMut) {
+    const OLD_MENU_PATH: &str = "interface.menu_visible";
+    const MENU_PATH: &str = "interface.menu_mode";
+
+    if let Some(interface) = document.get_mut("interface").and_then(Item::as_table_mut)
+        && !interface.contains_key("menu_mode")
+        && let Some(old_menu) = interface.get("menu_visible")
+        && let Some(visible) = old_menu.as_bool()
+    {
+        let mut menu_mode = Value::from(if visible { "auto" } else { "hide" });
+        if let Some(old_value) = old_menu.as_value() {
+            menu_mode.decor_mut().clone_from(old_value.decor());
+        }
+        interface.remove("menu_visible");
+        interface.insert("menu_mode", Item::Value(menu_mode));
+    }
+
+    let meta = ensure_table(document, "meta");
+    meta.insert("schema_version", value(RERACONFIG_SCHEMA_VERSION));
+    if let Some(locked) = meta.get_mut("locked_settings").and_then(Item::as_array_mut) {
+        for path in locked.iter_mut() {
+            if path.as_str() != Some(OLD_MENU_PATH) {
+                continue;
+            }
+            let mut replacement = Value::from(MENU_PATH);
+            replacement.decor_mut().clone_from(path.decor());
+            *path = replacement;
+        }
+    }
 }
 
 fn ensure_table<'a>(document: &'a mut DocumentMut, section: &str) -> &'a mut Table {

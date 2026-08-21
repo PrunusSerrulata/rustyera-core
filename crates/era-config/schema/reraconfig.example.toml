@@ -1,8 +1,8 @@
 # RustyEra 跨客户端项目配置示例。所有字段都可以省略，省略时使用注释中的默认值。
 
 [meta]
-# 类型：整数；当前仅支持 2。
-schema_version = 2
+# 类型：整数；当前仅支持 3。
+schema_version = 3
 # 类型：字符串数组；列出的设置不可由客户端设置面板修改。
 locked_settings = []
 
@@ -89,8 +89,8 @@ allow_long_oneinput_from_mouse = false
 undo_enabled = false
 
 [interface]
-# 用途：常态显示客户端菜单；类型：布尔
-menu_visible = true
+# 用途：控制客户端菜单始终显示、按页面高度自动显示或始终隐藏；类型：字符串枚举；可选值："show"、"auto"、"hide"
+menu_mode = "auto"
 
 [network]
 # 用途：禁止脚本执行联网更新检查；类型：布尔

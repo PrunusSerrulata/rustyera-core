@@ -29,7 +29,14 @@ fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
             "missing pinned mapping {expected:?}"
         );
     }
-    assert_eq!(RERACONFIG_SCHEMA_VERSION, 2);
+    assert_eq!(RERACONFIG_SCHEMA_VERSION, 3);
+    assert_eq!(
+        ConfigStore::default().get_code("UseMenu"),
+        Some(&ConfigValue::Enum {
+            value: "AUTO".into(),
+            allowed: vec!["SHOW".into(), "AUTO".into(), "HIDE".into()],
+        })
+    );
     let active_ids = specs.iter().map(|spec| spec.id).collect::<BTreeSet<_>>();
     assert_eq!(retired::RETIRED_CONFIG_SPECS.len(), 40);
     assert_eq!(
@@ -94,8 +101,8 @@ fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
 #[test]
 fn missing_fields_bom_and_line_endings_use_defaults() {
     for input in [
-        "[meta]\nschema_version = 2\n[text]\nfont_size = 20\n",
-        "\u{feff}[meta]\r\nschema_version = 2\r\n[text]\r\nfont_size = 20\r\n",
+        "[meta]\nschema_version = 3\n[text]\nfont_size = 20\n",
+        "\u{feff}[meta]\r\nschema_version = 3\r\n[text]\r\nfont_size = 20\r\n",
     ] {
         let document = ReraConfigDocument::parse(input).unwrap();
         let values = document.values().unwrap();
@@ -107,7 +114,7 @@ fn missing_fields_bom_and_line_endings_use_defaults() {
 #[test]
 fn editing_preserves_surrounding_and_inline_comments() {
     let mut document = ReraConfigDocument::parse(
-        "[meta]\nschema_version = 2\n\n[text]\n# before\nfont_size = 20 # inline\n\n# adjacent\nline_height = 21\n",
+        "[meta]\nschema_version = 3\n\n[text]\n# before\nfont_size = 20 # inline\n\n# adjacent\nline_height = 21\n",
     )
     .unwrap();
     document
@@ -122,7 +129,7 @@ fn editing_preserves_surrounding_and_inline_comments() {
 #[test]
 fn locked_settings_cannot_be_changed_and_lock_comments_survive_updates() {
     let mut document = ReraConfigDocument::parse(
-        "[meta]\nschema_version = 2\nlocked_settings = [\"text.font_size\"] # locked\n\n[text]\nfont_size = 20\n",
+        "[meta]\nschema_version = 3\nlocked_settings = [\"text.font_size\"] # locked\n\n[text]\nfont_size = 20\n",
     )
     .unwrap();
     let error = document
@@ -141,7 +148,7 @@ fn locked_settings_cannot_be_changed_and_lock_comments_survive_updates() {
 
 #[test]
 fn strict_validation_reports_stable_kind_and_utf8_byte_span() {
-    let input = "\u{feff}[meta]\r\nschema_version = 2\r\n[audio]\r\nvolume = 101\r\n";
+    let input = "\u{feff}[meta]\r\nschema_version = 3\r\n[audio]\r\nvolume = 101\r\n";
     let error = ReraConfigDocument::parse(input).unwrap_err();
     assert_eq!(error.kind, ReraConfigErrorKind::OutOfRange);
     assert_eq!(error.path.as_deref(), Some("audio.volume"));
@@ -153,7 +160,7 @@ fn strict_validation_reports_stable_kind_and_utf8_byte_span() {
         "[text]\ncharacter_width_mode = \"other\"\n",
         "text = { font_size = 20 }\n",
         "text.font_size = 20\n",
-        "[meta]\nschema_version = 2\n[text]\ndrawing_method = \"textrenderer\"\n",
+        "[meta]\nschema_version = 3\n[text]\ndrawing_method = \"textrenderer\"\n",
     ] {
         assert!(
             ReraConfigDocument::parse(invalid).is_err(),
@@ -212,6 +219,40 @@ fn legacy_migration_merges_precedence_locks_json_and_replace() {
         Some(&ConfigValue::String("円".into()))
     );
     assert_eq!(migration.document.values().unwrap(), migration.values);
+}
+
+#[test]
+fn legacy_menu_boolean_migration_records_the_intentional_client_difference() {
+    let automatic = migrate_legacy_configuration(&[LegacyConfigSource {
+        relative_path: "emuera.config",
+        contents: "Show menu:YES\n",
+    }]);
+    assert_eq!(
+        automatic.values.get_code("UseMenu"),
+        Some(&ConfigValue::Enum {
+            value: "AUTO".into(),
+            allowed: vec!["SHOW".into(), "AUTO".into(), "HIDE".into()],
+        })
+    );
+    assert!(!automatic.document.to_lf_string().contains("menu_mode"));
+
+    let hidden = migrate_legacy_configuration(&[LegacyConfigSource {
+        relative_path: "emuera.config",
+        contents: "Show menu:NO\n",
+    }]);
+    assert_eq!(
+        hidden.values.get_code("UseMenu"),
+        Some(&ConfigValue::Enum {
+            value: "HIDE".into(),
+            allowed: vec!["SHOW".into(), "AUTO".into(), "HIDE".into()],
+        })
+    );
+    assert!(
+        hidden
+            .document
+            .to_lf_string()
+            .contains("menu_mode = \"hide\"")
+    );
 }
 
 #[test]
@@ -345,7 +386,7 @@ fn schema_v1_is_upgraded_and_retired_locks_and_fields_are_removed() {
         &["TextDrawingMode", "CompatiDRAWLINE"]
     );
     let output = document.to_lf_string();
-    assert!(output.contains("schema_version = 2"));
+    assert!(output.contains("schema_version = 3"));
     assert!(output.contains("font_size = 20 # keep"));
     assert!(output.contains("legacy_nonbutton_wrapping = true"));
     assert!(!output.contains("drawing_method"));
@@ -353,6 +394,56 @@ fn schema_v1_is_upgraded_and_retired_locks_and_fields_are_removed() {
     let values = document.values().unwrap();
     assert!(values.is_fixed("FontSize"));
     assert!(values.is_fixed("CompatiLinefeedAs1739"));
+}
+
+#[test]
+fn schema_v2_menu_visibility_is_upgraded_to_menu_mode() {
+    for (visible, expected) in [(true, "AUTO"), (false, "HIDE")] {
+        let document = ReraConfigDocument::parse(&format!(
+            "[meta]\nschema_version = 2\nlocked_settings = [\"interface.menu_visible\"]\n\n[interface]\nmenu_visible = {visible} # keep\n",
+        ))
+        .unwrap();
+        assert!(document.was_upgraded());
+        assert_eq!(
+            document.values().unwrap().get_code("UseMenu"),
+            Some(&ConfigValue::Enum {
+                value: expected.into(),
+                allowed: vec!["SHOW".into(), "AUTO".into(), "HIDE".into()],
+            })
+        );
+        assert!(document.values().unwrap().is_fixed("UseMenu"));
+        let output = document.to_lf_string();
+        assert!(output.contains("schema_version = 3"));
+        assert!(output.contains(&format!(
+            "menu_mode = \"{}\" # keep",
+            expected.to_lowercase()
+        )));
+        assert!(output.contains("locked_settings = [\"interface.menu_mode\"]"));
+        assert!(!output.contains("menu_visible"));
+    }
+
+    let defaults = ReraConfigDocument::parse("[meta]\nschema_version = 2\n")
+        .unwrap()
+        .values()
+        .unwrap();
+    assert_eq!(
+        defaults.get_code("UseMenu"),
+        Some(&ConfigValue::Enum {
+            value: "AUTO".into(),
+            allowed: vec!["SHOW".into(), "AUTO".into(), "HIDE".into()],
+        })
+    );
+}
+
+#[test]
+fn schema_v2_menu_upgrade_preserves_unrelated_lock_formatting() {
+    let input = "[meta]\nschema_version = 2\nlocked_settings = [\n  \"text.font_size\", # font\n  \"interface.menu_visible\", # menu\n  \"input.mouse_enabled\", # mouse\n] # locks\n\n[interface]\nmenu_visible = true # value\n";
+    let expected = input
+        .replace("schema_version = 2", "schema_version = 3")
+        .replace("interface.menu_visible", "interface.menu_mode")
+        .replace("menu_visible = true", "menu_mode = \"auto\"");
+    let document = ReraConfigDocument::parse(input).unwrap();
+    assert_eq!(document.to_lf_string(), expected);
 }
 
 #[test]

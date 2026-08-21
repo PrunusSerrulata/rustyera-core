@@ -204,6 +204,21 @@ fn parse_like(
         return Err(ConfigParseError::InvalidValue);
     }
     let value = raw.trim();
+    if code == "USEMENU"
+        && let ConfigValue::Enum { allowed, .. } = current
+    {
+        let migrated = match value.to_ascii_uppercase().as_str() {
+            "YES" | "TRUE" | "1" | "前" => Some("AUTO"),
+            "NO" | "FALSE" | "0" | "後" => Some("HIDE"),
+            _ => None,
+        };
+        if let Some(migrated) = migrated {
+            return Ok(ConfigValue::Enum {
+                value: migrated.into(),
+                allowed: allowed.clone(),
+            });
+        }
+    }
     match current {
         ConfigValue::Boolean(_) => {
             if let Ok(value) = value.parse::<i32>() {

@@ -114,7 +114,7 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     project.files.push(SubmittedFile {
         relative_path: "reraconfig.toml".into(),
         category: FileCategory::Configuration,
-        payload: FilePayload::Utf8("[meta]\nschema_version = 2\n\n[text]\nfont_size = 21\n".into()),
+        payload: FilePayload::Utf8("[meta]\nschema_version = 3\n\n[text]\nfont_size = 21\n".into()),
         content_hash: None,
     });
     let mut build = crate::project::build_project(&project, None);
@@ -303,7 +303,7 @@ fn native_tui_and_cooperative_browser_caches_are_byte_identical() {
     initial.files.push(SubmittedFile {
         relative_path: "reraconfig.toml".into(),
         category: FileCategory::Configuration,
-        payload: FilePayload::Utf8("[meta]\nschema_version = 2\n[text]\nfont_size = 20\n".into()),
+        payload: FilePayload::Utf8("[meta]\nschema_version = 3\n[text]\nfont_size = 20\n".into()),
         content_hash: None,
     });
     let first = crate::project::build_project_with_extensions_and_progress(
@@ -479,8 +479,10 @@ fn streamed_project_file_decode_skips_compiled_sections_and_preserves_journal() 
     assert_eq!(streamed.project, expected);
     assert_eq!(streamed.file_digest, *blake3::hash(&bytes).as_bytes());
     let maximum_record_bytes = first_record.len().max(final_record.len());
+    // Vec capacity may grow to almost twice its current length when a chunk crosses an allocation
+    // boundary, so bound retained memory rather than only the initialized compressed bytes.
     let retained_bound =
-        stream::HEADER_BYTES + manifest_compressed_bytes + maximum_record_bytes * 2 + 13;
+        stream::HEADER_BYTES + manifest_compressed_bytes * 2 + maximum_record_bytes * 2 + 13;
     assert!(maximum_retained <= retained_bound);
     assert_ne!(streamed.project.identity, embedded_identity);
     assert!(streamed.project.manifest.files.iter().any(|file| {

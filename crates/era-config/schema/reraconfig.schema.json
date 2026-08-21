@@ -1,5 +1,5 @@
 {
-  "$id": "urn:rustyera:reraconfig:schema:2",
+  "$id": "urn:rustyera:reraconfig:schema:3",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "RustyEra 跨客户端项目配置。所有设置项均可省略，省略时采用各项统一默认值。",
@@ -523,10 +523,15 @@
     "interface": {
       "additionalProperties": false,
       "properties": {
-        "menu_visible": {
-          "default": true,
-          "description": "用途：常态显示客户端菜单；类型：布尔",
-          "type": "boolean",
+        "menu_mode": {
+          "default": "auto",
+          "description": "用途：控制客户端菜单始终显示、按页面高度自动显示或始终隐藏；类型：字符串枚举；可选值：\"show\"、\"auto\"、\"hide\"",
+          "enum": [
+            "show",
+            "auto",
+            "hide"
+          ],
+          "type": "string",
           "x-rustyera-application": "hot",
           "x-rustyera-clients": [
             "browser",
@@ -540,7 +545,7 @@
     },
     "meta": {
       "additionalProperties": false,
-      "description": "配置格式元数据。所有字段均可省略，省略时按 schema 版本 1 输入并自动升级到版本 2，且没有锁定项。",
+      "description": "配置格式元数据。所有字段均可省略，省略时按 schema 版本 1 输入并自动升级到版本 3，且没有锁定项。",
       "properties": {
         "locked_settings": {
           "default": [],
@@ -551,7 +556,7 @@
               "project.use_rename_file",
               "replacement.enabled",
               "input.mouse_enabled",
-              "interface.menu_visible",
+              "interface.menu_mode",
               "debug.commands_enabled",
               "application.allow_multiple_instances",
               "save.auto_save",
@@ -641,9 +646,9 @@
           "uniqueItems": true
         },
         "schema_version": {
-          "const": 2,
-          "default": 2,
-          "description": "reraconfig.toml 的格式版本。新文件使用整数 2。",
+          "const": 3,
+          "default": 3,
+          "description": "reraconfig.toml 的格式版本。新文件使用整数 3。",
           "type": "integer"
         }
       },

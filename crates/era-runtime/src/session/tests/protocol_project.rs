@@ -106,7 +106,7 @@ fn generated_configuration_can_be_confirmed_before_the_next_edit() {
             _ => None,
         })
         .expect("empty transaction confirms generated contents");
-    assert!(prepared.contents.contains("schema_version = 2"));
+    assert!(prepared.contents.contains("schema_version = 3"));
     submit(
         &mut session,
         3,
@@ -411,7 +411,7 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
                     relative_path: "reraconfig.toml".into(),
                     category: FileCategory::Configuration,
                     payload: FilePayload::Utf8(
-                        "[meta]\nschema_version = 2\nlocked_settings = [\"input.mouse_enabled\"]\n\n[input]\nmouse_enabled = false\n\n[text]\nfont_size = 21\nline_height = 21\n"
+                        "[meta]\nschema_version = 3\nlocked_settings = [\"input.mouse_enabled\"]\n\n[input]\nmouse_enabled = false\n\n[text]\nfont_size = 21\nline_height = 21\n"
                             .into(),
                     ),
                     content_hash: None,
@@ -451,6 +451,15 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
             .find(|entry| entry.code == "FontSize")
             .is_some_and(|entry| entry.preference_eligible)
     );
+    let menu = initial
+        .entries
+        .iter()
+        .find(|entry| entry.code == "UseMenu")
+        .unwrap();
+    assert_eq!(menu.kind, ConfigurationValueKind::Enum);
+    assert_eq!(menu.value, "AUTO");
+    assert_eq!(menu.default_value, "AUTO");
+    assert_eq!(menu.allowed, ["SHOW", "AUTO", "HIDE"].map(str::to_owned));
     assert_eq!(
         initial
             .entries

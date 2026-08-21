@@ -70,7 +70,7 @@ pub fn catalog() -> Vec<ConfigSpec> {
         spec!(UseRenameFile, "_Rename.csvを利用する", "Use _Rename.csv file", b false, PortableSemantic),
         spec!(UseReplaceFile, "_Replace.csvを利用する", "Use _Replace.csv file", b true, PortableSemantic),
         spec!(UseMouse, "マウスを使用する", "Use mouse", b true, QueryOnlyClientPreference),
-        spec!(UseMenu, "メニューを使用する", "Show menu", b true, QueryOnlyClientPreference),
+        spec!(UseMenu, "メニューを使用する", "Show menu", e "AUTO" ["SHOW", "AUTO", "HIDE"], QueryOnlyClientPreference),
         spec!(UseDebugCommand, "デバッグコマンドを使用する", "Allow debug commands", b false, PortableSemantic),
         spec!(AllowMultipleInstances, "多重起動を許可する", "Allow multiple instances", b true, UnsupportedPlatformIntegration),
         spec!(AutoSave, "オートセーブを行なう", "Make autosaves", b true, PortableSemantic),

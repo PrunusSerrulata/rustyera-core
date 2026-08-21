@@ -287,7 +287,12 @@ fn metadata(code: &str) -> (u16, &'static str, &'static str, bool) {
             false,
         ),
         "UseMouse" => (4, "input.mouse_enabled", "允许鼠标点击游戏交互项", false),
-        "UseMenu" => (5, "interface.menu_visible", "常态显示客户端菜单", false),
+        "UseMenu" => (
+            5,
+            "interface.menu_mode",
+            "控制客户端菜单始终显示、按页面高度自动显示或始终隐藏",
+            false,
+        ),
         "UseDebugCommand" => (6, "debug.commands_enabled", "允许执行调试命令", false),
         "AllowMultipleInstances" => (
             7,

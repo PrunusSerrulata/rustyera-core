@@ -180,7 +180,7 @@ fn reraconfig_takes_priority_and_legacy_sources_generate_it_only_when_absent() {
         relative_path: "reraconfig.toml".into(),
         category: FileCategory::Configuration,
         payload: FilePayload::Utf8(
-            "[meta]\r\nschema_version = 2\r\n[text]\r\nfont_size = 24\r\n".into(),
+            "[meta]\r\nschema_version = 3\r\n[text]\r\nfont_size = 24\r\n".into(),
         ),
         content_hash: None,
     };
@@ -217,8 +217,8 @@ fn schema_v1_reraconfig_is_returned_for_atomic_client_persistence() {
     );
     let generated = parsed
         .generated_source
-        .expect("schema version 1 must be persisted as version 2");
-    assert!(generated.contains("schema_version = 2"));
+        .expect("schema version 1 must be persisted as version 3");
+    assert!(generated.contains("schema_version = 3"));
     assert!(generated.contains("font_size = 20"));
     assert!(!generated.contains("drawing_method"));
     assert!(diagnostics.iter().any(|diagnostic| {

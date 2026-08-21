@@ -8,12 +8,14 @@
 
 - 文件使用 TOML，设置按用途放入浅层表中，例如 `text.font_size` 和
   `save.auto_save`。设置名称使用小写、完整且直观的英语单词。
-- `[meta]` 只保存格式元数据。`schema_version` 当前为整数 `2`；
+- `[meta]` 只保存格式元数据。`schema_version` 当前为整数 `3`；
   `locked_settings` 是不可由客户端设置面板修改的规范路径数组，用来承接旧
   `_fixed.config` 的语义。
-- 版本 1 文件及未写版本号的旧文件会在读取时升级为版本 2。升级会移除退役字段；
+- 版本 1、2 文件及未写版本号的旧文件会在读取时升级为版本 3。版本 1 升级会移除退役字段；
   `compatibility.drawline_starts_new_line = true` 会转移为仍受支持的
   `compatibility.legacy_nonbutton_wrapping = true`，对应锁定状态也一并转移。
+- 版本 2 的 `interface.menu_visible` 布尔项会升级为 `interface.menu_mode`：`true` 转为
+  `"auto"`，`false` 转为 `"hide"`，对应锁定路径也一并转移。
 - 未知表、未知字段、错误类型、越界整数和无效枚举值均被拒绝，
   防止拼写错误被静默忽略。
 - 修改单项设置时保留文件中其他字段、排序、空行和注释。配置文档层不执行文件 I/O，
@@ -57,6 +59,17 @@ TUI 不暴露音量设置，因为终端音频不由 TUI 控制；浏览器和 T
 
 过去各客户端对部分缺失设置使用不同默认值。`reraconfig.toml` 统一采用：历史日志
 `1000` 行、每行 `5` 个 PRINTC 项、每项宽度 `24` 列。其他设置使用配置目录列出的默认值。
+
+## 版本 3 菜单显示模式
+
+`interface.menu_mode` 是仅适用于浏览器和 Tauri 的字符串枚举，可热应用。`"show"` 始终
+显示菜单，`"auto"` 在页面高度不足时隐藏菜单，`"hide"` 始终隐藏菜单；默认值为
+`"auto"`。
+
+这是与 Emuera 参考实现的有意不兼容项。参考实现的 `UseMenu` 是布尔值，真值表示始终显示；
+RustyEra 为适应小屏幕和触控客户端，将旧 `YES`、`TRUE`、`1` 以及旧 TOML `true` 迁移为
+`"auto"`，将旧假值迁移为 `"hide"`。需要始终显示时必须在新配置或客户端偏好中显式选择
+`"show"`。该差异只改变客户端菜单投影，不影响 EraBasic 游戏逻辑或 runtime 状态。
 
 ## 旧项目迁移
 

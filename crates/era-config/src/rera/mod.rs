@@ -17,7 +17,7 @@ pub use migration::{
 };
 pub use schema::{generate_annotated_example, generate_json_schema};
 
-pub const RERACONFIG_SCHEMA_VERSION: i64 = 2;
+pub const RERACONFIG_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ByteSpan {
