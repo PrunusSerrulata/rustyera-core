@@ -8,7 +8,8 @@ use erabasic_bytecode::{
 };
 use erabasic_compiler::{
     CompilerDiagnosticCode, CompilerDiagnosticSeverity, CompilerOptions, ExecutionBinding,
-    HostBinding, compile_project, compile_project_with_artifact, default_host_registry,
+    HostBinding, compile_owned_validated_project_with_artifact, compile_project,
+    compile_project_with_artifact, compile_validated_project_with_artifact, default_host_registry,
 };
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
 use erabasic_validator::{ValidationContext, validate_bytecode};
@@ -37,6 +38,56 @@ fn analyze(text: &str) -> erabasic_analyzer::AnalyzedProject {
         report.diagnostics
     );
     report.project.expect("analysis should produce a project")
+}
+
+#[test]
+fn owned_compile_moves_source_indices_into_the_validated_artifact() {
+    let project = analyze("@SYSTEM_TITLE\nPRINTL one\nPRINTL two\nRETURN\n");
+    let line_starts = project.program.sources[0].line_starts.as_ptr();
+
+    let report = compile_owned_validated_project_with_artifact(
+        project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+        None,
+    );
+
+    let artifact = report
+        .report
+        .artifact
+        .expect("owned project should compile");
+    assert_eq!(report.source_ids, [erabasic_hir::SourceId(0)]);
+    assert_eq!(
+        artifact.artifact().source_map.sources[0]
+            .line_starts
+            .as_ptr(),
+        line_starts
+    );
+}
+
+#[test]
+fn borrowed_and_owned_validated_compiles_are_observationally_identical() {
+    let text = "@SYSTEM_TITLE\nPRINTL one\nPRINTL two\nRETURN\n";
+    let borrowed_project = analyze(text);
+    let borrowed = compile_validated_project_with_artifact(
+        &borrowed_project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+        None,
+    );
+    let owned = compile_owned_validated_project_with_artifact(
+        analyze(text),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+        None,
+    );
+
+    assert_eq!(owned.report, borrowed);
+    assert_eq!(owned.source_ids, [erabasic_hir::SourceId(0)]);
+    assert!(owned.diagnostic_sources.is_empty());
 }
 
 #[test]

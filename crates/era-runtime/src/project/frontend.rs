@@ -8,6 +8,37 @@ use erabasic_csv::{
     FilePayload as CsvFilePayload, FrontendFile as CsvFrontendFile, FrontendIoError as CsvIoError,
     FrontendIoErrorKind as CsvIoErrorKind,
 };
+use erabasic_hir::SourceId;
+
+pub(super) struct CompilerSourceIndex {
+    entries: Vec<(SourceId, u32)>,
+}
+
+impl CompilerSourceIndex {
+    pub(super) fn new(source_ids: &[SourceId]) -> Self {
+        let mut entries = source_ids
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, source)| (source, u32::try_from(index).unwrap_or(u32::MAX)))
+            .collect::<Vec<_>>();
+        entries.sort_unstable_by_key(|entry| entry.0);
+        Self { entries }
+    }
+
+    pub(super) fn get<'a>(
+        &self,
+        sources: &'a [erabasic_bytecode::SourceRecord],
+        source: SourceId,
+    ) -> Option<&'a erabasic_bytecode::SourceRecord> {
+        let index = self
+            .entries
+            .binary_search_by_key(&source, |entry| entry.0)
+            .ok()
+            .and_then(|index| usize::try_from(self.entries[index].1).ok())?;
+        sources.get(index)
+    }
+}
 
 pub(super) fn csv_file(path: String, payload: FilePayload) -> CsvFrontendFile {
     CsvFrontendFile {
@@ -120,15 +151,43 @@ pub(super) fn indexed_project_source_location(
     fallback_line: Option<u64>,
     source: Option<&erabasic_hir::SourceFile>,
 ) -> SourceLocation {
-    let (line, byte_column) = source.map_or((fallback_line, None), |source| {
-        let clamped_start = u64::try_from(byte_start)
-            .unwrap_or(u64::MAX)
-            .min(source.byte_len);
-        let line_index = source
-            .line_starts
+    indexed_source_location(
+        relative_path,
+        byte_start,
+        byte_end,
+        fallback_line,
+        source.map(|source| (source.byte_len, source.line_starts.as_slice())),
+    )
+}
+
+pub(super) fn indexed_source_record_location(
+    relative_path: String,
+    byte_start: usize,
+    byte_end: usize,
+    source: Option<&erabasic_bytecode::SourceRecord>,
+) -> SourceLocation {
+    indexed_source_location(
+        relative_path,
+        byte_start,
+        byte_end,
+        None,
+        source.map(|source| (source.byte_len, source.line_starts.as_slice())),
+    )
+}
+
+fn indexed_source_location(
+    relative_path: String,
+    byte_start: usize,
+    byte_end: usize,
+    fallback_line: Option<u64>,
+    source: Option<(u64, &[u64])>,
+) -> SourceLocation {
+    let (line, byte_column) = source.map_or((fallback_line, None), |(byte_len, line_starts)| {
+        let clamped_start = u64::try_from(byte_start).unwrap_or(u64::MAX).min(byte_len);
+        let line_index = line_starts
             .partition_point(|line_start| *line_start <= clamped_start)
             .saturating_sub(1);
-        let line_start = source.line_starts.get(line_index).copied().unwrap_or(0);
+        let line_start = line_starts.get(line_index).copied().unwrap_or(0);
         (
             Some(u64::try_from(line_index).unwrap_or(u64::MAX)),
             Some(clamped_start.saturating_sub(line_start)),
@@ -161,6 +220,7 @@ pub(super) fn project_diagnostic(
 mod tests {
     use era_protocol::ProtocolBytes;
     use era_runtime_protocol::FrontendIoError;
+    use erabasic_bytecode::{Digest, SourceRecord};
 
     use super::*;
 
@@ -213,5 +273,38 @@ mod tests {
         };
         assert_eq!(source_error.kind, SourceIoErrorKind::Other);
         assert_eq!(source_error.message, "changed");
+    }
+
+    #[test]
+    fn compiler_source_index_uses_ids_instead_of_vector_positions() {
+        let sources = [
+            SourceRecord {
+                relative_path: "ERB/seven.erb".into(),
+                content_hash: Digest::default(),
+                byte_len: 0,
+                line_starts: vec![0],
+            },
+            SourceRecord {
+                relative_path: "ERB/two.erb".into(),
+                content_hash: Digest::default(),
+                byte_len: 0,
+                line_starts: vec![0],
+            },
+        ];
+        let index = CompilerSourceIndex::new(&[SourceId(7), SourceId(2)]);
+
+        assert_eq!(
+            index
+                .get(&sources, SourceId(2))
+                .map(|source| source.relative_path.as_str()),
+            Some("ERB/two.erb")
+        );
+        assert_eq!(
+            index
+                .get(&sources, SourceId(7))
+                .map(|source| source.relative_path.as_str()),
+            Some("ERB/seven.erb")
+        );
+        assert!(index.get(&sources, SourceId(0)).is_none());
     }
 }

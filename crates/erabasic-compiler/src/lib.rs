@@ -8,9 +8,11 @@ mod registry;
 
 pub use compile::{
     CompileProgress, CompileProgressCallback, CompileProgressStage, CompileReport, CompileStats,
-    IncrementalState, ValidatedCompileReport, compile_project, compile_project_with_artifact,
-    compile_project_with_artifact_and_progress, compile_validated_project_with_artifact,
-    compile_validated_project_with_artifact_and_progress,
+    IncrementalState, OwnedValidatedCompileReport, ValidatedCompileReport,
+    compile_owned_validated_project_with_artifact,
+    compile_owned_validated_project_with_artifact_and_progress, compile_project,
+    compile_project_with_artifact, compile_project_with_artifact_and_progress,
+    compile_validated_project_with_artifact, compile_validated_project_with_artifact_and_progress,
 };
 pub use diagnostic::{CompilerDiagnostic, CompilerDiagnosticCode, CompilerDiagnosticSeverity};
 pub use options::{CompilerOptions, OptimizationLevel};

@@ -18,8 +18,8 @@ use erabasic_analyzer::{
 };
 use erabasic_bytecode::BytecodeArtifact;
 use erabasic_compiler::{
-    CompilerOptions, IncrementalState, compile_validated_project_with_artifact,
-    compile_validated_project_with_artifact_and_progress,
+    CompilerOptions, IncrementalState, compile_owned_validated_project_with_artifact,
+    compile_owned_validated_project_with_artifact_and_progress,
 };
 use erabasic_csv::{CsvDiagnosticSeverity, ProjectFiles, load_project};
 use erabasic_validator::ValidatedArtifact;
@@ -33,7 +33,8 @@ use self::extensions::{category_relative_path, is_deferred_index_source, prepare
 #[cfg(test)]
 use self::frontend::project_source_location;
 use self::frontend::{
-    analyzer_source, csv_file, indexed_project_source_location, payload_hash, project_diagnostic,
+    analyzer_source, csv_file, indexed_project_source_location, indexed_source_record_location,
+    payload_hash, project_diagnostic,
 };
 use self::model::SemanticConfig;
 pub(crate) use self::model::{
@@ -644,9 +645,13 @@ fn build_project_inner_with_extensions(
             event.total,
         );
     };
-    let compile = if progress.is_some() {
-        compile_validated_project_with_artifact_and_progress(
-            &project,
+    let erabasic_compiler::OwnedValidatedCompileReport {
+        report: compile,
+        source_ids,
+        diagnostic_sources,
+    } = if progress.is_some() {
+        compile_owned_validated_project_with_artifact_and_progress(
+            project,
             &CompilerOptions::default(),
             &host_registry,
             previous,
@@ -654,32 +659,30 @@ fn build_project_inner_with_extensions(
             &compile_progress,
         )
     } else {
-        compile_validated_project_with_artifact(
-            &project,
+        compile_owned_validated_project_with_artifact(
+            project,
             &CompilerOptions::default(),
             &host_registry,
             previous,
             previous_artifact,
         )
     };
+    let compile_sources = compile
+        .artifact
+        .as_ref()
+        .map_or(diagnostic_sources.as_slice(), |artifact| {
+            artifact.artifact().source_map.sources.as_slice()
+        });
+    let compile_source_index = frontend::CompilerSourceIndex::new(&source_ids);
     diagnostics.extend(compile.diagnostics.iter().map(|diagnostic| {
         let source = diagnostic.location.map(|location| {
-            let relative_path = project
-                .program
-                .sources
-                .iter()
-                .find(|source| source.id == location.source)
-                .map_or_else(String::new, |source| source.relative_path.clone());
-            let indexed = project
-                .program
-                .sources
-                .iter()
-                .find(|source| source.relative_path.eq_ignore_ascii_case(&relative_path));
-            indexed_project_source_location(
+            let indexed = compile_source_index.get(compile_sources, location.source);
+            let relative_path =
+                indexed.map_or_else(String::new, |source| source.relative_path.clone());
+            indexed_source_record_location(
                 relative_path,
                 location.span.start,
                 location.span.end,
-                None,
                 indexed,
             )
         });
@@ -694,9 +697,6 @@ fn build_project_inner_with_extensions(
             source,
         }
     }));
-    // The HIR is no longer needed after compiler diagnostics are projected. Release it before
-    // resource preparation so a constrained WASM heap can reuse those allocations for startup.
-    drop(project);
     let erabasic_compiler::ValidatedCompileReport {
         artifact,
         incremental_state: incremental,

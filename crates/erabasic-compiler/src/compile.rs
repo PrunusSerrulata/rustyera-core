@@ -8,7 +8,7 @@ use erabasic_bytecode::{
     BytecodePatch, Digest, HostImport, NativeImport, SourceMap, SourceMapEntry, SourceRecord,
     SymbolKey,
 };
-use erabasic_hir::Function;
+use erabasic_hir::{Function, SourceId};
 use erabasic_validator::{
     ValidatedArtifact, ValidationContext, validate_compiler_output, validate_hir,
 };
@@ -33,7 +33,9 @@ use incremental::{
 mod driver;
 
 pub use driver::{
-    compile_project, compile_project_with_artifact, compile_project_with_artifact_and_progress,
+    compile_owned_validated_project_with_artifact,
+    compile_owned_validated_project_with_artifact_and_progress, compile_project,
+    compile_project_with_artifact, compile_project_with_artifact_and_progress,
     compile_validated_project_with_artifact, compile_validated_project_with_artifact_and_progress,
 };
 
@@ -393,6 +395,17 @@ pub struct ValidatedCompileReport {
     pub incremental_state: IncrementalState,
     pub diagnostics: Vec<CompilerDiagnostic>,
     pub stats: CompileStats,
+}
+
+/// An owned compile result and source identities needed to project pre-artifact diagnostics.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OwnedValidatedCompileReport {
+    pub report: ValidatedCompileReport,
+    /// Source identities in the same order as either the artifact source map or
+    /// `diagnostic_sources`. This runtime-only side table is deliberately not
+    /// part of the serialized artifact format.
+    pub source_ids: Vec<SourceId>,
+    pub diagnostic_sources: Vec<SourceRecord>,
 }
 
 impl From<ValidatedCompileReport> for CompileReport {

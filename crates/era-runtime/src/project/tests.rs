@@ -393,6 +393,41 @@ fn project_build_populates_analyzer_diagnostic_line_and_byte_column() {
 }
 
 #[test]
+fn owned_project_build_maps_compiler_errors_to_utf8_byte_columns() {
+    let text = "@SYSTEM_TITLE\nPRINTL 日本語\nRESULT = GETMETH(\"TARGET\")\nRETURN\n";
+    let build = build_project(
+        &ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "ERB/compiler-error.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(text.into()),
+                content_hash: None,
+            }],
+        },
+        None,
+    );
+
+    let diagnostic = build
+        .report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "compiler.unsupportedconstruct")
+        .expect("unsupported compiler diagnostic");
+    let source = diagnostic
+        .source
+        .as_ref()
+        .expect("compiler source location");
+    assert_eq!(source.relative_path, "ERB/compiler-error.erb");
+    assert_eq!(source.line, Some(2));
+    assert_eq!(source.byte_column, Some(9));
+    assert_eq!(
+        source.byte_start,
+        u64::try_from(text.find("GETMETH").unwrap()).unwrap()
+    );
+}
+
+#[test]
 fn project_load_report_projects_only_defined_gamebase_information() {
     let build = build_project(
         &ProjectManifest {
