@@ -7,7 +7,7 @@ use erabasic_bytecode::{
 use erabasic_hir::{
     CallTarget, ControlFlowKind, Function, FunctionKind, HirArgument, HirCallArgument, HirExpr,
     HirExprKind, HirFormPart, HirFormattedString, HirStatementKind, InstructionTarget, LineId,
-    Program, SemanticType, SourceLocation,
+    SemanticType, SourceLocation, Variable,
 };
 
 use crate::{
@@ -33,12 +33,37 @@ use planning::{
 pub(crate) use encoding::bytecode_type;
 
 pub(crate) struct LoweringContext<'a> {
-    pub program: &'a Program,
+    pub program: LoweringProgram<'a>,
     pub function_keys: &'a DenseIdIndex<SymbolKey>,
-    pub functions_by_id: &'a DenseIdIndex<&'a Function>,
+    pub functions_by_id: &'a DenseIdIndex<&'a FunctionSignature>,
     pub variable_keys: &'a DenseIdIndex<SymbolKey>,
     pub source_indices: &'a DenseIdIndex<u32>,
     pub host_registry: &'a HostRegistry,
+}
+
+pub(crate) struct LoweringProgram<'a> {
+    pub variables: &'a [Variable],
+    pub call_compatibility: erabasic_hir::CallCompatibility,
+}
+
+pub(crate) struct FunctionSignature {
+    pub id: erabasic_hir::FunctionId,
+    pub name: String,
+    pub kind: FunctionKind,
+    pub return_type: SemanticType,
+    pub parameters: Vec<erabasic_hir::Parameter>,
+}
+
+impl From<&Function> for FunctionSignature {
+    fn from(function: &Function) -> Self {
+        Self {
+            id: function.id,
+            name: function.name.clone(),
+            kind: function.kind,
+            return_type: function.return_type,
+            parameters: function.parameters.clone(),
+        }
+    }
 }
 
 pub(crate) struct LoweredFunction {

@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CompilerDiagnostic, CompilerDiagnosticCode, CompilerOptions, HostRegistry,
-    lowering::{LoweredFunction, LoweredSourceMapEntry, LoweringContext, lower_function},
+    lowering::{
+        FunctionSignature, LoweredFunction, LoweredSourceMapEntry, LoweringContext,
+        LoweringProgram, lower_function,
+    },
 };
 
 mod artifact;

@@ -20,7 +20,10 @@ pub fn compile_project(
         host_registry,
         previous,
         None,
-        false,
+        CompilePolicy {
+            compact_cache: false,
+            consume_owned_hir: false,
+        },
         None,
     )
     .report
@@ -46,7 +49,10 @@ pub fn compile_project_with_artifact(
         host_registry,
         previous,
         previous_artifact,
-        true,
+        CompilePolicy {
+            compact_cache: true,
+            consume_owned_hir: false,
+        },
         None,
     )
     .report
@@ -68,7 +74,10 @@ pub fn compile_project_with_artifact_and_progress(
         host_registry,
         previous,
         previous_artifact,
-        true,
+        CompilePolicy {
+            compact_cache: true,
+            consume_owned_hir: false,
+        },
         Some(progress),
     )
     .report
@@ -90,7 +99,10 @@ pub fn compile_validated_project_with_artifact(
         host_registry,
         previous,
         previous_artifact,
-        true,
+        CompilePolicy {
+            compact_cache: true,
+            consume_owned_hir: false,
+        },
         None,
     )
     .report
@@ -112,7 +124,10 @@ pub fn compile_validated_project_with_artifact_and_progress(
         host_registry,
         previous,
         previous_artifact,
-        true,
+        CompilePolicy {
+            compact_cache: true,
+            consume_owned_hir: false,
+        },
         Some(progress),
     )
     .report
@@ -135,7 +150,10 @@ pub fn compile_owned_validated_project_with_artifact(
         host_registry,
         previous,
         previous_artifact,
-        true,
+        CompilePolicy {
+            compact_cache: true,
+            consume_owned_hir: cfg!(target_arch = "wasm32"),
+        },
         None,
     )
 }
@@ -156,7 +174,10 @@ pub fn compile_owned_validated_project_with_artifact_and_progress(
         host_registry,
         previous,
         previous_artifact,
-        true,
+        CompilePolicy {
+            compact_cache: true,
+            consume_owned_hir: cfg!(target_arch = "wasm32"),
+        },
         Some(progress),
     )
 }
@@ -166,11 +187,27 @@ enum ProjectInput<'a> {
     Owned(Box<AnalyzedProject>),
 }
 
+#[derive(Clone, Copy)]
+struct CompilePolicy {
+    compact_cache: bool,
+    consume_owned_hir: bool,
+}
+
 impl ProjectInput<'_> {
     fn project(&self) -> &AnalyzedProject {
         match self {
             Self::Borrowed(project) => project,
             Self::Owned(project) => project,
+        }
+    }
+
+    fn take_owned_functions(&mut self, consume: bool) -> Option<Vec<Function>> {
+        if !consume {
+            return None;
+        }
+        match self {
+            Self::Borrowed(_) => None,
+            Self::Owned(project) => Some(std::mem::take(&mut project.program.functions)),
         }
     }
 
@@ -233,14 +270,21 @@ fn compile_project_inner(
     host_registry: &HostRegistry,
     previous: Option<&IncrementalState>,
     previous_artifact: Option<&BytecodeArtifact>,
-    compact_cache: bool,
+    policy: CompilePolicy,
     progress: Option<&dyn CompileProgressCallback>,
 ) -> OwnedValidatedCompileReport {
-    let project_ref = project.project();
-    let total_functions = project_ref.program.functions.len();
+    let CompilePolicy {
+        compact_cache,
+        consume_owned_hir,
+    } = policy;
+    let mut project = project;
+    let total_functions = project.project().program.functions.len();
     let compiling_progress =
         CompileProgressCounter::new(CompileProgressStage::Compiling, total_functions, progress);
-    let hir_report = validate_hir(&project_ref.program, &project_ref.data);
+    let hir_report = {
+        let project_ref = project.project();
+        validate_hir(&project_ref.program, &project_ref.data)
+    };
     if !hir_report.is_valid() {
         let (source_ids, diagnostic_sources) = project.into_diagnostic_sources();
         return OwnedValidatedCompileReport {
@@ -266,11 +310,30 @@ fn compile_project_inner(
     }
 
     let compiler_options = canonical_digest("rustyera.compiler.options.v2", &options.optimization);
-    let function_keys = function_keys(&project_ref.program.functions, &project_ref.program.sources);
-    let variable_keys = variable_keys(&project_ref.program.variables, &function_keys);
+    let (function_keys, variable_keys, function_signatures, artifact_event_groups) = {
+        let project_ref = project.project();
+        let function_keys =
+            function_keys(&project_ref.program.functions, &project_ref.program.sources);
+        let variable_keys = variable_keys(&project_ref.program.variables, &function_keys);
+        let function_signatures = project_ref
+            .program
+            .functions
+            .iter()
+            .map(FunctionSignature::from)
+            .collect::<Vec<_>>();
+        let artifact_event_groups = event_groups(&project_ref.program.functions, &function_keys);
+        (
+            function_keys,
+            variable_keys,
+            function_signatures,
+            artifact_event_groups,
+        )
+    };
+    let owned_functions = project.take_owned_functions(consume_owned_hir);
+    let project_ref = project.project();
     let (function_builds, previous_artifact) = {
-        let mut functions_by_id = DenseIdIndex::new(project_ref.program.functions.len());
-        for function in &project_ref.program.functions {
+        let mut functions_by_id = DenseIdIndex::new(function_signatures.len());
+        for function in &function_signatures {
             functions_by_id.insert(function.id.0, function);
         }
         let mut source_indices = DenseIdIndex::new(project_ref.program.sources.len());
@@ -278,7 +341,10 @@ fn compile_project_inner(
             source_indices.insert(source.id.0, u32::try_from(index).unwrap_or(u32::MAX));
         }
         let context = LoweringContext {
-            program: &project_ref.program,
+            program: LoweringProgram {
+                variables: &project_ref.program.variables,
+                call_compatibility: project_ref.program.call_compatibility,
+            },
             function_keys: &function_keys,
             functions_by_id: &functions_by_id,
             variable_keys: &variable_keys,
@@ -331,40 +397,54 @@ fn compile_project_inner(
             compiling_progress.advance();
             build
         };
-        let compile_functions = || {
+        let function_builds = if let Some(functions) = owned_functions {
+            // A constrained WASM cold build no longer needs a complete HIR function graph after
+            // validation and signature extraction. Move and lower one function at a time so its
+            // statements are released before the next bytecode body is accumulated.
+            Ok(functions
+                .into_iter()
+                .map(|function| compile_one(&function))
+                .collect::<Vec<_>>())
+        } else {
+            let compile_functions = || {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    project_ref
+                        .program
+                        .functions
+                        .par_iter()
+                        .map(compile_one)
+                        .collect::<Vec<_>>()
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    project_ref
+                        .program
+                        .functions
+                        .iter()
+                        .map(compile_one)
+                        .collect::<Vec<_>>()
+                }
+            };
+            // Cache hashing and lowering are both function-local. Running them in
+            // one indexed parallel iterator preserves deterministic input order.
             #[cfg(not(target_arch = "wasm32"))]
             {
-                project_ref
-                    .program
-                    .functions
-                    .par_iter()
-                    .map(compile_one)
-                    .collect::<Vec<_>>()
+                if let Some(jobs) = options.jobs {
+                    rayon::ThreadPoolBuilder::new()
+                        .num_threads(jobs.max(1))
+                        .build()
+                        .map(|pool| pool.install(compile_functions))
+                        .map_err(|error| error.to_string())
+                } else {
+                    Ok(compile_functions())
+                }
             }
             #[cfg(target_arch = "wasm32")]
             {
-                project_ref
-                    .program
-                    .functions
-                    .iter()
-                    .map(compile_one)
-                    .collect::<Vec<_>>()
+                Ok::<_, String>(compile_functions())
             }
         };
-        // Cache hashing and lowering are both function-local. Running them in
-        // one indexed parallel iterator preserves deterministic input order.
-        #[cfg(not(target_arch = "wasm32"))]
-        let function_builds = if let Some(jobs) = options.jobs {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(jobs.max(1))
-                .build()
-                .map(|pool| pool.install(compile_functions))
-                .map_err(|error| error.to_string())
-        } else {
-            Ok(compile_functions())
-        };
-        #[cfg(target_arch = "wasm32")]
-        let function_builds = Ok::<_, String>(compile_functions());
         (function_builds, previous_artifact)
     };
     let function_builds = match function_builds {
@@ -475,7 +555,6 @@ fn compile_project_inner(
         &variable_keys,
         &function_keys,
     );
-    let artifact_event_groups = event_groups(&project_ref.program.functions, &function_keys);
     let (project_data, source_ids, project_sources) = project.into_artifact_parts();
     drop(variable_keys);
     drop(function_keys);
@@ -722,5 +801,65 @@ fn compile_project_inner(
             diagnostics,
             stats,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::default_host_registry;
+    use erabasic_analyzer::{
+        AnalysisInput, AnalyzerOptions, ExtensionRegistry, ProjectSource, SourcePayload,
+        analyze_project,
+    };
+    use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
+
+    fn analyzed(source: &str) -> AnalyzedProject {
+        let project_data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+            .data
+            .expect("default project data");
+        let report = analyze_project(
+            AnalysisInput {
+                project_data,
+                sources: vec![ProjectSource {
+                    relative_path: "main.erb".into(),
+                    payload: SourcePayload::Utf8(source.into()),
+                }],
+            },
+            &AnalyzerOptions::analysis_mode(),
+            &ExtensionRegistry::default(),
+        );
+        assert!(report.project.is_some(), "{:#?}", report.diagnostics);
+        report.project.expect("analyzed project")
+    }
+
+    #[test]
+    fn consumed_owned_hir_matches_the_borrowed_compile() {
+        let source = "@SYSTEM_TITLE\nCALL HELPER\nRETURN\n\
+                      @HELPER(ARG = 2)\nRESULT = ARG\nRETURN\n";
+        let borrowed_project = analyzed(source);
+        let expected = compile_validated_project_with_artifact(
+            &borrowed_project,
+            &CompilerOptions::default(),
+            &default_host_registry(),
+            None,
+            None,
+        );
+        let consumed = compile_project_inner(
+            ProjectInput::Owned(Box::new(analyzed(source))),
+            &CompilerOptions::default(),
+            &default_host_registry(),
+            None,
+            None,
+            CompilePolicy {
+                compact_cache: true,
+                consume_owned_hir: true,
+            },
+            None,
+        );
+
+        assert_eq!(consumed.report, expected);
+        assert_eq!(consumed.source_ids, [SourceId(0)]);
+        assert!(consumed.diagnostic_sources.is_empty());
     }
 }
