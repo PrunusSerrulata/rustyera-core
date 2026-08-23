@@ -12,6 +12,84 @@ mod model;
 use self::model::{PresentationDelivery, PresentationDirty};
 pub(crate) use self::model::{PresentationModel, PresentationUpdate};
 
+enum HtmlLineEvent {
+    Node(Box<erabasic_html::HtmlNode>),
+    Break,
+}
+
+fn split_nested_html_breaks(node: erabasic_html::HtmlNode, output: &mut Vec<HtmlLineEvent>) {
+    let erabasic_html::HtmlNode::Element {
+        kind,
+        attributes,
+        children,
+        interaction,
+        start,
+        end,
+        semantic,
+    } = node
+    else {
+        output.push(HtmlLineEvent::Node(Box::new(node)));
+        return;
+    };
+    if kind == erabasic_html::HtmlElementKind::Break {
+        output.push(HtmlLineEvent::Break);
+        return;
+    }
+    if kind == erabasic_html::HtmlElementKind::Division || children.is_empty() {
+        output.push(HtmlLineEvent::Node(Box::new(
+            erabasic_html::HtmlNode::Element {
+                kind,
+                attributes,
+                children,
+                interaction,
+                start,
+                end,
+                semantic,
+            },
+        )));
+        return;
+    }
+    let mut child_events = Vec::new();
+    for child in children {
+        split_nested_html_breaks(child, &mut child_events);
+    }
+    let mut line_children = Vec::new();
+    for event in child_events {
+        match event {
+            HtmlLineEvent::Node(child) => line_children.push(*child),
+            HtmlLineEvent::Break => {
+                if !line_children.is_empty() {
+                    output.push(HtmlLineEvent::Node(Box::new(
+                        erabasic_html::HtmlNode::Element {
+                            kind,
+                            attributes: attributes.clone(),
+                            children: std::mem::take(&mut line_children),
+                            interaction: interaction.clone(),
+                            start,
+                            end,
+                            semantic: semantic.clone(),
+                        },
+                    )));
+                }
+                output.push(HtmlLineEvent::Break);
+            }
+        }
+    }
+    if !line_children.is_empty() {
+        output.push(HtmlLineEvent::Node(Box::new(
+            erabasic_html::HtmlNode::Element {
+                kind,
+                attributes,
+                children: line_children,
+                interaction,
+                start,
+                end,
+                semantic,
+            },
+        )));
+    }
+}
+
 impl Default for PresentationModel {
     fn default() -> Self {
         defaults::model()
@@ -386,7 +464,25 @@ impl PresentationModel {
             self.commit_line();
         }
         let mut current = Vec::new();
+        let mut events = Vec::new();
         for node in document.nodes {
+            split_nested_html_breaks(node, &mut events);
+        }
+        for event in events {
+            let node = match event {
+                HtmlLineEvent::Node(node) => *node,
+                HtmlLineEvent::Break => {
+                    if !current.is_empty() {
+                        self.pending_runs.push(DisplayRun::HtmlDocument {
+                            document: erabasic_html::HtmlDocument {
+                                nodes: std::mem::take(&mut current),
+                            },
+                        });
+                    }
+                    self.commit_line();
+                    continue;
+                }
+            };
             match &node {
                 erabasic_html::HtmlNode::Element {
                     kind: erabasic_html::HtmlElementKind::Break,
