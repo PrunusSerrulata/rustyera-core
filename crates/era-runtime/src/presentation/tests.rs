@@ -878,6 +878,29 @@ fn logical_line_count_tracks_reference_clearline_semantics() {
 }
 
 #[test]
+fn html_breaks_are_physical_continuations_of_one_logical_line() {
+    let mut model = PresentationModel::default();
+    model.set_projection(true, true, true, true, true);
+    model.append_html(
+        erabasic_html::parse_document("<p align='left'><nobr>A<br><br></nobr></p>").unwrap(),
+    );
+
+    let snapshot = model.snapshot();
+    assert_eq!(model.logical_line_count(), 1);
+    assert_eq!(snapshot.history.logical_lines.len(), 3);
+    assert!(snapshot.history.logical_lines[0].logical_line_start);
+    assert!(
+        snapshot.history.logical_lines[1..]
+            .iter()
+            .all(|line| !line.logical_line_start)
+    );
+
+    model.delete_last_lines(1);
+    assert_eq!(model.logical_line_count(), 0);
+    assert!(model.snapshot().history.logical_lines.is_empty());
+}
+
+#[test]
 fn max_log_trims_oldest_physical_lines_without_changing_linecount() {
     let mut model = PresentationModel::default();
     model.settings.maximum_physical_lines = 2;
