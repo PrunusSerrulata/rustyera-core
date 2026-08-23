@@ -517,6 +517,15 @@ impl RuntimeSession {
         if let InputSubmission::Value(value) = &submission {
             self.record_input_undo_value(value)?;
         }
+        // Emuera prints and flushes a console input row after a successful integer,
+        // string, or any-value wait. A visible-button submission can leave that row
+        // empty, but it still counts as a physical/logical line for LINECOUNT/CLEARLINE.
+        if matches!(
+            pending.wait.kind,
+            WaitKind::IntegerValue | WaitKind::StringValue | WaitKind::AnyValue
+        ) {
+            self.presentation.force_new_line();
+        }
         let request = pending
             .host_request
             .ok_or_else(|| RuntimeError::Internal("VM wait has no host request".into()))?;
