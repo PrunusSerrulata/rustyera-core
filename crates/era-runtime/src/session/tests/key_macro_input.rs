@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn secondary_mouse_down_sets_message_skip_before_the_interpreter_resumes() {
+    let mut session = start_input_project(
+        "@SYSTEM_TITLE\n#DIM SEEN\nWAIT\nIF MESSKIP\nSEEN = 1\nENDIF\nFORCEWAIT\nRETURN\n",
+    );
+    let pending = session.operations.active_input().unwrap();
+    let wait_id = pending.wait.wait_id;
+    let token = pending.wait.submission_token;
+
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id,
+            token,
+            monotonic_time_ns: 1,
+            intent: InputIntent::Enter,
+            message_skip: false,
+        }),
+    );
+    submit(
+        &mut session,
+        4,
+        RuntimeMessage::DeviceStateChanged(era_runtime_protocol::DeviceStateChanged {
+            device: era_runtime_protocol::InputDeviceKind::Mouse,
+            code: 2,
+            pressed: true,
+            x: 0,
+            y: 0,
+            monotonic_time_ns: 1,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+
+    assert_eq!(runtime_integer(&session, "SEEN"), 1);
+    assert!(
+        session
+            .operations
+            .active_input()
+            .is_some_and(|pending| pending.wait.stop_message_skip)
+    );
+    assert!(!session.message_skip);
+}
+
+#[test]
 fn repeated_input_set_executes_every_segment_across_enter_waits() {
     let mut session = start_input_project(
         "@SYSTEM_TITLE\n#DIM LEARNED\nFOR LOCAL, 0, 2\nINPUT\nIF RESULT == 412\nLEARNED += 1\nENDIF\nWAIT\nNEXT\nINPUT\nRETURN\n",

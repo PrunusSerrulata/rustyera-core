@@ -619,6 +619,15 @@ impl RuntimeSession {
                     self.debug_frontend_time_sample = Some(state.monotonic_time_ns);
                 } else {
                     self.observe_frontend_time(state.monotonic_time_ns);
+                    // Emuera sets MesSkip as soon as the secondary mouse button is pressed, even
+                    // while the interpreter is running. Scripts can therefore observe MESSKIP and
+                    // abort an animation before the next input wait is opened.
+                    if state.device == era_runtime_protocol::InputDeviceKind::Mouse
+                        && state.code == 2
+                        && state.pressed
+                    {
+                        self.message_skip = true;
+                    }
                 }
                 Ok(())
             }
