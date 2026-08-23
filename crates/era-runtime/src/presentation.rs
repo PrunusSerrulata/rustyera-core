@@ -12,84 +12,6 @@ mod model;
 use self::model::{PresentationDelivery, PresentationDirty};
 pub(crate) use self::model::{PresentationModel, PresentationUpdate};
 
-enum HtmlLineEvent {
-    Node(Box<erabasic_html::HtmlNode>),
-    Break,
-}
-
-fn split_html_breaks(node: erabasic_html::HtmlNode, output: &mut Vec<HtmlLineEvent>) {
-    let erabasic_html::HtmlNode::Element {
-        kind,
-        attributes,
-        children,
-        interaction,
-        start,
-        end,
-        semantic,
-    } = node
-    else {
-        output.push(HtmlLineEvent::Node(Box::new(node)));
-        return;
-    };
-    if kind == erabasic_html::HtmlElementKind::Break {
-        output.push(HtmlLineEvent::Break);
-        return;
-    }
-    if kind == erabasic_html::HtmlElementKind::Division || children.is_empty() {
-        output.push(HtmlLineEvent::Node(Box::new(
-            erabasic_html::HtmlNode::Element {
-                kind,
-                attributes,
-                children,
-                interaction,
-                start,
-                end,
-                semantic,
-            },
-        )));
-        return;
-    }
-    let mut events = Vec::new();
-    for child in children {
-        split_html_breaks(child, &mut events);
-    }
-    let mut line = Vec::new();
-    for event in events {
-        match event {
-            HtmlLineEvent::Node(child) => line.push(*child),
-            HtmlLineEvent::Break => {
-                if !line.is_empty() {
-                    output.push(HtmlLineEvent::Node(Box::new(
-                        erabasic_html::HtmlNode::Element {
-                            kind,
-                            attributes: attributes.clone(),
-                            children: std::mem::take(&mut line),
-                            interaction: interaction.clone(),
-                            start,
-                            end,
-                            semantic: semantic.clone(),
-                        },
-                    )));
-                }
-                output.push(HtmlLineEvent::Break);
-            }
-        }
-    }
-    if !line.is_empty() {
-        output.push(HtmlLineEvent::Node(Box::new(
-            erabasic_html::HtmlNode::Element {
-                kind,
-                attributes,
-                children: line,
-                interaction,
-                start,
-                end,
-                semantic,
-            },
-        )));
-    }
-}
-
 impl Default for PresentationModel {
     fn default() -> Self {
         defaults::model()
@@ -276,28 +198,20 @@ impl PresentationModel {
     /// Delete canonical logical lines, including an uncommitted current line first.
     /// This models the small console-editing subset used by reference system flows.
     pub(crate) fn delete_last_lines(&mut self, mut count: usize) {
-        let mut physical_count = 0usize;
+        let physical_count = u32::try_from(count).unwrap_or(u32::MAX);
         if count != 0 && !self.pending_runs.is_empty() {
             self.pending_runs.clear();
             self.pending_temporary = false;
             count -= 1;
-            physical_count += 1;
         }
-        let mut logical_deletions = 0usize;
-        while count != 0 {
-            let Some(line) = self.lines.pop() else { break };
-            physical_count += 1;
-            if line.logical_line_start {
-                count -= 1;
-                logical_deletions += 1;
-            }
-        }
-        let logical_deletions = i64::try_from(logical_deletions).unwrap_or(i64::MAX);
+        let logical_deletions = i64::try_from(count).unwrap_or(i64::MAX);
         self.logical_line_count = self.logical_line_count.wrapping_sub(logical_deletions);
         self.line_count_dirty = true;
+        let keep = self.lines.len().saturating_sub(count);
+        self.lines.truncate(keep);
         self.history_operations
             .push(PresentationHistoryOperation::DeletePhysical {
-                count: u32::try_from(physical_count).unwrap_or(u32::MAX),
+                count: physical_count,
             });
         self.bump();
     }
@@ -472,27 +386,7 @@ impl PresentationModel {
             self.commit_line();
         }
         let mut current = Vec::new();
-        let mut events = Vec::new();
         for node in document.nodes {
-            split_html_breaks(node, &mut events);
-        }
-        let mut logical_start = true;
-        for event in events {
-            let node = match event {
-                HtmlLineEvent::Node(node) => *node,
-                HtmlLineEvent::Break => {
-                    if !current.is_empty() {
-                        self.pending_runs.push(DisplayRun::HtmlDocument {
-                            document: erabasic_html::HtmlDocument {
-                                nodes: std::mem::take(&mut current),
-                            },
-                        });
-                    }
-                    self.commit_line_with_logical_start(logical_start);
-                    logical_start = false;
-                    continue;
-                }
-            };
             match &node {
                 erabasic_html::HtmlNode::Element {
                     kind: erabasic_html::HtmlElementKind::Break,
@@ -505,8 +399,7 @@ impl PresentationModel {
                             },
                         });
                     }
-                    self.commit_line_with_logical_start(logical_start);
-                    logical_start = false;
+                    self.commit_line();
                 }
                 erabasic_html::HtmlNode::Element {
                     kind: erabasic_html::HtmlElementKind::Paragraph,
@@ -519,8 +412,7 @@ impl PresentationModel {
                                 nodes: std::mem::take(&mut current),
                             },
                         });
-                        self.commit_line_with_logical_start(logical_start);
-                        logical_start = false;
+                        self.commit_line();
                     }
                     let previous = self.current_alignment;
                     if let Some(align) = attributes
@@ -537,8 +429,7 @@ impl PresentationModel {
                     self.pending_runs.push(DisplayRun::HtmlDocument {
                         document: erabasic_html::HtmlDocument { nodes: vec![node] },
                     });
-                    self.commit_line_with_logical_start(logical_start);
-                    logical_start = false;
+                    self.commit_line();
                     self.current_alignment = previous;
                 }
                 _ => current.push(node),
@@ -548,7 +439,7 @@ impl PresentationModel {
             self.pending_runs.push(DisplayRun::HtmlDocument {
                 document: erabasic_html::HtmlDocument { nodes: current },
             });
-            self.commit_line_with_logical_start(logical_start);
+            self.commit_line();
         }
         self.bump();
     }
@@ -784,15 +675,11 @@ impl PresentationModel {
     }
 
     fn commit_line(&mut self) {
-        self.commit_line_with_logical_start(true);
-    }
-
-    fn commit_line_with_logical_start(&mut self, logical_line_start: bool) {
         self.last_committed_plain_runs = std::mem::take(&mut self.pending_plain_runs);
         let line = DisplayLine {
             line_id: self.next_line,
             temporary: self.pending_temporary,
-            logical_line_start,
+            logical_line_start: true,
             line_end: true,
             alignment: self.current_alignment,
             runs: std::mem::take(&mut self.pending_runs),
@@ -800,13 +687,11 @@ impl PresentationModel {
         self.pending_temporary = false;
         self.next_line = self.next_line.saturating_add(1);
         self.lines.push(line.clone());
-        if logical_line_start {
-            self.logical_line_count = if self.logical_line_count == i64::MAX {
-                0
-            } else {
-                self.logical_line_count + 1
-            };
-        }
+        self.logical_line_count = if self.logical_line_count == i64::MAX {
+            0
+        } else {
+            self.logical_line_count + 1
+        };
         self.line_count_dirty = true;
         if self.replace_next_temporary {
             self.history_operations
