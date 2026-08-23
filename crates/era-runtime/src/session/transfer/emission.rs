@@ -106,6 +106,13 @@ impl RuntimeSession {
         if !self.pending_presentation_update {
             return Ok(());
         }
+        // Reference Emuera drains consecutive skippable waits inside one secondary-click handler,
+        // without returning to the platform message loop between frames. Keep the canonical model
+        // current, but defer its projection while that same skip is still running so remote hosts
+        // do not serialize and render every discarded animation frame.
+        if self.phase == RuntimePhase::Running && self.message_skip {
+            return Ok(());
+        }
         self.materialize_resource_replay_if_ready();
         self.pending_presentation_update = false;
         let message = match self.presentation.next_update() {

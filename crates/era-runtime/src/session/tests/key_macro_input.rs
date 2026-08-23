@@ -45,6 +45,63 @@ fn secondary_mouse_down_sets_message_skip_before_the_interpreter_resumes() {
 }
 
 #[test]
+fn running_message_skip_defers_presentation_until_the_next_input_boundary() {
+    let mut session = start_input_project(
+        "@SYSTEM_TITLE\n#DIM OBSERVED\nWAIT\nFOR LOCAL, 0, 4\nCLEARLINE 1\nPRINTFORML frame {LOCAL}\nTWAIT 8, 0\nIF MESSKIP()\nOBSERVED += 1\nENDIF\nNEXT\nINPUT\nRETURN\n",
+    );
+    let pending = session.operations.active_input().unwrap();
+    let wait_id = pending.wait.wait_id;
+    let token = pending.wait.submission_token;
+    drain(&mut session);
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id,
+            token,
+            monotonic_time_ns: 1,
+            intent: InputIntent::Enter,
+            message_skip: true,
+        }),
+    );
+
+    let mut boundary_messages = Vec::new();
+    for _ in 0..256 {
+        session
+            .drive(RuntimeDriveBudget {
+                maximum_vm_instructions: 4,
+                maximum_runtime_transitions: 1,
+            })
+            .unwrap();
+        let messages = drain(&mut session);
+        if session.message_skip {
+            assert!(
+                !messages.iter().any(|message| matches!(
+                    message,
+                    RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+                )),
+                "running skip projected an intermediate frame: {messages:#?}"
+            );
+        } else {
+            boundary_messages = messages;
+            break;
+        }
+    }
+
+    assert_wait(&session, WaitKind::IntegerValue);
+    assert!(boundary_messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+    )));
+    assert_eq!(runtime_integer(&session, "OBSERVED"), 4);
+    let output = session.presentation.log_text(false);
+    assert!(output.ends_with("frame 3\r\n"), "{output:?}");
+    for discarded in ["frame 0", "frame 1", "frame 2"] {
+        assert!(!output.contains(discarded), "{output:?}");
+    }
+}
+
+#[test]
 fn repeated_input_set_executes_every_segment_across_enter_waits() {
     let mut session = start_input_project(
         "@SYSTEM_TITLE\n#DIM LEARNED\nFOR LOCAL, 0, 2\nINPUT\nIF RESULT == 412\nLEARNED += 1\nENDIF\nWAIT\nNEXT\nINPUT\nRETURN\n",
