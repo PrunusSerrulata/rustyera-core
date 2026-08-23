@@ -131,6 +131,12 @@ pub enum VmHostCompletion {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VmPortEvent {
+    Diagnostic {
+        fiber: FiberId,
+        code: String,
+        message: String,
+        origin: crate::VmExecutionOrigin,
+    },
     HostCall(VmHostRequest),
     FiberYielded(FiberId),
     FiberCompleted(FiberId, Option<VmValue>),

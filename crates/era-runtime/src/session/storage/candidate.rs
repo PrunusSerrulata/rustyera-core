@@ -148,6 +148,7 @@ impl RuntimeSession {
         let original_message = self.next_message_id;
         let original_effect = self.next_effect_id;
         self.candidate_clock = Some(time);
+        let mut candidate_diagnostics = Vec::new();
 
         let execution = (|| -> Result<(), RuntimeError> {
             let Some(function) = function else {
@@ -172,6 +173,17 @@ impl RuntimeSession {
                 let mut completed = false;
                 for event in report.events {
                     match event {
+                        VmPortEvent::Diagnostic {
+                            code,
+                            message,
+                            origin,
+                            ..
+                        } => candidate_diagnostics.push(ProtocolDiagnostic {
+                            code,
+                            level: RuntimeLogLevel::Warning,
+                            message,
+                            source: protocol_execution_origin(origin).source,
+                        }),
                         VmPortEvent::HostCall(request) => {
                             self.handle_host_call(&mut candidate, &request)?;
                         }
@@ -238,6 +250,9 @@ impl RuntimeSession {
         self.outbound_sequence = original_sequence;
         self.next_message_id = original_message;
         self.next_effect_id = original_effect;
+        for diagnostic in candidate_diagnostics {
+            self.emit(RuntimeMessage::Diagnostic(diagnostic), None)?;
+        }
         execution?;
 
         let description = read_runtime_string(&candidate, "SAVEDATA_TEXT")?;

@@ -32,11 +32,20 @@ impl Vm {
                 let function = generation
                     .function(position.function)
                     .expect("validated function exists");
-                fiber.frames.last_mut().expect("frame exists").instruction = function
+                let target = function
                     .labels
                     .iter()
                     .find(|label| label.name.eq_ignore_ascii_case(&name))
                     .map_or(missing_target, |label| label.instruction as usize);
+                let entered_structured_block =
+                    self.reconcile_structured_jump(fiber, position, target);
+                fiber.frames.last_mut().expect("frame exists").instruction = target;
+                if entered_structured_block {
+                    return Ok(Some(StepOutcome::Diagnostic {
+                        code: STRUCTURED_GOTO_DIAGNOSTIC_CODE,
+                        message: STRUCTURED_GOTO_DIAGNOSTIC_MESSAGE,
+                    }));
+                }
             }
             Opcode::InvokeEvent => {
                 let VmValue::String(name) =

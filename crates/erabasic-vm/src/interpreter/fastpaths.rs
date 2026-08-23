@@ -2,6 +2,39 @@
 use super::*;
 
 impl Vm {
+    pub(super) fn reconcile_structured_jump(
+        &self,
+        fiber: &mut Fiber,
+        position: &InstructionPosition<'_>,
+        target: usize,
+    ) -> bool {
+        let Some(transition) = self
+            .generations
+            .get(&position.generation)
+            .and_then(|generation| {
+                generation.structured_jump_transition(
+                    position.function,
+                    position.instruction,
+                    target,
+                )
+            })
+        else {
+            return false;
+        };
+        let frame = fiber.frames.last_mut().expect("frame exists");
+        frame.for_loops.truncate(transition.retain_loops);
+        frame.select_values.truncate(transition.retain_selects);
+        for scope in &transition.entered {
+            match scope {
+                StructuredScopeKind::Loop => frame.for_loops.push(ForLoopState::bypassed()),
+                StructuredScopeKind::Select => {
+                    frame.select_values.push(bypassed_select_value());
+                }
+            }
+        }
+        !transition.entered.is_empty()
+    }
+
     pub(super) fn call_registered_native(
         &mut self,
         fiber: &mut Fiber,

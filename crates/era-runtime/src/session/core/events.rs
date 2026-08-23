@@ -9,6 +9,20 @@ impl RuntimeSession {
         event: VmPortEvent,
     ) -> Result<(), RuntimeError> {
         match event {
+            VmPortEvent::Diagnostic {
+                code,
+                message,
+                origin,
+                ..
+            } => self.emit(
+                RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    code,
+                    level: RuntimeLogLevel::Warning,
+                    message,
+                    source: protocol_execution_origin(origin).source,
+                }),
+                None,
+            ),
             VmPortEvent::HostCall(request) => self.handle_host_call(vm, &request),
             VmPortEvent::FiberFaulted(_, fault) => self.fault(
                 FaultCode::VmFault,

@@ -229,6 +229,294 @@ fn selectcase_loop_rejects_the_previous_string_tip() {
 }
 
 #[test]
+fn goto_into_case_body_warns_and_treats_endselect_as_a_no_op() {
+    let artifact = compile_source(
+        "@ORACLE_GOTO_STRUCTURED\n\
+         GOTO CHOICE\n\
+         SELECTCASE 0\n\
+             CASE 0\n\
+                 $CHOICE\n\
+                 RESULT:1 = 42\n\
+         ENDSELECT\n\
+         RETURN\n",
+    );
+    let (result, report) =
+        run_compiled_entry_result_with_report(&artifact, "ORACLE_GOTO_STRUCTURED", 1);
+
+    assert!(
+        report.events.iter().any(|event| matches!(
+            event,
+            VmEvent::Diagnostic { code, message, origin, .. }
+                if code == "vm.control_flow.goto_into_structured_block"
+                    && message.contains("avoid jumping")
+                    && origin.command == "Jump"
+        )),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(result, VmValue::Integer(42));
+}
+
+#[test]
+fn goto_into_case_boundary_warns_and_skips_the_unselected_body() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         GOTO CASE_ENTRY\n\
+         SELECTCASE 1\n\
+             $CASE_ENTRY\n\
+             CASE 1\n\
+                 RESULT = 99\n\
+         ENDSELECT\n\
+         RESULT = 42\n\
+         RETURN RESULT\n",
+    );
+    let (result, report) = run_compiled_result_with_report(&artifact);
+
+    assert!(
+        report.events.iter().any(|event| matches!(
+            event,
+            VmEvent::Diagnostic { code, message, origin, .. }
+                if code == "vm.control_flow.goto_into_structured_block"
+                    && message.contains("avoid jumping")
+                    && origin.command == "Jump"
+        )),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(result, VmValue::Integer(42));
+}
+
+#[test]
+fn goto_into_caseelse_boundary_warns_and_skips_the_unselected_body() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         GOTO CASE_ENTRY\n\
+         SELECTCASE 1\n\
+             $CASE_ENTRY\n\
+             CASEELSE\n\
+                 RESULT = 99\n\
+         ENDSELECT\n\
+         RESULT = 42\n\
+         RETURN RESULT\n",
+    );
+    let (result, report) = run_compiled_result_with_report(&artifact);
+
+    assert!(
+        report.events.iter().any(|event| matches!(
+            event,
+            VmEvent::Diagnostic { code, .. }
+                if code == "vm.control_flow.goto_into_structured_block"
+        )),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(result, VmValue::Integer(42));
+}
+
+#[test]
+fn goto_into_for_body_warns_and_next_exits_the_inactive_loop() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         #DIM INDEX\n\
+         GOTO BODY\n\
+         FOR INDEX, 0, 3\n\
+             $BODY\n\
+             RESULT += 1\n\
+         NEXT\n\
+         RETURN RESULT\n",
+    );
+    let (result, report) = run_compiled_result_with_report(&artifact);
+
+    assert!(
+        report.events.iter().any(|event| matches!(
+            event,
+            VmEvent::Diagnostic { code, message, origin, .. }
+                if code == "vm.control_flow.goto_into_structured_block"
+                    && message.contains("avoid jumping")
+                    && origin.command == "Jump"
+        )),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(result, VmValue::Integer(1));
+}
+
+#[test]
+fn goto_into_for_body_warns_and_break_exits_without_a_counter() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         #DIM INDEX\n\
+         GOTO BODY\n\
+         FOR INDEX, 0, 3\n\
+             $BODY\n\
+             RESULT = 7\n\
+             BREAK\n\
+         NEXT\n\
+         RETURN RESULT\n",
+    );
+    let (result, report) = run_compiled_result_with_report(&artifact);
+
+    assert!(
+        report.events.iter().any(|event| matches!(
+            event,
+            VmEvent::Diagnostic { code, message, origin, .. }
+                if code == "vm.control_flow.goto_into_structured_block"
+                    && message.contains("avoid jumping")
+                    && origin.command == "Jump"
+        )),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(result, VmValue::Integer(7));
+}
+
+#[test]
+fn goto_into_repeat_body_warns_and_rend_exits_the_inactive_loop() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         GOTO BODY\n\
+         REPEAT 3\n\
+             $BODY\n\
+             RESULT += 1\n\
+         REND\n\
+         RETURN RESULT\n",
+    );
+    let (result, report) = run_compiled_result_with_report(&artifact);
+
+    assert!(
+        report.events.iter().any(|event| matches!(
+            event,
+            VmEvent::Diagnostic { code, .. }
+                if code == "vm.control_flow.goto_into_structured_block"
+        )),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(result, VmValue::Integer(1));
+}
+
+#[test]
+fn goto_into_an_outer_loop_keeps_normally_entered_nested_loop_state_aligned() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         #DIM OUTER\n\
+         #DIM INNER\n\
+         GOTO OUTER_BODY\n\
+         FOR OUTER, 0, 3\n\
+             $OUTER_BODY\n\
+             FOR INNER, 0, 2\n\
+                 RESULT += 1\n\
+             NEXT\n\
+         NEXT\n\
+         RETURN RESULT\n",
+    );
+    let (result, report) = run_compiled_result_with_report(&artifact);
+
+    assert_eq!(
+        report
+            .events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                VmEvent::Diagnostic { code, .. }
+                    if code == "vm.control_flow.goto_into_structured_block"
+            ))
+            .count(),
+        1,
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(result, VmValue::Integer(2));
+}
+
+#[test]
+fn dynamic_goto_into_case_body_uses_the_same_warning_and_compatibility_path() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         TRYCGOTOFORM BODY\n\
+         CATCH\n\
+             RETURN 99\n\
+         ENDCATCH\n\
+         SELECTCASE 0\n\
+             CASE 0\n\
+                 $BODY\n\
+                 RESULT = 42\n\
+         ENDSELECT\n\
+         RETURN RESULT\n",
+    );
+    let (result, report) = run_compiled_result_with_report(&artifact);
+
+    assert!(
+        report.events.iter().any(|event| matches!(
+            event,
+            VmEvent::Diagnostic { code, origin, .. }
+                if code == "vm.control_flow.goto_into_structured_block"
+                    && origin.command == "JumpDynamicLabel"
+        )),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(result, VmValue::Integer(42));
+}
+
+#[test]
+fn goto_out_of_one_loop_cannot_supply_state_to_another_loop_body() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         #DIM FIRST\n\
+         #DIM SECOND\n\
+         FOR FIRST, 0, 3\n\
+             GOTO OUTSIDE\n\
+         NEXT\n\
+         $OUTSIDE\n\
+         GOTO SECOND_BODY\n\
+         FOR SECOND, 0, 3\n\
+             $SECOND_BODY\n\
+             RESULT += 1\n\
+         NEXT\n\
+         RETURN RESULT\n",
+    );
+    let (result, report) = run_compiled_result_with_report(&artifact);
+
+    assert!(
+        report.events.iter().any(|event| matches!(
+            event,
+            VmEvent::Diagnostic { code, .. }
+                if code == "vm.control_flow.goto_into_structured_block"
+        )),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(result, VmValue::Integer(1));
+}
+
+#[test]
+fn goto_within_the_same_loop_preserves_state_without_warning() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         #DIM INDEX\n\
+         FOR INDEX, 0, 3\n\
+             GOTO SAME_BODY\n\
+             $SAME_BODY\n\
+             RESULT += 1\n\
+         NEXT\n\
+         RETURN RESULT\n",
+    );
+    let (result, report) = run_compiled_result_with_report(&artifact);
+
+    assert!(
+        !report.events.iter().any(|event| matches!(
+            event,
+            VmEvent::Diagnostic { code, .. }
+                if code == "vm.control_flow.goto_into_structured_block"
+        )),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(result, VmValue::Integer(3));
+}
+
+#[test]
 fn regexpmatch_supports_positive_boundaries_without_consuming_adjacent_tokens() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\n#DIM GROUP_COUNT\n#DIMS MATCHES, 4\nRESULT:0 = REGEXPMATCH(\"[$TOKEN:A][$TOKEN:B]\", \"(?<=\\\\[\\\\$TOKEN:).*?(?=\\\\])\", GROUP_COUNT, MATCHES)\nRESULT:1 = GROUP_COUNT\nRESULTS:10 '= MATCHES:0\nRESULTS:11 '= MATCHES:1\nRETURN RESULT\n",

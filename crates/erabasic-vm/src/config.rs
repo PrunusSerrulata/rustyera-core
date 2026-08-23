@@ -78,6 +78,12 @@ pub enum VmRunStop {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VmEvent {
+    Diagnostic {
+        fiber: FiberId,
+        code: String,
+        message: String,
+        origin: VmExecutionOrigin,
+    },
     HostPending {
         fiber: FiberId,
         request: HostRequestId,

@@ -21,8 +21,28 @@ mod planning;
 
 use planning::{
     build_function_memo_plans, case_insensitive_index, index_source_entries, literal_group_match,
-    memoized_indexed_read, simple_bulk_fill_loop,
+    memoized_indexed_read, simple_bulk_fill_loop, structured_scope_ranges,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StructuredScopeKind {
+    Loop,
+    Select,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StructuredScopeRange {
+    kind: StructuredScopeKind,
+    opener: usize,
+    start: usize,
+    end: usize,
+}
+
+pub(crate) struct StructuredJumpTransition {
+    pub retain_loops: usize,
+    pub retain_selects: usize,
+    pub entered: Vec<StructuredScopeKind>,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct ProgramGeneration {
@@ -48,6 +68,7 @@ pub(crate) struct ProgramGeneration {
     function_static_indices: BTreeMap<SymbolKey, Vec<usize>>,
     function_local_indices: BTreeMap<SymbolKey, Vec<usize>>,
     instruction_source_indices: Vec<Vec<u32>>,
+    structured_scope_ranges: Vec<Vec<StructuredScopeRange>>,
 }
 
 const NO_SOURCE_MAP_ENTRY: u32 = u32::MAX;
@@ -80,7 +101,7 @@ impl ProgramGeneration {
         let function_work = u64::try_from(artifact.functions.len()).unwrap_or(u64::MAX);
         let global_work = u64::try_from(artifact.globals.len()).unwrap_or(u64::MAX);
         let total_work = function_work
-            .saturating_mul(9)
+            .saturating_mul(10)
             .saturating_add(global_work.saturating_mul(4))
             .max(1);
         let mut completed_work = 0;
@@ -249,6 +270,16 @@ impl ProgramGeneration {
                 &mut next_checkpoint,
             );
         }
+        let mut structured_ranges = Vec::with_capacity(artifact.functions.len());
+        for function in &artifact.functions {
+            structured_ranges.push(structured_scope_ranges(function));
+            advance_vm_preparation(
+                &mut progress,
+                &mut completed_work,
+                total_work,
+                &mut next_checkpoint,
+            );
+        }
         let function_memo_plans = build_function_memo_plans(
             &artifact,
             &variable_global_indices,
@@ -406,6 +437,7 @@ impl ProgramGeneration {
             function_static_indices,
             function_local_indices,
             instruction_source_indices,
+            structured_scope_ranges: structured_ranges,
         }
     }
 
@@ -421,6 +453,42 @@ impl ProgramGeneration {
     pub(crate) fn function_by_name(&self, name: &str) -> Option<&BytecodeFunction> {
         case_insensitive_index(&self.function_name_indices, name)
             .and_then(|index| self.artifact.functions.get(*index))
+    }
+
+    pub(crate) fn structured_jump_transition(
+        &self,
+        function: SymbolKey,
+        source: usize,
+        target: usize,
+    ) -> Option<StructuredJumpTransition> {
+        let ranges = self
+            .structured_scope_ranges
+            .get(*self.function_index(function)?)?;
+        let containing = |instruction| {
+            ranges
+                .iter()
+                .filter(|range| range.start <= instruction && instruction <= range.end)
+                .collect::<Vec<_>>()
+        };
+        let source = containing(source);
+        let target = containing(target);
+        let common = source
+            .iter()
+            .zip(&target)
+            .take_while(|(left, right)| left.kind == right.kind && left.opener == right.opener)
+            .count();
+        let retained = &target[..common];
+        Some(StructuredJumpTransition {
+            retain_loops: retained
+                .iter()
+                .filter(|range| range.kind == StructuredScopeKind::Loop)
+                .count(),
+            retain_selects: retained
+                .iter()
+                .filter(|range| range.kind == StructuredScopeKind::Select)
+                .count(),
+            entered: target[common..].iter().map(|range| range.kind).collect(),
+        })
     }
 
     pub(crate) fn global(&self, key: SymbolKey) -> Option<&erabasic_bytecode::BytecodeGlobal> {

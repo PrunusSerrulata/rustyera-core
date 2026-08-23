@@ -151,11 +151,25 @@ fn compile_source_with_data(
 }
 
 fn run_compiled_result(artifact: &BytecodeArtifact) -> VmValue {
+    run_compiled_result_with_report(artifact).0
+}
+
+fn run_compiled_result_with_report(
+    artifact: &BytecodeArtifact,
+) -> (VmValue, erabasic_vm::VmRunReport) {
+    run_compiled_entry_result_with_report(artifact, "SYSTEM_TITLE", 0)
+}
+
+fn run_compiled_entry_result_with_report(
+    artifact: &BytecodeArtifact,
+    entry_name: &str,
+    index: u64,
+) -> (VmValue, erabasic_vm::VmRunReport) {
     let entry = artifact
         .functions
         .iter()
-        .find(|function| function.name == "SYSTEM_TITLE")
-        .expect("SYSTEM_TITLE")
+        .find(|function| function.name == entry_name)
+        .unwrap_or_else(|| panic!("missing entry {entry_name}"))
         .key;
     let result = artifact
         .globals
@@ -179,7 +193,7 @@ fn run_compiled_result(artifact: &BytecodeArtifact) -> VmValue {
         "{:#?}",
         report.events
     );
-    vm.read_variable(result, &[0], None).unwrap()
+    (vm.read_variable(result, &[index], None).unwrap(), report)
 }
 
 fn run_compiled_string_result(artifact: &BytecodeArtifact) -> VmValue {

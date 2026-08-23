@@ -297,7 +297,10 @@ impl Builder<'_> {
             return;
         }
         if name == "CASEELSE" {
-            self.emit(opcode::push_integer(1), location);
+            self.emit(
+                EncodedInstruction::new(Opcode::SelectCompare, vec![8]),
+                location,
+            );
             return;
         }
         if name == "ENDSELECT" {

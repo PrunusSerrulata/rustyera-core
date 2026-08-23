@@ -1,5 +1,57 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
+
+pub(super) fn structured_scope_ranges(function: &BytecodeFunction) -> Vec<StructuredScopeRange> {
+    let mut open = Vec::<(StructuredScopeKind, usize)>::new();
+    let mut ranges = Vec::new();
+    for (instruction, encoded) in function.code.iter().enumerate() {
+        let Ok(opcode) = Opcode::try_from(encoded.opcode) else {
+            continue;
+        };
+        let kind = match opcode {
+            Opcode::ForStart => {
+                open.push((StructuredScopeKind::Loop, instruction));
+                continue;
+            }
+            Opcode::SelectStart => {
+                open.push((StructuredScopeKind::Select, instruction));
+                continue;
+            }
+            Opcode::ForNext => StructuredScopeKind::Loop,
+            Opcode::SelectEnd => StructuredScopeKind::Select,
+            _ => continue,
+        };
+        let Some(position) = open.iter().rposition(|(candidate, _)| *candidate == kind) else {
+            continue;
+        };
+        let (_, opener) = open.remove(position);
+        let end = if kind == StructuredScopeKind::Loop
+            && function
+                .code
+                .get(instruction + 1)
+                .and_then(|encoded| Opcode::try_from(encoded.opcode).ok())
+                == Some(Opcode::Unary)
+            && function
+                .code
+                .get(instruction + 2)
+                .and_then(|encoded| Opcode::try_from(encoded.opcode).ok())
+                == Some(Opcode::JumpIfFalse)
+        {
+            instruction + 2
+        } else {
+            instruction
+        };
+        ranges.push(StructuredScopeRange {
+            kind,
+            opener,
+            start: opener + 1,
+            end,
+        });
+    }
+    ranges.sort_by_key(|range| (range.start, std::cmp::Reverse(range.end)));
+    ranges
+}
+
 pub(super) fn simple_bulk_fill_loop(
     artifact: &BytecodeArtifact,
     function_index: usize,

@@ -40,6 +40,22 @@ pub(crate) struct ForLoopState {
     pub step: i64,
 }
 
+impl ForLoopState {
+    pub(crate) fn bypassed() -> Self {
+        // Active FOR/REPEAT loops can never have a zero step, so this preserves the
+        // snapshot schema while representing a structured scope entered by GOTO.
+        Self {
+            counter: PlaceDescriptor::default(),
+            end: 0,
+            step: 0,
+        }
+    }
+
+    pub(crate) const fn is_bypassed(&self) -> bool {
+        self.step == 0
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct EventDispatchEntry {
     pub function: SymbolKey,

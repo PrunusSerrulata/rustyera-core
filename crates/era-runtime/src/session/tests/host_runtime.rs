@@ -1,6 +1,71 @@
 use super::*;
 
 #[test]
+fn goto_into_case_body_emits_a_nonfatal_warning_and_continues() {
+    let mut session = negotiated_session();
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nGOTO CHOICE\nSELECTCASE 0\nCASE 0\n$CHOICE\nPRINTL reached\nENDSELECT\nWAIT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().any(|message| {
+        matches!(message, RuntimeMessage::ProjectLoadReport(report) if report.success)
+    }));
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    for _ in 0..16 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        if session.operations.active_input().is_some() {
+            break;
+        }
+    }
+    let messages = drain(&mut session);
+
+    let diagnostic = messages.iter().find_map(|message| match message {
+        RuntimeMessage::Diagnostic(diagnostic)
+            if diagnostic.code == "vm.control_flow.goto_into_structured_block" =>
+        {
+            Some(diagnostic)
+        }
+        _ => None,
+    });
+    let diagnostic = diagnostic.expect("cross-block GOTO warning");
+    assert_eq!(diagnostic.level, RuntimeLogLevel::Warning);
+    assert!(diagnostic.message.contains("avoid jumping"));
+    assert_eq!(
+        diagnostic
+            .source
+            .as_ref()
+            .map(|source| source.relative_path.as_str()),
+        Some("main.erb")
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_))),
+        "{messages:#?}"
+    );
+    assert!(projected_presentation_text(&session.presentation.snapshot()).contains("reached"));
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn gcreatefromfile_defaults_to_content_directory_and_replays_dynamic_sprite() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());

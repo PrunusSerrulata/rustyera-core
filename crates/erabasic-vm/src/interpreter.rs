@@ -5,7 +5,9 @@ use erabasic_bytecode::{
     Opcode, SymbolKey, opcode,
 };
 
-use crate::state::{EventDispatch, EventDispatchEntry, ForLoopState, ProgramGeneration};
+use crate::state::{
+    EventDispatch, EventDispatchEntry, ForLoopState, ProgramGeneration, StructuredScopeKind,
+};
 use crate::{
     Fiber, FiberId, FiberState, HostCallRequest, HostCallResult, HostReady, HostWaitStability,
     NativeCallRequest, NativePlaceView, NativeReady, NativeServiceRegistry, PlaceDescriptor,
@@ -46,12 +48,19 @@ use operand::{
 
 enum StepOutcome {
     Continue,
+    Diagnostic {
+        code: &'static str,
+        message: &'static str,
+    },
     BulkProgress(u64),
     DeferredNative,
     Yielded,
     Blocked,
     Completed(Option<VmValue>),
 }
+
+const STRUCTURED_GOTO_DIAGNOSTIC_CODE: &str = "vm.control_flow.goto_into_structured_block";
+const STRUCTURED_GOTO_DIAGNOSTIC_MESSAGE: &str = "GOTO entered a structured block without executing its opener; avoid jumping into FOR, REPEAT, or SELECTCASE blocks";
 
 #[derive(Clone, Copy)]
 struct ExecutionPolicy {
@@ -93,6 +102,16 @@ struct FunctionCursor {
 struct DispatchInstruction<'a> {
     opcode: u16,
     payload: &'a [u8],
+}
+
+fn bypassed_select_value() -> VmValue {
+    // SELECTCASE expressions cannot produce places, making this an unambiguous
+    // snapshot-compatible marker for a scope entered through GOTO.
+    VmValue::IntegerPlace(Box::default())
+}
+
+fn is_bypassed_select_value(value: &VmValue) -> bool {
+    matches!(value, VmValue::IntegerPlace(place) if **place == PlaceDescriptor::default())
 }
 
 impl DispatchInstruction<'static> {
@@ -153,7 +172,10 @@ impl Vm {
         fiber: &Fiber,
         outcome: StepOutcome,
     ) -> Result<StepOutcome, StepError> {
-        if matches!(&outcome, StepOutcome::Continue) {
+        if matches!(
+            &outcome,
+            StepOutcome::Continue | StepOutcome::Diagnostic { .. }
+        ) {
             let stack_len = fiber.frames.last().map_or(0, |frame| frame.stack.len());
             if stack_len > self.config.maximum_operand_stack {
                 return Err(StepError::new(

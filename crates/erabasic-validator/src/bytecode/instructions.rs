@@ -247,8 +247,12 @@ pub(super) fn apply_instruction(
         }
         Opcode::SelectCompare => {
             expect_payload(&instruction.payload, 1)?;
-            let operands = if instruction.payload[0] == 6 { 2 } else { 1 };
-            if instruction.payload[0] > 7 {
+            let operands = match instruction.payload[0] {
+                6 => 2,
+                8 => 0,
+                _ => 1,
+            };
+            if instruction.payload[0] > 8 {
                 return Err((
                     ValidationCode::InvalidOperand,
                     "SELECTCASE comparison has an unknown operation".into(),

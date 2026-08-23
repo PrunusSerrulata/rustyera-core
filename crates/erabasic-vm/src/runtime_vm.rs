@@ -422,6 +422,17 @@ impl VmRuntimePort for RuntimeVm {
         let mut events = Vec::new();
         for event in report.events {
             match event {
+                crate::VmEvent::Diagnostic {
+                    fiber,
+                    code,
+                    message,
+                    origin,
+                } => events.push(VmPortEvent::Diagnostic {
+                    fiber,
+                    code,
+                    message,
+                    origin,
+                }),
                 crate::VmEvent::HostPending { request, .. } => {
                     if let Some(request) = requests.remove(&request) {
                         let import = self.current_host_import(request.import.key).cloned();

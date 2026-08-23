@@ -290,17 +290,17 @@ impl Vm {
                     .push(VmValue::Integer(i64::from(active)));
             }
             Opcode::ForNext => {
-                let state = fiber
-                    .frames
-                    .last()
-                    .and_then(|frame| frame.for_loops.last())
-                    .cloned()
-                    .ok_or_else(|| {
-                        StepError::new(
-                            VmFaultCode::InvalidInstruction,
-                            "NEXT has no active FOR loop",
-                        )
-                    })?;
+                let state = frame.for_loops.last().cloned().ok_or_else(|| {
+                    StepError::new(
+                        VmFaultCode::InvalidInstruction,
+                        "NEXT has no active FOR loop",
+                    )
+                })?;
+                if state.is_bypassed() {
+                    frame.for_loops.pop();
+                    frame.stack.push(VmValue::Integer(0));
+                    return Ok(Some(StepOutcome::Continue));
+                }
                 let VmValue::Integer(current) = self
                     .read_place(fiber, &state.counter)
                     .map_err(map_vm_error)?
@@ -322,17 +322,16 @@ impl Vm {
                 frame.stack.push(VmValue::Integer(i64::from(active)));
             }
             Opcode::ForBreak => {
-                let state = fiber
-                    .frames
-                    .last()
-                    .and_then(|frame| frame.for_loops.last())
-                    .cloned()
-                    .ok_or_else(|| {
-                        StepError::new(
-                            VmFaultCode::InvalidInstruction,
-                            "BREAK has no active FOR loop",
-                        )
-                    })?;
+                let state = frame.for_loops.last().cloned().ok_or_else(|| {
+                    StepError::new(
+                        VmFaultCode::InvalidInstruction,
+                        "BREAK has no active FOR loop",
+                    )
+                })?;
+                if state.is_bypassed() {
+                    frame.for_loops.pop();
+                    return Ok(Some(StepOutcome::Continue));
+                }
                 let VmValue::Integer(current) = self
                     .read_place(fiber, &state.counter)
                     .map_err(map_vm_error)?
@@ -376,15 +375,30 @@ impl Vm {
                     .frames
                     .last()
                     .and_then(|frame| frame.select_values.last())
-                    .cloned()
-                    .ok_or_else(|| {
-                        StepError::new(
-                            VmFaultCode::InvalidInstruction,
-                            "CASE is outside SELECTCASE",
-                        )
-                    })?;
+                    .cloned();
+                if selector.as_ref().is_some_and(is_bypassed_select_value) {
+                    let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
+                    let operands = match operation {
+                        6 => 2,
+                        8 => 0,
+                        _ => 1,
+                    };
+                    for _ in 0..operands {
+                        pop(stack)?;
+                    }
+                    stack.push(VmValue::Integer(0));
+                    return Ok(Some(StepOutcome::Continue));
+                }
+                let selector = selector.ok_or_else(|| {
+                    StepError::new(
+                        VmFaultCode::InvalidInstruction,
+                        "CASE is outside SELECTCASE",
+                    )
+                })?;
                 let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
-                let matched = if operation == 6 {
+                let matched = if operation == 8 {
+                    true
+                } else if operation == 6 {
                     let upper = pop(stack)?;
                     let lower = pop(stack)?;
                     let VmValue::Integer(lower_match) = binary_value(10, selector.clone(), lower)?
@@ -427,18 +441,12 @@ impl Vm {
                     .push(VmValue::Integer(i64::from(matched)));
             }
             Opcode::SelectEnd => {
-                fiber
-                    .frames
-                    .last_mut()
-                    .expect("frame exists")
-                    .select_values
-                    .pop()
-                    .ok_or_else(|| {
-                        StepError::new(
-                            VmFaultCode::InvalidInstruction,
-                            "ENDSELECT is outside SELECTCASE",
-                        )
-                    })?;
+                frame.select_values.pop().ok_or_else(|| {
+                    StepError::new(
+                        VmFaultCode::InvalidInstruction,
+                        "ENDSELECT is outside SELECTCASE",
+                    )
+                })?;
             }
             Opcode::Jump | Opcode::JumpIfFalse => {
                 let target = read_u32(position.encoded.payload, 0)? as usize;
@@ -456,11 +464,19 @@ impl Vm {
                     true
                 };
                 if take {
+                    let entered_structured_block =
+                        self.reconcile_structured_jump(fiber, position, target);
                     if target <= position.instruction {
                         fiber.backward_branches_without_progress =
                             fiber.backward_branches_without_progress.saturating_add(1);
                     }
                     fiber.frames.last_mut().expect("frame exists").instruction = target;
+                    if entered_structured_block {
+                        return Ok(Some(StepOutcome::Diagnostic {
+                            code: STRUCTURED_GOTO_DIAGNOSTIC_CODE,
+                            message: STRUCTURED_GOTO_DIAGNOSTIC_MESSAGE,
+                        }));
+                    }
                 }
             }
             _ => return Ok(None),

@@ -177,6 +177,21 @@ impl Vm {
                             break;
                         }
                     }
+                    Ok(StepOutcome::Diagnostic { code, message }) => {
+                        let command = self.command_for_position(&position);
+                        report.events.push(VmEvent::Diagnostic {
+                            fiber: fiber.id,
+                            code: code.into(),
+                            message: message.into(),
+                            origin: self.execution_origin(&position, &command),
+                        });
+                        if debug_checks_active
+                            && let Some(stop) = self.debug_stop_after(&fiber, false, false)
+                        {
+                            report.events.push(VmEvent::DebugStopped(stop));
+                            break;
+                        }
+                    }
                     Ok(StepOutcome::DeferredNative) => {}
                     Ok(StepOutcome::Yielded) => {
                         fiber.mark_progress();
