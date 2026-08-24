@@ -1,6 +1,7 @@
 //! Canonical presentation state and non-serialized delivery bookkeeping.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
+use std::sync::Arc;
 
 use era_runtime_protocol::{
     AudioState, Color, DisplayLine, DisplayRun, InputWait, LineAlignment, MediaPlacement,
@@ -19,8 +20,12 @@ const fn dirty_line_count() -> bool {
 pub(crate) struct PresentationModel {
     pub(super) revision: u64,
     pub(super) title: String,
-    pub(super) lines: Vec<DisplayLine>,
+    pub(super) lines: VecDeque<Arc<DisplayLine>>,
+    // Retained for runtime-snapshot schema compatibility. Delivery bookkeeping is rebuilt after
+    // restore, so new sessions keep non-duplicating shared edits in `history_edits` instead.
     pub(super) history_operations: Vec<PresentationHistoryOperation>,
+    #[serde(skip, default)]
+    pub(super) history_edits: Vec<PresentationHistoryEdit>,
     pub(super) pending_runs: Vec<DisplayRun>,
     pub(super) pending_plain_runs: BTreeSet<usize>,
     pub(super) last_committed_plain_runs: BTreeSet<usize>,
@@ -63,9 +68,20 @@ pub(crate) struct PresentationModel {
 pub(super) struct PresentationDelivery {
     pub(super) revision: Option<u64>,
     pub(super) history_index: usize,
+    /// Physical rows held by the frontend at the delivery baseline, including one pending row.
+    pub(super) history_line_count: usize,
     pub(super) pending_line_id: Option<u64>,
     pub(super) dirty_lines: BTreeSet<u64>,
     pub(super) dirty: PresentationDirty,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum PresentationHistoryEdit {
+    Append { line: Arc<DisplayLine> },
+    ReplaceTemporary { line: Arc<DisplayLine> },
+    DeletePhysical { count: u32 },
+    SetButtonGeneration { generation: u64 },
+    TrimPhysical { count: u32 },
 }
 
 #[derive(Clone, Copy, Debug, Default)]

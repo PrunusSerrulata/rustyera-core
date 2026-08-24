@@ -40,6 +40,69 @@ fn title_startup_reports_memory_before_program_indexing_with_monotonic_progress(
         );
     }
 }
+
+struct ImportCheckingNative {
+    expected: RuntimeImport,
+}
+
+impl NativeService for ImportCheckingNative {
+    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String> {
+        assert_eq!(request.import, self.expected);
+        assert_eq!(request.arguments, [VmValue::Integer(-4)]);
+        assert!(request.places.is_empty());
+        assert!(request.implicit_places.is_empty());
+        Ok(NativeReady::value(VmValue::Integer(17)))
+    }
+
+    fn requires_rollback_checkpoint(&self) -> bool {
+        false
+    }
+}
+
+#[test]
+fn registered_native_receives_the_complete_runtime_import() {
+    let artifact = compile_source("@SYSTEM_TITLE\nRESULT = ABS(-4)\nRETURN RESULT\n");
+    let native = artifact
+        .native_imports
+        .iter()
+        .find(|native| native.import.name.eq_ignore_ascii_case("abs"))
+        .expect("ABS native import");
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    assert!(!natives.register(
+        native.import.key,
+        ImportCheckingNative {
+            expected: native.import.clone(),
+        },
+    ));
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(17))
+    );
+}
+
 #[test]
 fn era_function_local_persists_across_calls() {
     let artifact = compile_source("@COUNTER\nLOCAL:0 += 1\nRESULT = LOCAL:0\nRETURN RESULT\n");
@@ -599,4 +662,252 @@ fn literal_groupmatch_preserves_results_and_instruction_accounting() {
     let ordinary = run("CANDIDATE_A, CANDIDATE_B, CANDIDATE_A");
     assert_eq!(optimized, ordinary);
     assert_eq!(optimized.1, VmValue::Integer(2));
+}
+
+#[test]
+fn path_memo_validates_values_and_replays_persistent_split_state() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         FLAG:0 = 10\nRESULT = 7\n\
+         RESULT:10 = LOOKUP_PATH(\"A\", 0)\n\
+         RESULT:11 = LOOKUP_PATH(\"A\", 0)\n\
+         FLAG:0 = 20\nRESULT:12 = LOOKUP_PATH(\"A\", 0)\n\
+         FLAG:0 = 10\nRESULT = 9\nRESULT = 7\n\
+         RESULT:13 = LOOKUP_PATH(\"A\", 0)\nRETURN RESULT\n\
+         @LOOKUP_PATH, ARGS, ARG\n#FUNCTION\n#LOCALSIZE 4\n#LOCALSSIZE 4\n\
+         #DIM SAVED\nSAVED = RESULT\nVARSET LOCALS\n\
+         SPLIT \"A/B\", \"/\", LOCALS\n\
+         LOCAL = FINDELEMENT(LOCALS, ESCAPE(ARGS), 0, RESULT, 1)\n\
+         RESULT = SAVED\nSIF ARG + LOCAL < 0\nTHROW invalid offset\n\
+         RETURNF FLAG:ARG + LOCAL\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let lookup = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "LOOKUP_PATH")
+        .expect("LOOKUP_PATH")
+        .key;
+    let global = |name: &str| {
+        artifact
+            .globals
+            .iter()
+            .find(|global| global.owner == Some(lookup) && global.name == name)
+            .unwrap_or_else(|| panic!("LOOKUP_PATH {name}"))
+            .key
+    };
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+
+    assert_eq!(
+        (10..=13)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        [10, 10, 20, 10].map(VmValue::Integer)
+    );
+    assert_eq!(vm.read_variable(result, &[], None), Ok(VmValue::Integer(7)));
+    assert_eq!(
+        vm.read_variable(global("SAVED"), &[], None),
+        Ok(VmValue::Integer(7))
+    );
+    assert_eq!(
+        vm.read_variable(global("LOCAL"), &[], None),
+        Ok(VmValue::Integer(0))
+    );
+    assert_eq!(
+        (0..4)
+            .map(|index| vm.read_variable(global("LOCALS"), &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        ["A", "B", "", ""].map(|value| VmValue::String(value.into()))
+    );
+}
+
+#[test]
+fn path_memo_find_element_queries_follow_array_revisions() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         RESULTS:0 '= \"target\"\nRESULTS:1 '= \"\"\nRESULTS:2 '= \"target\"\n\
+         RESULT:10 = LOOKUP_RANGE(\"target\")\n\
+         RESULT:11 = LOOKUP_RANGE(\"target\")\n\
+         RESULTS:0 '= \"\"\nRESULTS:1 '= \"target\"\nRESULTS:2 '= \"\"\n\
+         RESULT:12 = LOOKUP_RANGE(\"target\")\n\
+         RESULT:13 = LOOKUP_RANGE(\"target\")\nRETURN RESULT\n\
+         @LOOKUP_RANGE, ARGS\n#FUNCTION\n#LOCALSSIZE 2\n\
+         VARSET LOCALS\nSPLIT \"left/right\", \"/\", LOCALS\n\
+         RETURNF FINDELEMENT(RESULTS, ESCAPE(ARGS), 0, 3, 1) * 10 + FINDLASTELEMENT(RESULTS, ESCAPE(ARGS), 0, 3, 1)\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+
+    assert_eq!(
+        (10..=13)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        [2, 2, 11, 11].map(VmValue::Integer)
+    );
+}
+
+#[test]
+fn path_memo_does_not_replay_a_trace_that_mutates_its_queried_array() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"target\"\nRESULTS:1 '= \"\"\n\
+         RESULT:10 = FIND_THEN_MOVE(\"target\")\n\
+         RESULT:11 = FIND_THEN_MOVE(\"target\")\nRETURN RESULT\n\
+         @FIND_THEN_MOVE, ARGS\n#FUNCTION\n#DIM FOUND\n\
+         FOUND = FINDELEMENT(RESULTS, ESCAPE(ARGS), 0, 2, 1)\n\
+         RESULTS:0 '= \"\"\nRESULTS:1 '= \"target\"\nRETURNF FOUND\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+
+    assert_eq!(
+        (10..=11)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        [0, 1].map(VmValue::Integer)
+    );
+}
+
+#[test]
+fn faulting_path_is_never_replayed_from_a_successful_path_memo() {
+    struct ThrowFaultHost;
+
+    impl VmHost for ThrowFaultHost {
+        fn call(&mut self, request: HostCallRequest) -> HostCallResult {
+            if request.import.name.eq_ignore_ascii_case("THROW") {
+                HostCallResult::Error("thrown from test".into())
+            } else {
+                HostCallResult::Ready(HostReady::empty())
+            }
+        }
+    }
+
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULT = 7\nFLAG:0 = 0\n\
+         RESULT:10 = LOOKUP_FAULT(\"A\", 0)\n\
+         RESULT:11 = LOOKUP_FAULT(\"A\", 0)\n\
+         FLAG:0 = -1\nRESULT:12 = LOOKUP_FAULT(\"A\", 0)\nRETURN RESULT\n\
+         @LOOKUP_FAULT, ARGS, ARG\n#FUNCTION\n#LOCALSIZE 4\n#LOCALSSIZE 4\n\
+         #DIM SAVED\nSAVED = RESULT\nVARSET LOCALS\n\
+         SPLIT \"A/B\", \"/\", LOCALS\n\
+         LOCAL = FINDELEMENT(LOCALS, ESCAPE(ARGS), 0, RESULT, 1)\n\
+         RESULT = SAVED\nSIF FLAG:0 + ARG + LOCAL < 0\nTHROW invalid offset\n\
+         RETURNF LOCAL + ARG\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let lookup = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "LOOKUP_FAULT")
+        .expect("LOOKUP_FAULT")
+        .key;
+    let saved = artifact
+        .globals
+        .iter()
+        .find(|global| global.owner == Some(lookup) && global.name == "SAVED")
+        .expect("LOOKUP_FAULT SAVED")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(&mut ThrowFaultHost, &mut natives, RunBudget::default());
+
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(vm.read_variable(result, &[], None), Ok(VmValue::Integer(7)));
+    assert_eq!(vm.read_variable(saved, &[], None), Ok(VmValue::Integer(7)));
 }

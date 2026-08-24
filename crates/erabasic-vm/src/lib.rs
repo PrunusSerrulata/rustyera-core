@@ -41,8 +41,8 @@ pub use display_width::{
 pub use fault::{VmError, VmFault, VmFaultCode};
 pub use host::{
     HostCallRequest, HostCallResult, HostReady, HostRebindRequest, HostWaitStability,
-    NativeCallRequest, NativePlaceView, NativeReady, NativeService, NativeServiceRegistry, VmHost,
-    evaluate_pure_native,
+    ImmediateHostCall, ImmediateHostCallResult, NativeCallRequest, NativePlaceView, NativeReady,
+    NativeService, NativeServiceRegistry, VmHost, evaluate_pure_native,
 };
 pub use hot_reload::{HotReloadPlan, HotReloadReport};
 pub use runtime_port::{

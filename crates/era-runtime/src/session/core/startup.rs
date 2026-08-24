@@ -343,6 +343,7 @@ impl RuntimeSession {
         self.deferred_input_completion = None;
         self.text_box = payload.text_box;
         self.text_box_layout = payload.text_box_layout;
+        self.last_projection_state = None;
         self.flow_input_enabled = payload.flow_input_enabled;
         self.flow_input_default = payload.flow_input_default;
         self.flow_input_can_skip = payload.flow_input_can_skip;

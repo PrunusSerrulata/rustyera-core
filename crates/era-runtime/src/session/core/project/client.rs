@@ -46,20 +46,31 @@ impl RuntimeSession {
             vm.set_line_columns(self.line_columns);
         }
         self.text_box = observation.text_box;
+        // ProjectionState deduplication tracks what this client has received. A frontend
+        // observation can make its local projection diverge from the last runtime payload;
+        // conservatively invalidate so a later equal runtime value is delivered again.
+        self.last_projection_state = None;
         Ok(())
     }
 
     pub(in super::super::super) fn emit_projection_state(&mut self) -> Result<(), RuntimeError> {
-        self.emit(
-            RuntimeMessage::ProjectionState(ProjectionState {
-                runtime_revision: self.revision,
-                text_box: self.text_box.clone(),
-                hotkey_state: self.hotkey_state.clone(),
-                button_generation: self.button_generation,
-                text_box_layout: self.text_box_layout,
-            }),
-            None,
-        )
+        // Projection notifications historically acted as presentation ordering barriers even
+        // when their own payload was unchanged. Preserve that boundary while avoiding another
+        // outbound envelope and host round trip for an identical state.
+        self.flush_presentation()?;
+        let state = ProjectionState {
+            runtime_revision: self.revision,
+            text_box: self.text_box.clone(),
+            hotkey_state: self.hotkey_state.clone(),
+            button_generation: self.button_generation,
+            text_box_layout: self.text_box_layout,
+        };
+        if self.last_projection_state.as_ref() == Some(&state) {
+            return Ok(());
+        }
+        self.emit(RuntimeMessage::ProjectionState(state.clone()), None)?;
+        self.last_projection_state = Some(state);
+        Ok(())
     }
 
     pub(in super::super::super) fn hello(
@@ -84,6 +95,7 @@ impl RuntimeSession {
         };
         self.state = SessionState::Active;
         self.epoch = SessionEpoch(1);
+        self.last_projection_state = None;
         let limits = intersect_limits(self.options.limits, hello.requested_limits);
         self.options.limits = limits;
         self.options.wire_limits.maximum_envelope_bytes =

@@ -1,6 +1,15 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+#[derive(Clone, Copy)]
+struct ResolvedPlaceWrite {
+    generation: GenerationId,
+    key: SymbolKey,
+    storage: BytecodeStorage,
+    mutable: bool,
+    owner: Option<SymbolKey>,
+}
+
 impl Vm {
     pub(crate) fn function_memo_key(
         &self,
@@ -9,12 +18,12 @@ impl Vm {
         arguments: &[VmValue],
     ) -> Option<FunctionMemoKey> {
         let program = self.generations.get(&generation)?;
+        let plan = program.function_memo_plan(function)?;
         let arguments = arguments
             .iter()
             .map(MemoValue::from_vm)
             .collect::<Option<Vec<_>>>()?;
-        let dependency_revisions = program
-            .function_memo_plan(function)?
+        let dependency_revisions = plan
             .dependency_indices
             .iter()
             .map(|index| {
@@ -68,7 +77,7 @@ impl Vm {
                 .global(*variable)
                 .ok_or_else(|| VmError::InvalidState("memo scratch variable is missing".into()))?;
             self.memory
-                .cell_mut(generation, definition, 0)
+                .cell_mut(generation, definition.key, definition.storage, 0)
                 .ok_or_else(|| VmError::InvalidState("memo scratch storage is missing".into()))?
                 .write(&[], value.clone())
                 .map_err(VmError::InvalidState)?;
@@ -140,7 +149,7 @@ impl Vm {
             |value| usize::try_from(value).unwrap_or(usize::MAX),
         );
         self.memory
-            .cell_mut(generation, &definition, character)
+            .cell_mut(generation, definition.key, definition.storage, character)
             .ok_or_else(|| VmError::InvalidState("variable storage is unavailable".into()))?
             .write(indices, value)
             .map_err(VmError::InvalidState)
@@ -229,7 +238,7 @@ impl Vm {
             let definition = &program.artifact.globals[plan.global_index];
             for character in plan.characters {
                 self.memory
-                    .cell_mut(generation, definition, character)
+                    .cell_mut(generation, definition.key, definition.storage, character)
                     .expect("the complete fill batch was validated before mutation")
                     .fill(plan.value.clone())
                     .expect("the complete fill batch type was validated before mutation");
@@ -303,6 +312,14 @@ impl Vm {
             self.memory.reclaim_generation(generation);
             self.function_memo_cache
                 .retain(|key, _| key.generation != generation);
+            self.path_memo_cache
+                .retain(|key, _| key.generation != generation);
+            self.path_memo_retained_bytes = self
+                .path_memo_cache
+                .values()
+                .flatten()
+                .map(|entry| entry.retained_bytes)
+                .sum();
         }
     }
 
@@ -370,11 +387,14 @@ impl Vm {
         } else {
             0
         };
-        self.memory
+        let value = self
+            .memory
             .cell(generation, definition, character)
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
             .read(&place.indices)
-            .map_err(VmError::InvalidState)
+            .map_err(VmError::InvalidState)?;
+        self.observe_path_memo_read(fiber.id, generation, definition, &place.indices, &value);
+        Ok(value)
     }
 
     pub(crate) fn read_variable_resolved(
@@ -407,11 +427,14 @@ impl Vm {
         } else {
             0
         };
-        self.memory
+        let value = self
+            .memory
             .cell(generation, definition, character)
             .ok_or_else(|| VmError::InvalidState("variable storage is unavailable".into()))?
             .read(indices)
-            .map_err(VmError::InvalidState)
+            .map_err(VmError::InvalidState)?;
+        self.observe_path_memo_read(fiber.id, generation, definition, indices, &value);
+        Ok(value)
     }
 
     #[allow(
@@ -460,10 +483,12 @@ impl Vm {
             0
         };
         self.memory
-            .cell_mut(generation, definition, character)
+            .cell_mut(generation, definition.key, definition.storage, character)
             .ok_or_else(|| VmError::InvalidState("variable storage is unavailable".into()))?
-            .write(indices, value)
-            .map_err(VmError::InvalidState)
+            .write(indices, value.clone())
+            .map_err(VmError::InvalidState)?;
+        self.observe_path_memo_write(fiber.id, generation, definition, indices, &value);
+        Ok(())
     }
 
     pub(crate) fn read_place_array(
@@ -565,6 +590,27 @@ impl Vm {
         start: usize,
         end: usize,
     ) -> Result<Vec<VmValue>, VmError> {
+        self.read_place_array_range_internal(fiber, place, start, end, true)
+    }
+
+    pub(crate) fn read_place_array_range_unobserved(
+        &self,
+        fiber: &Fiber,
+        place: &PlaceDescriptor,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<VmValue>, VmError> {
+        self.read_place_array_range_internal(fiber, place, start, end, false)
+    }
+
+    fn read_place_array_range_internal(
+        &self,
+        fiber: &Fiber,
+        place: &PlaceDescriptor,
+        start: usize,
+        end: usize,
+        observe_path_memo: bool,
+    ) -> Result<Vec<VmValue>, VmError> {
         if !place.indices.is_empty() {
             return Err(VmError::InvalidArguments(
                 "array place must be unindexed".into(),
@@ -578,7 +624,13 @@ impl Vm {
                 .get(&definition.key)
                 .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
             if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) = cell.first() {
-                return self.read_place_array_range(fiber, &bound, start, end);
+                return self.read_place_array_range_internal(
+                    fiber,
+                    &bound,
+                    start,
+                    end,
+                    observe_path_memo,
+                );
             }
             return cell.to_values_range(start, end).ok_or_else(|| {
                 VmError::InvalidArguments("array range exceeds the variable".into())
@@ -592,11 +644,16 @@ impl Vm {
         } else {
             0
         };
-        self.memory
+        let values = self
+            .memory
             .cell(generation, definition, character)
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
             .to_values_range(start, end)
-            .ok_or_else(|| VmError::InvalidArguments("array range exceeds the variable".into()))
+            .ok_or_else(|| VmError::InvalidArguments("array range exceeds the variable".into()))?;
+        if observe_path_memo {
+            self.observe_path_memo_range_read(fiber.id, generation, definition, start, &values);
+        }
+        Ok(values)
     }
 
     pub(crate) fn fill_place_array_range(
@@ -612,8 +669,7 @@ impl Vm {
                 "array place must be unindexed".into(),
             ));
         }
-        let (generation, definition) = self.place_definition(fiber, place)?;
-        let definition = definition.clone();
+        let definition = self.resolve_place_write(fiber, place)?;
         if !definition.mutable {
             return Err(VmError::InvalidState("place is immutable".into()));
         }
@@ -638,17 +694,29 @@ impl Vm {
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
-                || self.target_character_for_generation(generation),
+                || self.target_character_for_generation(definition.generation),
                 |value| usize::try_from(value).unwrap_or(usize::MAX),
             )
         } else {
             0
         };
         self.memory
-            .cell_mut(generation, &definition, character)
+            .cell_mut(
+                definition.generation,
+                definition.key,
+                definition.storage,
+                character,
+            )
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
-            .fill_range(start, end, value)
-            .map_err(VmError::InvalidArguments)
+            .fill_range(start, end, value.clone())
+            .map_err(VmError::InvalidArguments)?;
+        let global = self
+            .generations
+            .get(&definition.generation)
+            .and_then(|program| program.global(definition.key))
+            .expect("resolved place definition remains available");
+        self.observe_path_memo_fill(fiber.id, definition.generation, global, start, end, &value);
+        Ok(())
     }
 
     pub(crate) fn write_place(
@@ -671,8 +739,7 @@ impl Vm {
                 "array place must be unindexed".into(),
             ));
         }
-        let (generation, definition) = self.place_definition(fiber, place)?;
-        let definition = definition.clone();
+        let definition = self.resolve_place_write(fiber, place)?;
         if !definition.mutable {
             return Err(VmError::InvalidState("place is immutable".into()));
         }
@@ -696,15 +763,26 @@ impl Vm {
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
-                || self.target_character_for_generation(generation),
+                || self.target_character_for_generation(definition.generation),
                 |value| usize::try_from(value).unwrap_or(usize::MAX),
             )
         } else {
             0
         };
+        let global = self
+            .generations
+            .get(&definition.generation)
+            .and_then(|program| program.global(definition.key))
+            .expect("resolved place definition remains available");
+        self.observe_path_memo_replace(fiber.id, definition.generation, global, &values);
         let cell = self
             .memory
-            .cell_mut(generation, &definition, character)
+            .cell_mut(
+                definition.generation,
+                definition.key,
+                definition.storage,
+                character,
+            )
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?;
         replace_cell_values(cell, values)
     }
@@ -721,8 +799,7 @@ impl Vm {
                 "place belongs to another fiber".into(),
             ));
         }
-        let (generation, definition) = self.place_definition(fiber, place)?;
-        let definition = definition.clone();
+        let definition = self.resolve_place_write(fiber, place)?;
         if !definition.mutable && !trusted_runtime {
             return Err(VmError::InvalidState("place is immutable".into()));
         }
@@ -749,17 +826,35 @@ impl Vm {
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
-                || self.target_character_for_generation(generation),
+                || self.target_character_for_generation(definition.generation),
                 |index| usize::try_from(index).unwrap_or(usize::MAX),
             )
         } else {
             0
         };
         self.memory
-            .cell_mut(generation, &definition, character)
+            .cell_mut(
+                definition.generation,
+                definition.key,
+                definition.storage,
+                character,
+            )
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
-            .write(&place.indices, value)
-            .map_err(VmError::InvalidState)
+            .write(&place.indices, value.clone())
+            .map_err(VmError::InvalidState)?;
+        let global = self
+            .generations
+            .get(&definition.generation)
+            .and_then(|program| program.global(definition.key))
+            .expect("resolved place definition remains available");
+        self.observe_path_memo_write(
+            fiber.id,
+            definition.generation,
+            global,
+            &place.indices,
+            &value,
+        );
+        Ok(())
     }
 
     pub(super) fn place_definition<'a>(
@@ -788,5 +883,20 @@ impl Vm {
                 VmError::InvalidState(format!("variable {:?} is not defined", place.variable))
             })?,
         ))
+    }
+
+    fn resolve_place_write(
+        &self,
+        fiber: &Fiber,
+        place: &PlaceDescriptor,
+    ) -> Result<ResolvedPlaceWrite, VmError> {
+        let (generation, definition) = self.place_definition(fiber, place)?;
+        Ok(ResolvedPlaceWrite {
+            generation,
+            key: definition.key,
+            storage: definition.storage,
+            mutable: definition.mutable,
+            owner: definition.owner,
+        })
     }
 }

@@ -247,7 +247,7 @@ pub(in super::super) fn execute_split_transaction(
             ));
         }
     };
-    let current = array_snapshot(vm, fiber, &output)?;
+    let capacity = array_len(vm, fiber, &output)?;
     let _ = vm.read_place(fiber, &count)?;
     let parts = if separator.is_empty() {
         vec![target.as_str()]
@@ -256,7 +256,7 @@ pub(in super::super) fn execute_split_transaction(
     };
     let values = parts
         .iter()
-        .take(current.len())
+        .take(capacity)
         .map(|value| VmValue::String((*value).into()))
         .collect::<Vec<_>>();
     // All destinations and types have been read above, so neither write can

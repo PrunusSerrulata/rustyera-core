@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 use era_runtime_protocol::{
     Color, LineAlignment, LogicalLength, PresentationSettings, ResourceReplay, TooltipFormat,
@@ -13,8 +13,9 @@ pub(super) fn model() -> PresentationModel {
     PresentationModel {
         revision: 0,
         title: String::new(),
-        lines: Vec::new(),
+        lines: VecDeque::new(),
         history_operations: Vec::new(),
+        history_edits: Vec::new(),
         pending_runs: Vec::new(),
         pending_plain_runs: BTreeSet::new(),
         last_committed_plain_runs: BTreeSet::new(),

@@ -125,12 +125,17 @@ impl Vm {
                 let host_before = report.host_calls;
                 let policy = ExecutionPolicy {
                     allow_function_memo: !debug_checks_active,
+                    // A queued diagnostic/debug event is an ordering barrier. Fall back to
+                    // the ordinary Host port so the caller observes it before more runtime
+                    // state is mutated.
+                    allow_immediate_host: !debug_checks_active && report.events.is_empty(),
                     remaining_quantum: quantum.saturating_sub(used),
                     remaining_instructions: budget
                         .maximum_instructions
                         .saturating_sub(report.instructions),
                 };
                 let outcome = if continuation_origin.is_some() {
+                    self.invalidate_path_memo(fiber.id);
                     resume_runtime_form(self, &mut fiber, natives).and_then(|step| match step {
                         RuntimeFormStep::Pending => Ok(StepOutcome::DeferredNative),
                         RuntimeFormStep::Complete(value) => {
@@ -145,6 +150,11 @@ impl Vm {
                         }
                     })
                 } else {
+                    if let Ok(opcode) = Opcode::try_from(position.encoded.opcode) {
+                        self.observe_path_memo_opcode(fiber.id, opcode);
+                    } else {
+                        self.invalidate_path_memo(fiber.id);
+                    }
                     self.execute_instruction(
                         &mut fiber,
                         &position,
@@ -158,6 +168,10 @@ impl Vm {
                     Ok(StepOutcome::BulkProgress(instructions)) => *instructions,
                     _ => 0,
                 };
+                self.observe_path_memo_instruction(
+                    fiber.id,
+                    1_u64.saturating_add(additional_instructions),
+                );
                 report.instructions = report
                     .instructions
                     .saturating_add(1)
@@ -182,6 +196,7 @@ impl Vm {
                         message,
                         notification,
                     }) => {
+                        self.invalidate_path_memo(fiber.id);
                         let command = self.command_for_position(&position);
                         report.events.push(VmEvent::Diagnostic {
                             fiber: fiber.id,
@@ -197,8 +212,11 @@ impl Vm {
                             break;
                         }
                     }
-                    Ok(StepOutcome::DeferredNative) => {}
+                    Ok(StepOutcome::DeferredNative) => {
+                        self.invalidate_path_memo(fiber.id);
+                    }
                     Ok(StepOutcome::Yielded) => {
+                        self.invalidate_path_memo(fiber.id);
                         fiber.mark_progress();
                         yielded = true;
                         report
@@ -212,6 +230,7 @@ impl Vm {
                         break;
                     }
                     Ok(StepOutcome::Blocked) => {
+                        self.invalidate_path_memo(fiber.id);
                         fiber.mark_progress();
                         if let FiberState::WaitingHost(wait) = &fiber.state {
                             report.events.push(VmEvent::HostPending {
@@ -239,6 +258,7 @@ impl Vm {
                         break;
                     }
                     Err(error) => {
+                        self.abort_path_memo(fiber.id);
                         fiber.clear_runtime_forms();
                         let fault = self.make_fault(fiber.id, &position, error.code, error.message);
                         fiber.state = FiberState::Faulted(fault.clone());
@@ -269,6 +289,9 @@ impl Vm {
             }
 
             if matches!(fiber.state, FiberState::Runnable) {
+                if used >= quantum || budget_exhausted {
+                    self.invalidate_path_memo(fiber.id);
+                }
                 // A fiber quantum is scheduler preemption, not evidence that the caller's
                 // instruction budget was exhausted. Large finite EraBasic routines can span
                 // many quanta in one run slice (for example, the eraTW all-items scan). Count
@@ -308,6 +331,7 @@ impl Vm {
                 }
             }
             if matches!(fiber.state, FiberState::Faulted(_) | FiberState::Cancelled) {
+                self.abort_path_memo(fiber.id);
                 for frame in &fiber.frames {
                     self.active_function_memos.remove(&frame.id);
                 }

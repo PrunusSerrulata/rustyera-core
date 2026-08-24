@@ -49,6 +49,111 @@ fn variable_map_serialization_is_key_ordered_and_accepts_legacy_maps() {
     }
 }
 
+fn storage_definitions() -> [BytecodeGlobal; 4] {
+    let mut definitions = [
+        global(BytecodeType::Integer, vec![1]),
+        global(BytecodeType::Integer, vec![1]),
+        global(BytecodeType::Integer, vec![1]),
+        global(BytecodeType::Integer, vec![1]),
+    ];
+    for (index, (definition, storage)) in definitions
+        .iter_mut()
+        .zip([
+            BytecodeStorage::Project,
+            BytecodeStorage::FunctionStatic,
+            BytecodeStorage::FunctionPersistent,
+            BytecodeStorage::Character,
+        ])
+        .enumerate()
+    {
+        definition.key = SymbolKey::derive(
+            "memory.storage",
+            &[u8::try_from(index).expect("four storage definitions")],
+        );
+        definition.storage = storage;
+    }
+    definitions
+}
+
+fn memory_with_storage_cells(definitions: &[BytecodeGlobal; 4]) -> Memory {
+    let mut memory = Memory::default();
+    memory.characters.push(VariableMap::default());
+    for definition in definitions {
+        let cell = VariableCell::new(definition);
+        match definition.storage {
+            BytecodeStorage::Project => {
+                memory.shared.insert(definition.key, cell);
+            }
+            BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
+                memory.statics.insert(definition.key, cell);
+            }
+            BytecodeStorage::Character => {
+                memory.characters[0].insert(definition.key, cell);
+            }
+            _ => unreachable!("the fixture contains only mutable storage classes"),
+        }
+    }
+    memory
+}
+
+#[test]
+fn mutable_cell_resolution_preserves_storage_classes_and_legacy_generations() {
+    let current = GenerationId(2);
+    let legacy_generation = GenerationId(1);
+    let definitions = storage_definitions();
+    let mut memory = memory_with_storage_cells(&definitions);
+
+    for (definition, expected) in definitions.iter().zip(1_i64..) {
+        memory
+            .cell_mut(current, definition.key, definition.storage, 0)
+            .expect("storage-class cell")
+            .write(&[0], VmValue::Integer(expected))
+            .unwrap();
+        assert_eq!(
+            memory.cell(current, definition, 0).unwrap().read(&[0]),
+            Ok(VmValue::Integer(expected))
+        );
+    }
+    assert!(
+        memory
+            .cell_mut(
+                current,
+                definitions[0].key,
+                BytecodeStorage::FunctionLocal,
+                0,
+            )
+            .is_none()
+    );
+
+    let legacy_cells = memory_with_storage_cells(&definitions);
+    memory.legacy.insert(
+        legacy_generation,
+        super::store::LegacyMemory {
+            shared: legacy_cells.shared,
+            statics: legacy_cells.statics,
+            characters: legacy_cells.characters,
+        },
+    );
+    for (definition, expected) in definitions.iter().zip(41_i64..) {
+        memory
+            .cell_mut(legacy_generation, definition.key, definition.storage, 0)
+            .expect("legacy storage-class cell")
+            .write(&[0], VmValue::Integer(expected))
+            .unwrap();
+        assert_eq!(
+            memory
+                .cell(legacy_generation, definition, 0)
+                .unwrap()
+                .read(&[0]),
+            Ok(VmValue::Integer(expected))
+        );
+    }
+    assert_eq!(
+        memory.shared.get(&definitions[0].key).unwrap().read(&[0]),
+        Ok(VmValue::Integer(1))
+    );
+}
+
 #[test]
 fn dense_integer_cell_preserves_public_vm_value_behavior() {
     let mut cell = VariableCell::new(&global(BytecodeType::Integer, vec![4]));

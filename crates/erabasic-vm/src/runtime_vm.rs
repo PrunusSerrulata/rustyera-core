@@ -5,10 +5,11 @@ use crate::structured::{StructuredExtension, StructuredScope};
 use crate::{
     EraState, EraStateReport, FiberId, FiberState, FiberStatus, GenerationId, HostCallRequest,
     HostCallResult, HostReady, HostRequestId, HostWaitStability, HotReloadReport,
-    NativeServiceRegistry, PlaceDescriptor, PreparedRuntimeState, RunBudget, SnapshotEligibility,
-    Vm, VmConfig, VmDriveMode, VmError, VmHost, VmHostCompletion, VmHostRequest, VmPortDriveReport,
-    VmPortEvent, VmPortStop, VmRestorePort, VmRuntimePort, VmRuntimeRead, VmRuntimeStatePort,
-    VmRuntimeStateTransaction, VmSnapshot, VmValue, VmWaitRebind,
+    ImmediateHostCall, ImmediateHostCallResult, NativeServiceRegistry, PlaceDescriptor,
+    PreparedRuntimeState, RunBudget, SnapshotEligibility, Vm, VmConfig, VmDriveMode, VmError,
+    VmHost, VmHostCompletion, VmHostRequest, VmPortDriveReport, VmPortEvent, VmPortStop,
+    VmRestorePort, VmRuntimePort, VmRuntimeRead, VmRuntimeStatePort, VmRuntimeStateTransaction,
+    VmSnapshot, VmValue, VmWaitRebind,
 };
 use std::collections::BTreeSet;
 
@@ -67,6 +68,10 @@ impl RuntimeVm {
         vm.next_fiber = 1;
         vm.pending_reload = None;
         vm.debug = DebugState::default();
+        vm.path_memo_cache.clear();
+        vm.path_memo_retained_bytes = 0;
+        vm.active_path_memo_fiber.set(None);
+        vm.active_path_memo.borrow_mut().take();
         let natives = self
             .natives
             .fork_for_artifact(vm.artifact())
@@ -355,15 +360,146 @@ impl VmRuntimeStatePort for RuntimeVm {
     }
 }
 
+#[derive(Default)]
 struct CaptureHost {
-    requests: Vec<HostCallRequest>,
+    first: Option<HostCallRequest>,
+    overflow: Vec<HostCallRequest>,
+}
+
+impl CaptureHost {
+    fn take(&mut self, request: HostRequestId) -> Option<HostCallRequest> {
+        if self.first.as_ref().is_some_and(|item| item.id == request) {
+            return self.first.take();
+        }
+        // Cooperative batches are uncommon and small. Keep the single-request hot
+        // path allocation-free while retaining request-id lookup for arbitrary event
+        // and completion order when several fibers reach the host together.
+        let index = self.overflow.iter().position(|item| item.id == request)?;
+        Some(self.overflow.remove(index))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.first.is_none() && self.overflow.is_empty()
+    }
 }
 
 impl VmHost for CaptureHost {
     fn call(&mut self, request: HostCallRequest) -> HostCallResult {
-        self.requests.push(request);
+        if self.first.is_none() {
+            self.first = Some(request);
+        } else {
+            self.overflow.push(request);
+        }
         // The runtime will classify the real wait after it has staged its own state.
         HostCallResult::Deferred
+    }
+}
+
+struct CapturingRuntimeHost<'a, H> {
+    immediate: &'a mut H,
+    captured: CaptureHost,
+}
+
+impl<H: VmHost> VmHost for CapturingRuntimeHost<'_, H> {
+    fn call_immediate(&mut self, request: ImmediateHostCall<'_>) -> ImmediateHostCallResult {
+        self.immediate.call_immediate(request)
+    }
+
+    fn call(&mut self, request: HostCallRequest) -> HostCallResult {
+        self.captured.call(request)
+    }
+}
+
+impl RuntimeVm {
+    /// Drive with an optional immediate Host implementation. Unsupported calls still cross the
+    /// ordinary caller-pumped port and retain all persistent wait/debug semantics.
+    pub fn drive_with_immediate_host(
+        &mut self,
+        budget: RunBudget,
+        mode: VmDriveMode,
+        immediate: &mut impl VmHost,
+    ) -> VmPortDriveReport {
+        self.vm.retire_terminal_fibers();
+        if matches!(mode, VmDriveMode::SelectedFiber(_)) {
+            return VmPortDriveReport {
+                stop: VmPortStop::DebugStopped,
+                instructions: 0,
+                events: Vec::new(),
+            };
+        }
+        let mut host = CapturingRuntimeHost {
+            immediate,
+            captured: CaptureHost::default(),
+        };
+        let report = self.vm.run_slice(&mut host, &mut self.natives, budget);
+        let mut events = Vec::new();
+        for event in report.events {
+            match event {
+                crate::VmEvent::Diagnostic {
+                    fiber,
+                    code,
+                    message,
+                    origin,
+                    notification,
+                } => events.push(VmPortEvent::Diagnostic {
+                    fiber,
+                    code,
+                    message,
+                    origin,
+                    notification,
+                }),
+                crate::VmEvent::HostPending { request, .. } => {
+                    if let Some(request) = host.captured.take(request)
+                        && let Some(definition) = self.current_host_import(request.import.key)
+                    {
+                        let import = HostImport {
+                            import: request.import,
+                            effect: definition.effect,
+                            capability: definition.capability,
+                            snapshot_capability: definition.snapshot_capability,
+                            contract: definition.contract,
+                        };
+                        events.push(VmPortEvent::HostCall(VmHostRequest {
+                            id: request.id,
+                            fiber: request.fiber,
+                            import,
+                            arguments: request.arguments,
+                            origin: request.origin,
+                        }));
+                    }
+                }
+                crate::VmEvent::FiberYielded { fiber } => {
+                    events.push(VmPortEvent::FiberYielded(fiber));
+                }
+                crate::VmEvent::FiberCompleted { fiber, value } => {
+                    events.push(VmPortEvent::FiberCompleted(fiber, value));
+                }
+                crate::VmEvent::FiberFaulted { fiber, fault } => {
+                    events.push(VmPortEvent::FiberFaulted(fiber, fault));
+                }
+                crate::VmEvent::DebugStopped(stop) => {
+                    events.push(VmPortEvent::DebugStopped(stop));
+                }
+            }
+        }
+        debug_assert!(
+            host.captured.is_empty(),
+            "captured host request lost its VM event"
+        );
+        let debug_stopped = events
+            .iter()
+            .any(|event| matches!(event, VmPortEvent::DebugStopped(_)));
+        VmPortDriveReport {
+            stop: if debug_stopped {
+                VmPortStop::DebugStopped
+            } else if matches!(report.stop, crate::VmRunStop::BudgetExhausted) {
+                VmPortStop::BudgetExhausted
+            } else {
+                VmPortStop::Idle
+            },
+            instructions: report.instructions,
+            events,
+        }
     }
 }
 
@@ -402,81 +538,7 @@ impl VmRuntimePort for RuntimeVm {
     }
 
     fn drive(&mut self, budget: RunBudget, mode: VmDriveMode) -> VmPortDriveReport {
-        self.vm.retire_terminal_fibers();
-        if matches!(mode, VmDriveMode::SelectedFiber(_)) {
-            return VmPortDriveReport {
-                stop: VmPortStop::DebugStopped,
-                instructions: 0,
-                events: Vec::new(),
-            };
-        }
-        let mut host = CaptureHost {
-            requests: Vec::new(),
-        };
-        let report = self.vm.run_slice(&mut host, &mut self.natives, budget);
-        let mut requests = host
-            .requests
-            .into_iter()
-            .map(|request| (request.id, request))
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let mut events = Vec::new();
-        for event in report.events {
-            match event {
-                crate::VmEvent::Diagnostic {
-                    fiber,
-                    code,
-                    message,
-                    origin,
-                    notification,
-                } => events.push(VmPortEvent::Diagnostic {
-                    fiber,
-                    code,
-                    message,
-                    origin,
-                    notification,
-                }),
-                crate::VmEvent::HostPending { request, .. } => {
-                    if let Some(request) = requests.remove(&request) {
-                        let import = self.current_host_import(request.import.key).cloned();
-                        if let Some(import) = import {
-                            events.push(VmPortEvent::HostCall(VmHostRequest {
-                                id: request.id,
-                                fiber: request.fiber,
-                                import,
-                                arguments: request.arguments,
-                                origin: request.origin,
-                            }));
-                        }
-                    }
-                }
-                crate::VmEvent::FiberYielded { fiber } => {
-                    events.push(VmPortEvent::FiberYielded(fiber));
-                }
-                crate::VmEvent::FiberCompleted { fiber, value } => {
-                    events.push(VmPortEvent::FiberCompleted(fiber, value));
-                }
-                crate::VmEvent::FiberFaulted { fiber, fault } => {
-                    events.push(VmPortEvent::FiberFaulted(fiber, fault));
-                }
-                crate::VmEvent::DebugStopped(stop) => {
-                    events.push(VmPortEvent::DebugStopped(stop));
-                }
-            }
-        }
-        let debug_stopped = events
-            .iter()
-            .any(|event| matches!(event, VmPortEvent::DebugStopped(_)));
-        VmPortDriveReport {
-            stop: if debug_stopped {
-                VmPortStop::DebugStopped
-            } else if matches!(report.stop, crate::VmRunStop::BudgetExhausted) {
-                VmPortStop::BudgetExhausted
-            } else {
-                VmPortStop::Idle
-            },
-            instructions: report.instructions,
-            events,
-        }
+        self.drive_with_immediate_host(budget, mode, &mut CaptureHost::default())
     }
 
     fn retire_terminal_fibers(&mut self) -> usize {
@@ -814,4 +876,57 @@ fn validate_ready(
         let _ = vm.read_place(fiber, &write.target)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use erabasic_bytecode::RuntimeImport;
+
+    fn host_request(id: u64) -> HostCallRequest {
+        HostCallRequest {
+            id: HostRequestId(id),
+            fiber: FiberId(id.saturating_add(100)),
+            import: RuntimeImport {
+                key: SymbolKey([u8::try_from(id).unwrap_or(u8::MAX); 16]),
+                namespace: "test".into(),
+                name: format!("HOST_{id}"),
+                abi_version: 1,
+                parameters: Vec::new(),
+                result: None,
+            },
+            arguments: vec![VmValue::Integer(i64::try_from(id).unwrap_or(i64::MAX))],
+            origin: crate::VmExecutionOrigin {
+                generation: GenerationId(1),
+                function: SymbolKey([0; 16]),
+                function_name: "TEST".into(),
+                instruction: u32::try_from(id).unwrap_or(u32::MAX),
+                command: format!("HOST_{id}"),
+                source: None,
+            },
+        }
+    }
+
+    #[test]
+    fn capture_host_keeps_the_single_request_inline() {
+        let mut host = CaptureHost::default();
+        let request = host_request(1);
+        assert_eq!(host.call(request.clone()), HostCallResult::Deferred);
+        assert!(host.overflow.is_empty());
+        assert_eq!(host.take(request.id), Some(request));
+        assert!(host.is_empty());
+    }
+
+    #[test]
+    fn capture_host_preserves_multiple_fibers_without_fifo_assumptions() {
+        let mut host = CaptureHost::default();
+        let requests = [host_request(1), host_request(2), host_request(3)];
+        for request in &requests {
+            assert_eq!(host.call(request.clone()), HostCallResult::Deferred);
+        }
+        assert_eq!(host.take(requests[1].id), Some(requests[1].clone()));
+        assert_eq!(host.take(requests[0].id), Some(requests[0].clone()));
+        assert_eq!(host.take(requests[2].id), Some(requests[2].clone()));
+        assert!(host.is_empty());
+    }
 }

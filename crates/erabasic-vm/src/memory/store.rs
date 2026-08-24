@@ -366,67 +366,68 @@ impl Memory {
     pub fn cell_mut(
         &mut self,
         generation: GenerationId,
-        definition: &BytecodeGlobal,
+        key: SymbolKey,
+        storage: BytecodeStorage,
         character: usize,
     ) -> Option<&mut VariableCell> {
         if self.legacy.is_empty() {
-            return match definition.storage {
+            return match storage {
                 BytecodeStorage::Project
                 | BytecodeStorage::Constant
-                | BytecodeStorage::Calculated => self.shared.get_mut(&definition.key),
+                | BytecodeStorage::Calculated => self.shared.get_mut(&key),
                 BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
-                    self.statics.get_mut(&definition.key)
+                    self.statics.get_mut(&key)
                 }
                 BytecodeStorage::Character => self
                     .characters
                     .get_mut(character)
-                    .and_then(|values| values.get_mut(&definition.key)),
+                    .and_then(|values| values.get_mut(&key)),
                 BytecodeStorage::FunctionLocal => None,
             };
         }
-        let use_legacy =
-            self.legacy
-                .get(&generation)
-                .is_some_and(|memory| match definition.storage {
-                    BytecodeStorage::Project
-                    | BytecodeStorage::Constant
-                    | BytecodeStorage::Calculated => memory.shared.contains_key(&definition.key),
-                    BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
-                        memory.statics.contains_key(&definition.key)
-                    }
-                    BytecodeStorage::Character => memory
-                        .characters
-                        .get(character)
-                        .is_some_and(|values| values.contains_key(&definition.key)),
-                    BytecodeStorage::FunctionLocal => false,
-                });
-        if use_legacy {
-            let memory = self.legacy.get_mut(&generation)?;
-            return match definition.storage {
+        let use_legacy = self
+            .legacy
+            .get(&generation)
+            .is_some_and(|memory| match storage {
                 BytecodeStorage::Project
                 | BytecodeStorage::Constant
-                | BytecodeStorage::Calculated => memory.shared.get_mut(&definition.key),
+                | BytecodeStorage::Calculated => memory.shared.contains_key(&key),
                 BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
-                    memory.statics.get_mut(&definition.key)
+                    memory.statics.contains_key(&key)
+                }
+                BytecodeStorage::Character => memory
+                    .characters
+                    .get(character)
+                    .is_some_and(|values| values.contains_key(&key)),
+                BytecodeStorage::FunctionLocal => false,
+            });
+        if use_legacy {
+            let memory = self.legacy.get_mut(&generation)?;
+            return match storage {
+                BytecodeStorage::Project
+                | BytecodeStorage::Constant
+                | BytecodeStorage::Calculated => memory.shared.get_mut(&key),
+                BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
+                    memory.statics.get_mut(&key)
                 }
                 BytecodeStorage::Character => memory
                     .characters
                     .get_mut(character)
-                    .and_then(|values| values.get_mut(&definition.key)),
+                    .and_then(|values| values.get_mut(&key)),
                 BytecodeStorage::FunctionLocal => None,
             };
         }
-        match definition.storage {
+        match storage {
             BytecodeStorage::Project | BytecodeStorage::Constant | BytecodeStorage::Calculated => {
-                self.shared.get_mut(&definition.key)
+                self.shared.get_mut(&key)
             }
             BytecodeStorage::FunctionStatic | BytecodeStorage::FunctionPersistent => {
-                self.statics.get_mut(&definition.key)
+                self.statics.get_mut(&key)
             }
             BytecodeStorage::Character => self
                 .characters
                 .get_mut(character)
-                .and_then(|values| values.get_mut(&definition.key)),
+                .and_then(|values| values.get_mut(&key)),
             BytecodeStorage::FunctionLocal => None,
         }
     }

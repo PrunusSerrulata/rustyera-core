@@ -113,7 +113,7 @@ fn apply_delta(snapshot: &mut PresentationSnapshot, delta: PresentationDelta) {
             PresentationOperation::SetRedraw { redraw } => snapshot.redraw = redraw,
             PresentationOperation::SetButtonGeneration { generation } => {
                 for line in &mut snapshot.history.logical_lines {
-                    disable_old_buttons(&mut line.runs, generation);
+                    super::projection::disable_old_buttons(&mut line.runs, generation);
                 }
             }
         }
@@ -170,12 +170,28 @@ fn presentation_deltas_replay_to_the_same_visible_state_as_a_snapshot() {
     apply_delta(&mut frontend, delta);
     assert_visible_snapshot_eq(&frontend, &model.snapshot());
 
-    let restored = serde_json::to_vec(&model).unwrap();
-    let mut restored: PresentationModel = serde_json::from_slice(&restored).unwrap();
-    assert!(matches!(
-        restored.next_update(),
-        PresentationUpdate::Snapshot(_)
-    ));
+    let expected = model.snapshot();
+    let mut legacy_payload = serde_json::to_value(&model).unwrap();
+    assert!(legacy_payload["lines"].is_array());
+    assert!(legacy_payload.get("history_edits").is_none());
+    legacy_payload["history_operations"] =
+        serde_json::to_value(vec![PresentationHistoryOperation::Append {
+            line: expected.history.logical_lines[0].clone(),
+        }])
+        .unwrap();
+    let mut restored: PresentationModel = serde_json::from_value(legacy_payload).unwrap();
+    assert!(restored.history_edits.is_empty());
+    let PresentationUpdate::Snapshot(restored_snapshot) = restored.next_update() else {
+        panic!("restored legacy delivery state must establish a snapshot");
+    };
+    assert_visible_snapshot_eq(&restored_snapshot, &expected);
+    assert!(
+        serde_json::to_value(&restored)
+            .unwrap()
+            .get("history_edits")
+            .is_none(),
+        "the runtime-only shared journal must not enter persisted snapshots"
+    );
 }
 
 #[test]
@@ -704,6 +720,382 @@ fn replay_button_description_uses_canonical_text_and_enabled_ordinal() {
 }
 
 #[test]
+fn button_generation_is_lazy_in_canonical_history_and_authoritative_at_boundaries() {
+    let mut model = PresentationModel::default();
+    let old = InteractionToken { epoch: 5, id: 1 };
+    model.append_button("old".into(), ProtocolValue::Integer(1), old, None);
+    model.set_button_generation(1);
+
+    assert!(matches!(
+        &model.pending_runs[0],
+        DisplayRun::Button {
+            enabled: true,
+            generation: 0,
+            ..
+        }
+    ));
+    assert!(model.enabled_button_value(old).is_none());
+    assert!(
+        model
+            .replay_button(old, crate::input_replay::ReplayValue::Integer("1".into()))
+            .is_none()
+    );
+    assert!(matches!(
+        &model.snapshot().history.logical_lines[0].runs[0],
+        DisplayRun::Button {
+            enabled: false,
+            generation: 0,
+            ..
+        }
+    ));
+
+    let current = InteractionToken { epoch: 5, id: 2 };
+    model.append_button("current".into(), ProtocolValue::Integer(2), current, None);
+    assert_eq!(
+        model.enabled_button_value(current),
+        Some(VmValue::Integer(2))
+    );
+
+    let mut document = erabasic_html::parse_document("<button value='3'>island</button>").unwrap();
+    assert!(install_test_html_interaction(&mut document.nodes, 5, 3, 1));
+    model.append_html_island(document);
+    model.set_button_generation(2);
+    let snapshot = model.snapshot();
+    let interaction = find_test_html_interaction(&snapshot.html_island[0].nodes)
+        .expect("projected HTML interaction");
+    assert!(!interaction.enabled);
+}
+
+fn install_test_html_interaction(
+    nodes: &mut [erabasic_html::HtmlNode],
+    epoch: u64,
+    id: u64,
+    generation: u64,
+) -> bool {
+    for node in nodes {
+        let erabasic_html::HtmlNode::Element {
+            interaction,
+            children,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        if interaction.is_none() {
+            *interaction = Some(erabasic_html::HtmlInteraction {
+                epoch,
+                id,
+                integer_value: Some(3),
+                string_value: None,
+                generation,
+                enabled: true,
+            });
+            return true;
+        }
+        if install_test_html_interaction(children, epoch, id, generation) {
+            return true;
+        }
+    }
+    false
+}
+
+fn find_test_html_interaction(
+    nodes: &[erabasic_html::HtmlNode],
+) -> Option<&erabasic_html::HtmlInteraction> {
+    for node in nodes {
+        let erabasic_html::HtmlNode::Element {
+            interaction,
+            children,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        if interaction.is_some() {
+            return interaction.as_ref();
+        }
+        if let Some(interaction) = find_test_html_interaction(children) {
+            return Some(interaction);
+        }
+    }
+    None
+}
+
+#[test]
+fn deferred_tail_replacements_collapse_to_the_final_frame() {
+    let mut model = PresentationModel::default();
+    model.append_text("stable".into(), false);
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+
+    for frame in ["frame 0", "frame 1", "final"] {
+        model.delete_last_lines(1);
+        model.append_text(frame.into(), false);
+    }
+
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("tail replacement must remain incremental");
+    };
+    let structural_operations = delta
+        .operations
+        .iter()
+        .filter(|operation| {
+            matches!(
+                operation,
+                PresentationOperation::AppendLine { .. }
+                    | PresentationOperation::DeleteLines { .. }
+            )
+        })
+        .count();
+    assert_eq!(structural_operations, 2);
+
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn production_history_reducer_preserves_button_generations_and_structural_edits() {
+    let mut model = PresentationModel::default();
+    model.settings.maximum_physical_lines = 3;
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+
+    model.append_button(
+        "old".into(),
+        ProtocolValue::Integer(1),
+        InteractionToken { epoch: 1, id: 1 },
+        None,
+    );
+    model.append_text(String::new(), false);
+    model.set_button_generation(1);
+    model.append_button(
+        "current".into(),
+        ProtocolValue::Integer(2),
+        InteractionToken { epoch: 1, id: 2 },
+        None,
+    );
+    model.append_text(String::new(), false);
+    model.set_button_generation(2);
+    model.set_button_generation(3);
+    model.append_button(
+        "new".into(),
+        ProtocolValue::Integer(3),
+        InteractionToken { epoch: 1, id: 3 },
+        None,
+    );
+    model.append_text(String::new(), false);
+    model.append_text("trimmed by maxlog".into(), false);
+    model.delete_last_lines(1);
+    model.print_temporary_line("temporary one".into());
+    model.print_temporary_line("temporary two".into());
+
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("mixed history edits must remain incremental");
+    };
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn first_temporary_line_appends_without_a_spurious_replacement() {
+    let mut model = PresentationModel::default();
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+
+    model.print_temporary_line("first".into());
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("first temporary line must remain incremental");
+    };
+    assert!(matches!(
+        delta.operations.as_slice(),
+        [PresentationOperation::AppendLine { line }]
+            if line.temporary && line.line_end
+    ));
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn delivered_committed_temporary_line_is_deleted_then_appended() {
+    let mut model = PresentationModel::default();
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+    model.print_temporary_line("first".into());
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("first temporary line must remain incremental");
+    };
+    apply_delta(&mut frontend, delta);
+
+    model.print_temporary_line("replacement".into());
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("committed temporary replacement must remain incremental");
+    };
+    assert!(matches!(
+        delta.operations.as_slice(),
+        [
+            PresentationOperation::DeleteLines { count: 1 },
+            PresentationOperation::AppendLine { line },
+        ] if line.temporary && line.line_end
+    ));
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn delivered_pending_temporary_line_is_replaced_in_place() {
+    let mut model = PresentationModel::default();
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+    model.append_print_text("pending".into(), true, false);
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("pending temporary line must remain incremental");
+    };
+    apply_delta(&mut frontend, delta);
+
+    model.print_temporary_line("replacement".into());
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("delivered pending replacement must remain incremental");
+    };
+    assert!(matches!(
+        delta.operations.as_slice(),
+        [PresentationOperation::ReplaceLine { line, .. }]
+            if line.temporary && line.line_end
+    ));
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn undelivered_pending_temporary_line_emits_only_its_replacement() {
+    let mut model = PresentationModel::default();
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+    model.append_print_text("never delivered".into(), true, false);
+    model.print_temporary_line("replacement".into());
+
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("undelivered pending replacement must remain incremental");
+    };
+    assert!(matches!(
+        delta.operations.as_slice(),
+        [PresentationOperation::AppendLine { line }]
+            if line.temporary && line.line_end
+    ));
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn empty_temporary_text_forces_an_empty_temporary_line() {
+    let mut model = PresentationModel::default();
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+
+    model.print_temporary_line(String::new());
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("empty temporary line must remain incremental");
+    };
+    assert!(matches!(
+        delta.operations.as_slice(),
+        [PresentationOperation::AppendLine { line }]
+            if line.temporary && line.line_end && line.runs.iter().all(run_is_empty)
+    ));
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn pending_line_deletions_distinguish_undelivered_and_delivered_rows() {
+    let mut model = PresentationModel::default();
+    model.append_text("baseline one".into(), false);
+    model.append_text("baseline two".into(), false);
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+
+    model.append_print_text("never delivered".into(), false, false);
+    model.delete_last_lines(1);
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("undelivered pending deletion must remain incremental");
+    };
+    assert!(
+        delta
+            .operations
+            .iter()
+            .all(|operation| !matches!(operation, PresentationOperation::DeleteLines { .. }))
+    );
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+
+    model.append_print_text("delivered pending".into(), false, false);
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("pending line must be delivered incrementally");
+    };
+    apply_delta(&mut frontend, delta);
+    model.delete_last_lines(2);
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("pending plus committed deletion must remain incremental");
+    };
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn delivered_pending_commit_then_delete_preserves_the_frontend_deletion() {
+    let mut model = PresentationModel::default();
+    model.append_text("baseline".into(), false);
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+    model.append_print_text("pending".into(), false, false);
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("pending line must be delivered incrementally");
+    };
+    apply_delta(&mut frontend, delta);
+
+    model.flush_pending_line();
+    model.delete_last_lines(1);
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("pending commit and deletion must remain incremental");
+    };
+    assert!(
+        delta
+            .operations
+            .iter()
+            .any(|operation| matches!(operation, PresentationOperation::DeleteLines { count: 1 }))
+    );
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn pending_button_generation_projects_the_final_enabled_state() {
+    let mut model = PresentationModel::default();
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+    model.append_button(
+        "pending old".into(),
+        ProtocolValue::Integer(1),
+        InteractionToken { epoch: 1, id: 1 },
+        None,
+    );
+    model.set_button_generation(1);
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("pending generation update must remain incremental");
+    };
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
 fn automatic_buttons_are_grouped_after_the_complete_print_buffer_is_committed() {
     let mut model = PresentationModel::default();
     model.append_print_text("[1] one  ".into(), false, false);
@@ -896,4 +1288,132 @@ fn max_log_trims_oldest_physical_lines_without_changing_linecount() {
             .iter()
             .all(|operation| matches!(operation, PresentationHistoryOperation::Append { .. }))
     );
+}
+
+#[test]
+fn canonical_history_and_delivery_journal_share_committed_lines() {
+    let mut model = PresentationModel::default();
+    model.append_text("shared".into(), false);
+
+    let canonical = model.lines.back().expect("committed canonical line");
+    let PresentationHistoryEdit::Append { line: journal } = model
+        .history_edits
+        .last()
+        .expect("committed journal append")
+    else {
+        panic!("committed line must be journaled as an append");
+    };
+    assert!(Arc::ptr_eq(canonical, journal));
+}
+
+#[test]
+fn canonical_cow_mutations_do_not_rewrite_queued_journal_lines() {
+    let mut model = PresentationModel::default();
+    let PresentationUpdate::Snapshot(_) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+    let old = InteractionToken { epoch: 1, id: 1 };
+    model.append_button("old".into(), ProtocolValue::Integer(1), old, None);
+    model.append_text(String::new(), false);
+    let PresentationHistoryEdit::Append { line: journal } =
+        model.history_edits.last().expect("queued journal append")
+    else {
+        panic!("committed line must be journaled as an append");
+    };
+    let journal = Arc::clone(journal);
+
+    let rebound = InteractionToken { epoch: 2, id: 9 };
+    model.rebind_interactions(&BTreeMap::from([(old, rebound)]), &BTreeMap::new());
+    assert!(!Arc::ptr_eq(model.lines.back().unwrap(), &journal));
+    assert!(matches!(
+        &journal.runs[0],
+        DisplayRun::Button { token, .. } if *token == old
+    ));
+    assert!(matches!(
+        &model.lines.back().unwrap().runs[0],
+        DisplayRun::Button { token, .. } if *token == rebound
+    ));
+
+    let PresentationUpdate::Snapshot(snapshot) = model.next_update() else {
+        panic!("interaction rebinding requires an authoritative snapshot");
+    };
+    assert_visible_snapshot_eq(&snapshot, &model.snapshot());
+}
+
+#[test]
+fn default_style_cow_delivers_the_canonical_replacement() {
+    let mut model = PresentationModel::default();
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+    model.append_text("styled".into(), false);
+    let PresentationHistoryEdit::Append { line: journal } =
+        model.history_edits.last().expect("queued journal append")
+    else {
+        panic!("committed line must be journaled as an append");
+    };
+    let journal = Arc::clone(journal);
+    let mut next = model.default_style.clone();
+    next.font_family = Some("replacement".into());
+    model.apply_project_default_style(next);
+
+    assert!(!Arc::ptr_eq(model.lines.back().unwrap(), &journal));
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("default style replacement must remain incremental");
+    };
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn redraw_tail_replacement_keeps_the_runtime_journal_bounded() {
+    let mut model = PresentationModel::default();
+    model.settings.maximum_physical_lines = 2;
+    model.append_text("baseline one".into(), false);
+    model.append_text("baseline two".into(), false);
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+
+    for frame in 0..100 {
+        model.delete_last_lines(2);
+        model.append_text(format!("frame {frame} one"), false);
+        model.append_text(format!("frame {frame} two"), false);
+        assert!(model.history_edits.len() <= 3);
+    }
+
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("replacement must remain incremental");
+    };
+    assert_eq!(delta.operations.len(), 3);
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn max_log_rollover_delivers_only_the_retained_window() {
+    let mut model = PresentationModel::default();
+    model.settings.maximum_physical_lines = 2;
+    model.append_text("baseline one".into(), false);
+    model.append_text("baseline two".into(), false);
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+
+    for line in 0..100 {
+        model.append_text(format!("rollover {line}"), false);
+    }
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("rollover must remain incremental");
+    };
+    assert!(matches!(
+        delta.operations.as_slice(),
+        [
+            PresentationOperation::TrimLines { count: 2 },
+            PresentationOperation::AppendLine { .. },
+            PresentationOperation::AppendLine { .. }
+        ]
+    ));
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
 }

@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
 use crate::debug::DebugState;
+use crate::memory::SymbolKeyHasher;
 use crate::regex_compat::RegexCache;
 use crate::{
     FiberId, FiberStatus, FrameId, GenerationId, HostReady, HostRequestId, Memory, PlaceDescriptor,
@@ -17,6 +19,7 @@ use erabasic_bytecode::{
 };
 use erabasic_validator::ValidatedArtifact;
 
+mod path_memo;
 mod planning;
 
 use planning::{
@@ -44,14 +47,16 @@ pub(crate) struct StructuredJumpTransition {
     pub entered: Vec<StructuredScopeKind>,
 }
 
+type SymbolMap<T> = HashMap<SymbolKey, T, BuildHasherDefault<SymbolKeyHasher>>;
+
 #[derive(Clone, Debug)]
 pub(crate) struct ProgramGeneration {
     pub artifact: Arc<BytecodeArtifact>,
-    function_indices: HashMap<SymbolKey, usize>,
+    function_indices: SymbolMap<usize>,
     function_name_indices: HashMap<String, usize>,
     // This map is lookup-only; authoritative globals remain canonically ordered
     // in the artifact, so hash iteration can never affect serialized output.
-    global_indices: HashMap<SymbolKey, usize>,
+    global_indices: SymbolMap<usize>,
     variable_global_indices: Vec<Vec<u32>>,
     bulk_fill_loop_plans: Vec<Vec<(u32, BulkFillLoopPlan)>>,
     literal_group_match_plans: Vec<Vec<(u32, LiteralGroupMatchPlan)>>,
@@ -62,11 +67,12 @@ pub(crate) struct ProgramGeneration {
     // Runtime inspection historically exposes otherwise unique function variables.
     runtime_name_fallback_indices: HashMap<String, usize>,
     target_global_index: Option<usize>,
-    native_import_indices: HashMap<SymbolKey, usize>,
-    host_import_indices: HashMap<SymbolKey, usize>,
+    native_import_indices: SymbolMap<usize>,
+    host_import_indices: SymbolMap<usize>,
     normalized_native_names: Vec<Arc<str>>,
-    function_static_indices: BTreeMap<SymbolKey, Vec<usize>>,
-    function_local_indices: BTreeMap<SymbolKey, Vec<usize>>,
+    normalized_host_names: Vec<Arc<str>>,
+    function_static_indices: SymbolMap<Vec<usize>>,
+    function_local_indices: SymbolMap<Vec<usize>>,
     instruction_source_indices: Vec<Vec<u32>>,
     structured_scope_ranges: Vec<Vec<StructuredScopeRange>>,
 }
@@ -115,7 +121,10 @@ impl ProgramGeneration {
         // Era projects commonly contain tens of thousands of functions. Resolving the
         // active function with a linear scan for every instruction makes otherwise
         // lightweight EraBasic execution quadratic in the project size.
-        let mut function_indices = HashMap::with_capacity(artifact.functions.len());
+        let mut function_indices = SymbolMap::with_capacity_and_hasher(
+            artifact.functions.len(),
+            BuildHasherDefault::default(),
+        );
         for (index, function) in artifact.functions.iter().enumerate() {
             function_indices.insert(function.key, index);
             advance_vm_preparation(
@@ -139,7 +148,10 @@ impl ProgramGeneration {
                 &mut next_checkpoint,
             );
         }
-        let mut global_indices = HashMap::with_capacity(artifact.globals.len());
+        let mut global_indices = SymbolMap::with_capacity_and_hasher(
+            artifact.globals.len(),
+            BuildHasherDefault::default(),
+        );
         for (index, global) in artifact.globals.iter().enumerate() {
             global_indices.insert(global.key, index);
             advance_vm_preparation(
@@ -206,7 +218,7 @@ impl ProgramGeneration {
             );
         }
         let target_global_index = global_name_indices.get("TARGET").copied();
-        let mut native_import_indices = HashMap::new();
+        let mut native_import_indices = SymbolMap::default();
         for (index, import) in artifact.native_imports.iter().enumerate() {
             native_import_indices
                 .entry(import.import.key)
@@ -217,12 +229,17 @@ impl ProgramGeneration {
             .iter()
             .map(|import| Arc::<str>::from(import.import.name.to_ascii_lowercase()))
             .collect();
-        let mut host_import_indices = HashMap::new();
+        let mut host_import_indices = SymbolMap::default();
         for (index, import) in artifact.host_imports.iter().enumerate() {
             host_import_indices
                 .entry(import.import.key)
                 .or_insert(index);
         }
+        let normalized_host_names = artifact
+            .host_imports
+            .iter()
+            .map(|import| Arc::<str>::from(import.import.name.to_ascii_uppercase()))
+            .collect();
         let mut bulk_fill_loop_plans = Vec::with_capacity(artifact.functions.len());
         for (function_index, function) in artifact.functions.iter().enumerate() {
             bulk_fill_loop_plans.push(
@@ -312,8 +329,8 @@ impl ProgramGeneration {
                 &mut next_checkpoint,
             );
         }
-        let mut function_static_indices = BTreeMap::<SymbolKey, Vec<usize>>::new();
-        let mut function_local_indices = BTreeMap::<SymbolKey, Vec<usize>>::new();
+        let mut function_static_indices = SymbolMap::<Vec<usize>>::default();
+        let mut function_local_indices = SymbolMap::<Vec<usize>>::default();
         let mut function_names_by_key = BTreeMap::<SymbolKey, String>::new();
         let mut function_keys_by_name = BTreeMap::<String, Vec<SymbolKey>>::new();
         for function in &artifact.functions {
@@ -434,6 +451,7 @@ impl ProgramGeneration {
             native_import_indices,
             host_import_indices,
             normalized_native_names,
+            normalized_host_names,
             function_static_indices,
             function_local_indices,
             instruction_source_indices,
@@ -464,30 +482,37 @@ impl ProgramGeneration {
         let ranges = self
             .structured_scope_ranges
             .get(*self.function_index(function)?)?;
-        let containing = |instruction| {
-            ranges
-                .iter()
-                .filter(|range| range.start <= instruction && instruction <= range.end)
-                .collect::<Vec<_>>()
-        };
-        let source = containing(source);
-        let target = containing(target);
-        let common = source
+        let mut source_ranges = ranges
             .iter()
-            .zip(&target)
-            .take_while(|(left, right)| left.kind == right.kind && left.opener == right.opener)
-            .count();
-        let retained = &target[..common];
+            .filter(|range| range.start <= source && source <= range.end);
+        let mut target_ranges = ranges
+            .iter()
+            .filter(|range| range.start <= target && target <= range.end);
+        let mut retain_loops = 0;
+        let mut retain_selects = 0;
+        let entered = loop {
+            match (source_ranges.next(), target_ranges.next()) {
+                (Some(left), Some(right))
+                    if left.kind == right.kind && left.opener == right.opener =>
+                {
+                    match right.kind {
+                        StructuredScopeKind::Loop => retain_loops += 1,
+                        StructuredScopeKind::Select => retain_selects += 1,
+                    }
+                }
+                (_, Some(first_entered)) => {
+                    break std::iter::once(first_entered)
+                        .chain(target_ranges)
+                        .map(|range| range.kind)
+                        .collect();
+                }
+                (_, None) => break Vec::new(),
+            }
+        };
         Some(StructuredJumpTransition {
-            retain_loops: retained
-                .iter()
-                .filter(|range| range.kind == StructuredScopeKind::Loop)
-                .count(),
-            retain_selects: retained
-                .iter()
-                .filter(|range| range.kind == StructuredScopeKind::Select)
-                .count(),
-            entered: target[common..].iter().map(|range| range.kind).collect(),
+            retain_loops,
+            retain_selects,
+            entered,
         })
     }
 
@@ -580,8 +605,12 @@ impl ProgramGeneration {
         self.host_import_indices.get(&key).copied()
     }
 
-    pub(crate) fn normalized_native_name(&self, index: usize) -> Option<Arc<str>> {
-        self.normalized_native_names.get(index).cloned()
+    pub(crate) fn normalized_native_name(&self, index: usize) -> Option<&str> {
+        self.normalized_native_names.get(index).map(AsRef::as_ref)
+    }
+
+    pub(crate) fn normalized_host_name(&self, index: usize) -> Option<&str> {
+        self.normalized_host_names.get(index).map(AsRef::as_ref)
     }
 
     pub(crate) fn function_statics(
@@ -790,9 +819,11 @@ mod runtime_types;
 
 pub use runtime_types::Vm;
 pub(crate) use runtime_types::{
-    BulkFillLoopPlan, EventDispatch, EventDispatchEntry, Fiber, FiberState, FindElementCacheKey,
-    FindElementNeedle, ForLoopState, Frame, FunctionMemoEntry, FunctionMemoKey, FunctionMemoPlan,
-    LiteralGroupMatchPlan, MemoValue, MemoizedIndexedReadPlan, WaitingHost,
+    ActivePathMemo, BulkFillLoopPlan, EventDispatch, EventDispatchEntry, Fiber, FiberState,
+    FindElementCacheKey, FindElementNeedle, ForLoopState, Frame, FunctionMemoEntry,
+    FunctionMemoKey, FunctionMemoPlan, LiteralGroupMatchPlan, MemoValue, MemoizedIndexedReadPlan,
+    PathMemoBaseKey, PathMemoDependency, PathMemoEntry, PathMemoMutation, PathMemoPlace,
+    WaitingHost,
 };
 
 pub(crate) use frames::{

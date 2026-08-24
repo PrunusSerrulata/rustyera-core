@@ -312,7 +312,12 @@ impl Vm {
             let character = usize::try_from(write.target.target.character.unwrap_or(0))
                 .map_err(|_| VmError::InvalidArguments("character index is too large".into()))?;
             self.memory
-                .cell_mut(write.target.generation, &definition, character)
+                .cell_mut(
+                    write.target.generation,
+                    definition.key,
+                    definition.storage,
+                    character,
+                )
                 .ok_or_else(|| VmError::InvalidArguments("variable storage is unavailable".into()))?
                 .write(&write.target.target.indices, write.value.clone())
                 .map_err(VmError::InvalidArguments)

@@ -2,6 +2,16 @@
 #[allow(clippy::wildcard_imports)]
 use super::super::*;
 
+fn train_command_names(vm: &RuntimeVm) -> &[Option<String>] {
+    vm.vm()
+        .artifact()
+        .project_data
+        .static_data
+        .name_tables
+        .get(&erabasic_data::NameTableKind::Train)
+        .map_or(&[], |table| table.names.as_slice())
+}
+
 impl RuntimeSession {
     #[allow(clippy::too_many_lines)]
     pub(in super::super) fn finish_flow_input(
@@ -467,15 +477,7 @@ impl RuntimeSession {
         &mut self,
         vm: &mut RuntimeVm,
     ) -> Result<(), RuntimeError> {
-        let names = vm
-            .vm()
-            .artifact()
-            .project_data
-            .static_data
-            .name_tables
-            .get(&erabasic_data::NameTableKind::Train)
-            .map(|table| table.names.clone())
-            .unwrap_or_default();
+        let name_count = train_command_names(vm).len();
         let default_enabled = vm
             .vm()
             .artifact()
@@ -484,10 +486,13 @@ impl RuntimeSession {
             .replace
             .com_able_default
             != 0;
-        while self.controller.train_scan < names.len() {
+        while self.controller.train_scan < name_count {
             let command = self.controller.train_scan;
             self.controller.train_scan += 1;
-            if names[command].is_none() {
+            let exists = train_command_names(vm)
+                .get(command)
+                .is_some_and(Option::is_some);
+            if !exists {
                 continue;
             }
             if self.dispatch_system_function(vm, &format!("COM_ABLE{command}"), false)? {
@@ -500,18 +505,14 @@ impl RuntimeSession {
             }
         }
         if !self.controller.continuous_train {
-            for (display, command) in self
-                .controller
-                .train_commands
-                .clone()
-                .into_iter()
-                .enumerate()
-            {
+            for display in 0..self.controller.train_commands.len() {
+                let command = self.controller.train_commands[display];
                 let name = usize::try_from(command)
                     .ok()
-                    .and_then(|index| names.get(index))
+                    .and_then(|index| train_command_names(vm).get(index))
                     .and_then(Option::as_deref)
-                    .unwrap_or("");
+                    .unwrap_or("")
+                    .to_owned();
                 let token = self.allocate_interaction();
                 let display = i64::try_from(display).unwrap_or(i64::MAX);
                 self.presentation.append_button(
@@ -599,10 +600,6 @@ impl RuntimeSession {
             self.operations.activate_input(pending);
             return self.finish_or_defer_automatic_input(submission);
         }
-        if self.undo_replay.is_none() {
-            self.undo_token = None;
-            self.emit_input_undo_state()?;
-        }
         let automatic_system_value = (pending.wait.system_input
             && (self.flow_input_force_skip || (self.flow_input_can_skip && self.message_skip)))
             .then(|| {
@@ -629,6 +626,10 @@ impl RuntimeSession {
             self.operations.activate_input(pending);
             return self.finish_or_defer_automatic_input(submission);
         }
+        if self.undo_replay.is_none() {
+            self.undo_token = None;
+            self.emit_input_undo_state()?;
+        }
         let count = self.presentation.pending_auto_button_values().len();
         let tokens = (0..count)
             .map(|_| self.allocate_interaction())
@@ -641,12 +642,8 @@ impl RuntimeSession {
         // being appended to the menu line that opened the wait.
         self.presentation.flush_pending_line();
         self.presentation.set_wait(Some(pending.wait.clone()));
-        self.emit(
-            RuntimeMessage::WaitChanged(WaitChange::Opened(pending.wait.clone())),
-            None,
-        )?;
+        self.emit_wait_change(WaitChange::Opened(pending.wait.clone()))?;
         self.operations.activate_input(pending);
-        self.emit_presentation()?;
         if pause_runtime {
             self.set_phase(RuntimePhase::WaitingInput)
         } else {
@@ -675,10 +672,6 @@ impl RuntimeSession {
             return Ok(());
         }
         self.presentation.set_wait(None);
-        self.emit(
-            RuntimeMessage::WaitChanged(WaitChange::Closed(wait_id)),
-            None,
-        )?;
-        self.emit_presentation()
+        self.emit_wait_change(WaitChange::Closed(wait_id))
     }
 }

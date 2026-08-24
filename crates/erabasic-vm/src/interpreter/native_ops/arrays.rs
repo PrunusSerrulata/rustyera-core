@@ -65,6 +65,24 @@ pub(in super::super) fn array_snapshot(
     fiber: &Fiber,
     place: &PlaceDescriptor,
 ) -> Result<Vec<VmValue>, VmError> {
+    let array = one_dimensional_array_place(vm, fiber, place)?;
+    vm.read_place_array(fiber, &array)
+}
+
+pub(in super::super) fn array_len(
+    vm: &Vm,
+    fiber: &Fiber,
+    place: &PlaceDescriptor,
+) -> Result<usize, VmError> {
+    let array = one_dimensional_array_place(vm, fiber, place)?;
+    vm.place_array_len(fiber, &array)
+}
+
+fn one_dimensional_array_place(
+    vm: &Vm,
+    fiber: &Fiber,
+    place: &PlaceDescriptor,
+) -> Result<PlaceDescriptor, VmError> {
     let generation = fiber.frames.last().expect("frame exists").generation;
     let program = vm
         .generations
@@ -85,7 +103,7 @@ pub(in super::super) fn array_snapshot(
     // complete array. The operation range comes from the following arguments.
     let mut array = place.clone();
     array.indices.clear();
-    vm.read_place_array(fiber, &array)
+    Ok(array)
 }
 
 pub(in super::super) fn commit_array(
@@ -378,32 +396,47 @@ pub(in super::super) fn execute_find_element(
         ));
     }
     let exact = !matches!(integer_argument(arguments, 4), Ok(0) | Err(_));
-    let cache_key =
-        vm.place_array_revision(fiber, &array)?
-            .and_then(|(generation, variable, revision)| {
-                let needle = match needle {
-                    VmValue::Integer(value) => FindElementNeedle::Integer(*value),
-                    VmValue::String(value) => FindElementNeedle::String(value.clone()),
-                    VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => return None,
-                };
-                Some(FindElementCacheKey {
-                    generation,
-                    variable,
-                    revision,
-                    start,
-                    end,
-                    last,
-                    exact,
-                    needle,
-                })
-            });
-    if let Some(result) = cache_key
+    let array_revision = vm.place_array_revision(fiber, &array)?;
+    let cache_key = array_revision
         .as_ref()
-        .and_then(|key| vm.find_element_cache.get(key))
+        .and_then(|(generation, variable, revision)| {
+            let needle = match needle {
+                VmValue::Integer(value) => FindElementNeedle::Integer(*value),
+                VmValue::String(value) => FindElementNeedle::String(value.clone()),
+                VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => return None,
+            };
+            Some(FindElementCacheKey {
+                generation: *generation,
+                variable: *variable,
+                revision: *revision,
+                start,
+                end,
+                last,
+                exact,
+                needle,
+            })
+        });
+    let path_memo_active = vm.path_memo_is_active_for(fiber.id);
+    let revision_covers_read = path_memo_active
+        && array_revision
+            .as_ref()
+            .is_some_and(|(generation, variable, revision)| {
+                vm.observe_path_memo_cell_revision(fiber.id, *generation, *variable, *revision)
+            });
+    if (!path_memo_active || revision_covers_read)
+        && let Some(result) = cache_key
+            .as_ref()
+            .and_then(|key| vm.find_element_cache.get(key))
     {
         return Ok(VmValue::Integer(*result));
     }
-    let values = vm.read_place_array_range(fiber, &array, start, end)?;
+    // Mutation observers invalidate a trace that later writes this cell, so one
+    // revision dependency safely covers both a cache hit and the whole scan.
+    let values = if revision_covers_read {
+        vm.read_place_array_range_unobserved(fiber, &array, start, end)?
+    } else {
+        vm.read_place_array_range(fiber, &array, start, end)?
+    };
     // FINDELEMENT treats the string needle as one regular expression for the
     // whole query. Compile it lazily so an empty range keeps its historical
     // no-op behavior, but do not rebuild the same automaton for every element.

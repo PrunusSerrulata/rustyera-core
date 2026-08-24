@@ -334,6 +334,14 @@ fn compiled_split_preserves_empty_fields_and_reports_the_full_count() {
 }
 
 #[test]
+fn compiled_split_uses_the_whole_indexed_array_and_preserves_its_tail() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n#DIMS TEMP, 2048\nTEMP:3 '= \"tail\"\nSPLIT \"a/b\", \"/\", TEMP:2, RESULT\nRETURN (TEMP:0 == \"a\") * 1000 + (TEMP:1 == \"b\") * 100 + (TEMP:3 == \"tail\") * 10 + RESULT\n",
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(1112));
+}
+
+#[test]
 fn getnum_resolves_the_referenced_builtin_name_table_at_runtime() {
     let mut data = project_data();
     data.static_data

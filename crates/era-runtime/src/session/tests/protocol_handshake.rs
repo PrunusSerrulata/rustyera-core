@@ -125,6 +125,77 @@ fn presentation_updates_are_coalesced_until_the_drive_boundary() {
 }
 
 #[test]
+fn wait_lifecycle_messages_follow_their_presentation_revision() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.presentation.snapshot_for_delivery();
+    let mut wait = InputWait {
+        wait_id: 7,
+        kind: WaitKind::StringValue,
+        stability: WaitStability::StableInput,
+        one_input: false,
+        stop_message_skip: false,
+        system_input: false,
+        mouse_input: false,
+        default_value: None,
+        deadline_ns: None,
+        display_time: false,
+        timeout_message: None,
+        submission_token: InteractionToken { epoch: 1, id: 9 },
+        countdown_remaining_ms: None,
+    };
+
+    session.presentation.set_wait(Some(wait.clone()));
+    session
+        .emit_wait_change(WaitChange::Opened(wait.clone()))
+        .unwrap();
+    assert_presentation_precedes_wait_change(&drain(&mut session), "opened");
+
+    wait.countdown_remaining_ms = Some(250);
+    session.presentation.set_wait(Some(wait.clone()));
+    session.emit_wait_change(WaitChange::Updated(wait)).unwrap();
+    assert_presentation_precedes_wait_change(&drain(&mut session), "updated");
+
+    session.presentation.set_wait(None);
+    session.emit_wait_change(WaitChange::Closed(7)).unwrap();
+    let close_messages = drain(&mut session);
+    assert!(matches!(
+        close_messages.as_slice(),
+        [RuntimeMessage::WaitChanged(WaitChange::Closed(7))]
+    ));
+    session.flush_presentation_for_observation().unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+    )));
+}
+
+fn assert_presentation_precedes_wait_change(messages: &[RuntimeMessage], expected: &str) {
+    let presentation = messages
+        .iter()
+        .position(|message| {
+            matches!(
+                message,
+                RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+            )
+        })
+        .expect("presentation update");
+    let wait = messages
+        .iter()
+        .position(|message| {
+            matches!(
+                (expected, message),
+                ("opened", RuntimeMessage::WaitChanged(WaitChange::Opened(_)))
+                    | (
+                        "updated",
+                        RuntimeMessage::WaitChanged(WaitChange::Updated(_))
+                    )
+            )
+        })
+        .expect("wait lifecycle message");
+    assert!(presentation < wait, "{messages:#?}");
+}
+
+#[test]
 fn resource_replay_is_materialized_once_when_a_deferred_frame_is_published() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     session.presentation.snapshot_for_delivery();

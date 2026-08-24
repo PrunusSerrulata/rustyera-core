@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn registered_override_is_not_path_memo_safe() {
+    let key = SymbolKey([7; 16]);
+    let mut registry = NativeServiceRegistry::default();
+    registry.path_memo_safe_keys.insert(key);
+
+    assert!(registry.path_memo_safe(key));
+    assert!(registry.register(
+        key,
+        CoreNative {
+            name: "abs".into(),
+            legacy_encoding: LegacyEncoding::default(),
+        },
+    ));
+    assert!(!registry.path_memo_safe(key));
+}
+
+#[test]
 fn form_width_honors_alignment_and_unicode_display_columns() {
     assert_eq!(
         apply_width("7", Some(&VmValue::Integer(3)), Some(&VmValue::Integer(0)),).unwrap(),

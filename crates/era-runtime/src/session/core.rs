@@ -120,6 +120,7 @@ impl RuntimeSession {
             debug_output_subscribed: false,
             projection_environment_revision: 0,
             projection_space_revision: 0,
+            last_projection_state: None,
             client_width: 760,
             client_height: 480,
             line_columns: DEFAULT_LINE_COLUMNS,
@@ -317,15 +318,13 @@ impl RuntimeSession {
                 };
                 let quantum = (|| {
                     synchronize_line_count(&mut self.presentation, &mut vm)?;
-                    let report = vm.drive(
-                        RunBudget {
-                            maximum_instructions: remaining
-                                .min(self.options.limits.maximum_drive_instructions),
-                            maximum_host_calls: self.options.limits.maximum_pending_requests,
-                            fiber_quantum: RunBudget::default().fiber_quantum,
-                        },
-                        VmDriveMode::Normal,
-                    );
+                    let run_budget = RunBudget {
+                        maximum_instructions: remaining
+                            .min(self.options.limits.maximum_drive_instructions),
+                        maximum_host_calls: self.options.limits.maximum_pending_requests,
+                        fiber_quantum: RunBudget::default().fiber_quantum,
+                    };
+                    let report = self.drive_vm_quantum(&mut vm, run_budget);
                     let executed = report.instructions;
                     let stop = report.stop;
                     let made_progress = executed != 0 || !report.events.is_empty();
@@ -371,7 +370,7 @@ impl RuntimeSession {
         let cooperative_background_work = self.poll_cooperative_background_work()?;
         #[cfg(all(not(target_arch = "wasm32"), not(test)))]
         let cooperative_background_work = false;
-        self.flush_presentation()?;
+        self.flush_presentation_at_drive_boundary()?;
         let state = self.drive_state();
         Ok(RuntimeDriveReport {
             state,
@@ -380,6 +379,23 @@ impl RuntimeSession {
             queued_envelopes: u32::try_from(self.outbound.len()).unwrap_or(u32::MAX),
             cooperative_background_work,
         })
+    }
+
+    fn drive_vm_quantum(&mut self, vm: &mut RuntimeVm, budget: RunBudget) -> VmPortDriveReport {
+        let replace = &vm.vm().artifact().project_data.static_data.replace;
+        let (bar_char_1, bar_char_2) = (replace.bar_char_1, replace.bar_char_2);
+        let line_count_place = global_place(vm, "LINECOUNT");
+        let report = {
+            let mut immediate =
+                self.immediate_runtime_host(bar_char_1, bar_char_2, line_count_place);
+            vm.drive_with_immediate_host(budget, VmDriveMode::Normal, &mut immediate)
+        };
+        if self.pending_presentation_update {
+            // Immediate PRINT uses the same presentation boundary as the slow Host dispatcher.
+            // Materialize ready resources before handling the next fallback event.
+            self.materialize_resource_replay_if_ready();
+        }
+        report
     }
 
     fn poll_native_project_tasks(&mut self) -> Result<(), RuntimeError> {

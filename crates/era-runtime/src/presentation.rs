@@ -1,15 +1,17 @@
+#[cfg(test)]
+use era_runtime_protocol::PresentationHistoryOperation;
 use era_runtime_protocol::{
     CellAlignment, DisplayLine, DisplayRun, InteractionToken, LineAlignment, LogicalLength,
-    MediaPlacement, PresentationHistoryOperation, PresentationLength, ProtocolValue,
-    RationalOpacity, SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef,
-    TextStyle,
+    MediaPlacement, PresentationLength, ProtocolValue, RationalOpacity, SeparatorRole, Shape,
+    SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
 };
 use erabasic_vm::{CharacterWidthMode, VmValue};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 mod model;
 
-use self::model::{PresentationDelivery, PresentationDirty};
+use self::model::{PresentationDelivery, PresentationDirty, PresentationHistoryEdit};
 pub(crate) use self::model::{PresentationModel, PresentationUpdate};
 
 impl Default for PresentationModel {
@@ -39,7 +41,7 @@ impl PresentationModel {
     }
 
     pub(crate) fn last_line_auto_button_values(&self) -> Vec<i64> {
-        let Some(line) = self.lines.last() else {
+        let Some(line) = self.lines.back() else {
             return Vec::new();
         };
         auto_button_values(&line.runs, &self.last_committed_plain_runs)
@@ -53,13 +55,13 @@ impl PresentationModel {
         self.pending_runs
             .iter()
             .rev()
-            .find_map(|run| enabled_button_value(run, token))
+            .find_map(|run| enabled_button_value(run, token, self.button_generation))
             .or_else(|| {
                 self.lines.iter().rev().find_map(|line| {
                     line.runs
                         .iter()
                         .rev()
-                        .find_map(|run| enabled_button_value(run, token))
+                        .find_map(|run| enabled_button_value(run, token, self.button_generation))
                 })
             })
     }
@@ -69,21 +71,35 @@ impl PresentationModel {
         token: InteractionToken,
         value: crate::input_replay::ReplayValue,
     ) -> Option<crate::input_replay::ReplayButton> {
-        let mut candidates = Vec::new();
+        let mut ordinal = 0;
         for line in &self.lines {
-            projection::collect_replay_buttons(&line.runs, &mut candidates);
+            if let Some(candidate) = projection::find_replay_button(
+                &line.runs,
+                token,
+                self.button_generation,
+                &mut ordinal,
+            ) {
+                return Some(crate::input_replay::ReplayButton {
+                    visible_text: candidate.visible_text,
+                    title: candidate.title,
+                    alt_text: candidate.alt_text,
+                    value,
+                    ordinal: candidate.ordinal,
+                });
+            }
         }
-        projection::collect_replay_buttons(&self.pending_runs, &mut candidates);
-        let (index, candidate) = candidates
-            .into_iter()
-            .enumerate()
-            .find(|(_, candidate)| candidate.token == token)?;
+        let candidate = projection::find_replay_button(
+            &self.pending_runs,
+            token,
+            self.button_generation,
+            &mut ordinal,
+        )?;
         Some(crate::input_replay::ReplayButton {
             visible_text: candidate.visible_text,
             title: candidate.title,
             alt_text: candidate.alt_text,
             value,
-            ordinal: index.saturating_add(1),
+            ordinal: candidate.ordinal,
         })
     }
 
@@ -91,9 +107,10 @@ impl PresentationModel {
         &mut self,
         tokens: &[InteractionToken],
     ) -> Vec<(InteractionToken, i64)> {
-        let Some(line) = self.lines.last_mut() else {
+        let Some(line) = self.lines.back_mut() else {
             return Vec::new();
         };
+        let line = Arc::make_mut(line);
         let bindings = bind_auto_buttons(
             &mut line.runs,
             &self.last_committed_plain_runs,
@@ -143,7 +160,7 @@ impl PresentationModel {
             }
         }
         for line in &mut self.lines {
-            rebind_runs(&mut line.runs, tokens);
+            rebind_runs(&mut Arc::make_mut(line).runs, tokens);
         }
         rebind_runs(&mut self.pending_runs, tokens);
         self.delivery.dirty.force_snapshot = true;
@@ -182,7 +199,7 @@ impl PresentationModel {
     }
 
     pub(crate) fn last_line_is_temporary(&self) -> bool {
-        self.lines.last().is_some_and(|line| line.temporary)
+        self.lines.back().is_some_and(|line| line.temporary)
             || (!self.pending_runs.is_empty() && self.pending_temporary)
     }
 
@@ -191,15 +208,17 @@ impl PresentationModel {
             return self.pending_runs.iter().all(run_is_empty);
         }
         self.lines
-            .last()
+            .back()
             .is_none_or(|line| line.runs.iter().all(run_is_empty))
     }
 
     /// Delete canonical logical lines, including an uncommitted current line first.
     /// This models the small console-editing subset used by reference system flows.
     pub(crate) fn delete_last_lines(&mut self, mut count: usize) {
-        let physical_count = u32::try_from(count).unwrap_or(u32::MAX);
+        let mut delivered_pending_deletion = 0;
         if count != 0 && !self.pending_runs.is_empty() {
+            delivered_pending_deletion =
+                usize::from(self.delivery.pending_line_id == Some(self.next_line));
             self.pending_runs.clear();
             self.pending_temporary = false;
             count -= 1;
@@ -209,10 +228,9 @@ impl PresentationModel {
         self.line_count_dirty = true;
         let keep = self.lines.len().saturating_sub(count);
         self.lines.truncate(keep);
-        self.history_operations
-            .push(PresentationHistoryOperation::DeletePhysical {
-                count: physical_count,
-            });
+        let physical_count =
+            u32::try_from(count.saturating_add(delivered_pending_deletion)).unwrap_or(u32::MAX);
+        self.record_history_delete(physical_count);
         self.bump();
     }
 
@@ -222,14 +240,18 @@ impl PresentationModel {
     }
 
     pub(crate) fn print_temporary_line(&mut self, text: String) {
-        if !self.pending_runs.is_empty() && self.pending_temporary {
+        let replaces_committed_line = if !self.pending_runs.is_empty() && self.pending_temporary {
             self.pending_runs.clear();
-        } else if self.lines.last().is_some_and(|line| line.temporary) {
-            self.lines.pop();
+            false
+        } else if self.lines.back().is_some_and(|line| line.temporary) {
+            self.lines.pop_back();
             self.logical_line_count = self.logical_line_count.wrapping_sub(1);
             self.line_count_dirty = true;
-        }
-        self.replace_next_temporary = true;
+            true
+        } else {
+            false
+        };
+        self.replace_next_temporary = replaces_committed_line;
         self.append_print_text(text, true, true);
     }
 
@@ -574,6 +596,7 @@ impl PresentationModel {
     fn apply_project_default_style(&mut self, next: TextStyle) {
         let previous = std::mem::replace(&mut self.default_style, next.clone());
         for line in &mut self.lines {
+            let line = Arc::make_mut(line);
             if replace_project_default_style(&mut line.runs, &previous, &next) {
                 self.delivery.dirty_lines.insert(line.line_id);
             }
@@ -626,12 +649,8 @@ impl PresentationModel {
 
     pub(crate) fn set_button_generation(&mut self, generation: u64) {
         self.button_generation = generation;
-        for line in &mut self.lines {
-            disable_old_buttons(&mut line.runs, generation);
-        }
-        disable_old_buttons(&mut self.pending_runs, generation);
-        self.history_operations
-            .push(PresentationHistoryOperation::SetButtonGeneration { generation });
+        self.history_edits
+            .push(PresentationHistoryEdit::SetButtonGeneration { generation });
         self.bump();
     }
 
@@ -676,17 +695,17 @@ impl PresentationModel {
 
     fn commit_line(&mut self) {
         self.last_committed_plain_runs = std::mem::take(&mut self.pending_plain_runs);
-        let line = DisplayLine {
+        let line = Arc::new(DisplayLine {
             line_id: self.next_line,
             temporary: self.pending_temporary,
             logical_line_start: true,
             line_end: true,
             alignment: self.current_alignment,
             runs: std::mem::take(&mut self.pending_runs),
-        };
+        });
         self.pending_temporary = false;
         self.next_line = self.next_line.saturating_add(1);
-        self.lines.push(line.clone());
+        self.lines.push_back(Arc::clone(&line));
         self.logical_line_count = if self.logical_line_count == i64::MAX {
             0
         } else {
@@ -694,15 +713,49 @@ impl PresentationModel {
         };
         self.line_count_dirty = true;
         if self.replace_next_temporary {
-            self.history_operations
-                .push(PresentationHistoryOperation::ReplaceTemporary { line });
+            self.history_edits
+                .push(PresentationHistoryEdit::ReplaceTemporary { line });
             self.replace_next_temporary = false;
         } else {
-            self.history_operations
-                .push(PresentationHistoryOperation::Append { line });
+            self.history_edits
+                .push(PresentationHistoryEdit::Append { line });
         }
         self.trim_physical_history();
         self.bump();
+    }
+
+    fn record_history_delete(&mut self, mut count: u32) {
+        if self.delivery.pending_line_id.is_none() {
+            while count != 0 {
+                let Some(index) = self.history_edits.iter().rposition(|operation| {
+                    !matches!(
+                        operation,
+                        PresentationHistoryEdit::SetButtonGeneration { .. }
+                    )
+                }) else {
+                    break;
+                };
+                if !matches!(
+                    self.history_edits[index],
+                    PresentationHistoryEdit::Append { .. }
+                ) {
+                    break;
+                }
+                self.history_edits.remove(index);
+                count -= 1;
+            }
+        }
+        if count == 0 {
+            return;
+        }
+        if let Some(PresentationHistoryEdit::DeletePhysical { count: previous }) =
+            self.history_edits.last_mut()
+        {
+            *previous = previous.saturating_add(count);
+        } else {
+            self.history_edits
+                .push(PresentationHistoryEdit::DeletePhysical { count });
+        }
     }
 
     fn text_run(&self, text: String) -> DisplayRun {
@@ -749,7 +802,7 @@ impl PresentationModel {
         token: InteractionToken,
         system_text: Option<SystemTextRef>,
     ) {
-        let line = DisplayLine {
+        let line = Arc::new(DisplayLine {
             line_id: self.next_line,
             temporary: false,
             logical_line_start: true,
@@ -761,17 +814,17 @@ impl PresentationModel {
                 token,
                 system_text,
             )],
-        };
+        });
         self.next_line = self.next_line.saturating_add(1);
-        self.lines.push(line.clone());
+        self.lines.push_back(Arc::clone(&line));
         self.logical_line_count = if self.logical_line_count == i64::MAX {
             0
         } else {
             self.logical_line_count + 1
         };
         self.line_count_dirty = true;
-        self.history_operations
-            .push(PresentationHistoryOperation::Append { line });
+        self.history_edits
+            .push(PresentationHistoryEdit::Append { line });
         self.trim_physical_history();
         self.bump();
     }
@@ -783,10 +836,15 @@ impl PresentationModel {
             return;
         }
         self.lines.drain(..excess);
-        self.history_operations
-            .push(PresentationHistoryOperation::TrimPhysical {
-                count: u32::try_from(excess).unwrap_or(u32::MAX),
-            });
+        let count = u32::try_from(excess).unwrap_or(u32::MAX);
+        if let Some(PresentationHistoryEdit::TrimPhysical { count: previous }) =
+            self.history_edits.last_mut()
+        {
+            *previous = previous.saturating_add(count);
+        } else {
+            self.history_edits
+                .push(PresentationHistoryEdit::TrimPhysical { count });
+        }
     }
 
     fn button_run(
@@ -878,5 +936,5 @@ mod tests;
 pub(crate) use self::projection::display_value;
 use self::projection::{
     append_html_run, append_log_run, auto_button_values, bind_auto_buttons, color_rgb,
-    disable_old_buttons, enabled_button_value, project_lines, rebind_runs, rgb_color, run_is_empty,
+    enabled_button_value, project_lines, rebind_runs, rgb_color, run_is_empty,
 };

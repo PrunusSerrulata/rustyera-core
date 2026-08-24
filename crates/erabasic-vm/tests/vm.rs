@@ -17,12 +17,13 @@ use erabasic_csv::{
 use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode};
 use erabasic_vm::{
     EraSaveScope, FiberId, FiberStatus, HostCallRequest, HostCallResult, HostReady,
-    HostRebindRequest, HostWaitStability, NativeServiceRegistry, RunBudget, RuntimeVm,
+    HostRebindRequest, HostWaitStability, ImmediateHostCall, ImmediateHostCallResult,
+    NativeCallRequest, NativeReady, NativeService, NativeServiceRegistry, RunBudget, RuntimeVm,
     SnapshotBlocker, SnapshotEligibility, Vm, VmBreakpoint, VmBreakpointLocation, VmConfig,
     VmDebugControl, VmDebugInspect, VmDebugVariableWrite, VmDiagnosticNotification, VmDriveMode,
-    VmEvent, VmFaultCode, VmHost, VmPreparationStage, VmRuntimeFill, VmRuntimePort,
-    VmRuntimeStatePort, VmRuntimeStateTransaction, VmSnapshot, VmStepKind, VmValue,
-    inspect_snapshot,
+    VmError, VmEvent, VmFaultCode, VmHost, VmHostCompletion, VmPortEvent, VmPortStop,
+    VmPreparationStage, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
+    VmRuntimeStateTransaction, VmSnapshot, VmStepKind, VmValue, inspect_snapshot,
 };
 use unicode_width::UnicodeWidthStr;
 

@@ -550,55 +550,13 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             self.emit_presentation()?;
             return if flags & 2 != 0 {
+                self.flush_presentation_for_observation()?;
                 self.emit_effect(EffectKind::PresentNow {
                     presentation_revision: self.presentation.revision(),
                 })
             } else {
                 Ok(())
             };
-        }
-        if matches!(name.as_str(), "CURRENTALIGN" | "GETFONT") {
-            *status = HostDispatchStatus::Handled;
-            let value = if name == "GETFONT" {
-                self.presentation.font()
-            } else {
-                match self.presentation.alignment() {
-                    LineAlignment::Left => "LEFT",
-                    LineAlignment::Center => "CENTER",
-                    LineAlignment::Right => "RIGHT",
-                }
-                .into()
-            };
-            return commit_completion(
-                vm,
-                request.id,
-                VmHostCompletion::Ready(HostReady {
-                    value: Some(VmValue::String(value)),
-                    writes: Vec::new(),
-                }),
-            );
-        }
-        if matches!(
-            name.as_str(),
-            "CURRENTREDRAW"
-                | "GETBGCOLOR"
-                | "GETCOLOR"
-                | "GETDEFBGCOLOR"
-                | "GETDEFCOLOR"
-                | "GETFOCUSCOLOR"
-                | "GETSTYLE"
-        ) {
-            *status = HostDispatchStatus::Handled;
-            let value = match name.as_str() {
-                "CURRENTREDRAW" => i64::from(self.presentation.redraw_enabled()),
-                "GETBGCOLOR" => self.presentation.background_rgb(),
-                "GETCOLOR" => self.presentation.foreground_rgb(),
-                "GETDEFBGCOLOR" => self.presentation.default_background_rgb(),
-                "GETDEFCOLOR" => self.presentation.default_foreground_rgb(),
-                "GETFOCUSCOLOR" => self.presentation.focus_rgb(),
-                _ => self.presentation.style_bits(),
-            };
-            return commit_integer_result(vm, request.id, value);
         }
         if name == "SETBGCOLOR" {
             *status = HostDispatchStatus::Handled;

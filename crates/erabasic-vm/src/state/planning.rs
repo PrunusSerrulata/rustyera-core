@@ -119,7 +119,7 @@ pub(super) fn literal_group_match(
     artifact: &BytecodeArtifact,
     function: &BytecodeFunction,
     instruction: usize,
-    native_import_indices: &HashMap<SymbolKey, usize>,
+    native_import_indices: &SymbolMap<usize>,
     normalized_native_names: &[Arc<str>],
 ) -> Option<LiteralGroupMatchPlan> {
     let mut candidates = Vec::new();
@@ -166,7 +166,7 @@ pub(super) fn memoized_indexed_read(
     function_index: usize,
     function: &BytecodeFunction,
     variable_global_indices: &[Vec<u32>],
-    function_indices: &HashMap<SymbolKey, usize>,
+    function_indices: &SymbolMap<usize>,
     function_memo_plans: &[Option<FunctionMemoPlan>],
 ) -> Option<MemoizedIndexedReadPlan> {
     let code = &function.code;
@@ -263,8 +263,8 @@ pub(super) fn memoized_indexed_read(
 pub(super) fn build_function_memo_plans(
     artifact: &BytecodeArtifact,
     variable_global_indices: &[Vec<u32>],
-    native_import_indices: &HashMap<SymbolKey, usize>,
-    host_import_indices: &HashMap<SymbolKey, usize>,
+    native_import_indices: &SymbolMap<usize>,
+    host_import_indices: &SymbolMap<usize>,
     normalized_native_names: &[Arc<str>],
     mut advance: impl FnMut(),
 ) -> Vec<Option<FunctionMemoPlan>> {
@@ -303,8 +303,8 @@ struct FunctionMemoAnalysis {
 fn analyze_function_memo(
     artifact: &BytecodeArtifact,
     variable_global_indices: &[Vec<u32>],
-    native_import_indices: &HashMap<SymbolKey, usize>,
-    host_import_indices: &HashMap<SymbolKey, usize>,
+    native_import_indices: &SymbolMap<usize>,
+    host_import_indices: &SymbolMap<usize>,
     normalized_native_names: &[Arc<str>],
     function_index: usize,
     function: &BytecodeFunction,

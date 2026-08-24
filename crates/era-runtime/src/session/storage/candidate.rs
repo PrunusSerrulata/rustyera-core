@@ -145,6 +145,7 @@ impl RuntimeSession {
         let original_outbound_journal = std::mem::take(&mut self.outbound_journal);
         let original_effect_journal = std::mem::take(&mut self.effect_journal);
         let original_pending_presentation = self.pending_presentation_update;
+        let original_projection_state = self.last_projection_state.clone();
         let original_sequence = self.outbound_sequence;
         let original_message = self.next_message_id;
         let original_effect = self.next_effect_id;
@@ -237,6 +238,7 @@ impl RuntimeSession {
             .collect();
         self.presentation = original_presentation;
         self.pending_presentation_update = original_pending_presentation;
+        self.last_projection_state = original_projection_state;
         self.project_snapshot = original_project;
         (
             self.message_skip,

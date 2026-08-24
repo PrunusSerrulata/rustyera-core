@@ -16,6 +16,63 @@ enum HostDispatchStatus {
     Handled,
 }
 
+#[derive(Clone, Copy)]
+struct RuntimeQueryState {
+    skip_print: bool,
+    message_skip: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum RuntimeQueryEvaluation {
+    Ready(VmValue),
+    MalformedHtml,
+    Unhandled,
+}
+
+fn evaluate_runtime_query(
+    name: &str,
+    arguments: &[VmValue],
+    presentation: &PresentationModel,
+    state: RuntimeQueryState,
+) -> Result<RuntimeQueryEvaluation, RuntimeError> {
+    let value = match name {
+        "HTML_ESCAPE" | "HTML_TOPLAINTEXT" => {
+            let source = string_argument_value(arguments, 0, name)?;
+            let value = if name == "HTML_ESCAPE" {
+                erabasic_html::escape(source)
+            } else {
+                let Ok(value) = erabasic_html::to_plain_text(source) else {
+                    return Ok(RuntimeQueryEvaluation::MalformedHtml);
+                };
+                value
+            };
+            VmValue::String(value)
+        }
+        "CURRENTALIGN" | "GETFONT" => VmValue::String(if name == "GETFONT" {
+            presentation.font()
+        } else {
+            match presentation.alignment() {
+                LineAlignment::Left => "LEFT",
+                LineAlignment::Center => "CENTER",
+                LineAlignment::Right => "RIGHT",
+            }
+            .into()
+        }),
+        "CURRENTREDRAW" => VmValue::Integer(i64::from(presentation.redraw_enabled())),
+        "GETBGCOLOR" => VmValue::Integer(presentation.background_rgb()),
+        "GETCOLOR" => VmValue::Integer(presentation.foreground_rgb()),
+        "GETDEFBGCOLOR" => VmValue::Integer(presentation.default_background_rgb()),
+        "GETDEFCOLOR" => VmValue::Integer(presentation.default_foreground_rgb()),
+        "GETFOCUSCOLOR" => VmValue::Integer(presentation.focus_rgb()),
+        "GETSTYLE" => VmValue::Integer(presentation.style_bits()),
+        "ISSKIP" => VmValue::Integer(i64::from(state.skip_print)),
+        "MESSKIP" | "MOUSESKIP" => VmValue::Integer(i64::from(state.message_skip)),
+        "LINEISEMPTY" => VmValue::Integer(i64::from(presentation.last_line_is_empty())),
+        _ => return Ok(RuntimeQueryEvaluation::Unhandled),
+    };
+    Ok(RuntimeQueryEvaluation::Ready(value))
+}
+
 impl RuntimeSession {
     #[allow(clippy::single_match_else, clippy::too_many_lines)]
     pub(super) fn handle_host_call(
@@ -70,6 +127,34 @@ impl RuntimeSession {
                 self.skip_print = true;
             }
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+        }
+        match evaluate_runtime_query(
+            &name,
+            &request.arguments,
+            &self.presentation,
+            RuntimeQueryState {
+                skip_print: self.skip_print,
+                message_skip: self.message_skip,
+            },
+        )? {
+            RuntimeQueryEvaluation::Ready(value) => {
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady {
+                        value: Some(value),
+                        writes: Vec::new(),
+                    }),
+                );
+            }
+            RuntimeQueryEvaluation::MalformedHtml => {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "malformed HTML text",
+                    Some(request.origin.clone()),
+                );
+            }
+            RuntimeQueryEvaluation::Unhandled => {}
         }
         if name == "ASSERT" {
             if integer_argument_value(&request.arguments, 0)? == 0 {
@@ -133,17 +218,8 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
-        if matches!(
-            name.as_str(),
-            "ISSKIP" | "MESSKIP" | "MOUSESKIP" | "LINEISEMPTY" | "ISACTIVE"
-        ) {
-            let value = match name.as_str() {
-                "ISSKIP" => self.skip_print,
-                "MESSKIP" | "MOUSESKIP" => self.message_skip,
-                "LINEISEMPTY" => self.presentation.last_line_is_empty(),
-                "ISACTIVE" => self.client_focused,
-                _ => unreachable!(),
-            };
+        if name == "ISACTIVE" {
+            let value = self.client_focused;
             return commit_completion(
                 vm,
                 request.id,

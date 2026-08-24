@@ -150,7 +150,7 @@ impl Vm {
         self.replay_function_memo_entry(generation_id, &entry)
             .map_err(map_vm_error)?;
         self.memory
-            .cell_mut(generation_id, &scratch, 0)
+            .cell_mut(generation_id, scratch.key, scratch.storage, 0)
             .ok_or_else(|| {
                 StepError::new(
                     VmFaultCode::MissingSymbol,

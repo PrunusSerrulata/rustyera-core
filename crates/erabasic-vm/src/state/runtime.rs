@@ -75,7 +75,12 @@ impl VmRuntimeStatePort for Vm {
                     };
                 for character in characters {
                     let cell = memory
-                        .cell_mut(self.current_generation, definition, character)
+                        .cell_mut(
+                            self.current_generation,
+                            definition.key,
+                            definition.storage,
+                            character,
+                        )
                         .ok_or_else(|| {
                             VmError::InvalidState("variable storage is unavailable".into())
                         })?;
@@ -95,7 +100,12 @@ impl VmRuntimeStatePort for Vm {
                     |value| usize::try_from(value).unwrap_or(usize::MAX),
                 );
                 memory
-                    .cell_mut(self.current_generation, definition, character)
+                    .cell_mut(
+                        self.current_generation,
+                        definition.key,
+                        definition.storage,
+                        character,
+                    )
                     .ok_or_else(|| VmError::InvalidState("variable storage is unavailable".into()))?
                     .write(&write.indices, write.value)
                     .map_err(VmError::InvalidState)?;

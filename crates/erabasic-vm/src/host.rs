@@ -1,11 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
-use erabasic_bytecode::{BytecodeArtifact, RuntimeImport, SymbolKey};
+use erabasic_bytecode::{BytecodeArtifact, HostImport, RuntimeImport, SymbolKey};
 use erabasic_data::LegacyEncoding;
 use serde::{Deserialize, Serialize};
 
+use crate::memory::SymbolKeyHasher;
 use crate::sfmt::Sfmt19937;
 use crate::structured::{StructuredExtension, StructuredScope};
 use crate::structured::{StructuredNative, StructuredState, bundle_key, is_structured_name};
@@ -25,6 +27,26 @@ pub struct HostCallRequest {
     pub import: RuntimeImport,
     pub arguments: Vec<VmValue>,
     pub origin: VmExecutionOrigin,
+}
+
+/// Borrowed call-site data offered before the VM materializes a persistent Host request.
+/// Implementations may handle only operations that are immediately and infallibly ready;
+/// returning [`ImmediateHostCallResult::Unsupported`] preserves the ordinary caller-pumped
+/// boundary.
+pub struct ImmediateHostCall<'a> {
+    pub fiber: FiberId,
+    pub import: &'a HostImport,
+    pub normalized_name: &'a str,
+    pub arguments: &'a [VmValue],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ImmediateHostCallResult {
+    Unsupported,
+    /// The call completed synchronously. Like [`HostCallResult::Ready`], this does not
+    /// implicitly yield the current fiber; the configured fiber quantum still bounds
+    /// cooperative scheduling.
+    Ready(HostReady),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -65,6 +87,10 @@ pub struct HostRebindRequest {
 }
 
 pub trait VmHost {
+    fn call_immediate(&mut self, _request: ImmediateHostCall<'_>) -> ImmediateHostCallResult {
+        ImmediateHostCallResult::Unsupported
+    }
+
     fn call(&mut self, request: HostCallRequest) -> HostCallResult;
 
     /// Implementations must apply this batch atomically. Returning an error means
@@ -186,12 +212,17 @@ impl CharacterWidthModeHandle {
     }
 }
 
+type SymbolServiceMap =
+    HashMap<SymbolKey, Box<dyn NativeService>, BuildHasherDefault<SymbolKeyHasher>>;
+type SymbolKeySet = HashSet<SymbolKey, BuildHasherDefault<SymbolKeyHasher>>;
+
 #[derive(Default)]
 pub struct NativeServiceRegistry {
-    services: BTreeMap<SymbolKey, Box<dyn NativeService>>,
+    services: SymbolServiceMap,
+    path_memo_safe_keys: SymbolKeySet,
     random: Option<Arc<Mutex<Sfmt19937>>>,
     structured: Option<Arc<Mutex<StructuredState>>>,
-    structured_keys: BTreeSet<SymbolKey>,
+    structured_keys: SymbolKeySet,
     extensions: erabasic_data::ExtensionData,
     character_width_mode: CharacterWidthModeHandle,
 }
@@ -301,12 +332,14 @@ impl NativeServiceRegistry {
                         legacy_encoding: artifact.project_data.static_data.legacy_encoding,
                     },
                 );
+                registry.path_memo_safe_keys.insert(native.import.key);
             }
         }
         registry
     }
 
     pub fn register(&mut self, key: SymbolKey, service: impl NativeService + 'static) -> bool {
+        self.path_memo_safe_keys.remove(&key);
         self.services.insert(key, Box::new(service)).is_none()
     }
 
@@ -331,6 +364,10 @@ impl NativeServiceRegistry {
 
     pub(crate) fn contains(&self, key: SymbolKey) -> bool {
         self.services.contains_key(&key)
+    }
+
+    pub(crate) fn path_memo_safe(&self, key: SymbolKey) -> bool {
+        self.path_memo_safe_keys.contains(&key)
     }
 
     pub(crate) fn implicit_place_names(

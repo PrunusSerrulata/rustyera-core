@@ -104,7 +104,7 @@ pub(crate) fn bind_persistent_arguments(
             )
         };
         memory
-            .cell_mut(generation, definition, character)
+            .cell_mut(generation, definition.key, definition.storage, character)
             .ok_or_else(|| VmError::InvalidState("parameter storage is missing".into()))?
             .write(indices, argument.clone())
             .map_err(VmError::InvalidState)?;

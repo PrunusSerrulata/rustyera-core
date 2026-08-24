@@ -1,5 +1,65 @@
 use std::cmp::Ordering;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::session) enum BarStringError {
+    NonPositiveMaximum,
+    InvalidLength,
+}
+
+pub(in crate::session) fn format_optional_era_integer(
+    value: i64,
+    format: Option<&str>,
+) -> Result<String, &'static str> {
+    format.map_or_else(
+        || Ok(value.to_string()),
+        |format| format_era_integer(value, format),
+    )
+}
+
+pub(in crate::session) fn decorate_money_value(
+    formatted: &str,
+    money_first: bool,
+    money_label: &str,
+) -> String {
+    if money_first {
+        format!("{money_label}{formatted}")
+    } else {
+        format!("{formatted}{money_label}")
+    }
+}
+
+pub(in crate::session) fn format_bar_string(
+    value: i64,
+    maximum: i64,
+    length: i64,
+    bar_char_1: char,
+    bar_char_2: char,
+) -> Result<String, BarStringError> {
+    if maximum <= 0 {
+        return Err(BarStringError::NonPositiveMaximum);
+    }
+    if !(1..100).contains(&length) {
+        return Err(BarStringError::InvalidLength);
+    }
+    // Emuera performs the multiplication in an unchecked Int64 context.
+    let filled = value.wrapping_mul(length) / maximum;
+    let filled = filled.clamp(0, length);
+    let empty = length - filled;
+    let mut bar = String::from("[");
+    bar.push_str(
+        &bar_char_1
+            .to_string()
+            .repeat(usize::try_from(filled).unwrap_or(0)),
+    );
+    bar.push_str(
+        &bar_char_2
+            .to_string()
+            .repeat(usize::try_from(empty).unwrap_or(0)),
+    );
+    bar.push(']');
+    Ok(bar)
+}
+
 pub(in super::super) fn format_era_integer(
     value: i64,
     format: &str,

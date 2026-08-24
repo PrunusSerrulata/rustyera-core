@@ -211,7 +211,16 @@ impl Vm {
                             &arguments,
                         )
                         .map_err(map_vm_error)?;
+                        self.observe_path_memo_arguments(
+                            fiber.id,
+                            position.generation,
+                            target,
+                            &generation,
+                            &arguments,
+                        );
+                        let path_memo_active = self.path_memo_is_active_for(fiber.id);
                         if policy.allow_function_memo
+                            && !path_memo_active
                             && let Some(value) = self.try_memoized_indexed_read(
                                 fiber,
                                 position.generation,
@@ -227,8 +236,8 @@ impl Vm {
                                 .push(value);
                             return Ok(Some(StepOutcome::Continue));
                         }
-                        let frame_id = new_frame.expect("function call reserved a frame id");
                         let memo_key = (policy.allow_function_memo
+                            && !path_memo_active
                             && usize::try_from(policy.remaining_quantum)
                                 .ok()
                                 .is_some_and(|remaining| target.code.len() < remaining))
@@ -251,6 +260,55 @@ impl Vm {
                                 .push(entry.result);
                             return Ok(Some(StepOutcome::Continue));
                         }
+                        // The revision-keyed memo remains the cheapest first choice. A plan can
+                        // still miss when its private scratch revision changes on every call, so
+                        // let the value-validated path memo cover that case. Indexed getters are
+                        // excluded because their first execution must warm the nested selector
+                        // memo used by the dedicated fast path.
+                        let path_memo_candidate =
+                            generation.memoized_indexed_read_plan(target.key).is_none();
+                        let frame_id = new_frame.expect("function call reserved a frame id");
+                        let path_memo_key = (policy.allow_function_memo
+                            && !path_memo_active
+                            && path_memo_candidate)
+                            .then(|| {
+                                Self::path_memo_key(position.generation, target.key, &arguments)
+                            })
+                            .flatten();
+                        if let Some(path_memo_key) = path_memo_key.as_ref()
+                            && let Some((value, body_instructions)) = self
+                                .try_replay_path_memo(
+                                    fiber,
+                                    path_memo_key,
+                                    policy.remaining_quantum,
+                                    policy.remaining_instructions,
+                                )
+                                .map_err(map_vm_error)?
+                        {
+                            fiber
+                                .frames
+                                .last_mut()
+                                .expect("caller frame exists")
+                                .stack
+                                .push(value);
+                            return Ok(Some(StepOutcome::BulkProgress(body_instructions)));
+                        }
+                        let event_context = fiber
+                            .frames
+                            .last()
+                            .expect("caller frame exists")
+                            .event_context
+                            || target.kind == BytecodeFunctionKind::Event;
+                        if let Some(path_memo_key) = path_memo_key {
+                            self.begin_path_memo(
+                                fiber,
+                                frame_id,
+                                target,
+                                path_memo_key,
+                                u64::from(policy.remaining_quantum.saturating_sub(1))
+                                    .min(policy.remaining_instructions.saturating_sub(1)),
+                            );
+                        }
                         let frame = make_frame(
                             frame_id,
                             position.generation,
@@ -258,12 +316,7 @@ impl Vm {
                             generation.function_locals(target.key),
                             arguments,
                             target.result.is_some(),
-                            fiber
-                                .frames
-                                .last()
-                                .expect("caller frame exists")
-                                .event_context
-                                || target.kind == BytecodeFunctionKind::Event,
+                            event_context,
                         );
                         if let Some(key) = memo_key {
                             self.active_function_memos.insert(frame_id, key);
@@ -278,7 +331,7 @@ impl Vm {
                                     "native import is missing",
                                 )
                             })?;
-                        let target = artifact
+                        let target = &artifact
                             .native_imports
                             .get(target_index)
                             .ok_or_else(|| {
@@ -287,8 +340,7 @@ impl Vm {
                                     "native import is missing",
                                 )
                             })?
-                            .import
-                            .clone();
+                            .import;
                         let result_type = target.result;
                         let native_name = generation
                             .normalized_native_name(target_index)
@@ -298,7 +350,7 @@ impl Vm {
                                     "native import is missing",
                                 )
                             })?;
-                        let native_name = native_name.as_ref();
+                        self.observe_path_memo_native(fiber.id, native_name);
                         let mut rollback = None;
                         let ready = if native_name == "strform" {
                             if result_type != Some(BytecodeType::String) || arguments.len() != 1 {
@@ -487,8 +539,15 @@ impl Vm {
                                 .map_err(map_vm_error)?;
                             NativeReady::default()
                         } else {
+                            if !natives.path_memo_safe(import.key) {
+                                self.invalidate_path_memo(fiber.id);
+                            }
                             let (ready, checkpoint) = self.call_registered_native(
-                                fiber, import.key, target, arguments, natives,
+                                fiber,
+                                import.key,
+                                (*target).clone(),
+                                arguments,
+                                natives,
                             )?;
                             rollback = checkpoint;
                             ready
@@ -512,17 +571,36 @@ impl Vm {
                         }
                     }
                     (Opcode::CallHost, ImportKind::Host) => {
+                        self.invalidate_path_memo(fiber.id);
                         let target_index =
                             generation.host_import_index(import.key).ok_or_else(|| {
                                 StepError::new(VmFaultCode::MissingSymbol, "host import is missing")
                             })?;
-                        let target = artifact
-                            .host_imports
-                            .get(target_index)
-                            .cloned()
+                        let target = artifact.host_imports.get(target_index).ok_or_else(|| {
+                            StepError::new(VmFaultCode::MissingSymbol, "host import is missing")
+                        })?;
+                        let normalized_name = generation
+                            .normalized_host_name(target_index)
                             .ok_or_else(|| {
                                 StepError::new(VmFaultCode::MissingSymbol, "host import is missing")
                             })?;
+                        if policy.allow_immediate_host {
+                            match host.call_immediate(ImmediateHostCall {
+                                fiber: fiber.id,
+                                import: target,
+                                normalized_name,
+                                arguments: &arguments,
+                            }) {
+                                ImmediateHostCallResult::Unsupported => {}
+                                ImmediateHostCallResult::Ready(ready) => {
+                                    *host_calls = host_calls.saturating_add(1);
+                                    self.apply_host_ready(fiber, target.import.result, ready)
+                                        .map_err(map_vm_error)?;
+                                    return Ok(Some(StepOutcome::Continue));
+                                }
+                            }
+                        }
+                        let target = target.clone();
                         let request = self.allocate_request_id();
                         *host_calls = host_calls.saturating_add(1);
                         let origin = self.execution_origin(position, &target.import.name);

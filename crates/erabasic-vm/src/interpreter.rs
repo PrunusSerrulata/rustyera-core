@@ -10,10 +10,10 @@ use crate::state::{
 };
 use crate::{
     Fiber, FiberId, FiberState, HostCallRequest, HostCallResult, HostReady, HostWaitStability,
-    NativeCallRequest, NativePlaceView, NativeReady, NativeServiceRegistry, PlaceDescriptor,
-    RunBudget, Vm, VmError, VmEvent, VmFault, VmFaultCode, VmHost, VmRunReport, VmRunStop, VmValue,
-    WaitingHost, bind_persistent_arguments, make_frame, prepare_dynamic_arguments,
-    validate_arguments,
+    ImmediateHostCall, ImmediateHostCallResult, NativeCallRequest, NativePlaceView, NativeReady,
+    NativeServiceRegistry, PlaceDescriptor, RunBudget, Vm, VmError, VmEvent, VmFault, VmFaultCode,
+    VmHost, VmRunReport, VmRunStop, VmValue, WaitingHost, bind_persistent_arguments, make_frame,
+    prepare_dynamic_arguments, validate_arguments,
 };
 
 mod character_ops;
@@ -66,6 +66,7 @@ const STRUCTURED_GOTO_DIAGNOSTIC_MESSAGE: &str = "GOTO entered a structured bloc
 #[derive(Clone, Copy)]
 struct ExecutionPolicy {
     allow_function_memo: bool,
+    allow_immediate_host: bool,
     remaining_quantum: u32,
     remaining_instructions: u64,
 }

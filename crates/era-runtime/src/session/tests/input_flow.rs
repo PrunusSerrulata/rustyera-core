@@ -1,6 +1,122 @@
 use super::*;
 
 #[test]
+fn identical_phase_keeps_the_presentation_barrier_without_a_state_revision() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.presentation.append_text("pending".into(), false);
+    session.emit_presentation().unwrap();
+    let revision = session.revision;
+    let phase = session.phase;
+
+    session.set_phase(phase).unwrap();
+    let messages = drain(&mut session);
+
+    assert_eq!(session.revision, revision);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+    )));
+    assert!(
+        messages
+            .iter()
+            .all(|message| !matches!(message, RuntimeMessage::StateChanged(_)))
+    );
+}
+
+#[test]
+fn identical_projection_keeps_the_presentation_barrier_without_republication() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.emit_projection_state().unwrap();
+    drain(&mut session);
+    session.presentation.append_text("pending".into(), false);
+    session.emit_presentation().unwrap();
+
+    session.emit_projection_state().unwrap();
+    let messages = drain(&mut session);
+
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+    )));
+    assert!(
+        messages
+            .iter()
+            .all(|message| !matches!(message, RuntimeMessage::ProjectionState(_)))
+    );
+}
+
+#[test]
+fn frontend_projection_observation_invalidates_runtime_delivery_deduplication() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.text_box = "runtime-value".into();
+    session.emit_projection_state().unwrap();
+    drain(&mut session);
+
+    session
+        .observe_projection(
+            1,
+            ProjectionObservation {
+                environment_revision: 1,
+                presentation_revision: session.presentation.revision(),
+                client_size: ProjectionSize {
+                    width: ProjectionLength(760),
+                    height: ProjectionLength(480),
+                },
+                projection_space_revision: 1,
+                line_columns: DEFAULT_LINE_COLUMNS,
+                text_box: "frontend-value".into(),
+                transform: ProjectionTransform {
+                    x_numerator: 1,
+                    x_denominator: 1,
+                    y_numerator: 1,
+                    y_denominator: 1,
+                    origin_x: ProjectionLength(0),
+                    origin_y: ProjectionLength(0),
+                },
+            },
+        )
+        .unwrap();
+    session.text_box = "runtime-value".into();
+    session.emit_projection_state().unwrap();
+
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ProjectionState(state) if state.text_box == "runtime-value"
+    )));
+}
+
+#[test]
+fn hello_invalidates_projection_delivery_deduplication() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.emit_projection_state().unwrap();
+    drain(&mut session);
+    session
+        .hello(
+            0,
+            &ClientHello {
+                runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+                client_name: "projection-reset-test".into(),
+                features: Vec::new(),
+                requested_limits: RuntimeOptions::default().limits,
+                capabilities: capabilities(),
+                preferred_locales: vec!["en".into()],
+                configuration_profile: None,
+            },
+        )
+        .unwrap();
+    drain(&mut session);
+
+    session.emit_projection_state().unwrap();
+    assert_eq!(
+        drain(&mut session)
+            .iter()
+            .filter(|message| matches!(message, RuntimeMessage::ProjectionState(_)))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn flow_input_configuration_shapes_system_waits() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     let ordinary = session.system_wait(InteractionToken { epoch: 0, id: 1 });

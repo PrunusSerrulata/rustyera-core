@@ -111,6 +111,107 @@ fn dynamic_calls_bind_variable_arguments_as_refs_or_values_from_the_target_signa
 }
 
 #[test]
+fn place_writes_preserve_project_function_character_and_ref_storage() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         #DIM VALUES, 3\n\
+         #DIMS WORDS, 3\n\
+         ADDVOIDCHARA\n\
+         FLAG:0 = 10\n\
+         CFLAG:0:0 = 20\n\
+         CALL WRITE_PERSISTENT\n\
+         FLAG:10 = READ_STATIC()\n\
+         FLAG:11 = READ_STATIC()\n\
+         CALL WRITE_REFS(VALUES, WORDS)\n\
+         FLAG:12 = VALUES:1\n\
+         FLAG:13 = CFLAG:0:0\n\
+         FLAG:14 = FLAG:0\n\
+         RESULTS:0 '= WORDS:0\n\
+         RESULTS:1 '= WORDS:1\n\
+         RETURN\n\
+         @WRITE_PERSISTENT\n\
+         LOCAL:0 = 30\n\
+         FLAG:15 = LOCAL:0\n\
+         RETURN\n\
+         @READ_STATIC\n\
+         #FUNCTION\n\
+         #DIM STATIC CACHE, 1\n\
+         CACHE:0 += 1\n\
+         RETURNF CACHE:0\n\
+         @WRITE_REFS(NUMBERS, TEXTS)\n\
+         #DIM REF NUMBERS\n\
+         #DIMS REF TEXTS\n\
+         VARSET NUMBERS, 40\n\
+         SPLIT \"left,right\", \",\", TEXTS\n\
+         RETURN\n",
+    );
+    let key = |name: &str| {
+        artifact
+            .globals
+            .iter()
+            .find(|global| global.name == name && global.owner.is_none())
+            .expect(name)
+            .key
+    };
+    let flag = key("FLAG");
+    let results = key("RESULTS");
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (10..=15)
+            .map(|index| vm.read_variable(flag, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        [1, 2, 40, 20, 10, 30].map(VmValue::Integer).to_vec()
+    );
+    assert_eq!(
+        (0..=1)
+            .map(|index| vm.read_variable(results, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        ["left", "right"]
+            .map(|value| VmValue::String(value.into()))
+            .to_vec()
+    );
+}
+
+#[test]
+fn public_place_writes_still_reject_immutable_variables() {
+    let artifact = compile_source("@SYSTEM_TITLE\n#DIM CONST LOCKED = 7\nRETURN LOCKED\n");
+    let locked = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "LOCKED")
+        .expect("LOCKED")
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+
+    assert!(matches!(
+        vm.write_variable(locked, &[0], None, VmValue::Integer(9)),
+        Err(VmError::InvalidState(message)) if message == "variable is immutable"
+    ));
+}
+
+#[test]
 fn dynamic_calls_convert_integer_places_for_string_value_parameters() {
     let mut options = AnalyzerOptions::analysis_mode();
     options.compatible_function_argument_auto_convert = true;
@@ -515,6 +616,43 @@ fn goto_within_the_same_loop_preserves_state_without_warning() {
         report.events
     );
     assert_eq!(result, VmValue::Integer(3));
+}
+
+#[test]
+fn goto_between_nested_scopes_retains_the_outer_loop_and_enters_the_target_select() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         #DIM INDEX\n\
+         FOR INDEX, 0, 2\n\
+             SELECTCASE 0\n\
+                 CASE 0\n\
+                     GOTO SECOND_BODY\n\
+             ENDSELECT\n\
+             SELECTCASE 1\n\
+                 CASE 1\n\
+                     $SECOND_BODY\n\
+                     RESULT += 1\n\
+             ENDSELECT\n\
+         NEXT\n\
+         RETURN RESULT\n",
+    );
+    let (result, report) = run_compiled_result_with_report(&artifact);
+
+    assert_eq!(
+        report
+            .events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                VmEvent::Diagnostic { code, .. }
+                    if code == "vm.control_flow.goto_into_structured_block"
+            ))
+            .count(),
+        2,
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(result, VmValue::Integer(2));
 }
 
 #[test]

@@ -658,6 +658,10 @@ fn input_undo_records_only_accepted_scalar_input_after_a_checkpoint() {
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
     drain(&mut session);
+    assert!(
+        session.undo_checkpoint.as_ref().unwrap().inputs.is_empty(),
+        "non-value WAIT completions are not part of reference Ctrl-Z input history"
+    );
     let records = input_replay_records(&session);
     assert_eq!(records[0]["step_count"], 1);
     assert_eq!(records[1]["action"], "enter");

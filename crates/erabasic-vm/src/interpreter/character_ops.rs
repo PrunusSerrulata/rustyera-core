@@ -349,7 +349,7 @@ pub(super) fn execute_character_mutation(
             let definition = character_definition(artifact, "STAIN")
                 .ok_or_else(|| VmError::InvalidState("STAIN variable is missing".into()))?;
             let cell = memory
-                .cell_mut(generation, definition, character)
+                .cell_mut(generation, definition.key, definition.storage, character)
                 .ok_or_else(|| VmError::InvalidState("STAIN storage is unavailable".into()))?;
             let destinations = cell.integers_mut().ok_or_else(|| {
                 VmError::InvalidState("STAIN storage is not an integer array".into())

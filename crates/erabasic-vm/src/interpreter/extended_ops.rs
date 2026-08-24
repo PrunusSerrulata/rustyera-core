@@ -578,7 +578,7 @@ pub(super) fn execute_random_place_transaction(
     } else {
         let values = natives.random_values()?;
         let cell = memory
-            .cell_mut(generation, definition, 0)
+            .cell_mut(generation, definition.key, definition.storage, 0)
             .ok_or_else(|| "RANDDATA storage is unavailable".to_owned())?;
         let targets = cell
             .integers_mut()

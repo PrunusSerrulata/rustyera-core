@@ -344,6 +344,9 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
     exact_sequence += 1;
     exact.drive(RuntimeDriveBudget::default()).unwrap();
     drain(&mut exact);
+    exact.emit_projection_state().unwrap();
+    drain(&mut exact);
+    assert!(exact.last_projection_state.is_some());
     submit(
         &mut exact,
         exact_sequence,
@@ -358,6 +361,10 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
         RuntimeMessage::Diagnostic(ProtocolDiagnostic { code, .. })
             if code == "runtime.snapshot_restored_from_diagnosis"
     )));
+    assert!(
+        exact.last_projection_state.is_none(),
+        "runtime snapshot restore must invalidate projection delivery deduplication"
+    );
     let restored_wait = exact.operations.active_input().expect("restored wait");
     assert_eq!(exact.phase(), RuntimePhase::WaitingInput);
     assert_eq!(exact.system_menu, SystemMenuState::Title);

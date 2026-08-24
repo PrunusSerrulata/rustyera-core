@@ -66,6 +66,198 @@ fn goto_into_case_body_emits_a_nonfatal_warning_and_continues() {
     assert!(projected_presentation_text(&session.presentation.snapshot()).contains("reached"));
 }
 
+fn run_immediate_query_project(
+    source: &str,
+) -> (RuntimeSession, RuntimeDriveReport, Vec<RuntimeMessage>) {
+    let mut session = negotiated_session();
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(source.into()),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let loaded = drain(&mut session);
+    assert!(loaded.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ProjectLoadReport(report) if report.success
+    )));
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let report = session
+        .drive(RuntimeDriveBudget {
+            maximum_vm_instructions: 1_000_000,
+            maximum_runtime_transitions: 1_024,
+        })
+        .unwrap();
+    let messages = drain(&mut session);
+    (session, report, messages)
+}
+
+#[test]
+fn immediate_queries_observe_latest_runtime_state_without_host_boundaries() {
+    let source = "@SYSTEM_TITLE\n\
+        ALIGNMENT CENTER\n\
+        SETFONT \"query-font\"\n\
+        REDRAW 0\n\
+        SETBGCOLOR 4, 5, 6\n\
+        SETCOLOR 1, 2, 3\n\
+        FONTBOLD\n\
+        PRINTFORM pending\n\
+        FLAG:0 = CURRENTALIGN() == \"CENTER\"\n\
+        FLAG:1 = GETFONT() == \"query-font\"\n\
+        FLAG:2 = CURRENTREDRAW() == 0\n\
+        FLAG:3 = GETBGCOLOR() == COLOR_FROMRGB(4, 5, 6)\n\
+        FLAG:4 = GETCOLOR() == COLOR_FROMRGB(1, 2, 3)\n\
+        FLAG:5 = GETSTYLE() == 1\n\
+        FLAG:6 = LINEISEMPTY() == 0\n\
+        SKIPDISP 1\n\
+        FLAG:7 = ISSKIP()\n\
+        SKIPLOG 1\n\
+        FLAG:8 = MESSKIP()\n\
+        FLAG:9 = MOUSESKIP()\n\
+        FLAG:10 = HTML_TOPLAINTEXT(\"a&nbsp;b\") == \"a b\"\n\
+        FLAG:11 = HTML_ESCAPE(\"<\") == \"&lt;\"\n\
+        FOR LOCAL, 0, 32\n\
+            RESULT:40 = GETDEFBGCOLOR()\n\
+            RESULT:41 = GETDEFCOLOR()\n\
+            RESULT:42 = GETFOCUSCOLOR()\n\
+            RESULT:43 = GETBGCOLOR()\n\
+            RESULT:44 = GETCOLOR()\n\
+            RESULT:45 = GETSTYLE()\n\
+            RESULT:46 = CURRENTREDRAW()\n\
+            RESULT:47 = LINEISEMPTY()\n\
+            RESULT:48 = CURRENTALIGN() == \"CENTER\"\n\
+            RESULT:49 = GETFONT() == \"query-font\"\n\
+            RESULT:50 = HTML_TOPLAINTEXT(\"a&nbsp;b\") == \"a b\"\n\
+            RESULT:51 = HTML_ESCAPE(\"<\") == \"&lt;\"\n\
+        NEXT\n\
+        SKIPLOG 0\n\
+        SKIPDISP 0\n\
+        FORCEWAIT\n\
+        RETURN\n";
+    let (session, report, messages) = run_immediate_query_project(source);
+
+    assert!(
+        report.runtime_transitions < 32,
+        "repeated read-only queries must stay within VM quanta: {report:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_))),
+        "{messages:#?}"
+    );
+    let vm = session.vm.as_ref().expect("runtime VM");
+    for index in 0..=11 {
+        assert_eq!(
+            read_runtime_integer(vm, "FLAG", &[index], None).unwrap(),
+            1,
+            "FLAG:{index}"
+        );
+    }
+}
+
+#[test]
+fn malformed_immediate_html_query_falls_back_to_a_sourced_vm_fault() {
+    let (session, _report, messages) = run_immediate_query_project(
+        "@SYSTEM_TITLE\nRESULT = HTML_TOPLAINTEXT(\"&#xD800;\") == \"\"\nRETURN\n",
+    );
+
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::Fault(RuntimeFault {
+                code: FaultCode::VmFault,
+                message,
+                origin: Some(origin),
+        }) if message == "malformed HTML text"
+            && origin.command.eq_ignore_ascii_case("HTML_TOPLAINTEXT")
+                && origin.source.as_ref().is_some_and(|source| source.relative_path == "main.erb")
+        )),
+        "{messages:#?}"
+    );
+}
+
+#[test]
+fn moneystr_invalid_format_keeps_vm_fault_priority_without_project_context() {
+    let build = build_project(
+        &ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                content_hash: None,
+            }],
+        },
+        None,
+    );
+    let artifact = build.artifact.expect("valid project");
+    let mut vm = RuntimeVm::new(artifact, VmConfig::default());
+    let binding = erabasic_compiler::default_host_registry()
+        .resolve("MONEYSTR")
+        .expect("MONEYSTR Host binding");
+    let function = erabasic_bytecode::SymbolKey::derive("test.function", b"moneystr");
+    let request = VmHostRequest {
+        id: erabasic_vm::HostRequestId(1),
+        fiber: erabasic_vm::FiberId(1),
+        import: erabasic_bytecode::HostImport {
+            import: erabasic_bytecode::RuntimeImport {
+                key: erabasic_bytecode::SymbolKey::derive("test.host", b"moneystr"),
+                namespace: binding.namespace,
+                name: binding.name,
+                abi_version: binding.abi_version,
+                parameters: vec![
+                    erabasic_bytecode::BytecodeType::Integer,
+                    erabasic_bytecode::BytecodeType::String,
+                ],
+                result: Some(erabasic_bytecode::BytecodeType::String),
+            },
+            effect: binding.effect,
+            capability: binding.capability,
+            snapshot_capability: binding.snapshot_capability,
+            contract: binding.contract,
+        },
+        arguments: vec![VmValue::Integer(1), VmValue::String("invalid[".into())],
+        origin: erabasic_vm::VmExecutionOrigin {
+            generation: erabasic_vm::GenerationId(1),
+            function,
+            function_name: "SYSTEM_TITLE".into(),
+            instruction: 0,
+            command: "MONEYSTR".into(),
+            source: None,
+        },
+    };
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    session.handle_host_call(&mut vm, &request).unwrap();
+    let messages = drain(&mut session);
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::Fault(RuntimeFault {
+                code: FaultCode::VmFault,
+                message,
+                origin: Some(origin),
+            }) if message.contains("MONEYSTR format is invalid") && origin.command == "MONEYSTR"
+        )),
+        "{messages:#?}"
+    );
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gcreatefromfile_defaults_to_content_directory_and_replays_dynamic_sprite() {
@@ -479,6 +671,66 @@ fn one_message_skip_input_drains_non_value_waits_until_forcewait() {
             .collect::<Vec<_>>(),
         vec![initial_wait_id]
     );
+    assert_eq!(
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                RuntimeMessage::StateChanged(change) => Some(change.phase),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![RuntimePhase::Running, RuntimePhase::WaitingInput],
+        "automatically skipped waits must not publish redundant running phases"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| matches!(message, RuntimeMessage::ProjectionState(_)))
+            .count(),
+        1,
+        "automatically skipped waits must not republish unchanged projection state"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| matches!(message, RuntimeMessage::InputUndoStateChanged(_)))
+            .count(),
+        1,
+        "only the final visible wait should publish input-undo availability"
+    );
+    let position = |predicate: fn(&RuntimeMessage) -> bool| {
+        messages
+            .iter()
+            .position(predicate)
+            .expect("expected message in skip sequence")
+    };
+    let running = position(|message| {
+        matches!(
+            message,
+            RuntimeMessage::StateChanged(change) if change.phase == RuntimePhase::Running
+        )
+    });
+    let projection = position(|message| matches!(message, RuntimeMessage::ProjectionState(_)));
+    let undo = position(|message| matches!(message, RuntimeMessage::InputUndoStateChanged(_)));
+    let presentation = position(|message| {
+        matches!(
+            message,
+            RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+        )
+    });
+    let opened =
+        position(|message| matches!(message, RuntimeMessage::WaitChanged(WaitChange::Opened(_))));
+    let waiting = position(|message| {
+        matches!(
+            message,
+            RuntimeMessage::StateChanged(change) if change.phase == RuntimePhase::WaitingInput
+        )
+    });
+    assert!(running < projection);
+    assert!(projection < presentation);
+    assert!(presentation < undo);
+    assert!(undo < opened);
+    assert!(opened < waiting);
 }
 
 #[test]
@@ -590,7 +842,7 @@ fn project_load_start_and_print_cross_the_message_boundary() {
                     relative_path: "main.erb".into(),
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\nSKIPDISP 1\nSKIPDISP 0\nPRINTFORML TITLE_CHARANUM={CHARANUM}\nPRINTL ORACLE_READY\nRETURN\n"
+                        "@SYSTEM_TITLE\nSKIPDISP 1\nPRINTFORM HIDDEN_BY_SKIPDISP\nSKIPDISP 0\nPRINTCPERLINE RESULT\nPRINTFORM FAST=0\nPRINTFORM 1\nPRINTFORM 2\nPRINTFORM 3\nPRINTFORM 4\nPRINTFORM 5\nPRINTFORM 6\nPRINTFORM 7\nPRINTFORM FMT=%TOSTR(12345, \"+#0;-#0\")%/%TOFULL(\"A1\")%/%TOHALF(\"Ａ１\")%/%MONEYSTR(7)%/%BARSTR(1, 2, 3)%\nPRINTFORML TITLE_CHARANUM={CHARANUM}\nPRINTFORML LAYOUT={RESULT}\nPRINTL ORACLE_READY\nRETURN\n"
                             .into(),
                     ),
                     content_hash: None,
@@ -636,11 +888,15 @@ fn project_load_start_and_print_cross_the_message_boundary() {
     assert_eq!(yielded.state, RuntimeDriveState::MoreWork);
     let report = session.drive(RuntimeDriveBudget::default()).expect("run");
     assert!(
-        report.runtime_transitions >= 3,
-        "ready host calls should be batched in one bounded runtime drive: {report:?}"
+        report.runtime_transitions <= 2,
+        "committed PRINT calls must remain inside the current VM quantum: {report:?}"
     );
     assert_eq!(session.random_seed(), Some(1));
     output.extend(drain(&mut session));
+    assert_fast_lane_project_output(&session, &output);
+}
+
+fn assert_fast_lane_project_output(session: &RuntimeSession, output: &[RuntimeMessage]) {
     assert!(output.iter().any(|message| matches!(
         message,
         RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
@@ -659,6 +915,31 @@ fn project_load_start_and_print_cross_the_message_boundary() {
             .logical_lines
             .iter()
             .any(|line| projected_line_text(line).contains("TITLE_CHARANUM=0"))
+    );
+    assert!(snapshot.history.logical_lines.iter().any(|line| {
+        projected_line_text(line)
+            .contains("FAST=01234567FMT=+12345/Ａ１/A1/$7/[*..]TITLE_CHARANUM=0")
+    }));
+    assert!(
+        snapshot
+            .history
+            .logical_lines
+            .iter()
+            .any(|line| { projected_line_text(line).contains("FMT=+12345/Ａ１/A1/$7/[*..]") })
+    );
+    assert!(
+        !snapshot
+            .history
+            .logical_lines
+            .iter()
+            .any(|line| { projected_line_text(line).contains("<place>") })
+    );
+    assert!(
+        !snapshot
+            .history
+            .logical_lines
+            .iter()
+            .any(|line| { projected_line_text(line).contains("HIDDEN_BY_SKIPDISP") })
     );
 }
 

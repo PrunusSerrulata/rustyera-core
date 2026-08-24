@@ -355,6 +355,37 @@ fn presentation_query_flushes_skipped_output_before_request() {
 }
 
 #[test]
+fn display_line_query_flushes_fast_lane_redraw_disabled_output_before_request() {
+    let (session, request, messages) = start_html_query_with_messages(
+        "@SYSTEM_TITLE\nSKIPLOG 1\nREDRAW 0\nPRINTFORM pending\nRESULTS '= GETDISPLAYLINE(0)\nRETURN\n",
+        GET_DISPLAY_LINE_OPERATION,
+        GET_DISPLAY_LINE_OPERATION_VERSION,
+    );
+    let payload: ProjectionStringIndexRequest =
+        decode_canonical(request.payload.as_slice()).unwrap();
+    let request_index = messages
+        .iter()
+        .position(|message| matches!(
+            message,
+            RuntimeMessage::ServiceRequest(candidate) if candidate.request_id == request.request_id
+        ))
+        .expect("display-line query request");
+    let update_revision = messages[..request_index]
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            RuntimeMessage::PresentationSnapshot(snapshot) => Some(snapshot.revision),
+            RuntimeMessage::PresentationDelta(delta) => Some(delta.new_revision),
+            _ => None,
+        })
+        .expect("presentation update before display-line query request");
+
+    assert!(session.message_skip);
+    assert!(!session.presentation.redraw_enabled());
+    assert_eq!(update_revision, payload.context.presentation_revision);
+}
+
+#[test]
 fn printed_html_query_rejects_a_changed_canonical_presentation() {
     let (mut session, request) = start_html_query(
         "@SYSTEM_TITLE\nPRINTL title\nRESULTS '= HTML_GETPRINTEDSTR(0)\nWAIT\nRETURN\n",

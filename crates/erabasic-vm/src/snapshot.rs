@@ -540,6 +540,10 @@ impl Vm {
             find_element_cache: HashMap::new(),
             function_memo_cache: HashMap::new(),
             active_function_memos: HashMap::new(),
+            path_memo_cache: HashMap::new(),
+            path_memo_retained_bytes: 0,
+            active_path_memo_fiber: std::cell::Cell::new(None),
+            active_path_memo: std::cell::RefCell::new(None),
         };
         vm.retire_terminal_fibers();
         Ok(vm)

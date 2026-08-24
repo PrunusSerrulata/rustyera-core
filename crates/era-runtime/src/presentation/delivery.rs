@@ -1,17 +1,23 @@
 use super::{
-    PresentationDelivery, PresentationDirty, PresentationModel, PresentationUpdate, project_lines,
+    PresentationDelivery, PresentationDirty, PresentationHistoryEdit, PresentationModel,
+    PresentationUpdate, project_lines,
 };
 use era_runtime_protocol::{
     DisplayLine, InputWait, PresentationDelta, PresentationHistory, PresentationHistoryOperation,
     PresentationOperation, PresentationSnapshot, RedrawState, ResourceReplay,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
+use std::sync::Arc;
 
 impl PresentationModel {
     pub(crate) fn has_wait(&self, wait_id: u64) -> bool {
         self.input_wait
             .as_ref()
             .is_some_and(|wait| wait.wait_id == wait_id)
+    }
+
+    pub(crate) fn has_open_wait(&self) -> bool {
+        self.input_wait.is_some()
     }
 
     pub(crate) fn set_wait(&mut self, wait: Option<InputWait>) {
@@ -28,7 +34,7 @@ impl PresentationModel {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn next_update(&mut self) -> PresentationUpdate {
         if self.delivery.revision.is_none()
-            || self.delivery.history_index > self.history_operations.len()
+            || self.delivery.history_index > self.history_edits.len()
             || self.delivery.dirty.force_snapshot
         {
             return PresentationUpdate::Snapshot(Box::new(self.snapshot_for_delivery()));
@@ -38,7 +44,11 @@ impl PresentationModel {
         let base_revision = delivery
             .revision
             .expect("the snapshot guard establishes a delivery revision");
-        let history = self.history_operations[delivery.history_index..].to_vec();
+        let history = compact_history_edits(
+            &self.history_edits[delivery.history_index..],
+            delivery.history_line_count,
+            delivery.pending_line_id,
+        );
         let mut operations = Vec::with_capacity(history.len().saturating_add(6));
 
         if delivery.dirty.title {
@@ -90,7 +100,7 @@ impl PresentationModel {
         }
         if delivery.dirty.html_island {
             operations.push(PresentationOperation::SetHtmlIsland {
-                html_island: self.html_island.clone(),
+                html_island: self.project_html_island(),
             });
         }
         if delivery.dirty.redraw {
@@ -103,17 +113,19 @@ impl PresentationModel {
 
         for operation in history {
             match operation {
-                PresentationHistoryOperation::Append { line } => {
+                PresentationHistoryEdit::Append { line } => {
                     let line_id = line.line_id;
                     let line = if delivery.dirty_lines.remove(&line_id) {
                         self.lines
                             .iter()
                             .rev()
                             .find(|current| current.line_id == line_id)
-                            .cloned()
-                            .unwrap_or(line)
+                            .map_or_else(
+                                || line.as_ref().clone(),
+                                |current| current.as_ref().clone(),
+                            )
                     } else {
-                        line
+                        line.as_ref().clone()
                     };
                     let line = self.project_line(line);
                     if delivery.pending_line_id == Some(line_id) {
@@ -123,17 +135,19 @@ impl PresentationModel {
                         operations.push(PresentationOperation::AppendLine { line });
                     }
                 }
-                PresentationHistoryOperation::ReplaceTemporary { line } => {
+                PresentationHistoryEdit::ReplaceTemporary { line } => {
                     let line_id = line.line_id;
                     let line = if delivery.dirty_lines.remove(&line_id) {
                         self.lines
                             .iter()
                             .rev()
                             .find(|current| current.line_id == line_id)
-                            .cloned()
-                            .unwrap_or(line)
+                            .map_or_else(
+                                || line.as_ref().clone(),
+                                |current| current.as_ref().clone(),
+                            )
                     } else {
-                        line
+                        line.as_ref().clone()
                     };
                     operations.push(PresentationOperation::DeleteLines { count: 1 });
                     operations.push(PresentationOperation::AppendLine {
@@ -141,18 +155,14 @@ impl PresentationModel {
                     });
                     delivery.pending_line_id = None;
                 }
-                PresentationHistoryOperation::DeletePhysical { count } => {
+                PresentationHistoryEdit::DeletePhysical { count } => {
                     operations.push(PresentationOperation::DeleteLines { count });
                     delivery.pending_line_id = None;
                 }
-                PresentationHistoryOperation::Clear => {
-                    operations.push(PresentationOperation::Clear);
-                    delivery.pending_line_id = None;
-                }
-                PresentationHistoryOperation::SetButtonGeneration { generation } => {
+                PresentationHistoryEdit::SetButtonGeneration { generation } => {
                     operations.push(PresentationOperation::SetButtonGeneration { generation });
                 }
-                PresentationHistoryOperation::TrimPhysical { count } => {
+                PresentationHistoryEdit::TrimPhysical { count } => {
                     operations.push(PresentationOperation::TrimLines { count });
                     delivery.pending_line_id = None;
                 }
@@ -164,7 +174,7 @@ impl PresentationModel {
                 .lines
                 .iter()
                 .find(|current| current.line_id == line_id)
-                .cloned()
+                .map(|current| current.as_ref().clone())
             {
                 operations.push(PresentationOperation::ReplaceLine {
                     line_id,
@@ -203,9 +213,11 @@ impl PresentationModel {
         }
 
         delivery.revision = Some(self.revision);
+        delivery.history_line_count = self.delivered_line_count();
         // Encoded outbound envelopes own retransmission after this point. Keeping the
         // same semantic edits in the presentation model made long sessions grow forever.
         self.history_operations.clear();
+        self.history_edits.clear();
         delivery.history_index = 0;
         delivery.dirty = PresentationDirty::default();
         self.delivery = delivery;
@@ -220,9 +232,11 @@ impl PresentationModel {
     pub(crate) fn snapshot_for_delivery(&mut self) -> PresentationSnapshot {
         let snapshot = self.snapshot();
         self.history_operations.clear();
+        self.history_edits.clear();
         self.delivery = PresentationDelivery {
             revision: Some(self.revision),
             history_index: 0,
+            history_line_count: self.delivered_line_count(),
             pending_line_id: (!self.pending_runs.is_empty()).then_some(self.next_line),
             dirty_lines: BTreeSet::new(),
             dirty: PresentationDirty::default(),
@@ -231,7 +245,11 @@ impl PresentationModel {
     }
 
     pub(crate) fn snapshot(&self) -> PresentationSnapshot {
-        let mut lines = self.lines.clone();
+        let mut lines = self
+            .lines
+            .iter()
+            .map(|line| line.as_ref().clone())
+            .collect::<Vec<_>>();
         let committed_line_count = lines.len();
         if !self.pending_runs.is_empty() {
             lines.push(DisplayLine {
@@ -242,6 +260,9 @@ impl PresentationModel {
                 alignment: self.current_alignment,
                 runs: self.pending_runs.clone(),
             });
+        }
+        for line in &mut lines {
+            super::projection::disable_old_buttons(&mut line.runs, self.button_generation);
         }
         project_lines(
             &mut lines,
@@ -285,7 +306,7 @@ impl PresentationModel {
             } else {
                 ResourceReplay::default()
             },
-            html_island: self.html_island.clone(),
+            html_island: self.project_html_island(),
             redraw: RedrawState {
                 enabled: self.redraw_enabled,
             },
@@ -307,7 +328,12 @@ impl PresentationModel {
         })
     }
 
+    fn delivered_line_count(&self) -> usize {
+        self.lines.len() + usize::from(!self.pending_runs.is_empty())
+    }
+
     fn project_line(&self, mut line: DisplayLine) -> DisplayLine {
+        super::projection::disable_old_buttons(&mut line.runs, self.button_generation);
         project_lines(
             std::slice::from_mut(&mut line),
             self.project_column_cells,
@@ -319,4 +345,91 @@ impl PresentationModel {
         );
         line
     }
+
+    fn project_html_island(&self) -> Vec<erabasic_html::HtmlDocument> {
+        let mut documents = self.html_island.clone();
+        for document in &mut documents {
+            super::projection::disable_old_html_buttons(
+                &mut document.nodes,
+                self.button_generation,
+            );
+        }
+        documents
+    }
+}
+
+fn compact_history_edits(
+    history: &[PresentationHistoryEdit],
+    baseline_line_count: usize,
+    pending_line_id: Option<u64>,
+) -> Vec<PresentationHistoryEdit> {
+    // An uncommitted line is represented separately by `pending_line_id`. Its later commit is an
+    // Append edit that delivery interprets as ReplaceLine, so cancellation against a following
+    // delete would incorrectly preserve the already-delivered pending row. Keep exact ordering for
+    // that uncommon boundary; normal animation frames have no pending row and use the reducer.
+    if pending_line_id.is_some() {
+        return history.to_vec();
+    }
+
+    let mut base_remaining = baseline_line_count;
+    let mut front_trim = 0_u32;
+    let mut tail_delete = 0_u32;
+    let mut appends = VecDeque::<Arc<DisplayLine>>::new();
+    let mut generation = None;
+
+    let delete_tail = |count: u32,
+                       base_remaining: &mut usize,
+                       tail_delete: &mut u32,
+                       appends: &mut VecDeque<Arc<DisplayLine>>| {
+        let mut remaining = usize::try_from(count).unwrap_or(usize::MAX);
+        let appended = remaining.min(appends.len());
+        appends.truncate(appends.len() - appended);
+        remaining -= appended;
+        let from_base = remaining.min(*base_remaining);
+        *base_remaining -= from_base;
+        *tail_delete = tail_delete.saturating_add(u32::try_from(from_base).unwrap_or(u32::MAX));
+    };
+
+    for operation in history {
+        match operation {
+            PresentationHistoryEdit::Append { line } => appends.push_back(Arc::clone(line)),
+            PresentationHistoryEdit::ReplaceTemporary { line } => {
+                delete_tail(1, &mut base_remaining, &mut tail_delete, &mut appends);
+                appends.push_back(Arc::clone(line));
+            }
+            PresentationHistoryEdit::DeletePhysical { count } => {
+                delete_tail(*count, &mut base_remaining, &mut tail_delete, &mut appends);
+            }
+            PresentationHistoryEdit::SetButtonGeneration { generation: next } => {
+                generation = Some(*next);
+            }
+            PresentationHistoryEdit::TrimPhysical { count } => {
+                let mut remaining = usize::try_from(*count).unwrap_or(usize::MAX);
+                let from_base = remaining.min(base_remaining);
+                base_remaining -= from_base;
+                remaining -= from_base;
+                front_trim =
+                    front_trim.saturating_add(u32::try_from(from_base).unwrap_or(u32::MAX));
+                let from_appends = remaining.min(appends.len());
+                appends.drain(..from_appends);
+            }
+        }
+    }
+
+    let mut compacted = Vec::with_capacity(appends.len().saturating_add(4));
+    if front_trim != 0 {
+        compacted.push(PresentationHistoryEdit::TrimPhysical { count: front_trim });
+    }
+    if tail_delete != 0 {
+        compacted.push(PresentationHistoryEdit::DeletePhysical { count: tail_delete });
+    }
+    if let Some(generation) = generation {
+        compacted.push(PresentationHistoryEdit::SetButtonGeneration { generation });
+    }
+    compacted.extend(
+        appends
+            .into_iter()
+            .map(|line| PresentationHistoryEdit::Append { line }),
+    );
+    compacted
 }

@@ -521,32 +521,6 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_projection_state();
         }
-        if matches!(name.as_str(), "HTML_ESCAPE" | "HTML_TOPLAINTEXT") {
-            *status = HostDispatchStatus::Handled;
-            let source = string_argument_value(&request.arguments, 0, &name)?;
-            let value = if name == "HTML_ESCAPE" {
-                erabasic_html::escape(source)
-            } else {
-                match erabasic_html::to_plain_text(source) {
-                    Ok(value) => value,
-                    Err(_) => {
-                        return self.fault(
-                            FaultCode::VmFault,
-                            "malformed HTML text",
-                            Some(request.origin.clone()),
-                        );
-                    }
-                }
-            };
-            return commit_completion(
-                vm,
-                request.id,
-                VmHostCompletion::Ready(HostReady {
-                    value: Some(VmValue::String(value)),
-                    writes: Vec::new(),
-                }),
-            );
-        }
         if name == "HTML_TAGSPLIT" {
             *status = HostDispatchStatus::Handled;
             let source = string_argument_value(&request.arguments, 0, &name)?;
@@ -604,39 +578,30 @@ impl RuntimeSession {
             let value = integer_argument_value(&request.arguments, 0)?;
             let maximum = integer_argument_value(&request.arguments, 1)?;
             let length = integer_argument_value(&request.arguments, 2)?;
-            if maximum <= 0 {
-                return self.fault(
-                    FaultCode::VmFault,
-                    "BARSTR maximum must be positive",
-                    Some(request.origin.clone()),
-                );
-            }
-            if !(1..100).contains(&length) {
-                return self.fault(
-                    FaultCode::VmFault,
-                    "BARSTR length must be between 1 and 99",
-                    Some(request.origin.clone()),
-                );
-            }
             let replace = &vm.vm().artifact().project_data.static_data.replace;
-            // Emuera performs the multiplication in an unchecked Int64 context.
-            let filled = value.wrapping_mul(length) / maximum;
-            let filled = filled.clamp(0, length);
-            let empty = length - filled;
-            let mut bar = String::from("[");
-            bar.push_str(
-                &replace
-                    .bar_char_1
-                    .to_string()
-                    .repeat(usize::try_from(filled).unwrap_or(0)),
-            );
-            bar.push_str(
-                &replace
-                    .bar_char_2
-                    .to_string()
-                    .repeat(usize::try_from(empty).unwrap_or(0)),
-            );
-            bar.push(']');
+            let bar = match format_bar_string(
+                value,
+                maximum,
+                length,
+                replace.bar_char_1,
+                replace.bar_char_2,
+            ) {
+                Ok(value) => value,
+                Err(BarStringError::NonPositiveMaximum) => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        "BARSTR maximum must be positive",
+                        Some(request.origin.clone()),
+                    );
+                }
+                Err(BarStringError::InvalidLength) => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        "BARSTR length must be between 1 and 99",
+                        Some(request.origin.clone()),
+                    );
+                }
+            };
             return commit_completion(
                 vm,
                 request.id,
@@ -649,18 +614,9 @@ impl RuntimeSession {
         if matches!(name.as_str(), "MONEYSTR" | "TOSTR") {
             *status = HostDispatchStatus::Handled;
             let value = integer_argument_value(&request.arguments, 0)?;
-            let formatted = match request.arguments.get(1) {
-                None => value.to_string(),
-                Some(VmValue::String(format)) => match format_era_integer(value, format) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        return self.fault(
-                            FaultCode::VmFault,
-                            &format!("{name} format is invalid: {error}"),
-                            Some(request.origin.clone()),
-                        );
-                    }
-                },
+            let format = match request.arguments.get(1) {
+                None => None,
+                Some(VmValue::String(format)) => Some(format.as_str()),
                 Some(_) => {
                     return self.fault(
                         FaultCode::VmFault,
@@ -670,6 +626,16 @@ impl RuntimeSession {
                 }
             };
             if name == "TOSTR" {
+                let formatted = match format_optional_era_integer(value, format) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            &format!("{name} format is invalid: {error}"),
+                            Some(request.origin.clone()),
+                        );
+                    }
+                };
                 return commit_completion(
                     vm,
                     request.id,
@@ -679,15 +645,21 @@ impl RuntimeSession {
                     }),
                 );
             }
+            let formatted = match format_optional_era_integer(value, format) {
+                Ok(value) => value,
+                Err(error) => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        &format!("{name} format is invalid: {error}"),
+                        Some(request.origin.clone()),
+                    );
+                }
+            };
             let project = self
                 .project_snapshot
                 .as_ref()
                 .ok_or_else(|| RuntimeError::Internal("MONEYSTR has no loaded project".into()))?;
-            let value = if project.money_first {
-                format!("{}{formatted}", project.money_label)
-            } else {
-                format!("{formatted}{}", project.money_label)
-            };
+            let value = decorate_money_value(&formatted, project.money_first, &project.money_label);
             return commit_completion(
                 vm,
                 request.id,

@@ -2,6 +2,17 @@
 #[allow(clippy::wildcard_imports)]
 use super::super::*;
 
+const fn records_input_undo(kind: WaitKind) -> bool {
+    matches!(
+        kind,
+        WaitKind::IntegerValue
+            | WaitKind::StringValue
+            | WaitKind::AnyValue
+            | WaitKind::IntegerButton
+            | WaitKind::StringButton
+    )
+}
+
 impl RuntimeSession {
     pub(in super::super) fn open_update_prompt(
         &mut self,
@@ -260,8 +271,7 @@ impl RuntimeSession {
             pending.wait.clone()
         };
         self.presentation.set_wait(Some(wait.clone()));
-        self.emit(RuntimeMessage::WaitChanged(WaitChange::Updated(wait)), None)?;
-        self.emit_presentation()
+        self.emit_wait_change(WaitChange::Updated(wait))
     }
 
     pub(in super::super) fn handle_system_input_command(
@@ -393,8 +403,7 @@ impl RuntimeSession {
             pending.wait.countdown_remaining_ms = Some(remaining);
             let wait = pending.wait.clone();
             self.presentation.set_wait(Some(wait.clone()));
-            self.emit(RuntimeMessage::WaitChanged(WaitChange::Updated(wait)), None)?;
-            self.emit_presentation()?;
+            self.emit_wait_change(WaitChange::Updated(wait))?;
         }
         if timed_out {
             let pending = self
@@ -518,7 +527,9 @@ impl RuntimeSession {
             self.finish_system_input(pending, &value)?;
             return self.emit_projection_state();
         }
-        if let InputSubmission::Value(value) = &submission {
+        if records_input_undo(pending.wait.kind)
+            && let InputSubmission::Value(value) = &submission
+        {
             self.record_input_undo_value(value)?;
         }
         // Emuera prints and flushes a console input row after a successful integer,
@@ -876,6 +887,32 @@ impl RuntimeSession {
                     "unknown system menu item",
                 )
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_z_records_only_reference_scalar_and_button_waits() {
+        for kind in [
+            WaitKind::IntegerValue,
+            WaitKind::StringValue,
+            WaitKind::AnyValue,
+            WaitKind::IntegerButton,
+            WaitKind::StringButton,
+        ] {
+            assert!(records_input_undo(kind), "{kind:?}");
+        }
+        for kind in [
+            WaitKind::EnterKey,
+            WaitKind::AnyKey,
+            WaitKind::Void,
+            WaitKind::PrimitiveMouseKey,
+        ] {
+            assert!(!records_input_undo(kind), "{kind:?}");
         }
     }
 }

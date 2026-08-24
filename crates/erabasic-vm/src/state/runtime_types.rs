@@ -1,3 +1,4 @@
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -141,6 +142,10 @@ pub struct Vm {
     pub(crate) find_element_cache: HashMap<FindElementCacheKey, i64>,
     pub(crate) function_memo_cache: HashMap<FunctionMemoKey, FunctionMemoEntry>,
     pub(crate) active_function_memos: HashMap<FrameId, FunctionMemoKey>,
+    pub(crate) path_memo_cache: HashMap<PathMemoBaseKey, Vec<Arc<PathMemoEntry>>>,
+    pub(crate) path_memo_retained_bytes: usize,
+    pub(crate) active_path_memo_fiber: Cell<Option<FiberId>>,
+    pub(crate) active_path_memo: RefCell<Option<ActivePathMemo>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -220,4 +225,155 @@ pub(crate) struct LiteralGroupMatchPlan {
 pub(crate) struct FunctionMemoEntry {
     pub result: VmValue,
     pub scratch: Vec<(SymbolKey, VmValue)>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct PathMemoBaseKey {
+    pub generation: GenerationId,
+    pub function: SymbolKey,
+    pub arguments: Vec<MemoValue>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct PathMemoPlace {
+    pub generation: GenerationId,
+    pub variable: SymbolKey,
+    pub indices: Vec<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum PathMemoDependency {
+    Value {
+        place: PathMemoPlace,
+        value: VmValue,
+    },
+    CellRevision {
+        generation: GenerationId,
+        variable: SymbolKey,
+        revision: u64,
+    },
+}
+
+impl PathMemoDependency {
+    pub(crate) fn observes_cell_revision(
+        &self,
+        generation: GenerationId,
+        variable: SymbolKey,
+    ) -> bool {
+        matches!(
+            self,
+            Self::CellRevision {
+                generation: observed_generation,
+                variable: observed_variable,
+                ..
+            } if *observed_generation == generation && *observed_variable == variable
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum PathMemoMutation {
+    Write {
+        place: PathMemoPlace,
+        value: VmValue,
+    },
+    Fill {
+        generation: GenerationId,
+        variable: SymbolKey,
+        start: usize,
+        end: usize,
+        value: VmValue,
+    },
+    Replace {
+        generation: GenerationId,
+        variable: SymbolKey,
+        values: Vec<VmValue>,
+    },
+}
+
+impl PathMemoMutation {
+    pub(crate) fn writes_cell(&self, generation: GenerationId, variable: SymbolKey) -> bool {
+        match self {
+            Self::Write { place, .. } => {
+                place.generation == generation && place.variable == variable
+            }
+            Self::Fill {
+                generation: written_generation,
+                variable: written_variable,
+                ..
+            }
+            | Self::Replace {
+                generation: written_generation,
+                variable: written_variable,
+                ..
+            } => *written_generation == generation && *written_variable == variable,
+        }
+    }
+
+    pub(crate) fn writes(&self, place: &PathMemoPlace) -> bool {
+        match self {
+            Self::Write { place: written, .. } => written == place,
+            Self::Fill {
+                generation,
+                variable,
+                start,
+                end,
+                ..
+            } => {
+                place.generation == *generation
+                    && place.variable == *variable
+                    && place.indices.len() <= 1
+                    && place
+                        .indices
+                        .first()
+                        .copied()
+                        .unwrap_or(0)
+                        .try_into()
+                        .ok()
+                        .is_some_and(|index: usize| index >= *start && index < *end)
+            }
+            Self::Replace {
+                generation,
+                variable,
+                values,
+            } => {
+                place.generation == *generation
+                    && place.variable == *variable
+                    && place.indices.len() <= 1
+                    && place
+                        .indices
+                        .first()
+                        .copied()
+                        .unwrap_or(0)
+                        .try_into()
+                        .ok()
+                        .is_some_and(|index: usize| index < values.len())
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PathMemoEntry {
+    pub dependencies: Vec<PathMemoDependency>,
+    pub mutations: Vec<PathMemoMutation>,
+    pub result: VmValue,
+    pub body_instructions: u64,
+    pub backward_branches: u64,
+    pub retained_bytes: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ActivePathMemo {
+    pub fiber: FiberId,
+    pub frame: FrameId,
+    pub key: PathMemoBaseKey,
+    pub dependencies: Vec<PathMemoDependency>,
+    pub mutations: Vec<PathMemoMutation>,
+    pub retained_bytes: usize,
+    pub body_instructions: u64,
+    pub maximum_body_instructions: u64,
+    pub backward_branches_before: u64,
+    pub skip_call_instruction: bool,
+    pub valid: bool,
 }

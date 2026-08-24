@@ -67,12 +67,13 @@ use era_runtime_protocol::{ClientPreferenceLayers, ClientPreferencesApplied, Con
 use erabasic_compiler::IncrementalState;
 use erabasic_validator::ValidatedArtifact;
 use erabasic_vm::{
-    CharacterWidthMode, DEFAULT_LINE_COLUMNS, EraSaveScope, EraState, HostReady, HostWaitStability,
-    HostWrite, PlaceDescriptor, PreparedCandidateState, PreparedRuntimeState, RunBudget, RuntimeVm,
-    SnapshotEligibility, StructuredScope, VmConfig, VmDiagnosticNotification, VmDriveMode,
-    VmHostCompletion, VmHostRequest, VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill,
-    VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot,
-    VmValue,
+    CharacterWidthMode, DEFAULT_LINE_COLUMNS, EraSaveScope, EraState, HostCallRequest,
+    HostCallResult, HostReady, HostWaitStability, HostWrite, ImmediateHostCall,
+    ImmediateHostCallResult, PlaceDescriptor, PreparedCandidateState, PreparedRuntimeState,
+    RunBudget, RuntimeVm, SnapshotEligibility, StructuredScope, VmConfig, VmDiagnosticNotification,
+    VmDriveMode, VmHost, VmHostCompletion, VmHostRequest, VmPortDriveReport, VmPortEvent,
+    VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
+    VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot, VmValue,
 };
 use serde::{Deserialize, Serialize};
 
@@ -691,6 +692,7 @@ pub struct RuntimeSession {
     debug_output_subscribed: bool,
     projection_environment_revision: u64,
     projection_space_revision: u64,
+    last_projection_state: Option<ProjectionState>,
     client_width: u32,
     client_height: u32,
     line_columns: u32,

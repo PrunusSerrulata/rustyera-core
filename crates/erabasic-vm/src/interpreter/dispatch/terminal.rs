@@ -154,6 +154,7 @@ impl Vm {
                     }
                     self.function_memo_cache.insert(key, entry);
                 }
+                self.complete_path_memo(fiber, returned_frame.id, value.as_ref());
                 if let Some(caller) = fiber.frames.last_mut() {
                     if returned_frame.return_value_to_caller
                         && let Some(value) = value.clone()

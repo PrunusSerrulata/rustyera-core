@@ -116,10 +116,42 @@ impl RuntimeSession {
         self.publish_pending_presentation()
     }
 
+    pub(in super::super) fn flush_presentation_at_drive_boundary(
+        &mut self,
+    ) -> Result<(), RuntimeError> {
+        if self.phase == RuntimePhase::Running
+            && !self.presentation.redraw_enabled()
+            && !self.presentation.has_open_wait()
+        {
+            return Ok(());
+        }
+        self.flush_presentation()
+    }
+
     pub(in super::super) fn flush_presentation_for_observation(
         &mut self,
     ) -> Result<(), RuntimeError> {
         self.publish_pending_presentation()
+    }
+
+    pub(in super::super) fn emit_wait_change(
+        &mut self,
+        change: WaitChange,
+    ) -> Result<(), RuntimeError> {
+        let closes_wait = matches!(change, WaitChange::Closed(_));
+        self.emit_presentation()?;
+        // Opening or updating a wait exposes it immediately and must publish the matching
+        // presentation revision first. Closing preserves the established protocol order:
+        // notify the frontend, then let the resumed drive publish or coalesce the cleared wait
+        // with the following frame. That distinction is what keeps message-skip and REDRAW 0
+        // transactions from leaking a SetInputWait(None) frame.
+        if !closes_wait {
+            self.flush_presentation_for_observation()?;
+        }
+        // The ordering above is deliberate, so bypass `emit`: that general helper flushes any
+        // pending presentation before every non-presentation message and would turn Closed back
+        // into an eager SetInputWait(None) frame.
+        self.emit_immediate(RuntimeMessage::WaitChanged(change), None)
     }
 
     fn publish_pending_presentation(&mut self) -> Result<(), RuntimeError> {
@@ -142,7 +174,7 @@ impl RuntimeSession {
         self.materialize_resource_replay_if_ready()
     }
 
-    fn materialize_resource_replay_if_ready(&mut self) -> bool {
+    pub(in crate::session) fn materialize_resource_replay_if_ready(&mut self) -> bool {
         if !self.presentation.resource_replay_is_ready_to_publish() {
             return false;
         }
@@ -181,6 +213,11 @@ impl RuntimeSession {
     }
 
     pub(in super::super) fn set_phase(&mut self, phase: RuntimePhase) -> Result<(), RuntimeError> {
+        if self.phase == phase {
+            // State changes are presentation ordering barriers. Keep that side effect without
+            // publishing a redundant revision and StateChanged envelope.
+            return self.flush_presentation();
+        }
         self.phase = phase;
         self.revision = self.revision.saturating_add(1);
         self.emit(
