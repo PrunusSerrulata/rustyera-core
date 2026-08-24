@@ -14,6 +14,10 @@ impl PresentationModel {
             .is_some_and(|wait| wait.wait_id == wait_id)
     }
 
+    pub(crate) fn has_open_wait(&self) -> bool {
+        self.input_wait.is_some()
+    }
+
     pub(crate) fn set_wait(&mut self, wait: Option<InputWait>) {
         self.input_wait = wait;
         self.delivery.dirty.input_wait = true;
@@ -38,7 +42,8 @@ impl PresentationModel {
         let base_revision = delivery
             .revision
             .expect("the snapshot guard establishes a delivery revision");
-        let history = self.history_operations[delivery.history_index..].to_vec();
+        let history =
+            compact_history_operations(&self.history_operations[delivery.history_index..]);
         let mut operations = Vec::with_capacity(history.len().saturating_add(6));
 
         if delivery.dirty.title {
@@ -90,7 +95,7 @@ impl PresentationModel {
         }
         if delivery.dirty.html_island {
             operations.push(PresentationOperation::SetHtmlIsland {
-                html_island: self.html_island.clone(),
+                html_island: self.project_html_island(),
             });
         }
         if delivery.dirty.redraw {
@@ -243,6 +248,9 @@ impl PresentationModel {
                 runs: self.pending_runs.clone(),
             });
         }
+        for line in &mut lines {
+            super::projection::disable_old_buttons(&mut line.runs, self.button_generation);
+        }
         project_lines(
             &mut lines,
             self.project_column_cells,
@@ -285,7 +293,7 @@ impl PresentationModel {
             } else {
                 ResourceReplay::default()
             },
-            html_island: self.html_island.clone(),
+            html_island: self.project_html_island(),
             redraw: RedrawState {
                 enabled: self.redraw_enabled,
             },
@@ -308,6 +316,7 @@ impl PresentationModel {
     }
 
     fn project_line(&self, mut line: DisplayLine) -> DisplayLine {
+        super::projection::disable_old_buttons(&mut line.runs, self.button_generation);
         project_lines(
             std::slice::from_mut(&mut line),
             self.project_column_cells,
@@ -319,4 +328,97 @@ impl PresentationModel {
         );
         line
     }
+
+    fn project_html_island(&self) -> Vec<erabasic_html::HtmlDocument> {
+        let mut documents = self.html_island.clone();
+        for document in &mut documents {
+            super::projection::disable_old_html_buttons(
+                &mut document.nodes,
+                self.button_generation,
+            );
+        }
+        documents
+    }
+}
+
+pub(super) fn compact_history_operations(
+    history: &[PresentationHistoryOperation],
+) -> Vec<PresentationHistoryOperation> {
+    let mut structural = Vec::new();
+    let mut tail_deletions = 0_u32;
+    let mut tail_appends: Vec<&DisplayLine> = Vec::new();
+
+    let flush_tail = |structural: &mut Vec<PresentationHistoryOperation>,
+                      tail_deletions: &mut u32,
+                      tail_appends: &mut Vec<&DisplayLine>| {
+        if *tail_deletions != 0 {
+            structural.push(PresentationHistoryOperation::DeletePhysical {
+                count: std::mem::take(tail_deletions),
+            });
+        }
+        structural.extend(
+            std::mem::take(tail_appends)
+                .into_iter()
+                .map(|line| PresentationHistoryOperation::Append { line: line.clone() }),
+        );
+    };
+    let absorb_tail_deletion =
+        |mut count: u32, tail_deletions: &mut u32, tail_appends: &mut Vec<&DisplayLine>| {
+            let cancel = usize::try_from(count)
+                .unwrap_or(usize::MAX)
+                .min(tail_appends.len());
+            tail_appends.truncate(tail_appends.len() - cancel);
+            count = count.saturating_sub(u32::try_from(cancel).unwrap_or(u32::MAX));
+            *tail_deletions = tail_deletions.saturating_add(count);
+        };
+
+    for operation in history {
+        match operation {
+            PresentationHistoryOperation::Append { line } => tail_appends.push(line),
+            PresentationHistoryOperation::ReplaceTemporary { line } => {
+                absorb_tail_deletion(1, &mut tail_deletions, &mut tail_appends);
+                tail_appends.push(line);
+            }
+            PresentationHistoryOperation::DeletePhysical { count } => {
+                absorb_tail_deletion(*count, &mut tail_deletions, &mut tail_appends);
+            }
+            PresentationHistoryOperation::Clear => {
+                let generation = structural
+                    .iter()
+                    .rev()
+                    .find_map(|operation| match operation {
+                        PresentationHistoryOperation::SetButtonGeneration { generation } => {
+                            Some(*generation)
+                        }
+                        _ => None,
+                    });
+                structural.clear();
+                tail_deletions = 0;
+                tail_appends.clear();
+                if let Some(generation) = generation {
+                    structural
+                        .push(PresentationHistoryOperation::SetButtonGeneration { generation });
+                }
+                structural.push(PresentationHistoryOperation::Clear);
+            }
+            PresentationHistoryOperation::SetButtonGeneration { generation } => {
+                flush_tail(&mut structural, &mut tail_deletions, &mut tail_appends);
+                structural.push(PresentationHistoryOperation::SetButtonGeneration {
+                    generation: *generation,
+                });
+            }
+            PresentationHistoryOperation::TrimPhysical { count } => {
+                flush_tail(&mut structural, &mut tail_deletions, &mut tail_appends);
+                if let Some(PresentationHistoryOperation::TrimPhysical { count: previous }) =
+                    structural.last_mut()
+                {
+                    *previous = previous.saturating_add(*count);
+                } else {
+                    structural.push(PresentationHistoryOperation::TrimPhysical { count: *count });
+                }
+            }
+        }
+    }
+    flush_tail(&mut structural, &mut tail_deletions, &mut tail_appends);
+    structural
 }

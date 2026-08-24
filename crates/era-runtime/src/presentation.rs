@@ -53,13 +53,13 @@ impl PresentationModel {
         self.pending_runs
             .iter()
             .rev()
-            .find_map(|run| enabled_button_value(run, token))
+            .find_map(|run| enabled_button_value(run, token, self.button_generation))
             .or_else(|| {
                 self.lines.iter().rev().find_map(|line| {
                     line.runs
                         .iter()
                         .rev()
-                        .find_map(|run| enabled_button_value(run, token))
+                        .find_map(|run| enabled_button_value(run, token, self.button_generation))
                 })
             })
     }
@@ -69,21 +69,35 @@ impl PresentationModel {
         token: InteractionToken,
         value: crate::input_replay::ReplayValue,
     ) -> Option<crate::input_replay::ReplayButton> {
-        let mut candidates = Vec::new();
+        let mut ordinal = 0;
         for line in &self.lines {
-            projection::collect_replay_buttons(&line.runs, &mut candidates);
+            if let Some(candidate) = projection::find_replay_button(
+                &line.runs,
+                token,
+                self.button_generation,
+                &mut ordinal,
+            ) {
+                return Some(crate::input_replay::ReplayButton {
+                    visible_text: candidate.visible_text,
+                    title: candidate.title,
+                    alt_text: candidate.alt_text,
+                    value,
+                    ordinal: candidate.ordinal,
+                });
+            }
         }
-        projection::collect_replay_buttons(&self.pending_runs, &mut candidates);
-        let (index, candidate) = candidates
-            .into_iter()
-            .enumerate()
-            .find(|(_, candidate)| candidate.token == token)?;
+        let candidate = projection::find_replay_button(
+            &self.pending_runs,
+            token,
+            self.button_generation,
+            &mut ordinal,
+        )?;
         Some(crate::input_replay::ReplayButton {
             visible_text: candidate.visible_text,
             title: candidate.title,
             alt_text: candidate.alt_text,
             value,
-            ordinal: index.saturating_add(1),
+            ordinal: candidate.ordinal,
         })
     }
 
@@ -626,10 +640,6 @@ impl PresentationModel {
 
     pub(crate) fn set_button_generation(&mut self, generation: u64) {
         self.button_generation = generation;
-        for line in &mut self.lines {
-            disable_old_buttons(&mut line.runs, generation);
-        }
-        disable_old_buttons(&mut self.pending_runs, generation);
         self.history_operations
             .push(PresentationHistoryOperation::SetButtonGeneration { generation });
         self.bump();
@@ -878,5 +888,5 @@ mod tests;
 pub(crate) use self::projection::display_value;
 use self::projection::{
     append_html_run, append_log_run, auto_button_values, bind_auto_buttons, color_rgb,
-    disable_old_buttons, enabled_button_value, project_lines, rebind_runs, rgb_color, run_is_empty,
+    enabled_button_value, project_lines, rebind_runs, rgb_color, run_is_empty,
 };

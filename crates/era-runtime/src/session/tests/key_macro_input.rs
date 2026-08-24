@@ -102,6 +102,104 @@ fn running_message_skip_defers_presentation_until_the_next_input_boundary() {
 }
 
 #[test]
+fn running_redraw_disabled_defers_presentation_until_the_next_input_boundary() {
+    let mut session = start_input_project(
+        "@SYSTEM_TITLE\nWAIT\nREDRAW 0\nFOR LOCAL, 0, 4\nCLEARLINE 1\nPRINTFORML frame {LOCAL}\nNEXT\nINPUT\nRETURN\n",
+    );
+    let pending = session.operations.active_input().unwrap();
+    let wait_id = pending.wait.wait_id;
+    let token = pending.wait.submission_token;
+    drain(&mut session);
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id,
+            token,
+            monotonic_time_ns: 1,
+            intent: InputIntent::Enter,
+            message_skip: false,
+        }),
+    );
+    drain(&mut session);
+
+    let mut boundary_messages = Vec::new();
+    for _ in 0..256 {
+        let redraw_was_already_disabled =
+            !session.presentation.redraw_enabled() && session.operations.active_input().is_none();
+        session
+            .drive(RuntimeDriveBudget {
+                maximum_vm_instructions: 4,
+                maximum_runtime_transitions: 1,
+            })
+            .unwrap();
+        let messages = drain(&mut session);
+        if session.operations.active_input().is_some() {
+            boundary_messages.extend(messages);
+            break;
+        }
+        if redraw_was_already_disabled {
+            assert!(
+                !messages.iter().any(|message| matches!(
+                    message,
+                    RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+                )),
+                "redraw-disabled execution projected an intermediate frame: {messages:#?}"
+            );
+        }
+    }
+
+    assert_wait(&session, WaitKind::IntegerValue);
+    assert!(boundary_messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+    )));
+    let output = session.presentation.log_text(false);
+    assert!(output.ends_with("frame 3\r\n"), "{output:?}");
+    for discarded in ["frame 0", "frame 1", "frame 2"] {
+        assert!(!output.contains(discarded), "{output:?}");
+    }
+}
+
+#[test]
+fn present_now_follows_the_presentation_revision_it_observes() {
+    let mut session =
+        start_input_project("@SYSTEM_TITLE\nPRINTL visible\nREDRAW 2\nWAIT\nRETURN\n");
+    let messages = drain(&mut session);
+    let (effect_index, effect_revision) = messages
+        .iter()
+        .enumerate()
+        .find_map(|(index, message)| match message {
+            RuntimeMessage::EffectBatch(batch) => batch.effects.iter().find_map(|effect| {
+                if let EffectKind::PresentNow {
+                    presentation_revision,
+                } = &effect.kind
+                {
+                    Some((index, *presentation_revision))
+                } else {
+                    None
+                }
+            }),
+            _ => None,
+        })
+        .expect("REDRAW 2 present-now effect");
+    let (presentation_index, presentation_revision) = messages[..effect_index]
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, message)| match message {
+            RuntimeMessage::PresentationSnapshot(snapshot) => Some((index, snapshot.revision)),
+            RuntimeMessage::PresentationDelta(delta) => Some((index, delta.new_revision)),
+            _ => None,
+        })
+        .expect("presentation update before present-now effect");
+
+    assert!(presentation_index < effect_index);
+    assert_eq!(presentation_revision, effect_revision);
+    assert!(!session.presentation.redraw_enabled());
+}
+
+#[test]
 fn negative_display_line_query_does_not_publish_a_skipped_frame() {
     let mut session = start_input_project(
         "@SYSTEM_TITLE\nWAIT\nPRINTL pending\nRESULTS '= GETDISPLAYLINE(-1)\nRESULT = GETKEY(65)\nRETURN\n",

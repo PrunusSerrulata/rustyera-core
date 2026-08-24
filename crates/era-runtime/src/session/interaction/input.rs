@@ -260,8 +260,7 @@ impl RuntimeSession {
             pending.wait.clone()
         };
         self.presentation.set_wait(Some(wait.clone()));
-        self.emit(RuntimeMessage::WaitChanged(WaitChange::Updated(wait)), None)?;
-        self.emit_presentation()
+        self.emit_wait_change(WaitChange::Updated(wait))
     }
 
     pub(in super::super) fn handle_system_input_command(
@@ -393,8 +392,7 @@ impl RuntimeSession {
             pending.wait.countdown_remaining_ms = Some(remaining);
             let wait = pending.wait.clone();
             self.presentation.set_wait(Some(wait.clone()));
-            self.emit(RuntimeMessage::WaitChanged(WaitChange::Updated(wait)), None)?;
-            self.emit_presentation()?;
+            self.emit_wait_change(WaitChange::Updated(wait))?;
         }
         if timed_out {
             let pending = self

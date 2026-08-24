@@ -113,7 +113,7 @@ fn apply_delta(snapshot: &mut PresentationSnapshot, delta: PresentationDelta) {
             PresentationOperation::SetRedraw { redraw } => snapshot.redraw = redraw,
             PresentationOperation::SetButtonGeneration { generation } => {
                 for line in &mut snapshot.history.logical_lines {
-                    disable_old_buttons(&mut line.runs, generation);
+                    super::projection::disable_old_buttons(&mut line.runs, generation);
                 }
             }
         }
@@ -701,6 +701,338 @@ fn replay_button_description_uses_canonical_text_and_enabled_ordinal() {
     assert_eq!(description.ordinal, 2);
     assert!(description.title.is_none());
     assert!(description.alt_text.is_none());
+}
+
+#[test]
+fn button_generation_is_lazy_in_canonical_history_and_authoritative_at_boundaries() {
+    let mut model = PresentationModel::default();
+    let old = InteractionToken { epoch: 5, id: 1 };
+    model.append_button("old".into(), ProtocolValue::Integer(1), old, None);
+    model.set_button_generation(1);
+
+    assert!(matches!(
+        &model.pending_runs[0],
+        DisplayRun::Button {
+            enabled: true,
+            generation: 0,
+            ..
+        }
+    ));
+    assert!(model.enabled_button_value(old).is_none());
+    assert!(
+        model
+            .replay_button(old, crate::input_replay::ReplayValue::Integer("1".into()))
+            .is_none()
+    );
+    assert!(matches!(
+        &model.snapshot().history.logical_lines[0].runs[0],
+        DisplayRun::Button {
+            enabled: false,
+            generation: 0,
+            ..
+        }
+    ));
+
+    let current = InteractionToken { epoch: 5, id: 2 };
+    model.append_button("current".into(), ProtocolValue::Integer(2), current, None);
+    assert_eq!(
+        model.enabled_button_value(current),
+        Some(VmValue::Integer(2))
+    );
+
+    let mut document = erabasic_html::parse_document("<button value='3'>island</button>").unwrap();
+    assert!(install_test_html_interaction(&mut document.nodes, 5, 3, 1));
+    model.append_html_island(document);
+    model.set_button_generation(2);
+    let snapshot = model.snapshot();
+    let interaction = find_test_html_interaction(&snapshot.html_island[0].nodes)
+        .expect("projected HTML interaction");
+    assert!(!interaction.enabled);
+}
+
+fn install_test_html_interaction(
+    nodes: &mut [erabasic_html::HtmlNode],
+    epoch: u64,
+    id: u64,
+    generation: u64,
+) -> bool {
+    for node in nodes {
+        let erabasic_html::HtmlNode::Element {
+            interaction,
+            children,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        if interaction.is_none() {
+            *interaction = Some(erabasic_html::HtmlInteraction {
+                epoch,
+                id,
+                integer_value: Some(3),
+                string_value: None,
+                generation,
+                enabled: true,
+            });
+            return true;
+        }
+        if install_test_html_interaction(children, epoch, id, generation) {
+            return true;
+        }
+    }
+    false
+}
+
+fn find_test_html_interaction(
+    nodes: &[erabasic_html::HtmlNode],
+) -> Option<&erabasic_html::HtmlInteraction> {
+    for node in nodes {
+        let erabasic_html::HtmlNode::Element {
+            interaction,
+            children,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        if interaction.is_some() {
+            return interaction.as_ref();
+        }
+        if let Some(interaction) = find_test_html_interaction(children) {
+            return Some(interaction);
+        }
+    }
+    None
+}
+
+#[test]
+fn deferred_tail_replacements_collapse_to_the_final_frame() {
+    let mut model = PresentationModel::default();
+    model.append_text("stable".into(), false);
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+
+    for frame in ["frame 0", "frame 1", "final"] {
+        model.delete_last_lines(1);
+        model.append_text(frame.into(), false);
+    }
+
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("tail replacement must remain incremental");
+    };
+    let structural_operations = delta
+        .operations
+        .iter()
+        .filter(|operation| {
+            matches!(
+                operation,
+                PresentationOperation::AppendLine { .. }
+                    | PresentationOperation::DeleteLines { .. }
+            )
+        })
+        .count();
+    assert_eq!(structural_operations, 2);
+
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
+fn history_compaction_preserves_button_generation_order() {
+    let mut model = PresentationModel::default();
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+    model.append_button(
+        "old".into(),
+        ProtocolValue::Integer(1),
+        InteractionToken { epoch: 1, id: 1 },
+        None,
+    );
+    model.append_text(String::new(), false);
+    model.set_button_generation(1);
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("button generation update must remain incremental");
+    };
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+
+    model.set_button_generation(2);
+    model.append_button(
+        "current".into(),
+        ProtocolValue::Integer(2),
+        InteractionToken { epoch: 1, id: 2 },
+        None,
+    );
+    model.append_text(String::new(), false);
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("current-generation append must remain incremental");
+    };
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+
+    let current_line = model
+        .snapshot()
+        .history
+        .logical_lines
+        .last()
+        .cloned()
+        .expect("current button line");
+    let compacted = super::delivery::compact_history_operations(&[
+        PresentationHistoryOperation::SetButtonGeneration { generation: 3 },
+        PresentationHistoryOperation::Clear,
+        PresentationHistoryOperation::Append { line: current_line },
+    ]);
+    assert!(matches!(
+        compacted.as_slice(),
+        [
+            PresentationHistoryOperation::SetButtonGeneration { generation: 3 },
+            PresentationHistoryOperation::Clear,
+            PresentationHistoryOperation::Append { .. }
+        ]
+    ));
+}
+
+#[test]
+fn history_compaction_is_equivalent_across_structural_barriers() {
+    let cases = vec![
+        (
+            "append/delete cancellation and excess deletion",
+            vec![
+                history_button_line(1, 0, true),
+                history_button_line(2, 0, true),
+            ],
+            vec![
+                PresentationHistoryOperation::Append {
+                    line: history_button_line(3, 0, true),
+                },
+                PresentationHistoryOperation::DeletePhysical { count: 1 },
+                PresentationHistoryOperation::DeletePhysical { count: 3 },
+                PresentationHistoryOperation::Append {
+                    line: history_button_line(4, 0, true),
+                },
+            ],
+        ),
+        (
+            "temporary replacement with a pending-line baseline",
+            vec![history_button_line(1, 0, false)],
+            vec![
+                PresentationHistoryOperation::ReplaceTemporary {
+                    line: history_button_line(2, 0, true),
+                },
+                PresentationHistoryOperation::ReplaceTemporary {
+                    line: history_button_line(3, 0, true),
+                },
+            ],
+        ),
+        (
+            "generation before and after clear",
+            vec![history_button_line(1, 0, true)],
+            vec![
+                PresentationHistoryOperation::SetButtonGeneration { generation: 1 },
+                PresentationHistoryOperation::Clear,
+                PresentationHistoryOperation::Append {
+                    line: history_button_line(2, 1, true),
+                },
+                PresentationHistoryOperation::SetButtonGeneration { generation: 2 },
+                PresentationHistoryOperation::Append {
+                    line: history_button_line(3, 2, true),
+                },
+            ],
+        ),
+        (
+            "trim mixed with tail edits",
+            vec![
+                history_button_line(1, 0, true),
+                history_button_line(2, 0, true),
+            ],
+            vec![
+                PresentationHistoryOperation::Append {
+                    line: history_button_line(3, 0, true),
+                },
+                PresentationHistoryOperation::TrimPhysical { count: 1 },
+                PresentationHistoryOperation::DeletePhysical { count: 1 },
+                PresentationHistoryOperation::Append {
+                    line: history_button_line(4, 0, true),
+                },
+            ],
+        ),
+        (
+            "multiple generation barriers",
+            vec![history_button_line(1, 0, true)],
+            vec![
+                PresentationHistoryOperation::Append {
+                    line: history_button_line(2, 0, true),
+                },
+                PresentationHistoryOperation::SetButtonGeneration { generation: 1 },
+                PresentationHistoryOperation::Append {
+                    line: history_button_line(3, 1, true),
+                },
+                PresentationHistoryOperation::SetButtonGeneration { generation: 2 },
+                PresentationHistoryOperation::Append {
+                    line: history_button_line(4, 2, true),
+                },
+            ],
+        ),
+    ];
+
+    for (name, baseline, operations) in cases {
+        let expected = replay_history_operations(baseline.clone(), &operations);
+        let compacted = super::delivery::compact_history_operations(&operations);
+        let actual = replay_history_operations(baseline, &compacted);
+        assert_eq!(actual, expected, "{name}: {compacted:#?}");
+    }
+}
+
+fn history_button_line(line_id: u64, generation: u64, line_end: bool) -> DisplayLine {
+    DisplayLine {
+        line_id,
+        temporary: !line_end,
+        logical_line_start: true,
+        line_end,
+        alignment: LineAlignment::Left,
+        runs: vec![DisplayRun::Button {
+            runs: vec![],
+            token: InteractionToken {
+                epoch: 1,
+                id: line_id,
+            },
+            title: None,
+            hover_style: None,
+            value: ProtocolValue::Integer(i64::try_from(line_id).expect("test line id")),
+            generation,
+            enabled: true,
+        }],
+    }
+}
+
+fn replay_history_operations(
+    mut lines: Vec<DisplayLine>,
+    operations: &[PresentationHistoryOperation],
+) -> Vec<DisplayLine> {
+    for operation in operations {
+        match operation {
+            PresentationHistoryOperation::Append { line } => lines.push(line.clone()),
+            PresentationHistoryOperation::ReplaceTemporary { line } => {
+                lines.pop();
+                lines.push(line.clone());
+            }
+            PresentationHistoryOperation::DeletePhysical { count } => {
+                lines.truncate(lines.len().saturating_sub(*count as usize));
+            }
+            PresentationHistoryOperation::Clear => lines.clear(),
+            PresentationHistoryOperation::SetButtonGeneration { generation } => {
+                for line in &mut lines {
+                    super::projection::disable_old_buttons(&mut line.runs, *generation);
+                }
+            }
+            PresentationHistoryOperation::TrimPhysical { count } => {
+                lines.drain(..(*count as usize).min(lines.len()));
+            }
+        }
+    }
+    lines
 }
 
 #[test]

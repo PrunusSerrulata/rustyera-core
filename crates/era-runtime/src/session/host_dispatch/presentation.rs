@@ -550,6 +550,7 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             self.emit_presentation()?;
             return if flags & 2 != 0 {
+                self.flush_presentation_for_observation()?;
                 self.emit_effect(EffectKind::PresentNow {
                     presentation_revision: self.presentation.revision(),
                 })

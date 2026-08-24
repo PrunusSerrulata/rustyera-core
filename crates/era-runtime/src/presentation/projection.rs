@@ -162,16 +162,21 @@ pub(super) fn disable_old_buttons(runs: &mut [DisplayRun], generation: u64) {
     }
 }
 
-pub(super) fn enabled_button_value(run: &DisplayRun, token: InteractionToken) -> Option<VmValue> {
+pub(super) fn enabled_button_value(
+    run: &DisplayRun,
+    token: InteractionToken,
+    generation: u64,
+) -> Option<VmValue> {
     match run {
         DisplayRun::Button {
             runs,
             token: button_token,
             value,
+            generation: button_generation,
             enabled,
             ..
         } => {
-            if *enabled && *button_token == token {
+            if *enabled && *button_generation == generation && *button_token == token {
                 return Some(match value {
                     ProtocolValue::Integer(value) => VmValue::Integer(*value),
                     ProtocolValue::String(value) => VmValue::String(value.clone()),
@@ -181,54 +186,120 @@ pub(super) fn enabled_button_value(run: &DisplayRun, token: InteractionToken) ->
             }
             runs.iter()
                 .rev()
-                .find_map(|run| enabled_button_value(run, token))
+                .find_map(|run| enabled_button_value(run, token, generation))
         }
         DisplayRun::ColumnCell { content, .. } => content
             .iter()
             .rev()
-            .find_map(|run| enabled_button_value(run, token)),
-        DisplayRun::HtmlDocument { document } => enabled_html_button_value(&document.nodes, token),
+            .find_map(|run| enabled_button_value(run, token, generation)),
+        DisplayRun::HtmlDocument { document } => {
+            enabled_html_button_value(&document.nodes, token, generation)
+        }
         _ => None,
     }
 }
 
 pub(super) struct ReplayButtonCandidate {
-    pub(super) token: InteractionToken,
+    pub(super) ordinal: usize,
     pub(super) visible_text: String,
     pub(super) title: Option<String>,
     pub(super) alt_text: Option<String>,
 }
 
-pub(super) fn collect_replay_buttons(runs: &[DisplayRun], output: &mut Vec<ReplayButtonCandidate>) {
+pub(super) fn find_replay_button(
+    runs: &[DisplayRun],
+    token: InteractionToken,
+    generation: u64,
+    ordinal: &mut usize,
+) -> Option<ReplayButtonCandidate> {
     for run in runs {
         match run {
             DisplayRun::Button {
                 runs,
-                token,
+                token: button_token,
                 title,
+                generation: button_generation,
                 enabled,
                 ..
             } => {
-                if *enabled {
-                    let mut visible_text = String::new();
-                    let mut alt_text = None;
-                    collect_replay_run_text(runs, &mut visible_text, &mut alt_text);
-                    output.push(ReplayButtonCandidate {
-                        token: *token,
-                        visible_text,
-                        title: title.clone(),
-                        alt_text,
-                    });
+                if *enabled && *button_generation == generation {
+                    *ordinal = ordinal.saturating_add(1);
+                    if *button_token == token {
+                        let mut visible_text = String::new();
+                        let mut alt_text = None;
+                        collect_replay_run_text(runs, &mut visible_text, &mut alt_text);
+                        return Some(ReplayButtonCandidate {
+                            ordinal: *ordinal,
+                            visible_text,
+                            title: title.clone(),
+                            alt_text,
+                        });
+                    }
                 }
-                collect_replay_buttons(runs, output);
+                if let Some(candidate) = find_replay_button(runs, token, generation, ordinal) {
+                    return Some(candidate);
+                }
             }
-            DisplayRun::ColumnCell { content, .. } => collect_replay_buttons(content, output),
+            DisplayRun::ColumnCell { content, .. } => {
+                if let Some(candidate) = find_replay_button(content, token, generation, ordinal) {
+                    return Some(candidate);
+                }
+            }
             DisplayRun::HtmlDocument { document } => {
-                collect_replay_html_buttons(&document.nodes, output);
+                if let Some(candidate) =
+                    find_replay_html_button(&document.nodes, token, generation, ordinal)
+                {
+                    return Some(candidate);
+                }
             }
             _ => {}
         }
     }
+    None
+}
+
+fn find_replay_html_button(
+    nodes: &[erabasic_html::HtmlNode],
+    token: InteractionToken,
+    generation: u64,
+    ordinal: &mut usize,
+) -> Option<ReplayButtonCandidate> {
+    for node in nodes {
+        let erabasic_html::HtmlNode::Element {
+            children,
+            interaction,
+            semantic,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        if let Some(interaction) = interaction
+            && interaction.enabled
+            && interaction.generation == generation
+        {
+            *ordinal = ordinal.saturating_add(1);
+            if interaction.epoch == token.epoch && interaction.id == token.id {
+                let mut visible_text = String::new();
+                collect_replay_html_text(children, &mut visible_text);
+                let title = match semantic {
+                    erabasic_html::HtmlElementSemantic::Button { title, .. }
+                    | erabasic_html::HtmlElementSemantic::NonButton { title, .. } => title.clone(),
+                    _ => None,
+                };
+                return Some(ReplayButtonCandidate {
+                    ordinal: *ordinal,
+                    visible_text,
+                    title,
+                    alt_text: None,
+                });
+            }
+        }
+        if let Some(candidate) = find_replay_html_button(children, token, generation, ordinal) {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn collect_replay_run_text(
@@ -264,44 +335,6 @@ fn collect_replay_run_text(
     }
 }
 
-fn collect_replay_html_buttons(
-    nodes: &[erabasic_html::HtmlNode],
-    output: &mut Vec<ReplayButtonCandidate>,
-) {
-    for node in nodes {
-        let erabasic_html::HtmlNode::Element {
-            children,
-            interaction,
-            semantic,
-            ..
-        } = node
-        else {
-            continue;
-        };
-        if let Some(interaction) = interaction
-            && interaction.enabled
-        {
-            let mut visible_text = String::new();
-            collect_replay_html_text(children, &mut visible_text);
-            let title = match semantic {
-                erabasic_html::HtmlElementSemantic::Button { title, .. }
-                | erabasic_html::HtmlElementSemantic::NonButton { title, .. } => title.clone(),
-                _ => None,
-            };
-            output.push(ReplayButtonCandidate {
-                token: InteractionToken {
-                    epoch: interaction.epoch,
-                    id: interaction.id,
-                },
-                visible_text,
-                title,
-                alt_text: None,
-            });
-        }
-        collect_replay_html_buttons(children, output);
-    }
-}
-
 fn collect_replay_html_text(nodes: &[erabasic_html::HtmlNode], visible_text: &mut String) {
     for node in nodes {
         match node {
@@ -316,6 +349,7 @@ fn collect_replay_html_text(nodes: &[erabasic_html::HtmlNode], visible_text: &mu
 pub(super) fn enabled_html_button_value(
     nodes: &[erabasic_html::HtmlNode],
     token: InteractionToken,
+    generation: u64,
 ) -> Option<VmValue> {
     nodes.iter().rev().find_map(|node| {
         let erabasic_html::HtmlNode::Element {
@@ -328,6 +362,7 @@ pub(super) fn enabled_html_button_value(
         };
         if let Some(interaction) = interaction
             && interaction.enabled
+            && interaction.generation == generation
             && interaction.epoch == token.epoch
             && interaction.id == token.id
         {
@@ -338,7 +373,7 @@ pub(super) fn enabled_html_button_value(
                     .map(|value| VmValue::String(value.clone()))
             });
         }
-        enabled_html_button_value(children, token)
+        enabled_html_button_value(children, token, generation)
     })
 }
 

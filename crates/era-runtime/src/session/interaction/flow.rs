@@ -641,12 +641,8 @@ impl RuntimeSession {
         // being appended to the menu line that opened the wait.
         self.presentation.flush_pending_line();
         self.presentation.set_wait(Some(pending.wait.clone()));
-        self.emit(
-            RuntimeMessage::WaitChanged(WaitChange::Opened(pending.wait.clone())),
-            None,
-        )?;
+        self.emit_wait_change(WaitChange::Opened(pending.wait.clone()))?;
         self.operations.activate_input(pending);
-        self.emit_presentation()?;
         if pause_runtime {
             self.set_phase(RuntimePhase::WaitingInput)
         } else {
@@ -675,10 +671,6 @@ impl RuntimeSession {
             return Ok(());
         }
         self.presentation.set_wait(None);
-        self.emit(
-            RuntimeMessage::WaitChanged(WaitChange::Closed(wait_id)),
-            None,
-        )?;
-        self.emit_presentation()
+        self.emit_wait_change(WaitChange::Closed(wait_id))
     }
 }
