@@ -102,6 +102,59 @@ fn running_message_skip_defers_presentation_until_the_next_input_boundary() {
 }
 
 #[test]
+fn negative_display_line_query_does_not_publish_a_skipped_frame() {
+    let mut session = start_input_project(
+        "@SYSTEM_TITLE\nWAIT\nPRINTL pending\nRESULTS '= GETDISPLAYLINE(-1)\nRESULT = GETKEY(65)\nRETURN\n",
+    );
+    let pending = session.operations.active_input().unwrap();
+    let wait_id = pending.wait.wait_id;
+    let token = pending.wait.submission_token;
+    drain(&mut session);
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id,
+            token,
+            monotonic_time_ns: 1,
+            intent: InputIntent::Enter,
+            message_skip: true,
+        }),
+    );
+
+    let mut messages = Vec::new();
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let batch = drain(&mut session);
+        let reached_get_key = batch.iter().any(|message| {
+            matches!(
+                message,
+                RuntimeMessage::ServiceRequest(request)
+                    if request.kind == ServiceKind::InputState
+                        && request.operation == GET_KEY_STATE_OPERATION
+            )
+        });
+        messages.extend(batch);
+        if reached_get_key {
+            break;
+        }
+    }
+
+    assert!(session.message_skip);
+    assert_eq!(runtime_string(&session, "RESULTS"), "");
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ServiceRequest(request)
+            if request.kind == ServiceKind::InputState
+                && request.operation == GET_KEY_STATE_OPERATION
+    )));
+    assert!(messages.iter().all(|message| !matches!(
+        message,
+        RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+    )));
+}
+
+#[test]
 fn repeated_input_set_executes_every_segment_across_enter_waits() {
     let mut session = start_input_project(
         "@SYSTEM_TITLE\n#DIM LEARNED\nFOR LOCAL, 0, 2\nINPUT\nIF RESULT == 412\nLEARNED += 1\nENDIF\nWAIT\nNEXT\nINPUT\nRETURN\n",

@@ -188,7 +188,6 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "GETDISPLAYLINE" | "HTML_GETPRINTEDSTR") {
             *status = HostDispatchStatus::Handled;
-            let context = self.projection_query_context();
             let index = request
                 .arguments
                 .first()
@@ -214,6 +213,7 @@ impl RuntimeSession {
                     Some(request.origin.clone()),
                 );
             }
+            let context = self.presentation_observation_context()?;
             let (operation, version, completion) = if name == "GETDISPLAYLINE" {
                 (
                     GET_DISPLAY_LINE_OPERATION,

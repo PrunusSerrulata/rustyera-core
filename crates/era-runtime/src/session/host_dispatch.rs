@@ -253,6 +253,14 @@ impl RuntimeSession {
         }
     }
 
+    fn presentation_observation_context(&mut self) -> Result<ProjectionQueryContext, RuntimeError> {
+        // A presentation query is an observation barrier: its frontend response must describe
+        // the canonical state that existed when the request was issued, even while ordinary
+        // animation frames are being collapsed during a continuous message skip.
+        self.flush_presentation_for_observation()?;
+        Ok(self.projection_query_context())
+    }
+
     fn issue_extension(
         &mut self,
         vm: &mut RuntimeVm,

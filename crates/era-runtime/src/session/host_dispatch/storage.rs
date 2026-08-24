@@ -489,7 +489,7 @@ impl RuntimeSession {
                 .unwrap_or("emuera.log");
             let path = safe_relative_path(filename)?;
             let hide_info = matches!(request.arguments.get(1), Some(VmValue::Integer(1)));
-            let context = self.projection_query_context();
+            let context = self.presentation_observation_context()?;
             return self.issue_host_service(
                 vm,
                 request,

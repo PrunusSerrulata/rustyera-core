@@ -130,6 +130,15 @@ fn start_html_query(
     operation: &str,
     operation_version: ProtocolVersion,
 ) -> (RuntimeSession, ServiceRequest) {
+    let (session, request, _) = start_html_query_with_messages(source, operation, operation_version);
+    (session, request)
+}
+
+fn start_html_query_with_messages(
+    source: &str,
+    operation: &str,
+    operation_version: ProtocolVersion,
+) -> (RuntimeSession, ServiceRequest, Vec<RuntimeMessage>) {
     let mut client_capabilities = capabilities();
     client_capabilities.html = true;
     client_capabilities.services.push(ServiceCapability {
@@ -176,20 +185,22 @@ fn start_html_query(
             mode: StartMode::NewGame { seed: Some(1) },
         }),
     );
+    let mut messages = Vec::new();
     let request = (0..8)
         .find_map(|_| {
             session.drive(RuntimeDriveBudget::default()).unwrap();
-            drain(&mut session)
-                .into_iter()
-                .find_map(|message| match message {
-                    RuntimeMessage::ServiceRequest(request) if request.operation == operation => {
-                        Some(request)
-                    }
-                    _ => None,
-                })
+            let batch = drain(&mut session);
+            let request = batch.iter().find_map(|message| match message {
+                RuntimeMessage::ServiceRequest(request) if request.operation == operation => {
+                    Some(request.clone())
+                }
+                _ => None,
+            });
+            messages.extend(batch);
+            request
         })
         .unwrap_or_else(|| panic!("{operation} service request; phase={:?}", session.phase()));
-    (session, request)
+    (session, request, messages)
 }
 
 fn submit_projection_resize(
@@ -311,6 +322,36 @@ fn printed_html_query_survives_a_concurrent_projection_resize() {
         read_runtime_string(session.vm.as_ref().unwrap(), "RESULTS").unwrap(),
         "<p>title</p>"
     );
+}
+
+#[test]
+fn presentation_query_flushes_skipped_output_before_request() {
+    let (session, request, messages) = start_html_query_with_messages(
+        "@SYSTEM_TITLE\nSKIPLOG 1\nREDRAW 0\nHTML_PRINT \"<nobr><nonbutton><img src='portrait'></nonbutton></nobr>\"\nRESULTS '= HTML_GETPRINTEDSTR(0)\nRETURN\n",
+        HTML_GET_PRINTED_STR_OPERATION,
+        HTML_GET_PRINTED_STR_OPERATION_VERSION,
+    );
+    let payload: ProjectionStringIndexRequest =
+        decode_canonical(request.payload.as_slice()).unwrap();
+    let request_index = messages
+        .iter()
+        .position(|message| matches!(
+            message,
+            RuntimeMessage::ServiceRequest(candidate) if candidate.request_id == request.request_id
+        ))
+        .expect("presentation query request");
+    let update_revision = messages[..request_index]
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            RuntimeMessage::PresentationSnapshot(snapshot) => Some(snapshot.revision),
+            RuntimeMessage::PresentationDelta(delta) => Some(delta.new_revision),
+            _ => None,
+        })
+        .expect("presentation update before query request");
+
+    assert!(session.message_skip);
+    assert_eq!(update_revision, payload.context.presentation_revision);
 }
 
 #[test]
@@ -716,4 +757,3 @@ fn invalid_host_file_paths_return_reference_failure_values() {
         Ok(VmValue::String(String::new()))
     );
 }
-

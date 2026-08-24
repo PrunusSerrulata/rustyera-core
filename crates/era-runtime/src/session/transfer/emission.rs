@@ -113,6 +113,19 @@ impl RuntimeSession {
         if self.phase == RuntimePhase::Running && self.message_skip {
             return Ok(());
         }
+        self.publish_pending_presentation()
+    }
+
+    pub(in super::super) fn flush_presentation_for_observation(
+        &mut self,
+    ) -> Result<(), RuntimeError> {
+        self.publish_pending_presentation()
+    }
+
+    fn publish_pending_presentation(&mut self) -> Result<(), RuntimeError> {
+        if !self.pending_presentation_update {
+            return Ok(());
+        }
         self.materialize_resource_replay_if_ready();
         self.pending_presentation_update = false;
         let message = match self.presentation.next_update() {
