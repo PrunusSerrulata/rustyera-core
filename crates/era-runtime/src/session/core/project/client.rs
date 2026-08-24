@@ -304,6 +304,7 @@ impl RuntimeSession {
                     self.extension_declarations.len()
                 ),
                 source: None,
+                notification: DiagnosticNotification::default(),
             }),
             Some(message_id),
         )
@@ -365,6 +366,7 @@ impl RuntimeSession {
                 message: "key macro state changed in memory; frontend storage was not negotiated"
                     .into(),
                 source: None,
+                notification: DiagnosticNotification::default(),
             }),
             Some(message_id),
         )

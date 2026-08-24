@@ -177,13 +177,18 @@ impl Vm {
                             break;
                         }
                     }
-                    Ok(StepOutcome::Diagnostic { code, message }) => {
+                    Ok(StepOutcome::Diagnostic {
+                        code,
+                        message,
+                        notification,
+                    }) => {
                         let command = self.command_for_position(&position);
                         report.events.push(VmEvent::Diagnostic {
                             fiber: fiber.id,
                             code: code.into(),
                             message: message.into(),
                             origin: self.execution_origin(&position, &command),
+                            notification,
                         });
                         if debug_checks_active
                             && let Some(stop) = self.debug_stop_after(&fiber, false, false)

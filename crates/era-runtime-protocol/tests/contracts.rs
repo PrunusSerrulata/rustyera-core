@@ -6,21 +6,22 @@ use era_runtime_protocol::{
     AdvanceTime, AudioEffect, AudioEffectAction, CanvasPixelRequest, CanvasReplay,
     CanvasReplayCommand, CanvasSize, ClientPreferenceLayers, Color, ConfigurationApplication,
     ConfigurationChange, ConfigurationClientProfile, ConfigurationUpdateCommitted,
-    ConfigurationUpdateOutcome, ConfigurationValueKind, DisplayRun, EffectAcknowledgement,
-    EffectBatch, EffectEvent, EffectKind, EffectOutcome, EffectOutcomeStatus, ExitReason,
-    ExitRequested, FinalizeConfigurationUpdate, FrontendInput, FullProjectManifest,
-    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
-    GetKeyStateResponse, InputIntent, InputUndoRequest, InputUndoState, InteractionToken,
-    KeyMacroCommand, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
-    PointerStateResponse, PrepareConfigurationUpdate, PresentationDelta, PresentationOperation,
-    PrimitiveInput, ProjectConfigurationEntry, ProjectConfigurationSnapshot, ProjectLoadRequest,
-    ProjectManifest, ProjectionLength, ProjectionObservation, ProjectionQueryContext,
-    ProjectionSize, ProjectionTransform, RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay,
-    ReturnToTitleRequest, RuntimeLog, RuntimeLogLevel, RuntimeMessage,
-    SAMPLE_CANVAS_PIXEL_OPERATION, SeparatorRole, ServiceKind, ServiceRequest,
-    SnapshotExportPurpose, StateExportCancel, StateExportChunkRequest, StateExportKind,
-    StateExportRequest, StateImportBegin, StateImportCommit, StorageNamespace, StorageOperation,
-    StorageRequest, TextExtentRequest, TextStyle, parse_document, validate_relative_path,
+    ConfigurationUpdateOutcome, ConfigurationValueKind, DiagnosticNotification, DisplayRun,
+    EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcome,
+    EffectOutcomeStatus, ExitReason, ExitRequested, FinalizeConfigurationUpdate, FrontendInput,
+    FullProjectManifest, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
+    GetKeyStateRequest, GetKeyStateResponse, InputIntent, InputUndoRequest, InputUndoState,
+    InteractionToken, KeyMacroCommand, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION,
+    PointerStateRequest, PointerStateResponse, PrepareConfigurationUpdate, PresentationDelta,
+    PresentationOperation, PrimitiveInput, ProjectConfigurationEntry, ProjectConfigurationSnapshot,
+    ProjectLoadRequest, ProjectManifest, ProjectionLength, ProjectionObservation,
+    ProjectionQueryContext, ProjectionSize, ProjectionTransform, ProtocolDiagnostic,
+    RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay, ReturnToTitleRequest, RuntimeLog,
+    RuntimeLogLevel, RuntimeMessage, SAMPLE_CANVAS_PIXEL_OPERATION, SeparatorRole, ServiceKind,
+    ServiceRequest, SnapshotExportPurpose, StateExportCancel, StateExportChunkRequest,
+    StateExportKind, StateExportRequest, StateImportBegin, StateImportCommit, StorageNamespace,
+    StorageOperation, StorageRequest, TextExtentRequest, TextStyle, parse_document,
+    validate_relative_path,
 };
 
 #[test]
@@ -161,7 +162,31 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(33, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
+}
+
+#[test]
+fn protocol_34_carries_diagnostic_notification_guidance() {
+    assert_eq!(
+        encode_canonical(&DiagnosticNotification::LogOnly).unwrap(),
+        vec![1]
+    );
+    let message = RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+        code: "vm.control_flow.goto_into_structured_block".into(),
+        level: RuntimeLogLevel::Warning,
+        message: "structured GOTO".into(),
+        source: None,
+        notification: DiagnosticNotification::LogOnly,
+    });
+    assert_eq!(
+        RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
+        message
+    );
+    assert_eq!(
+        serde_json::to_value(&message).unwrap()["value"]["notification"],
+        "log_only"
+    );
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
 }
 
 #[test]
@@ -303,7 +328,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(33, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
 }
 
 #[test]
@@ -312,7 +337,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(33, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -478,7 +503,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(33, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -517,7 +542,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(33, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 

@@ -24,6 +24,7 @@ impl RuntimeSession {
                                 "frontend storage cannot provide revision-checked atomic writes"
                                     .into(),
                             source: None,
+                            notification: DiagnosticNotification::default(),
                         }),
                         None,
                     )?;
@@ -177,12 +178,14 @@ impl RuntimeSession {
                             code,
                             message,
                             origin,
+                            notification,
                             ..
                         } => candidate_diagnostics.push(ProtocolDiagnostic {
                             code,
                             level: RuntimeLogLevel::Warning,
                             message,
                             source: protocol_execution_origin(origin).source,
+                            notification: protocol_diagnostic_notification(notification),
                         }),
                         VmPortEvent::HostCall(request) => {
                             self.handle_host_call(&mut candidate, &request)?;
@@ -301,6 +304,7 @@ impl RuntimeSession {
                 level: RuntimeLogLevel::Warning,
                 message: message.into(),
                 source: None,
+                notification: DiagnosticNotification::default(),
             }),
             None,
         )?;

@@ -1035,6 +1035,7 @@ fn assert_erafl_crossing_warnings(messages: &[RuntimeMessage], command: &str, fi
             unreachable!()
         };
         assert_eq!(diagnostic.level, RuntimeLogLevel::Warning);
+        assert_eq!(diagnostic.notification, DiagnosticNotification::LogOnly);
         assert_eq!(
             diagnostic.message,
             format!(

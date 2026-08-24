@@ -19,9 +19,10 @@ use erabasic_vm::{
     EraSaveScope, FiberId, FiberStatus, HostCallRequest, HostCallResult, HostReady,
     HostRebindRequest, HostWaitStability, NativeServiceRegistry, RunBudget, RuntimeVm,
     SnapshotBlocker, SnapshotEligibility, Vm, VmBreakpoint, VmBreakpointLocation, VmConfig,
-    VmDebugControl, VmDebugInspect, VmDebugVariableWrite, VmDriveMode, VmEvent, VmFaultCode,
-    VmHost, VmPreparationStage, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
-    VmRuntimeStateTransaction, VmSnapshot, VmStepKind, VmValue, inspect_snapshot,
+    VmDebugControl, VmDebugInspect, VmDebugVariableWrite, VmDiagnosticNotification, VmDriveMode,
+    VmEvent, VmFaultCode, VmHost, VmPreparationStage, VmRuntimeFill, VmRuntimePort,
+    VmRuntimeStatePort, VmRuntimeStateTransaction, VmSnapshot, VmStepKind, VmValue,
+    inspect_snapshot,
 };
 use unicode_width::UnicodeWidthStr;
 

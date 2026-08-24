@@ -332,6 +332,7 @@ impl RuntimeSession {
                 message: "audio intent was retained but no frontend audio device is available"
                     .into(),
                 source: None,
+                notification: DiagnosticNotification::default(),
             }),
             None,
         )
@@ -368,6 +369,7 @@ impl RuntimeSession {
                             )
                         }),
                         source: None,
+                        notification: DiagnosticNotification::default(),
                     }),
                     Some(message_id),
                 )?;

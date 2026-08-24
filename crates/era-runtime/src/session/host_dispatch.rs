@@ -341,6 +341,7 @@ impl RuntimeSession {
                     level: RuntimeLogLevel::Warning,
                     message: format!("frontend did not negotiate service {kind:?}/{operation}"),
                     source: None,
+                    notification: DiagnosticNotification::default(),
                 }),
                 None,
             );
@@ -480,6 +481,7 @@ fn emit_html_warnings(
                 level: RuntimeLogLevel::Warning,
                 message,
                 source: source.clone(),
+                notification: DiagnosticNotification::LogOnly,
             }),
             None,
         )?;

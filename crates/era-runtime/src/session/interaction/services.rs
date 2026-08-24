@@ -63,6 +63,7 @@ impl RuntimeSession {
                             line: None,
                             byte_column: None,
                         }),
+                        notification: DiagnosticNotification::default(),
                     });
                 }
             }
@@ -118,6 +119,7 @@ impl RuntimeSession {
                         level: RuntimeLogLevel::Warning,
                         message,
                         source: None,
+                        notification: DiagnosticNotification::default(),
                     }),
                     Some(message_id),
                 )?;

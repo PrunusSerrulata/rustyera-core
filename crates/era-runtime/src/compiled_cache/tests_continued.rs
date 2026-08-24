@@ -262,6 +262,7 @@ fn frontend_manifest_keeps_resources_and_diagnostic_sources_only() {
             line: Some(1),
             byte_column: Some(1),
         }),
+        notification: era_runtime_protocol::DiagnosticNotification::default(),
     }];
 
     compact_frontend_manifest(&mut project, &diagnostics);

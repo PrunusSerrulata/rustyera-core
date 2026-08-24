@@ -101,6 +101,7 @@ impl RuntimeSession {
                         "changed image resources require the negotiated image_metadata service"
                             .into(),
                     source: None,
+                    notification: DiagnosticNotification::default(),
                 });
                 self.emit(
                     RuntimeMessage::ProjectLoadReport(build.report),
@@ -141,18 +142,12 @@ impl RuntimeSession {
         if let Some(vm) = &mut self.vm
             && let Err(error) = vm.prepare_hot_reload(target.clone())
         {
-            build.report.success = false;
-            build.report.diagnostics.push(ProtocolDiagnostic {
-                code: "runtime.hot_reload_incompatible".into(),
-                level: RuntimeLogLevel::Error,
-                message: error.to_string(),
-                source: None,
-            });
-            self.emit(
-                RuntimeMessage::ProjectLoadReport(build.report),
-                Some(message_id),
-            )?;
-            return self.set_phase(previous_phase);
+            return self.reject_incompatible_project_reload(
+                message_id,
+                build,
+                previous_phase,
+                error.to_string(),
+            );
         }
         if let Some(vm) = &mut self.vm {
             vm.commit_hot_reload()
@@ -235,6 +230,30 @@ impl RuntimeSession {
         self.set_phase(previous_phase)?;
         self.renew_debug_grant()?;
         self.emit_presentation()
+    }
+
+    fn reject_incompatible_project_reload(
+        &mut self,
+        message_id: u64,
+        mut build: crate::project::ProjectBuild,
+        previous_phase: RuntimePhase,
+        message: String,
+    ) -> Result<(), RuntimeError> {
+        build.report.success = false;
+        build
+            .report
+            .diagnostics
+            .push(crate::project::project_diagnostic(
+                "runtime.hot_reload_incompatible",
+                RuntimeLogLevel::Error,
+                message,
+                None,
+            ));
+        self.emit(
+            RuntimeMessage::ProjectLoadReport(build.report),
+            Some(message_id),
+        )?;
+        self.set_phase(previous_phase)
     }
 }
 
@@ -447,6 +466,7 @@ pub(super) fn project_payload_required_report(project_revision: u64) -> ProjectL
             level: RuntimeLogLevel::Info,
             message: "compiled cache is missing or does not match the project".into(),
             source: None,
+            notification: DiagnosticNotification::default(),
         }],
         payload_required: true,
         configuration: None,
@@ -462,6 +482,7 @@ fn exact_cached_project(
     Arc::make_mut(&mut exact.snapshot.manifest).project_revision = project_revision;
     exact.snapshot.configuration_profile = configuration_profile;
     for diagnostic in &mut exact.diagnostics {
+        diagnostic.notification = crate::project::project_diagnostic_notification(diagnostic.level);
         diagnostic.message = format!("[cached] {}", diagnostic.message);
     }
     exact.diagnostics.push(ProtocolDiagnostic {
@@ -469,6 +490,7 @@ fn exact_cached_project(
         level: RuntimeLogLevel::Debug,
         message: "loaded the exact compiled project cache".into(),
         source: None,
+        notification: DiagnosticNotification::default(),
     });
     let game_information = crate::project::project_game_information(&exact.artifact);
     ProjectBuild {

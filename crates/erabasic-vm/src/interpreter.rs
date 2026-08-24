@@ -51,6 +51,7 @@ enum StepOutcome {
     Diagnostic {
         code: &'static str,
         message: &'static str,
+        notification: crate::VmDiagnosticNotification,
     },
     BulkProgress(u64),
     DeferredNative,

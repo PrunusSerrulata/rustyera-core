@@ -581,6 +581,7 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
             line: Some(0),
             byte_column: Some(0),
         }),
+        notification: DiagnosticNotification::default(),
     });
     initial.incremental.compact();
     let cache = crate::compiled_cache::encode_compiled_cache_for_test(
@@ -646,6 +647,7 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
         .find(|diagnostic| diagnostic.code == "compiler.cached_warning")
         .expect("cached compiler warning is replayed");
     assert_eq!(replayed.level, RuntimeLogLevel::Warning);
+    assert_eq!(replayed.notification, DiagnosticNotification::LogOnly);
     assert_eq!(
         replayed.message,
         "[cached] warning retained with compiled output"

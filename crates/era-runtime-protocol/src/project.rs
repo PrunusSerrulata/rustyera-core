@@ -151,6 +151,9 @@ pub struct ProtocolDiagnostic {
     pub message: String,
     #[n(3)]
     pub source: Option<SourceLocation>,
+    #[serde(default)]
+    #[n(4)]
+    pub notification: crate::DiagnosticNotification,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

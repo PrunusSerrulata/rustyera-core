@@ -55,6 +55,7 @@ impl RuntimeSession {
                         level: RuntimeLogLevel::Warning,
                         message: format!("macro.txt write failed: {error:?}"),
                         source: None,
+                        notification: DiagnosticNotification::default(),
                     }),
                     Some(message_id),
                 )?;
@@ -67,6 +68,7 @@ impl RuntimeSession {
                         level: RuntimeLogLevel::Warning,
                         message: format!("emuera.log write failed: {error:?}"),
                         source: None,
+                        notification: DiagnosticNotification::default(),
                     }),
                     Some(message_id),
                 )?;

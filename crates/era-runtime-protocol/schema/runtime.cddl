@@ -199,5 +199,6 @@ runtime-resynchronized = {
 command-rejected = { 0: uint, 1: tstr, 2: bool, 3: any / null }
 ; Runtime protocol 30 publishes parsed GameBase information in project load reports.
 runtime-log-level = 0..3 ; Debug, Info, Warning, Error
-protocol-diagnostic = { 0: tstr, 1: runtime-log-level, 2: tstr, 3: any / null }
+diagnostic-notification = 0..1 ; Default, LogOnly
+protocol-diagnostic = { 0: tstr, 1: runtime-log-level, 2: tstr, 3: any / null, 4: diagnostic-notification }
 runtime-log = { 0: runtime-log-level, 1: tstr }

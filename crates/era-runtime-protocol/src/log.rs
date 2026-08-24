@@ -18,6 +18,18 @@ pub enum RuntimeLogLevel {
     Error,
 }
 
+/// Frontend notification guidance carried by a structured diagnostic.
+#[derive(Clone, Copy, Debug, Decode, Default, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticNotification {
+    #[default]
+    #[n(0)]
+    Default,
+    #[n(1)]
+    LogOnly,
+}
+
 /// A presentation-neutral log record emitted by the runtime.
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]

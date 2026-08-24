@@ -48,6 +48,7 @@ fn goto_into_case_body_emits_a_nonfatal_warning_and_continues() {
     });
     let diagnostic = diagnostic.expect("cross-block GOTO warning");
     assert_eq!(diagnostic.level, RuntimeLogLevel::Warning);
+    assert_eq!(diagnostic.notification, DiagnosticNotification::LogOnly);
     assert!(diagnostic.message.contains("avoid jumping"));
     assert_eq!(
         diagnostic

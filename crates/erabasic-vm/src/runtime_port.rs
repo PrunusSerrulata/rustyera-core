@@ -136,6 +136,7 @@ pub enum VmPortEvent {
         code: String,
         message: String,
         origin: crate::VmExecutionOrigin,
+        notification: crate::VmDiagnosticNotification,
     },
     HostCall(VmHostRequest),
     FiberYielded(FiberId),

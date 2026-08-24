@@ -384,6 +384,7 @@ impl RuntimeSession {
                     level: RuntimeLogLevel::Warning,
                     message: message.into(),
                     source: None,
+                    notification: DiagnosticNotification::default(),
                 }),
                 Some(message_id),
             )?;

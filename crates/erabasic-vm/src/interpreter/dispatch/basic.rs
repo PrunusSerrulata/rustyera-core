@@ -475,6 +475,7 @@ impl Vm {
                         return Ok(Some(StepOutcome::Diagnostic {
                             code: STRUCTURED_GOTO_DIAGNOSTIC_CODE,
                             message: STRUCTURED_GOTO_DIAGNOSTIC_MESSAGE,
+                            notification: crate::VmDiagnosticNotification::LogOnly,
                         }));
                     }
                 }

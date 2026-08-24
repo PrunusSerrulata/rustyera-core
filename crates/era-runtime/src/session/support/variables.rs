@@ -460,6 +460,15 @@ pub(in super::super) fn protocol_execution_origin(
     }
 }
 
+pub(in super::super) const fn protocol_diagnostic_notification(
+    notification: VmDiagnosticNotification,
+) -> DiagnosticNotification {
+    match notification {
+        VmDiagnosticNotification::Default => DiagnosticNotification::Default,
+        VmDiagnosticNotification::LogOnly => DiagnosticNotification::LogOnly,
+    }
+}
+
 pub(in super::super) fn safe_relative_path(value: &str) -> Result<String, RuntimeError> {
     era_runtime_protocol::validate_relative_path(value)
         .map_err(|error| RuntimeError::Internal(error.message))

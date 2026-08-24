@@ -57,7 +57,7 @@ pub use lifecycle::{
     StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
     StateTransferDescriptor, TextBoxLayout, VersionRejected,
 };
-pub use log::{RuntimeLog, RuntimeLogLevel};
+pub use log::{DiagnosticNotification, RuntimeLog, RuntimeLogLevel};
 pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage, RuntimeResynchronized};
 pub use presentation::{
     AudioState, CanvasPoint, CanvasRect, CanvasReplay, CanvasReplayCommand, CanvasSize,

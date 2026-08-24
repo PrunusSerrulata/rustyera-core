@@ -85,6 +85,7 @@ fn invalid_external_resource_metadata_falls_back_to_lazy_service_detection() {
     assert!(build.report.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "runtime.invalid_image_metadata"
             && diagnostic.level == RuntimeLogLevel::Warning
+            && diagnostic.notification == DiagnosticNotification::LogOnly
     }));
     assert_eq!(
         build.snapshot.unwrap().resource_graph.metadata_requests(),

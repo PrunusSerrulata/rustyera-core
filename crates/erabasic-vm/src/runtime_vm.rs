@@ -427,11 +427,13 @@ impl VmRuntimePort for RuntimeVm {
                     code,
                     message,
                     origin,
+                    notification,
                 } => events.push(VmPortEvent::Diagnostic {
                     fiber,
                     code,
                     message,
                     origin,
+                    notification,
                 }),
                 crate::VmEvent::HostPending { request, .. } => {
                     if let Some(request) = requests.remove(&request) {

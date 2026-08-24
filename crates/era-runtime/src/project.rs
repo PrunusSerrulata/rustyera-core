@@ -7,10 +7,10 @@ mod support;
 mod tests;
 
 use era_runtime_protocol::{
-    ConfigurationClientProfile, FileCategory, FileChange, FilePayload, ProjectAnalysisReport,
-    ProjectAnalysisRequest, ProjectGameInformation, ProjectLoadReport, ProjectManifest,
-    ProtocolDiagnostic, ReloadProject, RuntimeLogLevel, SourceLocation, SubmittedFile,
-    validate_relative_path,
+    ConfigurationClientProfile, DiagnosticNotification, FileCategory, FileChange, FilePayload,
+    ProjectAnalysisReport, ProjectAnalysisRequest, ProjectGameInformation, ProjectLoadReport,
+    ProjectManifest, ProtocolDiagnostic, ReloadProject, RuntimeLogLevel, SourceLocation,
+    SubmittedFile, validate_relative_path,
 };
 use erabasic_analyzer::{
     AnalysisInput, AnalysisProgressStage, AnalyzerDiagnosticSeverity, analyze_project,
@@ -30,11 +30,12 @@ use crate::{ProjectProgress, ProjectProgressReporter, ProjectProgressStage};
 
 use self::configuration::{apply_replace_configuration, parse_configuration};
 use self::extensions::{category_relative_path, is_deferred_index_source, prepare_extensions};
+pub(crate) use self::frontend::project_diagnostic;
 #[cfg(test)]
 use self::frontend::project_source_location;
 use self::frontend::{
     analyzer_source, csv_file, indexed_project_source_location, indexed_source_record_location,
-    payload_hash, project_diagnostic,
+    payload_hash,
 };
 use self::model::SemanticConfig;
 pub(crate) use self::model::{
@@ -45,6 +46,16 @@ use self::support::{
     failed, failed_with_incremental, inspect_deferred_file, normalize_resource,
     path_has_priority_directory, project_identity,
 };
+
+pub(crate) const fn project_diagnostic_notification(
+    level: RuntimeLogLevel,
+) -> DiagnosticNotification {
+    if matches!(level, RuntimeLogLevel::Warning) {
+        DiagnosticNotification::LogOnly
+    } else {
+        DiagnosticNotification::Default
+    }
+}
 
 pub(crate) fn is_root_configuration_file(file: &SubmittedFile) -> bool {
     file.category == FileCategory::Configuration
@@ -534,28 +545,26 @@ fn build_project_inner_with_extensions(
         diagnostics: csv_diagnostics,
     } = load_project_owned(csv_files, &config.csv);
     report_progress(progress, ProjectProgressStage::LoadingData, 1, 1);
-    diagnostics.extend(
-        csv_diagnostics
-            .into_iter()
-            .map(|diagnostic| ProtocolDiagnostic {
-                code: format!("csv.{:?}", diagnostic.code).to_ascii_lowercase(),
-                level: match diagnostic.severity {
-                    CsvDiagnosticSeverity::Notice => RuntimeLogLevel::Info,
-                    CsvDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
-                    CsvDiagnosticSeverity::Error | CsvDiagnosticSeverity::Fatal => {
-                        RuntimeLogLevel::Error
-                    }
-                },
-                message: diagnostic.message,
-                source: diagnostic.source.map(|source| SourceLocation {
-                    relative_path: source.relative_path,
-                    byte_start: source.byte_start as u64,
-                    byte_end: source.byte_end as u64,
-                    line: Some(u64::from(source.physical_line)),
-                    byte_column: None,
-                }),
+    diagnostics.extend(csv_diagnostics.into_iter().map(|diagnostic| {
+        let level = match diagnostic.severity {
+            CsvDiagnosticSeverity::Notice => RuntimeLogLevel::Info,
+            CsvDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
+            CsvDiagnosticSeverity::Error | CsvDiagnosticSeverity::Fatal => RuntimeLogLevel::Error,
+        };
+        ProtocolDiagnostic {
+            code: format!("csv.{:?}", diagnostic.code).to_ascii_lowercase(),
+            level,
+            message: diagnostic.message,
+            source: diagnostic.source.map(|source| SourceLocation {
+                relative_path: source.relative_path,
+                byte_start: source.byte_start as u64,
+                byte_end: source.byte_end as u64,
+                line: Some(u64::from(source.physical_line)),
+                byte_column: None,
             }),
-    );
+            notification: project_diagnostic_notification(level),
+        }
+    }));
     let Some(mut data) = data else {
         return failed(normalized_manifest.project_revision, diagnostics, previous);
     };
@@ -620,17 +629,19 @@ fn build_project_inner_with_extensions(
                 indexed,
             )
         });
+        let level = match diagnostic.severity {
+            AnalyzerDiagnosticSeverity::Notice => RuntimeLogLevel::Info,
+            AnalyzerDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
+            AnalyzerDiagnosticSeverity::Error | AnalyzerDiagnosticSeverity::Fatal => {
+                RuntimeLogLevel::Error
+            }
+        };
         ProtocolDiagnostic {
             code: format!("analyzer.{:?}", diagnostic.code).to_ascii_lowercase(),
-            level: match diagnostic.severity {
-                AnalyzerDiagnosticSeverity::Notice => RuntimeLogLevel::Info,
-                AnalyzerDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
-                AnalyzerDiagnosticSeverity::Error | AnalyzerDiagnosticSeverity::Fatal => {
-                    RuntimeLogLevel::Error
-                }
-            },
+            level,
             message: diagnostic.message,
             source,
+            notification: project_diagnostic_notification(level),
         }
     }));
     let Some(project) = project else {
@@ -716,15 +727,17 @@ fn build_project_inner_with_extensions(
                 indexed,
             )
         });
+        let level = match diagnostic.severity {
+            erabasic_compiler::CompilerDiagnosticSeverity::Notice => RuntimeLogLevel::Info,
+            erabasic_compiler::CompilerDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
+            erabasic_compiler::CompilerDiagnosticSeverity::Error => RuntimeLogLevel::Error,
+        };
         ProtocolDiagnostic {
             code: format!("compiler.{:?}", diagnostic.code).to_ascii_lowercase(),
-            level: match diagnostic.severity {
-                erabasic_compiler::CompilerDiagnosticSeverity::Notice => RuntimeLogLevel::Info,
-                erabasic_compiler::CompilerDiagnosticSeverity::Warning => RuntimeLogLevel::Warning,
-                erabasic_compiler::CompilerDiagnosticSeverity::Error => RuntimeLogLevel::Error,
-            },
+            level,
             message: diagnostic.message,
             source,
+            notification: project_diagnostic_notification(level),
         }
     }));
     drop(compile_source_index);

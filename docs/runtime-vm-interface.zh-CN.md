@@ -292,7 +292,7 @@ pub enum VmPortStop {
 
 | `VmPortEvent` | 字段与效果 | runtime 处理 |
 | --- | --- | --- |
-| `Diagnostic { fiber, code, message, origin }` | 非终止性执行诊断，fiber 已继续到下一条指令 | 转为带源码位置的 runtime `Diagnostic`；当前用于兼容执行但应避免的控制流 |
+| `Diagnostic { fiber, code, message, origin, notification }` | 非终止性执行诊断，fiber 已继续到下一条指令；notification 可建议仅记录日志 | 转为带源码位置和通知建议的 runtime `Diagnostic`；当前用于兼容执行但应避免的控制流 |
 | `HostCall(VmHostRequest)` | fiber 已停在 `CallHost`，请求仍由 VM 持有 | 分类请求并执行两阶段完成 |
 | `FiberYielded(FiberId)` | fiber 主动让出 | 通常继续系统流程 |
 | `FiberCompleted(FiberId, Option<VmValue>)` | root/子 fiber 正常结束 | 控制器推进下一事件或等待 |

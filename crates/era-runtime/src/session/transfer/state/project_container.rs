@@ -198,6 +198,7 @@ impl RuntimeSession {
                         level: RuntimeLogLevel::Info,
                         message: "compiled project cache is ready for frontend persistence".into(),
                         source: None,
+                        notification: DiagnosticNotification::default(),
                     }),
                     None,
                 )?;
@@ -210,6 +211,7 @@ impl RuntimeSession {
                         level: RuntimeLogLevel::Warning,
                         message: error,
                         source: None,
+                        notification: DiagnosticNotification::default(),
                     }),
                     None,
                 )?;

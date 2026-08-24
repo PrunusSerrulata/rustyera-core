@@ -202,7 +202,7 @@ fn indexed_source_location(
     }
 }
 
-pub(super) fn project_diagnostic(
+pub(crate) fn project_diagnostic(
     code: &str,
     level: RuntimeLogLevel,
     message: impl Into<String>,
@@ -213,6 +213,7 @@ pub(super) fn project_diagnostic(
         level,
         message: message.into(),
         source,
+        notification: super::project_diagnostic_notification(level),
     }
 }
 

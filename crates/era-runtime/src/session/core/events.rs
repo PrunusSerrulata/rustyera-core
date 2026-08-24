@@ -13,6 +13,7 @@ impl RuntimeSession {
                 code,
                 message,
                 origin,
+                notification,
                 ..
             } => self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
@@ -20,6 +21,7 @@ impl RuntimeSession {
                     level: RuntimeLogLevel::Warning,
                     message,
                     source: protocol_execution_origin(origin).source,
+                    notification: protocol_diagnostic_notification(notification),
                 }),
                 None,
             ),

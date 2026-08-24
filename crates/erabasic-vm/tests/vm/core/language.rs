@@ -246,10 +246,11 @@ fn goto_into_case_body_warns_and_treats_endselect_as_a_no_op() {
     assert!(
         report.events.iter().any(|event| matches!(
             event,
-            VmEvent::Diagnostic { code, message, origin, .. }
+            VmEvent::Diagnostic { code, message, origin, notification, .. }
                 if code == "vm.control_flow.goto_into_structured_block"
                     && message.contains("avoid jumping")
                     && origin.command == "Jump"
+                    && *notification == VmDiagnosticNotification::LogOnly
         )),
         "{:#?}",
         report.events

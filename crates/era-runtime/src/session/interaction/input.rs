@@ -280,6 +280,7 @@ impl RuntimeSession {
                     level: RuntimeLogLevel::Warning,
                     message: "system commands cannot be entered during a timed wait".into(),
                     source: None,
+                    notification: DiagnosticNotification::default(),
                 }),
                 Some(message_id),
             );
@@ -316,6 +317,7 @@ impl RuntimeSession {
                             level: RuntimeLogLevel::Warning,
                             message: "@OUTPUT requires negotiated frontend storage".into(),
                             source: None,
+                            notification: DiagnosticNotification::default(),
                         }),
                         Some(message_id),
                     );
@@ -342,6 +344,7 @@ impl RuntimeSession {
                     level: RuntimeLogLevel::Warning,
                     message: "@DEBUG is available only through the granted debug protocol".into(),
                     source: None,
+                    notification: DiagnosticNotification::default(),
                 }),
                 Some(message_id),
             ),
@@ -351,6 +354,7 @@ impl RuntimeSession {
                     level: RuntimeLogLevel::Warning,
                     message: "arbitrary input debug commands are available only through the granted debug protocol".into(),
                     source: None,
+                    notification: DiagnosticNotification::default(),
                 }),
                 Some(message_id),
             ),

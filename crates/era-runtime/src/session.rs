@@ -23,11 +23,11 @@ use era_runtime_protocol::{
     CommandErrorCode, CommandRejected, ConfigurationApplication, ConfigurationClientProfile,
     ConfigurationUpdateCommitted, ConfigurationUpdateOutcome, ConfigurationUpdatePrepared,
     DECODE_CANVAS_IMAGE_OPERATION, DECODE_CANVAS_IMAGE_OPERATION_VERSION, DecodeCanvasImageRequest,
-    DecodeCanvasImageResponse, ENCODE_CANVAS_PNG_OPERATION, ENCODE_CANVAS_PNG_OPERATION_VERSION,
-    EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcomeStatus,
-    EncodeCanvasPngRequest, EncodeCanvasPngResponse, ExitReason, ExitRequested,
-    ExtensionDeclaration, ExtensionRegistrySubmit, ExternalRequestKind, FaultCode, FileCategory,
-    FilePayload, FinalizeConfigurationUpdate, FrontendInput, FrontendIoErrorKind,
+    DecodeCanvasImageResponse, DiagnosticNotification, ENCODE_CANVAS_PNG_OPERATION,
+    ENCODE_CANVAS_PNG_OPERATION_VERSION, EffectAcknowledgement, EffectBatch, EffectEvent,
+    EffectKind, EffectOutcomeStatus, EncodeCanvasPngRequest, EncodeCanvasPngResponse, ExitReason,
+    ExitRequested, ExtensionDeclaration, ExtensionRegistrySubmit, ExternalRequestKind, FaultCode,
+    FileCategory, FilePayload, FinalizeConfigurationUpdate, FrontendInput, FrontendIoErrorKind,
     FullProjectManifest, GET_DISPLAY_LINE_OPERATION, GET_DISPLAY_LINE_OPERATION_VERSION,
     GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GGET_TEXT_SIZE_OPERATION,
     GGET_TEXT_SIZE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse,
@@ -69,9 +69,10 @@ use erabasic_validator::ValidatedArtifact;
 use erabasic_vm::{
     CharacterWidthMode, DEFAULT_LINE_COLUMNS, EraSaveScope, EraState, HostReady, HostWaitStability,
     HostWrite, PlaceDescriptor, PreparedCandidateState, PreparedRuntimeState, RunBudget, RuntimeVm,
-    SnapshotEligibility, StructuredScope, VmConfig, VmDriveMode, VmHostCompletion, VmHostRequest,
-    VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
-    VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot, VmValue,
+    SnapshotEligibility, StructuredScope, VmConfig, VmDiagnosticNotification, VmDriveMode,
+    VmHostCompletion, VmHostRequest, VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill,
+    VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot,
+    VmValue,
 };
 use serde::{Deserialize, Serialize};
 

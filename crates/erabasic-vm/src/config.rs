@@ -76,6 +76,13 @@ pub enum VmRunStop {
     BudgetExhausted,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VmDiagnosticNotification {
+    #[default]
+    Default,
+    LogOnly,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VmEvent {
     Diagnostic {
@@ -83,6 +90,7 @@ pub enum VmEvent {
         code: String,
         message: String,
         origin: VmExecutionOrigin,
+        notification: VmDiagnosticNotification,
     },
     HostPending {
         fiber: FiberId,

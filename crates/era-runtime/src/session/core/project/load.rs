@@ -120,6 +120,7 @@ impl RuntimeSession {
                 level: RuntimeLogLevel::Error,
                 message: "resource sprites require the negotiated image_metadata service".into(),
                 source: None,
+                notification: DiagnosticNotification::default(),
             });
             self.emit(
                 RuntimeMessage::ProjectLoadReport(report.clone()),
@@ -226,12 +227,12 @@ impl RuntimeSession {
                     if let Some(error) = cache_warning.take() {
                         report.diagnostics.insert(
                             0,
-                            ProtocolDiagnostic {
-                                code: "runtime.compiled_cache_ignored".into(),
-                                level: RuntimeLogLevel::Warning,
-                                message: error,
-                                source: None,
-                            },
+                            crate::project::project_diagnostic(
+                                "runtime.compiled_cache_ignored",
+                                RuntimeLogLevel::Warning,
+                                error,
+                                None,
+                            ),
                         );
                     }
                     return Err(Box::new(report));
@@ -246,13 +247,12 @@ impl RuntimeSession {
                     return Err(Box::new(ProjectLoadReport {
                         project_revision: request.identity.project_revision,
                         success: false,
-                        diagnostics: vec![ProtocolDiagnostic {
-                            code: "runtime.project_identity_mismatch".into(),
-                            level: RuntimeLogLevel::Error,
-                            message: "submitted project payload differs from its source identity"
-                                .into(),
-                            source: None,
-                        }],
+                        diagnostics: vec![crate::project::project_diagnostic(
+                            "runtime.project_identity_mismatch",
+                            RuntimeLogLevel::Error,
+                            "submitted project payload differs from its source identity",
+                            None,
+                        )],
                         payload_required: false,
                         configuration: None,
                         game_information: None,
@@ -278,12 +278,15 @@ impl RuntimeSession {
             }
         };
         if let Some(error) = cache_warning {
-            build.report.diagnostics.push(ProtocolDiagnostic {
-                code: "runtime.compiled_cache_ignored".into(),
-                level: RuntimeLogLevel::Warning,
-                message: error,
-                source: None,
-            });
+            build
+                .report
+                .diagnostics
+                .push(crate::project::project_diagnostic(
+                    "runtime.compiled_cache_ignored",
+                    RuntimeLogLevel::Warning,
+                    error,
+                    None,
+                ));
         }
         if !self.options.retain_project_source_payloads
             && let Some(snapshot) = &mut build.snapshot
