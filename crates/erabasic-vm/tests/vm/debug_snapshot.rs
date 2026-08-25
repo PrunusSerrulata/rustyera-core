@@ -351,10 +351,38 @@ fn getnum_resolves_the_referenced_builtin_name_table_at_runtime() {
         .lookup
         .insert("dynamic-key".into(), 17);
     let artifact = compile_source_with_data(
-        "@SYSTEM_TITLE\nRESULT = GETNUM(CFLAG, \"dynamic-key\")\nRETURN RESULT\n",
+        "@SYSTEM_TITLE\nRESULTS '= \"dynamic-key\"\nRESULT = GETNUM(CFLAG, RESULTS)\nRETURN RESULT\n",
         data,
     );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(17));
+}
+
+#[test]
+fn folded_getnum_lookups_preserve_execution_results() {
+    let mut data = project_data();
+    data.static_data
+        .name_tables
+        .get_mut(&erabasic_data::NameTableKind::Cflag)
+        .unwrap()
+        .lookup
+        .insert("known".into(), 17);
+    data.static_data
+        .name_tables
+        .get_mut(&erabasic_data::NameTableKind::Cdflag2)
+        .unwrap()
+        .lookup
+        .insert("second".into(), 23);
+    let artifact = compile_source_with_data(
+        "@SYSTEM_TITLE\n\
+         RESULT = GETNUM(CFLAG, \"known\") * 10000\n\
+         RESULT += (GETNUM(CFLAG, \"missing\") + 1) * 1000\n\
+         RESULT += GETNUM(CDFLAG, \"second\", 2) * 10\n\
+         RESULT += GETNUM(CFLAG, \"known\", -1) + 1\n\
+         RETURN RESULT\n",
+        data,
+    );
+
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(170_230));
 }
 
 #[test]

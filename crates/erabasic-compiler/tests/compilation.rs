@@ -142,6 +142,25 @@ fn scoped_scalar_initializers_and_array_declarations_compile() {
 }
 
 #[test]
+fn folded_getnum_does_not_emit_a_native_call() {
+    let artifact = compile_project(
+        &analyze("@SYSTEM_TITLE\nRESULT = GETNUM(CFLAG, \"missing\")\nRETURN RESULT\n"),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .expect("constant GETNUM should compile");
+
+    assert!(
+        artifact
+            .native_imports
+            .iter()
+            .all(|import| !import.import.name.eq_ignore_ascii_case("getnum"))
+    );
+}
+
+#[test]
 fn continuation_replacement_keeps_compiler_source_maps_in_bounds() {
     let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
         .data

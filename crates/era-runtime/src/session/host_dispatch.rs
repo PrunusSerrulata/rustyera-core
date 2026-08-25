@@ -69,6 +69,110 @@ impl PreparedHtmlPrint {
     }
 }
 
+#[derive(Debug)]
+enum PresentationStatePreparationError {
+    Alignment,
+    FontStyle(RuntimeError),
+    Color(&'static str),
+}
+
+enum PreparedPresentationState {
+    Alignment(LineAlignment),
+    FontStyle(i64),
+    Bold,
+    Italic,
+    Regular,
+    Font(Option<String>),
+    Foreground(i64),
+    ResetForeground,
+}
+
+impl PreparedPresentationState {
+    fn prepare(
+        name: &str,
+        arguments: &[VmValue],
+    ) -> Result<Option<Self>, PresentationStatePreparationError> {
+        let prepared = match name {
+            "ALIGNMENT" => {
+                let alignment = match arguments.first() {
+                    Some(VmValue::String(value)) if value.eq_ignore_ascii_case("CENTER") => {
+                        LineAlignment::Center
+                    }
+                    Some(VmValue::String(value)) if value.eq_ignore_ascii_case("RIGHT") => {
+                        LineAlignment::Right
+                    }
+                    Some(VmValue::String(value)) if value.eq_ignore_ascii_case("LEFT") => {
+                        LineAlignment::Left
+                    }
+                    _ => return Err(PresentationStatePreparationError::Alignment),
+                };
+                Self::Alignment(alignment)
+            }
+            "FONTSTYLE" => Self::FontStyle(
+                integer_argument_value(arguments, 0)
+                    .map_err(PresentationStatePreparationError::FontStyle)?,
+            ),
+            "FONTBOLD" => Self::Bold,
+            "FONTITALIC" => Self::Italic,
+            "FONTREGULAR" => Self::Regular,
+            "SETFONT" => Self::Font(arguments.first().map(display_value)),
+            "SETCOLOR" => Self::Foreground(
+                color_argument_value(arguments)
+                    .map_err(PresentationStatePreparationError::Color)?,
+            ),
+            "RESETCOLOR" => Self::ResetForeground,
+            _ => return Ok(None),
+        };
+        Ok(Some(prepared))
+    }
+
+    fn apply(self, presentation: &mut PresentationModel) {
+        match self {
+            Self::Alignment(alignment) => presentation.set_alignment(alignment),
+            Self::FontStyle(bits) => presentation.set_font_style(bits),
+            Self::Bold => presentation.set_bold(true),
+            Self::Italic => presentation.set_italic(true),
+            Self::Regular => presentation.clear_font_style(),
+            Self::Font(family) => presentation.set_font(family),
+            Self::Foreground(color) => presentation.set_foreground(color),
+            Self::ResetForeground => presentation.reset_foreground(),
+        }
+    }
+}
+
+enum PreparedLineEdit {
+    AppendSeparator(String),
+    Clear(usize),
+}
+
+impl PreparedLineEdit {
+    fn prepare(name: &str, arguments: &[VmValue]) -> Option<Self> {
+        if matches!(name, "DRAWLINE" | "CUSTOMDRAWLINE" | "DRAWLINEFORM") {
+            return Some(Self::AppendSeparator(
+                arguments.first().map_or_else(|| "-".into(), display_value),
+            ));
+        }
+        if name == "CLEARLINE" {
+            let count = arguments
+                .first()
+                .and_then(|value| match value {
+                    VmValue::Integer(value) => usize::try_from(*value).ok(),
+                    _ => None,
+                })
+                .unwrap_or(1);
+            return Some(Self::Clear(count));
+        }
+        None
+    }
+
+    fn apply(self, presentation: &mut PresentationModel) {
+        match self {
+            Self::AppendSeparator(pattern) => presentation.append_separator(pattern),
+            Self::Clear(count) => presentation.delete_last_lines(count),
+        }
+    }
+}
+
 struct HtmlInteractionBindings<'a> {
     epoch: u64,
     next_interaction_id: &'a mut u64,

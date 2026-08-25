@@ -327,10 +327,10 @@ impl NativeServiceRegistry {
             ) {
                 registry.register(
                     native.import.key,
-                    CoreNative {
-                        name: name.into(),
-                        legacy_encoding: artifact.project_data.static_data.legacy_encoding,
-                    },
+                    CoreNative::new(
+                        name.into(),
+                        artifact.project_data.static_data.legacy_encoding,
+                    ),
                 );
                 registry.path_memo_safe_keys.insert(native.import.key);
             }

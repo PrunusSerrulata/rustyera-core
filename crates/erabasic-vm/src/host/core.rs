@@ -4,6 +4,52 @@ use super::*;
 pub(super) struct CoreNative {
     pub(super) name: String,
     pub(super) legacy_encoding: LegacyEncoding,
+    regex_cache: RegexCache,
+}
+
+const REGEX_CACHE_CAPACITY: usize = 16;
+
+// Emuera's RegexFactory reuses compiled patterns in regex string natives. Keep the same derived
+// optimization bounded to one CoreNative within a RuntimeVm; it has no script-visible state and
+// is intentionally rebuilt rather than persisted in VM snapshots.
+#[derive(Default)]
+struct RegexCache {
+    entries: Vec<(String, regex::Regex)>,
+}
+
+impl RegexCache {
+    fn get_or_compile(&mut self, pattern: &str) -> Result<&regex::Regex, regex::Error> {
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|(cached, _)| cached == pattern)
+        {
+            if index + 1 != self.entries.len() {
+                let entry = self.entries.remove(index);
+                self.entries.push(entry);
+            }
+            let newest = self.entries.len() - 1;
+            return Ok(&self.entries[newest].1);
+        }
+
+        let regex = regex::Regex::new(pattern)?;
+        if self.entries.len() == REGEX_CACHE_CAPACITY {
+            self.entries.remove(0);
+        }
+        let index = self.entries.len();
+        self.entries.push((pattern.to_owned(), regex));
+        Ok(&self.entries[index].1)
+    }
+}
+
+impl CoreNative {
+    pub(super) fn new(name: String, legacy_encoding: LegacyEncoding) -> Self {
+        Self {
+            name,
+            legacy_encoding,
+            regex_cache: RegexCache::default(),
+        }
+    }
 }
 
 /// Evaluate a side-effect-free core native through the same implementation used by bytecode.
@@ -75,13 +121,10 @@ pub fn evaluate_pure_native(name: &str, arguments: Vec<VmValue>) -> Result<VmVal
         places: Vec::new(),
         implicit_places: BTreeMap::new(),
     };
-    CoreNative {
-        name,
-        legacy_encoding: LegacyEncoding::default(),
-    }
-    .call(request)?
-    .value
-    .ok_or_else(|| "pure core-native service returned no value".into())
+    CoreNative::new(name, LegacyEncoding::default())
+        .call(request)?
+        .value
+        .ok_or_else(|| "pure core-native service returned no value".into())
 }
 
 impl NativeService for CoreNative {
@@ -308,11 +351,13 @@ impl NativeService for CoreNative {
                 }
             }
             "strcount" => {
-                let regex = regex::Regex::new(string(1)?)
+                let pattern = string(1)?;
+                let regex = self
+                    .regex_cache
+                    .get_or_compile(pattern)
                     .map_err(|error| format!("STRCOUNT argument 2 is not a regex: {error}"))?;
-                VmValue::Integer(
-                    i64::try_from(regex.find_iter(string(0)?).count()).unwrap_or(i64::MAX),
-                )
+                let input = string(0)?;
+                VmValue::Integer(i64::try_from(regex.find_iter(input).count()).unwrap_or(i64::MAX))
             }
             "getpalamlv" | "getexplv" => {
                 let maximum = usize::try_from(integer(1)?)
@@ -339,7 +384,7 @@ impl NativeService for CoreNative {
                 }
                 VmValue::Integer(i64::try_from(level).unwrap_or(i64::MAX))
             }
-            "replace" => VmValue::String(replace_text(&request)?),
+            "replace" => VmValue::String(replace_text(&request, &mut self.regex_cache)?),
             "escape" => VmValue::String(regex::escape(string(0)?)),
             "charatu" => {
                 let position = usize::try_from(integer(1)?).unwrap_or(usize::MAX);
@@ -385,7 +430,10 @@ impl NativeService for CoreNative {
     }
 }
 
-fn replace_text(request: &NativeCallRequest) -> Result<String, String> {
+fn replace_text(
+    request: &NativeCallRequest,
+    regex_cache: &mut RegexCache,
+) -> Result<String, String> {
     let input = request_string(request, 0)?;
     let pattern = request_string(request, 1)?;
     let mode = match request.arguments.get(3) {
@@ -397,7 +445,8 @@ fn replace_text(request: &NativeCallRequest) -> Result<String, String> {
         return Ok(input.replace(pattern, request_string(request, 2)?));
     }
 
-    let regex = regex::Regex::new(pattern)
+    let regex = regex_cache
+        .get_or_compile(pattern)
         .map_err(|error| format!("REPLACE argument 2 is not a regex: {error}"))?;
     if mode == 1 {
         let replacements = request
@@ -646,4 +695,27 @@ fn utf8_boundary_at_or_after(value: &str, mut offset: usize) -> usize {
         offset += 1;
     }
     offset
+}
+
+#[cfg(test)]
+mod regex_cache_tests {
+    use super::*;
+
+    #[test]
+    fn compiled_patterns_are_reused_without_unbounded_or_invalid_entries() {
+        let mut cache = RegexCache::default();
+
+        cache.get_or_compile("reused").unwrap();
+        cache.get_or_compile("reused").unwrap();
+        assert_eq!(cache.entries.len(), 1);
+
+        assert!(cache.get_or_compile("[").is_err());
+        assert_eq!(cache.entries.len(), 1);
+
+        for index in 0..=REGEX_CACHE_CAPACITY {
+            cache.get_or_compile(&format!("pattern-{index}")).unwrap();
+            assert!(cache.entries.len() <= REGEX_CACHE_CAPACITY);
+        }
+        assert_eq!(cache.entries.len(), REGEX_CACHE_CAPACITY);
+    }
 }

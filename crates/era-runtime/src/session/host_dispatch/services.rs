@@ -70,6 +70,20 @@ impl VmHost for ImmediateRuntimeHost<'_> {
                 writes: Vec::new(),
             });
         }
+        if let Ok(Some(prepared)) = PreparedPresentationState::prepare(name, request.arguments) {
+            prepared.apply(self.presentation);
+            return ImmediateHostCallResult::Ready(HostReady::empty());
+        }
+        if let Ok(button) = PreparedButton::prepare(name, request.arguments) {
+            let token = self.allocate_interaction();
+            let value = button.apply(self.presentation, token);
+            self.command_intents.insert(token, value);
+            *self.pending_presentation_update = true;
+            return ImmediateHostCallResult::Ready(HostReady::empty());
+        }
+        if let Some(ready) = self.immediate_line_edit(name, request.arguments) {
+            return ImmediateHostCallResult::Ready(ready);
+        }
         if name == "HTML_PRINT"
             && let Some(ready) = self.immediate_html_print(request.arguments)
         {
@@ -98,6 +112,58 @@ impl VmHost for ImmediateRuntimeHost<'_> {
 
     fn call(&mut self, _request: HostCallRequest) -> HostCallResult {
         HostCallResult::Error("immediate presentation host cannot capture deferred calls".into())
+    }
+}
+
+struct PreparedButton {
+    text: String,
+    value: VmValue,
+    protocol_value: era_runtime_protocol::ProtocolValue,
+    alignment: Option<CellAlignment>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ButtonPreparationError {
+    Unsupported,
+    MissingValue,
+    UnmaterializedValue,
+}
+
+impl PreparedButton {
+    fn prepare(name: &str, arguments: &[VmValue]) -> Result<Self, ButtonPreparationError> {
+        if !matches!(name, "PRINTBUTTON" | "PRINTBUTTONC" | "PRINTBUTTONLC") {
+            return Err(ButtonPreparationError::Unsupported);
+        }
+        let value = arguments
+            .get(1)
+            .ok_or(ButtonPreparationError::MissingValue)?
+            .clone();
+        let protocol_value = match &value {
+            VmValue::Integer(value) => era_runtime_protocol::ProtocolValue::Integer(*value),
+            VmValue::String(value) => era_runtime_protocol::ProtocolValue::String(value.clone()),
+            VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => {
+                return Err(ButtonPreparationError::UnmaterializedValue);
+            }
+        };
+        let alignment = match name {
+            "PRINTBUTTONC" => Some(CellAlignment::Right),
+            "PRINTBUTTONLC" => Some(CellAlignment::Left),
+            _ => None,
+        };
+        Ok(Self {
+            text: arguments
+                .first()
+                .map_or_else(String::new, display_value)
+                .replace('\n', ""),
+            value,
+            protocol_value,
+            alignment,
+        })
+    }
+
+    fn apply(self, presentation: &mut PresentationModel, token: InteractionToken) -> VmValue {
+        presentation.append_button(self.text, self.protocol_value, token, self.alignment);
+        self.value
     }
 }
 
@@ -376,6 +442,13 @@ impl PreparedGenericPrint {
 }
 
 impl ImmediateRuntimeHost<'_> {
+    fn immediate_line_edit(&mut self, name: &str, arguments: &[VmValue]) -> Option<HostReady> {
+        let prepared = PreparedLineEdit::prepare(name, arguments)?;
+        prepared.apply(self.presentation);
+        *self.pending_presentation_update = true;
+        Some(self.complete_line_count())
+    }
+
     fn immediate_html_print(&mut self, arguments: &[VmValue]) -> Option<HostReady> {
         let Ok(mut prepared) = PreparedHtmlPrint::prepare(arguments) else {
             return None;
@@ -445,35 +518,20 @@ impl RuntimeSession {
             name.as_str(),
             "PRINTBUTTON" | "PRINTBUTTONC" | "PRINTBUTTONLC"
         ) {
-            let text = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value)
-                .replace('\n', "");
-            let value = request
-                .arguments
-                .get(1)
-                .cloned()
-                .ok_or_else(|| RuntimeError::Internal("PRINTBUTTON value is missing".into()))?;
+            let button = PreparedButton::prepare(name, &request.arguments).map_err(|error| {
+                RuntimeError::Internal(
+                    match error {
+                        ButtonPreparationError::MissingValue => "PRINTBUTTON value is missing",
+                        ButtonPreparationError::UnmaterializedValue => {
+                            "PRINTBUTTON value was not materialized"
+                        }
+                        ButtonPreparationError::Unsupported => "PRINTBUTTON command is unsupported",
+                    }
+                    .into(),
+                )
+            })?;
             let token = self.allocate_interaction();
-            let alignment = match name.as_str() {
-                "PRINTBUTTONC" => Some(CellAlignment::Right),
-                "PRINTBUTTONLC" => Some(CellAlignment::Left),
-                _ => None,
-            };
-            let protocol_value = match &value {
-                VmValue::Integer(value) => era_runtime_protocol::ProtocolValue::Integer(*value),
-                VmValue::String(value) => {
-                    era_runtime_protocol::ProtocolValue::String(value.clone())
-                }
-                VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => {
-                    return Err(RuntimeError::Internal(
-                        "PRINTBUTTON value was not materialized".into(),
-                    ));
-                }
-            };
-            self.presentation
-                .append_button(text, protocol_value, token, alignment);
+            let value = button.apply(&mut self.presentation, token);
             self.command_intents.insert(token, value);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
@@ -766,12 +824,14 @@ impl RuntimeSession {
 #[cfg(test)]
 mod immediate_tests {
     use super::{
-        ImmediateTagSplitTargets, ImmediateTextFormatting, PreparedHtmlPrint,
-        RuntimeQueryEvaluation, RuntimeQueryState, evaluate_runtime_query,
-        immediate_html_tag_split, immediate_text_value, is_immediate_committed_text_print,
-        is_immediate_text_print, skips_runtime_command_immediately,
+        CellAlignment, ImmediateTagSplitTargets, ImmediateTextFormatting, LineAlignment,
+        PreparedButton, PreparedHtmlPrint, PreparedPresentationState, RuntimeQueryEvaluation,
+        RuntimeQueryState, evaluate_runtime_query, immediate_html_tag_split, immediate_text_value,
+        is_immediate_committed_text_print, is_immediate_text_print,
+        skips_runtime_command_immediately,
     };
     use crate::presentation::PresentationModel;
+    use era_runtime_protocol::ProtocolValue;
     use erabasic_vm::{PlaceDescriptor, VmValue};
 
     fn tag_split_targets(capacity: usize) -> ImmediateTagSplitTargets {
@@ -875,6 +935,59 @@ mod immediate_tests {
         assert!(is_immediate_committed_text_print("PRINTFORMKL"));
         assert!(!is_immediate_committed_text_print("PRINTW"));
         assert!(!is_immediate_committed_text_print("PRINTFORMC"));
+    }
+
+    #[test]
+    fn common_button_and_style_commands_are_safe_for_the_immediate_lane() {
+        let mut presentation = PresentationModel::default();
+        PreparedPresentationState::prepare(
+            "SETCOLOR",
+            &[
+                VmValue::Integer(0x12),
+                VmValue::Integer(0x34),
+                VmValue::Integer(0x56),
+            ],
+        )
+        .unwrap()
+        .unwrap()
+        .apply(&mut presentation);
+        assert_eq!(presentation.foreground_rgb(), 0x12_34_56);
+        PreparedPresentationState::prepare("ALIGNMENT", &[VmValue::String("center".into())])
+            .unwrap()
+            .unwrap()
+            .apply(&mut presentation);
+        assert_eq!(presentation.alignment(), LineAlignment::Center);
+        assert!(
+            PreparedPresentationState::prepare(
+                "SETCOLOR",
+                &[
+                    VmValue::Integer(300),
+                    VmValue::Integer(0),
+                    VmValue::Integer(0)
+                ],
+            )
+            .is_err()
+        );
+
+        let button = PreparedButton::prepare(
+            "PRINTBUTTONC",
+            &[VmValue::String("A\nB".into()), VmValue::Integer(42)],
+        )
+        .unwrap();
+        assert_eq!(button.text, "AB");
+        assert_eq!(button.value, VmValue::Integer(42));
+        assert_eq!(button.protocol_value, ProtocolValue::Integer(42));
+        assert_eq!(button.alignment, Some(CellAlignment::Right));
+        assert!(
+            PreparedButton::prepare(
+                "PRINTBUTTON",
+                &[
+                    VmValue::String("bad".into()),
+                    VmValue::IntegerPlace(Box::default()),
+                ],
+            )
+            .is_err()
+        );
     }
 
     #[test]

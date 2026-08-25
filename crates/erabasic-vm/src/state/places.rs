@@ -315,13 +315,27 @@ impl Vm {
         } else {
             0
         };
+        // Bytecode resolves omitted character selectors before reaching the storage layer. Treat
+        // a selector equal to the current TARGET as target-dependent. This is conservative for an
+        // explicit selector with the same value, but prevents an unsafe memo hit after TARGET
+        // changes without altering captured-place semantics.
+        let implicit_target = definition.storage == BytecodeStorage::Character
+            && character == self.target_character_for_generation(generation);
         let value = self
             .memory
             .cell(generation, definition, character)
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
             .read(&place.indices)
             .map_err(VmError::InvalidState)?;
-        self.observe_path_memo_read(fiber.id, generation, definition, &place.indices, &value);
+        self.observe_path_memo_read(
+            fiber.id,
+            generation,
+            definition,
+            character,
+            implicit_target,
+            &place.indices,
+            &value,
+        );
         Ok(value)
     }
 
@@ -355,13 +369,23 @@ impl Vm {
         } else {
             0
         };
+        let implicit_target = definition.storage == BytecodeStorage::Character
+            && character == self.target_character_for_generation(generation);
         let value = self
             .memory
             .cell(generation, definition, character)
             .ok_or_else(|| VmError::InvalidState("variable storage is unavailable".into()))?
             .read(indices)
             .map_err(VmError::InvalidState)?;
-        self.observe_path_memo_read(fiber.id, generation, definition, indices, &value);
+        self.observe_path_memo_read(
+            fiber.id,
+            generation,
+            definition,
+            character,
+            implicit_target,
+            indices,
+            &value,
+        );
         Ok(value)
     }
 
@@ -410,12 +434,22 @@ impl Vm {
         } else {
             0
         };
+        let implicit_target = definition.storage == BytecodeStorage::Character
+            && character == self.target_character_for_generation(generation);
         self.memory
             .cell_mut(generation, definition.key, definition.storage, character)
             .ok_or_else(|| VmError::InvalidState("variable storage is unavailable".into()))?
             .write(indices, value.clone())
             .map_err(VmError::InvalidState)?;
-        self.observe_path_memo_write(fiber.id, generation, definition, indices, &value);
+        self.observe_path_memo_write(
+            fiber.id,
+            generation,
+            definition,
+            character,
+            implicit_target,
+            indices,
+            &value,
+        );
         Ok(())
     }
 
@@ -572,6 +606,8 @@ impl Vm {
         } else {
             0
         };
+        let implicit_target = definition.storage == BytecodeStorage::Character
+            && character == self.target_character_for_generation(generation);
         let values = self
             .memory
             .cell(generation, definition, character)
@@ -579,7 +615,15 @@ impl Vm {
             .to_values_range(start, end)
             .ok_or_else(|| VmError::InvalidArguments("array range exceeds the variable".into()))?;
         if observe_path_memo {
-            self.observe_path_memo_range_read(fiber.id, generation, definition, start, &values);
+            self.observe_path_memo_range_read(
+                fiber.id,
+                generation,
+                definition,
+                character,
+                implicit_target,
+                start,
+                &values,
+            );
         }
         Ok(values)
     }
@@ -628,6 +672,8 @@ impl Vm {
         } else {
             0
         };
+        let implicit_target = definition.storage == BytecodeStorage::Character
+            && character == self.target_character_for_generation(definition.generation);
         self.memory
             .cell_mut(
                 definition.generation,
@@ -643,7 +689,16 @@ impl Vm {
             .get(&definition.generation)
             .and_then(|program| program.global(definition.key))
             .expect("resolved place definition remains available");
-        self.observe_path_memo_fill(fiber.id, definition.generation, global, start, end, &value);
+        self.observe_path_memo_fill(
+            fiber.id,
+            definition.generation,
+            global,
+            character,
+            implicit_target,
+            start,
+            end,
+            &value,
+        );
         Ok(())
     }
 
@@ -697,12 +752,21 @@ impl Vm {
         } else {
             0
         };
+        let implicit_target = definition.storage == BytecodeStorage::Character
+            && character == self.target_character_for_generation(definition.generation);
         let global = self
             .generations
             .get(&definition.generation)
             .and_then(|program| program.global(definition.key))
             .expect("resolved place definition remains available");
-        self.observe_path_memo_replace(fiber.id, definition.generation, global, &values);
+        self.observe_path_memo_replace(
+            fiber.id,
+            definition.generation,
+            global,
+            character,
+            implicit_target,
+            &values,
+        );
         let cell = self
             .memory
             .cell_mut(
@@ -760,6 +824,8 @@ impl Vm {
         } else {
             0
         };
+        let implicit_target = definition.storage == BytecodeStorage::Character
+            && character == self.target_character_for_generation(definition.generation);
         self.memory
             .cell_mut(
                 definition.generation,
@@ -779,6 +845,8 @@ impl Vm {
             fiber.id,
             definition.generation,
             global,
+            character,
+            implicit_target,
             &place.indices,
             &value,
         );

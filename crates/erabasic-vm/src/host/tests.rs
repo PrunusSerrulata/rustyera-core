@@ -9,10 +9,7 @@ fn registered_override_is_not_path_memo_safe() {
     assert!(registry.path_memo_safe(key));
     assert!(registry.register(
         key,
-        CoreNative {
-            name: "abs".into(),
-            legacy_encoding: LegacyEncoding::default(),
-        },
+        CoreNative::new("abs".into(), LegacyEncoding::default()),
     ));
     assert!(!registry.path_memo_safe(key));
 }
@@ -264,10 +261,7 @@ fn regex_string_natives_match_non_overlapping_reference_semantics() {
         places: Vec::new(),
         implicit_places: BTreeMap::new(),
     };
-    let mut count = CoreNative {
-        name: "strcount".into(),
-        legacy_encoding: LegacyEncoding::default(),
-    };
+    let mut count = CoreNative::new("strcount".into(), LegacyEncoding::default());
     assert_eq!(
         count
             .call(request(
@@ -281,10 +275,33 @@ fn regex_string_natives_match_non_overlapping_reference_semantics() {
             .value,
         Some(VmValue::Integer(1))
     );
-    let mut escape = CoreNative {
-        name: "escape".into(),
-        legacy_encoding: LegacyEncoding::default(),
-    };
+    assert_eq!(
+        count
+            .call(request(
+                "strcount",
+                vec![VmValue::String("aba".into()), VmValue::String("aba".into())],
+            ))
+            .unwrap()
+            .value,
+        Some(VmValue::Integer(1))
+    );
+    assert!(
+        count
+            .call(request(
+                "strcount",
+                vec![VmValue::String("text".into()), VmValue::String("[".into())],
+            ))
+            .is_err()
+    );
+    let error = count
+        .call(request(
+            "strcount",
+            vec![VmValue::Integer(1), VmValue::String("[".into())],
+        ))
+        .unwrap_err();
+    assert!(error.starts_with("STRCOUNT argument 2 is not a regex:"));
+
+    let mut escape = CoreNative::new("escape".into(), LegacyEncoding::default());
     assert_eq!(
         escape
             .call(request("escape", vec![VmValue::String("a+b".into())]))
@@ -309,10 +326,7 @@ fn replace_native_uses_reference_regex_literal_and_array_modes() {
         places,
         implicit_places: BTreeMap::new(),
     };
-    let mut native = CoreNative {
-        name: "replace".into(),
-        legacy_encoding: LegacyEncoding::default(),
-    };
+    let mut native = CoreNative::new("replace".into(), LegacyEncoding::default());
     let replace = |native: &mut CoreNative, request| native.call(request).unwrap().value.unwrap();
 
     assert_eq!(

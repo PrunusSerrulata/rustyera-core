@@ -26,10 +26,18 @@ impl Vm {
                 return;
             };
             if definition.storage != BytecodeStorage::FunctionLocal {
+                let implicit_target = definition.storage == BytecodeStorage::Character;
+                let character = if implicit_target {
+                    self.target_character_for_generation(generation)
+                } else {
+                    0
+                };
                 self.observe_path_memo_write(
                     fiber,
                     generation,
                     definition,
+                    character,
+                    implicit_target,
                     &parameter.indices,
                     argument,
                 );
@@ -193,27 +201,73 @@ impl Vm {
         }
     }
 
+    fn observe_path_memo_target_identity(
+        &self,
+        fiber: FiberId,
+        generation: GenerationId,
+        character: usize,
+    ) -> bool {
+        let mut active = self.active_path_memo.borrow_mut();
+        let Some(active) = active.as_mut().filter(|active| active.fiber == fiber) else {
+            return false;
+        };
+        if !active.valid {
+            return false;
+        }
+        if let Some(observed_character) = active.dependencies.iter().find_map(|dependency| {
+            let PathMemoDependency::TargetIdentity {
+                generation: observed_generation,
+                character,
+            } = dependency
+            else {
+                return None;
+            };
+            (*observed_generation == generation).then_some(*character)
+        }) {
+            if observed_character != character {
+                active.valid = false;
+                return false;
+            }
+            return true;
+        }
+        active.retained_bytes = active
+            .retained_bytes
+            .saturating_add(std::mem::size_of::<PathMemoDependency>());
+        active
+            .dependencies
+            .push(PathMemoDependency::TargetIdentity {
+                generation,
+                character,
+            });
+        enforce_path_memo_limits(active);
+        active.valid
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn observe_path_memo_read(
         &self,
         fiber: FiberId,
         generation: GenerationId,
         definition: &erabasic_bytecode::BytecodeGlobal,
+        character: usize,
+        implicit_target: bool,
         indices: &[u64],
         value: &VmValue,
     ) {
         if definition.storage == BytecodeStorage::FunctionLocal {
             return;
         }
-        if definition.storage == BytecodeStorage::Character {
-            self.invalidate_path_memo(fiber);
+        if !self.path_memo_can_observe(fiber) {
             return;
         }
-        if !self.path_memo_can_observe(fiber) {
+        if implicit_target && !self.observe_path_memo_target_identity(fiber, generation, character)
+        {
             return;
         }
         let place = PathMemoPlace {
             generation,
             variable: definition.key,
+            character,
             indices: indices.to_vec(),
         };
         let mut active = self.active_path_memo.borrow_mut();
@@ -302,11 +356,14 @@ impl Vm {
         active.valid
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn observe_path_memo_range_read(
         &self,
         fiber: FiberId,
         generation: GenerationId,
         definition: &erabasic_bytecode::BytecodeGlobal,
+        character: usize,
+        implicit_target: bool,
         start: usize,
         values: &[VmValue],
     ) {
@@ -318,28 +375,33 @@ impl Vm {
                 fiber,
                 generation,
                 definition,
+                character,
+                implicit_target,
                 &[u64::try_from(start.saturating_add(offset)).unwrap_or(u64::MAX)],
                 value,
             );
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn observe_path_memo_write(
         &self,
         fiber: FiberId,
         generation: GenerationId,
         definition: &erabasic_bytecode::BytecodeGlobal,
+        character: usize,
+        implicit_target: bool,
         indices: &[u64],
         value: &VmValue,
     ) {
         if definition.storage == BytecodeStorage::FunctionLocal {
             return;
         }
-        if definition.storage == BytecodeStorage::Character {
-            self.invalidate_path_memo(fiber);
+        if !self.path_memo_can_observe(fiber) {
             return;
         }
-        if !self.path_memo_can_observe(fiber) {
+        if implicit_target && !self.observe_path_memo_target_identity(fiber, generation, character)
+        {
             return;
         }
         let mut active = self.active_path_memo.borrow_mut();
@@ -365,6 +427,7 @@ impl Vm {
             place: PathMemoPlace {
                 generation,
                 variable: definition.key,
+                character,
                 indices: indices.to_vec(),
             },
             value: value.clone(),
@@ -378,6 +441,8 @@ impl Vm {
         fiber: FiberId,
         generation: GenerationId,
         definition: &erabasic_bytecode::BytecodeGlobal,
+        character: usize,
+        implicit_target: bool,
         start: usize,
         end: usize,
         value: &VmValue,
@@ -385,11 +450,11 @@ impl Vm {
         if definition.storage == BytecodeStorage::FunctionLocal {
             return;
         }
-        if definition.storage == BytecodeStorage::Character {
-            self.invalidate_path_memo(fiber);
+        if !self.path_memo_can_observe(fiber) {
             return;
         }
-        if !self.path_memo_can_observe(fiber) {
+        if implicit_target && !self.observe_path_memo_target_identity(fiber, generation, character)
+        {
             return;
         }
         let mut active = self.active_path_memo.borrow_mut();
@@ -413,6 +478,7 @@ impl Vm {
         active.mutations.push(PathMemoMutation::Fill {
             generation,
             variable: definition.key,
+            character,
             start,
             end,
             value: value.clone(),
@@ -420,21 +486,24 @@ impl Vm {
         enforce_path_memo_limits(active);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn observe_path_memo_replace(
         &self,
         fiber: FiberId,
         generation: GenerationId,
         definition: &erabasic_bytecode::BytecodeGlobal,
+        character: usize,
+        implicit_target: bool,
         values: &[VmValue],
     ) {
         if definition.storage == BytecodeStorage::FunctionLocal {
             return;
         }
-        if definition.storage == BytecodeStorage::Character {
-            self.invalidate_path_memo(fiber);
+        if !self.path_memo_can_observe(fiber) {
             return;
         }
-        if !self.path_memo_can_observe(fiber) {
+        if implicit_target && !self.observe_path_memo_target_identity(fiber, generation, character)
+        {
             return;
         }
         let mut active = self.active_path_memo.borrow_mut();
@@ -460,6 +529,7 @@ impl Vm {
         active.mutations.push(PathMemoMutation::Replace {
             generation,
             variable: definition.key,
+            character,
             values: values.to_vec(),
         });
         enforce_path_memo_limits(active);
@@ -590,7 +660,7 @@ impl Vm {
                         return false;
                     };
                     self.memory
-                        .cell(place.generation, definition, 0)
+                        .cell(place.generation, definition, place.character)
                         .and_then(|cell| cell.read(&place.indices).ok())
                         .is_some_and(|observed| observed.eq(value))
                 }
@@ -604,22 +674,30 @@ impl Vm {
                     .and_then(|program| program.global(*variable))
                     .and_then(|definition| self.memory.cell(*generation, definition, 0))
                     .is_some_and(|cell| cell.revision() == *revision),
+                PathMemoDependency::TargetIdentity {
+                    generation,
+                    character,
+                } => self.target_character_for_generation(*generation) == *character,
             })
     }
 
     fn replay_path_memo_mutation(&mut self, mutation: &PathMemoMutation) -> Result<(), VmError> {
-        let (generation, variable) = match mutation {
-            PathMemoMutation::Write { place, .. } => (place.generation, place.variable),
+        let (generation, variable, character) = match mutation {
+            PathMemoMutation::Write { place, .. } => {
+                (place.generation, place.variable, place.character)
+            }
             PathMemoMutation::Fill {
                 generation,
                 variable,
+                character,
                 ..
             }
             | PathMemoMutation::Replace {
                 generation,
                 variable,
+                character,
                 ..
-            } => (*generation, *variable),
+            } => (*generation, *variable, *character),
         };
         let definition = self
             .generations
@@ -629,7 +707,7 @@ impl Vm {
         let storage = definition.storage;
         let cell = self
             .memory
-            .cell_mut(generation, definition.key, storage, 0)
+            .cell_mut(generation, definition.key, storage, character)
             .ok_or_else(|| VmError::InvalidState("path memo storage is missing".into()))?;
         match mutation {
             PathMemoMutation::Write { place, value } => cell

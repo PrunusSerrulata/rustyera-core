@@ -908,6 +908,133 @@ fn path_memo_find_element_queries_follow_array_revisions() {
 }
 
 #[test]
+fn path_memo_character_reads_follow_implicit_and_explicit_identities() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         ADDVOIDCHARA\n\
+         CFLAG:0:1 = 10\nCFLAG:1:1 = 20\n\
+         CSTR:0:0 '= \"needle\"\nCSTR:0:1 '= \"other\"\n\
+         CSTR:1:0 '= \"other\"\nCSTR:1:1 '= \"needle\"\n\
+         TARGET = 0\nRESULT:10 = READ_TARGET()\nRESULT:11 = FIND_TARGET(\"needle\")\n\
+         RESULT:12 = READ_TARGET()\nRESULT:13 = FIND_TARGET(\"needle\")\n\
+         TARGET = 1\nRESULT:14 = READ_TARGET()\nRESULT:15 = FIND_TARGET(\"needle\")\n\
+         RESULT:16 = READ_TARGET()\nRESULT:17 = FIND_TARGET(\"needle\")\n\
+         MASTER = 0\nRESULT:18 = READ_MASTER()\nRESULT:19 = READ_MASTER()\n\
+         MASTER = 1\nRESULT:20 = READ_MASTER()\nRESULT:21 = READ_MASTER()\n\
+         MASTER = 0\nASSI = 1\nCFLAG:1:5 = 30\n\
+         RESULT:22 = WRITE_MASTER_READ_ASSI()\nCFLAG:1:5 = 40\n\
+         RESULT:23 = WRITE_MASTER_READ_ASSI()\nRETURN RESULT\n\
+         @READ_TARGET\n#FUNCTION\nRETURNF CFLAG:1\n\
+         @FIND_TARGET, ARGS\n#FUNCTION\nRETURNF FINDELEMENT(CSTR, ESCAPE(ARGS), 0, 2, 1)\n\
+         @READ_MASTER\n#FUNCTION\nRETURNF CFLAG:MASTER:1\n\
+         @WRITE_MASTER_READ_ASSI\n#FUNCTION\nCFLAG:MASTER:5 = 9\nRETURNF CFLAG:ASSI:5\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+
+    assert_eq!(
+        (10..=23)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        [10, 0, 10, 0, 20, 1, 20, 1, 10, 10, 20, 20, 30, 40].map(VmValue::Integer)
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn path_memo_replays_character_mutations_only_for_the_resolved_character() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         ADDVOIDCHARA\n\
+         TARGET = 0\nRESULT:10 = WRITE_TARGET()\nCFLAG:0:1 = 0\nRESULT:11 = WRITE_TARGET()\n\
+         TARGET = 1\nRESULT:12 = WRITE_TARGET()\nCFLAG:1:1 = 0\nRESULT:13 = WRITE_TARGET()\n\
+         TARGET = 0\nRESULT:14 = FILL_TARGET()\nCFLAG:0:2 = 0\nCFLAG:0:3 = 0\nRESULT:15 = FILL_TARGET()\n\
+         TARGET = 1\nRESULT:16 = FILL_TARGET()\nCFLAG:1:2 = 0\nCFLAG:1:3 = 0\nRESULT:17 = FILL_TARGET()\n\
+         MASTER = 0\nRESULT:18 = WRITE_MASTER()\nCFLAG:0:4 = 0\nRESULT:19 = WRITE_MASTER()\n\
+         MASTER = 1\nRESULT:20 = WRITE_MASTER()\nCFLAG:1:4 = 0\nRESULT:21 = WRITE_MASTER()\nRETURN RESULT\n\
+         @WRITE_TARGET\n#FUNCTION\nCFLAG:1 = 7\nRETURNF 1\n\
+         @FILL_TARGET\n#FUNCTION\nVARSET CFLAG:TARGET, 8, 2, 4\nRETURNF 1\n\
+         @WRITE_MASTER\n#FUNCTION\nCFLAG:MASTER:4 = 9\nRETURNF 1\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let global = |name: &str| {
+        artifact
+            .globals
+            .iter()
+            .find(|global| global.name == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .key
+    };
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+
+    for character in 0..=1 {
+        assert_eq!(
+            vm.read_variable(global("CFLAG"), &[1], Some(character)),
+            Ok(VmValue::Integer(7))
+        );
+        assert_eq!(
+            (2..=3)
+                .map(|index| {
+                    vm.read_variable(global("CFLAG"), &[index], Some(character))
+                        .unwrap()
+                })
+                .collect::<Vec<_>>(),
+            [VmValue::Integer(8), VmValue::Integer(8)]
+        );
+        assert_eq!(
+            vm.read_variable(global("CFLAG"), &[4], Some(character)),
+            Ok(VmValue::Integer(9))
+        );
+    }
+}
+
+#[test]
 fn path_memo_does_not_replay_a_trace_that_mutates_its_queried_array() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nRESULTS:0 '= \"target\"\nRESULTS:1 '= \"\"\n\

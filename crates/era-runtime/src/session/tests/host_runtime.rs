@@ -343,6 +343,44 @@ fn immediate_html_print_binds_integer_and_string_buttons_in_order() {
 }
 
 #[test]
+fn button_style_and_line_edits_stay_in_one_vm_quantum() {
+    let source = "@SYSTEM_TITLE\n\
+        PRINTL baseline\n\
+        RESULT:0 = LINECOUNT\n\
+        FOR LOCAL, 0, 128\n\
+            SETCOLOR LOCAL, 0, 0\n\
+            PRINTBUTTONC \"choice\", LOCAL\n\
+            RESETCOLOR\n\
+        NEXT\n\
+        PRINTL\n\
+        FOR LOCAL, 0, 64\n\
+            DRAWLINE\n\
+            CLEARLINE 1\n\
+        NEXT\n\
+        RESULT:1 = LINECOUNT\n\
+        FORCEWAIT\n\
+        RETURN\n";
+    let (session, report, messages) = run_immediate_query_project(source);
+
+    assert!(
+        report.runtime_transitions < 8,
+        "pure presentation commands must not create one transition per call: {report:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_))),
+        "{messages:#?}"
+    );
+    assert_eq!(session.command_intents.len(), 128);
+    let vm = session.vm.as_ref().expect("runtime VM");
+    assert_eq!(
+        read_runtime_integer(vm, "RESULT", &[1], None).unwrap(),
+        read_runtime_integer(vm, "RESULT", &[0], None).unwrap() + 1
+    );
+}
+
+#[test]
 fn malformed_immediate_html_print_falls_back_to_a_sourced_vm_fault() {
     let (session, _report, messages) =
         run_immediate_query_project("@SYSTEM_TITLE\nHTML_PRINT \"<unknown>\"\nRETURN\n");
@@ -927,7 +965,7 @@ fn one_message_skip_input_drains_non_value_waits_until_forcewait() {
 }
 
 #[test]
-fn message_skip_stops_before_a_value_wait() {
+fn message_skip_stops_when_can_skip_is_explicitly_omitted() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(
         &mut session,
@@ -953,7 +991,7 @@ fn message_skip_stops_before_a_value_wait() {
                 relative_path: "message-skip-value.erb".into(),
                 category: FileCategory::Erb,
                 payload: FilePayload::Utf8(
-                    "@SYSTEM_TITLE\nWAIT\nINPUT\nPRINTL after\nRETURN\n".into(),
+                    "@SYSTEM_TITLE\nWAIT\nINPUTS ,,\nPRINTL after\nRETURN\n".into(),
                 ),
                 content_hash: None,
             }],
@@ -995,13 +1033,13 @@ fn message_skip_stops_before_a_value_wait() {
         if session
             .operations
             .active_input()
-            .is_some_and(|input| input.wait.kind == WaitKind::IntegerValue)
+            .is_some_and(|input| input.wait.kind == WaitKind::StringValue)
         {
             break;
         }
     }
     let pending = session.operations.active_input().expect("value wait");
-    assert_eq!(pending.wait.kind, WaitKind::IntegerValue);
+    assert_eq!(pending.wait.kind, WaitKind::StringValue);
     assert!(!session.message_skip);
     assert!(!session.presentation.log_text(false).contains("after"));
 }

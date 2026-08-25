@@ -240,6 +240,8 @@ pub(crate) struct PathMemoBaseKey {
 pub(crate) struct PathMemoPlace {
     pub generation: GenerationId,
     pub variable: SymbolKey,
+    /// Resolved character storage index, or zero for non-character storage.
+    pub character: usize,
     pub indices: Vec<u64>,
 }
 
@@ -253,6 +255,10 @@ pub(crate) enum PathMemoDependency {
         generation: GenerationId,
         variable: SymbolKey,
         revision: u64,
+    },
+    TargetIdentity {
+        generation: GenerationId,
+        character: usize,
     },
 }
 
@@ -282,6 +288,7 @@ pub(crate) enum PathMemoMutation {
     Fill {
         generation: GenerationId,
         variable: SymbolKey,
+        character: usize,
         start: usize,
         end: usize,
         value: VmValue,
@@ -289,6 +296,7 @@ pub(crate) enum PathMemoMutation {
     Replace {
         generation: GenerationId,
         variable: SymbolKey,
+        character: usize,
         values: Vec<VmValue>,
     },
 }
@@ -318,12 +326,14 @@ impl PathMemoMutation {
             Self::Fill {
                 generation,
                 variable,
+                character,
                 start,
                 end,
                 ..
             } => {
                 place.generation == *generation
                     && place.variable == *variable
+                    && place.character == *character
                     && place.indices.len() <= 1
                     && place
                         .indices
@@ -337,10 +347,12 @@ impl PathMemoMutation {
             Self::Replace {
                 generation,
                 variable,
+                character,
                 values,
             } => {
                 place.generation == *generation
                     && place.variable == *variable
+                    && place.character == *character
                     && place.indices.len() <= 1
                     && place
                         .indices

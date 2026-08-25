@@ -7,7 +7,7 @@ use crate::{
 use erabasic_ast::{BinaryOp, Expr, ExprKind, FormPart, FormattedString, PostfixOp, UnaryOp};
 use erabasic_hir::{
     CallTarget, ConstantValue, FunctionId, HirCallArgument, HirExpr, HirExprKind, HirFormPart,
-    HirFormattedString, HirPlace, SemanticType, SourceId, SourceLocation,
+    HirFormattedString, HirPlace, SemanticType, SourceId, SourceLocation, VariableScope,
 };
 
 mod value;
@@ -369,6 +369,9 @@ impl ExpressionAnalyzer<'_> {
             signature.allow_omitted,
             location,
         );
+        if let Some(expression) = self.fold_builtin_call(&signature.name, &key, &values, location) {
+            return expression;
+        }
         let argument_count = values.len();
         let arguments = values
             .into_iter()
@@ -450,6 +453,102 @@ impl ExpressionAnalyzer<'_> {
             constant,
             location,
         }
+    }
+
+    fn fold_builtin_call(
+        &self,
+        name: &str,
+        key: &str,
+        arguments: &[Option<HirExpr>],
+        location: SourceLocation,
+    ) -> Option<HirExpr> {
+        if name != "GETNUM" || self.catalog.extension_functions.contains(key) {
+            return None;
+        }
+        let value = self.fold_builtin_getnum(arguments)?;
+        Some(HirExpr {
+            kind: HirExprKind::Integer { value },
+            value_type: SemanticType::Integer,
+            constant: Some(ConstantValue::Integer(value)),
+            location,
+        })
+    }
+
+    fn fold_builtin_getnum(&self, arguments: &[Option<HirExpr>]) -> Option<i64> {
+        if !(2..=3).contains(&arguments.len()) {
+            return None;
+        }
+        let HirExprKind::Variable { place } = &arguments.first()?.as_ref()?.kind else {
+            return None;
+        };
+        let variable = self.symbols.variables.get(place.variable.0 as usize)?;
+        if !place.indices.is_empty()
+            || variable.scope != VariableScope::Project
+            || variable.owner.is_some()
+            || variable.reference
+        {
+            return None;
+        }
+        let ConstantValue::String(key) = self.pure_constant(arguments.get(1)?.as_ref()?)? else {
+            return None;
+        };
+        let source_dimension = match arguments.get(2) {
+            None => 0,
+            Some(Some(argument)) => {
+                let ConstantValue::Integer(value) = self.pure_constant(argument)? else {
+                    return None;
+                };
+                value
+            }
+            Some(None) => return None,
+        };
+        let data_dimension = if source_dimension > 0 {
+            source_dimension - 1
+        } else {
+            source_dimension
+        };
+        let Ok(data_dimension) = usize::try_from(data_dimension) else {
+            return Some(-1);
+        };
+        Some(
+            self.index_resolver
+                .resolve_builtin(&variable.name, data_dimension, &key)
+                .unwrap_or(-1),
+        )
+    }
+
+    fn pure_constant(&self, expression: &HirExpr) -> Option<ConstantValue> {
+        match &expression.kind {
+            HirExprKind::Integer { .. } | HirExprKind::String { .. } => {}
+            HirExprKind::Variable { place } => {
+                let variable = self.symbols.variables.get(place.variable.0 as usize)?;
+                if !place.indices.is_empty()
+                    || variable.storage != erabasic_data::StorageScope::Constant
+                {
+                    return None;
+                }
+            }
+            HirExprKind::Unary { op, operand }
+                if !matches!(op, UnaryOp::PreIncrement | UnaryOp::PreDecrement) =>
+            {
+                self.pure_constant(operand)?;
+            }
+            HirExprKind::Binary { left, right, .. } => {
+                self.pure_constant(left)?;
+                self.pure_constant(right)?;
+            }
+            HirExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.pure_constant(condition)?;
+                self.pure_constant(then_expr)?;
+                self.pure_constant(else_expr)?;
+            }
+            _ => return None,
+        }
+        expression.constant.clone()
     }
 
     fn analyze_postfix(

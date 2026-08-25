@@ -59,7 +59,10 @@ impl RuntimeSession {
             let (mouse_index, can_skip_index) = if timed_value_input { (4, 5) } else { (1, 2) };
             if self.message_skip
                 && (timed_value_input || untimed_value_input)
-                && request.arguments.get(can_skip_index).is_some()
+                && matches!(
+                    request.arguments.get(can_skip_index),
+                    Some(VmValue::Integer(value)) if *value != i64::MIN
+                )
             {
                 let mouse = matches!(
                     request.arguments.get(mouse_index),
@@ -237,30 +240,9 @@ impl RuntimeSession {
                 },
             );
         }
-        if matches!(
-            name.as_str(),
-            "DRAWLINE" | "CUSTOMDRAWLINE" | "DRAWLINEFORM"
-        ) {
+        if let Some(prepared) = PreparedLineEdit::prepare(name, &request.arguments) {
             *status = HostDispatchStatus::Handled;
-            let pattern = request
-                .arguments
-                .first()
-                .map_or_else(|| "-".into(), display_value);
-            self.presentation.append_separator(pattern);
-            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
-            return self.emit_presentation();
-        }
-        if name == "CLEARLINE" {
-            *status = HostDispatchStatus::Handled;
-            let count = request
-                .arguments
-                .first()
-                .and_then(|value| match value {
-                    VmValue::Integer(value) => usize::try_from(*value).ok(),
-                    _ => None,
-                })
-                .unwrap_or(1);
-            self.presentation.delete_last_lines(count);
+            prepared.apply(&mut self.presentation);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
@@ -405,60 +387,33 @@ impl RuntimeSession {
             self.debug_output.clear();
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
-        if name == "ALIGNMENT" {
-            *status = HostDispatchStatus::Handled;
-            let alignment = match request.arguments.first() {
-                Some(VmValue::String(value)) if value.eq_ignore_ascii_case("CENTER") => {
-                    LineAlignment::Center
-                }
-                Some(VmValue::String(value)) if value.eq_ignore_ascii_case("RIGHT") => {
-                    LineAlignment::Right
-                }
-                Some(VmValue::String(value)) if value.eq_ignore_ascii_case("LEFT") => {
-                    LineAlignment::Left
-                }
-                _ => {
-                    return self.fault(
-                        FaultCode::VmFault,
-                        "ALIGNMENT expects LEFT, CENTER, or RIGHT",
-                        Some(request.origin.clone()),
-                    );
-                }
-            };
-            self.presentation.set_alignment(alignment);
-            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
-        }
-        if name == "FONTSTYLE" {
-            *status = HostDispatchStatus::Handled;
-            let bits = integer_argument_value(&request.arguments, 0)?;
-            self.presentation.set_font_style(bits);
-            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
-        }
-        if matches!(name.as_str(), "FONTBOLD" | "FONTITALIC" | "FONTREGULAR") {
-            *status = HostDispatchStatus::Handled;
-            match name.as_str() {
-                "FONTBOLD" => self.presentation.set_bold(true),
-                "FONTITALIC" => self.presentation.set_italic(true),
-                _ => self.presentation.clear_font_style(),
+        match PreparedPresentationState::prepare(name, &request.arguments) {
+            Ok(Some(prepared)) => {
+                *status = HostDispatchStatus::Handled;
+                prepared.apply(&mut self.presentation);
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady::empty()),
+                );
             }
-            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
-        }
-        if name == "SETFONT" {
-            *status = HostDispatchStatus::Handled;
-            let family = request.arguments.first().map(display_value);
-            self.presentation.set_font(family);
-            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
-        }
-        if name == "SETCOLOR" {
-            *status = HostDispatchStatus::Handled;
-            let color = match color_argument_value(&request.arguments) {
-                Ok(color) => color,
-                Err(error) => {
-                    return self.fault(FaultCode::VmFault, error, Some(request.origin.clone()));
-                }
-            };
-            self.presentation.set_foreground(color);
-            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
+            Ok(None) => {}
+            Err(PresentationStatePreparationError::Alignment) => {
+                *status = HostDispatchStatus::Handled;
+                return self.fault(
+                    FaultCode::VmFault,
+                    "ALIGNMENT expects LEFT, CENTER, or RIGHT",
+                    Some(request.origin.clone()),
+                );
+            }
+            Err(PresentationStatePreparationError::FontStyle(error)) => {
+                *status = HostDispatchStatus::Handled;
+                return Err(error);
+            }
+            Err(PresentationStatePreparationError::Color(error)) => {
+                *status = HostDispatchStatus::Handled;
+                return self.fault(FaultCode::VmFault, error, Some(request.origin.clone()));
+            }
         }
         if matches!(name.as_str(), "SETCOLORBYNAME" | "SETBGCOLORBYNAME") {
             *status = HostDispatchStatus::Handled;
@@ -481,11 +436,6 @@ impl RuntimeSession {
             } else {
                 Ok(())
             };
-        }
-        if name == "RESETCOLOR" {
-            *status = HostDispatchStatus::Handled;
-            self.presentation.reset_foreground();
-            return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
         if name == "RESETBGCOLOR" {
             *status = HostDispatchStatus::Handled;
