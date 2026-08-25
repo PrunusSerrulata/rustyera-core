@@ -1,6 +1,11 @@
+use std::mem::size_of;
+
 use era_runtime_protocol::CanvasRect;
 
 use super::{CanvasCommand, CanvasSurface, ResourceGraph, SpriteDefinition, SpriteFrame};
+
+pub(super) const MAXIMUM_CANVAS_COMMAND_BYTES: usize = 64 * 1024 * 1024;
+const MAXIMUM_CANVASES: usize = 65_536;
 
 impl ResourceGraph {
     pub(crate) fn create_canvas(
@@ -9,7 +14,7 @@ impl ResourceGraph {
         width: i64,
         height: i64,
     ) -> Result<bool, &'static str> {
-        if self.canvases.contains_key(&id) {
+        if self.canvases.contains_key(&id) || self.canvases.len() >= MAXIMUM_CANVASES {
             return Ok(false);
         }
         let width = u32::try_from(width).map_err(|_| "canvas width must be positive")?;
@@ -24,6 +29,7 @@ impl ResourceGraph {
                 height,
                 revision: 0,
                 commands: Vec::new(),
+                retained_command_bytes: 0,
                 brush_argb: self.canvas_defaults.brush_argb,
                 pen_argb: self.canvas_defaults.pen_argb,
                 pen_width: 1,
@@ -38,7 +44,7 @@ impl ResourceGraph {
     }
 
     pub(crate) fn create_canvas_from_resource(&mut self, id: i64, path: &str) -> bool {
-        if self.canvases.contains_key(&id) {
+        if self.canvases.contains_key(&id) || self.canvases.len() >= MAXIMUM_CANVASES {
             return false;
         }
         // With the default relative=false, GCREATEFROMFILE resolves filenames
@@ -52,16 +58,32 @@ impl ResourceGraph {
         if metadata.width > 8_192 || metadata.height > 8_192 {
             return false;
         }
+        let width = metadata.width;
+        let height = metadata.height;
+        let digest = image.digest.to_vec();
+        let encoded = image.bytes.clone();
+        let command = CanvasCommand::LoadEncodedImage {
+            content_digest: digest,
+            encoded,
+        };
+        let retained_command_bytes = command.retained_bytes();
+        self.ensure_canvas_retained_bytes();
+        if !retained_canvas_bytes_fit(
+            self.retained_canvas_command_bytes,
+            0,
+            retained_command_bytes,
+            MAXIMUM_CANVAS_COMMAND_BYTES,
+        ) {
+            return false;
+        }
         self.canvases.insert(
             id,
             CanvasSurface {
-                width: metadata.width,
-                height: metadata.height,
+                width,
+                height,
                 revision: 1,
-                commands: vec![CanvasCommand::LoadEncodedImage {
-                    content_digest: image.digest.to_vec(),
-                    encoded: image.bytes.clone(),
-                }],
+                commands: vec![command],
+                retained_command_bytes,
                 brush_argb: self.canvas_defaults.brush_argb,
                 pen_argb: self.canvas_defaults.pen_argb,
                 pen_width: 1,
@@ -72,6 +94,9 @@ impl ResourceGraph {
                 font_style: self.canvas_defaults.font_style,
             },
         );
+        self.retained_canvas_command_bytes = self
+            .retained_canvas_command_bytes
+            .saturating_add(retained_command_bytes);
         true
     }
 
@@ -83,6 +108,7 @@ impl ResourceGraph {
         encoded: Vec<u8>,
     ) -> bool {
         if self.canvases.contains_key(&id)
+            || self.canvases.len() >= MAXIMUM_CANVASES
             || width == 0
             || height == 0
             || width > 8_192
@@ -91,6 +117,18 @@ impl ResourceGraph {
             return false;
         }
         let digest = blake3::hash(&encoded);
+        let retained_command_bytes = size_of::<CanvasCommand>()
+            .saturating_add(digest.as_bytes().len())
+            .saturating_add(encoded.len());
+        self.ensure_canvas_retained_bytes();
+        if !retained_canvas_bytes_fit(
+            self.retained_canvas_command_bytes,
+            0,
+            retained_command_bytes,
+            MAXIMUM_CANVAS_COMMAND_BYTES,
+        ) {
+            return false;
+        }
         self.canvases.insert(
             id,
             CanvasSurface {
@@ -101,6 +139,7 @@ impl ResourceGraph {
                     content_digest: digest.as_bytes().to_vec(),
                     encoded,
                 }],
+                retained_command_bytes,
                 brush_argb: self.canvas_defaults.brush_argb,
                 pen_argb: self.canvas_defaults.pen_argb,
                 pen_width: 1,
@@ -111,11 +150,21 @@ impl ResourceGraph {
                 font_style: self.canvas_defaults.font_style,
             },
         );
+        self.retained_canvas_command_bytes = self
+            .retained_canvas_command_bytes
+            .saturating_add(retained_command_bytes);
         true
     }
 
     pub(crate) fn dispose_canvas(&mut self, id: i64) -> bool {
-        self.canvases.remove(&id).is_some()
+        self.ensure_canvas_retained_bytes();
+        let Some(canvas) = self.canvases.remove(&id) else {
+            return false;
+        };
+        self.retained_canvas_command_bytes = self
+            .retained_canvas_command_bytes
+            .saturating_sub(canvas.retained_command_bytes);
+        true
     }
 
     pub(crate) fn canvas_state(&self, id: i64) -> Option<(u32, u32)> {
@@ -131,15 +180,67 @@ impl ResourceGraph {
     }
 
     pub(crate) fn clear_canvas(&mut self, id: i64, argb: i64, rectangle: Option<[i32; 4]>) -> bool {
-        let Some(canvas) = self.canvases.get_mut(&id) else {
+        let Some(canvas) = self.canvases.get(&id) else {
             return false;
         };
-        canvas.commands.push(CanvasCommand::Clear {
+        let command = CanvasCommand::Clear {
             // System.Drawing treats the signed EraBasic value as a 32-bit ARGB
             // bit pattern. Mask explicitly so the narrowing rule is portable.
             argb: u32::try_from(argb & i64::from(u32::MAX)).expect("masked ARGB fits u32"),
             rectangle,
-        });
+        };
+        if rectangle.is_none() {
+            // A full clear is a semantic checkpoint: no earlier drawing command can
+            // affect the resulting pixels. Preserve the current state explicitly so
+            // later drawing commands remain replayable without the discarded prefix.
+            let checkpoint = vec![
+                command,
+                CanvasCommand::SetBrush {
+                    argb: canvas.brush_argb,
+                },
+                CanvasCommand::SetPen {
+                    argb: canvas.pen_argb,
+                    width: canvas.pen_width,
+                },
+                CanvasCommand::SetDashStyle {
+                    style: canvas.dash_style,
+                    cap: canvas.dash_cap,
+                },
+                CanvasCommand::SetFont {
+                    family: canvas.font_family.clone(),
+                    size: canvas.font_size,
+                    style_bits: canvas.font_style,
+                },
+            ];
+            let retained = checkpoint
+                .iter()
+                .map(CanvasCommand::retained_bytes)
+                .fold(0, usize::saturating_add);
+            self.ensure_canvas_retained_bytes();
+            let previous_retained = self.canvases[&id].retained_command_bytes;
+            if !retained_canvas_bytes_fit(
+                self.retained_canvas_command_bytes
+                    .saturating_sub(previous_retained),
+                0,
+                retained,
+                MAXIMUM_CANVAS_COMMAND_BYTES,
+            ) {
+                return false;
+            }
+            let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
+            self.retained_canvas_command_bytes = self
+                .retained_canvas_command_bytes
+                .saturating_sub(canvas.retained_command_bytes)
+                .saturating_add(retained);
+            canvas.commands = checkpoint;
+            canvas.retained_command_bytes = retained;
+            canvas.revision = canvas.revision.saturating_add(1);
+            return true;
+        }
+        if !self.push_canvas_command(id, command) {
+            return false;
+        }
+        let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
         canvas.revision = canvas.revision.saturating_add(1);
         true
     }
@@ -160,19 +261,23 @@ impl ResourceGraph {
             i32::try_from(sprite.width).unwrap_or(i32::MAX),
             i32::try_from(sprite.height).unwrap_or(i32::MAX),
         ]);
-        let Some(canvas) = self.canvases.get_mut(&id) else {
+        if !self.push_canvas_command(
+            id,
+            CanvasCommand::DrawSprite {
+                name: name.to_ascii_uppercase(),
+                destination,
+                color_matrix,
+            },
+        ) {
             return false;
-        };
-        canvas.commands.push(CanvasCommand::DrawSprite {
-            name: name.to_ascii_uppercase(),
-            destination,
-            color_matrix,
-        });
+        }
+        let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
         canvas.revision = canvas.revision.saturating_add(1);
         true
     }
 
     pub(crate) fn set_canvas_pixel(&mut self, id: i64, argb: i64, point: [i32; 2]) -> bool {
+        self.ensure_canvas_retained_bytes();
         let Some(canvas) = self.canvases.get_mut(&id) else {
             return false;
         };
@@ -183,61 +288,93 @@ impl ResourceGraph {
         {
             return false;
         }
-        canvas.commands.push(CanvasCommand::SetPixel {
-            point,
-            argb: argb_bits(argb),
-        });
+        if !push_canvas_command(
+            &mut self.retained_canvas_command_bytes,
+            canvas,
+            CanvasCommand::SetPixel {
+                point,
+                argb: argb_bits(argb),
+            },
+        ) {
+            return false;
+        }
         bump_canvas(canvas);
         true
     }
 
     pub(crate) fn fill_canvas_rectangle(&mut self, id: i64, rectangle: [i32; 4]) -> bool {
+        self.ensure_canvas_retained_bytes();
         let Some(canvas) = self.canvases.get_mut(&id) else {
             return false;
         };
-        canvas.commands.push(CanvasCommand::FillRectangle {
-            rectangle,
-            brush_argb: canvas.brush_argb,
-        });
+        if !push_canvas_command(
+            &mut self.retained_canvas_command_bytes,
+            canvas,
+            CanvasCommand::FillRectangle {
+                rectangle,
+                brush_argb: canvas.brush_argb,
+            },
+        ) {
+            return false;
+        }
         bump_canvas(canvas);
         true
     }
 
     pub(crate) fn set_canvas_brush(&mut self, id: i64, argb: i64) -> bool {
+        self.ensure_canvas_retained_bytes();
         let Some(canvas) = self.canvases.get_mut(&id) else {
             return false;
         };
-        canvas.brush_argb = argb_bits(argb);
-        canvas.commands.push(CanvasCommand::SetBrush {
-            argb: canvas.brush_argb,
-        });
+        let brush_argb = argb_bits(argb);
+        if !push_canvas_command(
+            &mut self.retained_canvas_command_bytes,
+            canvas,
+            CanvasCommand::SetBrush { argb: brush_argb },
+        ) {
+            return false;
+        }
+        canvas.brush_argb = brush_argb;
         bump_canvas(canvas);
         true
     }
 
     pub(crate) fn set_canvas_pen(&mut self, id: i64, argb: i64, width: i64) -> bool {
+        self.ensure_canvas_retained_bytes();
         let Some(canvas) = self.canvases.get_mut(&id) else {
             return false;
         };
-        canvas.pen_argb = argb_bits(argb);
+        let pen_argb = argb_bits(argb);
+        if !push_canvas_command(
+            &mut self.retained_canvas_command_bytes,
+            canvas,
+            CanvasCommand::SetPen {
+                argb: pen_argb,
+                width,
+            },
+        ) {
+            return false;
+        }
+        canvas.pen_argb = pen_argb;
         canvas.pen_width = width;
-        canvas.commands.push(CanvasCommand::SetPen {
-            argb: canvas.pen_argb,
-            width,
-        });
         bump_canvas(canvas);
         true
     }
 
     pub(crate) fn set_canvas_dash(&mut self, id: i64, style: i64, cap: i64) -> bool {
+        self.ensure_canvas_retained_bytes();
         let Some(canvas) = self.canvases.get_mut(&id) else {
             return false;
         };
+        if !push_canvas_command(
+            &mut self.retained_canvas_command_bytes,
+            canvas,
+            CanvasCommand::SetDashStyle { style, cap },
+        ) {
+            return false;
+        }
         canvas.dash_style = style;
         canvas.dash_cap = cap;
-        canvas
-            .commands
-            .push(CanvasCommand::SetDashStyle { style, cap });
         bump_canvas(canvas);
         true
     }
@@ -249,20 +386,27 @@ impl ResourceGraph {
         size: i64,
         style_bits: u8,
     ) -> bool {
+        self.ensure_canvas_retained_bytes();
         let Some(canvas) = self.canvases.get_mut(&id) else {
             return false;
         };
         if family.is_empty() || size <= 0 {
             return false;
         }
-        canvas.font_family.clone_from(&family);
+        if !push_canvas_command(
+            &mut self.retained_canvas_command_bytes,
+            canvas,
+            CanvasCommand::SetFont {
+                family: family.clone(),
+                size,
+                style_bits,
+            },
+        ) {
+            return false;
+        }
+        canvas.font_family = family;
         canvas.font_size = size;
         canvas.font_style = style_bits;
-        canvas.commands.push(CanvasCommand::SetFont {
-            family,
-            size,
-            style_bits,
-        });
         bump_canvas(canvas);
         true
     }
@@ -281,21 +425,33 @@ impl ResourceGraph {
     }
 
     pub(crate) fn draw_canvas_line(&mut self, id: i64, start: [i32; 2], end: [i32; 2]) -> bool {
+        self.ensure_canvas_retained_bytes();
         let Some(canvas) = self.canvases.get_mut(&id) else {
             return false;
         };
-        canvas.commands.push(CanvasCommand::DrawLine { start, end });
+        if !push_canvas_command(
+            &mut self.retained_canvas_command_bytes,
+            canvas,
+            CanvasCommand::DrawLine { start, end },
+        ) {
+            return false;
+        }
         bump_canvas(canvas);
         true
     }
 
     pub(crate) fn draw_canvas_text(&mut self, id: i64, text: String, point: [i32; 2]) -> bool {
+        self.ensure_canvas_retained_bytes();
         let Some(canvas) = self.canvases.get_mut(&id) else {
             return false;
         };
-        canvas
-            .commands
-            .push(CanvasCommand::DrawText { text, point });
+        if !push_canvas_command(
+            &mut self.retained_canvas_command_bytes,
+            canvas,
+            CanvasCommand::DrawText { text, point },
+        ) {
+            return false;
+        }
         bump_canvas(canvas);
         true
     }
@@ -325,19 +481,22 @@ impl ResourceGraph {
         if mask_canvas_id.is_some_and(|mask| !self.canvases.contains_key(&mask)) {
             return false;
         }
-        let Some(canvas) = self.canvases.get_mut(&id) else {
+        if !self.push_canvas_command(
+            id,
+            CanvasCommand::DrawCanvas {
+                source_canvas_id: source_id,
+                source_revision,
+                source: source.unwrap_or(full),
+                destination: destination.unwrap_or(full),
+                color_matrix,
+                mask_canvas_id,
+                rotation_millidegrees,
+                rotation_center,
+            },
+        ) {
             return false;
-        };
-        canvas.commands.push(CanvasCommand::DrawCanvas {
-            source_canvas_id: source_id,
-            source_revision,
-            source: source.unwrap_or(full),
-            destination: destination.unwrap_or(full),
-            color_matrix,
-            mask_canvas_id,
-            rotation_millidegrees,
-            rotation_center,
-        });
+        }
+        let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
         bump_canvas(canvas);
         true
     }
@@ -473,6 +632,7 @@ impl ResourceGraph {
     /// Preserve game-created replay objects while replacing submitted static resources.
     pub(crate) fn inherit_runtime_graph(&mut self, previous: &Self) {
         self.canvases.clone_from(&previous.canvases);
+        self.retained_canvas_command_bytes = previous.retained_canvas_command_bytes;
         self.animation_timer_ms = previous.animation_timer_ms;
         let mut inherited_metadata = Vec::new();
         for image in self.images.values_mut() {
@@ -498,13 +658,62 @@ impl ResourceGraph {
     }
 
     pub(crate) fn reset_runtime_graph(&mut self) {
-        self.canvases.clear();
+        self.canvases = std::collections::BTreeMap::default();
+        self.retained_canvas_command_bytes = 0;
         self.animation_timer_ms = 0;
         self.sprites.retain(|_, sprite| !sprite.dynamic);
         for sprite in self.sprites.values_mut() {
             sprite.position_x = 0;
             sprite.position_y = 0;
         }
+    }
+
+    fn ensure_canvas_retained_bytes(&mut self) {
+        let mut rebuilt_surface = false;
+        for canvas in self.canvases.values_mut() {
+            if canvas.retained_command_bytes == 0 && !canvas.commands.is_empty() {
+                canvas.retained_command_bytes = canvas
+                    .commands
+                    .iter()
+                    .map(CanvasCommand::retained_bytes)
+                    .fold(0, usize::saturating_add);
+                rebuilt_surface = true;
+            }
+        }
+        if rebuilt_surface || self.retained_canvas_command_bytes == 0 {
+            self.retained_canvas_command_bytes = self
+                .canvases
+                .values()
+                .map(|canvas| canvas.retained_command_bytes)
+                .fold(0, usize::saturating_add);
+        }
+    }
+
+    fn push_canvas_command(&mut self, id: i64, command: CanvasCommand) -> bool {
+        self.ensure_canvas_retained_bytes();
+        let Some(canvas) = self.canvases.get_mut(&id) else {
+            return false;
+        };
+        push_canvas_command(&mut self.retained_canvas_command_bytes, canvas, command)
+    }
+
+    #[cfg(test)]
+    pub(super) fn push_canvas_command_with_limit(
+        &mut self,
+        id: i64,
+        command: CanvasCommand,
+        maximum: usize,
+    ) -> bool {
+        self.ensure_canvas_retained_bytes();
+        let Some(canvas) = self.canvases.get_mut(&id) else {
+            return false;
+        };
+        push_canvas_command_with_limit(
+            &mut self.retained_canvas_command_bytes,
+            canvas,
+            command,
+            maximum,
+        )
     }
 }
 
@@ -527,4 +736,57 @@ pub(super) fn opaque_rgb(value: i64) -> u32 {
 
 fn bump_canvas(canvas: &mut CanvasSurface) {
     canvas.revision = canvas.revision.saturating_add(1);
+}
+
+fn push_canvas_command(
+    total_retained: &mut usize,
+    canvas: &mut CanvasSurface,
+    command: CanvasCommand,
+) -> bool {
+    push_canvas_command_with_limit(
+        total_retained,
+        canvas,
+        command,
+        MAXIMUM_CANVAS_COMMAND_BYTES,
+    )
+}
+
+fn push_canvas_command_with_limit(
+    total_retained: &mut usize,
+    canvas: &mut CanvasSurface,
+    command: CanvasCommand,
+    maximum: usize,
+) -> bool {
+    if canvas.retained_command_bytes == 0 && !canvas.commands.is_empty() {
+        // Snapshots written before the retained-byte counter was introduced decode
+        // it as zero. Rebuild it lazily before accepting another command.
+        canvas.retained_command_bytes = canvas
+            .commands
+            .iter()
+            .map(CanvasCommand::retained_bytes)
+            .fold(0, usize::saturating_add);
+    }
+    let retained = command.retained_bytes();
+    if !retained_canvas_bytes_fit(
+        *total_retained,
+        canvas.retained_command_bytes,
+        retained,
+        maximum,
+    ) {
+        return false;
+    }
+    canvas.retained_command_bytes = canvas.retained_command_bytes.saturating_add(retained);
+    *total_retained = total_retained.saturating_add(retained);
+    canvas.commands.push(command);
+    true
+}
+
+pub(super) fn retained_canvas_bytes_fit(
+    total_retained: usize,
+    surface_retained: usize,
+    incoming: usize,
+    maximum: usize,
+) -> bool {
+    surface_retained.saturating_add(incoming) <= maximum
+        && total_retained.saturating_add(incoming) <= maximum
 }

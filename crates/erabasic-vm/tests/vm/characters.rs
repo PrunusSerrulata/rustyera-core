@@ -205,6 +205,146 @@ fn sortchara_reorders_characters_and_remaps_target() {
 }
 
 #[test]
+fn pickupchara_moves_selected_characters_and_remaps_special_indices() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nADDVOIDCHARA\nADDVOIDCHARA\nTARGET = 0\nNO = 10\nTARGET = 1\nNO = 20\nTARGET = 2\nNO = 30\nASSI = 1\nMASTER = 2\nPICKUPCHARA 2, 0, 2\nRETURN RESULT\n",
+    );
+    let entry = artifact.functions[0].key;
+    let variable = |name: &str| {
+        artifact
+            .globals
+            .iter()
+            .find(|global| global.name == name)
+            .unwrap()
+            .key
+    };
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..2)
+            .map(|character| vm
+                .read_variable(variable("NO"), &[], Some(character))
+                .unwrap())
+            .collect::<Vec<_>>(),
+        vec![VmValue::Integer(30), VmValue::Integer(10)]
+    );
+    assert_eq!(
+        vm.read_variable(variable("CHARANUM"), &[], None),
+        Ok(VmValue::Integer(2))
+    );
+    assert_eq!(
+        vm.read_variable(variable("TARGET"), &[], None),
+        Ok(VmValue::Integer(0))
+    );
+    assert_eq!(
+        vm.read_variable(variable("ASSI"), &[], None),
+        Ok(VmValue::Integer(-1))
+    );
+    assert_eq!(
+        vm.read_variable(variable("MASTER"), &[], None),
+        Ok(VmValue::Integer(0))
+    );
+}
+
+#[test]
+fn pickupchara_out_of_range_is_atomic() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nDELALLCHARA\nADDVOIDCHARA\nADDVOIDCHARA\nTARGET = 0\nNO = 10\nTARGET = 1\nNO = 20\nTARGET = 0\nASSI = 1\nMASTER = 1\nPICKUPCHARA 1, 99\nRETURN RESULT\n",
+    );
+    let entry = artifact.functions[0].key;
+    let variable = |name: &str| {
+        artifact
+            .globals
+            .iter()
+            .find(|global| global.name == name)
+            .unwrap()
+            .key
+    };
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        VmEvent::FiberFaulted { fault, .. } if fault.message.contains("out of range")
+    )));
+    assert_eq!(
+        (0..2)
+            .map(|character| vm
+                .read_variable(variable("NO"), &[], Some(character))
+                .unwrap())
+            .collect::<Vec<_>>(),
+        vec![VmValue::Integer(10), VmValue::Integer(20)]
+    );
+    for (name, expected) in [("CHARANUM", 2), ("TARGET", 0), ("ASSI", 1), ("MASTER", 1)] {
+        assert_eq!(
+            vm.read_variable(variable(name), &[], None),
+            Ok(VmValue::Integer(expected))
+        );
+    }
+}
+
+#[test]
+fn sortchara_invalid_key_is_atomic() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nDELALLCHARA\nADDVOIDCHARA\nADDVOIDCHARA\nTARGET = 0\nNO = 30\nTARGET = 1\nNO = 10\nTARGET = 0\nASSI = 1\nMASTER = 1\nSORTCHARA FLAG, FORWARD\nRETURN RESULT\n",
+    );
+    let entry = artifact.functions[0].key;
+    let variable = |name: &str| {
+        artifact
+            .globals
+            .iter()
+            .find(|global| global.name == name)
+            .unwrap()
+            .key
+    };
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        VmEvent::FiberFaulted { fault, .. } if fault.message.contains("character variable")
+    )));
+    assert_eq!(
+        (0..2)
+            .map(|character| vm
+                .read_variable(variable("NO"), &[], Some(character))
+                .unwrap())
+            .collect::<Vec<_>>(),
+        vec![VmValue::Integer(30), VmValue::Integer(10)]
+    );
+    for (name, expected) in [("CHARANUM", 2), ("TARGET", 0), ("ASSI", 1), ("MASTER", 1)] {
+        assert_eq!(
+            vm.read_variable(variable(name), &[], None),
+            Ok(VmValue::Integer(expected))
+        );
+    }
+}
+
+#[test]
 fn cmatch_counts_an_indexed_character_field_across_the_requested_range() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nADDVOIDCHARA\nADDVOIDCHARA\nADDVOIDCHARA\nTARGET = 0\nCFLAG:5 = 9\nTARGET = 1\nCFLAG:5 = 4\nTARGET = 2\nCFLAG:5 = 9\nRETURN CMATCH(CFLAG:5, 9, 0, 3)\n",

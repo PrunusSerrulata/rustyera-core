@@ -68,6 +68,9 @@ pub struct RuntimeLimits {
     /// Maximum size of one logical import or export assembled from chunks.
     #[n(5)]
     pub maximum_transfer_bytes: u64,
+    /// Maximum encoded bytes retained for replay until the frontend acknowledges them.
+    #[n(6)]
+    pub maximum_journal_bytes: u64,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

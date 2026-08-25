@@ -1,5 +1,14 @@
 use super::*;
 
+fn assert_outbound_journal_byte_invariant(session: &RuntimeSession) {
+    let encoded_bytes = session
+        .outbound_journal
+        .values()
+        .map(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+        .sum::<u64>();
+    assert_eq!(session.outbound_journal_bytes, encoded_bytes);
+}
+
 #[test]
 fn chkdata_returns_its_status_and_updates_the_description() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
@@ -109,7 +118,7 @@ fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
                     relative_path: "candidate.erb".into(),
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\nWAIT\nRETURN\n@SAVEINFO\nRESULT = 99\nRESULT:1 = GETCONFIG(\"Font size\")\nRESULTS:1 = %BARSTR(2, 4, 4)%\nPUTFORM %TOSTR(12345, \"0克尔\")%\nRETURN\n"
+                        "@SYSTEM_TITLE\nWAIT\nRETURN\n@SAVEINFO\nIF RESULT:2\nWAIT\nENDIF\nRESULT = 99\nRESULT:1 = GETCONFIG(\"Font size\")\nRESULTS:1 = %BARSTR(2, 4, 4)%\nPUTFORM %TOSTR(12345, \"0克尔\")%\nRETURN\n"
                             .into(),
                     ),
                     content_hash: None,
@@ -133,6 +142,7 @@ fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
         read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
         0
     );
+    assert_outbound_journal_byte_invariant(&session);
 
     let time = LocalDateTimeResponse {
         year: 2026,
@@ -149,6 +159,7 @@ fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
         .begin_candidate_save(&mut live, 99, CandidateSaveContinuation::Autosave)
         .unwrap();
     session.vm = Some(live);
+    assert_outbound_journal_byte_invariant(&session);
     let stat_request = drain(&mut session)
         .into_iter()
         .find_map(|message| match message {
@@ -169,6 +180,7 @@ fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
             },
         )
         .unwrap();
+    assert_outbound_journal_byte_invariant(&session);
     let clock_request = drain(&mut session)
         .into_iter()
         .find_map(|message| match message {
@@ -187,6 +199,7 @@ fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
             },
         )
         .unwrap();
+    assert_outbound_journal_byte_invariant(&session);
     let write_request = drain(&mut session)
         .into_iter()
         .find_map(|message| match message {
@@ -244,6 +257,39 @@ fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
         vm.vm().read_variable(results, &[1], None),
         Ok(VmValue::String("[**..]".into()))
     );
+    assert_outbound_journal_byte_invariant(&session);
+
+    let mut live = session.vm.take().unwrap();
+    write_runtime_integer(&mut live, "RESULT", &[2], None, 1).unwrap();
+    session
+        .begin_candidate_save(&mut live, 98, CandidateSaveContinuation::Autosave)
+        .unwrap();
+    session.vm = Some(live);
+    let stat_request = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::StorageRequest(request) => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    session
+        .complete_storage(
+            0,
+            StorageResponse {
+                request_id: stat_request.request_id,
+                result: StorageResult::Metadata(era_runtime_protocol::StorageMetadata {
+                    byte_length: 0,
+                    revision: None,
+                }),
+            },
+        )
+        .unwrap();
+    assert_outbound_journal_byte_invariant(&session);
+    assert!(drain(&mut session).iter().any(|message| matches!(
+        message,
+        RuntimeMessage::Diagnostic(diagnostic)
+            if diagnostic.code == "runtime.candidate_save_failed"
+    )));
 }
 
 #[test]
@@ -290,13 +336,22 @@ fn active_session_rejects_stale_epochs_and_acknowledges_journal_entries() {
     session.drive(RuntimeDriveBudget::default()).expect("hello");
     drain(&mut session);
     assert_eq!(session.outbound_journal.len(), 2);
+    assert!(session.outbound_journal_bytes > 0);
+    assert_outbound_journal_byte_invariant(&session);
 
     let ack = RuntimeMessage::Acknowledge(era_runtime_protocol::SequenceAcknowledgement {
-        through_sequence: 1,
+        through_sequence: 0,
     });
     submit(&mut session, 1, ack);
     session.drive(RuntimeDriveBudget::default()).expect("ack");
-    assert!(session.outbound_journal.is_empty());
+    assert_eq!(session.outbound_journal.len(), 1);
+    assert_outbound_journal_byte_invariant(&session);
+    let remaining = session.outbound_journal_bytes;
+    session
+        .emit_log(RuntimeLogLevel::Info, "reuses acknowledged budget")
+        .unwrap();
+    assert!(session.outbound_journal_bytes > remaining);
+    assert_outbound_journal_byte_invariant(&session);
 
     let message = RuntimeMessage::AdvanceTime(AdvanceTime {
         monotonic_time_ns: 1,
@@ -316,6 +371,61 @@ fn active_session_rejects_stale_epochs_and_acknowledges_journal_entries() {
         session.submit_envelope(&bytes),
         Err(RuntimeError::SessionMismatch)
     ));
+}
+
+#[test]
+fn outbound_journal_rejects_an_encoded_message_over_its_byte_budget() {
+    let mut options = RuntimeOptions::default();
+    options.limits.maximum_journal_bytes = 1;
+    let mut session = RuntimeSession::new(options);
+
+    assert!(matches!(
+        session.emit_log(RuntimeLogLevel::Info, "larger than one byte"),
+        Err(RuntimeError::ResourceLimit(
+            "outbound journal byte budget is exhausted"
+        ))
+    ));
+    assert!(session.outbound.is_empty());
+    assert!(session.outbound_journal.is_empty());
+    assert_eq!(session.outbound_journal_bytes, 0);
+}
+
+#[test]
+fn outbound_journal_enforces_cumulative_encoded_bytes_at_the_exact_boundary() {
+    let mut probe = RuntimeSession::new(RuntimeOptions::default());
+    probe.emit_log(RuntimeLogLevel::Info, "first").unwrap();
+    probe.emit_log(RuntimeLogLevel::Info, "second").unwrap();
+    let exact = probe.outbound_journal_bytes;
+    assert_outbound_journal_byte_invariant(&probe);
+
+    let mut options = RuntimeOptions::default();
+    options.limits.maximum_journal_bytes = exact;
+    let mut session = RuntimeSession::new(options);
+    session.emit_log(RuntimeLogLevel::Info, "first").unwrap();
+    session.emit_log(RuntimeLogLevel::Info, "second").unwrap();
+    assert_eq!(session.outbound_journal_bytes, exact);
+    assert_outbound_journal_byte_invariant(&session);
+    assert!(matches!(
+        session.emit_log(RuntimeLogLevel::Info, "third"),
+        Err(RuntimeError::ResourceLimit(
+            "outbound journal byte budget is exhausted"
+        ))
+    ));
+    assert_eq!(session.outbound_journal_bytes, exact);
+    assert_outbound_journal_byte_invariant(&session);
+    session.state = SessionState::Active;
+    session
+        .handle_message(
+            0,
+            RuntimeMessage::Acknowledge(era_runtime_protocol::SequenceAcknowledgement {
+                through_sequence: 0,
+            }),
+        )
+        .unwrap();
+    assert!(session.outbound_journal_bytes < exact);
+    session.emit_log(RuntimeLogLevel::Info, "third").unwrap();
+    assert_eq!(session.outbound_journal_bytes, exact);
+    assert_outbound_journal_byte_invariant(&session);
 }
 
 #[test]

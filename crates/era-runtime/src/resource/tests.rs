@@ -263,6 +263,135 @@ fn canvas_and_dynamic_sprite_mutations_form_a_deterministic_replay_graph() {
 }
 
 #[test]
+fn full_canvas_clear_discards_the_unobservable_replay_prefix() {
+    let mut graph = ResourceGraph::default();
+    assert_eq!(graph.create_canvas(9, 64, 32), Ok(true));
+    for index in 0..1_000 {
+        assert!(graph.draw_canvas_text(9, format!("retained-{index}"), [0, 0]));
+    }
+    assert_eq!(graph.canvases[&9].commands.len(), 1_000);
+    let old_capacity = graph.canvases[&9].commands.capacity();
+    assert!(graph.set_canvas_brush(9, 0xff11_2233));
+    assert!(graph.set_canvas_pen(9, 0xff44_5566, 3));
+    assert!(graph.set_canvas_dash(9, 2, 1));
+    assert!(graph.set_canvas_font(9, "checkpoint".into(), 18, 9));
+
+    assert!(graph.clear_canvas(9, 0xff00_0000, None));
+    assert!(graph.draw_canvas_line(9, [0, 0], [2, 3]));
+
+    let canvas = &graph.canvases[&9];
+    assert_eq!(canvas.commands.len(), 6);
+    assert!(canvas.commands.capacity() < old_capacity);
+    assert_eq!(
+        canvas.retained_command_bytes,
+        canvas
+            .commands
+            .iter()
+            .map(CanvasCommand::retained_bytes)
+            .sum::<usize>()
+    );
+    assert_eq!(
+        graph.retained_canvas_command_bytes,
+        canvas.retained_command_bytes
+    );
+    assert!(matches!(
+        graph.replay().canvases[0].commands.as_slice(),
+        [
+            CanvasReplayCommand::Clear { rectangle: None, .. },
+            CanvasReplayCommand::SetBrush { argb: 0xff11_2233 },
+            CanvasReplayCommand::SetPen { argb: 0xff44_5566, width: 3 },
+            CanvasReplayCommand::SetDashStyle { style: 2, cap: 1 },
+            CanvasReplayCommand::SetFont { family, size: 18, style_bits: 9 },
+            CanvasReplayCommand::DrawLine { .. },
+        ] if family == "checkpoint"
+    ));
+}
+
+#[test]
+fn canvas_command_budget_is_graph_wide_and_restored_lazily_for_old_snapshots() {
+    assert!(super::canvas::retained_canvas_bytes_fit(60, 30, 40, 100));
+    assert!(!super::canvas::retained_canvas_bytes_fit(70, 20, 31, 100));
+    assert!(!super::canvas::retained_canvas_bytes_fit(30, 80, 21, 100));
+
+    let mut graph = ResourceGraph::default();
+    graph.create_canvas(1, 10, 10).unwrap();
+    graph.create_canvas(2, 10, 10).unwrap();
+    assert!(graph.draw_canvas_text(1, "first".into(), [0, 0]));
+    assert!(graph.draw_canvas_text(2, "second".into(), [0, 0]));
+    let expected = graph
+        .canvases
+        .values()
+        .map(|canvas| canvas.retained_command_bytes)
+        .sum();
+    assert_eq!(graph.retained_canvas_command_bytes, expected);
+
+    let encoded = serde_json::to_vec(&graph).expect("serialize legacy-shaped graph");
+    let mut restored: ResourceGraph =
+        serde_json::from_slice(&encoded).expect("restore graph without derived counters");
+    assert_eq!(restored.retained_canvas_command_bytes, 0);
+    assert!(
+        restored
+            .canvases
+            .values()
+            .all(|canvas| canvas.retained_command_bytes == 0)
+    );
+    assert!(!restored.push_canvas_command_with_limit(
+        1,
+        CanvasCommand::DrawText {
+            text: "over restored budget".into(),
+            point: [0, 0],
+        },
+        expected,
+    ));
+    assert_eq!(restored.retained_canvas_command_bytes, expected);
+    assert!(restored.draw_canvas_text(1, "after restore".into(), [0, 0]));
+    assert_eq!(
+        restored.retained_canvas_command_bytes,
+        restored
+            .canvases
+            .values()
+            .map(|canvas| canvas.retained_command_bytes)
+            .sum::<usize>()
+    );
+
+    let released = restored.canvases[&2].retained_command_bytes;
+    assert!(restored.dispose_canvas(2));
+    assert_eq!(
+        restored.retained_canvas_command_bytes,
+        expected.saturating_sub(released).saturating_add(
+            CanvasCommand::DrawText {
+                text: "after restore".into(),
+                point: [0, 0],
+            }
+            .retained_bytes()
+        )
+    );
+}
+
+#[test]
+fn resource_backed_canvas_creation_uses_the_same_graph_budget() {
+    let mut graph = ResourceGraph::default();
+    let retained = super::canvas::MAXIMUM_CANVAS_COMMAND_BYTES.saturating_sub(1);
+    graph.retained_canvas_command_bytes = retained;
+    let image = graph
+        .images
+        .entry("resources/image.png".into())
+        .or_insert(ResourceImage {
+            relative_path: "resources/image.png".into(),
+            digest: [0; 32],
+            metadata: Some(ImageMetadata {
+                width: 1,
+                height: 1,
+                format: "png".into(),
+                animated: false,
+            }),
+            bytes: vec![1],
+        });
+    image.bytes = vec![1];
+    assert!(!graph.create_canvas_from_resource(1, "image.png"));
+}
+
+#[test]
 fn portable_canvas_replay_captures_style_draw_and_snapshot_revisions() {
     let mut graph = ResourceGraph::default();
     graph.configure_canvas_defaults(0x0011_2233, 0x0044_5566, "Project Font".into(), 3);

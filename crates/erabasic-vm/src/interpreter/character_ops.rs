@@ -193,18 +193,15 @@ pub(super) fn execute_character_mutation(
         .ok_or_else(|| VmError::InvalidState("character mutation generation is missing".into()))?
         .artifact;
     if matches!(operation, "pickupchara" | "sortchara") {
-        // These operations can fail while deriving a reordered character set and
-        // remapping TARGET/ASSI/MASTER. Keep their uncommon transactional copy;
-        // ordinary ADD/DEL paths validate first and mutate in place below.
-        let mut memory = vm.memory.clone();
-        if operation == "pickupchara" {
-            pickup_characters(artifact, &mut memory, arguments)?;
-        } else {
-            sort_characters(generation, artifact, &mut memory, arguments)?;
+        for name in ["CHARANUM", "TARGET", "ASSI", "MASTER"] {
+            validate_named_integer_slot(artifact, &vm.memory, name)?;
         }
-        let character_count = i64::try_from(memory.characters.len()).unwrap_or(i64::MAX);
-        write_named_integer(artifact, &mut memory, "CHARANUM", character_count)?;
-        vm.memory = memory;
+        let plan = if operation == "pickupchara" {
+            plan_pickup_characters(artifact, &vm.memory, arguments)?
+        } else {
+            plan_sort_characters(generation, artifact, &vm.memory, arguments)?
+        };
+        commit_character_reorder(artifact, &mut vm.memory, plan)?;
         return Ok(());
     }
 
@@ -380,14 +377,25 @@ pub(super) fn execute_character_mutation(
 }
 
 #[allow(clippy::too_many_lines)]
-pub(super) fn sort_characters(
+struct CharacterReorderPlan {
+    order: Vec<usize>,
+    scalar_updates: Vec<(&'static str, i64)>,
+}
+
+fn plan_sort_characters(
     generation: crate::GenerationId,
     artifact: &erabasic_bytecode::BytecodeArtifact,
-    memory: &mut crate::Memory,
+    memory: &crate::Memory,
     arguments: &[VmValue],
-) -> Result<(), VmError> {
+) -> Result<CharacterReorderPlan, VmError> {
     if memory.characters.len() <= 1 {
-        return Ok(());
+        return Ok(CharacterReorderPlan {
+            order: (0..memory.characters.len()).collect(),
+            scalar_updates: vec![(
+                "CHARANUM",
+                i64::try_from(memory.characters.len()).unwrap_or(i64::MAX),
+            )],
+        });
     }
     let (definition, indices, descending) = match arguments.first() {
         None => (
@@ -453,48 +461,37 @@ pub(super) fn sort_characters(
     if descending {
         order.reverse();
     }
-    let old = memory.characters.clone();
-    let mut sorted = order
-        .iter()
-        .map(|(index, _)| old[*index].clone())
-        .collect::<Vec<_>>();
+    let mut final_order = order.iter().map(|(index, _)| *index).collect::<Vec<_>>();
     if let Some(master_index) = master_index {
-        sorted.insert(master_index, old[master_index].clone());
+        final_order.insert(master_index, master_index);
     }
-    memory.characters = sorted;
     let new_index = |old_index: i64| {
         usize::try_from(old_index).ok().and_then(|old_index| {
-            if Some(old_index) == master_index {
-                master_index
-            } else {
-                order
-                    .iter()
-                    .position(|(candidate, _)| *candidate == old_index)
-                    .map(|position| {
-                        position
-                            + usize::from(master_index.is_some_and(|master| position >= master))
-                    })
-            }
+            final_order
+                .iter()
+                .position(|candidate| *candidate == old_index)
         })
     };
+    let mut scalar_updates = vec![(
+        "CHARANUM",
+        i64::try_from(final_order.len()).unwrap_or(i64::MAX),
+    )];
     for (name, old_index) in [("TARGET", target), ("ASSI", assi)] {
         if let Some(index) = new_index(old_index) {
-            write_named_integer(
-                artifact,
-                memory,
-                name,
-                i64::try_from(index).unwrap_or(i64::MAX),
-            )?;
+            scalar_updates.push((name, i64::try_from(index).unwrap_or(i64::MAX)));
         }
     }
-    Ok(())
+    Ok(CharacterReorderPlan {
+        order: final_order,
+        scalar_updates,
+    })
 }
 
-pub(super) fn pickup_characters(
+fn plan_pickup_characters(
     artifact: &erabasic_bytecode::BytecodeArtifact,
-    memory: &mut crate::Memory,
+    memory: &crate::Memory,
     arguments: &[VmValue],
-) -> Result<(), VmError> {
+) -> Result<CharacterReorderPlan, VmError> {
     let mut selected = Vec::new();
     for argument in arguments {
         let VmValue::Integer(value) = argument else {
@@ -517,18 +514,58 @@ pub(super) fn pickup_characters(
     }
     let old_special = ["TARGET", "ASSI", "MASTER"]
         .map(|name| read_named_integer(artifact, memory, name).unwrap_or(-1));
-    let characters = selected
-        .iter()
-        .map(|index| memory.characters[*index].clone())
-        .collect();
-    memory.characters = characters;
+    let mut scalar_updates = vec![(
+        "CHARANUM",
+        i64::try_from(selected.len()).unwrap_or(i64::MAX),
+    )];
     for (name, old) in ["TARGET", "ASSI", "MASTER"].into_iter().zip(old_special) {
         let replacement = usize::try_from(old)
             .ok()
             .and_then(|old| selected.iter().position(|candidate| *candidate == old))
             .map_or(-1, |index| i64::try_from(index).unwrap_or(i64::MAX));
-        write_named_integer(artifact, memory, name, replacement)?;
+        scalar_updates.push((name, replacement));
     }
+    Ok(CharacterReorderPlan {
+        order: selected,
+        scalar_updates,
+    })
+}
+
+fn commit_character_reorder(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    memory: &mut crate::Memory,
+    plan: CharacterReorderPlan,
+) -> Result<(), VmError> {
+    let originals = plan
+        .scalar_updates
+        .iter()
+        .map(|(name, _)| {
+            read_named_integer(artifact, memory, name)
+                .map(|value| (*name, value))
+                .ok_or_else(|| VmError::InvalidState(format!("{name} is not an integer slot")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for (index, (name, value)) in plan.scalar_updates.iter().enumerate() {
+        if let Err(error) = write_named_integer(artifact, memory, name, *value) {
+            for (name, value) in originals[..index].iter().rev() {
+                let _ = write_named_integer(artifact, memory, name, *value);
+            }
+            return Err(error);
+        }
+    }
+    let mut old = std::mem::take(&mut memory.characters)
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
+    memory.characters = plan
+        .order
+        .into_iter()
+        .map(|index| {
+            old[index]
+                .take()
+                .expect("validated reorder plan contains unique in-range indices")
+        })
+        .collect();
     Ok(())
 }
 
@@ -567,10 +604,20 @@ fn validate_named_integer_slot(
 ) -> Result<(), VmError> {
     let definition = shared_definition(artifact, name)
         .ok_or_else(|| VmError::InvalidState(format!("{name} is not defined")))?;
-    memory
+    if definition.value_type != erabasic_bytecode::BytecodeType::Integer {
+        return Err(VmError::InvalidState(format!(
+            "{name} is not an integer variable"
+        )));
+    }
+    let value = memory
         .shared
         .get(&definition.key)
         .and_then(crate::VariableCell::first)
         .ok_or_else(|| VmError::InvalidState(format!("{name} storage is unavailable")))?;
+    if !matches!(value, VmValue::Integer(_)) {
+        return Err(VmError::InvalidState(format!(
+            "{name} storage is not an integer slot"
+        )));
+    }
     Ok(())
 }

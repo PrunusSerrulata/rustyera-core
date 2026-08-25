@@ -299,6 +299,7 @@ pub(in super::super) fn intersect_limits(
         maximum_transfer_bytes: left
             .maximum_transfer_bytes
             .min(right.maximum_transfer_bytes),
+        maximum_journal_bytes: left.maximum_journal_bytes.min(right.maximum_journal_bytes),
     }
 }
 

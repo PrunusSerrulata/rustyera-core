@@ -148,6 +148,7 @@ impl Vm {
             .insert(new_generation, Arc::new(ProgramGeneration::new(target)));
         self.current_generation = new_generation;
         self.next_generation = self.next_generation.saturating_add(1);
+        self.clear_derived_caches();
         self.path_memo_cache.clear();
         self.path_memo_retained_bytes = 0;
         self.active_path_memo_fiber.set(None);

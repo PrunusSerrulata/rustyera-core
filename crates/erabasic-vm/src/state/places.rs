@@ -11,80 +11,6 @@ struct ResolvedPlaceWrite {
 }
 
 impl Vm {
-    pub(crate) fn function_memo_key(
-        &self,
-        generation: GenerationId,
-        function: SymbolKey,
-        arguments: &[VmValue],
-    ) -> Option<FunctionMemoKey> {
-        let program = self.generations.get(&generation)?;
-        let plan = program.function_memo_plan(function)?;
-        let arguments = arguments
-            .iter()
-            .map(MemoValue::from_vm)
-            .collect::<Option<Vec<_>>>()?;
-        let dependency_revisions = plan
-            .dependency_indices
-            .iter()
-            .map(|index| {
-                let definition = program.artifact.globals.get(*index)?;
-                self.memory
-                    .cell(generation, definition, 0)
-                    .map(VariableCell::revision)
-            })
-            .collect::<Option<Vec<_>>>()?;
-        Some(FunctionMemoKey {
-            generation,
-            function,
-            arguments,
-            dependency_revisions,
-        })
-    }
-
-    pub(crate) fn capture_function_memo_entry(
-        &self,
-        key: &FunctionMemoKey,
-        result: VmValue,
-    ) -> Option<FunctionMemoEntry> {
-        let program = self.generations.get(&key.generation)?;
-        let scratch = program
-            .function_memo_plan(key.function)?
-            .scratch_indices
-            .iter()
-            .map(|index| {
-                let definition = program.artifact.globals.get(*index)?;
-                self.memory
-                    .cell(key.generation, definition, 0)?
-                    .read(&[])
-                    .ok()
-                    .map(|value| (definition.key, value))
-            })
-            .collect::<Option<Vec<_>>>()?;
-        Some(FunctionMemoEntry { result, scratch })
-    }
-
-    pub(crate) fn replay_function_memo_entry(
-        &mut self,
-        generation: GenerationId,
-        entry: &FunctionMemoEntry,
-    ) -> Result<(), VmError> {
-        let program = self
-            .generations
-            .get(&generation)
-            .ok_or_else(|| VmError::InvalidState("memo generation is missing".into()))?;
-        for (variable, value) in &entry.scratch {
-            let definition = program
-                .global(*variable)
-                .ok_or_else(|| VmError::InvalidState("memo scratch variable is missing".into()))?;
-            self.memory
-                .cell_mut(generation, definition.key, definition.storage, 0)
-                .ok_or_else(|| VmError::InvalidState("memo scratch storage is missing".into()))?
-                .write(&[], value.clone())
-                .map_err(VmError::InvalidState)?;
-        }
-        Ok(())
-    }
-
     /// Read non-frame storage in the current generation.
     ///
     /// # Errors
@@ -307,11 +233,10 @@ impl Vm {
                 *generation != self.current_generation && !active.contains(generation)
             })
             .collect();
+        let reclaimed = !obsolete.is_empty();
         for generation in obsolete {
             self.generations.remove(&generation);
             self.memory.reclaim_generation(generation);
-            self.function_memo_cache
-                .retain(|key, _| key.generation != generation);
             self.path_memo_cache
                 .retain(|key, _| key.generation != generation);
             self.path_memo_retained_bytes = self
@@ -320,6 +245,9 @@ impl Vm {
                 .flatten()
                 .map(|entry| entry.retained_bytes)
                 .sum();
+        }
+        if reclaimed {
+            self.clear_derived_caches();
         }
     }
 

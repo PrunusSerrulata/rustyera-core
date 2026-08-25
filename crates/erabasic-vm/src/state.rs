@@ -19,6 +19,7 @@ use erabasic_bytecode::{
 };
 use erabasic_validator::ValidatedArtifact;
 
+mod derived_cache;
 mod path_memo;
 mod planning;
 

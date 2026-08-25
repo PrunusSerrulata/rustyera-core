@@ -87,6 +87,7 @@ impl RuntimeSession {
             inbound: VecDeque::new(),
             outbound: VecDeque::new(),
             outbound_journal: BTreeMap::new(),
+            outbound_journal_bytes: 0,
             effect_journal: BTreeMap::new(),
             accepted_message_ids: BTreeMap::new(),
             accepted_debug_message_ids: BTreeMap::new(),
@@ -713,8 +714,17 @@ impl RuntimeSession {
                 self.shutdown(message_id)
             }
             RuntimeMessage::Acknowledge(ack) => {
-                self.outbound_journal
-                    .retain(|sequence, _| *sequence > ack.through_sequence);
+                let mut released_bytes = 0_u64;
+                self.outbound_journal.retain(|sequence, bytes| {
+                    let retained = *sequence > ack.through_sequence;
+                    if !retained {
+                        released_bytes = released_bytes
+                            .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+                    }
+                    retained
+                });
+                self.outbound_journal_bytes =
+                    self.outbound_journal_bytes.saturating_sub(released_bytes);
                 Ok(())
             }
             RuntimeMessage::Resynchronize(_) => self.resynchronize(message_id),

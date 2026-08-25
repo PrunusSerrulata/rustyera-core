@@ -70,7 +70,7 @@ server-hello = {
   0: any, 1: any, 2: [* uint], 3: runtime-limits, 4: uint, 5: any, 6: tstr,
   ? 7: configuration-client-profile / null
 }
-runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint }
+runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }
 version-rejected = { 0: any, 1: tstr }
 project-manifest = { 0: uint, 1: [* any] }
 project-identity = { 0: uint, 1: bstr }

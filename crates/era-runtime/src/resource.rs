@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::mem::size_of;
 
 use era_runtime_protocol::{
     CanvasReplay, CanvasReplayCommand, CanvasSize, FileCategory, FilePayload,
@@ -16,6 +17,8 @@ pub(crate) struct ResourceGraph {
     images: BTreeMap<String, ResourceImage>,
     sprites: BTreeMap<String, SpriteDefinition>,
     canvases: BTreeMap<i64, CanvasSurface>,
+    #[serde(skip, default)]
+    retained_canvas_command_bytes: usize,
     animation_timer_ms: i32,
     canvas_defaults: CanvasDefaults,
 }
@@ -35,6 +38,7 @@ impl Default for ResourceGraph {
             images: BTreeMap::new(),
             sprites: BTreeMap::new(),
             canvases: BTreeMap::new(),
+            retained_canvas_command_bytes: 0,
             animation_timer_ms: 0,
             canvas_defaults: CanvasDefaults {
                 brush_argb: 0xff00_0000,
@@ -53,6 +57,8 @@ struct CanvasSurface {
     height: u32,
     revision: u64,
     commands: Vec<CanvasCommand>,
+    #[serde(skip, default)]
+    retained_command_bytes: usize,
     brush_argb: u32,
     pen_argb: u32,
     pen_width: i64,
@@ -120,6 +126,37 @@ enum CanvasCommand {
         content_digest: Vec<u8>,
         encoded: Vec<u8>,
     },
+}
+
+impl CanvasCommand {
+    fn retained_bytes(&self) -> usize {
+        let dynamic = match self {
+            Self::DrawSprite {
+                name, color_matrix, ..
+            } => name.len().saturating_add(
+                color_matrix
+                    .as_ref()
+                    .map_or(0, |values| values.len().saturating_mul(size_of::<i64>())),
+            ),
+            Self::SetFont { family, .. } => family.len(),
+            Self::DrawText { text, .. } => text.len(),
+            Self::DrawCanvas { color_matrix, .. } => color_matrix
+                .as_ref()
+                .map_or(0, |values| values.len().saturating_mul(size_of::<i64>())),
+            Self::LoadEncodedImage {
+                content_digest,
+                encoded,
+            } => content_digest.len().saturating_add(encoded.len()),
+            Self::Clear { .. }
+            | Self::SetPixel { .. }
+            | Self::FillRectangle { .. }
+            | Self::SetBrush { .. }
+            | Self::SetPen { .. }
+            | Self::SetDashStyle { .. }
+            | Self::DrawLine { .. } => 0,
+        };
+        size_of::<Self>().saturating_add(dynamic)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

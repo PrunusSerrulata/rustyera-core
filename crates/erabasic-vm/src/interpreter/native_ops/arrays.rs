@@ -491,10 +491,7 @@ pub(in super::super) fn execute_find_element(
         }
     }
     if let Some(key) = cache_key {
-        if vm.find_element_cache.len() >= 65_536 {
-            vm.find_element_cache.clear();
-        }
-        vm.find_element_cache.insert(key, result);
+        vm.cache_find_element(key, result);
     }
     Ok(VmValue::Integer(result))
 }

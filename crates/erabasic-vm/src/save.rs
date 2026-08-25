@@ -159,8 +159,7 @@ impl Vm {
         self.runnable.clear();
         self.primary_fiber = None;
         self.next_fiber = 1;
-        self.find_element_cache.clear();
-        self.function_memo_cache.clear();
+        self.clear_derived_caches();
         self.active_function_memos.clear();
         self.path_memo_cache.clear();
         self.path_memo_retained_bytes = 0;

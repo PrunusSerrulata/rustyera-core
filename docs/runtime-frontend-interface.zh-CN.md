@@ -380,11 +380,13 @@ column_cells/separators`；9 `available_fonts[]`（ServerHello 按大小写不�
 10 `services[]`；11 `StorageCapabilities`。当前 `video` 总被选为 false；
 `font_metrics` 还要求 `gget_text_size` 服务。布尔值没有缺省，前端必须全部发送。
 
-`RuntimeLimits` 键 0–5：`maximum_envelope_bytes:u64`、`maximum_payload_bytes:u64`、
+`RuntimeLimits` 键 0–6：`maximum_envelope_bytes:u64`、`maximum_payload_bytes:u64`、
 `maximum_pending_requests:u32`、`maximum_journal_entries:u32`、
-`maximum_drive_instructions:u64`、`maximum_transfer_bytes:u64`。服务端逐字段取请求值与
+`maximum_drive_instructions:u64`、`maximum_transfer_bytes:u64`、
+`maximum_journal_bytes:u64`。服务端逐字段取请求值与
 创建者上限的较小者。默认创建者限制分别是 128 MiB、127 MiB、1024、4096、100000、
-1 GiB。
+1 GiB、64 MiB。最后一项只统计等待前端 ACK 的可重放 runtime journal 消息经协议编码后
+的字节数，不包含 debug 非重放队列或容器自身开销。
 
 成功响应 `ServerHello`：0 选定版本、1 session、2 features、3 limits、4 epoch（初始
 1）、5 selected capabilities、6 locale。无交集响应 `VersionRejected {supported,

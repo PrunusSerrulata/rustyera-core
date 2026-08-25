@@ -143,6 +143,7 @@ impl RuntimeSession {
         let original_revision = self.revision;
         let original_outbound = std::mem::take(&mut self.outbound);
         let original_outbound_journal = std::mem::take(&mut self.outbound_journal);
+        let original_outbound_journal_bytes = std::mem::take(&mut self.outbound_journal_bytes);
         let original_effect_journal = std::mem::take(&mut self.effect_journal);
         let original_pending_presentation = self.pending_presentation_update;
         let original_projection_state = self.last_projection_state.clone();
@@ -251,6 +252,14 @@ impl RuntimeSession {
         self.revision = original_revision;
         self.outbound = original_outbound;
         self.outbound_journal = original_outbound_journal;
+        self.outbound_journal_bytes = original_outbound_journal_bytes;
+        debug_assert_eq!(
+            self.outbound_journal_bytes,
+            self.outbound_journal
+                .values()
+                .map(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+                .sum::<u64>()
+        );
         self.effect_journal = original_effect_journal;
         self.outbound_sequence = original_sequence;
         self.next_message_id = original_message;

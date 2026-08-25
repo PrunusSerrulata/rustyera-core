@@ -326,8 +326,17 @@ impl RuntimeSession {
         if self.outbound_journal.len() >= self.options.limits.maximum_journal_entries as usize {
             return Err(RuntimeError::ResourceLimit("outbound journal is full"));
         }
+        let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if self.outbound_journal_bytes.saturating_add(encoded_bytes)
+            > self.options.limits.maximum_journal_bytes
+        {
+            return Err(RuntimeError::ResourceLimit(
+                "outbound journal byte budget is exhausted",
+            ));
+        }
         self.outbound.push_back(bytes.clone());
         self.outbound_journal.insert(self.outbound_sequence, bytes);
+        self.outbound_journal_bytes = self.outbound_journal_bytes.saturating_add(encoded_bytes);
         self.outbound_sequence = self.outbound_sequence.saturating_add(1);
         self.next_message_id = self.next_message_id.saturating_add(1);
         Ok(())

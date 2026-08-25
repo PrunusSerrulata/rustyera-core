@@ -16,9 +16,9 @@ use era_runtime_protocol::{
     PresentationOperation, PrimitiveInput, ProjectConfigurationEntry, ProjectConfigurationSnapshot,
     ProjectLoadRequest, ProjectManifest, ProjectionLength, ProjectionObservation,
     ProjectionQueryContext, ProjectionSize, ProjectionTransform, ProtocolDiagnostic,
-    RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay, ReturnToTitleRequest, RuntimeLog,
-    RuntimeLogLevel, RuntimeMessage, SAMPLE_CANVAS_PIXEL_OPERATION, SeparatorRole, ServiceKind,
-    ServiceRequest, SnapshotExportPurpose, StateExportCancel, StateExportChunkRequest,
+    RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay, ReturnToTitleRequest, RuntimeLimits,
+    RuntimeLog, RuntimeLogLevel, RuntimeMessage, SAMPLE_CANVAS_PIXEL_OPERATION, SeparatorRole,
+    ServiceKind, ServiceRequest, SnapshotExportPurpose, StateExportCancel, StateExportChunkRequest,
     StateExportKind, StateExportRequest, StateImportBegin, StateImportCommit, StorageNamespace,
     StorageOperation, StorageRequest, TextExtentRequest, TextStyle, parse_document,
     validate_relative_path,
@@ -162,7 +162,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
 }
 
 #[test]
@@ -186,7 +186,30 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
+}
+
+#[test]
+fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
+    let limits = RuntimeLimits {
+        maximum_envelope_bytes: 1,
+        maximum_payload_bytes: 2,
+        maximum_pending_requests: 3,
+        maximum_journal_entries: 4,
+        maximum_drive_instructions: 5,
+        maximum_transfer_bytes: 6,
+        maximum_journal_bytes: 7,
+    };
+    let encoded = encode_canonical(&limits).expect("encode runtime limits");
+    assert_eq!(
+        encoded,
+        vec![0xa7, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7]
+    );
+    assert_eq!(decode_canonical::<RuntimeLimits>(&encoded), Ok(limits));
+    assert!(include_str!("../schema/runtime.cddl").contains(
+        "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
+    ));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
 }
 
 #[test]
@@ -328,7 +351,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
 }
 
 #[test]
@@ -337,7 +360,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -503,7 +526,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -542,7 +565,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(34, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 
