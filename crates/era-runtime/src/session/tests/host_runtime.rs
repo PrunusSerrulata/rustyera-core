@@ -262,6 +262,108 @@ fn default_html_tag_split_stays_in_the_immediate_runtime_lane() {
 }
 
 #[test]
+fn clean_html_prints_stay_in_one_vm_quantum_and_synchronize_line_count() {
+    let source = "@SYSTEM_TITLE\n\
+        PRINTL baseline\n\
+        RESULT:0 = LINECOUNT\n\
+        FOR LOCAL, 0, 31\n\
+            FOR LOCAL:1, 0, 42\n\
+                HTML_PRINT \"<p align='left'><nobr>line</nobr></p>\"\n\
+            NEXT\n\
+            IF LOCAL != 30\n\
+                CLEARLINE 42\n\
+            ENDIF\n\
+        NEXT\n\
+        RESULT:1 = LINECOUNT\n\
+        CLEARLINE 42\n\
+        RESULT:2 = LINECOUNT\n\
+        HTML_PRINT \"<nobr>inline</nobr>\", 1\n\
+        RESULT:3 = LINECOUNT\n\
+        FORCEWAIT\n\
+        RETURN\n";
+    let (session, report, messages) = run_immediate_query_project(source);
+
+    assert!(
+        report.runtime_transitions < 64,
+        "clean HTML_PRINT calls must not create one transition per call: {report:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_))),
+        "{messages:#?}"
+    );
+    let vm = session.vm.as_ref().expect("runtime VM");
+    let baseline = read_runtime_integer(vm, "RESULT", &[0], None).unwrap();
+    assert_eq!(
+        read_runtime_integer(vm, "RESULT", &[1], None).unwrap(),
+        baseline + 42
+    );
+    assert_eq!(
+        read_runtime_integer(vm, "RESULT", &[2], None).unwrap(),
+        baseline
+    );
+    assert_eq!(
+        read_runtime_integer(vm, "RESULT", &[3], None).unwrap(),
+        baseline,
+        "inline HTML_PRINT must not commit a logical line"
+    );
+}
+
+#[test]
+fn immediate_html_print_binds_integer_and_string_buttons_in_order() {
+    let source = "@SYSTEM_TITLE\n\
+        HTML_PRINT \"<button value='7'>integer</button><button value='word'>string</button>\"\n\
+        FORCEWAIT\n\
+        RETURN\n";
+    let (session, report, messages) = run_immediate_query_project(source);
+
+    assert!(report.runtime_transitions < 8, "{report:?}");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_))),
+        "{messages:#?}"
+    );
+    assert_eq!(
+        session
+            .command_intents
+            .values()
+            .cloned()
+            .collect::<Vec<_>>(),
+        [VmValue::Integer(7), VmValue::String("word".into())]
+    );
+    let tokens = session.command_intents.keys().copied().collect::<Vec<_>>();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].epoch, session.epoch.0);
+    assert_eq!(tokens[1].id, tokens[0].id + 1);
+    let output = projected_presentation_text(&session.presentation.snapshot());
+    assert!(output.contains("integer"), "{output:?}");
+    assert!(output.contains("string"), "{output:?}");
+}
+
+#[test]
+fn malformed_immediate_html_print_falls_back_to_a_sourced_vm_fault() {
+    let (session, _report, messages) =
+        run_immediate_query_project("@SYSTEM_TITLE\nHTML_PRINT \"<unknown>\"\nRETURN\n");
+
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::Fault(RuntimeFault {
+                code: FaultCode::VmFault,
+                message,
+                origin: Some(origin),
+        }) if message.contains("HTML_PRINT UnknownTag")
+            && origin.command.eq_ignore_ascii_case("HTML_PRINT")
+                && origin.source.as_ref().is_some_and(|source| source.relative_path == "main.erb")
+        )),
+        "{messages:#?}"
+    );
+}
+
+#[test]
 fn malformed_immediate_html_query_falls_back_to_a_sourced_vm_fault() {
     let (session, _report, messages) = run_immediate_query_project(
         "@SYSTEM_TITLE\nRESULT = HTML_TOPLAINTEXT(\"&#xD800;\") == \"\"\nRETURN\n",

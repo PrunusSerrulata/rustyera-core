@@ -43,6 +43,50 @@ fn split_html_tags(source: &str) -> Result<Vec<String>, erabasic_html::Error> {
     })
 }
 
+struct PreparedHtmlPrint {
+    document: erabasic_html::HtmlDocument,
+    warnings: Vec<erabasic_html::HtmlWarning>,
+    inline: bool,
+}
+
+impl PreparedHtmlPrint {
+    fn prepare(arguments: &[VmValue]) -> Result<Self, erabasic_html::HtmlError> {
+        let markup = arguments.first().map_or_else(String::new, display_value);
+        let (document, warnings) = erabasic_html::parse_document_with_warnings(&markup)?;
+        Ok(Self {
+            document,
+            warnings,
+            inline: arguments.get(1).map_or(0, integer_value_or_zero) != 0,
+        })
+    }
+
+    fn apply(self, presentation: &mut PresentationModel) {
+        if self.inline {
+            presentation.append_html_inline(self.document);
+        } else {
+            presentation.append_html(self.document);
+        }
+    }
+}
+
+struct HtmlInteractionBindings<'a> {
+    epoch: u64,
+    next_interaction_id: &'a mut u64,
+    button_generation: u64,
+    command_intents: &'a mut BTreeMap<InteractionToken, VmValue>,
+}
+
+impl HtmlInteractionBindings<'_> {
+    fn allocate_interaction(&mut self) -> InteractionToken {
+        let token = InteractionToken {
+            epoch: self.epoch,
+            id: *self.next_interaction_id,
+        };
+        *self.next_interaction_id = (*self.next_interaction_id).saturating_add(1);
+        token
+    }
+}
+
 fn evaluate_runtime_query(
     name: &str,
     arguments: &[VmValue],
@@ -515,14 +559,14 @@ impl RuntimeSession {
     }
 }
 fn bind_html_document(
-    session: &mut RuntimeSession,
+    bindings: &mut HtmlInteractionBindings<'_>,
     document: &mut erabasic_html::HtmlDocument,
-) -> Result<(), RuntimeError> {
+) {
     fn visit(
-        session: &mut RuntimeSession,
+        bindings: &mut HtmlInteractionBindings<'_>,
         nodes: &mut [erabasic_html::HtmlNode],
         buttons_suppressed: bool,
-    ) -> Result<(), RuntimeError> {
+    ) {
         for node in nodes {
             let erabasic_html::HtmlNode::Element {
                 kind,
@@ -541,10 +585,10 @@ fn bind_html_document(
                         .find(|attribute| attribute.name == "value")
                         .map(|attribute| attribute.value.clone())
                     else {
-                        visit(session, children, buttons_suppressed)?;
+                        visit(bindings, children, buttons_suppressed);
                         continue;
                     };
-                    let token = session.allocate_interaction();
+                    let token = bindings.allocate_interaction();
                     let vm_value = value
                         .parse::<i64>()
                         .map_or_else(|_| VmValue::String(value.clone()), VmValue::Integer);
@@ -558,24 +602,23 @@ fn bind_html_document(
                         id: token.id,
                         integer_value,
                         string_value,
-                        generation: session.button_generation,
+                        generation: bindings.button_generation,
                         enabled: true,
                     });
-                    session.command_intents.insert(token, vm_value);
+                    bindings.command_intents.insert(token, vm_value);
                 }
                 erabasic_html::HtmlElementKind::ClearButton => {
                     // clearbutton suppresses buttonization only for its subtree;
                     // it never invalidates interactions already printed.
-                    visit(session, children, true)?;
+                    visit(bindings, children, true);
                     continue;
                 }
                 _ => {}
             }
-            visit(session, children, buttons_suppressed)?;
+            visit(bindings, children, buttons_suppressed);
         }
-        Ok(())
     }
-    visit(session, &mut document.nodes, false)
+    visit(bindings, &mut document.nodes, false);
 }
 
 fn emit_html_warnings(

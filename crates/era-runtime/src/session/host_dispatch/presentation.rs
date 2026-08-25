@@ -266,31 +266,30 @@ impl RuntimeSession {
         }
         if name == "HTML_PRINT" {
             *status = HostDispatchStatus::Handled;
-            let markup = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            let (mut document, warnings) =
-                match erabasic_html::parse_document_with_warnings(&markup) {
-                    Ok(parsed) => parsed,
-                    Err(error) => {
-                        return self.fault(
-                            FaultCode::VmFault,
-                            &format!(
-                                "HTML_PRINT {:?} at UTF-8 bytes {}..{}",
-                                error.kind, error.start, error.end
-                            ),
-                            Some(request.origin.clone()),
-                        );
-                    }
+            let mut prepared = match PreparedHtmlPrint::prepare(&request.arguments) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        &format!(
+                            "HTML_PRINT {:?} at UTF-8 bytes {}..{}",
+                            error.kind, error.start, error.end
+                        ),
+                        Some(request.origin.clone()),
+                    );
+                }
+            };
+            emit_html_warnings(self, "HTML_PRINT", &prepared.warnings, &request.origin)?;
+            {
+                let mut bindings = HtmlInteractionBindings {
+                    epoch: self.epoch.0,
+                    next_interaction_id: &mut self.next_interaction_id,
+                    button_generation: self.button_generation,
+                    command_intents: &mut self.command_intents,
                 };
-            emit_html_warnings(self, "HTML_PRINT", &warnings, &request.origin)?;
-            bind_html_document(self, &mut document)?;
-            if request.arguments.get(1).map_or(0, integer_value_or_zero) != 0 {
-                self.presentation.append_html_inline(document);
-            } else {
-                self.presentation.append_html(document);
+                bind_html_document(&mut bindings, &mut prepared.document);
             }
+            prepared.apply(&mut self.presentation);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
@@ -315,7 +314,13 @@ impl RuntimeSession {
                     }
                 };
             emit_html_warnings(self, "HTML_PRINT_ISLAND", &warnings, &request.origin)?;
-            bind_html_document(self, &mut document)?;
+            let mut bindings = HtmlInteractionBindings {
+                epoch: self.epoch.0,
+                next_interaction_id: &mut self.next_interaction_id,
+                button_generation: self.button_generation,
+                command_intents: &mut self.command_intents,
+            };
+            bind_html_document(&mut bindings, &mut document);
             self.presentation.append_html_island(document);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();

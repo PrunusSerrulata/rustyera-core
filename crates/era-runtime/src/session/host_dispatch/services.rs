@@ -22,6 +22,7 @@ pub(in crate::session) struct ImmediateRuntimeHost<'a> {
     command_intents: &'a mut BTreeMap<InteractionToken, VmValue>,
     next_interaction_id: &'a mut u64,
     epoch: u64,
+    button_generation: u64,
     line_count_place: Option<PlaceDescriptor>,
     query_state: RuntimeQueryState,
     user_defined_skip: bool,
@@ -68,6 +69,11 @@ impl VmHost for ImmediateRuntimeHost<'_> {
                 value: Some(value),
                 writes: Vec::new(),
             });
+        }
+        if name == "HTML_PRINT"
+            && let Some(ready) = self.immediate_html_print(request.arguments)
+        {
+            return ImmediateHostCallResult::Ready(ready);
         }
         let commits_line = is_immediate_committed_text_print(name);
         if !is_immediate_text_print(name) && !commits_line {
@@ -118,6 +124,7 @@ impl RuntimeSession {
             command_intents: &mut self.command_intents,
             next_interaction_id: &mut self.next_interaction_id,
             epoch: self.epoch.0,
+            button_generation: self.button_generation,
             line_count_place,
             query_state: RuntimeQueryState {
                 skip_print: self.skip_print,
@@ -364,24 +371,47 @@ impl PreparedGenericPrint {
         if !plain {
             host.bind_last_output_buttons();
         }
-        let writes = host
+        host.complete_line_count()
+    }
+}
+
+impl ImmediateRuntimeHost<'_> {
+    fn immediate_html_print(&mut self, arguments: &[VmValue]) -> Option<HostReady> {
+        let Ok(mut prepared) = PreparedHtmlPrint::prepare(arguments) else {
+            return None;
+        };
+        if !prepared.warnings.is_empty() {
+            return None;
+        }
+        let mut bindings = HtmlInteractionBindings {
+            epoch: self.epoch,
+            next_interaction_id: self.next_interaction_id,
+            button_generation: self.button_generation,
+            command_intents: self.command_intents,
+        };
+        bind_html_document(&mut bindings, &mut prepared.document);
+        prepared.apply(self.presentation);
+        *self.pending_presentation_update = true;
+        Some(self.complete_line_count())
+    }
+
+    fn complete_line_count(&mut self) -> HostReady {
+        let writes = self
             .line_count_place
             .clone()
             .map_or_else(Vec::new, |target| {
                 vec![HostWrite {
                     target,
-                    value: VmValue::Integer(host.presentation.logical_line_count()),
+                    value: VmValue::Integer(self.presentation.logical_line_count()),
                 }]
             });
-        host.presentation.mark_line_count_synchronized();
+        self.presentation.mark_line_count_synchronized();
         HostReady {
             value: None,
             writes,
         }
     }
-}
 
-impl ImmediateRuntimeHost<'_> {
     fn allocate_interaction(&mut self) -> InteractionToken {
         let token = InteractionToken {
             epoch: self.epoch,
@@ -736,10 +766,10 @@ impl RuntimeSession {
 #[cfg(test)]
 mod immediate_tests {
     use super::{
-        ImmediateTagSplitTargets, ImmediateTextFormatting, RuntimeQueryEvaluation,
-        RuntimeQueryState, evaluate_runtime_query, immediate_html_tag_split, immediate_text_value,
-        is_immediate_committed_text_print, is_immediate_text_print,
-        skips_runtime_command_immediately,
+        ImmediateTagSplitTargets, ImmediateTextFormatting, PreparedHtmlPrint,
+        RuntimeQueryEvaluation, RuntimeQueryState, evaluate_runtime_query,
+        immediate_html_tag_split, immediate_text_value, is_immediate_committed_text_print,
+        is_immediate_text_print, skips_runtime_command_immediately,
     };
     use crate::presentation::PresentationModel;
     use erabasic_vm::{PlaceDescriptor, VmValue};
@@ -810,6 +840,31 @@ mod immediate_tests {
             .is_none()
         );
         assert!(immediate_html_tag_split(&[VmValue::String("a".into())], None).is_none());
+    }
+
+    #[test]
+    fn html_print_preparation_distinguishes_clean_warning_and_error_inputs() {
+        let clean = PreparedHtmlPrint::prepare(&[VmValue::String(
+            "<p align='left'><nobr>clean</nobr></p>".into(),
+        )])
+        .unwrap();
+        assert!(clean.warnings.is_empty());
+        assert!(!clean.inline);
+
+        let inline = PreparedHtmlPrint::prepare(&[
+            VmValue::String("<nobr>inline</nobr>".into()),
+            VmValue::Integer(1),
+        ])
+        .unwrap();
+        assert!(inline.warnings.is_empty());
+        assert!(inline.inline);
+
+        let warning = PreparedHtmlPrint::prepare(&[VmValue::String(
+            "<font color='#fff'><button value='1'>crossed</font></button>".into(),
+        )])
+        .unwrap();
+        assert!(!warning.warnings.is_empty());
+        assert!(PreparedHtmlPrint::prepare(&[VmValue::String("<unknown>".into())]).is_err());
     }
 
     #[test]
