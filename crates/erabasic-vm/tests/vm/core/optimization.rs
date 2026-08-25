@@ -748,6 +748,115 @@ fn path_memo_validates_values_and_replays_persistent_split_state() {
 }
 
 #[test]
+fn reset_new_game_does_not_replay_show_day_with_missing_show_week_statics() {
+    let mut data = project_data();
+    data.static_data
+        .name_tables
+        .get_mut(&erabasic_data::NameTableKind::Flag)
+        .expect("FLAG name table")
+        .lookup
+        .insert("回想模式".into(), 0);
+    let artifact = compile_source_with_data(
+        r#"@SYSTEM_TITLE
+RESULTS:0 '= SHOW_DAY()
+RETURN
+
+@EVENTFIRST
+RESULTS:0 '= SHOW_DAY()
+RETURN
+
+@DAYS, ARG = -1
+#FUNCTION
+ARG = ARG == -1 ? DAY # ARG
+RETURNF ARG % 30 + 1
+
+@MONTH, ARG = -1
+#FUNCTION
+ARG = ARG == -1 ? DAY # ARG
+RETURNF (ARG % 360) / 30 + 1
+
+@YEAR, ARG = -1
+#FUNCTION
+ARG = ARG == -1 ? DAY # ARG
+RETURNF ARG / 360 + 1
+
+@SHOW_DAY, ARG = -1
+#FUNCTIONS
+ARG = ARG == -1 ? DAY # ARG
+RETURNF FLAG:回想模式 ? @"第{DAY}日" # @"第{YEAR(ARG)}年 {MONTH(ARG),2}月 {DAYS(ARG),2}日 %SHOW_WEEK(ARG)%"
+
+@WEEK, ARG = -1
+#FUNCTION
+ARG = ARG == -1 ? DAY # ARG
+RETURNF ARG % 7 + 1
+
+@SHOW_WEEK, ARG = -1
+#FUNCTIONS
+ARG = ARG == -1 ? DAY # ARG
+SELECTCASE WEEK(ARG)
+    CASE 1
+        LOCALS = 周一
+    CASE 2
+        LOCALS = 周二
+    CASE 3
+        LOCALS = 周三
+    CASE 4
+        LOCALS = 周四
+    CASE 5
+        LOCALS = 周五
+    CASE 6
+        LOCALS = 周六
+    CASE 7
+        LOCALS = 周日
+ENDSELECT
+RETURNF LOCALS
+"#,
+        data,
+    );
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .expect("RESULTS")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+
+    for entry_name in ["SYSTEM_TITLE", "EVENTFIRST"] {
+        let entry = artifact
+            .functions
+            .iter()
+            .find(|function| function.name == entry_name)
+            .unwrap_or_else(|| panic!("{entry_name}"))
+            .key;
+        vm.spawn_entry(entry, Vec::new()).unwrap();
+        let report = vm.run_slice(
+            &mut ReadyHost::default(),
+            &mut natives,
+            RunBudget::default(),
+        );
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{entry_name}: {:#?}",
+            report.events
+        );
+        assert_eq!(
+            vm.read_variable(results, &[0], None),
+            Ok(VmValue::String("第1年  1月  1日 周一".into()))
+        );
+        if entry_name == "SYSTEM_TITLE" {
+            let prepared = vm
+                .prepare_runtime_state(VmRuntimeStateTransaction::ResetNewGame)
+                .unwrap();
+            vm.commit_runtime_state(prepared).unwrap();
+        }
+    }
+}
+
+#[test]
 fn path_memo_find_element_queries_follow_array_revisions() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\n\
