@@ -385,9 +385,14 @@ impl RuntimeSession {
         let replace = &vm.vm().artifact().project_data.static_data.replace;
         let (bar_char_1, bar_char_2) = (replace.bar_char_1, replace.bar_char_2);
         let line_count_place = global_place(vm, "LINECOUNT");
+        let tag_split_targets = super::host_dispatch::immediate_tag_split_targets(vm);
         let report = {
-            let mut immediate =
-                self.immediate_runtime_host(bar_char_1, bar_char_2, line_count_place);
+            let mut immediate = self.immediate_runtime_host(
+                bar_char_1,
+                bar_char_2,
+                line_count_place,
+                tag_split_targets,
+            );
             vm.drive_with_immediate_host(budget, VmDriveMode::Normal, &mut immediate)
         };
         if self.pending_presentation_update {

@@ -10,6 +10,8 @@ mod presentation;
 mod services;
 mod storage;
 
+pub(in crate::session) use services::immediate_tag_split_targets;
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum HostDispatchStatus {
     Unhandled,
@@ -28,6 +30,17 @@ enum RuntimeQueryEvaluation {
     MalformedHtml,
     InvalidPrintedHtmlIndex,
     Unhandled,
+}
+
+fn split_html_tags(source: &str) -> Result<Vec<String>, erabasic_html::Error> {
+    erabasic_html::split_tags(source).map(|tokens| {
+        tokens
+            .into_iter()
+            .map(|token| match token {
+                erabasic_html::Token::Text(value) | erabasic_html::Token::Tag(value) => value,
+            })
+            .collect()
+    })
 }
 
 fn evaluate_runtime_query(

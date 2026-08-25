@@ -9,6 +9,13 @@ struct ImmediateTextFormatting<'a> {
     money_label: &'a str,
 }
 
+#[derive(Clone)]
+pub(in crate::session) struct ImmediateTagSplitTargets {
+    result: PlaceDescriptor,
+    results: PlaceDescriptor,
+    results_capacity: usize,
+}
+
 pub(in crate::session) struct ImmediateRuntimeHost<'a> {
     presentation: &'a mut PresentationModel,
     pending_presentation_update: &'a mut bool,
@@ -20,6 +27,7 @@ pub(in crate::session) struct ImmediateRuntimeHost<'a> {
     user_defined_skip: bool,
     force_kana_mode: u8,
     text_formatting: Option<ImmediateTextFormatting<'a>>,
+    tag_split_targets: Option<ImmediateTagSplitTargets>,
 }
 
 impl VmHost for ImmediateRuntimeHost<'_> {
@@ -40,6 +48,12 @@ impl VmHost for ImmediateRuntimeHost<'_> {
             .eq_ignore_ascii_case("rustyera.text")
         {
             return ImmediateHostCallResult::Unsupported;
+        }
+        if name == "HTML_TAGSPLIT"
+            && let Some(ready) =
+                immediate_html_tag_split(request.arguments, self.tag_split_targets.as_ref())
+        {
+            return ImmediateHostCallResult::Ready(ready);
         }
         if let Some(value) = immediate_text_value(name, request.arguments, self.text_formatting) {
             return ImmediateHostCallResult::Ready(HostReady {
@@ -87,6 +101,7 @@ impl RuntimeSession {
         bar_char_1: char,
         bar_char_2: char,
         line_count_place: Option<PlaceDescriptor>,
+        tag_split_targets: Option<ImmediateTagSplitTargets>,
     ) -> ImmediateRuntimeHost<'_> {
         let text_formatting =
             self.project_snapshot
@@ -111,8 +126,78 @@ impl RuntimeSession {
             user_defined_skip: self.user_defined_skip,
             force_kana_mode: self.force_kana_mode,
             text_formatting,
+            tag_split_targets,
         }
     }
+}
+
+pub(in crate::session) fn immediate_tag_split_targets(
+    vm: &RuntimeVm,
+) -> Option<ImmediateTagSplitTargets> {
+    let count_definition = vm.vm().global_by_name("RESULT")?;
+    let [count_capacity] = count_definition.dimensions.as_slice() else {
+        return None;
+    };
+    if count_definition.value_type != erabasic_bytecode::BytecodeType::Integer
+        || *count_capacity == 0
+        || !count_definition.mutable
+    {
+        return None;
+    }
+    let tokens_definition = vm.vm().global_by_name("RESULTS")?;
+    let [tokens_capacity] = tokens_definition.dimensions.as_slice() else {
+        return None;
+    };
+    if tokens_definition.value_type != erabasic_bytecode::BytecodeType::String
+        || !tokens_definition.mutable
+    {
+        return None;
+    }
+    Some(ImmediateTagSplitTargets {
+        result: global_place_at(vm, "RESULT", 0)?,
+        results: global_place_at(vm, "RESULTS", 0)?,
+        results_capacity: usize::try_from(*tokens_capacity).unwrap_or(0),
+    })
+}
+
+fn immediate_html_tag_split(
+    arguments: &[VmValue],
+    targets: Option<&ImmediateTagSplitTargets>,
+) -> Option<HostReady> {
+    let [VmValue::String(source)] = arguments else {
+        return None;
+    };
+    let targets = targets?;
+    let Ok(values) = split_html_tags(source) else {
+        return Some(HostReady {
+            value: None,
+            writes: vec![HostWrite {
+                target: targets.result.clone(),
+                value: VmValue::Integer(-1),
+            }],
+        });
+    };
+    let mut writes = values
+        .iter()
+        .take(targets.results_capacity)
+        .enumerate()
+        .map(|(index, value)| {
+            let mut target = targets.results.clone();
+            target.indices[0] = u64::try_from(index).unwrap_or(u64::MAX);
+            HostWrite {
+                target,
+                value: VmValue::String(value.clone()),
+            }
+        })
+        .collect::<Vec<_>>();
+    writes.push(HostWrite {
+        target: targets.result.clone(),
+        value: VmValue::Integer(i64::try_from(values.len()).unwrap_or(i64::MAX)),
+    });
+    Some(HostReady {
+        value: None,
+        writes,
+    })
 }
 
 fn skips_runtime_command_immediately(
@@ -651,12 +736,81 @@ impl RuntimeSession {
 #[cfg(test)]
 mod immediate_tests {
     use super::{
-        ImmediateTextFormatting, RuntimeQueryEvaluation, RuntimeQueryState, evaluate_runtime_query,
-        immediate_text_value, is_immediate_committed_text_print, is_immediate_text_print,
+        ImmediateTagSplitTargets, ImmediateTextFormatting, RuntimeQueryEvaluation,
+        RuntimeQueryState, evaluate_runtime_query, immediate_html_tag_split, immediate_text_value,
+        is_immediate_committed_text_print, is_immediate_text_print,
         skips_runtime_command_immediately,
     };
     use crate::presentation::PresentationModel;
-    use erabasic_vm::VmValue;
+    use erabasic_vm::{PlaceDescriptor, VmValue};
+
+    fn tag_split_targets(capacity: usize) -> ImmediateTagSplitTargets {
+        let place = |index| PlaceDescriptor {
+            indices: vec![index],
+            ..PlaceDescriptor::default()
+        };
+        ImmediateTagSplitTargets {
+            result: place(0),
+            results: place(0),
+            results_capacity: capacity,
+        }
+    }
+
+    #[test]
+    fn immediate_tag_split_preserves_default_target_write_semantics() {
+        let targets = tag_split_targets(2);
+        let ready =
+            immediate_html_tag_split(&[VmValue::String("a<b>x</b>".into())], Some(&targets))
+                .unwrap();
+        assert_eq!(ready.writes.len(), 3);
+        assert_eq!(ready.writes[0].value, VmValue::String("a".into()));
+        assert_eq!(ready.writes[1].value, VmValue::String("<b>".into()));
+        assert_eq!(ready.writes[2].value, VmValue::Integer(4));
+
+        let empty = immediate_html_tag_split(
+            &[VmValue::String(String::new())],
+            Some(&tag_split_targets(2)),
+        )
+        .unwrap();
+        assert_eq!(empty.writes.len(), 1);
+        assert_eq!(empty.writes[0].value, VmValue::Integer(0));
+
+        let malformed = immediate_html_tag_split(
+            &[VmValue::String("a<b".into())],
+            Some(&tag_split_targets(2)),
+        )
+        .unwrap();
+        assert_eq!(malformed.writes.len(), 1);
+        assert_eq!(malformed.writes[0].value, VmValue::Integer(-1));
+    }
+
+    #[test]
+    fn immediate_tag_split_rejects_nondefault_or_mistyped_calls() {
+        let targets = tag_split_targets(2);
+        assert!(immediate_html_tag_split(&[VmValue::Integer(1)], Some(&targets)).is_none());
+        assert!(
+            immediate_html_tag_split(
+                &[
+                    VmValue::String("a".into()),
+                    VmValue::StringPlace(Box::default()),
+                ],
+                Some(&targets),
+            )
+            .is_none()
+        );
+        assert!(
+            immediate_html_tag_split(
+                &[
+                    VmValue::String("a".into()),
+                    VmValue::StringPlace(Box::default()),
+                    VmValue::IntegerPlace(Box::default()),
+                ],
+                Some(&targets),
+            )
+            .is_none()
+        );
+        assert!(immediate_html_tag_split(&[VmValue::String("a".into())], None).is_none());
+    }
 
     #[test]
     fn layout_queries_are_never_classified_as_immediate_prints() {

@@ -211,6 +211,57 @@ fn negative_printed_html_index_falls_back_to_a_sourced_vm_fault() {
 }
 
 #[test]
+fn default_html_tag_split_stays_in_the_immediate_runtime_lane() {
+    let source = "@SYSTEM_TITLE\n\
+        #DIMS EXPLICIT, 8\n\
+        #DIM COUNT\n\
+        PRINTL seed\n\
+        HTML_TAGSPLIT \"a<b>x</b>\"\n\
+        FLAG:0 = RESULT == 4\n\
+        FLAG:1 = RESULTS:0 == \"a\"\n\
+        FLAG:2 = RESULTS:1 == \"<b>\"\n\
+        FLAG:3 = RESULTS:2 == \"x\"\n\
+        FLAG:4 = RESULTS:3 == \"</b>\"\n\
+        HTML_TAGSPLIT \"z\"\n\
+        FLAG:5 = RESULT == 1 && RESULTS:3 == \"</b>\"\n\
+        HTML_TAGSPLIT \"\"\n\
+        FLAG:6 = RESULT == 0 && RESULTS:3 == \"</b>\"\n\
+        HTML_TAGSPLIT \"a<b\"\n\
+        FLAG:7 = RESULT == -1 && RESULTS:3 == \"</b>\"\n\
+        HTML_TAGSPLIT \"a<b>x</b>\", EXPLICIT, COUNT\n\
+        FLAG:8 = COUNT == 4 && EXPLICIT:0 == \"a\" && EXPLICIT:3 == \"</b>\"\n\
+        EXPLICIT:7 = \"keep\"\n\
+        HTML_TAGSPLIT \"a<b\", EXPLICIT, COUNT\n\
+        FLAG:9 = COUNT == -1\n\
+        FOR LOCAL, 0, 1302\n\
+            HTML_TAGSPLIT HTML_GETPRINTEDSTR(0)\n\
+        NEXT\n\
+        FLAG:10 = RESULT > 0\n\
+        FORCEWAIT\n\
+        RETURN\n";
+    let (session, report, messages) = run_immediate_query_project(source);
+
+    assert!(
+        report.runtime_transitions < 32,
+        "default HTML_TAGSPLIT must not create one transition per call: {report:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_))),
+        "{messages:#?}"
+    );
+    let vm = session.vm.as_ref().expect("runtime VM");
+    for index in 0..=10 {
+        assert_eq!(
+            read_runtime_integer(vm, "FLAG", &[index], None).unwrap(),
+            1,
+            "FLAG:{index}"
+        );
+    }
+}
+
+#[test]
 fn malformed_immediate_html_query_falls_back_to_a_sourced_vm_fault() {
     let (session, _report, messages) = run_immediate_query_project(
         "@SYSTEM_TITLE\nRESULT = HTML_TOPLAINTEXT(\"&#xD800;\") == \"\"\nRETURN\n",

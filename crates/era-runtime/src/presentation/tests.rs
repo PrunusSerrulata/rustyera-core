@@ -83,10 +83,7 @@ fn runtime_projection_queries_use_physical_and_logical_history_order() {
     );
 }
 
-#[test]
-fn printed_html_serializes_rich_projected_runs_as_an_emuera_fragment() {
-    let mut model = PresentationModel::default();
-    model.set_projection(true, true, true, true, true);
+fn rich_projected_runs() -> Vec<DisplayRun> {
     let token = InteractionToken { epoch: 1, id: 1 };
     let style = TextStyle {
         bold: true,
@@ -104,7 +101,7 @@ fn printed_html_serializes_rich_projected_runs_as_an_emuera_fragment() {
         generation: 0,
         enabled: true,
     };
-    model.pending_runs = vec![
+    vec![
         DisplayRun::Text {
             text: "<&".into(),
             style,
@@ -171,7 +168,14 @@ fn printed_html_serializes_rich_projected_runs_as_an_emuera_fragment() {
             alignment: CellAlignment::Left,
             preferred_columns: 4,
         },
-    ];
+    ]
+}
+
+#[test]
+fn printed_html_serializes_rich_projected_runs_as_an_emuera_fragment() {
+    let mut model = PresentationModel::default();
+    model.set_projection(true, true, true, true, true);
+    model.pending_runs = rich_projected_runs();
 
     let html = model.printed_html_line(0);
     assert!(

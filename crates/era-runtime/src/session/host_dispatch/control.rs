@@ -530,32 +530,22 @@ impl RuntimeSession {
                 .get(2)
                 .and_then(vm_place)
                 .or_else(|| global_place(vm, "RESULT"));
-            let values = match erabasic_html::split_tags(source) {
-                Ok(tokens) => tokens
+            let Ok(values) = split_html_tags(source) else {
+                let writes = integer_target
                     .into_iter()
-                    .map(|token| match token {
-                        erabasic_html::Token::Text(value) | erabasic_html::Token::Tag(value) => {
-                            value
-                        }
+                    .map(|target| HostWrite {
+                        target,
+                        value: VmValue::Integer(-1),
                     })
-                    .collect::<Vec<_>>(),
-                Err(_) => {
-                    let writes = integer_target
-                        .into_iter()
-                        .map(|target| HostWrite {
-                            target,
-                            value: VmValue::Integer(-1),
-                        })
-                        .collect();
-                    return commit_completion(
-                        vm,
-                        request.id,
-                        VmHostCompletion::Ready(HostReady {
-                            value: None,
-                            writes,
-                        }),
-                    );
-                }
+                    .collect();
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady {
+                        value: None,
+                        writes,
+                    }),
+                );
             };
             let mut writes = string_array_writes(vm, string_target, &values);
             if let Some(target) = integer_target {
