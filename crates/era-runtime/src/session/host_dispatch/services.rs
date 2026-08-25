@@ -873,4 +873,21 @@ mod immediate_tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn runtime_query_evaluator_classifies_negative_printed_html_indexes() {
+        assert_eq!(
+            evaluate_runtime_query(
+                "HTML_GETPRINTEDSTR",
+                &[VmValue::Integer(-1)],
+                &PresentationModel::default(),
+                RuntimeQueryState {
+                    skip_print: false,
+                    message_skip: false,
+                },
+            )
+            .unwrap(),
+            RuntimeQueryEvaluation::InvalidPrintedHtmlIndex
+        );
+    }
 }

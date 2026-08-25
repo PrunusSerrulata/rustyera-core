@@ -8,6 +8,7 @@ use unicode_segmentation::UnicodeSegmentation as _;
 
 mod serialization;
 pub(in crate::presentation) use serialization::{append_html_run, append_log_run};
+pub(super) use serialization::{append_plain_run, append_printed_html_run};
 
 pub(super) fn auto_button_groups(
     runs: &[DisplayRun],

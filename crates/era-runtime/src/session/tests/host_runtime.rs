@@ -109,6 +109,7 @@ fn run_immediate_query_project(
 #[test]
 fn immediate_queries_observe_latest_runtime_state_without_host_boundaries() {
     let source = "@SYSTEM_TITLE\n\
+        PRINTL oldest\n\
         ALIGNMENT CENTER\n\
         SETFONT \"query-font\"\n\
         REDRAW 0\n\
@@ -130,6 +131,14 @@ fn immediate_queries_observe_latest_runtime_state_without_host_boundaries() {
         FLAG:9 = MOUSESKIP()\n\
         FLAG:10 = HTML_TOPLAINTEXT(\"a&nbsp;b\") == \"a b\"\n\
         FLAG:11 = HTML_ESCAPE(\"<\") == \"&lt;\"\n\
+        RESULTS '= HTML_GETPRINTEDSTR(0)\n\
+        FLAG:12 = RESULTS == \"<p align='center'><nobr><b>p</b><b>e</b><b>n</b><b>d</b><b>i</b><b>n</b><b>g</b></nobr></p>\"\n\
+        FLAG:13 = GETDISPLAYLINE(0) == \"oldest\"\n\
+        FLAG:14 = GETDISPLAYLINE(1) == \"pending\"\n\
+        FLAG:15 = HTML_GETPRINTEDSTR(1) == \"<p align='left'><nobr>oldest</nobr></p>\"\n\
+        FLAG:16 = GETDISPLAYLINE(-1) == \"\"\n\
+        FLAG:17 = GETDISPLAYLINE(4294967296) == \"\"\n\
+        FLAG:18 = HTML_GETPRINTEDSTR(4294967296) == \"\"\n\
         FOR LOCAL, 0, 32\n\
             RESULT:40 = GETDEFBGCOLOR()\n\
             RESULT:41 = GETDEFCOLOR()\n\
@@ -143,6 +152,8 @@ fn immediate_queries_observe_latest_runtime_state_without_host_boundaries() {
             RESULT:49 = GETFONT() == \"query-font\"\n\
             RESULT:50 = HTML_TOPLAINTEXT(\"a&nbsp;b\") == \"a b\"\n\
             RESULT:51 = HTML_ESCAPE(\"<\") == \"&lt;\"\n\
+            RESULT:52 = HTML_GETPRINTEDSTR(0) == \"<p align='center'><nobr><b>p</b><b>e</b><b>n</b><b>d</b><b>i</b><b>n</b><b>g</b></nobr></p>\"\n\
+            RESULT:53 = GETDISPLAYLINE(1) == \"pending\"\n\
         NEXT\n\
         SKIPLOG 0\n\
         SKIPDISP 0\n\
@@ -161,13 +172,42 @@ fn immediate_queries_observe_latest_runtime_state_without_host_boundaries() {
         "{messages:#?}"
     );
     let vm = session.vm.as_ref().expect("runtime VM");
-    for index in 0..=11 {
+    let printed_html = read_runtime_string(vm, "RESULTS").unwrap();
+    for index in 0..=18 {
         assert_eq!(
             read_runtime_integer(vm, "FLAG", &[index], None).unwrap(),
             1,
-            "FLAG:{index}"
+            "FLAG:{index}; HTML_GETPRINTEDSTR(0)={printed_html:?}"
         );
     }
+    assert_eq!(read_runtime_integer(vm, "RESULT", &[52], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "RESULT", &[53], None).unwrap(), 1);
+    assert!(messages.iter().all(|message| !matches!(
+        message,
+        RuntimeMessage::ServiceRequest(request)
+            if request.kind == ServiceKind::PresentationQuery
+    )));
+}
+
+#[test]
+fn negative_printed_html_index_falls_back_to_a_sourced_vm_fault() {
+    let (session, _report, messages) =
+        run_immediate_query_project("@SYSTEM_TITLE\nRESULTS '= HTML_GETPRINTEDSTR(-1)\nRETURN\n");
+
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::Fault(RuntimeFault {
+                code: FaultCode::VmFault,
+                message,
+                origin: Some(origin),
+        }) if message == "HTML_GETPRINTEDSTR line number must be non-negative"
+            && origin.command.eq_ignore_ascii_case("HTML_GETPRINTEDSTR")
+                && origin.source.as_ref().is_some_and(|source| source.relative_path == "main.erb")
+        )),
+        "{messages:#?}"
+    );
 }
 
 #[test]

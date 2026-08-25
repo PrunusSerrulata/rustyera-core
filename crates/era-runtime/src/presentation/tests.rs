@@ -1,6 +1,6 @@
 use super::projection::plain_text;
 use super::*;
-use era_runtime_protocol::{PresentationDelta, PresentationSnapshot, ResourceReplay};
+use era_runtime_protocol::{Color, PresentationDelta, PresentationSnapshot, ResourceReplay};
 use serde::Serialize;
 
 fn display_text(run: &DisplayRun) -> Option<&str> {
@@ -20,6 +20,200 @@ fn collect_text_layouts<'a>(runs: &'a [DisplayRun], output: &mut Vec<(&'a str, u
             _ => {}
         }
     }
+}
+
+fn query_test_line(
+    line_id: u64,
+    logical_line_start: bool,
+    alignment: LineAlignment,
+    text: &str,
+) -> Arc<DisplayLine> {
+    Arc::new(DisplayLine {
+        line_id,
+        temporary: false,
+        logical_line_start,
+        line_end: true,
+        alignment,
+        runs: vec![DisplayRun::Text {
+            text: text.into(),
+            style: TextStyle::default(),
+            system_text: None,
+        }],
+    })
+}
+
+#[test]
+fn runtime_projection_queries_use_physical_and_logical_history_order() {
+    let mut model = PresentationModel::default();
+    model.set_projection(true, true, true, true, true);
+    model
+        .lines
+        .push_back(query_test_line(1, true, LineAlignment::Left, "oldest"));
+    model
+        .lines
+        .push_back(query_test_line(2, true, LineAlignment::Center, "wrapped-a"));
+    model
+        .lines
+        .push_back(query_test_line(3, false, LineAlignment::Right, "wrapped-b"));
+
+    assert_eq!(model.display_line(0), "oldest");
+    assert_eq!(model.display_line(1), "wrapped-a");
+    assert_eq!(model.display_line(2), "wrapped-b");
+    assert_eq!(
+        model.printed_html_line(0),
+        "<p align='center'><nobr>wrapped-a<br>wrapped-b</nobr></p>"
+    );
+    assert_eq!(
+        model.printed_html_line(1),
+        "<p align='left'><nobr>oldest</nobr></p>"
+    );
+    assert_eq!(model.display_line(3), "");
+    assert_eq!(model.printed_html_line(2), "");
+
+    model.set_alignment(LineAlignment::Right);
+    model.append_print_text("pending".into(), false, false);
+    assert_eq!(model.display_line(3), "pending");
+    assert_eq!(
+        model.printed_html_line(0),
+        "<p align='right'><nobr>pending</nobr></p>"
+    );
+    assert_eq!(
+        model.printed_html_line(1),
+        "<p align='center'><nobr>wrapped-a<br>wrapped-b</nobr></p>"
+    );
+}
+
+#[test]
+fn printed_html_serializes_rich_projected_runs_as_an_emuera_fragment() {
+    let mut model = PresentationModel::default();
+    model.set_projection(true, true, true, true, true);
+    let token = InteractionToken { epoch: 1, id: 1 };
+    let style = TextStyle {
+        bold: true,
+        italic: true,
+        underline: true,
+        strikeout: true,
+        ..TextStyle::default()
+    };
+    let button = |value, title: Option<&str>| DisplayRun::Button {
+        runs: vec![plain_text("button".into(), 18_000)],
+        token,
+        title: title.map(str::to_owned),
+        hover_style: None,
+        value,
+        generation: 0,
+        enabled: true,
+    };
+    model.pending_runs = vec![
+        DisplayRun::Text {
+            text: "<&".into(),
+            style,
+            system_text: None,
+        },
+        button(ProtocolValue::Integer(7), Some("t'&")),
+        button(ProtocolValue::String("s<&".into()), None),
+        button(ProtocolValue::Boolean(true), None),
+        DisplayRun::HtmlDocument {
+            document: erabasic_html::parse_document(
+                "<p align='right'><nobr><b>root</b></nobr></p>",
+            )
+            .unwrap(),
+        },
+        DisplayRun::Image {
+            placement: MediaPlacement {
+                resource_id: "image<&".into(),
+                x: LogicalLength(0),
+                y: LogicalLength(0),
+                width: LogicalLength(0),
+                height: LogicalLength(0),
+                depth: 0,
+                opacity: RationalOpacity {
+                    numerator: 1,
+                    denominator: 1,
+                },
+                revision: 1,
+                hover_resource_id: Some("hover".into()),
+                mask_resource_id: Some("mask".into()),
+                requested_width: Some(PresentationLength::Logical(LogicalLength(12_000))),
+                requested_height: None,
+                requested_y: None,
+            },
+            alt_text: Some("alt".into()),
+        },
+        DisplayRun::Shape {
+            shape: Shape {
+                kind: "rect".into(),
+                parameters: vec![PresentationLength::Logical(LogicalLength(5_000))],
+                foreground: Some(Color {
+                    red: 1,
+                    green: 2,
+                    blue: 3,
+                    alpha: 255,
+                }),
+                background: Some(Color {
+                    red: 4,
+                    green: 5,
+                    blue: 6,
+                    alpha: 255,
+                }),
+            },
+        },
+        DisplayRun::Space {
+            width: PresentationLength::FontHeightHundredths(50),
+        },
+        DisplayRun::Separator {
+            pattern: "-&".into(),
+            role: SeparatorRole::Rule,
+            style: TextStyle::default(),
+        },
+        DisplayRun::ColumnCell {
+            content: vec![plain_text("cell".into(), 18_000)],
+            alignment: CellAlignment::Left,
+            preferred_columns: 4,
+        },
+    ];
+
+    let html = model.printed_html_line(0);
+    assert!(
+        html.starts_with(
+            "<p align='left'><nobr><b><i><u><s>&lt;</s></u></i></b>\
+             <b><i><u><s>&amp;</s></u></i></b>"
+        ),
+        "{html}"
+    );
+    assert!(html.contains("<button value='7' title='t&apos;&amp;'>button</button>"));
+    assert!(html.contains("<button value='s&lt;&amp;'>button</button>"));
+    assert!(html.contains("<button value='1'>button</button>"));
+    assert!(html.contains("<b>root</b>"));
+    assert!(!html.contains("<p align='right'>"));
+    assert!(!html.contains("<nobr><b>root"));
+    assert!(html.contains("<img src='image&lt;&amp;' srcb='hover' srcm='mask' width='12px'>"));
+    assert!(html.contains("<shape type='rect' param='5px' color='#010203' bcolor='#040506'>"));
+    assert!(html.contains("<shape type='space' param='50'>"));
+    assert!(html.contains("-&amp;cell"));
+}
+
+#[test]
+fn printed_html_honors_disabled_rich_projection_capabilities() {
+    let mut model = PresentationModel::default();
+    model.set_projection(false, false, false, false, true);
+    model.append_html_inline(erabasic_html::parse_document("<b>root</b>").unwrap());
+    model.append_image("image".into(), Some("alt".into()));
+    model.append_shape(
+        "rect",
+        vec![PresentationLength::Logical(LogicalLength(5_000))],
+    );
+    model.append_separator("-&".into());
+    model.append_column_cell("cell".into(), CellAlignment::Left);
+
+    let fallback = model.printed_html_line(2);
+    assert!(fallback.contains("root"));
+    assert!(fallback.contains("alt"));
+    assert!(!fallback.contains("<b>root</b>"));
+    assert!(!fallback.contains("<img"));
+    assert!(!fallback.contains("type='rect'"));
+    assert!(model.printed_html_line(1).contains("-&amp;"));
+    assert!(model.printed_html_line(0).contains("cell"));
 }
 
 #[test]

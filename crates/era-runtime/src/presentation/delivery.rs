@@ -1,15 +1,67 @@
+use super::projection::{append_plain_run, append_printed_html_run};
 use super::{
     PresentationDelivery, PresentationDirty, PresentationHistoryEdit, PresentationModel,
     PresentationUpdate, project_lines,
 };
 use era_runtime_protocol::{
-    DisplayLine, InputWait, PresentationDelta, PresentationHistory, PresentationHistoryOperation,
-    PresentationOperation, PresentationSnapshot, RedrawState, ResourceReplay,
+    DisplayLine, InputWait, LineAlignment, PresentationDelta, PresentationHistory,
+    PresentationHistoryOperation, PresentationOperation, PresentationSnapshot, RedrawState,
+    ResourceReplay,
 };
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 impl PresentationModel {
+    pub(crate) fn display_line(&self, index: usize) -> String {
+        let Some(line) = self.projected_line(index) else {
+            return String::new();
+        };
+        let mut output = String::new();
+        for run in &line.runs {
+            append_plain_run(&mut output, run);
+        }
+        output
+    }
+
+    pub(crate) fn printed_html_line(&self, index_from_end: usize) -> String {
+        let mut logical_index = 0_usize;
+        let mut selected = Vec::new();
+        for physical_index in (0..self.delivered_line_count()).rev() {
+            let Some(line) = self.projected_line(physical_index) else {
+                continue;
+            };
+            if logical_index == index_from_end {
+                selected.push(line.clone());
+            }
+            if line.logical_line_start {
+                logical_index = logical_index.saturating_add(1);
+            }
+            if logical_index > index_from_end {
+                break;
+            }
+        }
+        selected.reverse();
+        let Some(first_line) = selected.first() else {
+            return String::new();
+        };
+        let alignment = match first_line.alignment {
+            LineAlignment::Left => "left",
+            LineAlignment::Center => "center",
+            LineAlignment::Right => "right",
+        };
+        let mut output = format!("<p align='{alignment}'><nobr>");
+        for (index, line) in selected.iter().enumerate() {
+            if index != 0 {
+                output.push_str("<br>");
+            }
+            for run in &line.runs {
+                append_printed_html_run(&mut output, run, self.settings.line_height);
+            }
+        }
+        output.push_str("</nobr></p>");
+        output
+    }
+
     pub(crate) fn has_wait(&self, wait_id: u64) -> bool {
         self.input_wait
             .as_ref()
@@ -326,6 +378,19 @@ impl PresentationModel {
             alignment: self.current_alignment,
             runs: self.pending_runs.clone(),
         })
+    }
+
+    fn projected_line(&self, index: usize) -> Option<DisplayLine> {
+        let line = self
+            .lines
+            .get(index)
+            .map(|line| line.as_ref().clone())
+            .or_else(|| {
+                (index == self.lines.len())
+                    .then(|| self.pending_line())
+                    .flatten()
+            })?;
+        Some(self.project_line(line))
     }
 
     fn delivered_line_count(&self) -> usize {

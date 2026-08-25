@@ -49,11 +49,6 @@ pub(crate) enum ExternalCompletion {
         return_type: era_runtime_protocol::ExtensionValueType,
         mutable_places: Vec<Option<(PlaceDescriptor, era_runtime_protocol::ExtensionValueType)>>,
     },
-    ProjectionString {
-        request: HostRequestId,
-        operation: ProjectionStringOperation,
-        context: era_runtime_protocol::ProjectionQueryContext,
-    },
     ProjectionInteger {
         request: HostRequestId,
         context: era_runtime_protocol::ProjectionQueryContext,
@@ -92,12 +87,6 @@ pub(crate) enum ExternalCompletion {
         context: era_runtime_protocol::ProjectionQueryContext,
         relative_path: String,
     },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) enum ProjectionStringOperation {
-    DisplayLine,
-    PrintedHtml,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

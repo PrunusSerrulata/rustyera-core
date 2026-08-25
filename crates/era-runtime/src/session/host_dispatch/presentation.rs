@@ -186,61 +186,6 @@ impl RuntimeSession {
             )?;
             return self.emit_presentation();
         }
-        if matches!(name.as_str(), "GETDISPLAYLINE" | "HTML_GETPRINTEDSTR") {
-            *status = HostDispatchStatus::Handled;
-            let index = request
-                .arguments
-                .first()
-                .and_then(|value| match value {
-                    VmValue::Integer(value) => Some(*value),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            if index < 0 {
-                if name == "GETDISPLAYLINE" {
-                    return commit_completion(
-                        vm,
-                        request.id,
-                        VmHostCompletion::Ready(HostReady {
-                            value: Some(VmValue::String(String::new())),
-                            writes: Vec::new(),
-                        }),
-                    );
-                }
-                return self.fault(
-                    FaultCode::VmFault,
-                    "HTML_GETPRINTEDSTR line number must be non-negative",
-                    Some(request.origin.clone()),
-                );
-            }
-            let context = self.presentation_observation_context()?;
-            let (operation, version, completion) = if name == "GETDISPLAYLINE" {
-                (
-                    GET_DISPLAY_LINE_OPERATION,
-                    GET_DISPLAY_LINE_OPERATION_VERSION,
-                    ProjectionStringOperation::DisplayLine,
-                )
-            } else {
-                (
-                    HTML_GET_PRINTED_STR_OPERATION,
-                    HTML_GET_PRINTED_STR_OPERATION_VERSION,
-                    ProjectionStringOperation::PrintedHtml,
-                )
-            };
-            return self.issue_host_service(
-                vm,
-                request,
-                ExternalCompletion::ProjectionString {
-                    request: request.id,
-                    operation: completion,
-                    context,
-                },
-                ServiceKind::PresentationQuery,
-                operation,
-                version,
-                &ProjectionStringIndexRequest { context, index },
-            );
-        }
         if matches!(
             name.as_str(),
             "HTML_STRINGLEN" | "HTML_SUBSTRING" | "HTML_STRINGLINES"

@@ -2,6 +2,32 @@ use std::fmt::Write as _;
 
 use era_runtime_protocol::{Color, DisplayRun, LogicalLength, PresentationLength, ProtocolValue};
 
+pub(in crate::presentation) fn append_plain_run(output: &mut String, run: &DisplayRun) {
+    match run {
+        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+            output.push_str(text);
+        }
+        DisplayRun::Button { runs, .. } => {
+            for run in runs {
+                append_plain_run(output, run);
+            }
+        }
+        DisplayRun::Image { alt_text, .. } => {
+            if let Some(text) = alt_text {
+                output.push_str(text);
+            }
+        }
+        DisplayRun::ColumnCell { content, .. } => {
+            for run in content {
+                append_plain_run(output, run);
+            }
+        }
+        DisplayRun::Separator { pattern, .. } => output.push_str(pattern),
+        DisplayRun::Space { .. } => output.push(' '),
+        DisplayRun::HtmlDocument { .. } | DisplayRun::Shape { .. } => {}
+    }
+}
+
 pub(in crate::presentation) fn append_log_run(output: &mut String, run: &DisplayRun) {
     match run {
         DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
@@ -37,6 +63,30 @@ pub(in crate::presentation) fn append_html_run(
     run: &DisplayRun,
     line_height: LogicalLength,
 ) {
+    append_html_run_with_document_mode(output, run, line_height, HtmlDocumentMode::Complete);
+}
+
+pub(in crate::presentation) fn append_printed_html_run(
+    output: &mut String,
+    run: &DisplayRun,
+    line_height: LogicalLength,
+) {
+    append_html_run_with_document_mode(output, run, line_height, HtmlDocumentMode::PrintedFragment);
+}
+
+#[derive(Clone, Copy)]
+enum HtmlDocumentMode {
+    Complete,
+    PrintedFragment,
+}
+
+#[allow(clippy::too_many_lines)]
+fn append_html_run_with_document_mode(
+    output: &mut String,
+    run: &DisplayRun,
+    line_height: LogicalLength,
+    document_mode: HtmlDocumentMode,
+) {
     match run {
         DisplayRun::Text { text, style, .. } | DisplayRun::TextLayout { text, style, .. } => {
             let mut value = erabasic_html::escape(text);
@@ -71,13 +121,18 @@ pub(in crate::presentation) fn append_html_run(
             }
             output.push_str("'>");
             for run in runs {
-                append_html_run(output, run, line_height);
+                append_html_run_with_document_mode(output, run, line_height, document_mode);
             }
             output.push_str("</button>");
         }
-        DisplayRun::HtmlDocument { document } => {
-            output.push_str(&erabasic_html::serialize_document(document));
-        }
+        DisplayRun::HtmlDocument { document } => match document_mode {
+            HtmlDocumentMode::Complete => {
+                output.push_str(&erabasic_html::serialize_document(document));
+            }
+            HtmlDocumentMode::PrintedFragment => {
+                append_printed_html_document(output, document);
+            }
+        },
         DisplayRun::Image { placement, .. } => {
             output.push_str("<img src='");
             output.push_str(&erabasic_html::escape(&placement.resource_id));
@@ -131,7 +186,7 @@ pub(in crate::presentation) fn append_html_run(
         }
         DisplayRun::ColumnCell { content, .. } => {
             for run in content {
-                append_html_run(output, run, line_height);
+                append_html_run_with_document_mode(output, run, line_height, document_mode);
             }
         }
         DisplayRun::Separator { pattern, .. } => {
@@ -142,6 +197,31 @@ pub(in crate::presentation) fn append_html_run(
             append_raw_mixed_length(output, width);
             output.push_str("'>");
         }
+    }
+}
+
+fn append_printed_html_document(output: &mut String, document: &erabasic_html::HtmlDocument) {
+    fn append_root_node(output: &mut String, node: &erabasic_html::HtmlNode) {
+        if let erabasic_html::HtmlNode::Element { kind, children, .. } = node
+            && matches!(
+                kind,
+                erabasic_html::HtmlElementKind::Paragraph | erabasic_html::HtmlElementKind::NoBreak
+            )
+        {
+            for child in children {
+                append_root_node(output, child);
+            }
+            return;
+        }
+        output.push_str(&erabasic_html::serialize_document(
+            &erabasic_html::HtmlDocument {
+                nodes: vec![node.clone()],
+            },
+        ));
+    }
+
+    for node in &document.nodes {
+        append_root_node(output, node);
     }
 }
 

@@ -223,7 +223,6 @@ impl RuntimeSession {
                     | ExternalCompletion::UpdateCheck { request: id, .. }
                     | ExternalCompletion::PointerState { request: id, .. }
                     | ExternalCompletion::Extension { request: id, .. }
-                    | ExternalCompletion::ProjectionString { request: id, .. }
                     | ExternalCompletion::ProjectionInteger { request: id, .. }
                     | ExternalCompletion::HtmlSubstring { request: id, .. }
                     | ExternalCompletion::TextExtent { request: id, .. }
@@ -463,17 +462,6 @@ impl RuntimeSession {
                                 );
                             }
                         }
-                    }
-                    ExternalCompletion::ProjectionString {
-                        operation, context, ..
-                    } => {
-                        let result: ProjectionStringResponse =
-                            decode_canonical(payload.as_slice())?;
-                        if !self.validate_presentation_query_context(context, result.context)? {
-                            return Ok(());
-                        }
-                        let _ = operation;
-                        Some(VmValue::String(result.value))
                     }
                     ExternalCompletion::ProjectionInteger { context, .. } => {
                         let result: ProjectionIntegerResponse =

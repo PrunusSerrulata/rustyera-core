@@ -26,6 +26,7 @@ struct RuntimeQueryState {
 enum RuntimeQueryEvaluation {
     Ready(VmValue),
     MalformedHtml,
+    InvalidPrintedHtmlIndex,
     Unhandled,
 }
 
@@ -65,6 +66,29 @@ fn evaluate_runtime_query(
         "GETDEFCOLOR" => VmValue::Integer(presentation.default_foreground_rgb()),
         "GETFOCUSCOLOR" => VmValue::Integer(presentation.focus_rgb()),
         "GETSTYLE" => VmValue::Integer(presentation.style_bits()),
+        "GETDISPLAYLINE" => {
+            let index = match arguments.first() {
+                Some(VmValue::Integer(value)) => usize::try_from(*value).ok(),
+                Some(_) | None => Some(0),
+            };
+            VmValue::String(
+                index.map_or_else(String::new, |index| presentation.display_line(index)),
+            )
+        }
+        "HTML_GETPRINTEDSTR" => {
+            let raw_index = match arguments.first() {
+                Some(VmValue::Integer(value)) => *value,
+                Some(_) | None => 0,
+            };
+            if raw_index < 0 {
+                return Ok(RuntimeQueryEvaluation::InvalidPrintedHtmlIndex);
+            }
+            VmValue::String(
+                usize::try_from(raw_index)
+                    .ok()
+                    .map_or_else(String::new, |index| presentation.printed_html_line(index)),
+            )
+        }
         "ISSKIP" => VmValue::Integer(i64::from(state.skip_print)),
         "MESSKIP" | "MOUSESKIP" => VmValue::Integer(i64::from(state.message_skip)),
         "LINEISEMPTY" => VmValue::Integer(i64::from(presentation.last_line_is_empty())),
@@ -151,6 +175,13 @@ impl RuntimeSession {
                 return self.fault(
                     FaultCode::VmFault,
                     "malformed HTML text",
+                    Some(request.origin.clone()),
+                );
+            }
+            RuntimeQueryEvaluation::InvalidPrintedHtmlIndex => {
+                return self.fault(
+                    FaultCode::VmFault,
+                    "HTML_GETPRINTEDSTR line number must be non-negative",
                     Some(request.origin.clone()),
                 );
             }
