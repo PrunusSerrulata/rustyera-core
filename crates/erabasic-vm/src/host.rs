@@ -577,7 +577,9 @@ use core::CoreNative;
 pub use core::evaluate_pure_native;
 #[cfg(test)]
 use core::{parse_era_numeric, substring_legacy_bytes, substring_scalars};
+pub(crate) use services::apply_owned_width_with_mode;
 #[cfg(test)]
 use services::apply_width;
+#[cfg(test)]
 pub(crate) use services::apply_width_with_mode;
 use services::{CompilerNative, RandomNative};

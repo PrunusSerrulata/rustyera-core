@@ -222,18 +222,8 @@ impl Vm {
             Opcode::Concat => {
                 let count = read_u16(position.encoded.payload, 0)? as usize;
                 let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
-                let mut parts = Vec::with_capacity(count);
-                for _ in 0..count {
-                    let VmValue::String(part) = pop(stack)? else {
-                        return Err(StepError::new(
-                            VmFaultCode::TypeMismatch,
-                            "concat expects strings",
-                        ));
-                    };
-                    parts.push(part);
-                }
-                parts.reverse();
-                stack.push(VmValue::String(parts.concat()));
+                let value = concat_strings(stack, count)?;
+                stack.push(VmValue::String(value));
             }
             Opcode::ForStart => {
                 let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;

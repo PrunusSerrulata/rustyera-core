@@ -42,8 +42,8 @@ use native_ops::{
     validate_native_ready,
 };
 use operand::{
-    assign_binary_tag, binary_value, exact, map_vm_error, pop, pop_arguments, pop_indices,
-    read_u16, read_u32, unary_value,
+    assign_binary_tag, binary_value, concat_strings, exact, map_vm_error, pop, pop_arguments,
+    pop_indices, read_u16, read_u32, unary_value,
 };
 
 enum StepOutcome {

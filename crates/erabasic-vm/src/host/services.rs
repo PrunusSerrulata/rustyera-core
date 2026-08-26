@@ -13,12 +13,14 @@ impl NativeService for CompilerNative {
                 let Some(VmValue::Integer(value)) = request.arguments.first() else {
                     return Err("format_integer expects an integer".into());
                 };
-                Ok(NativeReady::value(VmValue::String(apply_width_with_mode(
-                    &value.to_string(),
-                    request.arguments.get(1),
-                    request.arguments.get(2),
-                    self.character_width_mode.get(),
-                )?)))
+                Ok(NativeReady::value(VmValue::String(
+                    apply_owned_width_with_mode(
+                        value.to_string(),
+                        request.arguments.get(1),
+                        request.arguments.get(2),
+                        self.character_width_mode.get(),
+                    )?,
+                )))
             }
             "format_string" => {
                 let Some(value) = request.arguments.first() else {
@@ -31,12 +33,14 @@ impl NativeService for CompilerNative {
                         return Err("format_string cannot dereference a place".into());
                     }
                 };
-                Ok(NativeReady::value(VmValue::String(apply_width_with_mode(
-                    &value,
-                    request.arguments.get(1),
-                    request.arguments.get(2),
-                    self.character_width_mode.get(),
-                )?)))
+                Ok(NativeReady::value(VmValue::String(
+                    apply_owned_width_with_mode(
+                        value,
+                        request.arguments.get(1),
+                        request.arguments.get(2),
+                        self.character_width_mode.get(),
+                    )?,
+                )))
             }
             "times" => {
                 let place = request
@@ -145,14 +149,24 @@ impl NativeService for RandomNative {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn apply_width_with_mode(
     value: &str,
     width: Option<&VmValue>,
     alignment: Option<&VmValue>,
     mode: crate::CharacterWidthMode,
 ) -> Result<String, String> {
+    apply_owned_width_with_mode(value.to_owned(), width, alignment, mode)
+}
+
+pub(crate) fn apply_owned_width_with_mode(
+    mut value: String,
+    width: Option<&VmValue>,
+    alignment: Option<&VmValue>,
+    mode: crate::CharacterWidthMode,
+) -> Result<String, String> {
     let Some(width) = width else {
-        return Ok(value.into());
+        return Ok(value);
     };
     let VmValue::Integer(signed_width) = width else {
         return Err("format width must be an integer".into());
@@ -164,16 +178,20 @@ pub(crate) fn apply_width_with_mode(
         Some(_) => return Err("format alignment must be an integer".into()),
         None => false,
     };
-    let characters = crate::display_width(value, mode);
+    let characters = crate::display_width(&value, mode);
     if characters >= width {
-        return Ok(value.into());
+        return Ok(value);
     }
-    let padding = " ".repeat(width - characters);
-    Ok(if left_align {
-        format!("{value}{padding}")
-    } else {
-        format!("{padding}{value}")
-    })
+    let padding = width - characters;
+    if left_align {
+        value.reserve(padding);
+        value.extend(std::iter::repeat_n(' ', padding));
+        return Ok(value);
+    }
+    let mut padded = String::with_capacity(value.len() + padding);
+    padded.extend(std::iter::repeat_n(' ', padding));
+    padded.push_str(&value);
+    Ok(padded)
 }
 
 #[cfg(test)]

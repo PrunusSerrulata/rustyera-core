@@ -374,8 +374,8 @@ impl RuntimeFormContinuation {
                 let alignment_value = width_value
                     .as_ref()
                     .map(|_| VmValue::Integer(i64::from(alignment == Some(Alignment::Left))));
-                let value = crate::host::apply_width_with_mode(
-                    &value,
+                let value = crate::host::apply_owned_width_with_mode(
+                    value,
                     width_value.as_ref(),
                     alignment_value.as_ref(),
                     natives.character_width_mode(),

@@ -73,6 +73,27 @@ fn form_width_honors_alignment_and_unicode_display_columns() {
 }
 
 #[test]
+fn owned_form_width_reuses_unpadded_and_left_padded_storage() {
+    let mut value = String::with_capacity(16);
+    value.push('7');
+    let allocation = value.as_ptr();
+    let value =
+        apply_owned_width_with_mode(value, None, None, crate::CharacterWidthMode::Automatic)
+            .unwrap();
+    assert_eq!(value.as_ptr(), allocation);
+
+    let value = apply_owned_width_with_mode(
+        value,
+        Some(&VmValue::Integer(3)),
+        Some(&VmValue::Integer(1)),
+        crate::CharacterWidthMode::Automatic,
+    )
+    .unwrap();
+    assert_eq!(value, "7  ");
+    assert_eq!(value.as_ptr(), allocation);
+}
+
+#[test]
 fn form_width_uses_the_selected_project_column_policy() {
     let width = Some(&VmValue::Integer(4));
     let left = Some(&VmValue::Integer(1));

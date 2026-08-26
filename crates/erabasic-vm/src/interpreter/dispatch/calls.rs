@@ -60,12 +60,17 @@ impl Vm {
                             format!("dynamic target {name} has an incompatible function kind"),
                         ));
                     }
+                    let resolved_name = if target.name == name {
+                        name
+                    } else {
+                        target.name.clone()
+                    };
                     fiber
                         .frames
                         .last_mut()
                         .expect("frame exists")
                         .stack
-                        .push(VmValue::String(target.name.clone()));
+                        .push(VmValue::String(resolved_name));
                 } else if allow_missing {
                     fiber
                         .frames

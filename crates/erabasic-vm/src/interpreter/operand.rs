@@ -35,6 +35,51 @@ pub(super) fn pop(stack: &mut Vec<VmValue>) -> Result<VmValue, StepError> {
         .ok_or_else(|| StepError::new(VmFaultCode::StackUnderflow, "operand stack underflow"))
 }
 
+pub(super) fn concat_strings(stack: &mut Vec<VmValue>, count: usize) -> Result<String, StepError> {
+    let available = stack.len();
+    for offset in 0..count.min(available) {
+        let index = available - offset - 1;
+        if !matches!(stack[index], VmValue::String(_)) {
+            stack.truncate(index);
+            return Err(StepError::new(
+                VmFaultCode::TypeMismatch,
+                "concat expects strings",
+            ));
+        }
+    }
+    if count > available {
+        stack.clear();
+        return Err(StepError::new(
+            VmFaultCode::StackUnderflow,
+            "operand stack underflow",
+        ));
+    }
+    if count == 0 {
+        return Ok(String::new());
+    }
+
+    let start = available - count;
+    let total_bytes = stack[start..]
+        .iter()
+        .map(|value| match value {
+            VmValue::String(value) => value.len(),
+            _ => unreachable!("concat parts were validated before measuring"),
+        })
+        .sum::<usize>();
+    let mut parts = stack.drain(start..);
+    let VmValue::String(mut result) = parts.next().expect("validated concat part exists") else {
+        unreachable!("concat parts were validated before draining")
+    };
+    result.reserve(total_bytes - result.len());
+    for part in parts {
+        let VmValue::String(part) = part else {
+            unreachable!("concat parts were validated before draining")
+        };
+        result.push_str(&part);
+    }
+    Ok(result)
+}
+
 pub(super) struct PoppedIndices {
     inline: [u64; 4],
     length: usize,
@@ -240,6 +285,54 @@ pub(super) fn map_vm_error(error: VmError) -> StepError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concat_strings_preserves_order_and_reuses_the_first_allocation() {
+        let mut first = String::with_capacity(32);
+        first.push('前');
+        let allocation = first.as_ptr();
+        let mut stack = vec![
+            VmValue::Integer(7),
+            VmValue::String(first),
+            VmValue::String("缀".to_owned()),
+            VmValue::String(String::new()),
+        ];
+
+        let Ok(result) = concat_strings(&mut stack, 3) else {
+            panic!("validated strings must concatenate");
+        };
+
+        assert_eq!(result, "前缀");
+        assert_eq!(result.as_ptr(), allocation);
+        assert_eq!(stack, [VmValue::Integer(7)]);
+    }
+
+    #[test]
+    fn concat_strings_preserves_legacy_fault_priority_and_consumption() {
+        let mut mismatch = vec![
+            VmValue::Integer(1),
+            VmValue::Integer(2),
+            VmValue::String("top".to_owned()),
+        ];
+        let error = concat_strings(&mut mismatch, 4).unwrap_err();
+        assert_eq!(error.code, VmFaultCode::TypeMismatch);
+        assert_eq!(mismatch, [VmValue::Integer(1)]);
+
+        let mut underflow = vec![
+            VmValue::String("bottom".to_owned()),
+            VmValue::String("top".to_owned()),
+        ];
+        let error = concat_strings(&mut underflow, 3).unwrap_err();
+        assert_eq!(error.code, VmFaultCode::StackUnderflow);
+        assert!(underflow.is_empty());
+
+        let mut unchanged = vec![VmValue::Integer(7)];
+        let Ok(result) = concat_strings(&mut unchanged, 0) else {
+            panic!("zero-part concat must succeed");
+        };
+        assert_eq!(result, "");
+        assert_eq!(unchanged, [VmValue::Integer(7)]);
+    }
 
     #[test]
     fn popped_indices_preserve_source_order_inline_and_on_overflow() {
