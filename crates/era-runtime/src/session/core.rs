@@ -99,6 +99,7 @@ impl RuntimeSession {
             incremental: Arc::new(IncrementalState::default()),
             extension_declarations: Vec::new(),
             vm: None,
+            retained_title_program: None,
             presentation: PresentationModel::default(),
             pending_presentation_update: false,
             operations: PendingOperations::default(),

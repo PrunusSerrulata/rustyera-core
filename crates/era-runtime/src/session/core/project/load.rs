@@ -343,6 +343,7 @@ impl RuntimeSession {
             .cloned()
             .collect();
         self.incremental = Arc::new(candidate.build.incremental);
+        self.retained_title_program = None;
         self.artifact = candidate.build.artifact;
         self.project_snapshot = candidate.build.snapshot;
         self.undo_checkpoint = None;

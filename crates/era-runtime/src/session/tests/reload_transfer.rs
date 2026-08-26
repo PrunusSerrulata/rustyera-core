@@ -176,8 +176,12 @@ fn effect_acknowledgements_are_exact_and_failures_become_diagnostics() {
     ));
 }
 
-#[test]
-fn return_to_title_reuses_the_loaded_artifact_without_project_loading() {
+fn title_session_fixture() -> (
+    RuntimeSession,
+    Arc<std::sync::Mutex<Vec<ProjectProgress>>>,
+    ProjectManifest,
+    erabasic_bytecode::Digest,
+) {
     let manifest = ProjectManifest {
         project_revision: 1,
         files: vec![SubmittedFile {
@@ -203,16 +207,135 @@ fn return_to_title_reuses_the_loaded_artifact_without_project_loading() {
     session.artifact = build.artifact.take();
     session.incremental = Arc::new(build.incremental);
     session.project_snapshot = build.snapshot;
+    let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = Arc::clone(&progress);
+    session.project_progress_reporter = Some(ProjectProgressReporter::new(move |value| {
+        observed.lock().unwrap().push(value);
+    }));
     session.start_new_game(7).unwrap();
+    let _ = drain(&mut session);
+    (session, progress, manifest, expected)
+}
+
+fn return_to_title_entropy_request(messages: Vec<RuntimeMessage>) -> u64 {
+    messages
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ServiceRequest(request)
+                if request.operation == RANDOM_SEED_OPERATION =>
+            {
+                Some(request.request_id)
+            }
+            _ => None,
+        })
+        .expect("return-to-title entropy request")
+}
+
+fn answer_entropy(session: &mut RuntimeSession, request_id: u64, seed: u64) {
+    session
+        .handle_message(
+            100,
+            RuntimeMessage::ServiceResponse(ServiceResponse {
+                request_id,
+                result: ServiceResult::Ready {
+                    payload: ProtocolBytes::new(
+                        encode_canonical(&RandomSeedResponse { seed }).unwrap(),
+                    ),
+                },
+            }),
+        )
+        .unwrap();
+}
+
+fn seed_title_timeline_retirement_state(session: &mut RuntimeSession) {
+    session
+        .presentation
+        .append_text("old timeline sentinel".into(), false);
+    session.pending_presentation_update = true;
+    session
+        .operations
+        .insert_service(77, PendingService::StartEntropy);
+    let project = session.project_snapshot.as_mut().unwrap();
+    assert_eq!(project.resource_graph.create_canvas(17, 64, 64), Ok(true));
+    assert!(
+        project
+            .resource_graph
+            .draw_canvas_text(17, "retained canvas command".into(), [0, 0])
+    );
+    session
+        .presentation
+        .set_resource_replay(project.resource_graph.replay());
+    session.hotkey_state = vec![1];
+    session.text_box = "retained text box".into();
+    session.flow_input_default_string = "retained input".into();
+    session.debug_output = "retained debug output".into();
+    session
+        .save_extensions
+        .push(era_runtime_save::OpaqueSaveExtension {
+            type_tag: 0x7f,
+            key: "retained".into(),
+            payload: vec![1],
+        });
+    session.load_slot_paths.push("save01.sav".into());
+    session
+        .slot_labels
+        .insert("save01.sav".into(), "slot".into());
+    session.last_projection_state = Some(ProjectionState {
+        runtime_revision: 1,
+        text_box: "retained projection".into(),
+        hotkey_state: vec![1],
+        button_generation: 1,
+        text_box_layout: TextBoxLayout::default(),
+    });
+    session.logical_time_ns = 123_456;
+    session.frontend_time_origin = Some((7, 123_456));
+}
+
+fn assert_title_timeline_retired(session: &RuntimeSession) {
+    assert_eq!(session.phase, RuntimePhase::Starting);
+    assert!(session.vm.is_none());
+    assert!(session.retained_title_program.is_some());
+    assert!(session.hotkey_state.is_empty());
+    assert!(session.text_box.is_empty());
+    assert!(session.flow_input_default_string.is_empty());
+    assert!(session.debug_output.is_empty());
+    assert!(session.save_extensions.is_empty());
+    assert!(session.load_slot_paths.is_empty());
+    assert!(session.slot_labels.is_empty());
+    assert!(session.last_projection_state.is_none());
+    assert_eq!(session.logical_time_ns, 123_456);
+    assert!(session.frontend_time_origin.is_none());
+    assert!(
+        session
+            .project_snapshot
+            .as_ref()
+            .unwrap()
+            .resource_graph
+            .canvas_state(17)
+            .is_none()
+    );
+}
+
+#[test]
+fn return_to_title_reuses_program_index_without_project_loading() {
+    let (mut session, progress, _manifest, expected) = title_session_fixture();
 
     assert!(std::ptr::eq(
         session.artifact.as_ref().unwrap().artifact(),
         session.vm.as_ref().unwrap().vm().artifact(),
     ));
+    assert!(
+        progress
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|value| value.stage == ProjectProgressStage::IndexingProgram)
+    );
+    progress.lock().unwrap().clear();
 
     session.return_to_title(99).unwrap();
-
-    assert_eq!(session.phase, RuntimePhase::Starting);
+    assert!(session.vm.is_none());
+    assert!(session.retained_title_program.is_some());
     assert_eq!(
         session
             .artifact
@@ -229,7 +352,90 @@ fn return_to_title_reuses_the_loaded_artifact_without_project_loading() {
             .iter()
             .all(|message| !matches!(message, RuntimeMessage::ProjectLoadReport(_)))
     );
-    let entropy_request = messages
+    answer_entropy(&mut session, return_to_title_entropy_request(messages), 9);
+
+    assert!(session.retained_title_program.is_none());
+    assert!(session.vm.is_some());
+    let resumed_progress = progress.lock().unwrap();
+    assert!(
+        resumed_progress
+            .iter()
+            .any(|value| value.stage == ProjectProgressStage::InitializingMemory)
+    );
+    assert!(
+        resumed_progress
+            .iter()
+            .all(|value| value.stage != ProjectProgressStage::IndexingProgram)
+    );
+    drop(resumed_progress);
+    let replay_header = input_replay_records(&session).remove(0);
+    assert_eq!(replay_header["origin"]["kind"], "new_game");
+    assert_eq!(replay_header["origin"]["seed"], "9");
+    assert_eq!(replay_header["origin"]["trigger"], "return_to_title");
+}
+
+#[test]
+fn return_to_title_retires_timeline_before_cancellation_and_entropy() {
+    let (mut session, _progress, _manifest, _expected) = title_session_fixture();
+    seed_title_timeline_retirement_state(&mut session);
+
+    session.return_to_title(99).unwrap();
+    assert_title_timeline_retired(&session);
+    let messages = drain(&mut session);
+    let clear_snapshot = messages
+        .iter()
+        .position(|message| {
+            matches!(
+                message,
+                RuntimeMessage::PresentationSnapshot(snapshot)
+                    if snapshot.history.logical_lines.is_empty()
+                        && snapshot.resources.canvases.is_empty()
+                        && snapshot.resources.sprites.is_empty()
+            )
+        })
+        .expect("authoritative clear snapshot");
+    assert!(messages[..clear_snapshot].iter().all(|message| !matches!(
+        message,
+        RuntimeMessage::PresentationSnapshot(_) | RuntimeMessage::PresentationDelta(_)
+    )));
+    let cancellation_position = messages
+        .iter()
+        .position(|message| {
+            matches!(
+                message,
+                RuntimeMessage::CancelExternalRequest(request) if request.request_id == 77
+            )
+        })
+        .expect("old external request cancellation");
+    let entropy_position = messages
+        .iter()
+        .position(|message| {
+            matches!(
+                message,
+                RuntimeMessage::ServiceRequest(request)
+                    if request.operation == RANDOM_SEED_OPERATION
+            )
+        })
+        .expect("return-to-title entropy request position");
+    assert!(clear_snapshot < cancellation_position);
+    assert!(cancellation_position < entropy_position);
+}
+
+#[test]
+fn retained_title_program_is_released_on_failure_shutdown_load_and_reload() {
+    let (mut session, _progress, manifest, _expected) = title_session_fixture();
+
+    session.return_to_title(101).unwrap();
+    assert!(session.vm.is_none());
+    assert!(session.retained_title_program.is_some());
+    let repeated = drain(&mut session);
+    assert!(repeated.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::PresentationSnapshot(snapshot)
+            if snapshot.history.logical_lines.is_empty()
+                && snapshot.resources.canvases.is_empty()
+    )));
+    let repeated_entropy = repeated
         .into_iter()
         .find_map(|message| match message {
             RuntimeMessage::ServiceRequest(request)
@@ -239,24 +445,61 @@ fn return_to_title_reuses_the_loaded_artifact_without_project_loading() {
             }
             _ => None,
         })
-        .expect("return-to-title entropy request");
+        .expect("repeated return-to-title entropy request");
     session
         .handle_message(
-            100,
+            102,
             RuntimeMessage::ServiceResponse(ServiceResponse {
-                request_id: entropy_request,
-                result: ServiceResult::Ready {
-                    payload: ProtocolBytes::new(
-                        encode_canonical(&RandomSeedResponse { seed: 9 }).unwrap(),
-                    ),
+                request_id: repeated_entropy,
+                result: ServiceResult::Error {
+                    error: era_runtime_protocol::ServiceError {
+                        code: "entropy.unavailable".into(),
+                        message: "unavailable".into(),
+                    },
                 },
             }),
         )
         .unwrap();
-    let replay_header = input_replay_records(&session).remove(0);
-    assert_eq!(replay_header["origin"]["kind"], "new_game");
-    assert_eq!(replay_header["origin"]["seed"], "9");
-    assert_eq!(replay_header["origin"]["trigger"], "return_to_title");
+    assert_eq!(session.phase, RuntimePhase::Faulted);
+    assert!(session.vm.is_none());
+    assert!(session.retained_title_program.is_some());
+    session.shutdown(103).unwrap();
+    assert!(session.retained_title_program.is_none());
+
+    let (mut load_session, _progress, _old_manifest, _expected) = title_session_fixture();
+    load_session.return_to_title(104).unwrap();
+    assert!(load_session.retained_title_program.is_some());
+    load_session.phase = RuntimePhase::Ready;
+    load_session.operations = PendingOperations::default();
+    let identity = crate::compiled_cache::project_identity(&manifest);
+    load_session
+        .load_project(
+            105,
+            ProjectLoadRequest {
+                identity,
+                manifest: Some(manifest),
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+    assert!(load_session.retained_title_program.is_none());
+
+    let (mut reload_session, _progress, _manifest, _expected) = title_session_fixture();
+    reload_session.return_to_title(106).unwrap();
+    assert!(reload_session.retained_title_program.is_some());
+    reload_session.phase = RuntimePhase::Ready;
+    reload_session.operations = PendingOperations::default();
+    reload_session
+        .reload_project(
+            107,
+            &ReloadProject {
+                base_revision: 1,
+                target_revision: 2,
+                changes: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(reload_session.retained_title_program.is_none());
 }
 
 #[test]

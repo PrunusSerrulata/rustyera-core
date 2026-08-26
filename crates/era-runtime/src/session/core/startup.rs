@@ -24,6 +24,8 @@ impl RuntimeSession {
         }
         if matches!(request.mode, StartMode::NewGame { .. }) {
             self.advance_epoch();
+        } else {
+            self.retained_title_program = None;
         }
         match request.mode {
             StartMode::NewGame { seed: Some(seed) } => self.start_new_game(seed),
@@ -74,6 +76,7 @@ impl RuntimeSession {
         message_id: u64,
         bytes: &[u8],
     ) -> Result<(), RuntimeError> {
+        self.retained_title_program = None;
         let artifact = self
             .artifact
             .as_ref()
@@ -165,6 +168,7 @@ impl RuntimeSession {
         message_id: u64,
         bytes: &[u8],
     ) -> Result<(), RuntimeError> {
+        self.retained_title_program = None;
         let maximum =
             usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
         let mut payload = match runtime_snapshot::decode(bytes, maximum) {
@@ -459,12 +463,25 @@ impl RuntimeSession {
                 total: progress.total,
             });
         };
-        let mut vm = RuntimeVm::new_for_title_with_seed_and_progress(
-            artifact,
-            self.options.vm_config,
-            seed,
-            &mut report_preparation,
-        );
+        let retained = self
+            .retained_title_program
+            .take()
+            .filter(|retained| retained.artifact_id() == artifact.artifact().manifest.artifact_id);
+        let mut vm = if let Some(retained) = retained {
+            RuntimeVm::new_for_title_from_retained_program_with_seed_and_progress(
+                retained,
+                self.options.vm_config,
+                seed,
+                &mut report_preparation,
+            )
+        } else {
+            RuntimeVm::new_for_title_with_seed_and_progress(
+                artifact,
+                self.options.vm_config,
+                seed,
+                &mut report_preparation,
+            )
+        };
         vm.set_line_columns(self.line_columns);
         vm.set_character_width_mode(configured_character_width_mode(
             self.project_snapshot.as_ref(),
@@ -513,6 +530,28 @@ impl RuntimeSession {
             );
         }
         let (services, storage) = self.operations.external_requests();
+        self.retained_title_program = self
+            .vm
+            .take()
+            .map(RuntimeVm::retain_program_index_for_title)
+            .or_else(|| self.retained_title_program.take());
+        self.reset_game_timeline_for_title();
+        if let Some(project) = &mut self.project_snapshot {
+            project.resource_graph.reset_runtime_graph();
+        }
+        // Discard the old dirty frame before emitting any protocol message. The generic
+        // emitter flushes pending presentation first, which must never serialize the
+        // previous game's long history during this memory-retirement transaction.
+        self.pending_presentation_update = false;
+        self.presentation.reset_preserving_projection();
+        if let Some(project) = &self.project_snapshot {
+            self.presentation.configure_project(project);
+        }
+        // Publish the empty authoritative projection before changing phase or requesting
+        // entropy. Frontends can release long history, canvases and media while the immutable
+        // program index is the only allocation retained from the previous live VM.
+        self.emit_presentation()?;
+        self.flush_presentation_for_observation()?;
         for request_id in services {
             self.emit(
                 RuntimeMessage::CancelExternalRequest(CancelExternalRequest {
@@ -531,25 +570,6 @@ impl RuntimeSession {
                 None,
             )?;
         }
-        self.operations.clear();
-        self.effect_journal.clear();
-        self.inbound_transfer = None;
-        self.outbound_transfer = None;
-        self.vm = None;
-        self.controller = SystemController::default();
-        self.presentation.reset_preserving_projection();
-        self.pending_presentation_update = false;
-        if let Some(project) = &self.project_snapshot {
-            self.presentation.configure_project(project);
-        }
-        self.queued_input.clear();
-        self.deferred_input_completion = None;
-        self.command_intents.clear();
-        self.reusable_system_intents.clear();
-        self.undo_checkpoint = None;
-        self.undo_replay = None;
-        self.undo_token = None;
-        self.exit_requested = None;
         self.set_phase(RuntimePhase::Ready)?;
         self.next_new_game_trigger = NewGameTrigger::ReturnToTitle;
         self.start(
@@ -560,15 +580,72 @@ impl RuntimeSession {
         )
     }
 
-    pub(in super::super) fn open_title_menu(&mut self) -> Result<(), RuntimeError> {
+    fn reset_game_timeline_for_title(&mut self) {
+        // Retained session/project state: the session-monotonic logical clock, loaded
+        // artifact and incremental/static project data, client capabilities and
+        // projection parameters, configuration transactions, and compiled cache.
+        self.operations = PendingOperations::default();
+        self.effect_journal = BTreeMap::new();
+        self.inbound_transfer = None;
+        self.outbound_transfer = None;
+        self.pending_candidate_commit = None;
+        self.candidate_clock = None;
+        self.controller = SystemController::default();
+        self.random_seed = None;
+        self.frontend_time_origin = None;
+        // `logical_time_ns` is session-monotonic protocol time, not game timeline state.
+        // Clearing pending operations removes every old deadline while preserving the
+        // non-decreasing clock contract for later frontend samples.
+        self.input_replay = InputReplayHistory::default();
+        // Envelopes already decoded behind ReturnToTitle still carry the previous epoch.
+        // Drop them here so they cannot retain large payloads or act on the new timeline.
+        self.inbound = VecDeque::new();
+        self.key_toggle_state = [0; 256];
+        self.hotkey_state = Vec::new();
+        self.queued_input = VecDeque::new();
+        self.deferred_input_completion = None;
+        self.text_box = String::new();
+        self.text_box_layout = TextBoxLayout::default();
+        self.flow_input_enabled = false;
+        self.flow_input_default = 0;
+        self.flow_input_can_skip = false;
+        self.flow_input_force_skip = false;
+        self.flow_input_string = false;
+        self.flow_input_default_string = String::new();
+        self.button_generation = 0;
+        self.debug_output = String::new();
+        self.debug_output_base = 0;
+        self.debug_resume_phase = None;
+        self.debug_frontend_time_sample = None;
+        self.last_projection_state = None;
+        self.message_skip = false;
+        self.skip_print = false;
+        self.user_defined_skip = false;
+        self.saved_skip = false;
+        self.force_kana_mode = 0;
+        self.command_intents = BTreeMap::new();
+        self.reusable_system_intents = BTreeMap::new();
+        self.exit_requested = None;
+        self.undo_checkpoint = None;
+        self.undo_replay = None;
+        self.undo_token = None;
+        self.save_extensions = Vec::new();
+        self.reset_title_menu_state();
+    }
+
+    fn reset_title_menu_state(&mut self) {
         self.system_menu = SystemMenuState::Title;
-        self.load_slot_paths.clear();
-        self.occupied_slot_paths.clear();
-        self.slot_change_tokens.clear();
-        self.slot_labels.clear();
-        self.invalid_slot_paths.clear();
+        self.load_slot_paths = Vec::new();
+        self.occupied_slot_paths = BTreeSet::new();
+        self.slot_change_tokens = BTreeMap::new();
+        self.slot_labels = BTreeMap::new();
+        self.invalid_slot_paths = BTreeSet::new();
         self.system_menu_host_request = None;
         self.system_menu_page = 0;
+    }
+
+    pub(in super::super) fn open_title_menu(&mut self) -> Result<(), RuntimeError> {
+        self.reset_title_menu_state();
         let vm = self
             .vm
             .as_ref()

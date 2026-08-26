@@ -69,10 +69,10 @@ use erabasic_vm::{
     CharacterWidthMode, DEFAULT_LINE_COLUMNS, EraSaveScope, EraState, HostCallRequest,
     HostCallResult, HostReady, HostWaitStability, HostWrite, ImmediateHostCall,
     ImmediateHostCallResult, PlaceDescriptor, PreparedCandidateState, PreparedRuntimeState,
-    RunBudget, RuntimeVm, SnapshotEligibility, StructuredScope, VmConfig, VmDiagnosticNotification,
-    VmDriveMode, VmHost, VmHostCompletion, VmHostRequest, VmPortDriveReport, VmPortEvent,
-    VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort, VmRuntimeStatePort,
-    VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot, VmValue,
+    RetainedProgramIndex, RunBudget, RuntimeVm, SnapshotEligibility, StructuredScope, VmConfig,
+    VmDiagnosticNotification, VmDriveMode, VmHost, VmHostCompletion, VmHostRequest,
+    VmPortDriveReport, VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort,
+    VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot, VmValue,
 };
 use serde::{Deserialize, Serialize};
 
@@ -671,6 +671,7 @@ pub struct RuntimeSession {
     incremental: Arc<IncrementalState>,
     extension_declarations: Vec<ExtensionDeclaration>,
     vm: Option<RuntimeVm>,
+    retained_title_program: Option<RetainedProgramIndex>,
     presentation: PresentationModel,
     pending_presentation_update: bool,
     operations: PendingOperations,

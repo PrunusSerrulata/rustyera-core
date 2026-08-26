@@ -105,6 +105,16 @@ impl Vm {
         Self::new_with_memory_and_progress(artifact, config, true, Some(progress))
     }
 
+    pub(crate) fn new_for_title_from_program_with_progress(
+        program: Arc<ProgramGeneration>,
+        config: VmConfig,
+        progress: &mut dyn FnMut(VmPreparationProgress),
+    ) -> Self {
+        let mut progress = Some(progress);
+        let memory = initialize_title_memory(&program.artifact, &mut progress);
+        Self::from_program_and_memory(program, config, memory)
+    }
+
     fn new_with_memory(artifact: ValidatedArtifact, config: VmConfig, title_state: bool) -> Self {
         Self::new_with_memory_and_progress(artifact, config, title_state, None)
     }
@@ -116,42 +126,25 @@ impl Vm {
         mut progress: Option<&mut dyn FnMut(VmPreparationProgress)>,
     ) -> Self {
         let artifact = artifact.into_shared();
-        let memory_total = if title_state {
-            u64::try_from(artifact.globals.len())
-                .unwrap_or(u64::MAX - 1)
-                .saturating_add(1)
-                .max(1)
-        } else {
-            1
-        };
-        report_vm_preparation(
-            &mut progress,
-            VmPreparationStage::InitializingMemory,
-            0,
-            memory_total,
-        );
         let memory = if title_state {
-            Memory::title_with_progress(&artifact, &mut |completed, total| {
-                report_vm_preparation(
-                    &mut progress,
-                    VmPreparationStage::InitializingMemory,
-                    completed,
-                    total,
-                );
-            })
+            initialize_title_memory(&artifact, &mut progress)
         } else {
+            report_vm_preparation(&mut progress, VmPreparationStage::InitializingMemory, 0, 1);
             Memory::new_game(&artifact)
         };
         if !title_state {
-            report_vm_preparation(
-                &mut progress,
-                VmPreparationStage::InitializingMemory,
-                memory_total,
-                memory_total,
-            );
+            report_vm_preparation(&mut progress, VmPreparationStage::InitializingMemory, 1, 1);
         }
-        let generation = GenerationId(1);
         let program = Arc::new(ProgramGeneration::new_with_progress(artifact, progress));
+        Self::from_program_and_memory(program, config, memory)
+    }
+
+    fn from_program_and_memory(
+        program: Arc<ProgramGeneration>,
+        config: VmConfig,
+        memory: Memory,
+    ) -> Self {
+        let generation = GenerationId(1);
         Self {
             config,
             generations: BTreeMap::from([(generation, program)]),
@@ -177,6 +170,12 @@ impl Vm {
             active_path_memo_fiber: std::cell::Cell::new(None),
             active_path_memo: std::cell::RefCell::new(None),
         }
+    }
+
+    pub(crate) fn into_current_program(mut self) -> Arc<ProgramGeneration> {
+        self.generations
+            .remove(&self.current_generation)
+            .expect("the current generation is always retained")
     }
 
     pub(crate) fn compile_regex(&mut self, pattern: &str) -> Result<regex::Regex, String> {
@@ -527,4 +526,23 @@ impl Vm {
         self.runnable.push_back(fiber);
         Ok(())
     }
+}
+
+fn initialize_title_memory(
+    artifact: &BytecodeArtifact,
+    progress: &mut Option<&mut dyn FnMut(VmPreparationProgress)>,
+) -> Memory {
+    let total = u64::try_from(artifact.globals.len())
+        .unwrap_or(u64::MAX - 1)
+        .saturating_add(1)
+        .max(1);
+    report_vm_preparation(progress, VmPreparationStage::InitializingMemory, 0, total);
+    Memory::title_with_progress(artifact, &mut |completed, total| {
+        report_vm_preparation(
+            progress,
+            VmPreparationStage::InitializingMemory,
+            completed,
+            total,
+        );
+    })
 }

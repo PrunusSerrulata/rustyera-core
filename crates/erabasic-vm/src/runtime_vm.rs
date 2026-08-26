@@ -24,6 +24,23 @@ pub struct RuntimeVm {
     line_columns: u32,
 }
 
+/// The immutable program index retained while a runtime obtains title entropy.
+///
+/// Consuming a [`RuntimeVm`] into this type releases game memory, fibers, scheduler
+/// state, derived caches, Native services, layout and VM configuration without
+/// rebuilding the program index when the title timeline starts.
+pub struct RetainedProgramIndex {
+    program: std::sync::Arc<crate::ProgramGeneration>,
+}
+
+impl RetainedProgramIndex {
+    /// Identify the exact artifact whose immutable index is retained.
+    #[must_use]
+    pub fn artifact_id(&self) -> Digest {
+        self.program.artifact.manifest.artifact_id
+    }
+}
+
 /// Stable logical width used until a frontend reports its projection dimensions.
 pub const DEFAULT_LINE_COLUMNS: u32 = 75;
 
@@ -36,6 +53,21 @@ pub struct PreparedCandidateState {
 }
 
 impl RuntimeVm {
+    /// Consume the live VM and retain only its immutable program index for a title restart.
+    #[must_use]
+    pub fn retain_program_index_for_title(self) -> RetainedProgramIndex {
+        let Self {
+            vm,
+            natives,
+            pending_natives,
+            line_columns: _,
+        } = self;
+        drop(natives);
+        drop(pending_natives);
+        let program = vm.into_current_program();
+        RetainedProgramIndex { program }
+    }
+
     /// Read a place supplied to a Host extension without exposing VM storage layouts.
     ///
     /// # Errors
@@ -172,6 +204,26 @@ impl RuntimeVm {
         let natives = NativeServiceRegistry::for_artifact_with_seed(artifact.artifact(), seed);
         let mut runtime = Self {
             vm: Vm::new_for_title_with_progress(artifact, config, progress),
+            natives,
+            pending_natives: None,
+            line_columns: DEFAULT_LINE_COLUMNS,
+        };
+        runtime.refresh_draw_line_string();
+        runtime
+    }
+
+    /// Build title memory and Native services around a previously retained program index.
+    #[must_use]
+    pub fn new_for_title_from_retained_program_with_seed_and_progress(
+        retained: RetainedProgramIndex,
+        config: VmConfig,
+        seed: u64,
+        progress: &mut dyn FnMut(crate::VmPreparationProgress),
+    ) -> Self {
+        let RetainedProgramIndex { program } = retained;
+        let natives = NativeServiceRegistry::for_artifact_with_seed(&program.artifact, seed);
+        let mut runtime = Self {
+            vm: Vm::new_for_title_from_program_with_progress(program, config, progress),
             natives,
             pending_natives: None,
             line_columns: DEFAULT_LINE_COLUMNS,

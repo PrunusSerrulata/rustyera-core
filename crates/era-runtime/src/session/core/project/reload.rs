@@ -154,6 +154,7 @@ impl RuntimeSession {
                 .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         }
 
+        self.retained_title_program = None;
         self.artifact = Some(target);
         build.incremental.compact();
         self.incremental = Arc::new(build.incremental);

@@ -51,7 +51,8 @@ pub use runtime_port::{
     VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite, VmWaitRebind,
 };
 pub use runtime_vm::{
-    DEFAULT_LINE_COLUMNS, PreparedCandidateState, PreparedHostCompletion, RuntimeVm,
+    DEFAULT_LINE_COLUMNS, PreparedCandidateState, PreparedHostCompletion, RetainedProgramIndex,
+    RuntimeVm,
 };
 pub use save::{EraSaveScope, EraState, EraStateReport, EraVariableState};
 pub use snapshot::{

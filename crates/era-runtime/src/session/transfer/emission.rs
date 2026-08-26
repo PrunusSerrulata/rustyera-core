@@ -49,6 +49,7 @@ impl RuntimeSession {
         self.inbound_transfer = None;
         self.outbound_transfer = None;
         self.vm = None;
+        self.retained_title_program = None;
         self.set_phase(RuntimePhase::Stopped)?;
         self.emit(
             RuntimeMessage::ShutdownReady(ShutdownReady {
