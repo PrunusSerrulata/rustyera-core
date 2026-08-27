@@ -11,6 +11,11 @@ Use the batches defined by the root `AGENTS.md`: estimate each requested feature
 combine small items for implementation, refactoring review, and testing, and handle large items
 independently with separate budgets. Keep a separate commit for each item regardless of batching.
 All review counts, suite counts, gates, and deadlines below apply to the current batch.
+For user-requested iterative work, "batch" below means that batch in the current iteration. Each
+iteration gets its own required review and test budget; fixes within an iteration do not reset
+either. A new iteration requires substantive analysis and changes based on prior evidence, not
+merely renaming a failed run to repeat a full suite. Record the iteration scope, timings, results,
+and next steps.
 
 Follow the root `AGENTS.md` parallel scheduling rules. Run independent checks concurrently when
 their inputs, outputs, and mutable resources are isolated; pipeline dependent checks as prerequisites
@@ -38,8 +43,29 @@ gates. Delegate test execution as required by the component's `AGENTS.md`.
   snapshot every 5 seconds. Include every HTML element when an HTML client is involved. Compare
   snapshots without timestamps and other reporting-only metadata; if two consecutive snapshots
   are identical, immediately terminate the flow as stalled and report the error.
-- At the 60-minute deadline, terminate all test processes for that batch and report the active command, exact
-  case or stage, last snapshot, elapsed time, completed checks, and unverified checks.
+- At the 60-minute deadline, terminate all test processes for that batch and report the active
+  command, exact case or stage, last snapshot, elapsed time, completed checks, and unverified checks.
+
+## Continue or pause iterative work
+
+A test-budget expiry fails the current iteration's verification; it does not end the overall
+iterative task. Report the failure and return control to the primary agent for substantive next
+work. Continue until the user's goal or time limit is reached, unless the user pauses/stops the task
+or a real permission/environment/input blocker requires their help.
+
+Respect the user's deadline and reserve time before it for validation, per-item commits, and
+restoring the last deliverable state when an attempt is incomplete or unverified. Do not leave
+partial code or extend the user's deadline. Bound each test by the remaining iteration budget and
+the time available before wrap-up.
+
+On a deadline pause with the goal unmet, or a user-requested pause, stop processes but retain test
+procedures, scripts, fixtures, temporary projects, and necessary evidence for resumption. Record
+paths, commands, environment/seed, measurements, outstanding goals/checks, and restart steps. Reuse
+and recheck these materials on resumption; same-iteration work keeps its used budget, while a
+substantive new iteration has an independent budget. Clean up iterative-task test materials only
+when the user explicitly declares the task completed or aborted, never merely at iteration end,
+goal attainment, or pause. The primary agent owns code repair, commits, and wrap-up; test-only
+subagents must not perform those mutations.
 
 ## Select the scope
 

@@ -25,3 +25,8 @@ cargo run --manifest-path tools/runtime-tester/Cargo.toml -- COMMAND [PROJECT] [
 支持 `registry`、`minimal`、`minimal-root-paths`、`csv`、`analyzer`、`compile`、
 `benchmark`、`restore-saved`、`parse-file` 和 `project-extractor-all`。修改本目录 Rust
 代码时继续遵守仓库根 `AGENTS.md` 的格式、Clippy、测试顺序和测试子 agent 要求。
+
+循环迭代时，上述批次范围指该批次的当前轮次；各轮独立计算审查次数和测试预算。单轮预算
+耗尽只结束该轮测试，不能提前结束未达用户目标且未到用户时限的迭代任务。有时限须预留
+收尾且不留半成品；暂停时保留流程、脚本、fixture、临时项目及恢复记录，仅在用户明确
+表示任务完成或中止时清理，具体遵循工作区根 `AGENTS.md`。
