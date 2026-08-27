@@ -29,7 +29,11 @@ pub enum FilePayload {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FrontendFile {
+    /// Lookup path relative to the selected CSV or ERB data root.
     pub relative_path: String,
+    /// Original project-relative path for diagnostics; absent for root-relative callers.
+    #[serde(default)]
+    pub source_path: Option<String>,
     pub payload: FilePayload,
 }
 

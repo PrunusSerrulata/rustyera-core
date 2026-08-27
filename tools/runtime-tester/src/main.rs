@@ -200,6 +200,7 @@ fn audit_analyzer(compile: bool) {
                 .unwrap_or(&relative)
                 .to_owned();
             csv_files.csv.push(erabasic_csv::FrontendFile {
+                source_path: None,
                 relative_path: stripped,
                 payload: erabasic_csv::FilePayload::Utf8(text),
             });
@@ -439,6 +440,7 @@ fn audit_csv() {
             .unwrap_or(&relative)
             .to_owned();
         files.csv.push(erabasic_csv::FrontendFile {
+            source_path: None,
             relative_path: path,
             payload: erabasic_csv::FilePayload::Utf8(content),
         });

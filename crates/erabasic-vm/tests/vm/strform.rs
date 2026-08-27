@@ -13,6 +13,7 @@ fn compile_erafl_title_fixture() -> BytecodeArtifact {
     let data = load_project(
         &ProjectFiles {
             csv: vec![FrontendFile {
+                source_path: None,
                 relative_path: "FLAG.CSV".into(),
                 payload: CsvFilePayload::Utf8(ERAFL_TITLE_FLAG_CSV.into()),
             }],

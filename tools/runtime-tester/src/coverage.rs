@@ -189,6 +189,7 @@ fn audit_project(
                 file.path.clone()
             };
             let item = FrontendFile {
+                source_path: None,
                 relative_path,
                 payload: FilePayload::Utf8(text),
             };

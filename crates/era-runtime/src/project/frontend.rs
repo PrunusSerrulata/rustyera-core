@@ -42,6 +42,7 @@ impl CompilerSourceIndex {
 
 pub(super) fn csv_file(path: String, payload: FilePayload) -> CsvFrontendFile {
     CsvFrontendFile {
+        source_path: None,
         relative_path: path,
         payload: match payload {
             FilePayload::Utf8(value) => CsvFilePayload::Utf8(value),

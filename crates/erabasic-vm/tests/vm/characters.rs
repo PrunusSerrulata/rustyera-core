@@ -378,6 +378,7 @@ fn character_csv_queries_use_loaded_templates_and_character_lookup() {
     let loaded = load_project(
         &ProjectFiles {
             csv: vec![FrontendFile {
+                source_path: None,
                 relative_path: "CHARA0.CSV".into(),
                 payload: CsvFilePayload::Utf8("NO,10\nNAME,Alice\nBASE,0,100\nCFLAG,1,7\n".into()),
             }],
@@ -488,6 +489,7 @@ fn normal_addchara_accepts_nonzero_cflag_zero_when_sp_compatibility_is_disabled(
     let loaded = load_project(
         &ProjectFiles {
             csv: vec![FrontendFile {
+                source_path: None,
                 relative_path: "CHARA0.CSV".into(),
                 payload: CsvFilePayload::Utf8("NO,0\nNAME,Player\nCFLAG,0,1900\n".into()),
             }],
@@ -510,6 +512,7 @@ fn resetdata_clears_initial_characters_before_script_insertion() {
     let loaded = load_project(
         &ProjectFiles {
             csv: vec![FrontendFile {
+                source_path: None,
                 relative_path: "Chara/CHARA0.CSV".into(),
                 payload: CsvFilePayload::Utf8("NO,0\nNAME,Master\n".into()),
             }],

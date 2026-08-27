@@ -35,10 +35,12 @@ fn csv_name_tables_resolve_identifier_indices() {
         &ProjectFiles {
             csv: vec![
                 FrontendFile {
+                    source_path: None,
                     relative_path: "ABL.csv".into(),
                     payload: CsvFilePayload::Utf8("2,later\n".into()),
                 },
                 FrontendFile {
+                    source_path: None,
                     relative_path: "BASE.csv".into(),
                     payload: CsvFilePayload::Utf8("0,health\n".into()),
                 },
@@ -235,10 +237,12 @@ fn str_indices_resolve_through_strname_instead_of_initial_values() {
         &ProjectFiles {
             csv: vec![
                 FrontendFile {
+                    source_path: None,
                     relative_path: "STR.csv".into(),
                     payload: CsvFilePayload::Utf8("0,initial text\n".into()),
                 },
                 FrontendFile {
+                    source_path: None,
                     relative_path: "STRNAME.csv".into(),
                     payload: CsvFilePayload::Utf8("7,named_slot\n".into()),
                 },

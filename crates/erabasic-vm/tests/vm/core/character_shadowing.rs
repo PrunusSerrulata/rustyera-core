@@ -5,6 +5,7 @@ fn character_shadowing_artifact() -> BytecodeArtifact {
         &ProjectFiles {
             csv: vec![
                 FrontendFile {
+                    source_path: None,
                     relative_path: "Chara/Chara1.csv".into(),
                     payload: CsvFilePayload::Utf8(
                         "NO,1\nNAME,琉米爱尔\nCALLNAME,露米\nNICKNAME,小露\nMASTERNAME,主人甲\nBASE,0,123\nCFLAG,0,7\nCSTR,1,称号甲\n"
@@ -12,6 +13,7 @@ fn character_shadowing_artifact() -> BytecodeArtifact {
                     ),
                 },
                 FrontendFile {
+                    source_path: None,
                     relative_path: "Chara/Chara2.csv".into(),
                     payload: CsvFilePayload::Utf8(
                         "NO,2\nNAME,奥莉薇娅\nCALLNAME,奥莉\nNICKNAME,小奥\nMASTERNAME,主人乙\n"

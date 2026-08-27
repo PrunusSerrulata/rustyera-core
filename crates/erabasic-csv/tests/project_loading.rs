@@ -6,6 +6,7 @@ use erabasic_data::{CharacterSelection, NameTableKind, UserIndexRegistration};
 
 fn file(path: &str, content: &str) -> FrontendFile {
     FrontendFile {
+        source_path: None,
         relative_path: path.into(),
         payload: FilePayload::Utf8(content.into()),
     }
@@ -197,6 +198,7 @@ fn reports_frontend_errors_but_treats_not_found_as_absent() {
     let files = ProjectFiles {
         csv: vec![
             FrontendFile {
+                source_path: None,
                 relative_path: "missing.csv".into(),
                 payload: FilePayload::IoError(FrontendIoError {
                     kind: FrontendIoErrorKind::NotFound,
@@ -204,6 +206,7 @@ fn reports_frontend_errors_but_treats_not_found_as_absent() {
                 }),
             },
             FrontendFile {
+                source_path: None,
                 relative_path: "denied.csv".into(),
                 payload: FilePayload::IoError(FrontendIoError {
                     kind: FrontendIoErrorKind::PermissionDenied,

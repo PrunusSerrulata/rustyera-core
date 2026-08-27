@@ -278,6 +278,7 @@ fn prohibited_era_locals_stay_disabled_without_duplicate_size_warnings() {
     let project_data = load_project(
         &ProjectFiles {
             csv: vec![FrontendFile {
+                source_path: None,
                 relative_path: "VariableSize.csv".into(),
                 payload: CsvFilePayload::Utf8("LOCAL,-1\nLOCALS,-1\n".into()),
             }],
