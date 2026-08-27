@@ -9,6 +9,7 @@ mod codec;
 mod host;
 mod ids;
 mod isa;
+mod method_call;
 mod patch;
 mod source_map;
 mod version;
@@ -28,6 +29,7 @@ pub use host::{
 };
 pub use ids::{Digest, SymbolKey};
 pub use isa::{BytecodeType, EncodedInstruction, InstructionPayload, Opcode, opcode};
+pub use method_call::{MethodArgumentSpec, MethodCallSpec, MethodResult};
 pub use patch::{BytecodePatch, PatchError, apply_patch, create_patch};
 pub use source_map::{ResolvedSourceLocation, SourceMap, SourceMapEntry, SourceRecord};
 pub use version::{
