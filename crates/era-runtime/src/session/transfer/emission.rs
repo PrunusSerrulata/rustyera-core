@@ -136,6 +136,13 @@ impl RuntimeSession {
     pub(in super::super) fn flush_presentation_for_observation(
         &mut self,
     ) -> Result<(), RuntimeError> {
+        // Observation barriers need the current replay even when REDRAW 0 or message skip
+        // defers ordinary frames. Do not make a freshly drawn, unmounted canvas invisible
+        // to a service querying that same revision.
+        if self.presentation.resource_replay_stale() {
+            self.materialize_resource_replay();
+            self.pending_presentation_update = true;
+        }
         self.publish_pending_presentation()
     }
 

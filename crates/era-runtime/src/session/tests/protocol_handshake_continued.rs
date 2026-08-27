@@ -1395,3 +1395,49 @@ fn pointer_query_flushes_prints_and_returns_each_canonical_value() {
         }
     }
 }
+
+#[test]
+fn canvas_sampling_flushes_new_draws_before_query_and_returns_argb() {
+    let (mut session, request, messages) = start_projection_service_with_messages(
+        "@SYSTEM_TITLE\nREDRAW 0\nRESULT = GCREATE(1, 2, 2)\nRESULT = GCLEAR(1, 4279312947)\nRESULT = GGETCOLOR(1, 0, 0)\nWAIT\nRETURN\n",
+        ServiceKind::Canvas,
+        SAMPLE_CANVAS_PIXEL_OPERATION,
+        SAMPLE_CANVAS_PIXEL_OPERATION_VERSION,
+    );
+    let query: CanvasPixelRequest = decode_canonical(request.payload.as_slice()).unwrap();
+    let service_index = messages.iter().position(|message| matches!(message, RuntimeMessage::ServiceRequest(value) if value.request_id == request.request_id)).unwrap();
+    let resources = messages[..service_index]
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            RuntimeMessage::PresentationSnapshot(snapshot) => Some(&snapshot.resources),
+            RuntimeMessage::PresentationDelta(delta) => delta.operations.iter().find_map(|operation| match operation {
+                PresentationOperation::SetResources { resources } => Some(resources),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("current replay must precede the sample request");
+    let canvas = resources.canvases.iter().find(|canvas| canvas.canvas_id == query.canvas_id)
+        .expect("new canvas must be present even without a mounted display");
+    assert_eq!(canvas.revision, query.canvas_revision);
+    assert!(canvas.commands.iter().any(|command| matches!(command,
+        era_runtime_protocol::CanvasReplayCommand::Clear { argb: 0xff11_2233, rectangle: None }
+    )));
+    assert_eq!(query.context.presentation_revision, session.presentation.revision());
+    complete_projection_reply(
+        &mut session,
+        &request,
+        encode_canonical(&CanvasPixelResponse {
+            context: query.context,
+            canvas_revision: query.canvas_revision,
+            argb: 0xff11_2233,
+        })
+        .unwrap(),
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+        0xff11_2233
+    );
+}

@@ -416,7 +416,7 @@ impl RuntimeSession {
             {
                 return commit_integer_result(vm, request.id, -1);
             }
-            let context = self.projection_query_context();
+            let context = self.presentation_observation_context()?;
             return self.issue_host_service(
                 vm,
                 request,
