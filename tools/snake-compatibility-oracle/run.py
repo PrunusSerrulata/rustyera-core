@@ -94,8 +94,18 @@ def comparison_snapshot(snapshot):
     return result
 
 
+def prepare_case_game(template, output, ordinal, expected_identity):
+    """Keep one case's saves and overlays out of every later case's initial state."""
+    game = output / "case-games" / f"{ordinal:04d}"
+    shutil.copytree(template, game)
+    actual = identity(game)
+    if actual != expected_identity:
+        raise ValueError("effective fixture changed before case loading")
+    return game
+
+
 class Oracle:
-    def __init__(self, args, baseline, deadline):
+    def __init__(self, args, baseline, deadline, game_directory):
         self.args, self.baseline, self.deadline = args, baseline, deadline
         self.responses = queue.Queue()
         self.sequence = 0
@@ -109,11 +119,11 @@ class Oracle:
         if args.wine:
             env.update(WINEPREFIX=str(args.wine_prefix), WINEDEBUG="-all")
         self.env = env
-        self.stderr = (args.output / "stderr.log").open("w", encoding="utf-8")
+        self.stderr = (args.output / f"stderr-{game_directory.name}.log").open("w", encoding="utf-8")
         command = ([args.wine] if args.wine else []) + [str(args.exe)]
         self.process = subprocess.Popen(
             command,
-            cwd=args.output,
+            cwd=game_directory,
             env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -360,7 +370,7 @@ def close_oracle(oracle, evidence, failure):
     """Keep primary failure and raw requests even when OS cleanup is denied."""
     if oracle is None:
         return failure
-    evidence["requests"] = oracle.records
+    evidence.setdefault("requests", []).extend(oracle.records)
     try:
         oracle.close()
     except Exception as error:
@@ -437,6 +447,7 @@ def main():
         "seed": manifest["seed"],
         "sourceFixture": source_fixture,
         "effectiveFixture": identity(game),
+        "caseFixtures": [],
         "font": {**manifest["font"], "byteSourceStatus": "unverified-installed-source"},
         "drawingMode": args.drawing_mode or ("SKIASHARP" if args.oracle == "snake" else "TEXTRENDERER"),
         "presentationObservation": "not_requested" if args.logical_output_only else "font_pinned_snapshot",
@@ -446,35 +457,35 @@ def main():
     }
     oracle = None
     failure = None
+    active_case = "startup"
     try:
-        oracle = Oracle(args, evidence["semanticBaseline"], deadline)
-        capabilities = oracle.request({"op": "capabilities"})
-        subset(
-            capabilities,
-            {
-                "ok": True,
-                "result": {
-                    "observationVersions": {"presentationSnapshot": 1, "headlessInputTrace": 1}
-                },
-            },
-        )
-        if args.oracle == "snake":
-            subset(
-                capabilities,
-                {"result": {"implementation": "emuera_lazyloading_selfmodified_version"}},
-            )
-        evidence["capabilities"] = capabilities
-        load = {
-            "op": "load",
-            "gameDir": oracle.windows_path(game),
-            "seed": manifest["seed"],
-            "instructionLimit": 100000,
-            "timeoutMs": 3000,
-            **load_observation_options(args.logical_output_only, selected, manifest["font"],
-                                       oracle.windows_path(args.font_file)),
-        }
-        for case in selected:
-            oracle.case = case["id"]
+        for ordinal, case in enumerate(selected):
+            active_case = case["id"]
+            case_game = prepare_case_game(game, args.output, ordinal, evidence["effectiveFixture"])
+            # Snake GetValidPath returns a relative path. The CLI's load operation
+            # does not change the process CWD; use the actual isolated game root.
+            oracle = Oracle(args, evidence["semanticBaseline"], deadline, case_game)
+            oracle.case = active_case
+            capabilities = oracle.request({"op": "capabilities"})
+            subset(capabilities, {"ok": True, "result": {
+                "observationVersions": {"presentationSnapshot": 1, "headlessInputTrace": 1}}})
+            if args.oracle == "snake":
+                subset(capabilities, {"result": {
+                    "implementation": "emuera_lazyloading_selfmodified_version"}})
+            evidence.setdefault("capabilities", capabilities)
+            load = {
+                "op": "load", "gameDir": oracle.windows_path(case_game),
+                "seed": manifest["seed"], "instructionLimit": 100000, "timeoutMs": 3000,
+                **load_observation_options(args.logical_output_only, selected, manifest["font"],
+                                           oracle.windows_path(args.font_file)),
+            }
+            evidence["caseFixtures"].append({
+                "case": active_case, "gameDir": load["gameDir"],
+                "initialSha256": evidence["effectiveFixture"]["sha256"],
+                "isolation": "fresh process and working directory per case; requests within a case share both",
+                "capabilities": capabilities,
+                "stderr": f"stderr-{case_game.name}.log",
+            })
             load_response = oracle.request(load)
             validate_load(load_response, manifest.get("loadExpect"))
             last = None
@@ -499,9 +510,18 @@ def main():
                     "snakeTargetStatus": case["snakeTargetStatus"],
                 }
             )
+            # Report completed observable state even when every individual case
+            # finishes before its first periodic sample. The outer Wine monitor
+            # must see real case progress across multiple fresh CLI processes.
+            print(json.dumps({"oracleCaseCompleted": oracle.snapshot(None)},
+                             ensure_ascii=False), flush=True)
+            failure = close_oracle(oracle, evidence, oracle.watchdog_failure)
+            oracle = None
+            if failure:
+                raise RuntimeError(failure)
     except Exception as error:
         failure = str(error)
-        evidence["failure"] = {"case": oracle.case if oracle else "startup", "error": failure}
+        evidence["failure"] = {"case": active_case, "error": failure}
     finally:
         if oracle is not None and oracle.watchdog_failure and failure is None:
             failure = oracle.watchdog_failure

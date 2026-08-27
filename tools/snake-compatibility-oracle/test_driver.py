@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from comparison import compare_case, output_after_load, split_setup_diagnostics, validate_rust_evidence
@@ -17,6 +18,51 @@ spec.loader.exec_module(driver)
 
 
 class DriverTests(unittest.TestCase):
+    def test_oracle_process_uses_each_case_working_directory_and_keeps_prior_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = SimpleNamespace(output=root, wine=None, exe=root / "reference.exe")
+            with patch.object(driver.subprocess, "Popen") as popen, patch.object(driver.threading, "Thread"):
+                first = driver.Oracle(args, "a" * 40, 0, root / "0000")
+                second = driver.Oracle(args, "a" * 40, 0, root / "0001")
+            try:
+                self.assertEqual([call.kwargs["cwd"] for call in popen.call_args_list],
+                                 [root / "0000", root / "0001"])
+                first.stderr.write("first case")
+                second.stderr.write("second case")
+            finally:
+                first.stderr.close()
+                second.stderr.close()
+            self.assertEqual((root / "stderr-0000.log").read_text(), "first case")
+            self.assertEqual((root / "stderr-0001.log").read_text(), "second case")
+        evidence = {}
+        first_case = SimpleNamespace(case="first", records=[{"case": "first"}], close=lambda: None)
+        second_case = SimpleNamespace(case="second", records=[{"case": "second"}], close=lambda: None)
+        self.assertIsNone(driver.close_oracle(first_case, evidence, None))
+        self.assertIsNone(driver.close_oracle(second_case, evidence, None))
+        self.assertEqual(evidence["requests"], [{"case": "first"}, {"case": "second"}])
+
+    def test_each_case_starts_with_pristine_files_and_independent_storage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            template = root / "template"
+            template.mkdir()
+            (template / "emuera.config").write_text("Drawing interface:SKIASHARP\n")
+            (template / "seed.txt").write_text("original")
+            expected = driver.identity(template)
+            first = driver.prepare_case_game(template, root, 0, expected)
+            (first / "global.sav").write_bytes(b"saved in the first case")
+            (first / "seed.txt").write_text("overlay")
+            second = driver.prepare_case_game(template, root, 1, expected)
+            self.assertEqual(driver.identity(second), expected)
+            self.assertFalse((second / "global.sav").exists())
+            self.assertEqual((first / "global.sav").read_bytes(), b"saved in the first case")
+            with self.assertRaises(FileExistsError):
+                driver.prepare_case_game(template, root, 1, expected)
+            (template / "seed.txt").write_text("unexpected template change")
+            with self.assertRaisesRegex(ValueError, "effective fixture changed"):
+                driver.prepare_case_game(template, root, 2, expected)
+
     def test_logical_only_observation_never_claims_or_allows_presentation_validation(self):
         font = {"family": "BIZ UDGothic", "sha256": "a" * 64}
         case = {"group": "INDEX", "requests": [{"request": {"op": "eval", "source": "1"}}]}

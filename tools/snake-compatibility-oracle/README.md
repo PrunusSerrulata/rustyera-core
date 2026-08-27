@@ -17,6 +17,13 @@ run. The requested family is `BIZ UDGothic`. A missing font, substituted family,
 unexpected fallback run, or wrong file hash is a setup failure, never a passing
 approximation. The driver does not install fonts or change the font baseline.
 
+The prepared `game/` directory is a pristine template, never a running game's
+storage. Every case launches a fresh process with `case-games/NNNN/` as its working
+directory, loads that copy and records its initial effective fixture hash. Requests inside one case share that copy; saves, overlays
+and deletions cannot leak into later cases. Copies and per-case stderr logs remain with the run evidence. The snake engine
+resolves string paths relative to the process CWD; passing `gameDir` to the CLI
+alone does not set that CWD. No reference implementation change is needed.
+
 Example, from the core worktree (replace the wrapper SHA and paths with actual
 isolated build inputs; do not paste a symbolic placeholder as a real SHA):
 
