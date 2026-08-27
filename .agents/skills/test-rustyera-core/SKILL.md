@@ -5,7 +5,12 @@ description: Validate rustyera-core changes with scope-appropriate checks, order
 
 # Test RustyEra Core
 
-## Enforce the task budget
+## Enforce the batch budget
+
+Use the batches defined by the root `AGENTS.md`: estimate each requested feature/change/fix first,
+combine small items for implementation, refactoring review, and testing, and handle large items
+independently with separate budgets. Keep a separate commit for each item regardless of batching.
+All review counts, suite counts, gates, and deadlines below apply to the current batch.
 
 Follow the root `AGENTS.md` parallel scheduling rules. Run independent checks concurrently when
 their inputs, outputs, and mutable resources are isolated; pipeline dependent checks as prerequisites
@@ -15,11 +20,11 @@ gates. Delegate test execution as required by the component's `AGENTS.md`.
 - Before starting any test command, confirm that any required refactoring subagent has completed
   its single permitted run and that every requirement it reported has been implemented. Refuse to
   start testing while any refactoring requirement remains. Once the first test starts, never spawn,
-  resume, follow up with, or rerun a refactoring subagent during that task.
-- Start one shared 60-minute wall-clock budget when the task's first test command starts. Include
+  resume, follow up with, or rerun a refactoring subagent during that batch.
+- Start one shared 60-minute wall-clock budget when the batch's first test command starts. Include
   every later test, targeted rerun, end-to-end wait, and test-failure investigation in that budget;
   no command timeout may exceed the remaining time.
-- Start each distinct full test suite at most once per task. If it exposes a failure, repair it and
+- Start each distinct full test suite at most once per batch. If it exposes a failure, repair it and
   rerun only the smallest directly affected test target, never the full suite again. Report the
   original full-suite result separately from the targeted post-fix result.
 - Run every command that may outlive its initial tool response in a persistent PTY. Start it with
@@ -33,7 +38,7 @@ gates. Delegate test execution as required by the component's `AGENTS.md`.
   snapshot every 5 seconds. Include every HTML element when an HTML client is involved. Compare
   snapshots without timestamps and other reporting-only metadata; if two consecutive snapshots
   are identical, immediately terminate the flow as stalled and report the error.
-- At the 60-minute deadline, terminate all test processes and report the active command, exact
+- At the 60-minute deadline, terminate all test processes for that batch and report the active command, exact
   case or stage, last snapshot, elapsed time, completed checks, and unverified checks.
 
 ## Select the scope
@@ -61,7 +66,7 @@ The first four gates may run concurrently when build/output isolation permits it
 full workspace tests until formatting, compilation, Clippy, and the minimal
 regression test pass. If the one full workspace run fails, report it, fix the problem separately,
 and rerun only the affected package, test binary, module, or named tests. Never rerun
-`cargo test --workspace` in the same task.
+`cargo test --workspace` in the same batch.
 
 Do not use a C# oracle test as a replacement for a Rust implementation test.
 
@@ -120,7 +125,7 @@ The original macOS script uses the workspace's `.wine-prefix/emuera-reference-cl
 `.wine-tmp/emuera-reference-cli`. Snake uses `.wine-prefix/emuera-selfmodified-cli` and temporary
 fixture copies. Keep prefixes, processes, requests, and evidence separate; never point the original
 script's `EMUERA_REFERENCE_ROOT` at the snake tree to bypass its distinct .NET target and fixtures.
-Both suites share the same task-wide 60-minute budget, static-before-dynamic gates, and watchdog
+Both suites share the same batch-wide 60-minute budget, static-before-dynamic gates, and watchdog
 rules. Each full oracle smoke suite may start once only, independently of the other suite.
 
 ## Handle oracle failures
@@ -128,7 +133,7 @@ rules. Each full oracle smoke suite may start once only, independently of the ot
 Treat timeout, empty output, premature exit, and protocol errors as reference CLI defects. Do not
 skip the oracle and claim validation. Diagnose and repair the CLI first within the authorization
 in `AGENTS.md`, then rerun only the failing request or directly affected smoke case. The complete
-platform smoke test must not be run a second time in the same task.
+platform smoke test must not be run a second time in the same batch.
 
 If the repair touches either reference repository, also verify that its normal Emuera project still
 compiles and append the required per-file audit entry: original
