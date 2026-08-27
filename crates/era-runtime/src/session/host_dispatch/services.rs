@@ -738,9 +738,10 @@ impl RuntimeSession {
                 "MOUSEY" => PointerCoordinate::Y,
                 _ => PointerCoordinate::Button,
             };
-            let presentation_revision = self.presentation.revision();
-            let environment_revision = self.projection_environment_revision;
-            let projection_space_revision = self.projection_space_revision;
+            let context = self.presentation_observation_context()?;
+            let presentation_revision = context.presentation_revision;
+            let environment_revision = context.environment_revision;
+            let projection_space_revision = context.projection_space_revision;
             self.issue_host_service(
                 vm,
                 request,

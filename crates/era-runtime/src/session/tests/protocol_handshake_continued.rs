@@ -1281,3 +1281,117 @@ fn invalid_host_file_paths_return_reference_failure_values() {
         Ok(VmValue::String(String::new()))
     );
 }
+
+#[test]
+fn pointer_service_negotiates_only_the_existing_operation_version() {
+    let selected = crate::session::selected_service_capabilities(&[
+        ServiceCapability {
+            kind: ServiceKind::InputState,
+            operation: POINTER_STATE_OPERATION.into(),
+            versions: VersionRange::exact(POINTER_STATE_OPERATION_VERSION),
+        },
+        ServiceCapability {
+            kind: ServiceKind::InputState,
+            operation: "unknown_pointer".into(),
+            versions: VersionRange::exact(POINTER_STATE_OPERATION_VERSION),
+        },
+    ]);
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].operation, POINTER_STATE_OPERATION);
+    assert!(
+        crate::session::selected_service_capabilities(&[ServiceCapability {
+            kind: ServiceKind::InputState,
+            operation: POINTER_STATE_OPERATION.into(),
+            versions: VersionRange::exact(ProtocolVersion::new(2, 0))
+        },])
+        .is_empty()
+    );
+}
+
+fn complete_projection_reply(
+    session: &mut RuntimeSession,
+    request: &ServiceRequest,
+    payload: Vec<u8>,
+) {
+    submit(
+        session,
+        3,
+        RuntimeMessage::ServiceResponse(ServiceResponse {
+            request_id: request.request_id,
+            result: ServiceResult::Ready {
+                payload: ProtocolBytes::new(payload),
+            },
+        }),
+    );
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        if matches!(
+            session.phase(),
+            RuntimePhase::WaitingInput | RuntimePhase::Faulted
+        ) {
+            break;
+        }
+    }
+}
+
+#[test]
+fn pointer_query_flushes_prints_and_returns_each_canonical_value() {
+    for (expression, integer, string) in [
+        ("MOUSEX()", Some(37), None),
+        ("MOUSEY()", Some(-91), None),
+        ("MOUSEB()", None, Some("script-value")),
+    ] {
+        let assignment = if integer.is_some() {
+            format!("RESULT = {expression}")
+        } else {
+            format!("RESULTS '= {expression}")
+        };
+        let source =
+            format!("@SYSTEM_TITLE\nREDRAW 0\nPRINTL before-pointer\n{assignment}\nWAIT\nRETURN\n");
+        let (mut session, request, messages) = start_projection_service_with_messages(
+            &source,
+            ServiceKind::InputState,
+            POINTER_STATE_OPERATION,
+            POINTER_STATE_OPERATION_VERSION,
+        );
+        let query: PointerStateRequest = decode_canonical(request.payload.as_slice()).unwrap();
+        let service_index = messages.iter().position(|message| matches!(message, RuntimeMessage::ServiceRequest(value) if value.request_id == request.request_id)).unwrap();
+        assert!(
+            messages[..service_index].iter().any(|message| matches!(
+                message,
+                RuntimeMessage::PresentationDelta(_) | RuntimeMessage::PresentationSnapshot(_)
+            )),
+            "{messages:?}"
+        );
+        assert_eq!(query.presentation_revision, session.presentation.revision());
+        complete_projection_reply(
+            &mut session,
+            &request,
+            encode_canonical(&PointerStateResponse {
+                x: ProjectionLength(37),
+                y: ProjectionLength(-91),
+                button_value: "script-value".into(),
+                presentation_revision: query.presentation_revision,
+                environment_revision: query.environment_revision,
+                projection_space_revision: query.projection_space_revision,
+            })
+            .unwrap(),
+        );
+        assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+        let vm = session.vm.as_ref().unwrap();
+        if let Some(value) = integer {
+            assert_eq!(
+                read_runtime_integer(vm, "RESULT", &[], None).unwrap(),
+                value
+            );
+        }
+        if let Some(value) = string {
+            assert_eq!(
+                vm.vm()
+                    .read_variable(runtime_variable_key(vm, "RESULTS").unwrap(), &[0], None)
+                    .unwrap(),
+                VmValue::String(value.into())
+            );
+        }
+    }
+}

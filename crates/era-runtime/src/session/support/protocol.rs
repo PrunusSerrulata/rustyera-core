@@ -44,6 +44,9 @@ pub(in super::super) fn selected_service_capabilities(
                 (ServiceKind::InputState, GET_KEY_STATE_OPERATION) => {
                     GET_KEY_STATE_OPERATION_VERSION
                 }
+                (ServiceKind::InputState, POINTER_STATE_OPERATION) => {
+                    POINTER_STATE_OPERATION_VERSION
+                }
                 (ServiceKind::Image, IMAGE_METADATA_OPERATION) => IMAGE_METADATA_OPERATION_VERSION,
                 (ServiceKind::Image, IMAGE_PIXEL_OPERATION) => IMAGE_PIXEL_OPERATION_VERSION,
                 (ServiceKind::Network, UPDATE_CHECK_OPERATION) => UPDATE_CHECK_OPERATION_VERSION,
