@@ -67,6 +67,13 @@ services = <sql, presentation, audio, extension capability versions>
 
 前置：批次 0 的 profile、identity 与诊断契约。
 
+2026-08-27 用户确认的[详细实施方案](BATCH_1_IMPLEMENTATION_PLAN.md)将本批划为独立的
+1A（S01/S02 与资源清单）、1B（动态方法）、1C（列选项/GLOBAL/安全读取）、
+1D（服务与集成）。1C 依赖 1A，1D 的最终集成等待 1A–1C；各自唯一审查、独立验收，
+功能仍分别提交。用户取消本任务各子批次测试总时限，但未取消单次全量、静态门禁或看门狗。
+Browser/Tauri 完成真实服务，TUI 本批对像素测量/pointer/canvas 明确缺能力，不新增终端投影。
+执行需管理磁盘：20 GiB 以下减少并行，10 GiB 以下暂停新增高写入任务并清理本任务可再生产物。
+
 - 实施 S01/S02：三个客户端都提交 `.als/.erd`，core 建立用户 ERD/ALS。
 - 实施 S03/S12：`GETMETH/GETMETHS/EXISTMETH` 与 `DT_COLUMN_OPTIONS` 从注册到 runtime 全链路可用。
 - 核验标题必需的 `LOADGLOBAL/SAVEGLOBAL`，以及初始化必需的 `LOADTEXT`、MAP/XML/DT、递归资源清单与安全路径映射；发现参考能力缺口先补齐，供批次 3 的 SQL seed/XML 读取和批次 4 的启动闭环复用。

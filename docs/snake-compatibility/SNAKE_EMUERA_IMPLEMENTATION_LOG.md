@@ -1,6 +1,6 @@
 # 蛇版 Emuera 适配：分批次实施与验收记录
 
-> 文档状态：批次 0 已完成；其他批次仍待登记。完成范围是 profile、隔离、基线与门禁，不是完整蛇版语义或蛇版 TW 可玩性。
+> 文档状态：批次 0 已完成；批次 1 实施中，其他批次仍待登记。批次 0 完成范围是 profile、隔离、基线与门禁，不是完整蛇版语义或蛇版 TW 可玩性。
 
 ## 文档职责与填写规则
 
@@ -37,7 +37,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | 批次 | 范围 | 状态 | 最近更新 / 负责人 | 当前结论 / 下一步 |
 |---|---|---|---|---|
 | [0](#batch-0) | 建立基线、profile 与门禁 | 已完成 | 2026-08-27 / Codex | 三端、双 oracle、8 游戏基线与 9 份覆盖报告已验证；后续语义差异逐例保留，磁盘已治理 |
-| [1](#batch-1) | 完整摄取与参考能力阻塞项 | 待登记 | 待填写 | 待填写 |
+| [1](#batch-1) | 完整摄取与参考能力阻塞项 | 实施中 | 2026-08-27 / Codex | 详细方案已确认；开始 1A 摄取/ERD/ALS，尚未审查或测试 |
 | [2](#batch-2) | 确定性 API、输入与兼容差异骨架 | 待登记 | 待填写 | 待填写 |
 | [3](#batch-3) | 安全 SQL（蛇版 TW P0） | 待登记 | 待填写 | 待填写 |
 | [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 待登记 | 待填写 | 待填写 |
@@ -49,7 +49,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 
 ## 批次 0：建立基线、profile 与门禁
 
-计划入口：[改造思路 / 批次 0](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-0)。状态：已完成；负责人 / 最近更新：Codex / 2026-08-27。
+计划入口：[改造思路 / 批次 0](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-0)。状态：已完成；负责人 / 最近更新：Codex / 2026-08-28。
 
 ### 具体实施方案
 
@@ -423,15 +423,207 @@ WASM/native core SHA。不得自动推送/合并；远端不可获取的本地 S
 
 ## 批次 1：完整摄取与参考能力阻塞项
 
-计划入口：[改造思路 / 批次 1](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-1)。状态：待登记；负责人 / 最近更新：待填写。
+计划入口：[改造思路 / 批次 1](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-1)。状态：实施中；负责人 / 最近更新：Codex / 2026-08-28。
 
 ### 具体实施方案
 
-- 目标、S/D/C/N 编号、范围与明确不做项：待填写。
-- 前置批次/子项、已通过门禁和对应证据：待填写；区分可并行实现与必须汇合的集成验收。
-- 受影响仓库/模块、接口与数据格式、profile/cache/save/service 版本变化：待填写。
-- 分项步骤、文件/hunk 归属、共享基础依赖、资源隔离与提交划分：待填写。
-- 验收目标、最小 fixture、获准测试范围、风险/回退方案与用户时限：待填写。
+- 采用用户确认的[详细实施方案](BATCH_1_IMPLEMENTATION_PLAN.md)，1A/1B/1C/1D 为四个独立实施子批次。
+- 上游批次 0 已完成，来源/门禁/后续缺口见上节；开工 core/TUI/Web 专用分支均干净。
+- 1A 开发归属：主智能体 core 数据/协议/文档，TUI 与 Web 分别独立执行者；共享版本和最终绑定由主智能体整合。
+- 所有子批次测试总时限由用户取消；单套全量一次、测试前唯一重构审查、静态先于动态和五秒看门狗不变。
+- 开工磁盘可用约 35 GiB；本组 target 约 15 GiB，批次 0 证据约 2.1 GiB。新结果使用本组 batch-1-work/，不覆盖批次 0。
+
+| 子批次 | 状态 | 重构审查启动次数 | 首次测试 | 全量启动记录 | 当前边界 |
+|---|---|---|---|---|---|
+| 1A | 已完成，保留明确差异与观察限制 | 1 | 2026-08-27 23:25:42 +08:00 | core、runtime-tester、TUI、Web Vitest/Rust、oracle Python、supervisor unit 各启动一次 | S01/S02、三端摄取和只读资源清单；动态已启动，首次失败与定向复验分别记录 |
+| 1B | 实施中 | 0 | 未启动 | 无 | S03；未审查或测试 |
+| 1C | 待实施 | 0 | 未启动 | 无 | S12、GLOBAL、安全读取 |
+| 1D | 待实施 | 0 | 未启动 | 无 | S04、统一集成与覆盖报告 |
+
+#### 1A 实施进度（静态已执行，动态验收未完成）
+
+- 已写入 S01 三端类别 6/7、完整/快速扫描、源索引、物化、manifest/Worker 传输和增量重载；
+  ERD 经数据加载器处理，不再作为 ERB 声明源码。ALS/ERD 采用严格 UTF-8，原始字节摘要与提交文本摘要分列记录。
+- 已写入 S02 compatibility 透传、ERD→CSV→ALS 顺序、同目录同 root 关联、signed alias 与显式反向名称；
+  snake semantic/policy 变为 2/2，其他蛇版策略保持实验状态及原值。动态字符串索引读取用户表，GETNUM 范围不扩大。
+- 资源清单纳入 XML/TXT/DB/SQLite，排除 `.git/.rustyera/sav/save/saves/data/log/logs` 根目录，
+  DLL 不作为扩展加载。新输入限制在授权根内，旧源码的既有外链行为保留；Data→Resource 回退尚未实现，属于 1C。
+- 当前格式调整：runtime protocol 37.0、project data 3、HIR 14、bytecode container 17、compiler ABI 39、native ABI 16、
+  compiled cache/project 10。ISA、VM ABI 和 C ABI 未改；原版 v9 完整项目可恢复源码重建，
+  旧 snake 1/1 identity 明确拒绝，所有旧编译缓存拒绝。
+- 代码已格式化，core 产品与 fixture 已分项提交；前端 pin 与发布锁文件已同步至
+  `f8239986c1d7da69432b2b16bac98e38d71b881f`，重建/动态门禁仍在进行，不代表 1A 完成。
+- 1A 测试记录入口为本组 `batch-1-work/1A/`。监督脚本复用批次 0 的进程清理逻辑，默认无总 deadline，
+  每命令有独立限额；全量启动标记按子批次独立保存。构建优先复用本组已核验的 `target/core-static`、
+  `target/runtime-tester-static`、`target/tui-static`、`target/web-static`，不复用主工作区产物。
+
+#### 1A 唯一重构审查
+
+审查者 `review_batch_1a` 使用 `$refactor-rustyera-code` 完成一次只读跨组件审查，
+结论为需要有限重构和修正，不需要大规模拆分。未运行任何测试或格式化，不再启动或恢复该审查者。
+
+| 要求 | 落实方式 | 首次测试前状态 |
+|---|---|---|
+| R1 完整来源路径 | CSV 输入分别保存 root-relative lookup path 和原始 `source_path`；初次加载与 deferred 诊断保留 provenance，新增双根和 UTF-8 span 回归 | 已写入，待验证 |
+| R2 类别主导错误 | runtime 按 Als/Erd 类别拒绝 IoError/Bytes/ExternalResource，不依赖扩展名；保留旧 CSV NotFound，增加非标准后缀及双根错误测试 | 已写入，待验证 |
+| R3 工具摄取一致 | `project_inputs` 统一 main/extractor/coverage 分类，修复 resources 下数据资源过滤及 root 丢失，新增五个 canonical/root/UTF-8 回归 | 已写入，待验证 |
+| R4 读取时授权复查 | Tauri 扫描、读取、prefix 和流式导出共用授权路径检查；测试同 inode 移至 Data/private 后链接替换 | 已写入，待验证 |
+| R5 原版既有缺口 | 增加双 profile 静态主名执行；保留原版动态主名 oracle 成功期望并登记 Rust 既有差异，不伪装拒绝 | 已写入，待验证 |
+| R6 v9 profile 边界 | 原版 v9 允许源码恢复；历史 snake 1/1 非流式和流式明确拒绝，文档不再概括为全部可重建 | 已写入，待验证 |
+| R7 锁定依赖 | 主智能体机械补 core/runtime-tester 锁文件的 CSV→compat 依赖边，不改变包版本；前端绑定等 core 提交 | 已写入，待验证 |
+
+七项要求均在首条测试前落实。后续格式化和测试不再启动或恢复重构审查；
+测试失败由主智能体定位修复，只执行受影响的定向复验。
+
+#### 1A 静态门禁进展
+
+测试由 `gpt-5.6-terra / low` 执行者运行；详细命令、时间、退出码与进程清理记录保存于
+本组 `batch-1-work/1A/validation/`。`budget.json` 的总 deadline 为 null。
+
+| 检查 | 首次结果 | 修复及定向复验 | 当前结论 |
+|---|---|---|---|
+| core fmt / workspace check | fmt 通过；check 因 replay 类别映射缺 ALS/ERD 失败 | 补 replay 两类别与已有 hot reload 测试；单文件格式及 runtime 定向 check 通过 | 后续 lint/最小/full 见下行 |
+| core lint / 最小 / 全量 | Clippy 先后发现文档标记、显式 Default、expect_err 与 checked cast 要求 | 主智能体修正；相关文件格式及各受影响 crate Clippy 均通过 | 最小 VM 25、CSV 16、protocol 30、compat 1、extractor 7、runtime replay 6/project 29/cache 28 通过；唯一 workspace full 退出 0，约 87.7 秒 |
+| 独立 runtime-tester | 首次 check 缺 `has_direct_child_directory` 导入 | 补导入，定向格式/check 恢复；Clippy 通过 | 最小 inputs 2/extractor 3/fixture 5 通过；唯一全量 39/39 通过 |
+| Web 定向 Vitest | 101 通过、3 失败；旧 TXT 排除期望及跨 realm hash 数组比较 | 更新 TXT 资源期望，显式比对完整 hash 字节；仅两受影响文件 80/80 通过 | 其余三文件首次结果保留 |
+| Web 完整 Vitest | 92 文件、1017 用例全部通过，唯一一次 | 无 | JS 全量通过 |
+| Web typecheck / lint / format / build | 全部退出 0 | 无 | 最终 pin 下 WASM 发布构建及生产 build 通过 |
+| Web Rust 最小 / 全量 | fmt/check/clippy 通过；project 最小 36 通过、1 失败、1 既有忽略（TXT 排除旧期望） | 修正后只复验失败具名用例及受影响格式/Clippy；WASM 类别回归通过 | 随后唯一全量：bridge 28、Tauri 69、WASM 11 通过；Tauri 1 个既有 handoff 用例忽略，doctest 通过 |
+| oracle Python 工具 | 本批定向四例通过；唯一完整 19/19 通过 | 无 | 仅驱动/比较单元测试，不是实际 oracle 运行 |
+| TUI 最小 pytest / Ruff | project 81、wire 3 全部通过；Ruff 通过 | 无 | 完整 pytest 与 pin 定向结果见下行 |
+| TUI 完整 pytest | 首次 425 通过、3 失败，44.05 秒；失败均为旧 `version.py` 的 `7ba54e80` 与旧 pin `8862fa95` 已不一致 | 同步最终 pin 与显示元数据后只复验失败三个节点，3/3 通过；version.py Ruff 通过 | 不重跑全量；7ba54e80 是旧 TUI 文本，不是本批 C ABI 库的实际 SHA |
+| TUI 静态打包 | 首次 COLLECT 因 sandbox 禁止写用户 bincache 失败 | 最小权限批准后重试构建成功；dist 93 MiB/work 23 MiB | 产物位于本组 batch-1-work/1A/tui-dist；后续 --help 与包内库真实加载冒烟均通过 |
+| supervisor 单元测试 | 五例中四通过；孤儿进程用例因 sandbox 的 ps 权限失败 | 沙箱外只复验该一例通过；一次错误模块导入未加载实际用例，单独保留记录 | 首次全量与定向结果分列，不重跑全量 |
+
+动态在相关静态与共享 core 门禁全部恢复后启动；后续失败仅定向复验，不重跑全量。
+Web 本地 Rust 封装执行前后发布锁文件 SHA-256 一致（`88491d…8c69c9e`），
+此值是同步前基线；现已把原本无 source 的十九个 core 锁包改为完整 Git source/rev/commit，
+并补 CSV→compat 依赖边；最终 pin 下 check/clippy/WASM/build 已通过，本地封装执行前后新发布锁摘要保持一致。未以本地 patch 代替最终绑定。
+Rust 构建后磁盘剩余约 25 GiB；最多两个构建并行，尚未触发 20 GiB 阈值。
+
+#### 1A 契约提交与当前绑定
+
+| 项目 | core commit | 范围 / 依赖 |
+|---|---|---|
+| 公共输入基础 | `bb4b04c` | 可选 source_path 与旧调用方机械适配 |
+| S02 | `99e3621` | ERD/ALS 语义、signed lookup、反向名称、profile/数据格式；依赖公共基础 |
+| S01 | `8c08eb4` | 协议类别、runtime 摄取/缓存/诊断、工具分类；依赖公共基础和 S02 |
+| 执行 fixture / 比较工具 | `f823998` | 24 个双 oracle index case；保留原版动态主名既有差异 |
+
+上述提交对应已通过静态门禁的最终代码，不将尚待执行的双 oracle / 动态客户端描述为通过。
+当前 TUI/Web pin 均为 `f8239986c1d7da69432b2b16bac98e38d71b881f`，core 产品 crate 无未提交差异。
+C ABI 由本组 `target/core-static/debug/libera_runtime_capi.dylib` 重建，SHA-256 为
+`5b1d280c2a3b48d77bc7807dd641a665acba20368a1193b0afe0041a0f77f670`；TUI 复验显式使用
+`ERA_RUNTIME_LIBRARY`，不使用主工作区产物。初次 C ABI 构建与 pin 后重建内容摘要一致。
+一次错误地从 core cwd 调用 TUI 构建脚本在构建前即退出 2，已在 TUI cwd 正确重建；
+该基础设施调用错误不作为产品编译失败或成功证据。
+
+#### 1A 动态与真实输入证据（2026-08-28）
+
+- TUI 首次场景因 fixture 缺 binary saves 配置导致 CHARADATA 声明失败；移除 SAVEDATA
+  并不足以解除 CHARADATA 的配置要求。补 `[save] binary_format=true` 后，新增真实 C ABI
+  fixture 回归单节点、Ruff、diff check 通过。原场景定向复验通过：seed 123456、snake 2/2、
+  integer 等待点、`INGEST_FLAG=10,11,300` / `INGEST_BUFF=50,60` /
+  `INGEST_ERD=70,80,90` / `SNAKE_INGESTION_READY` 四项均满足。
+- TUI PyInstaller 可执行文件 `--help` 与包内 dylib 同场景加载均通过。包内库经 macOS
+  处理后的 SHA-256 为 `8252125b1e279e58ba4281796ecaec8987f33e0c2586c3b5422ddf9a1025d851`，
+  与未打包库摘要不同，不冒称字节相同。证据 labels `tui-package-help-smoke-1a`、
+  `tui-package-embedded-cabi-ingestion-1a`。
+- Chromium 私有完整包下载零进展到单命令限额，headless 包下载也未完成；用户明确要求
+  不再下载、复用已有浏览器，已停止下载。实际采用主工作区 `.playwright-browsers` 的匹配
+  v1234 程序；仅浏览器程序复用，profile、session、项目、WASM 与输出仍保持本组隔离。
+  首次成功启动后冷加载输出正确；ALS scoped reload 后仍输出旧值，正在核对旧调用栈
+  generation 保留语义与 fixture 的新入口验收，不把旧栈结果误认为冷加载成功证明。
+- 原生 Firefox 154.0.1 已观察正确启动输出和 OPFS 导入，但清理会话卡住且中断清理失败；
+  保留为基础设施失败，不能把中间正确输出写成完整通过。Safari/Tauri 尚待执行。
+- 原版及蛇版 oracle 平台 smoke 各唯一一次均退出 0。Rust 两 profile 的 24-case 原始观察
+  已生成。原版完整差分运行到 `index-builtin-alias-same-index` 时失败：固定源
+  `ConstantData.cs:1812` 的警告只传一个格式化参数，而 `Lang.cs:655` 模板需要两个，
+  重复 index 会使 ALS 后续行停止读取。首次中途 watchdog 中出现的 canonical case 不是
+  实际失败 case；以 evidence.json 的最后请求为准。该原版 oracle 缺陷不据此修改 Rust 原版既有语义。
+- 蛇版首个差分 load 的 presentation 校验失败：fallback 字体 `SimHei` 不符合 BIZ UDGothic。
+  原失败保留，不能称字体验收通过；正在为只比较值/逻辑文本的数据用例增加显式
+  `--logical-output-only`，该模式拒绝 presentation 用例且证据注明不请求像素/字体观察。
+- 蛇版 TW 唯一静态覆盖流程退出 0：15761 inputs（ALS 20、ERD 2、CSV 206、ERB 3931、
+  ERH 169、Resource 11337、ResourceManifest 96），读取错误 0；4328 文本输入同时记录
+  原始与 UTF-8 payload 的独立 BLAKE3/长度。CSV accepted，analyzer diagnostic_errors，
+  compiler blocked_by_load_diagnostics，未生成 artifact；3310758 appearances、8602 diagnostics。
+  这是审计默认选项下的静态覆盖，不是完整游戏编译或标题成功。
+- 覆盖 JSON 直接写 gzip（压缩 89067678 bytes），原始 2169108268 bytes、SHA-256
+  `5eb81b249e4d4ed058ca6d8075e840716225817499b587081b9f7aa148b3f47e`；没有落盘展开副本。压缩 SHA-256 `c26a23899e5e56b094b4aca1a3f2393ce00d0260cc03c73376313ae41cb52c17`。
+  路径本组 `batch-1-work/1A/snake-ingestion-coverage.json.gz` 及同名 Markdown，命令/五秒
+  观察见 `validation/core-snake-coverage-1a.*`。磁盘剩余约 24 GiB，未复制真实游戏。
+
+#### 1A 续做记录（2026-08-28，仍未完成）
+
+- TUI 已分项提交：`a4c77dc` 同步 core pin，`e0f743e` 实现摄取；当前工作树干净。
+- Chromium 修正了热重载场景的新入口预期后通过：旧调用帧仍输出 42，真实“返回标题”
+  确认后输出 84。返回标题复用当前 artifact，没有重新扫描或编译；对应 core 执行回归、
+  两个既有返回标题回归、runtime Clippy/格式均通过。浏览器 trace：
+  `.rustyera/test-runs/snake-ingestion-20260827164444088-25059/trace.ndjson`。
+- Firefox 首次清理失败保留；定向重试通过（154.0.1），Safari 首次通过（26.6.2）；
+  两者验证真实 WASM、OPFS cold import、目录 fallback picker 与预期输出。
+  snapshots 位于 Web `.rustyera/test-runs/browser-compat-firefox-1787849102559/`
+  和 `browser-compat-safari-1787849117245/`。
+- Tauri 首次退出 7：新 binary 构建完成，但 runner 硬编码 `../target/debug`，实际启动旧 binary，
+  其内嵌旧 fixture 路径不存在。故不能把该次描述为新 host 已通过真实加载。
+  主智能体改为 Cargo metadata 的 target_directory，并通过 cargo-local 封装构建，
+  避免本地 patch 改写发布锁文件；定向 Vitest 4 文件 51 例、typecheck、ESLint、Prettier、
+  core-rev/锁审计、diff check 均通过，原生动态定向复验待执行。
+- Web 最终发布锁 SHA-256 为 `4e46531f7ad1d1dc64f2e123a3212f0e944f4b295d1b4bf2f5f43dbbf1c08d17`，
+  十九个 core Git source 全部指向 f823。首次 Tauri 绕过封装导致锁漂移，已恢复，不掩盖该故障。
+- 蛇版 `--logical-output-only` 的最小恢复 case `index-static-primary-names` 已通过同输入
+  比较；它不验证字体/像素，原字体失败保留。随后只选剩余 23 个未执行 case 的尝试在
+  capabilities 响应前卡住，五秒相同状态看门狗终止；没有产生新的语义通过结果。
+  已确认无活跃 Emuera client，并仅停止蛇版专用 prefix 的孤立 wineserver，等待定向恢复。
+- 原版最后三个 case 的 oracle 断言元数据改为实际 warning 格式异常所致的错误；
+  Rust 继续读取后续 alias 的既有行为保持，新增执行回归验证 500/210，未将差异豁免为通过。
+  旧 fixture 冻结于 `batch-1-work/1A/index-fixture-before-oracle-metadata-fix`，供旧 Rust
+  evidence 对应的剩余蛇版 case 使用；原版三例会以新 fixture 身份单独生成定向证据。
+- 磁盘曾降至约 18–19 GiB。确认无构建使用后，仅清理本批首条测试后新建的 core/Web
+  incremental session（约 4.0/8.6 GiB 逻辑大小）；逐目录来源清单位于
+  `regenerable-incremental-cleanup.json`、`regenerable-web-incremental-cleanup.json`。
+  未删除 binary、批次 0 证据或其他任务产物；当前可用约 24 GiB，后续大构建串行。
+
+#### 1A 收尾结论与分项提交
+
+- 1A 已完成其摄取/索引范围的实施、唯一审查、静态与三客户端验收；不代表批次 1 完成。
+  Tauri 定向复验 1/1 通过：实际 binary 为本组 `target/web-static/debug/era-web-tauri`，
+  cold/cached/reload/return-title 均验证，锁 hash 未漂移，完整快照
+  `Web/.rustyera/test-runs/tauri-snapshots/2026-08-27T16-58-49.062Z-snake-ingestion.spec.mjs.jsonl`。
+  构建时 core HEAD `0531090`，与发布 pin f823 的产品内容一致，差异为已验证的 cfg(test) 回归。
+- 蛇版 24-case 证据已收齐：18 matched_observables、6 incomparable；后六项均为预期错误，
+  原始错误/边界结果保留，Rust/C# 诊断 schema 不同，不声称错误文本等价。
+  原版 24-case：9 matched、10 incomparable、5 different；三个动态用户索引既有差异，
+  两个固定原版 warning 格式缺陷差异，均未修改为伪通过。原版既有行为保持的执行回归通过。
+- 首次失败和定向恢复分开：原版首次完成 21 项后遇固定 warning 缺陷，最后三项仅定向恢复；
+  蛇版首次字体 setup 失败，逻辑输出恢复按 1+1+22 项完成，中间一次 capabilities stall 失败
+  未产生语义结果。不重跑 full 或 smoke；仅数据语义验收，不承诺 font/pixel 相同。
+  逐例状态/原因、fixture/evidence 来源见本组 `batch-1-work/1A/compact-oracle-results.json`
+  和 `.md`。逻辑恢复不豁免 1D 的真实 HTML/pointer/canvas 服务验证。
+- Core 产品提交仍为 `bb4b04c` → `99e3621` → `8c08eb4`，fixture `f823998`；
+  后续 `0531090` 为 reload generation 执行回归，`791fa7c` 为 oracle 证据/工具修正。
+- TUI：pin `a4c77dc` → 摄取 `e0f743e`。Web：pin `617f65a` → 摄取 `92780ed` →
+  Tauri harness 修复 `214abd9`。两前端仍完整绑定 f823，不因 core 文档/测试提交移动 pin。
+- 测试无总截止；首次 full 结果和受影响定向复验见上表及 validation/*.json。磁盘约 24 GiB。
+  证据和复现材料继续保留供 1D 集成；无游戏/参考实现改动，没有推送或合并主线。
+
+#### 1B 实施入口（未审查、未测试）
+
+- 主智能体负责公共 method operand/四 opcode、compiler 惰性 expression/method-statement
+  lowering、执行分类、格式版本和 fixture/harness 集成；独立执行者分别拥有 VM/STRFORM
+  与 analyzer/validator，编辑边界按 crate 隔离。此处设计分析不是重构审查。
+- `MethodCallSpec` 保留 omitted/value/variable；先解析 target/kind/type/signature，再按 formal
+  捕获实际值或 whole-array REF，fallback 只在不存在时求值。支持合法 i64::MIN，禁止新路径
+  使用旧 sentinel。EXISTMETH 采用零实参解析，绑定调用者 generation，不执行 body。
+- ISA 7→8、compiler ABI 39→40、VM ABI 14→15、VM snapshot 11→12；不改产品版本、
+  runtime protocol、native ABI、C ABI，也不提前改变 profile 算术/RNG/variadic 策略。
+- Validator 使用私有 opaque token/slot 栈，检查 operand、origin、连续 slot、分支合流和结果类型；
+  VM 校验实际 REF 身份/rank、generation 和 snapshot/STRFORM continuation。不将动态调用送入 memo。
+- 新 fixture 已准备，仍未加载/编译/执行；将补 method-statement 和 error-side-effect 比较。
+  本批全部实质代码完成后才启动唯一 `$refactor-rustyera-code` 审查，再由 terra/low 执行测试。
+  1A 的 oracle 使用固定已验证 binary 和 fixture，未因并行 1B 改动重建。
+
 
 ### 所作改动
 
