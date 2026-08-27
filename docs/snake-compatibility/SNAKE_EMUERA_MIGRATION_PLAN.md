@@ -48,6 +48,17 @@ services = <sql, presentation, audio, extension capability versions>
 - 自动生成“脚本出现 API → analyzer → compiler → VM/service → frontend”覆盖表，区分 unknown、trap、unsupported capability。
 - 为第 2 类建立双期望 fixture；先锁定 `PRINTC`、算术、RNG、REF、extra args、`TOINT`、`GETKEY`。
 
+2026-08-27 细化：三个客户端同时接入项目配置显式选择，缺省原版。批次 0 的 snake profile
+为实验状态，身份记录当前有效策略并明确告警，不将后续语义提前标为兼容。原版裸存档互操作
+保留，snake 自身存档采用独立身份容器及存储目录。用户授权两个 oracle 增加仅 headless 生效
+的真实布局观察和设备原语注入，以补足 PRINTC/GETKEY 的动态证据；不改变正常游戏语义，
+不把布局度量等同于 GUI/GPU 或跨客户端像素等价。详细契约、版本、分项与门禁见本批实施记录。
+
+批次 0 实测进一步记录固定蛇版基准的 RNG dump/restore 状态丢失：`DumpRanddata`
+向临时 `ToArray` 副本写入，随后 `INITRAND` 恢复零。批次 2 须明确决定复刻该可观察行为
+还是采用有意修复并升级 policy；算法名称相同不代表状态兼容。原始向量及两引擎逐例结果见
+[实测比较汇总](BATCH_0_ORACLE_RESULTS.md)，不得先改参考实现或以新 golden 隐藏差异。
+
 验收：选择 `emuera.skia.snake` profile 不改变 `emuera.em` profile 的既有 fixture；错误中能显示 profile 和缺失 capability。
 
 <a id="batch-1"></a>

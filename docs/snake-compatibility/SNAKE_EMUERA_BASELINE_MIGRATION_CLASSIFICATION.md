@@ -74,7 +74,7 @@
 | `GETDISPLAYLINE` 负数 | 未发现活动负索引 | 当前语料风险低，但返回空串到倒序索引仍是可观察变化，放 profile |
 | 多余实参 | 仅在 `era魔界牧場` 找到 5 个高疑似“4 参数后尾随空项”，尚需 parser 复核 | reference 默认继续报错；`emuera.skia.snake` profile 忽略并发 warning，记录函数名和位置 |
 | `XML_ADDNODE` 多目标 | 仅 erafl 有 9 行；正常数据目标唯一 | clone 修复在通常数据无差；遇重复目标时按 profile 差分并告警 |
-| 非法 `TOINT` | 活动调用量很大（合计 1,517 行），未发现常量非法字面量，但用户/XML/运行时字符串可非法 | `emuera.em` profile 报错；`emuera.skia.snake` profile 返回 0 并 warning，避免静默掩盖数据问题 |
+| `TOINT` 整数读取异常 | 活动调用量很大（合计 1,517 行），未发现常量非法字面量，但用户/XML/运行时字符串可超范围 | 两版对空串、普通非数字串均返回 0；原版传播整数读取异常，蛇版捕获后返回 0。runtime 是否另加 warning 属于待设计的有意差异，并非 oracle 行为 |
 | `GETKEY` latch | eraTW 11、erafl 1；eratohoK 有 3 个 `GETKEYTRIGGERED` | 明确 held/edge/consume 与 tick 顺序；以输入 trace 做回归 |
 | 字符串 `>=/<=` | 未确认活动的 string-string 样本 | 风险暂低，仍需操作符矩阵测试 |
 
@@ -117,8 +117,8 @@
 | D08 | `GETDISPLAYLINE` 负索引 | `-1` 取最后一行，依次倒序；参考实现负数为空 | 会改变分支/文本；虽然 7 个非蛇版项目未发现活动负索引，仍是可观察差异 | `emuera.skia.snake` profile 启用；基于稳定 `DisplayLine.line_id`/history 索引，越界规则固定 | S/M |
 | D09 | sprite/CBG 新重载 | `SPRITECREATE` 增至 8/10 参数；`CBGSETSPRITE` 增尺寸、opacity、ColorMatrix | 参数解释和默认值可能污染已有 2/6、4 参数形式 | 旧 arity 单独 handler 并做 golden test；新尾参映射到规范化 sprite/canvas replay | M/L |
 | D10 | `SETANIMETIMER` / `BITMAP_CACHE_ENABLE` 语法迁移 | 从参考表达式注册迁为蛇版命令；前者设置动画节拍，后者切换位图缓存 | 同名 token 的 parse 形态、返回值、参数表达式可能变化；其他游戏存在命令式 `SETANIMETIMER` | parser 接受已证实语法并标准化为同一 IR；`SETANIMETIMER` 接一般表达式。缓存开关的实际行为归 N01/N03 | M |
-| D11 | RNG 状态命令 | 蛇版让 `INITRAND/DUMPRAND/RANDOMIZE` 始终作用于 MT | 非蛇版游戏依赖传统 RANDDATA；错误绑定会改变全局随机序列和存档复现 | RNG algorithm/id 进入 profile 与 save；dump/restore 只能操作当前 generator，导入旧状态需显式 adapter | L |
-| D12 | 参考行为修正集合 | `XML_ADDNODE` 多目标 clone、字符串 `>=/<=`、非法 `TOINT→0`、鼠标键 latch | 数据重复、非法输入和输入时序下会改变结果；`TOINT` 使用面很大 | 每项独立 golden/trace；reference 与 snake 结果并存，snake 的宽容行为必须 warning | M |
+| D11 | RNG 状态命令 | 蛇版让 `INITRAND/DUMPRAND/RANDOMIZE` 始终作用于 MT；批次 0 实测固定基准的 dump 写入临时副本，restore 后状态丢失 | 非蛇版游戏依赖传统 RANDDATA；错误绑定或直接修复基准缺陷都会改变可观察序列 | RNG algorithm/id 进入 profile 与 save；批次 2 明确复刻缺陷或有意修复的 policy，见实测比较汇总；旧状态须显式 adapter | L |
+| D12 | 参考行为修正集合 | `XML_ADDNODE` 多目标 clone、字符串 `>=/<=`、`TOINT` 整数读取异常返回 0、鼠标键 latch | 数据重复、超范围输入和输入时序下会改变结果；`TOINT` 使用面很大 | 每项独立 golden/trace；reference 与 snake 结果并存；额外 warning 必须作为 RustyEra 有意差异单独评估 | M |
 | D13 | NF 输入、序列输入和宏开关 | `TINPUT*NF` 超时等待但保留上滚位置；`SEQUENCEINPUT` 注入下一次输入；临时开关宏 | 改变 focus、scroll、timeout、队列消费和自动化时序 | 建立统一 input state machine；逻辑事件由 runtime 排序，viewport 保持为前端 policy；录制 input trace 回归 | L |
 | D14 | 规范化 HTML / scene 扩展 | `<font size/valign/render/...>`、`<img xpos/display/matrix>`、`<div>`、ImageLayer 的 depth/opacity/锚点 | 旧标签默认、换行、层叠和保存 presentation state 可能变化 | 扩展 canonical AST 和 `SceneLayer`，未知属性按 profile 诊断；物理查询另走 C04/C08 service | L |
 | D15 | polygon、canvas 与动画语义 | `G_POLYGON_*` 维护点集并描边/填充；sprite/图像支持尺寸、翻转、动画 | 影响绘制顺序、坐标、ColorMatrix 与 replay；不同前端输出可能不同 | runtime 只产生确定性 CanvasReplay/scene delta；固定点颜色矩阵和稳定同 depth 顺序 | L |
