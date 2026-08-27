@@ -184,4 +184,5 @@ mod key_macro_input;
 mod protocol_handshake;
 mod protocol_project;
 mod reload_transfer;
+mod resource_storage;
 mod save_lifecycle;

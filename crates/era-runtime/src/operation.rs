@@ -92,6 +92,25 @@ pub(crate) enum PendingStorage {
         target: Option<erabasic_vm::PlaceDescriptor>,
         strip_character_dat: bool,
     },
+    HostResourceText {
+        request: HostRequestId,
+        path: String,
+        resource: bool,
+    },
+    HostResourceStat {
+        request: HostRequestId,
+        path: String,
+        resource: bool,
+    },
+    HostResourceList {
+        request: HostRequestId,
+        target: Option<erabasic_vm::PlaceDescriptor>,
+        directory: String,
+        pattern: Option<String>,
+        recursive: bool,
+        /// None awaits Data; Some awaits Resource after validating the Data response.
+        data_paths: Option<Vec<String>>,
+    },
     GraphicsImageRead {
         request: HostRequestId,
         canvas_id: i64,

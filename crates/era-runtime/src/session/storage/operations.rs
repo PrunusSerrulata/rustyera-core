@@ -44,6 +44,12 @@ impl RuntimeSession {
         };
         match (pending, response.result) {
             (
+                pending @ (PendingStorage::HostResourceText { .. }
+                | PendingStorage::HostResourceStat { .. }
+                | PendingStorage::HostResourceList { .. }),
+                result,
+            ) => self.complete_resource_storage(pending, result),
+            (
                 PendingStorage::KeyMacroWrite { resume_phase }
                 | PendingStorage::SystemOutputLog { resume_phase },
                 StorageResult::Written { .. },

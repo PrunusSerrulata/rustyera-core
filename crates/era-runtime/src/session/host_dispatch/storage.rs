@@ -10,6 +10,8 @@ impl RuntimeSession {
         name: &String,
         status: &mut HostDispatchStatus,
     ) -> Result<(), RuntimeError> {
+        let snake_resources = vm.vm().artifact().manifest.compatibility.profile
+            == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake;
         if matches!(name.as_str(), "SAVEVAR" | "LOADVAR") {
             *status = HostDispatchStatus::Handled;
             return self.fault(
@@ -352,7 +354,7 @@ impl RuntimeSession {
         if name == "SAVETEXT" {
             *status = HostDispatchStatus::Handled;
             let text = string_argument_value(&request.arguments, 0, "SAVETEXT")?;
-            let Ok((namespace, path)) = text_storage_target(
+            let Ok((namespace, mut path)) = text_storage_target(
                 request
                     .arguments
                     .get(1)
@@ -360,6 +362,12 @@ impl RuntimeSession {
             ) else {
                 return commit_integer_result(vm, request.id, 0);
             };
+            if snake_resources && namespace == StorageNamespace::Data {
+                let Some(normalized) = Self::resource_storage_path(&path, false) else {
+                    return commit_integer_result(vm, request.id, 0);
+                };
+                path = normalized;
+            }
             return self.issue_host_storage(
                 vm,
                 request,
@@ -392,12 +400,35 @@ impl RuntimeSession {
                     }),
                 );
             };
+            let pending = if snake_resources && namespace == StorageNamespace::Data {
+                let Some(normalized) = Self::resource_storage_path(&path, false) else {
+                    return commit_completion(
+                        vm,
+                        request.id,
+                        VmHostCompletion::Ready(HostReady {
+                            value: Some(VmValue::String(String::new())),
+                            writes: Vec::new(),
+                        }),
+                    );
+                };
+                PendingStorage::HostResourceText {
+                    request: request.id,
+                    path: normalized,
+                    resource: false,
+                }
+            } else {
+                PendingStorage::HostReadText {
+                    request: request.id,
+                }
+            };
+            let path = match &pending {
+                PendingStorage::HostResourceText { path, .. } => path.clone(),
+                _ => path,
+            };
             return self.issue_host_storage(
                 vm,
                 request,
-                PendingStorage::HostReadText {
-                    request: request.id,
-                },
+                pending,
                 namespace,
                 StorageOperation::Read,
                 path,
@@ -410,12 +441,29 @@ impl RuntimeSession {
             else {
                 return commit_integer_result(vm, request.id, 0);
             };
+            let path = if snake_resources {
+                let Some(normalized) = Self::resource_storage_path(&path, false) else {
+                    return commit_integer_result(vm, request.id, 0);
+                };
+                normalized
+            } else {
+                path
+            };
+            let pending = if snake_resources {
+                PendingStorage::HostResourceStat {
+                    request: request.id,
+                    path: path.clone(),
+                    resource: false,
+                }
+            } else {
+                PendingStorage::HostStat {
+                    request: request.id,
+                }
+            };
             return self.issue_host_storage(
                 vm,
                 request,
-                PendingStorage::HostStat {
-                    request: request.id,
-                },
+                pending,
                 StorageNamespace::Data,
                 StorageOperation::Stat,
                 path,
@@ -438,14 +486,37 @@ impl RuntimeSession {
                 VmValue::StringPlace(place) => Some(place.as_ref().clone()),
                 _ => None,
             });
-            return self.issue_host_storage(
-                vm,
-                request,
+            let directory = if snake_resources {
+                let Some(normalized) = Self::resource_storage_path(&directory, true) else {
+                    return commit_integer_result(vm, request.id, -1);
+                };
+                if !Self::resource_storage_pattern_valid(pattern.as_deref()) {
+                    return commit_integer_result(vm, request.id, -1);
+                }
+                normalized
+            } else {
+                directory
+            };
+            let pending = if snake_resources {
+                PendingStorage::HostResourceList {
+                    request: request.id,
+                    target,
+                    directory: directory.clone(),
+                    pattern: pattern.clone(),
+                    recursive,
+                    data_paths: None,
+                }
+            } else {
                 PendingStorage::HostListFiles {
                     request: request.id,
                     target,
                     strip_character_dat: false,
-                },
+                }
+            };
+            return self.issue_host_storage(
+                vm,
+                request,
+                pending,
                 StorageNamespace::Data,
                 StorageOperation::List { pattern, recursive },
                 directory,

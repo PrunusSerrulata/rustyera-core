@@ -4,3 +4,4 @@ mod candidate;
 mod loads;
 mod menus;
 mod operations;
+mod resource;

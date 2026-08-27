@@ -585,6 +585,76 @@ fn streamed_project_file_decode_rejects_corrupt_incomplete_and_oversized_inputs(
 }
 
 #[test]
+fn streamed_project_file_custom_decoded_budget_precedes_manifest_allocation() {
+    let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let bytes = encode_full_project_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let mut offset = stream::HEADER_BYTES;
+    let mut decoded_through_manifest = 0_u64;
+    for index in 0..=MANIFEST_SECTION_INDEX {
+        decoded_through_manifest +=
+            u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+        if index != MANIFEST_SECTION_INDEX {
+            offset += 16
+                + usize::try_from(u64::from_le_bytes(
+                    bytes[offset + 8..offset + 16].try_into().unwrap(),
+                ))
+                .unwrap();
+        }
+    }
+    let mut limited = ProjectFileStreamDecoder::new_with_decoded_limit(
+        bytes.len(),
+        bytes.len(),
+        decoded_through_manifest - 1,
+    )
+    .unwrap();
+    let error = limited.append(&bytes[..offset + 16]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("decoded sections exceed their limit")
+    );
+    assert_eq!(limited.retained_bytes(), stream::HEADER_BYTES);
+
+    let mut normal = ProjectFileStreamDecoder::new_with_decoded_limit(
+        bytes.len(),
+        bytes.len(),
+        128 * 1024 * 1024,
+    )
+    .unwrap();
+    for chunk in bytes.chunks(17) {
+        normal.append(chunk).unwrap();
+    }
+    assert_eq!(
+        normal.finish().unwrap().project,
+        decode_project_file(&bytes, bytes.len()).unwrap()
+    );
+
+    let mut attempted_relaxation = bytes.clone();
+    attempted_relaxation[stream::HEADER_BYTES..stream::HEADER_BYTES + 8]
+        .copy_from_slice(&(MAXIMUM_DECODED_PAYLOAD_BYTES + 1).to_le_bytes());
+    let mut hard_limit =
+        ProjectFileStreamDecoder::new_with_decoded_limit(bytes.len(), bytes.len(), u64::MAX)
+            .unwrap();
+    assert!(hard_limit.append(&attempted_relaxation).is_err());
+    assert_eq!(hard_limit.retained_bytes(), stream::HEADER_BYTES);
+    assert!(
+        ProjectFileStreamDecoder::new_with_decoded_limit(bytes.len(), bytes.len() - 1, u64::MAX)
+            .is_err()
+    );
+}
+
+#[test]
 fn project_file_cache_externalizes_resources_and_compacts_runtime_sources() {
     let mut project = manifest("@SYSTEM_TITLE\nPRINTL cached\nRETURN\n", 3);
     project.files.push(SubmittedFile {

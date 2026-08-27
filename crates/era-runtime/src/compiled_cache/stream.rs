@@ -48,6 +48,7 @@ pub struct ProjectFileStreamDecoder {
     section_count: usize,
     section_remaining: usize,
     decoded_bytes: u64,
+    maximum_decoded_bytes: u64,
     manifest_decoded_len: Option<u64>,
     manifest_compressed: Vec<u8>,
     digest: [u8; CONTAINER_DIGEST_BYTES],
@@ -63,6 +64,24 @@ impl ProjectFileStreamDecoder {
     /// Returns an error when the declared length exceeds the negotiated transfer limit or cannot
     /// contain the mandatory project-file framing.
     pub fn new(expected_len: usize, maximum_len: usize) -> Result<Self, ProjectFileError> {
+        Self::new_with_decoded_limit(expected_len, maximum_len, MAXIMUM_DECODED_PAYLOAD_BYTES)
+    }
+
+    /// Create a streaming decoder with an additional bound on all decoded sections.
+    ///
+    /// The caller may lower, but cannot raise, the format's existing 2 GiB hard limit.
+    /// Section lengths are checked before retaining compressed manifest bytes or decompressing.
+    /// Compiled sections that are skipped still count towards the decoded-section budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same framing/transfer errors as [`Self::new`]. A section exceeding the
+    /// effective decoded budget is rejected by [`Self::append`] before allocation.
+    pub fn new_with_decoded_limit(
+        expected_len: usize,
+        maximum_len: usize,
+        maximum_decoded_bytes: u64,
+    ) -> Result<Self, ProjectFileError> {
         let minimum_len = HEADER_BYTES
             .saturating_add(FIXED_SECTION_COUNT.saturating_mul(SECTION_HEADER_BYTES))
             .saturating_add(CONTAINER_DIGEST_BYTES);
@@ -87,6 +106,7 @@ impl ProjectFileStreamDecoder {
             section_count: 0,
             section_remaining: 0,
             decoded_bytes: 0,
+            maximum_decoded_bytes: maximum_decoded_bytes.min(MAXIMUM_DECODED_PAYLOAD_BYTES),
             manifest_decoded_len: None,
             manifest_compressed: Vec::new(),
             digest: [0; CONTAINER_DIGEST_BYTES],
@@ -273,7 +293,7 @@ impl ProjectFileStreamDecoder {
             .decoded_bytes
             .checked_add(decoded_length)
             .ok_or_else(|| error("compiled cache decoded length overflow"))?;
-        if self.decoded_bytes > MAXIMUM_DECODED_PAYLOAD_BYTES {
+        if self.decoded_bytes > self.maximum_decoded_bytes {
             return Err(error("compiled cache decoded sections exceed their limit"));
         }
         let remaining_section_headers = self
