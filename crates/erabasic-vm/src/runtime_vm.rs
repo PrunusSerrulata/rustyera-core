@@ -329,6 +329,22 @@ impl RuntimeVm {
         self.vm.fibers.get(&fiber).map(|fiber| fiber.frames.len())
     }
 
+    /// Read an exact retained caller frame without exposing VM-owned references.
+    /// `depth` is zero-based from the root; nested calls preserve the owner's identity.
+    #[must_use]
+    pub fn host_frame_identity(
+        &self,
+        fiber: FiberId,
+        depth: usize,
+    ) -> Option<(
+        crate::FrameId,
+        crate::GenerationId,
+        erabasic_bytecode::SymbolKey,
+    )> {
+        let frame = self.vm.fibers.get(&fiber)?.frames.get(depth)?;
+        Some((frame.id, frame.generation, frame.function))
+    }
+
     /// Return the active dimensions for a named global, local, or bound
     /// reference variable in the requesting fiber.
     #[must_use]

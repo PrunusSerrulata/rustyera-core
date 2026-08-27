@@ -7,6 +7,7 @@ mod compatibility;
 mod configuration;
 mod effect;
 mod extension;
+mod html_query;
 mod input;
 mod key_macro;
 mod lifecycle;
@@ -45,6 +46,10 @@ pub use extension::{
     ExtensionArgument, ExtensionArgumentStyle, ExtensionCallableKind, ExtensionDeclaration,
     ExtensionInvocation, ExtensionRegistrySubmit, ExtensionResult, ExtensionValueType,
     ExtensionWrite,
+};
+pub use html_query::{
+    HtmlCutAdvanceV2, HtmlMeasureProbeV2, HtmlMeasureRequestV2, HtmlMeasureResponseV2,
+    HtmlProbeCutV2, HtmlProbeModeV2, HtmlProbeResponseV2, HtmlProbeResultV2, HtmlQueryStyleV2,
 };
 pub use input::{
     AdvanceTime, DeviceStateChanged, FrontendInput, InputDeviceKind, InputIntent, InputUndoRequest,
