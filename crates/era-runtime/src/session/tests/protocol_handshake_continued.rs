@@ -1441,3 +1441,35 @@ fn canvas_sampling_flushes_new_draws_before_query_and_returns_argb() {
         0xff11_2233
     );
 }
+
+#[test]
+fn canvas_sampling_rejects_matching_reply_after_the_current_canvas_changes() {
+    for remove in [false, true] {
+        let (mut session, request, _) = start_projection_service_with_messages(
+            "@SYSTEM_TITLE\nRESULT = GCREATE(1, 2, 2)\nRESULT = GGETCOLOR(1, 0, 0)\nWAIT\nRETURN\n",
+            ServiceKind::Canvas,
+            SAMPLE_CANVAS_PIXEL_OPERATION,
+            SAMPLE_CANVAS_PIXEL_OPERATION_VERSION,
+        );
+        let query: CanvasPixelRequest = decode_canonical(request.payload.as_slice()).unwrap();
+        let graph = &mut session.project_snapshot.as_mut().unwrap().resource_graph;
+        if remove {
+            assert!(graph.dispose_canvas(1));
+        } else {
+            assert!(graph.clear_canvas(1, 0, None));
+        }
+        // Simulate an independent resource-generation change without a projection revision.
+        // Matching the outstanding reply alone must not authorize this old raster.
+        complete_projection_reply(
+            &mut session,
+            &request,
+            encode_canonical(&CanvasPixelResponse {
+                context: query.context,
+                canvas_revision: query.canvas_revision,
+                argb: 0,
+            })
+            .unwrap(),
+        );
+        assert_service_failure(&mut session);
+    }
+}

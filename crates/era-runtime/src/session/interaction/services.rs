@@ -541,6 +541,7 @@ impl RuntimeSession {
                     }
                     ExternalCompletion::CanvasPixel {
                         context,
+                        canvas_id,
                         canvas_revision,
                         ..
                     } => {
@@ -548,7 +549,16 @@ impl RuntimeSession {
                         if !self.validate_projection_query_context(context, result.context)? {
                             return Ok(());
                         }
-                        if result.canvas_revision != canvas_revision {
+                        let current_revision = self
+                            .project_snapshot
+                            .as_ref()
+                            .and_then(|project| {
+                                project.resource_graph.canvas_observation(canvas_id)
+                            })
+                            .map(|(_, _, revision)| revision);
+                        if result.canvas_revision != canvas_revision
+                            || current_revision != Some(canvas_revision)
+                        {
                             return self.fault(
                                 FaultCode::ServiceFailure,
                                 "stale canvas raster revision",

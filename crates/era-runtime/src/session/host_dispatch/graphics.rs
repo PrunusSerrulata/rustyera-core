@@ -423,6 +423,7 @@ impl RuntimeSession {
                 ExternalCompletion::CanvasPixel {
                     request: request.id,
                     context,
+                    canvas_id,
                     canvas_revision,
                 },
                 ServiceKind::Canvas,

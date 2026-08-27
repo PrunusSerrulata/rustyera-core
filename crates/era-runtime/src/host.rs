@@ -66,6 +66,7 @@ pub(crate) enum ExternalCompletion {
     CanvasPixel {
         request: HostRequestId,
         context: era_runtime_protocol::ProjectionQueryContext,
+        canvas_id: i64,
         canvas_revision: u64,
     },
     DecodeCanvasImage {
