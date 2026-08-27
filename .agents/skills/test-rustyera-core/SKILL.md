@@ -7,6 +7,11 @@ description: Validate rustyera-core changes with scope-appropriate checks, order
 
 ## Enforce the task budget
 
+Follow the root `AGENTS.md` parallel scheduling rules. Run independent checks concurrently when
+their inputs, outputs, and mutable resources are isolated; pipeline dependent checks as prerequisites
+pass. Parallelism never bypasses the required review, focused-before-full, or static-before-dynamic
+gates. Delegate test execution as required by the component's `AGENTS.md`.
+
 - Before starting any test command, confirm that any required refactoring subagent has completed
   its single permitted run and that every requirement it reported has been implemented. Refuse to
   start testing while any refactoring requirement remains. Once the first test starts, never spawn,
@@ -44,7 +49,7 @@ description: Validate rustyera-core changes with scope-appropriate checks, order
 ## Run the Rust workflow
 
 Format changed Rust code and write the smallest useful unit or integration test first. Then run
-these gates in order, stopping at the first failure:
+these gates with the dependencies below, stopping affected downstream work on failure:
 
 1. `cargo fmt --all -- --check`
 2. `cargo check --workspace --all-targets`
@@ -52,7 +57,8 @@ these gates in order, stopping at the first failure:
 4. The smallest Rust regression test that covers the change
 5. `cargo test --workspace` (once only)
 
-Do not run the full workspace tests until formatting, compilation, Clippy, and the minimal
+The first four gates may run concurrently when build/output isolation permits it. Do not run the
+full workspace tests until formatting, compilation, Clippy, and the minimal
 regression test pass. If the one full workspace run fails, report it, fix the problem separately,
 and rerun only the affected package, test binary, module, or named tests. Never rerun
 `cargo test --workspace` in the same task.
