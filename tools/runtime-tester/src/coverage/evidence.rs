@@ -98,6 +98,9 @@ impl SourceIndex {
 
 pub(super) fn registration(binding: Option<&ExecutionBinding>) -> Value {
     match binding {
+        Some(ExecutionBinding::ExpressionMethod { result }) => {
+            json!({"classification": "ExpressionMethod", "result": result, "lowering": "typed_resolve_capture_invoke", "implementation_verified": false})
+        }
         Some(ExecutionBinding::Native(contract)) => {
             json!({"classification": "Native", "contract": contract, "implementation_verified": false})
         }

@@ -127,6 +127,7 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
         "TOINT" => "toint",
         "GETKEY" => "getkey",
         "INDEX" => "index",
+        "METHODS" => "methods",
         _ => return Err(format!("unknown fixture group {group}").into()),
     };
     let mut files = Vec::new();
@@ -142,7 +143,13 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
             fs::read_to_string(root.join(&path))?,
         ));
     }
-    if group == "INDEX" {
+    if group == "METHODS" {
+        files.push(submitted(
+            "erb/methods.erh",
+            FileCategory::Erh,
+            fs::read_to_string(root.join("erb/methods.erh"))?,
+        ));
+    } else if group == "INDEX" {
         // Index cases keep their own complete data inputs. Do not add these files
         // to older observation groups: their historical fixture identity is frozen.
         for (path, category) in [
@@ -350,6 +357,68 @@ mod tests {
             } else {
                 assert_eq!(observation["ok"], false, "{result}");
                 assert_eq!(observation["termination"], "faulted", "{result}");
+            }
+        }
+    }
+
+    #[test]
+    fn method_fixture_executes_lazy_values_references_and_statement_results() {
+        use erabasic_compat::CompatibilityProfileId;
+
+        let root = crate::tool_root().join("fixture-snake-methods");
+        let fixture: Fixture =
+            serde_json::from_slice(&fs::read(root.join("cases.json")).unwrap()).unwrap();
+        for (id, expected) in [
+            (
+                "method-present-skips-fallback",
+                json!({"RESULT:0":23,"METHOD_TRACE:0":1234,"METHOD_BODY_COUNT:0":1}),
+            ),
+            (
+                "method-missing-only-fallback",
+                json!({"RESULT:0":90,"METHOD_TRACE:0":19,"METHOD_BODY_COUNT:0":0}),
+            ),
+            (
+                "method-explicit-omitted-slot",
+                json!({"RESULT:0":57,"METHOD_BODY_COUNT:0":1}),
+            ),
+            (
+                "method-i64-min-is-value",
+                json!({"RESULT:0":i64::MIN,"METHOD_BODY_COUNT:0":1}),
+            ),
+            (
+                "method-whole-array-ref-skips-index",
+                json!({"RESULT:0":11,"METHOD_VALUES:0":11,"METHOD_VALUES:2":30,"METHOD_WORDS:1":"changed","METHOD_INDEX_COUNT:0":0,"METHOD_BODY_COUNT:0":1}),
+            ),
+            (
+                "method-value-captured-before-next-argument",
+                json!({"RESULT:0":102,"METHOD_VALUES:0":99,"METHOD_TRACE:0":4,"METHOD_BODY_COUNT:0":1}),
+            ),
+            (
+                "method-integer-statement",
+                json!({"RESULT:0":42,"METHOD_TRACE:0":0,"METHOD_BODY_COUNT:0":1}),
+            ),
+            (
+                "method-string-statement",
+                json!({"RESULTS:0":"zero","METHOD_TRACE:0":0,"METHOD_BODY_COUNT:0":1}),
+            ),
+        ] {
+            let case = fixture.cases.iter().find(|case| case.id == id).unwrap();
+            for profile in [
+                CompatibilityProfileId::EmueraEm,
+                CompatibilityProfileId::EmueraSkiaSnake,
+            ] {
+                let result = super::super::observe_case(
+                    &root,
+                    &CompatibilityIdentity::for_profile(profile),
+                    fixture.seed,
+                    case,
+                )
+                .unwrap();
+                assert_eq!(result["load"]["success"], true, "{id}: {result}");
+                assert_eq!(result["steps"][0]["status"], "executed", "{id}: {result}");
+                let observation = &result["steps"][0]["result"];
+                assert_eq!(observation["ok"], true, "{id}: {result}");
+                assert_eq!(observation["watches"], expected, "{id}: {result}");
             }
         }
     }
