@@ -193,6 +193,18 @@ fn title_session_fixture() -> (
             content_hash: None,
         }],
     };
+    title_session_fixture_with_manifest(manifest, 7)
+}
+
+fn title_session_fixture_with_manifest(
+    manifest: ProjectManifest,
+    seed: u64,
+) -> (
+    RuntimeSession,
+    Arc<std::sync::Mutex<Vec<ProjectProgress>>>,
+    ProjectManifest,
+    erabasic_bytecode::Digest,
+) {
     let mut build = crate::project::build_project(&manifest, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     let expected = build
@@ -214,7 +226,7 @@ fn title_session_fixture() -> (
     session.project_progress_reporter = Some(ProjectProgressReporter::new(move |value| {
         observed.lock().unwrap().push(value);
     }));
-    session.start_new_game(7).unwrap();
+    session.start_new_game(seed).unwrap();
     let _ = drain(&mut session);
     (session, progress, manifest, expected)
 }
@@ -373,6 +385,139 @@ fn return_to_title_reuses_program_index_without_project_loading() {
     let replay_header = input_replay_records(&session).remove(0);
     assert_eq!(replay_header["origin"]["kind"], "new_game");
     assert_eq!(replay_header["origin"]["seed"], "9");
+    assert_eq!(replay_header["origin"]["trigger"], "return_to_title");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn als_only_reload_keeps_old_frames_and_restarts_title_with_updated_alias() {
+    let file = |path: &str, category, contents: &str| SubmittedFile {
+        relative_path: path.into(),
+        category,
+        payload: FilePayload::Utf8(contents.into()),
+        content_hash: None,
+    };
+    let manifest = ProjectManifest {
+        compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+        project_revision: 1,
+        files: vec![
+            file(
+                "reraconfig.toml",
+                FileCategory::Configuration,
+                "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n",
+            ),
+            file("ERB/definitions.erh", FileCategory::Erh, "#DIM BUFF,32\n"),
+            file(
+                "ERB/main.erb",
+                FileCategory::Erb,
+                "@SYSTEM_TITLE\nBUFF:main = 42\nBUFF:other = 84\nWHILE 1\nCALL REPORT_ALIAS\nINPUT\nWEND\nRETURN\n\n@REPORT_ALIAS\nPRINTFORML ALIAS={BUFF:alias}\nRETURN\n",
+            ),
+            file(
+                "ERB/indices/BUFF.erd",
+                FileCategory::Erd,
+                "10,main\n11,other\n",
+            ),
+            file("ERB/indices/BUFF.als", FileCategory::Als, "10,alias\n"),
+        ],
+    };
+    let (mut session, progress, _manifest, initial_artifact) =
+        title_session_fixture_with_manifest(manifest, 123_456);
+    let drive_to_wait = |session: &mut RuntimeSession| {
+        for _ in 0..16 {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            if session.phase == RuntimePhase::WaitingInput {
+                break;
+            }
+        }
+        assert_eq!(session.phase, RuntimePhase::WaitingInput);
+    };
+    drive_to_wait(&mut session);
+    assert_eq!(
+        projected_presentation_text(&session.presentation.snapshot()),
+        "ALIAS=42"
+    );
+    drain(&mut session);
+
+    session
+        .reload_project(
+            97,
+            &ReloadProject {
+                base_revision: 1,
+                target_revision: 2,
+                changes: vec![FileChange::Upsert {
+                    file: file("ERB/indices/BUFF.als", FileCategory::Als, "11,alias\n"),
+                }],
+            },
+        )
+        .unwrap();
+    let target = session.artifact.as_ref().unwrap().artifact();
+    let reloaded_artifact = target.manifest.artifact_id;
+    assert_ne!(reloaded_artifact, initial_artifact);
+    assert_eq!(
+        target.project_data.static_data.deferred_indices.resolved["BUFF"].entries["alias"],
+        11
+    );
+
+    // Calls made by the suspended title frame remain in its original program generation.
+    let wait = session.operations.active_input().unwrap().wait.clone();
+    session
+        .handle_message(
+            98,
+            RuntimeMessage::Input(FrontendInput {
+                wait_id: wait.wait_id,
+                token: wait.submission_token,
+                monotonic_time_ns: 0,
+                intent: InputIntent::CommitText("1".into()),
+                message_skip: false,
+            }),
+        )
+        .unwrap();
+    drive_to_wait(&mut session);
+    assert_eq!(
+        projected_presentation_text(&session.presentation.snapshot()),
+        "ALIAS=42\n\nALIAS=42"
+    );
+    drain(&mut session);
+    progress.lock().unwrap().clear();
+
+    // Returning to title must use the committed reload, without reading or compiling sources.
+    session.return_to_title(99).unwrap();
+    let messages = drain(&mut session);
+    assert!(
+        messages
+            .iter()
+            .all(|message| !matches!(message, RuntimeMessage::ProjectLoadReport(_)))
+    );
+    answer_entropy(
+        &mut session,
+        return_to_title_entropy_request(messages),
+        123_456,
+    );
+    drive_to_wait(&mut session);
+    assert_eq!(
+        projected_presentation_text(&session.presentation.snapshot()),
+        "ALIAS=84"
+    );
+    assert_eq!(
+        session.vm.as_ref().unwrap().vm().artifact_id(),
+        reloaded_artifact
+    );
+    assert!(
+        drain(&mut session)
+            .iter()
+            .all(|message| !matches!(message, RuntimeMessage::ProjectLoadReport(_)))
+    );
+    let resumed_progress = progress.lock().unwrap();
+    assert!(!resumed_progress.is_empty());
+    assert!(
+        resumed_progress
+            .iter()
+            .all(|value| { value.stage == ProjectProgressStage::InitializingMemory })
+    );
+    let replay_header = input_replay_records(&session).remove(0);
+    assert_eq!(replay_header["origin"]["seed"], "123456");
     assert_eq!(replay_header["origin"]["trigger"], "return_to_title");
 }
 
