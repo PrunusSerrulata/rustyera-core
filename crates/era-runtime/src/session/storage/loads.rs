@@ -114,9 +114,9 @@ impl RuntimeSession {
             payload_digest: crate::input_replay::digest_hex(bytes),
             data_type: crate::input_replay::ReplayExternalDataType::Global,
         })?;
-        let mut vm = self
+        let vm = self
             .vm
-            .take()
+            .as_ref()
             .ok_or_else(|| RuntimeError::Internal("global load has no VM".into()))?;
         let decoded = decode_scoped_save(
             bytes,
@@ -131,11 +131,7 @@ impl RuntimeSession {
                 &decoded.structured_extensions,
             )
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        vm.commit_runtime_state(prepared)
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        self.save_extensions =
-            merge_opaque_extensions(&self.save_extensions, decoded.opaque_extensions);
-        let writes = global_place(&vm, "RESULT")
+        let writes = global_place(vm, "RESULT")
             .map(|target| {
                 vec![HostWrite {
                     target,
@@ -143,15 +139,27 @@ impl RuntimeSession {
                 }]
             })
             .unwrap_or_default();
-        commit_completion(
-            &mut vm,
-            request,
-            VmHostCompletion::Ready(HostReady {
-                value: None,
-                writes,
-            }),
-        )?;
-        self.vm = Some(vm);
+        // Decode, state preparation and host validation must not remove the live VM.
+        // A corrupt or incompatible GLOBAL load leaves both state and replay intact.
+        let completion = vm
+            .validate_host_completion(
+                request,
+                VmHostCompletion::Ready(HostReady {
+                    value: None,
+                    writes,
+                }),
+            )
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        let vm = self
+            .vm
+            .as_mut()
+            .expect("global load was prepared against the live VM");
+        vm.commit_runtime_state(prepared)
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        vm.commit_host_completion(completion)
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        self.save_extensions =
+            merge_opaque_extensions(&self.save_extensions, decoded.opaque_extensions);
         self.set_phase(RuntimePhase::Running)?;
         self.install_input_replay(replay_origin);
         Ok(())
