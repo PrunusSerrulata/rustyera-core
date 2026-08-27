@@ -25,7 +25,11 @@ use era_runtime_protocol::{
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_compiler::{ExecutionBinding, default_host_registry};
 
+mod baseline;
+mod coverage;
 mod project_extractor;
+mod snake_observations;
+mod watchdog;
 
 fn diagnostics_with_level(
     diagnostics: &[ProtocolDiagnostic],
@@ -116,6 +120,12 @@ fn artifact_path(name: &str) -> PathBuf {
 fn main() {
     let command = env::args().nth(1).unwrap_or_else(|| "registry".into());
     match command.as_str() {
+        "baseline" => run_audit_command(watchdog::supervise("baseline", baseline::run_cli)),
+        "coverage" => run_audit_command(watchdog::supervise("coverage", coverage::run_cli)),
+        "snake-observations" => run_audit_command(watchdog::supervise(
+            "snake-observations",
+            snake_observations::run_cli,
+        )),
         "registry" => audit_registry(),
         "minimal" => audit_minimal(false, false),
         "minimal-root-paths" => audit_minimal(true, false),
@@ -127,6 +137,13 @@ fn main() {
         "compile" => audit_analyzer(true),
         "project-extractor-all" => project_extractor::audit_all_reference_games(),
         other => panic!("unknown command {other}"),
+    }
+}
+
+fn run_audit_command(result: Result<(), Box<dyn std::error::Error>>) {
+    if let Err(error) = result {
+        eprintln!("audit failed: {error}");
+        std::process::exit(2);
     }
 }
 
@@ -621,6 +638,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files,
         }),
@@ -1169,6 +1187,7 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
         1,
         Some(1),
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: files.to_vec(),
         }),
@@ -1661,6 +1680,8 @@ mod tests {
     #[test]
     fn protocol_diagnostics_are_filtered_by_runtime_log_level() {
         let diagnostic = |code: &str, level| ProtocolDiagnostic {
+            context: None,
+            notification: era_runtime_protocol::DiagnosticNotification::default(),
             code: code.into(),
             level,
             message: String::new(),
