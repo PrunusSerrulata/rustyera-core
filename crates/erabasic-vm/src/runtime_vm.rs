@@ -1,7 +1,7 @@
 use erabasic_bytecode::{Digest, HostImport, HostSnapshotCapability, SymbolKey};
 use erabasic_validator::ValidatedArtifact;
 
-use crate::structured::{StructuredExtension, StructuredScope};
+use crate::structured::{ColumnIdentityStamp, StructuredExtension, StructuredScope};
 use crate::{
     EraState, EraStateReport, FiberId, FiberState, FiberStatus, GenerationId, HostCallRequest,
     HostCallResult, HostReady, HostRequestId, HostWaitStability, HotReloadReport,
@@ -20,8 +20,16 @@ use crate::debug::DebugState;
 pub struct RuntimeVm {
     vm: Vm,
     natives: NativeServiceRegistry,
-    pending_natives: Option<NativeServiceRegistry>,
+    pending_natives: Option<(NativeServiceRegistry, Option<ColumnIdentityStamp>)>,
+    candidate_base_column_stamp: CandidateColumnBase,
     line_columns: u32,
+}
+
+/// Distinguish an unforked runtime from a fork whose artifact has no structured services.
+#[derive(Clone, Copy)]
+enum CandidateColumnBase {
+    Unforked,
+    Forked(Option<ColumnIdentityStamp>),
 }
 
 /// The immutable program index retained while a runtime obtains title entropy.
@@ -48,6 +56,7 @@ pub const DEFAULT_LINE_COLUMNS: u32 = 75;
 /// It intentionally excludes fibers, frames and scheduler counters.
 pub struct PreparedCandidateState {
     artifact_id: Digest,
+    base_column_stamp: CandidateColumnBase,
     memory: crate::Memory,
     natives: NativeServiceRegistry,
 }
@@ -60,6 +69,7 @@ impl RuntimeVm {
             vm,
             natives,
             pending_natives,
+            candidate_base_column_stamp: _,
             line_columns: _,
         } = self;
         drop(natives);
@@ -111,6 +121,11 @@ impl RuntimeVm {
             vm,
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Forked(
+                self.natives
+                    .column_identity_stamp()
+                    .map_err(VmError::Snapshot)?,
+            ),
             line_columns: self.line_columns,
         })
     }
@@ -119,6 +134,7 @@ impl RuntimeVm {
     pub fn into_candidate_state(self) -> PreparedCandidateState {
         PreparedCandidateState {
             artifact_id: self.vm.artifact_id(),
+            base_column_stamp: self.candidate_base_column_stamp,
             memory: self.vm.memory,
             natives: self.natives,
         }
@@ -139,6 +155,14 @@ impl RuntimeVm {
                 "candidate state belongs to another artifact".into(),
             ));
         }
+        let CandidateColumnBase::Forked(base) = candidate.base_column_stamp else {
+            return Err(VmError::InvalidState(
+                "candidate state was not forked from a live runtime".into(),
+            ));
+        };
+        self.natives
+            .validate_column_identity_stamp(base)
+            .map_err(VmError::InvalidState)?;
         self.vm.memory = candidate.memory;
         self.natives = candidate.natives;
         self.refresh_draw_line_string();
@@ -152,6 +176,7 @@ impl RuntimeVm {
             vm: Vm::new(artifact, config),
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
         };
         runtime.refresh_draw_line_string();
@@ -165,6 +190,7 @@ impl RuntimeVm {
             vm: Vm::new(artifact, config),
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
         };
         runtime.refresh_draw_line_string();
@@ -187,6 +213,7 @@ impl RuntimeVm {
             vm: Vm::new_for_title(artifact, config),
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
         };
         runtime.refresh_draw_line_string();
@@ -205,6 +232,7 @@ impl RuntimeVm {
             vm: Vm::new_for_title_with_progress(artifact, config, progress),
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
         };
         runtime.refresh_draw_line_string();
@@ -225,6 +253,7 @@ impl RuntimeVm {
             vm: Vm::new_for_title_from_program_with_progress(program, config, progress),
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
         };
         runtime.refresh_draw_line_string();
@@ -242,7 +271,7 @@ impl RuntimeVm {
         let changed = self.natives.character_width_mode() != mode;
         self.natives.set_character_width_mode(mode);
         if let Some(pending) = &mut self.pending_natives {
-            pending.set_character_width_mode(mode);
+            pending.0.set_character_width_mode(mode);
         }
         if changed {
             // Width-sensitive compiler natives are memo-safe only within one width policy.
@@ -383,6 +412,10 @@ impl RuntimeVm {
             .map_err(VmError::InvalidState)?;
         let mut prepared = self.vm.prepare_runtime_state(transaction)?;
         prepared.structured_state = structured_state;
+        prepared.base_column_stamp = self
+            .natives
+            .column_identity_stamp()
+            .map_err(VmError::InvalidState)?;
         Ok((prepared, imported))
     }
 }
@@ -402,6 +435,10 @@ impl VmRuntimeStatePort for RuntimeVm {
             .map_err(VmError::InvalidState)?;
         let mut prepared = self.vm.prepare_runtime_state(transaction)?;
         prepared.structured_state = structured_state;
+        prepared.base_column_stamp = self
+            .natives
+            .column_identity_stamp()
+            .map_err(VmError::InvalidState)?;
         Ok(prepared)
     }
 
@@ -411,9 +448,12 @@ impl VmRuntimeStatePort for RuntimeVm {
                 "runtime state transaction belongs to a stale generation".into(),
             ));
         }
+        self.natives
+            .validate_column_identity_stamp(prepared.base_column_stamp)
+            .map_err(VmError::InvalidState)?;
         if let Some(structured_state) = &prepared.structured_state {
             self.natives
-                .commit_structured_state(structured_state)
+                .commit_structured_state(structured_state, prepared.base_column_stamp)
                 .map_err(VmError::InvalidState)?;
         }
         self.vm.commit_runtime_state(prepared)?;
@@ -737,21 +777,33 @@ impl VmRuntimePort for RuntimeVm {
     }
 
     fn prepare_hot_reload(&mut self, target: ValidatedArtifact) -> Result<(), VmError> {
+        let base_column_stamp = self
+            .natives
+            .column_identity_stamp()
+            .map_err(VmError::Snapshot)?;
         let migrated = self
             .natives
             .migrated_for_artifact(target.artifact())
             .map_err(VmError::Snapshot)?;
         self.vm.prepare_hot_reload_artifact(target)?;
-        self.pending_natives = Some(migrated);
+        self.pending_natives = Some((migrated, base_column_stamp));
         Ok(())
     }
 
     fn commit_hot_reload(&mut self) -> Result<HotReloadReport, VmError> {
+        let (_, base_column_stamp) = self
+            .pending_natives
+            .as_ref()
+            .ok_or_else(|| VmError::InvalidState("prepared native migration is missing".into()))?;
+        self.natives
+            .validate_column_identity_stamp(*base_column_stamp)
+            .map_err(VmError::InvalidState)?;
         let report = self.vm.commit_hot_reload()?;
-        self.natives = self
+        let (natives, _) = self
             .pending_natives
             .take()
-            .ok_or_else(|| VmError::InvalidState("prepared native migration is missing".into()))?;
+            .expect("validated native migration remains available");
+        self.natives = natives;
         self.refresh_draw_line_string();
         Ok(report)
     }
@@ -889,6 +941,7 @@ impl VmRestorePort for RuntimeVm {
             vm,
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
         };
         Ok(PreparedVmRestore {

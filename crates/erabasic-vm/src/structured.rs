@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{HostWrite, NativeCallRequest, NativePlaceView, NativeReady, PlaceDescriptor, VmValue};
 
+mod column_identity;
+mod column_options;
 mod data_table;
+mod legacy;
 mod xml;
 
 use data_table::{
@@ -22,10 +25,10 @@ use data_table::{
 };
 use xml::{parse_xml, xml_attribute_escape, xml_text_escape};
 
-pub(crate) const STRUCTURED_BUNDLE_VERSION: u32 = 2;
+pub(crate) const STRUCTURED_BUNDLE_VERSION: u32 = 3;
 
 pub(crate) fn bundle_key() -> SymbolKey {
-    SymbolKey::derive("rustyera.native.bundle", b"structured-data-v2")
+    SymbolKey::derive("rustyera.native.bundle", b"structured-data-v3")
 }
 
 pub(crate) fn is_structured_name(name: &str) -> bool {
@@ -33,12 +36,29 @@ pub(crate) fn is_structured_name(name: &str) -> bool {
     name.starts_with("map_") || name.starts_with("xml_") || name.starts_with("dt_")
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct StructuredState {
     maps: BTreeMap<String, OrderedMap>,
     xml_documents: BTreeMap<String, XmlDocument>,
     data_tables: BTreeMap<String, DataTable>,
+    next_column_identity: u64,
+    column_identity_revision: u64,
 }
+
+impl Default for StructuredState {
+    fn default() -> Self {
+        Self {
+            maps: BTreeMap::new(),
+            xml_documents: BTreeMap::new(),
+            data_tables: BTreeMap::new(),
+            next_column_identity: 1,
+            column_identity_revision: 0,
+        }
+    }
+}
+
+pub(crate) use column_identity::ColumnIdentityStamp;
+pub(crate) use column_options::is_internal_column_native;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StructuredScope {
@@ -141,9 +161,11 @@ enum Cell {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct Column {
+    identity: u64,
     name: String,
     value_type: DataType,
     nullable: bool,
+    default_value: Cell,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -166,9 +188,11 @@ impl DataTable {
             case_sensitive: true,
             next_id: 1,
             columns: vec![Column {
+                identity: 0,
                 name: "id".into(),
                 value_type: DataType::Int64,
                 nullable: false,
+                default_value: Cell::Null,
             }],
             rows: Vec::new(),
         }
@@ -235,6 +259,7 @@ impl crate::NativeService for StructuredNative {
 
 impl StructuredState {
     pub(crate) fn encode(&self) -> Result<Vec<u8>, String> {
+        self.validate_identity_state()?;
         let payload = serde_json::to_vec(self).map_err(|error| error.to_string())?;
         let mut output = STRUCTURED_BUNDLE_VERSION.to_le_bytes().to_vec();
         output.extend(payload);
@@ -252,7 +277,9 @@ impl StructuredState {
                 "unsupported structured native bundle version {version}"
             ));
         }
-        serde_json::from_slice(&bytes[4..]).map_err(|error| error.to_string())
+        let state: Self = serde_json::from_slice(&bytes[4..]).map_err(|error| error.to_string())?;
+        state.validate_identity_state()?;
+        Ok(state)
     }
 
     pub(crate) fn clear_for_transaction(
@@ -398,7 +425,7 @@ impl StructuredState {
                 }
                 StructuredExtension::DataTable { key, schema, data } if tables.contains(key) => {
                     let table = decode_data_table_extension(key, schema, data)?;
-                    self.data_tables.insert(key.clone(), table);
+                    self.install_fresh_table(key.clone(), table)?;
                     imported.insert((0x22, key.clone()));
                 }
                 _ => {}
@@ -415,6 +442,9 @@ impl StructuredState {
         }
         if name.starts_with("xml_") {
             return self.call_xml(&name, request);
+        }
+        if name.starts_with("dt__column_") {
+            return self.call_column_option(&name, request);
         }
         if name.starts_with("dt_") {
             return self.call_data_table(&name, request);
@@ -575,13 +605,7 @@ fn decode_data_table_extension(key: &str, schema: &str, data: &str) -> Result<Da
         // RustyEra briefly wrote its internal serde representation before the
         // reference-compatible DataSet XML boundary was implemented. Keep those
         // saves loadable, but never emit this legacy representation again.
-        let columns: Vec<Column> =
-            serde_json::from_str(schema).map_err(|error| error.to_string())?;
-        let table: DataTable = serde_json::from_str(data).map_err(|error| error.to_string())?;
-        if table.columns != columns {
-            return Err(format!("DataTable extension {key} schema differs"));
-        }
-        table
+        legacy::decode_table(key, schema, data)?
     };
     table.next_id = table
         .rows

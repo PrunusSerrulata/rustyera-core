@@ -72,6 +72,15 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     // array variable and writes all of its dimensions to RESULT.
     add("VARSIZE", Expressions, &[ReferenceAny], 1, false, false);
     add("ASSERT", Expressions, &[Integer], 1, false, false);
+    // DEFAULT positions have a dedicated parser/analyzer, with typed value expressions.
+    add(
+        "DT_COLUMN_OPTIONS",
+        Expressions,
+        &[String, String, ArgumentConstraint::Raw, Any],
+        4,
+        true,
+        false,
+    );
     add("THROW", FormStyle, &[Formatted], 0, false, true);
     // The statement form is distinct from ENCODETOUNI(string, position): it
     // consumes one nullable FORM string and writes its code points to RESULT.

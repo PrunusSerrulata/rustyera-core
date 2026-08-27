@@ -670,6 +670,37 @@ fn analyze_instruction(
             Argument::Omitted(_) => HirArgument::Omitted,
         });
     }
+    if key == "DT_COLUMN_OPTIONS" {
+        let expression_arguments = lowered
+            .iter()
+            .enumerate()
+            .filter_map(|(index, argument)| {
+                if index >= 2 && index % 2 == 0 {
+                    return None;
+                }
+                Some(match argument {
+                    HirArgument::Expression(expression) => Some(expression.clone()),
+                    _ => None,
+                })
+            })
+            .collect::<Vec<_>>();
+        analyzer.check_arguments(
+            &expression_arguments,
+            &[
+                crate::ArgumentConstraint::String,
+                crate::ArgumentConstraint::String,
+                crate::ArgumentConstraint::Any,
+            ],
+            3,
+            true,
+            false,
+            SourceLocation::new(source.source.id, statement.span),
+        );
+        return HirStatementKind::Instruction {
+            target: InstructionTarget::Builtin(key),
+            arguments: lowered,
+        };
+    }
     if static_target && lowered.is_empty() && !raw_arguments.trim().is_empty() {
         lowered.push(HirArgument::Raw(resolve_static_target(
             raw_arguments,

@@ -46,6 +46,10 @@ pub(super) fn data_table_schema_xml(key: &str, table: &DataTable) -> String {
         if column.nullable {
             output.push_str("\" minOccurs=\"0");
         }
+        if let Some(default) = default_text(&column.default_value) {
+            output.push_str("\" default=\"");
+            output.push_str(&schema_attribute_escape(&default));
+        }
         output.push_str("\" />\r\n");
     }
     output.push_str(
@@ -75,6 +79,13 @@ pub(super) fn data_table_data_xml(key: &str, table: &DataTable) -> String {
                 row.cells.get(index).cloned().unwrap_or(Cell::Null)
             };
             if matches!(cell, Cell::Null) {
+                // Omission would reactivate a non-null schema default on import.
+                // Keep explicit null distinct, without changing existing no-default XML.
+                if !matches!(column.default_value, Cell::Null) {
+                    output.push_str("    <");
+                    output.push_str(&encode_xml_name(&column.name));
+                    output.push_str(" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:nil=\"true\" />\r\n");
+                }
                 continue;
             }
             let name = encode_xml_name(&column.name);
@@ -140,27 +151,32 @@ pub(super) fn parse_data_table_schema(key: &str, xml: &str) -> Result<DataTable,
             Some("xs:string") => DataType::String,
             _ => return Err("DataTable schema contains an unsupported column type".into()),
         };
+        let default_value = element
+            .attribute("default")
+            .map(|text| parse_typed_cell(value_type, text))
+            .transpose()?
+            .unwrap_or(Cell::Null);
         columns.push(Column {
+            identity: 0,
             name,
             value_type,
             nullable: element.attribute("minOccurs") == Some("0"),
+            default_value,
         });
     }
-    if columns.first()
-        != Some(&Column {
-            name: "id".into(),
-            value_type: DataType::Int64,
-            nullable: false,
-        })
-    {
+    if !columns.first().is_some_and(|column| {
+        column.name == "id" && column.value_type == DataType::Int64 && !column.nullable
+    }) {
         return Err("DataTable schema must start with a non-null Int64 id column".into());
     }
-    Ok(DataTable {
+    let table = DataTable {
         case_sensitive,
         next_id: 1,
         columns,
         rows: Vec::new(),
-    })
+    };
+    super::column_identity::validate_table(&table)?;
+    Ok(table)
 }
 
 pub(super) fn parse_data_table_xml(
@@ -181,7 +197,12 @@ pub(super) fn parse_data_table_xml(
         if row_element.name != table_name {
             return Err("DataTable data contains a row for another table".into());
         }
-        let mut cells = table.columns.iter().map(|_| Cell::Null).collect::<Vec<_>>();
+        let mut cells = table
+            .columns
+            .iter()
+            .map(|column| column.default_value.clone())
+            .collect::<Vec<_>>();
+        let mut seen = vec![false; table.columns.len()];
         for cell_element in &row_element.children {
             let XmlChild::Element(cell_element) = cell_element else {
                 continue;
@@ -190,25 +211,17 @@ pub(super) fn parse_data_table_xml(
             let index = table
                 .column(&name)
                 .ok_or_else(|| format!("DataTable data contains unknown column {name}"))?;
-            if !matches!(cells[index], Cell::Null) {
+            if seen[index] {
                 return Err(format!("DataTable row repeats column {name}"));
             }
-            let text = cell_element.inner_text();
-            cells[index] = match table.columns[index].value_type {
-                DataType::String => Cell::String(text),
-                value_type => {
-                    let value = text
-                        .parse::<i64>()
-                        .map_err(|_| format!("DataTable column {name} is not an integer"))?;
-                    cell_for_column(
-                        &Column {
-                            name: name.clone(),
-                            value_type,
-                            nullable: table.columns[index].nullable,
-                        },
-                        &VmValue::Integer(value),
-                    )?
+            seen[index] = true;
+            cells[index] = if is_explicit_null(cell_element, row_element, &document.root)? {
+                if !cell_element.children.is_empty() {
+                    return Err(format!("DataTable null column {name} contains content"));
                 }
+                Cell::Null
+            } else {
+                parse_typed_cell(table.columns[index].value_type, &cell_element.inner_text())?
             };
         }
         let id = match cells.first() {
@@ -230,6 +243,62 @@ pub(super) fn parse_data_table_xml(
         table.rows.push(DataRow { id, cells });
     }
     Ok(table)
+}
+
+fn default_text(cell: &Cell) -> Option<String> {
+    match cell {
+        Cell::Null => None,
+        Cell::Integer(value) => Some(value.to_string()),
+        Cell::String(value) => Some(value.clone()),
+    }
+}
+
+fn schema_attribute_escape(value: &str) -> String {
+    xml_attribute_escape(value)
+        .replace('\r', "&#xD;")
+        .replace('\n', "&#xA;")
+        .replace('\t', "&#x9;")
+}
+
+fn parse_typed_cell(value_type: DataType, text: &str) -> Result<Cell, String> {
+    let cell = if value_type == DataType::String {
+        Cell::String(text.to_owned())
+    } else {
+        Cell::Integer(
+            text.parse::<i64>()
+                .map_err(|_| "DataTable XML value is not an integer")?,
+        )
+    };
+    super::column_identity::validate_cell_type(value_type, &cell)?;
+    Ok(cell)
+}
+
+fn is_explicit_null(
+    cell: &XmlElement,
+    row: &XmlElement,
+    root: &XmlElement,
+) -> Result<bool, String> {
+    let mut value = None;
+    for (name, attribute) in &cell.attributes {
+        let Some((prefix, "nil")) = name.split_once(':') else {
+            continue;
+        };
+        let namespace = format!("xmlns:{prefix}");
+        let binding = [cell, row, root]
+            .into_iter()
+            .find_map(|element| element.attribute(&namespace));
+        if binding != Some("http://www.w3.org/2001/XMLSchema-instance") {
+            continue;
+        }
+        if value.replace(attribute.as_str()).is_some() {
+            return Err("DataTable XML has duplicate nil attributes".into());
+        }
+    }
+    match value {
+        None | Some("false" | "0") => Ok(false),
+        Some("true" | "1") => Ok(true),
+        Some(_) => Err("DataTable XML nil attribute is not boolean".into()),
+    }
 }
 
 pub(super) fn collect_elements<'a>(

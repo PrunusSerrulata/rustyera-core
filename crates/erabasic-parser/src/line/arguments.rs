@@ -8,6 +8,70 @@ use crate::expression::ExpressionParser;
 use crate::formatted::{lower_formatted, shift_formatted};
 use crate::util::{shift_diagnostics, shift_tokens, split_top_level};
 
+pub(super) fn parse_column_options(
+    source: &str,
+    base: usize,
+    context: &dyn ParserContext,
+) -> ParseOutput<Vec<Argument>> {
+    let lexed = lex_with(
+        source,
+        context.lexer_config(),
+        LexEnd::EndOfLine,
+        LexFlags::NONE,
+        context.macros(),
+    );
+    let mut diagnostics = shift_diagnostics(lexed.diagnostics, base);
+    let tokens = shift_tokens(lexed.tokens, base);
+    let mut arguments = Vec::new();
+    for (index, segment) in split_top_level(&tokens, ',').into_iter().enumerate() {
+        if index >= 2 && index % 2 == 0 {
+            // Options are syntax, not variable references or string expressions.
+            if let [
+                Token {
+                    kind: TokenKind::Identifier(option),
+                    ..
+                },
+            ] = segment
+                && option.eq_ignore_ascii_case("DEFAULT")
+            {
+                arguments.push(Argument::Raw("DEFAULT".into()));
+            } else {
+                let span = segment
+                    .first()
+                    .zip(segment.last())
+                    .map_or(Span::empty(base + source.len()), |(first, last)| {
+                        Span::new(first.span.start, last.span.end)
+                    });
+                diagnostics.push(Diagnostic::error(
+                    DiagnosticCode::UnexpectedToken,
+                    span,
+                    "DT_COLUMN_OPTIONS supports only the DEFAULT keyword",
+                ));
+                arguments.push(Argument::Omitted(span));
+            }
+        } else if segment.is_empty() {
+            arguments.push(Argument::Omitted(Span::empty(base + source.len())));
+        } else {
+            let mut parser = ExpressionParser::new(segment);
+            if let Some(expression) = parser.parse() {
+                arguments.push(Argument::Expression(expression));
+            }
+            diagnostics.append(&mut parser.diagnostics);
+        }
+    }
+    if arguments.len() < 4 || arguments.len() % 2 != 0 {
+        diagnostics.push(Diagnostic::error(
+            DiagnosticCode::UnexpectedToken,
+            Span::new(base, base + source.len()),
+            "DT_COLUMN_OPTIONS requires table, column and DEFAULT/value pairs",
+        ));
+    }
+    ParseOutput {
+        value: Some(arguments),
+        diagnostics,
+    }
+}
+
 pub(super) fn parse_mixed_arguments(
     name: &str,
     source: &str,

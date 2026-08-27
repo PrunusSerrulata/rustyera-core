@@ -8,6 +8,7 @@ use super::{
 };
 
 mod calls;
+mod column_options;
 mod data_blocks;
 mod expressions;
 mod formatted;

@@ -116,6 +116,48 @@ fn times_parses_real_literal_as_an_exact_ratio() {
 }
 
 #[test]
+fn column_options_parse_keywords_and_preserve_unicode_expression_spans() {
+    let text = "DT_COLUMN_OPTIONS \"表\", \"列\", default, F(1, 2), DEFAULT, \"值\"";
+    let output = parse_line(text, &DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:?}", output.diagnostics);
+    let StatementKind::Instruction { arguments, .. } = output.value.unwrap().kind else {
+        panic!("expected column options");
+    };
+    assert_eq!(arguments.len(), 6);
+    for index in [2, 4] {
+        assert!(matches!(&arguments[index], Argument::Raw(value) if value == "DEFAULT"));
+    }
+    let Argument::Expression(value) = &arguments[3] else {
+        panic!("expected value expression")
+    };
+    assert_eq!(&text[value.span.start..value.span.end], "F(1, 2)");
+    assert!(matches!(value.kind, ExprKind::Call { .. }));
+}
+
+#[test]
+fn column_options_reject_unknown_or_missing_keywords_and_values() {
+    for tail in [
+        "\"t\", \"c\"",
+        "\"t\", \"c\", DEFAULT",
+        "\"t\", \"c\", NULLABLE, 1",
+        "\"t\", \"c\", \"DEFAULT\", 1",
+        "\"t\", \"c\", DEFAULT(), 1",
+    ] {
+        let output = parse_line(
+            &format!("DT_COLUMN_OPTIONS {tail}"),
+            &DefaultParserContext::default(),
+        );
+        assert!(output.has_errors(), "{tail}");
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("DT_COLUMN_OPTIONS"))
+        );
+    }
+}
+
+#[test]
 fn printv_apostrophe_operands_are_raw_strings() {
     let output = parse_line(
         "PRINTV 'LV,ABL:親密,'(,ABL:親密,')",

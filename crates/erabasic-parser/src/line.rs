@@ -14,7 +14,9 @@ use crate::util::{
     top_level_assignment, trim_line_start,
 };
 
-use arguments::{OutputMap, parse_arguments, parse_assignment_right, parse_mixed_arguments};
+use arguments::{
+    OutputMap, parse_arguments, parse_assignment_right, parse_column_options, parse_mixed_arguments,
+};
 
 pub fn parse_line(source: &str, context: &dyn ParserContext) -> ParseOutput<Statement> {
     parse_line_at(source, 0, context)
@@ -300,7 +302,9 @@ pub(crate) fn parse_line_at(
         // `px` mixed unit). Their dedicated pass owns all tail diagnostics.
         diagnostics.retain(|diagnostic| diagnostic.span.end <= name_span.end);
     }
-    let mut args_output = if uses_mixed_arguments {
+    let mut args_output = if name.eq_ignore_ascii_case("DT_COLUMN_OPTIONS") {
+        parse_column_options(&raw, raw_offset, context)
+    } else if uses_mixed_arguments {
         parse_mixed_arguments(name, &raw, raw_offset, context)
     } else {
         parse_arguments(&raw, raw_offset, spec.argument_style, context)

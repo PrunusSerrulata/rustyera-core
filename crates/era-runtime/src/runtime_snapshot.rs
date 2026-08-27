@@ -12,9 +12,9 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 19;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 20;
 #[cfg(test)]
-const LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 18;
+const LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 19;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 60;

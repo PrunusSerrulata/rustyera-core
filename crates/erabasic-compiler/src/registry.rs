@@ -15,6 +15,12 @@ mod hosts;
 use contracts::{host_contract, native_contract};
 use hosts::{AUDIO, CLOCK, GRAPHICS, INPUT, NETWORK, STORAGE, SYSTEM, TEXT, register_hosts};
 
+pub(crate) fn column_options_contract() -> OperationContract {
+    let mut contract = native_contract("dt_column_options");
+    contract.debug = OperationDebugPolicy::Forbidden;
+    contract
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HostBinding {
     pub namespace: String,

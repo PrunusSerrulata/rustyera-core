@@ -333,6 +333,11 @@ fn validate_form(
                             ));
                         }
                     } else {
+                        if crate::structured::is_internal_column_native(name) {
+                            return Err(unsupported(
+                                "STRFORM cannot invoke an internal column operation",
+                            ));
+                        }
                         let supported_native =
                             program.artifact.native_imports.iter().any(|native| {
                                 native.import.name.eq_ignore_ascii_case(name)

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::memory::SymbolKeyHasher;
 use crate::sfmt::Sfmt19937;
-use crate::structured::{StructuredExtension, StructuredScope};
+use crate::structured::{ColumnIdentityStamp, StructuredExtension, StructuredScope};
 use crate::structured::{StructuredNative, StructuredState, bundle_key, is_structured_name};
 use crate::{FiberId, HostRequestId, HostWrite, PlaceDescriptor, VmExecutionOrigin, VmValue};
 
@@ -457,14 +457,44 @@ impl NativeServiceRegistry {
         )
     }
 
-    pub(crate) fn commit_structured_state(&mut self, bytes: &[u8]) -> Result<(), String> {
+    pub(crate) fn column_identity_stamp(&self) -> Result<Option<ColumnIdentityStamp>, String> {
+        self.structured
+            .as_ref()
+            .map(|state| {
+                state
+                    .lock()
+                    .map(|state| state.column_identity_stamp())
+                    .map_err(|_| "structured native state lock is poisoned".to_owned())
+            })
+            .transpose()
+    }
+
+    pub(crate) fn validate_column_identity_stamp(
+        &self,
+        expected: Option<ColumnIdentityStamp>,
+    ) -> Result<(), String> {
+        if self.column_identity_stamp()? != expected {
+            return Err("structured state belongs to a stale column identity timeline".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn commit_structured_state(
+        &mut self,
+        bytes: &[u8],
+        expected: Option<ColumnIdentityStamp>,
+    ) -> Result<(), String> {
         let decoded = StructuredState::decode(bytes)?;
-        *self
+        let mut state = self
             .structured
             .as_ref()
             .ok_or_else(|| "structured native bundle is not registered".to_owned())?
             .lock()
-            .map_err(|_| "structured native state lock is poisoned".to_owned())? = decoded;
+            .map_err(|_| "structured native state lock is poisoned".to_owned())?;
+        if Some(state.column_identity_stamp()) != expected {
+            return Err("structured state belongs to a stale column identity timeline".into());
+        }
+        *state = decoded;
         Ok(())
     }
 

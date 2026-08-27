@@ -712,6 +712,11 @@ impl RuntimeFormContinuation {
             return Ok(());
         }
 
+        if crate::structured::is_internal_column_native(name) {
+            return Err(unsupported(
+                "STRFORM cannot invoke an internal column operation",
+            ));
+        }
         let native = generation
             .artifact
             .native_imports

@@ -116,6 +116,7 @@ impl VmRuntimeStatePort for Vm {
             memory,
             reset_execution,
             structured_state: None,
+            base_column_stamp: None,
         })
     }
 

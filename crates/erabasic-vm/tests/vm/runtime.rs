@@ -1190,3 +1190,139 @@ fn formatted_try_call_resolves_a_unicode_function_before_catch() {
         Ok(VmValue::Integer(2_008))
     );
 }
+
+fn column_identity_artifact() -> BytecodeArtifact {
+    compile_source(
+        r#"@WAITING
+DT_CREATE "t"
+DT_COLUMN_ADD "t", "value", "int32"
+INPUT
+RETURN RESULT:0
+@ADD
+DT_COLUMN_ADD "t", "other", "int32"
+RETURN RESULT:0
+@REMOVE
+DT_COLUMN_REMOVE "t", "value"
+RETURN RESULT:0
+@REPLACE
+DT_COLUMN_REMOVE "t", "value"
+DT_COLUMN_ADD "t", "value", "string"
+RETURN RESULT:0
+@RELEASE
+DT_RELEASE "t"
+DT_CREATE "t"
+RETURN RESULT:0
+"#,
+    )
+}
+
+fn run_identity_entry(runtime: &mut RuntimeVm, artifact: &BytecodeArtifact, name: &str) -> FiberId {
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == name)
+        .unwrap()
+        .key;
+    let fiber = runtime.spawn_entry(entry, Vec::new()).unwrap();
+    let report = runtime.drive(RunBudget::default(), VmDriveMode::Normal);
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmPortEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    fiber
+}
+
+#[test]
+fn candidate_state_rejects_stale_column_identities_without_mutating_live_frames() {
+    let artifact = column_identity_artifact();
+    for change in ["ADD", "REMOVE", "REPLACE", "RELEASE"] {
+        let mut live = RuntimeVm::new(validated(&artifact), VmConfig::default());
+        let waiting = run_identity_entry(&mut live, &artifact, "WAITING");
+        let candidate = live.fork_isolated().unwrap().into_candidate_state();
+        run_identity_entry(&mut live, &artifact, change);
+        assert!(live.fiber_frame_count(waiting).unwrap() > 0);
+        let before = live.encode_unrestricted_snapshot().unwrap();
+        let error = live.commit_candidate_state(candidate).unwrap_err();
+        assert!(
+            error.to_string().contains("stale column identity"),
+            "{error}"
+        );
+        assert_eq!(live.encode_unrestricted_snapshot().unwrap(), before);
+    }
+}
+
+#[test]
+fn runtime_transaction_rejects_stale_column_identities_before_installing_memory() {
+    let artifact = column_identity_artifact();
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT" && global.owner.is_none())
+        .unwrap()
+        .key;
+    let mut live = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    run_identity_entry(&mut live, &artifact, "WAITING");
+    let prepared = live
+        .prepare_runtime_state(VmRuntimeStateTransaction::Mutate {
+            writes: vec![erabasic_vm::VmRuntimeWrite {
+                variable: result,
+                indices: vec![30],
+                character: None,
+                value: VmValue::Integer(99),
+            }],
+            fills: Vec::new(),
+            clear_characters: false,
+            add_characters_from_csv: Vec::new(),
+        })
+        .unwrap();
+    run_identity_entry(&mut live, &artifact, "REPLACE");
+    let before = live.encode_unrestricted_snapshot().unwrap();
+    let error = live.commit_runtime_state(prepared).unwrap_err();
+    assert!(
+        error.to_string().contains("stale column identity"),
+        "{error}"
+    );
+    assert_eq!(live.encode_unrestricted_snapshot().unwrap(), before);
+}
+
+#[test]
+fn native_hot_reload_rejects_stale_column_identities_before_switching_generation() {
+    let artifact = column_identity_artifact();
+    let mut live = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    let waiting = run_identity_entry(&mut live, &artifact, "WAITING");
+    let generation = live.current_generation();
+    live.prepare_hot_reload(validated(&artifact)).unwrap();
+    run_identity_entry(&mut live, &artifact, "REMOVE");
+    let before = live.encode_unrestricted_snapshot().unwrap();
+    let error = live.commit_hot_reload().unwrap_err();
+    assert!(
+        error.to_string().contains("stale column identity"),
+        "{error}"
+    );
+    assert_eq!(live.current_generation(), generation);
+    assert!(live.fiber_frame_count(waiting).unwrap() > 0);
+    assert_eq!(live.encode_unrestricted_snapshot().unwrap(), before);
+    live.vm_mut().abort_hot_reload();
+    live.prepare_hot_reload(validated(&artifact)).unwrap();
+    live.commit_hot_reload().unwrap();
+    assert_ne!(live.current_generation(), generation);
+}
+
+#[test]
+fn isolated_candidate_can_create_columns_when_its_base_identity_is_still_current() {
+    let artifact = column_identity_artifact();
+    let mut live = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    let waiting = run_identity_entry(&mut live, &artifact, "WAITING");
+    let mut candidate = live.fork_isolated().unwrap();
+    run_identity_entry(&mut candidate, &artifact, "ADD");
+    live.commit_candidate_state(candidate.into_candidate_state())
+        .unwrap();
+    assert!(live.fiber_frame_count(waiting).unwrap() > 0);
+    // A subsequent mutation and snapshot both observe one valid allocator timeline.
+    run_identity_entry(&mut live, &artifact, "REPLACE");
+    live.encode_unrestricted_snapshot().unwrap();
+}

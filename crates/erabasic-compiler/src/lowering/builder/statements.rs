@@ -15,6 +15,10 @@ impl Builder<'_> {
         location: SourceLocation,
     ) {
         let name = target.name();
+        if name == "DT_COLUMN_OPTIONS" {
+            self.lower_column_options(arguments, location);
+            return;
+        }
         if matches!(name, "VARI" | "VARS") {
             // Scoped array declarations only allocate frame storage. The
             // enclosing lowering loop emits a source-mapped NOP for this line.

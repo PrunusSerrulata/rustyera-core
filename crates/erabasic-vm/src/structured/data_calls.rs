@@ -11,18 +11,16 @@ impl StructuredState {
         let key = string_argument(request, 0)?.to_owned();
         match name {
             "dt_create" => {
-                if let std::collections::btree_map::Entry::Vacant(entry) =
-                    self.data_tables.entry(key)
-                {
-                    entry.insert(DataTable::new());
-                    ready_integer(1)
-                } else {
+                if self.data_tables.contains_key(&key) {
                     ready_integer(0)
+                } else {
+                    self.install_fresh_table(key, DataTable::new())?;
+                    ready_integer(1)
                 }
             }
             "dt_exist" => ready_integer(i64::from(self.data_tables.contains_key(&key))),
             "dt_release" => {
-                self.data_tables.remove(&key);
+                self.remove_table(&key)?;
                 ready_integer(1)
             }
             "dt_clear" => {
@@ -74,14 +72,21 @@ impl StructuredState {
                 if table.column(&column_name).is_some() {
                     return ready_integer(0);
                 }
-                table.columns.push(Column {
-                    name: column_name,
-                    value_type,
-                    nullable,
-                });
-                for row in &mut table.rows {
-                    row.cells.push(Cell::Null);
+                if !nullable && !table.rows.is_empty() {
+                    return Err(
+                        "DT_COLUMN_ADD non-null column has no default for existing rows".into(),
+                    );
                 }
+                self.append_fresh_column(
+                    &key,
+                    Column {
+                        identity: 0,
+                        name: column_name,
+                        value_type,
+                        nullable,
+                        default_value: Cell::Null,
+                    },
+                )?;
                 ready_integer(1)
             }
             "dt_column_remove" => {
@@ -95,10 +100,7 @@ impl StructuredState {
                 if index == 0 {
                     return ready_integer(0);
                 }
-                table.columns.remove(index);
-                for row in &mut table.rows {
-                    row.cells.remove(index);
-                }
+                self.remove_column(&key, index)?;
                 ready_integer(1)
             }
             "dt_column_names" => {
@@ -201,7 +203,11 @@ impl StructuredState {
             .ok_or_else(|| "DT_ROW_ADD deterministic row id overflowed".to_owned())?;
         let mut row = DataRow {
             id,
-            cells: table.columns.iter().map(|_| Cell::Null).collect(),
+            cells: table
+                .columns
+                .iter()
+                .map(|column| column.default_value.clone())
+                .collect(),
         };
         let pairs = data_table_pairs(request, 1)?;
         for (name, value) in pairs {
@@ -213,6 +219,8 @@ impl StructuredState {
             }
             row.cells[column] = cell_for_column(&table.columns[column], &value)?;
         }
+        row.cells[0] = Cell::Null;
+        super::column_identity::validate_row_cells(table, &row.cells)?;
         let table = self
             .data_tables
             .get_mut(key)
@@ -246,9 +254,12 @@ impl StructuredState {
             changes.push((column, cell_for_column(&table.columns[column], &value)?));
         }
         let count = changes.len();
+        let mut cells = table.rows[row_index].cells.clone();
         for (column, value) in changes {
-            table.rows[row_index].cells[column] = value;
+            cells[column] = value;
         }
+        super::column_identity::validate_row_cells(table, &cells)?;
+        table.rows[row_index].cells = cells;
         ready_integer(i64::try_from(count).unwrap_or(i64::MAX))
     }
 
@@ -311,6 +322,9 @@ impl StructuredState {
         let Ok(value) = value else {
             return ready_integer(-2);
         };
+        if !table.columns[column].nullable && matches!(value, Cell::Null) {
+            return ready_integer(-2);
+        }
         table.rows[row].cells[column] = value;
         ready_integer(1)
     }
@@ -404,7 +418,7 @@ impl StructuredState {
             .unwrap_or(0)
             .checked_add(1)
             .ok_or_else(|| "DT_FROMXML row id overflowed".to_owned())?;
-        self.data_tables.insert(key.to_owned(), table);
+        self.install_fresh_table(key.to_owned(), table)?;
         ready_integer(1)
     }
 }

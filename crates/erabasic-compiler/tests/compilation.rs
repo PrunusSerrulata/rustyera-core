@@ -41,6 +41,54 @@ fn analyze(text: &str) -> erabasic_analyzer::AnalyzedProject {
 }
 
 #[test]
+fn column_options_lower_to_validated_private_native_steps() {
+    let project = analyze(
+        "@SYSTEM_TITLE\nDT_COLUMN_OPTIONS \"t\", \"c\", DEFAULT, 12, DEFAULT, \"text\"\nRETURN\n",
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = report.artifact.expect("column options compile");
+    let validation = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &ValidationContext::for_artifact(&artifact),
+    );
+    assert!(
+        validation.diagnostics.is_empty(),
+        "{:?}",
+        validation.diagnostics
+    );
+    let names = artifact
+        .native_imports
+        .iter()
+        .map(|native| native.import.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        names,
+        [
+            "dt__column_resolve",
+            "dt__column_check_int",
+            "dt__column_apply_int",
+            "dt__column_check_str",
+            "dt__column_apply_str"
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert!(
+        artifact
+            .native_imports
+            .iter()
+            .all(|native| native.contract.debug
+                == erabasic_bytecode::OperationDebugPolicy::Forbidden)
+    );
+    assert!(artifact.host_imports.is_empty());
+}
+
+#[test]
 fn owned_compile_moves_source_indices_into_the_validated_artifact() {
     let project = analyze("@SYSTEM_TITLE\nPRINTL one\nPRINTL two\nRETURN\n");
     let line_starts = project.program.sources[0].line_starts.as_ptr();

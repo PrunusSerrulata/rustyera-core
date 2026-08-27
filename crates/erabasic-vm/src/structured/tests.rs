@@ -237,7 +237,9 @@ fn deterministic_table_ids_are_monotonic() {
 #[test]
 fn rejected_data_table_rows_do_not_consume_ids() {
     let mut state = StructuredState::default();
-    state.data_tables.insert("table".into(), DataTable::new());
+    state
+        .install_fresh_table("table".into(), DataTable::new())
+        .unwrap();
     let request = NativeCallRequest {
         import: erabasic_bytecode::RuntimeImport {
             key: SymbolKey([0; 16]),
@@ -267,11 +269,15 @@ fn data_table_xml_matches_reference_dataset_shape_and_round_trips() {
     let mut table = DataTable::new();
     table.columns.extend([
         Column {
+            identity: 0,
+            default_value: Cell::Null,
             name: "name".into(),
             value_type: DataType::String,
             nullable: true,
         },
         Column {
+            identity: 0,
+            default_value: Cell::Null,
             name: "score".into(),
             value_type: DataType::Int32,
             nullable: false,
@@ -406,6 +412,8 @@ fn data_table_save_extensions_write_reference_xml_and_read_legacy_json() {
     };
     let mut table = DataTable::new();
     table.columns.push(Column {
+        identity: 0,
+        default_value: Cell::Null,
         name: "name".into(),
         value_type: DataType::String,
         nullable: true,
@@ -415,7 +423,9 @@ fn data_table_save_extensions_write_reference_xml_and_read_legacy_json() {
         cells: vec![Cell::Null, Cell::String("saved".into())],
     });
     let mut state = StructuredState::default();
-    state.data_tables.insert("table".into(), table.clone());
+    table.next_id = 5;
+    state.install_fresh_table("table".into(), table).unwrap();
+    let table = state.data_tables["table"].clone();
 
     let exported = state.export_extensions(&declarations, StructuredScope::Ordinary);
     let StructuredExtension::DataTable { key, schema, data } = &exported[0] else {
@@ -438,8 +448,8 @@ fn data_table_save_extensions_write_reference_xml_and_read_legacy_json() {
 
     let legacy = StructuredExtension::DataTable {
         key: "table".into(),
-        schema: serde_json::to_string(&table.columns).unwrap(),
-        data: serde_json::to_string(&table).unwrap(),
+        schema: r#"[{"name":"id","value_type":"Int64","nullable":false},{"name":"name","value_type":"String","nullable":true}]"#.into(),
+        data: r#"{"case_sensitive":true,"next_id":5,"columns":[{"name":"id","value_type":"Int64","nullable":false},{"name":"name","value_type":"String","nullable":true}],"rows":[{"id":4,"cells":["Null",{"String":"saved"}]}]}"#.into(),
     };
     let mut legacy_import = StructuredState::default();
     legacy_import
@@ -448,4 +458,383 @@ fn data_table_save_extensions_write_reference_xml_and_read_legacy_json() {
     assert_eq!(legacy_import.data_tables["table"].columns, table.columns);
     assert_eq!(legacy_import.data_tables["table"].rows, table.rows);
     assert_eq!(legacy_import.data_tables["table"].next_id, 5);
+}
+
+fn column_request(name: &str, arguments: Vec<VmValue>) -> NativeCallRequest {
+    NativeCallRequest {
+        import: erabasic_bytecode::RuntimeImport {
+            key: SymbolKey([0; 16]),
+            namespace: "rustyera.vm".into(),
+            name: name.into(),
+            abi_version: erabasic_bytecode::NATIVE_ABI_VERSION,
+            parameters: arguments.iter().map(VmValue::value_type).collect(),
+            result: (name == "dt__column_resolve")
+                .then_some(erabasic_bytecode::BytecodeType::String),
+        },
+        arguments,
+        places: Vec::new(),
+        implicit_places: BTreeMap::new(),
+    }
+}
+
+fn table_with_default(value_type: DataType, default_value: Cell) -> StructuredState {
+    let mut state = StructuredState::default();
+    let mut table = DataTable::new();
+    table.columns.push(Column {
+        identity: 0,
+        name: "value".into(),
+        value_type,
+        nullable: true,
+        default_value,
+    });
+    state.install_fresh_table("table".into(), table).unwrap();
+    state
+}
+
+fn resolve_default_ticket(state: &mut StructuredState) -> VmValue {
+    state
+        .call(
+            "dt__column_resolve",
+            &column_request(
+                "dt__column_resolve",
+                vec![
+                    VmValue::String("value".into()),
+                    VmValue::String("table".into()),
+                ],
+            ),
+        )
+        .unwrap()
+        .value
+        .unwrap()
+}
+
+#[test]
+fn column_defaults_saturate_numeric_types_without_treating_minimum_as_omitted() {
+    for (value_type, minimum, maximum) in [
+        (DataType::Int8, i64::from(i8::MIN), i64::from(i8::MAX)),
+        (DataType::Int16, i64::from(i16::MIN), i64::from(i16::MAX)),
+        (DataType::Int32, i64::from(i32::MIN), i64::from(i32::MAX)),
+        (DataType::Int64, i64::MIN, i64::MAX),
+    ] {
+        let mut state = table_with_default(value_type, Cell::Null);
+        let ticket = resolve_default_ticket(&mut state);
+        for (input, expected) in [(i64::MIN, minimum), (i64::MAX, maximum)] {
+            state
+                .call(
+                    "dt__column_apply_int",
+                    &column_request(
+                        "dt__column_apply_int",
+                        vec![ticket.clone(), VmValue::Integer(input)],
+                    ),
+                )
+                .unwrap();
+            assert_eq!(
+                state.data_tables["table"].columns[1].default_value,
+                Cell::Integer(expected)
+            );
+        }
+    }
+}
+
+#[test]
+fn column_option_private_signatures_and_tickets_fail_before_state_changes() {
+    let mut state = table_with_default(DataType::Int32, Cell::Integer(7));
+    let ticket = resolve_default_ticket(&mut state);
+    let original = state.clone();
+    let valid = column_request(
+        "dt__column_apply_int",
+        vec![ticket.clone(), VmValue::Integer(8)],
+    );
+    let mut invalid = Vec::new();
+    let mut request = valid.clone();
+    request.import.result = Some(erabasic_bytecode::BytecodeType::Integer);
+    invalid.push(request);
+    let mut request = valid.clone();
+    request.import.namespace = "script".into();
+    invalid.push(request);
+    let mut request = valid.clone();
+    request.import.abi_version = 0;
+    invalid.push(request);
+    let mut request = valid.clone();
+    request.import.parameters.clear();
+    invalid.push(request);
+    let mut request = valid.clone();
+    request.arguments[1] = VmValue::String("8".into());
+    invalid.push(request);
+    for ticket in [
+        "dtc1:0000000000000000:3",
+        "dtc1:ffffffffffffffff:3",
+        "dtc1:0000000000000002:5",
+        "dtc1:000000000000000A:3",
+        "bad",
+    ] {
+        let mut request = valid.clone();
+        request.arguments[0] = VmValue::String(ticket.into());
+        invalid.push(request);
+    }
+    for request in invalid {
+        assert!(state.call("dt__column_apply_int", &request).is_err());
+        assert_eq!(state, original);
+    }
+    assert!(
+        state
+            .call(
+                "dt__column_check_str",
+                &column_request("dt__column_check_str", vec![ticket])
+            )
+            .is_err()
+    );
+    assert_eq!(state, original);
+}
+
+#[test]
+fn column_option_missing_targets_return_the_required_result_write_only() {
+    let mut state = table_with_default(DataType::Int32, Cell::Null);
+    for (table, column, expected) in [("missing", "value", -1), ("table", "missing", 0)] {
+        let mut request = column_request(
+            "dt__column_resolve",
+            vec![
+                VmValue::String(column.into()),
+                VmValue::String(table.into()),
+            ],
+        );
+        assert!(
+            state.call("dt__column_resolve", &request).is_err(),
+            "missing RESULT is not silently ignored"
+        );
+        request.implicit_places.insert(
+            "RESULT".into(),
+            NativePlaceView {
+                argument_index: usize::MAX,
+                target: PlaceDescriptor::default(),
+                values: vec![VmValue::Integer(77)],
+            },
+        );
+        let result = state.call("dt__column_resolve", &request).unwrap();
+        assert_eq!(result.value, Some(VmValue::String(String::new())));
+        assert_eq!(result.writes.len(), 1);
+        assert_eq!(result.writes[0].value, VmValue::Integer(expected));
+        assert_eq!(result.writes[0].target.indices, vec![0]);
+    }
+}
+
+#[test]
+fn column_ticket_retains_original_type_after_removal_and_replacement() {
+    let mut state = table_with_default(DataType::Int8, Cell::Integer(3));
+    let ticket = resolve_default_ticket(&mut state);
+    let old_identity = state.data_tables["table"].columns[1].identity;
+    state.remove_column("table", 1).unwrap();
+    state
+        .append_fresh_column(
+            "table",
+            Column {
+                identity: 0,
+                name: "value".into(),
+                value_type: DataType::String,
+                nullable: true,
+                default_value: Cell::String("replacement".into()),
+            },
+        )
+        .unwrap();
+    assert!(state.data_tables["table"].columns[1].identity > old_identity);
+    state
+        .call(
+            "dt__column_check_int",
+            &column_request("dt__column_check_int", vec![ticket.clone()]),
+        )
+        .unwrap();
+    state
+        .call(
+            "dt__column_apply_int",
+            &column_request(
+                "dt__column_apply_int",
+                vec![ticket.clone(), VmValue::Integer(999)],
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        state.data_tables["table"].columns[1].default_value,
+        Cell::String("replacement".into())
+    );
+    assert!(
+        state
+            .call(
+                "dt__column_check_str",
+                &column_request("dt__column_check_str", vec![ticket])
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn structured_bundle_rejects_old_or_corrupt_column_state_and_preserves_valid_identity() {
+    let state = table_with_default(DataType::Int8, Cell::Integer(8));
+    let bytes = state.encode().unwrap();
+    assert_eq!(StructuredState::decode(&bytes).unwrap(), state);
+    let mut old = bytes.clone();
+    old[..4].copy_from_slice(&2_u32.to_le_bytes());
+    assert!(StructuredState::decode(&old).is_err());
+    let mut invalid_states = Vec::new();
+    let mut invalid = state.clone();
+    invalid.data_tables.get_mut("table").unwrap().columns[1].identity = 1;
+    invalid_states.push(invalid);
+    let mut invalid = state.clone();
+    invalid.next_column_identity = 2;
+    invalid_states.push(invalid);
+    let mut invalid = state.clone();
+    invalid.column_identity_revision = 0;
+    invalid_states.push(invalid);
+    let mut invalid = state.clone();
+    invalid.data_tables.get_mut("table").unwrap().columns[1].default_value = Cell::Integer(128);
+    invalid_states.push(invalid);
+    for invalid in invalid_states {
+        let mut bytes = STRUCTURED_BUNDLE_VERSION.to_le_bytes().to_vec();
+        bytes.extend(serde_json::to_vec(&invalid).unwrap());
+        assert!(StructuredState::decode(&bytes).is_err());
+    }
+    let mut payload = serde_json::to_value(&state).unwrap();
+    payload["data_tables"]["table"]["columns"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("default_value");
+    let mut missing_field = STRUCTURED_BUNDLE_VERSION.to_le_bytes().to_vec();
+    missing_field.extend(serde_json::to_vec(&payload).unwrap());
+    assert!(StructuredState::decode(&missing_field).is_err());
+}
+
+#[test]
+fn column_identity_allocator_overflow_does_not_replace_existing_data() {
+    let mut state = table_with_default(DataType::String, Cell::Null);
+    state.next_column_identity = u64::MAX - 1;
+    let before = state.clone();
+    assert!(
+        state
+            .install_fresh_table("table".into(), DataTable::new())
+            .is_err()
+    );
+    assert_eq!(state, before);
+    state.column_identity_revision = u64::MAX - 1;
+    let before = state.clone();
+    assert!(state.remove_table("table").is_err());
+    assert_eq!(state, before);
+}
+
+#[test]
+fn column_default_xml_keeps_unicode_attribute_whitespace_and_explicit_null() {
+    // This checks Rust persistence, not a .NET XML-string oracle golden.
+    let mut state = table_with_default(DataType::String, Cell::String("爱<&\"\r\n\t".into()));
+    let table = state.data_tables.get_mut("table").unwrap();
+    table.rows = vec![
+        DataRow {
+            id: 1,
+            cells: vec![Cell::Null, Cell::Null],
+        },
+        DataRow {
+            id: 2,
+            cells: vec![Cell::Null, Cell::String(String::new())],
+        },
+    ];
+    table.next_id = 3;
+    let schema = data_table_schema_xml("table", table);
+    let parsed_schema = parse_data_table_schema("table", &schema).unwrap();
+    assert_eq!(
+        parsed_schema.columns[1].default_value,
+        table.columns[1].default_value
+    );
+    let data = data_table_data_xml("table", table);
+    let parsed = parse_data_table_xml("table", &parsed_schema, &data).unwrap();
+    assert_eq!(parsed.rows, table.rows);
+    let inherited = parse_data_table_xml(
+        "table",
+        &parsed_schema,
+        "<DocumentElement><table><id>3</id></table></DocumentElement>",
+    )
+    .unwrap();
+    assert_eq!(inherited.rows[0].cells[1], table.columns[1].default_value);
+    for xml in [
+        "<DocumentElement xmlns:n='http://www.w3.org/2001/XMLSchema-instance'><table><id>3</id><value n:nil='true'/></table></DocumentElement>",
+        "<DocumentElement><table xmlns:n='http://www.w3.org/2001/XMLSchema-instance'><id>3</id><value n:nil='1'/></table></DocumentElement>",
+    ] {
+        assert_eq!(
+            parse_data_table_xml("table", &parsed_schema, xml)
+                .unwrap()
+                .rows[0]
+                .cells[1],
+            Cell::Null
+        );
+    }
+    let rebound = "<DocumentElement xmlns:n='http://www.w3.org/2001/XMLSchema-instance'><table><id>3</id><value xmlns:n='unrelated' n:nil='true'/></table></DocumentElement>";
+    assert_eq!(
+        parse_data_table_xml("table", &parsed_schema, rebound)
+            .unwrap()
+            .rows[0]
+            .cells[1],
+        Cell::String(String::new())
+    );
+    assert!(parse_data_table_xml("table", &parsed_schema, "<DocumentElement><table><id>3</id><value>a</value><value>b</value></table></DocumentElement>").is_err());
+}
+
+#[test]
+fn column_default_xml_rejects_wrong_types_but_accepts_empty_and_minimum_defaults() {
+    for (value_type, default) in [
+        (DataType::String, Cell::String(String::new())),
+        (DataType::Int64, Cell::Integer(i64::MIN)),
+    ] {
+        let state = table_with_default(value_type, default.clone());
+        let table = &state.data_tables["table"];
+        let schema = data_table_schema_xml("table", table);
+        assert_eq!(
+            parse_data_table_schema("table", &schema).unwrap().columns[1].default_value,
+            default
+        );
+    }
+    let state = table_with_default(DataType::Int8, Cell::Integer(12));
+    let schema = data_table_schema_xml("table", &state.data_tables["table"]);
+    for invalid in ["128", "text"] {
+        assert!(
+            parse_data_table_schema(
+                "table",
+                &schema.replace("default=\"12\"", &format!("default=\"{invalid}\""))
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn imported_data_tables_receive_fresh_column_identities_and_preserve_defaults() {
+    let declarations = ExtensionData {
+        global_data_tables: BTreeSet::from(["table".into()]),
+        ..ExtensionData::default()
+    };
+    let mut state = table_with_default(DataType::Int32, Cell::Integer(8));
+    let ticket = resolve_default_ticket(&mut state);
+    let initial_stamp = state.column_identity_stamp();
+    let previous_identity = state.data_tables["table"].columns[1].identity;
+    let exported = state.export_extensions(&declarations, StructuredScope::Global);
+    state
+        .import_extensions(&declarations, StructuredScope::Global, &exported)
+        .unwrap();
+    assert_ne!(state.column_identity_stamp(), initial_stamp);
+    assert!(state.data_tables["table"].columns[1].identity > previous_identity);
+    state
+        .call(
+            "dt__column_apply_int",
+            &column_request("dt__column_apply_int", vec![ticket, VmValue::Integer(19)]),
+        )
+        .unwrap();
+    assert_eq!(
+        state.data_tables["table"].columns[1].default_value,
+        Cell::Integer(8)
+    );
+    let stamp = state.column_identity_stamp();
+    state.clear_for_transaction(
+        &declarations,
+        &crate::VmRuntimeStateTransaction::ResetGlobalData,
+    );
+    assert_eq!(state.column_identity_stamp(), stamp);
+    assert_eq!(
+        state.data_tables["table"].columns[1].default_value,
+        Cell::Integer(8)
+    );
 }

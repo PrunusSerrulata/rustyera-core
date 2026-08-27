@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+fn column_options_treat_default_as_syntax_and_require_typed_header_and_values() {
+    for (tail, accepted) in [
+        ("\"t\", \"c\", DEFAULT, 12, DEFAULT, \"value\"", true),
+        ("1, \"c\", DEFAULT, 12", false),
+        ("\"t\", 1, DEFAULT, 12", false),
+        ("\"t\", \"c\", DEFAULT,", false),
+        ("\"t\", \"c\", , 12", false),
+    ] {
+        let report = analyze_project(
+            AnalysisInput {
+                project_data: empty_project(),
+                sources: vec![source(
+                    "column-options.erb",
+                    &format!("@SYSTEM_TITLE\nDT_COLUMN_OPTIONS {tail}\nRETURN\n"),
+                )],
+            },
+            &AnalyzerOptions::analysis_mode(),
+            &ExtensionRegistry::default(),
+        );
+        assert_eq!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.reference_level >= 2),
+            accepted,
+            "{tail}: {:?}",
+            report.diagnostics
+        );
+        if accepted {
+            let project = report.project.unwrap();
+            let HirStatementKind::Instruction { arguments, .. } =
+                &project.program.functions[0].lines[0].kind
+            else {
+                panic!("expected instruction")
+            };
+            assert!(
+                matches!(&arguments[2], erabasic_hir::HirArgument::Raw(value) if value == "DEFAULT")
+            );
+        }
+    }
+}
+
+#[test]
 fn bitmap_cache_enable_requires_the_reference_argument() {
     for (call, accepted) in [
         ("BITMAP_CACHE_ENABLE()", false),

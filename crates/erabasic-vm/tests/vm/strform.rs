@@ -1641,6 +1641,59 @@ RETURN
 }
 
 #[test]
+fn runtime_form_rejects_private_column_import_before_side_effects() {
+    let artifact = compile_source(
+        r#"@SYSTEM_TITLE
+DT_CREATE "t"
+DT_COLUMN_ADD "t", "value", "int64", 1
+DT_COLUMN_OPTIONS "t", "value", DEFAULT, 9
+RESULT:10 = 0
+RESULTS:0 '= STRFORM("{BUMP()}%DT__COLUMN_RESOLVE(\"value\", \"t\")%")
+RETURN
+@BUMP
+#FUNCTION
+RESULT:10 += 1
+RETURNF 1
+"#,
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    let fault = take_fault(report);
+    assert!(
+        fault.message.contains("internal column operation"),
+        "{fault:?}"
+    );
+    assert_eq!(
+        vm.read_variable(named_key(&artifact, "RESULT"), &[10], None),
+        Ok(VmValue::Integer(0))
+    );
+}
+
+#[test]
+fn runtime_form_keeps_user_methods_named_like_private_column_imports() {
+    let artifact = compile_source(
+        r#"@SYSTEM_TITLE
+RESULTS:0 '= STRFORM("%DT__COLUMN_RESOLVE()%")
+RETURN
+@DT__COLUMN_RESOLVE
+#FUNCTIONS
+RETURNF "user-method"
+"#,
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert_eq!(
+        vm.read_variable(named_key(&artifact, "RESULTS"), &[0], None),
+        Ok(VmValue::String("user-method".into()))
+    );
+}
+
+#[test]
 fn unsupported_runtime_form_is_rejected_before_any_user_side_effect() {
     let artifact = compile_source(
         r#"@SYSTEM_TITLE
