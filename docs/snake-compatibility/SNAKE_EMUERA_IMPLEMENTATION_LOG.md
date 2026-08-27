@@ -10,7 +10,7 @@
 - 原版 profile 为 `emuera.em`，蛇版 profile 为 `emuera.skia.snake`；引擎、游戏、profile/codec/service 版本、seed 与资源 hash 分别记录，不混用原版 eraTW 和蛇版 TW。
 - 状态可填“未开始 / 进行中 / 阻塞 / 暂停 / 已完成”；初始“待登记”不作事实判断。结论必须区分通过、失败、未执行和不适用，后两者须写原因；计划、命令已提交或 oracle smoke 不能冒充验收通过。
 - 若范围、依赖、接口决策或验收目标变化，先在本文记录理由和影响，并同步改造思路；具体结果、提交、未完成项和下一步必须写回本批记录，并更新总览。不要把未验证设想改成历史调研事实。
-- 审查、测试顺序、子智能体职责、单次全量限制和 60 分钟预算遵守[工作区规则](../../../AGENTS.md)、[core 规则](../../AGENTS.md)及相关组件规则；本模板不增加测试范围。首次全量与修复后定向复验分开记录，不把未重跑全量描述为修复后通过。
+- 审查、测试顺序、子智能体职责及单次全量限制遵守[工作区规则](../../../AGENTS.md)、[core 规则](../../AGENTS.md)及相关组件规则；用户已明确取消本任务所有批次的测试总时限，单命令限额、卡死检测和磁盘管理仍生效。本模板不增加测试范围。首次全量与修复后定向复验分开记录，不把未重跑全量描述为修复后通过。
 - 循环任务在所属批次下按实际轮次追加记录，保留每轮起止时间、分析、改动与结论；同轮续做沿用已用预算。暂停时记录复现命令、工作目录、环境/seed、指标、材料路径、进程释放状态与恢复入口，保留材料直至用户允许清理。
 - 路径优先使用仓库/工作区相对路径；证据须足以定位。临时材料若只在某环境可用，注明位置约定与可用性，不提交用户机器绝对路径、游戏副本、原始存档、密钥或临时测试输出。
 
@@ -437,8 +437,8 @@ WASM/native core SHA。不得自动推送/合并；远端不可获取的本地 S
 |---|---|---|---|---|---|
 | 1A | 已完成，保留明确差异与观察限制 | 1 | 2026-08-27 23:25:42 +08:00 | core、runtime-tester、TUI、Web Vitest/Rust、oracle Python、supervisor unit 各启动一次 | S01/S02、三端摄取和只读资源清单；动态已启动，首次失败与定向复验分别记录 |
 | 1B | 已完成本子批范围，保留明确差分边界 | 1 | 2026-08-28 01:47:57 +08:00 | core workspace / runtime-tester 首次通过 | 双 oracle 各 23 可比项匹配；错误观察限制与批次 2 实参差异见下文 |
-| 1C | 列默认值、GLOBAL、三端安全资源层实施中 | 0 | 未启动 | 无 | S12、GLOBAL、安全读取 |
-| 1D | Web pointer/canvas 独立实施中 | 0 | 未启动 | 无 | S04；core 与 HTML 待实施，未验证 |
+| 1C | 已完成并分项提交；差异及首次失败保留 | 1 | 2026-08-28 03:17:34 +08:00 | core/tool/TUI/Web Vitest/Web Rust、双 smoke/列 Oracle、Python driver、四项 BBAS 各一次 | S12、GLOBAL、安全读取；三端实际数据断面通过 |
+| 1D | 隔离实现完成，唯一独立重构审查中 | 1 | 未启动 | 无 | S04；活动仓未合入，尚未测试 |
 
 #### 1A 实施进度（静态已执行，动态验收未完成）
 
@@ -691,7 +691,7 @@ C ABI 由本组 `target/core-static/debug/libera_runtime_capi.dylib` 重建，SH
 - 所有测试由 terra/low 执行，无批次 deadline；单命令限制、卡死观察与 full-once 保持。
   收尾可用磁盘约 22 GiB。续做保留必要证据，没有推送、合并或产品版本调整。
 
-#### 1C 资源层实施入口（未审查、未测试）
+#### 1C 资源层实施、唯一审查及验证（进行中）
 
 - 1A/1B 前置门禁已完成；1C core 与前端分模块实施。1B binary/fixture 与源码证据已冻结，
   未将 1C 改动混入 1B 验证。具体执行设计见本组 `batch-1-work/1C/`，不属于重构审查。
@@ -705,10 +705,219 @@ C ABI 由本组 `target/core-static/debug/libera_runtime_capi.dylib` 重建，SH
 - Web 的 21 个 D-only 文件已逐字节保存并移出当前输入，位于 `1D/isolated-pointer-canvas/`；
   1C 验证不会夹带未审查的服务改动。Data 路径逐段 NFC/大小写身份一致性也归 1C，
   避免枚举合并认为 overlay 覆盖但文本查找命中 Resource 的矛盾；原版 profile 保持既有行为。
-- 每个子批次仍只进行一次覆盖全部实质代码的重构审查；1C 当前审查次数 0、测试次数 0。
-  当前可用磁盘约 24 GiB，构建串行，不下载 Chromium。
+- 列默认值已具备独立 DEFAULT 关键字解析、column→table 求值、每项类型检查先于值求值、
+  稳定列身份（删除/重建不重新绑定）、有类型默认值、XML schema/data 和 GLOBAL 扩展保存。
+  structured bundle 2→3、compiler ABI 40→41、native ABI 16→17、VM ABI 15→16、VM snapshot
+  12→13、runtime snapshot 19→20；ISA 8、runtime protocol 37、C ABI 和产品版本不变。
+- 内部列 ticket 使用普通 String 载体，不是安全 capability。structured 身份与默认值在 snapshot
+  恢复时严格校验；损坏的活动 ticket 在下一次内部操作、状态变更之前拒绝，不承诺扫描全部脚本
+  字符串并在恢复瞬间识别 ticket。STRFORM 禁止调用内部 native，但仍允许同名用户方法。
+- GLOBAL 失败修复保留 Session 中的 VM，先准备及验证，再提交内存/structured/host completion。
+  损坏内容或 profile 不符不安装 replay，也不清已有 global structured；这是沿用 Rust 原有原子
+  恢复策略，与参考“先清 global structured、捕获异常后返回 0”有意不同，不能报告为差分相同。
+- `fixture-snake-data` 的 27 项同输入用例及内存存储 responder 已编写：仅 COLUMNS 开启，
+  记录真实请求/回复、namespace、revision 和字节 hash。Resource 只读，snake Data 不自行回退；
+  观察工具接纳原始 Resource bytes。内存 responder 不能替代三端实际存储验收。
+  XML 显式 Null 的 xsi:nil 本地保真路径待双 oracle 观察，尚未登记参考 golden。
+- 1C 唯一独立 `$refactor-rustyera-code` 审查已完成（本组 `1C/review.md`），次数 1、
+  测试次数 0。审查冻结输入：core 78、TUI 10、Web 18 文件；不得再次启动/恢复审查者。
+  七项必需整改分别为重复 lock 依赖、有界统一模式、遍历错误分类、实际 basename 校验、
+  safe link 逻辑前缀、原版不新增 link 子树、memory host 原版目录来源选择。七项已落实并补齐最小回归，
+  已格式化并重新冻结输入；下一步由指定测试者启动首条验证。当前可用约 22 GiB，构建串行。
+- 蛇版枚举模式明确采用 NFC→Unicode lowercase、scalar `?`、`*`、字面 `[]`，空/省略
+  不筛选；4096 UTF-8 字节和 1,048,576 步限额。core/Tauri/tester 共享 Rust helper，
+  Python/Browser 读取相同 JSON 向量。参考源码直接调用平台 `Directory.EnumerateFiles`，
+  新增 observation-only oracle case 记录大小写、non-BMP、方括号、空模式与 NFC/NFD；
+  不将平台语义差异或未执行观察描述为一致。原版匹配策略保持。
+- memory host 原版已有 Data 目录时只枚举该目录，删除最后文件也保留目录存在性；原版
+  overlay fixture 当前 Rust 递归数量 1，蛇版 2，固定 reference expectation 2 不修改。
+  这是一项原版 host 已有差异，工具不得替产品合并命名空间。无测试总 deadline；不下载 Chromium。
+- 主智能体进一步落实 R3 的 Tauri 存在性竞态：私有 ResolvedReadPath 保留首次存在性，
+  snake normalized lookup 选中目标后不再因后续 NotFound 降级为空列表；两 profile 从 lookup
+  到 walker 消失均 Conflict，原版初始缺失仍可项目回退。新增三个精确回归；不追加审查。
+- 格式化为源码编辑，不记作测试通过；core/tool 全部改动 Rust（含 include 文件）及 Web
+  改动 Rust/TS/JS/MJS/JSON 已格式化。测试前输入见 `1C/post-review-inputs.json`；
+  该清单记录首测前状态，以下另行记录实际验证及修复。实际产品版本 core/TUI 0.8.0、Web package 0.9.0，均未修改。
 
-#### 1D 服务层实施入口（未审查、未测试）
+
+#### 1C 首轮静态验证及修复记录（持续更新）
+
+- 已启动验证，唯一审查次数仍为 1，禁止再启动或恢复审查者。所有命令由指定 terra/low
+  测试执行者运行；原始冻结输入、各次修复文件 hash 和压缩日志位于 `batch-1-work/1C/`。
+  测试没有批次总时限，单命令超时、进程清理、磁盘阈值及全量一次规则仍生效。
+- 监督器首次完整 unittest 为 9 通过、1 个 sandbox `ps` 权限错误；获准后只对孤儿进程
+  清理用例定向复验，1 通过，不再运行完整监督器套件。
+- core workspace format/check/Clippy 已通过。此前 check 的 validator 输入转换与测试模块
+  import、Clippy 的 6 个等价写法/文档问题均已修正，并定向恢复相关静态门禁；原始失败
+  与修复结果分开留存，不冒充首次全通过。
+- 最小回归已通过：模式 1、parser 2、analyzer 1、compiler 1、VM structured 单元 24、
+  执行集成 15、私有 STRFORM 1、列身份 candidate/事务/热重载 3、isolated candidate 1、
+  runtime resource 10。完整 workspace 尚未启动时，GLOBAL 最小集出现 2 通过、1 失败。
+- GLOBAL 失败根因是新 fixture 未启用二进制存档，却期待保存结构化 VAREXT；固定原版
+  与蛇版 `VariableEvaluator.SaveGlobal` 均仅在 binary 分支输出这类扩展。现测试显式覆盖
+  两种 profile × text/binary：binary 恢复 row/default=12，text 保持清数据/留现有 schema
+  default=99 的既有行为；不修改产品格式来迎合错误预期。oracle/client fixture 原已启用
+  binary，无需更改。修复清单 `repair-global-fixture-format.json`，定向复验进行中。
+- Python/Browser 共用 JSON 向量各保存一份相同内容到组件 `tests/fixtures/`，避免独立 CI
+  checkout 依赖 sibling core；源与复制摘要见 `shared-vectors-provenance.json`。前端尚未首测。
+- 此时 core 全量、runtime-tester、前端静态及全部动态门禁尚未完成，1C 不能标为完成；
+  可用磁盘约 22 GiB，单构建，无 Chromium 下载。
+
+
+- core 首次且唯一 workspace 全量退出 0（90.38 秒），其后发现的 XML fixture/重载修复只做
+  定向验证，未再次运行全量。runtime-tester 首次且唯一全量 51 通过（6.29 秒）；其格式、
+  check/Clippy、data fixture 与 8 项 storage 最小回归均通过。
+- tool 最小回归先发现 named XML 应调用 `XML_GET_BYNAME`，并发现 `XML_DOCUMENT` 对已存在
+  名称不替换；fixture 改为 `XML_REPLACE` 且断言实际发生修改，避免恢复假阳性。进一步暴露
+  analyzer 将 `XML_REPLACE(key, xml)` 两参数重载误判为 inline 写回；现表达式/METHOD
+  共用按 arity 选择的约束，两参数 key 为值，三参数以上保持 inline mutable 规则。
+  新 VM fixture 的未加引号字符串也已修正。每次原始失败保留，修复记录分别见
+  `repair-xml-fixture.json`、`repair-xml-replace-overload.json`、`repair-xml-key-literal.json`。
+- 修复后 workspace check/Clippy、analyzer 重载/列选项、VM 重载执行及 structured 16、
+  runtime GLOBAL 3、tool 最小及唯一全量均通过。core 产品/fixture 已按功能提交：
+
+  | 提交 | 范围 |
+  |---|---|
+  | `34d1d08cb19c0df6059a9c29037cd230d4921218` | Unicode 枚举规则、公共限额与共享依赖 |
+  | `9928ba46bd15c73e8cc18e4685469b06ac471950` | DEFAULT、稳定列身份、XML/snapshot 默认值 |
+  | `e41b6858ddadca7f0d5271ebdfdfdd6130ba1a24` | snake Data→Resource 与有界 cache decode |
+  | `35ae660983ff04c393968317578f1a71124eeb15` | GLOBAL 拒绝时保留 VM/replay |
+  | `b1481da7842a6a7e997bd517a81a4127d6406264` | XML_REPLACE 存储名称重载 |
+  | `0538206ce74e7a1e97c634f2ce86c178932bd54c` | 初始化/资源/GLOBAL fixture 与观察工具 |
+
+- TUI/Web 已机械绑定完整 `0538206ce74e7a1e97c634f2ce86c178932bd54c`，Web Git rev/lock
+  及新增依赖边同步，TUI 展示短 SHA 同步。pin 更新尚未替代前端验证；下一步重建本组
+  tester/C ABI/WASM/Tauri 并完成前端静态，全部通过后才授权动态/oracle。提交未修改已验证
+  源码字节，不推送或合并；1C 尚未完成，根 CHANGELOG_PENDING 尚未追加本子批功能。
+
+- post-commit tester/C ABI 已在本组重建。冻结 tester SHA-256 为
+  `245a339e819258b553342f8b93505f0f8383d37099fe19ed3c8379de392413fa`，TUI C ABI 为
+  `1583b8344aacb2f0c5a6cc9664b6e2d896910186d90f4db6987d28a40ffe5c72`。
+  TUI 最小 7、资源相关 139、Ruff 通过；首次且唯一完整 pytest 475 通过（43.86 秒）。
+  PyInstaller 首次遇到用户级 bincache 的 sandbox 删除权限错误，批准限定重试后构建与
+  `--help` 通过；记录为构建权限重试，不是第二次全量。打包 C ABI 动态加载仍待验收。
+- Web 首次最小 Vitest 94 通过、4 失败。修复资源读取以活动 manifest 授权并保留文件名
+  大小写，补足内嵌资源读取；随后发现释放 payload 时丢失长度，改保留 external 长度。
+  测试同时修正 jsdom 字节 realm、Vite fixture URL 与缺 Data 目录的空枚举断言。最终最小
+  98、目录 32 通过。两次 iterator lint/类型故障均保留日志；改为复用 fixture 的真实
+  AsyncGenerator，仅 mock next() 失败后，定向 2、typecheck、lint 恢复通过。
+- Web 客户端测试工具 86、format、core revision 检查通过；发布 lock 的完整 SHA 和
+  unicode-normalization 依赖边已核对。首次且唯一完整 Vitest 92 files / 1058 tests 通过，
+  证据 `1C/validation/runs/web-vitest-first`。Web Rust 静态与构建尚在执行，所有动态及
+  oracle 未授权。磁盘约 21 GiB，单构建，未下载 Chromium。
+- Web Rust check 通过后，首次 Clippy 报 9 项代码/测试规范问题；已拆出资源枚举与原版链接
+  检查，显式导入、checked chunk 索引、64 KiB heap 缓冲区及八进制权限写法，并恢复相关
+  check/Clippy。storage 最小 33 通过、1 个旧错误分类断言失败；逃逸路径仍被拒绝，现断言
+  统一的 PermissionDenied，失败单例及相关静态复验通过。project 最小 40 通过，首次且
+  唯一 Web Rust workspace 全量 130 通过（112.61 秒），1 个既有跨前端 cache handoff 驱动
+  保留 ignored，需其专用场景调用。本轮没有重跑已通过的完整 Vitest。
+- Web build 与 WASM 重建通过；WASM 更新后再次定向 build，确保 dist 使用本次产物。
+  Tauri webdriver 构建亦通过；全部静态门禁通过后，已授权真实客户端及双 oracle 验证，
+  当前输入冻结，动态结果待登记。磁盘约 17.39 GiB；跌破 20 GiB 后已获准清理仅本组
+  停用的 `target/web-static/debug/incremental`（703,855,752 原始字节），不删二进制或证据；
+  计划/结果见 `cleanup-web-incremental-{plan,result}.json`。继续 `CARGO_INCREMENTAL=0`
+  及单构建，低于 10 GiB 停止新增高写入任务。
+
+#### 1C 动态验证及定向修复（进行中）
+
+- 真实 TUI RuntimeWorker/C ABI 和打包 C ABI 场景均通过，七个阶段标记及 watches 符合。
+- Chromium 首次仅 Resource 标记失败（`0/0/0`），无 runtime fault，其余阶段通过。
+  原因为测试 remote filesystem 给不存在的 Data 目录返回虚假句柄，后续安全遍历将
+  ENOENT 正确归为 conflict，故未回退。已修驱动先验证目录存在/类型；最小单例及
+  webTestLib 60 通过，新增 fixture 的 DOMException lint 问题修正后单例/lint/format 通过。
+  生产代码和 WASM 无变化；Chromium 定向复验全部通过。原生 Firefox 随后通过同场景。
+- Safari 首次停在已有值 `1` 的真实 prompt，提交点击未推进；相同快照看门狗停止会话后
+  才出现 invalid session / ECONNREFUSED，后者不是首因。Safari helper 改走聚焦 prompt
+  的原生 WebDriver Enter，三路径单例/lint/format 通过；Safari 定向复验通过，随后真实
+  Tauri 同场景通过。两者均验证全部七个阶段标记，未以启动成功代替数据断面。
+  所有首次失败和监督证据保留，不重跑全量、不放宽看门狗。
+- 证据入口为 `1C/validation/runs/` 及 Web `.rustyera/test-runs/`，修复记录为
+  `repair-chromium-remote-directory.json`、`repair-safari-visible-input.json`。没有下载浏览器。
+- 原版首次完整 smoke 的脚本退出 0，58 条响应全部写完且通过脚本断言，但 Wine 后台
+  进程持有合并输出管道，外层监督器以 `stdoutClosed:false` 退出 1。保留首次全量失败，
+  不重跑 smoke；响应 SHA-256 为 `cd3f8e3e6624c6f0f56a510ea0408810d1ee63f79a0c5f0d19996ed139262fd5`。
+  本组 `1C/run_wine_command.py` 将后台输出隔离至自有文件、转发实际命令输出、按五秒
+  观察进展并等待专属 wineserver 退出；单条 capabilities 和 stdout 边界定向恢复均通过。
+  该恢复只证明连接与监督收尾可用，不改写首次完整 smoke 结果。
+- 原版 Rust 列观察首次运行通过，27 个 case 的 JSON SHA-256 为
+  `7bbcfb2ac5f1666d4aec7aaf1c5f90d41e264b219172ecd07f8e0f5c6bd70eaa`。
+  原版列 Oracle 首次在第四项 `column-empty-string-and-explicit-null` 失败；前三项
+  DEFAULT/Int64 最小值/饱和转换已逐项匹配。原因是 fixture 的末尾省略值未被参考
+  parser 保留，`DT_ROW_ADD(table, column, )` 成为两参数并被拒绝；不是 DEFAULT handler
+  返回错误。原始 `1C/diff-columns-original/evidence.json` 保留。当前仅继续尚未执行的
+  精确 case；两项同类 Null fixture 待修正并定向复验，不再次启动完整列 Oracle。
+- 后续原版 22 项未执行集合首次调度误加不存在的 `--repeat`，退出 2、未执行 case；
+  去掉旗标后原版继续完成 16 项（10 项可比观测匹配、6 项错误诊断 schema 不可比），
+  在 `column-global-missing` 失败。根因是 driver 多 case 复用目录，前一 GLOBAL 往返
+  留下文件；现在每 case 从 pristine template 复制独立目录，记录起始 hash，只有同 case
+  内请求共享文件。新增隔离单例通过，Python driver 本子批首次完整 21 项通过；工具
+  fmt/check/Clippy 及 defaults 最小回归通过，没有再次运行 core/tool Rust 全量。
+- Null fixture 已改为内部省略值加后续 String pair，保留旧输入于
+  `1C/frozen/fixture-snake-data-before-null-repair/`。首次定向 Oracle 证明 Null watches
+  `0/1/0` 后，又在 fixture 误写的 `STRLEN(...)` 失败（参考函数为 `STRLENS`）；已仅改
+  正该函数名，继续最小复验。定向矩阵为 `targeted-oracle-matrix-2.json`：新 fixture 两项
+  重新观察，原版存储失败/未执行六项沿用旧冻结 fixture 与原 Rust 证据；不改写旧 hash。
+
+#### 1C 最终定向观察与初始化资源结论
+
+- `STRLENS` 修正后两项 Null 定向执行完成：空值用例匹配；XML 显式 Null 往返前后
+  两端均为 `1/1`，差异仅为原始 XML 的 namespace/schema/ID 序列化拼写，保留为
+  `different`，不把字符串差异抹除。原版存储六项恢复期间又暴露 XML 扩展未获 fixture
+  配置允许；已显式增加 `Valid extensions for LOADTEXT and SAVETEXT:txt,xml`，随后
+  resource-map/XML 定向匹配。该配置同样用于 BBAS 副本，不改参考实现。
+- 蛇版首次完整 smoke 通过；Rust 列观察首次运行收集 27 项，蛇版列 Oracle 首次在第
+  23 项 resource-read 失败，已完成的前 22 项为 15 matched、6 incomparable、1 different。
+  蛇版路径解析返回相对路径，CLI 的 load 不切换进程目录。driver 现为每项独立启动进程，
+  CWD 指向该项游戏副本，stderr 与 capabilities 分项保存，累计请求不覆盖前项记录。
+  最小 Python 三项通过；旧失败证据和全量启动记录不变。
+- 首次 CWD 定向恢复无最终证据：短 case 均未触及内层五秒周期，外层未收到输出而按
+  看门狗失败。现在每项完成后立即输出该项完整实际 snapshot，周期规则不变；不以
+  case 目录已创建或 Wine 进程正常推定执行成功。
+- 观察工具还漏交了 fixture 中五个 `patterns/` 资源。此前全零结果撤回，不能据此
+  声称匹配或引擎差异。已补充显式资源摄取、目录/符号链接校验及现有 manifest 回归。
+  tool fmt/check/Clippy、两项 data fixture 最小测试、构建通过；未重跑 Rust 全量。
+  新冻结 tester SHA-256 为
+  `fcb7ca6246d4e2a4057bd556e4d0acbf57312d1bd0b4b360079df138c182871b`；
+  旧 `245a339e…` 二进制及其证据继续保留，新产物只包含观察工具修复，产品 core 仍为
+  `0538206ce74e7a1e97c634f2ce86c178932bd54c`。
+- 最终资源定向恢复：蛇版五项中四项 matched、一项 pattern different；原版 pattern
+  一项 different。实际 Rust watches 为 `[5,3,1,5,5,1,1]`，两参考为
+  `[5,2,1,5,5,1,0]`，对应已声明的有界 Unicode scalar/NFC 模式与平台匹配差异。
+  原版 memory responder 的模式结果不代表改写了原版产品文件匹配策略。
+  命令、各次输入与 hash 见 `targeted-oracle-resource-input-matrix.json` 和
+  `repair-oracle-{xml-config,process-cwd,resource-inputs}.json`。
+- BBAS 的 Rust/original、Oracle/original、Rust/snake、Oracle/snake 四项首次运行均
+  退出 0、输出正常关闭；两套同输入比较均为一项 `matched_observables`。实际值为
+  `RESULT:10..13 = 1/161/4531748/1`，`RESULTS:10..11 = 靈夢/真面目`。
+  输入 schema.xml 1,532 字节，SHA-256
+  `83b7abf02eda889d85f6d094d26b2069c5483ad0668173de8941aef14ae279ce`；
+  bbas_dataset.xml 36,420 字节，SHA-256
+  `d17b4ec540698f707e37c4a9f0b2b4b0093ff5b664196ae331f254a62abe4054`。
+  原始游戏和参考源码未变。仍缺 `bbas_map_schema.xml`、`bbas_map.xml`，后续初始化
+  被资源与 SQL/后置语义阻塞；本结果不代表真实标题或 GRAPH_DB_INIT 已执行。
+- 三端实际组合已覆盖 ALS/ERD→GETMETH→资源 overlay→MAP/XML/DT→GLOBAL；图形服务
+  等待 1D。本子批完整套件未重跑，全部修复仅定向复验；命令日志、首测/首次全量 claim、
+  gzip/原始摘要及失败现场均留在本组 `1C/`。可用磁盘约 16.7 GiB，继续单构建与
+  `CARGO_INCREMENTAL=0`，没有下载 Chromium。
+- 按每项最新有效执行聚合 27 项列用例：原版为 18 matched、6 incomparable、3 different；
+  蛇版为 19 matched、6 incomparable、2 different。六项错误保留原始异常/诊断，尚无
+  跨引擎统一诊断 schema，不能以两端都失败声称错误等价。差异为 XML 字符串序列化、
+  平台文件模式；原版额外保留原有 Data 目录覆盖资源目录的枚举行为。完整首次与定向
+  结果分别记录，没有重新运行全量，也未将原版 smoke 监督器首败改成通过。
+- 1C 后续测试修复提交为 core `ca34ce2b7f4e0a402face5b29e4515f5342f64a7`
+  （fixture/观察输入）、`28de387976c1cd4caf3fd732d3f9fface789a76e`（Oracle 隔离/监督）。
+  产品 crate 相对前端 pin `0538206ce74e7a1e97c634f2ce86c178932bd54c` 未变。
+
+  | 组件 | 共用模式 | 资源接线 | 执行 fixture/驱动 | 完整 core 绑定 |
+  |---|---|---|---|---|
+  | TUI | `0131f7434dd0a5eeb503022db3c906ddf7bf54d4` | `fb6eff3e22fc1cd766390fcba28d034fc9ec5f26` | `cb58571e886288265a6965afe566dba91b3f950e` | `487b49a123d25f07f99978d556ea36386603611f` |
+  | Web | `543aba3064303929ced18d4dbf9133edced478ff` | `68a8318aa7977d25a46417ead70ac2e1ea03edbe` | `0b2cd2630e70dc4bde13c486b183706be1ead77b` | `37dc8e14b6a089866b782daf45c4586a3d4189df` |
+
+- 根 `CHANGELOG_PENDING.md` 仅追加 DEFAULT、安全资源、GLOBAL 拒绝原子性及
+  XML_REPLACE 重载四项实际行为；测试工具、文档与流程不列为功能。1C 完成不等于
+  批次 1 完成：1D 的真实 HTML/pointer/canvas 服务、覆盖报告及最终组合验收仍待执行。
+
+#### 1D 服务层实施入口（唯一审查中，未测试）
 
 - Web 独立执行者拥有 runtime service 生命周期、pointer 规范按钮值观察及独立 canvas
   replay sampling；不修改正在验证的 core，也不修改 1C 的 browserProject/resource/storage 文件。
@@ -716,6 +925,18 @@ C ABI 由本组 `target/core-static/debug/libera_runtime_capi.dylib` 重建，SH
   和 request ID；MOUSEY 按固定参考的 clientY-clientHeight 映射。HTML v2 留待 core 契约与
   规范树测量实现，不提前宣告能力；Rust bridge、共享版本、pin/锁文件由主串行整合。
 - 当前无测试/构建/格式化/审查/提交；1D 统一集成仍等待 1A–1C 门禁及本批唯一审查。
+- 隔离实现已包含保留源码切分、完整参考 length layout 计划、编译器惰性 HTML 参数路径、
+  runtime v2 多轮续接/flow/snapshot 身份约束；Web CBOR/provider 接线、TUI 明确拒绝
+  的五项 C ABI 断面及覆盖报告 schema 3 已交付隔离源码。共享格式草案为 compiler ABI 42、host ABI 13、runtime snapshot 21，其余
+  ABI/产品版本不变；尚未改活动仓。真实服务及组合 fixture 源已准备，未运行，不作为
+  参考像素或运行成功证据。各隔离目录包含基线/输出 hash，集成时逐项合并而非覆盖 1C。
+- 全部实质源码已机械整合为 `1D/integration-source/` 的 180 个变化文件（core 109、
+  Web 59、TUI 12），活动源 hash 与隔离输出逐项登记。包含真实服务捕获/typed watch/
+  CBOR 证据工具、局部 int32 HTML 长度单位换算修正及 17-case Oracle fixture；捕获历史
+  只作为证据保留，不允许消息计数增长掩盖相同 DOM/runtime 的卡死。
+- 当前在隔离源码上启动本子批唯一独立 `$refactor-rustyera-code` 审查，次数 1，入口
+  `1D/review-start.json`。未运行任何 D 测试/构建；待落实全部要求、1C 收尾及活动仓
+  整合后，才能启动 D 的首条静态命令。该审查不是 1C 的二次审查。
 
 
 ### 所作改动
