@@ -55,6 +55,7 @@ pub(crate) fn analyze_global_declarations(
     context: &dyn ParserContext,
     options: &AnalyzerOptions,
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
+    progress: Option<&dyn crate::project::AnalysisProgressCallback>,
 ) -> DeclarationOutput {
     let mut output = DeclarationOutput::default();
     let mut constants = BTreeMap::new();
@@ -75,13 +76,18 @@ pub(crate) fn analyze_global_declarations(
         .filter(|input| matches!(input.directive.name.as_str(), "DIM" | "DIMS"))
         .collect();
 
+    let progress = crate::project::ProgressCounter::new(
+        crate::project::AnalysisProgressStage::DeclaringGlobals,
+        pending.len(),
+        progress,
+    );
     // Emuera queues every header DIM and retries the queue while another declaration
     // was resolved. This permits dimensions to refer to constants declared later.
     while !pending.is_empty() {
         let before = pending.len();
         let mut deferred = Vec::new();
         for input in pending {
-            match parse_dim(
+            let parsed = parse_dim(
                 input,
                 false,
                 context,
@@ -89,7 +95,12 @@ pub(crate) fn analyze_global_declarations(
                 &variable_dimensions,
                 &index_resolver,
                 options,
-            ) {
+            );
+            // Count declarations only once they resolve or produce a final error.
+            if !matches!(&parsed, Err(DimError::UnknownConstant(_))) {
+                progress.advance();
+            }
+            match parsed {
                 Ok(variable) => {
                     let key = normalize(variable.schema.id.name(), options.ignore_case);
                     if is_reserved(variable.schema.id.name()) {
@@ -128,6 +139,7 @@ pub(crate) fn analyze_global_declarations(
         }
         if deferred.len() == before {
             for input in deferred {
+                progress.advance();
                 diagnostics.push(at_input(
                     input,
                     AnalyzerDiagnosticCode::UnknownIdentifier,

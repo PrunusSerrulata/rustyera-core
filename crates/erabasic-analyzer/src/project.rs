@@ -56,6 +56,9 @@ pub struct AnalysisReport {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AnalysisProgressStage {
     Parsing,
+    DeclaringGlobals,
+    IndexingFunctions,
+    DeclaringLocals,
     Analyzing,
 }
 
@@ -102,7 +105,7 @@ pub fn compare_reference_file_paths(left: &str, right: &str) -> std::cmp::Orderi
     }
 }
 
-struct ProgressCounter<'a> {
+pub(crate) struct ProgressCounter<'a> {
     stage: AnalysisProgressStage,
     total: usize,
     completed: AtomicUsize,
@@ -112,7 +115,7 @@ struct ProgressCounter<'a> {
 }
 
 impl<'a> ProgressCounter<'a> {
-    fn new(
+    pub(crate) fn new(
         stage: AnalysisProgressStage,
         total: usize,
         callback: Option<&'a dyn AnalysisProgressCallback>,
@@ -134,7 +137,7 @@ impl<'a> ProgressCounter<'a> {
         }
     }
 
-    fn advance(&self) {
+    pub(crate) fn advance(&self) {
         let completed = self.completed.fetch_add(1, Ordering::Relaxed) + 1;
         let Some(callback) = self.callback else {
             return;
@@ -412,6 +415,7 @@ fn analyze_with_context(
         context,
         options,
         &mut diagnostics,
+        progress,
     );
     if options.use_erd {
         let csv_options = CsvLoadOptions {
@@ -436,6 +440,15 @@ fn analyze_with_context(
     let mut symbols = Symbols::new(&project_data, &declaration_output.variables, options);
     drop(declaration_output);
     let mut definitions = Vec::new();
+    let indexing_progress = ProgressCounter::new(
+        AnalysisProgressStage::IndexingFunctions,
+        sources
+            .iter()
+            .filter(|source| source.source.kind == SourceKind::Erb)
+            .map(|source| source.script.functions.len())
+            .sum(),
+        progress,
+    );
     for (source_index, source) in sources.iter().enumerate() {
         if source.source.kind != SourceKind::Erb {
             continue;
@@ -500,12 +513,19 @@ fn analyze_with_context(
                     format!("function {} is already declared", function.name),
                 )),
             }
+            indexing_progress.advance();
         }
     }
 
     let reachable = reachable_functions(sources.as_ref(), &definitions, &symbols, options);
+    let declaration_progress = ProgressCounter::new(
+        AnalysisProgressStage::DeclaringLocals,
+        definitions.len(),
+        progress,
+    );
     for definition in &definitions {
         if !should_analyze_function(definition, &reachable, options) {
+            declaration_progress.advance();
             continue;
         }
         let source = &sources[definition.source_index];
@@ -522,6 +542,7 @@ fn analyze_with_context(
             options,
             &mut diagnostics,
         );
+        declaration_progress.advance();
     }
     // Function bodies only read the completed symbol table. Indexed Rayon collection keeps
     // HIR ordering deterministic while large projects analyze independent bodies in parallel.

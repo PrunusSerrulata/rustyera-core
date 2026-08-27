@@ -663,7 +663,10 @@ fn build_project_with_resolved_compatibility(
             progress,
             match event.stage {
                 AnalysisProgressStage::Parsing => ProjectProgressStage::Parsing,
-                AnalysisProgressStage::Analyzing => ProjectProgressStage::Analyzing,
+                AnalysisProgressStage::DeclaringGlobals
+                | AnalysisProgressStage::IndexingFunctions
+                | AnalysisProgressStage::DeclaringLocals
+                | AnalysisProgressStage::Analyzing => ProjectProgressStage::Analyzing,
             },
             event.completed,
             event.total,

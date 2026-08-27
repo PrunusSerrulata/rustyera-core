@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn progress_covers_declaration_and_indexing_work_without_changing_analysis() {
+    use erabasic_analyzer::{AnalysisProgressStage, analyze_project_with_progress};
+    let input = AnalysisInput {
+        project_data: empty_project(),
+        sources: vec![
+            source("header.erh", "#DIM CONST LATER = 3\n#DIM VALUES, LATER\n"),
+            source(
+                "main.erb",
+                "@SYSTEM_TITLE\n#DIM PRIVATE X\nRETURN\n@UNUSED\nRETURN\n",
+            ),
+        ],
+    };
+    let options = AnalyzerOptions::analysis_mode();
+    let expected = analyze_project(input.clone(), &options, &ExtensionRegistry::default());
+    let events = std::sync::Mutex::new(Vec::new());
+    let actual =
+        analyze_project_with_progress(input, &options, &ExtensionRegistry::default(), &|event| {
+            events.lock().unwrap().push(event);
+        });
+    assert_eq!(actual, expected);
+    let events = events.into_inner().unwrap();
+    for stage in [
+        AnalysisProgressStage::DeclaringGlobals,
+        AnalysisProgressStage::IndexingFunctions,
+        AnalysisProgressStage::DeclaringLocals,
+        AnalysisProgressStage::Analyzing,
+    ] {
+        let work: Vec<_> = events.iter().filter(|event| event.stage == stage).collect();
+        assert_eq!(work.first().unwrap().completed, 0);
+        let final_event = work.last().unwrap();
+        assert!(final_event.total > 0);
+        assert_eq!(final_event.completed, final_event.total);
+        assert!(
+            work.windows(2)
+                .all(|pair| pair[0].completed <= pair[1].completed)
+        );
+    }
+}
+
+#[test]
 fn frontend_observation_reports_source_and_control_dependency() {
     let report = analyze_project(
         AnalysisInput {
