@@ -1274,6 +1274,39 @@ fn delivered_pending_commit_then_delete_preserves_the_frontend_deletion() {
 }
 
 #[test]
+fn delivered_pending_commit_reenables_tail_redraw_compaction() {
+    let mut model = PresentationModel::default();
+    model.append_text("baseline".into(), false);
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must establish a snapshot");
+    };
+    model.append_print_text("pending".into(), false, false);
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("pending line must be delivered incrementally");
+    };
+    apply_delta(&mut frontend, delta);
+
+    model.flush_pending_line();
+    for frame in 0..100 {
+        model.delete_last_lines(1);
+        model.append_text(format!("frame {frame}"), false);
+    }
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("pending commit and redraw must remain incremental");
+    };
+    assert!(matches!(
+        delta.operations.as_slice(),
+        [
+            PresentationOperation::ReplaceLine { .. },
+            PresentationOperation::DeleteLines { count: 1 },
+            PresentationOperation::AppendLine { line },
+        ] if line.runs.iter().any(|run| matches!(run, DisplayRun::TextLayout { text, .. } if text == "9"))
+    ));
+    apply_delta(&mut frontend, delta);
+    assert_visible_snapshot_eq(&frontend, &model.snapshot());
+}
+
+#[test]
 fn pending_button_generation_projects_the_final_enabled_state() {
     let mut model = PresentationModel::default();
     let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {

@@ -428,11 +428,41 @@ fn compact_history_edits(
     baseline_line_count: usize,
     pending_line_id: Option<u64>,
 ) -> Vec<PresentationHistoryEdit> {
-    // An uncommitted line is represented separately by `pending_line_id`. Its later commit is an
-    // Append edit that delivery interprets as ReplaceLine, so cancellation against a following
-    // delete would incorrectly preserve the already-delivered pending row. Keep exact ordering for
-    // that uncommon boundary; normal animation frames have no pending row and use the reducer.
-    if pending_line_id.is_some() {
+    // An uncommitted line is represented separately by `pending_line_id`. Preserve the exact
+    // prefix through the edit that releases that frontend-only state, then reduce the remaining
+    // ordinary history. Disabling the reducer for the whole batch retained every intermediate
+    // redraw after a prompt and made skipped animations expensive to project and transfer.
+    if let Some(pending_line_id) = pending_line_id {
+        let mut line_count = baseline_line_count;
+        for (index, operation) in history.iter().enumerate() {
+            let releases_pending = match operation {
+                PresentationHistoryEdit::Append { line } => {
+                    if line.line_id == pending_line_id {
+                        true
+                    } else {
+                        line_count = line_count.saturating_add(1);
+                        false
+                    }
+                }
+                PresentationHistoryEdit::ReplaceTemporary { .. } => true,
+                PresentationHistoryEdit::DeletePhysical { count }
+                | PresentationHistoryEdit::TrimPhysical { count } => {
+                    line_count =
+                        line_count.saturating_sub(usize::try_from(*count).unwrap_or(usize::MAX));
+                    true
+                }
+                PresentationHistoryEdit::SetButtonGeneration { .. } => false,
+            };
+            if releases_pending {
+                let mut compacted = history[..=index].to_vec();
+                compacted.extend(compact_history_edits(
+                    &history[index + 1..],
+                    line_count,
+                    None,
+                ));
+                return compacted;
+            }
+        }
         return history.to_vec();
     }
 
