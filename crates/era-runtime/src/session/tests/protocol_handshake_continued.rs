@@ -1473,3 +1473,82 @@ fn canvas_sampling_rejects_matching_reply_after_the_current_canvas_changes() {
         assert_service_failure(&mut session);
     }
 }
+
+#[test]
+fn malformed_pointer_and_canvas_replies_fault_without_losing_the_host_wait() {
+    let queries = [
+        (
+            ServiceKind::InputState,
+            POINTER_STATE_OPERATION,
+            POINTER_STATE_OPERATION_VERSION,
+            "",
+            "RESULT = MOUSEX()",
+        ),
+        (
+            ServiceKind::InputState,
+            POINTER_STATE_OPERATION,
+            POINTER_STATE_OPERATION_VERSION,
+            "",
+            "RESULTS '= MOUSEB()",
+        ),
+        (
+            ServiceKind::Canvas,
+            SAMPLE_CANVAS_PIXEL_OPERATION,
+            SAMPLE_CANVAS_PIXEL_OPERATION_VERSION,
+            "RESULT = GCREATE(1, 2, 2)\n",
+            "RESULT = GGETCOLOR(1, 0, 0)",
+        ),
+    ];
+    for (kind, operation, version, setup, assignment) in queries {
+        for payload in [
+            vec![0xa1, 0x00],                   // Truncated field value.
+            vec![0xa1, 0x00, 0x61, b'x'],       // Wrong type for the first field.
+            vec![0xa2, 0x00, 0x00, 0x00, 0x00], // Duplicate deterministic map key.
+            vec![0xbf, 0xff],                   // Indefinite maps are not deterministic.
+            vec![0xa0, 0x00],                   // Trailing data after a complete map.
+        ] {
+            let source = format!(
+                "@SYSTEM_TITLE\n{setup}RESULT = 777\nRESULTS '= \"kept\"\nRESULT:9 = 991\n{assignment}\nRESULT:9 = 0\nWAIT\nRETURN\n"
+            );
+            let (mut session, request, _) =
+                start_projection_service_with_messages(&source, kind, operation, version);
+            complete_projection_reply(&mut session, &request, payload.clone());
+            assert_service_failure(&mut session);
+            let vm = session.vm.as_ref().unwrap();
+            assert_eq!(read_runtime_integer(vm, "RESULT", &[], None).unwrap(), 777);
+            assert_eq!(read_runtime_integer(vm, "RESULT", &[9], None).unwrap(), 991);
+            assert_eq!(
+                vm.vm()
+                    .read_variable(runtime_variable_key(vm, "RESULTS").unwrap(), &[0], None)
+                    .unwrap(),
+                VmValue::String("kept".into()),
+            );
+
+            // Exercise the public drive path again: the failed request cannot be
+            // rebound, and the session must remain faulted rather than waiting.
+            submit(
+                &mut session,
+                4,
+                RuntimeMessage::ServiceResponse(ServiceResponse {
+                    request_id: request.request_id,
+                    result: ServiceResult::Ready {
+                        payload: ProtocolBytes::new(payload),
+                    },
+                }),
+            );
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            let messages = drain(&mut session);
+            assert_eq!(session.phase(), RuntimePhase::Faulted);
+            assert!(
+                messages.iter().any(|message| matches!(
+                    message,
+                    RuntimeMessage::CommandRejected(CommandRejected {
+                        code: CommandErrorCode::StaleRequest,
+                        ..
+                    })
+                )),
+                "{operation}: {messages:#?}"
+            );
+        }
+    }
+}

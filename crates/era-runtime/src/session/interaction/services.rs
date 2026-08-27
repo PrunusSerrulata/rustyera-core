@@ -207,11 +207,19 @@ impl RuntimeSession {
         let payload = match response.result {
             ServiceResult::Ready { payload } => payload,
             ServiceResult::Error { error } => {
-                return self.fault(
-                    FaultCode::ServiceFailure,
-                    &format!("{}: {}", error.code, error.message),
-                    None,
+                let projection_query = matches!(
+                    &pending,
+                    PendingService::Host(
+                        ExternalCompletion::PointerState { .. }
+                            | ExternalCompletion::CanvasPixel { .. }
+                    )
                 );
+                let code = if projection_query {
+                    super::super::html_query::projection_service_failure(&error.code).0
+                } else {
+                    FaultCode::ServiceFailure
+                };
+                return self.fault(code, &format!("{}: {}", error.code, error.message), None);
             }
         };
         match pending {
@@ -335,7 +343,19 @@ impl RuntimeSession {
                         projection_space_revision,
                         ..
                     } => {
-                        let state: PointerStateResponse = decode_canonical(payload.as_slice())?;
+                        let state: PointerStateResponse = match decode_canonical(payload.as_slice())
+                        {
+                            Ok(state) => state,
+                            Err(error) => {
+                                // The pending continuation has already been consumed. A bad
+                                // reply must terminate its wait instead of escaping from drive.
+                                return self.fault(
+                                    FaultCode::ServiceFailure,
+                                    &format!("invalid pointer_state service response: {error}"),
+                                    None,
+                                );
+                            }
+                        };
                         if state.presentation_revision != presentation_revision
                             || state.presentation_revision != self.presentation.revision()
                             || state.environment_revision != environment_revision
@@ -545,7 +565,19 @@ impl RuntimeSession {
                         canvas_revision,
                         ..
                     } => {
-                        let result: CanvasPixelResponse = decode_canonical(payload.as_slice())?;
+                        let result: CanvasPixelResponse = match decode_canonical(payload.as_slice())
+                        {
+                            Ok(result) => result,
+                            Err(error) => {
+                                return self.fault(
+                                    FaultCode::ServiceFailure,
+                                    &format!(
+                                        "invalid sample_canvas_pixel service response: {error}"
+                                    ),
+                                    None,
+                                );
+                            }
+                        };
                         if !self.validate_projection_query_context(context, result.context)? {
                             return Ok(());
                         }
