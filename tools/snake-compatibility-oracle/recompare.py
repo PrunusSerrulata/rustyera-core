@@ -7,15 +7,15 @@ import json
 from pathlib import Path
 
 from comparison import compare_case, validate_rust_evidence
-from run import FIXTURE, identity, subset
+from run import FIXTURE, identity, subset, validate_load
 
 
-def recorded_steps(evidence, case):
+def recorded_steps(evidence, case, load_expect=None):
     records = [record for record in evidence["requests"] if record["case"] == case["id"]]
     if not records or records[0]["request"].get("op") != "load":
         raise ValueError(f"missing initial load for {case['id']}")
     load = records[0]["response"]
-    subset(load, {"ok": True})
+    validate_load(load, load_expect)
     count = len(case["requests"])
     steps = records[1:1 + count]
     if len(steps) != count:
@@ -37,7 +37,8 @@ def recompare(evidence, rust, manifest, fixture):
         raise ValueError("oracle semantic baseline differs")
     if evidence["sourceFixture"]["files"] != fixture["files"] or evidence["seed"] != manifest["seed"]:
         raise ValueError("oracle fixture/seed differs")
-    validate_rust_evidence(rust, oracle, fixture, manifest["seed"])
+    validate_rust_evidence(rust, oracle, fixture, manifest["seed"],
+                           manifest.get("requiredRustPolicy", {}).get(oracle))
     planned = {case["id"]: case for case in manifest["cases"]}
     observed = {case["id"]: case for case in rust["cases"]}
     completed = evidence["cases"]
@@ -46,7 +47,7 @@ def recompare(evidence, rust, manifest, fixture):
     comparisons = []
     for completed_case in completed:
         case = planned[completed_case["id"]]
-        load, steps = recorded_steps(evidence, case)
+        load, steps = recorded_steps(evidence, case, manifest.get("loadExpect"))
         comparisons.append(compare_case(case, steps, observed.get(case["id"]), load, rust["profile"]))
     return {
         "version": 2, "status": "recompared_observations", "oracle": oracle,
@@ -61,6 +62,7 @@ def recompare(evidence, rust, manifest, fixture):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--fixture", type=Path, default=FIXTURE)
     parser.add_argument("--oracle-evidence", type=Path, required=True)
     parser.add_argument("--rust-evidence", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -68,7 +70,7 @@ def main():
     oracle_bytes = args.oracle_evidence.read_bytes()
     rust_bytes = args.rust_evidence.read_bytes()
     result = recompare(json.loads(oracle_bytes), json.loads(rust_bytes),
-                       json.loads((FIXTURE / "cases.json").read_text()), identity(FIXTURE))
+                       json.loads((args.fixture / "cases.json").read_text()), identity(args.fixture))
     result["provenance"] = {
         "oracle": {"path": str(args.oracle_evidence.resolve()), "sha256": hashlib.sha256(oracle_bytes).hexdigest()},
         "rust": {"path": str(args.rust_evidence.resolve()), "sha256": hashlib.sha256(rust_bytes).hexdigest()},

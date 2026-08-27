@@ -117,12 +117,7 @@ pub(super) fn wrapper(request: &Value) -> AuditResult<String> {
     ))
 }
 
-pub(super) fn build_manifest(
-    root: &Path,
-    identity: &CompatibilityIdentity,
-    group: &str,
-    request: &Value,
-) -> AuditResult<(ProjectManifest, Value)> {
+fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile>> {
     let group_file = match group {
         "PRINTC" => "printc",
         "arithmetic" => "arithmetic",
@@ -131,6 +126,7 @@ pub(super) fn build_manifest(
         "extra_args" => "extra-args",
         "TOINT" => "toint",
         "GETKEY" => "getkey",
+        "INDEX" => "index",
         _ => return Err(format!("unknown fixture group {group}").into()),
     };
     let mut files = Vec::new();
@@ -146,6 +142,37 @@ pub(super) fn build_manifest(
             fs::read_to_string(root.join(&path))?,
         ));
     }
+    if group == "INDEX" {
+        // Index cases keep their own complete data inputs. Do not add these files
+        // to older observation groups: their historical fixture identity is frozen.
+        for (path, category) in [
+            ("erb/index.erh", FileCategory::Erh),
+            ("csv/BUFF.csv", FileCategory::Csv),
+            ("csv/BUFF.als", FileCategory::Als),
+            ("csv/FLAG.csv", FileCategory::Csv),
+            ("csv/FLAG.als", FileCategory::Als),
+            ("erb/columns/COLUMNDIV@2.ERD", FileCategory::Erd),
+            ("erb/columns/COLUMNDIV@2.als", FileCategory::Als),
+            ("erb/matrix/SEMEN_MATRIX@2.ERD", FileCategory::Erd),
+            ("erb/matrix/SEMEN_MATRIX@2.als", FileCategory::Als),
+        ] {
+            files.push(submitted(
+                path,
+                category,
+                fs::read_to_string(root.join(path))?,
+            ));
+        }
+    }
+    Ok(files)
+}
+
+pub(super) fn build_manifest(
+    root: &Path,
+    identity: &CompatibilityIdentity,
+    group: &str,
+    request: &Value,
+) -> AuditResult<(ProjectManifest, Value)> {
+    let mut files = load_fixture_files(root, group)?;
     let sources: Vec<_> = files
         .iter()
         .filter_map(|file| match &file.payload {
@@ -249,6 +276,136 @@ mod tests {
                 wrapper(&json!({"op": "run", "entry": "COMPAT_ONE", "arguments": arguments}))
                     .unwrap();
             assert!(source.contains(&format!("CALL COMPAT_ONE, {arguments}\n")));
+        }
+    }
+
+    #[test]
+    fn index_fixture_submits_primary_alias_and_header_inputs_without_reclassification() {
+        let root = crate::tool_root().join("fixture-snake-index-inputs");
+        let identity = CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        );
+        let request = json!({"op": "run", "entry": "INDEX_READ", "arguments": "\"alias\""});
+        let (manifest, _) = build_manifest(&root, &identity, "INDEX", &request).unwrap();
+        for (path, category) in [
+            ("erb/index.erh", FileCategory::Erh),
+            ("csv/BUFF.als", FileCategory::Als),
+            ("erb/columns/COLUMNDIV@2.ERD", FileCategory::Erd),
+            ("erb/matrix/SEMEN_MATRIX@2.als", FileCategory::Als),
+        ] {
+            let submitted = manifest
+                .files
+                .iter()
+                .find(|file| file.relative_path == path)
+                .unwrap();
+            assert_eq!(submitted.category, category);
+            assert_eq!(
+                submitted.payload,
+                FilePayload::Utf8(fs::read_to_string(root.join(path)).unwrap())
+            );
+        }
+        assert!(
+            !manifest
+                .files
+                .iter()
+                .any(|file| file.relative_path == "erb/base.erb")
+        );
+        assert!(
+            manifest
+                .files
+                .iter()
+                .any(|file| file.relative_path == "erb/__observation_title.erb")
+        );
+    }
+
+    #[test]
+    fn index_fixture_executes_aliases_only_for_the_snake_profile() {
+        use erabasic_compat::CompatibilityProfileId;
+
+        let root = crate::tool_root().join("fixture-snake-index-inputs");
+        let fixture: Fixture =
+            serde_json::from_slice(&fs::read(root.join("cases.json")).unwrap()).unwrap();
+        let case = fixture
+            .cases
+            .iter()
+            .find(|case| case.id == "index-user-alias-10-trim-first-wins")
+            .unwrap();
+        for profile in [
+            CompatibilityProfileId::EmueraEm,
+            CompatibilityProfileId::EmueraSkiaSnake,
+        ] {
+            let result = super::super::observe_case(
+                &root,
+                &CompatibilityIdentity::for_profile(profile),
+                fixture.seed,
+                case,
+            )
+            .unwrap();
+            assert_eq!(result["load"]["success"], true, "{result}");
+            assert_eq!(result["steps"][0]["status"], "executed", "{result}");
+            let observation = &result["steps"][0]["result"];
+            if profile == CompatibilityProfileId::EmueraSkiaSnake {
+                assert_eq!(observation["ok"], true, "{result}");
+                assert_eq!(observation["watches"]["RESULT:0"], 110);
+            } else {
+                assert_eq!(observation["ok"], false, "{result}");
+                assert_eq!(observation["termination"], "faulted", "{result}");
+            }
+        }
+    }
+
+    #[test]
+    fn index_fixture_distinguishes_shared_static_names_from_original_dynamic_gap() {
+        use erabasic_compat::CompatibilityProfileId;
+
+        let root = crate::tool_root().join("fixture-snake-index-inputs");
+        let fixture: Fixture =
+            serde_json::from_slice(&fs::read(root.join("cases.json")).unwrap()).unwrap();
+        for case_id in [
+            "index-static-primary-names",
+            "index-primary-name-precedes-alias",
+            "index-column-primary",
+            "index-matrix-primary-300",
+        ] {
+            let case = fixture
+                .cases
+                .iter()
+                .find(|case| case.id == case_id)
+                .unwrap();
+            let is_static = case_id == "index-static-primary-names";
+            for profile in [
+                CompatibilityProfileId::EmueraEm,
+                CompatibilityProfileId::EmueraSkiaSnake,
+            ] {
+                let result = super::super::observe_case(
+                    &root,
+                    &CompatibilityIdentity::for_profile(profile),
+                    fixture.seed,
+                    case,
+                )
+                .unwrap();
+                assert_eq!(result["load"]["success"], true, "{result}");
+                assert_eq!(result["steps"][0]["status"], "executed", "{result}");
+                let observation = &result["steps"][0]["result"];
+                if !is_static && profile == CompatibilityProfileId::EmueraEm {
+                    // Preserve the original profile's existing dynamic user-index gap.
+                    // The fixed original oracle succeeds; this is not its rejection.
+                    assert_eq!(observation["ok"], false, "{result}");
+                    assert_eq!(observation["termination"], "faulted", "{result}");
+                    continue;
+                }
+                assert_eq!(observation["ok"], true, "{result}");
+                let expected = match case_id {
+                    "index-column-primary" => 311,
+                    "index-matrix-primary-300" => 600,
+                    _ => 110,
+                };
+                assert_eq!(observation["watches"]["RESULT:0"], expected, "{result}");
+                if is_static {
+                    assert_eq!(observation["watches"]["RESULT:1"], 311, "{result}");
+                    assert_eq!(observation["watches"]["RESULT:2"], 600, "{result}");
+                }
+            }
         }
     }
 }

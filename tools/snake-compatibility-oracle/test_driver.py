@@ -17,6 +17,29 @@ spec.loader.exec_module(driver)
 
 
 class DriverTests(unittest.TestCase):
+    def test_expected_operation_rejection_cannot_hide_failed_fixture_loading(self):
+        with self.assertRaises(AssertionError):
+            driver.validate_load({"ok": True, "result": {"termination": "error"}})
+        with self.assertRaises(AssertionError):
+            driver.validate_load({"ok": False, "result": {}})
+        driver.validate_load({"ok": True, "result": {"termination": "waitingInput"}},
+                             {"result": {"termination": "waitingInput"}})
+        case = {"id": "bounds", "targetBatch": 1, "snakeTargetStatus": "requires_batch_1_acceptance",
+                "requireSuccessfulLoad": True, "requests": []}
+        for load in [None, {"success": False}]:
+            result = compare_case(case, [], {"load": load})
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("load failure", result["reason"])
+
+    def test_expected_rejection_is_recorded_without_claiming_diagnostic_equivalence(self):
+        step = {"expect": {"original": {"ok": True, "result": {"termination": "error"}}},
+                "expectedRejection": {"original": "unsupported user alias"}}
+        findings = driver.step_expectations(step, {"ok": True, "result": {"termination": "error"}}, "original")
+        self.assertEqual(findings[0]["kind"], "expected_rejection")
+        self.assertEqual(findings[0]["diagnosticComparison"], "incomparable_schema")
+        with self.assertRaises(AssertionError):
+            driver.step_expectations(step, {"ok": True, "result": {"termination": "completed"}}, "original")
+
     def test_handled_oracle_request_is_not_successful_script_execution(self):
         request = {"op": "run", "entry": "DIVIDE_ZERO"}
         case = {"id": "divide", "group": "arithmetic", "targetBatch": 2,
@@ -210,6 +233,18 @@ class DriverTests(unittest.TestCase):
             validate_rust_evidence(evidence, "original", {"files": []}, 1)
         with self.assertRaises(ValueError):
             validate_rust_evidence(evidence, "original", fixture, 2)
+        snake = {**evidence, "profile": {**evidence["profile"],
+                 "profile": "emuera.skia.snake", "semantic_version": 2, "policy_version": 2,
+                 "save_codec": "rustyera_envelope_v1:emuera1808"}}
+        required = {"semantic_version": 2, "policy_version": 2}
+        validate_rust_evidence(snake, "snake", fixture, 1, required)
+        historical = {**snake, "profile": {**snake["profile"], "semantic_version": 1, "policy_version": 1}}
+        validate_rust_evidence(historical, "snake", fixture, 1)
+        with self.assertRaises(ValueError):
+            validate_rust_evidence(historical, "snake", fixture, 1, required)
+        unknown = {**snake, "profile": {**snake["profile"], "policy_version": 3}}
+        with self.assertRaises(ValueError):
+            validate_rust_evidence(unknown, "snake", fixture, 1)
 
     def test_watchdog_ignores_envelope_ids_but_keeps_script_state(self):
         first = {"request": {"op": "observe", "id": 1}, "lastAvailableResponse": {"id": 1, "result": {"id": 7}}}
@@ -251,6 +286,46 @@ class DriverTests(unittest.TestCase):
         self.assertEqual([event["down"] for event in click["awaitPumps"][0]], [True, False])
         shared_invalid = cases["toint-invalid"]["requests"][0]["expect"]
         self.assertEqual(shared_invalid["original"], shared_invalid["snake"])
+
+    def test_index_fixture_keeps_extension_rejections_separate_from_successful_loads(self):
+        fixture = driver.FIXTURE.with_name("fixture-snake-index-inputs")
+        manifest = json.loads((fixture / "cases.json").read_text())
+        cases = {case["id"]: case for case in manifest["cases"]}
+        self.assertEqual(manifest["requiredRustPolicy"]["snake"],
+                         {"semantic_version": 2, "policy_version": 2})
+        self.assertEqual(manifest["loadExpect"]["result"]["termination"], "waitingInput")
+        step = cases["index-user-alias-10-trim-first-wins"]["requests"][0]
+        self.assertEqual(step["request"]["arguments"], '"alias"')
+        self.assertEqual(step["expect"]["snake"]["result"]["watches"], {"RESULT:0": 110})
+        self.assertIn("original", step["expectedRejection"])
+        for case in cases.values():
+            self.assertTrue(case["requireSuccessfulLoad"])
+            for step in case["requests"]:
+                self.assertNotIn("GETNUM", json.dumps(step["request"]))
+
+    def test_index_primary_names_preserve_original_reference_success_and_rust_gap(self):
+        fixture = driver.FIXTURE.with_name("fixture-snake-index-inputs")
+        manifest = json.loads((fixture / "cases.json").read_text())
+        cases = {case["id"]: case for case in manifest["cases"]}
+        shared = cases["index-static-primary-names"]["requests"][0]
+        self.assertEqual(shared["expect"]["original"], shared["expect"]["snake"])
+        self.assertEqual(shared["expect"]["original"]["result"]["watches"],
+                         {"RESULT:0": 110, "RESULT:1": 311, "RESULT:2": 600})
+        for case_id in ["index-primary-name-precedes-alias", "index-column-primary", "index-matrix-primary-300"]:
+            case = cases[case_id]
+            self.assertEqual(case["rustCurrentPolicy"], "original_dynamic_user_index_existing_gap")
+            self.assertEqual(case["knownRustDifference"]["original"]["status"], "existing_gap")
+            step = case["requests"][0]
+            self.assertNotIn("original", step.get("expectedRejection", {}))
+            self.assertEqual(step["expect"]["original"]["result"]["termination"], "completed")
+            self.assertEqual(step["expect"]["original"], step["expect"]["snake"])
+            response = {**step["expect"]["original"], "diagnostics": []}
+            rust = {"load": {"success": True}, "steps": [{
+                "request": step["request"], "status": "executed",
+                "result": {"ok": False, "termination": "faulted", "diagnostics": []},
+            }]}
+            compared = compare_case(case, [{"request": step["request"], "response": response}], rust)
+            self.assertEqual(compared["status"], "different")
 
 
 if __name__ == "__main__":

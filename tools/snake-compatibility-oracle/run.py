@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run core-owned batch-0 fixtures against one pinned, explicitly selected oracle.
+"""Run core-owned compatibility fixtures against one pinned, explicitly selected oracle.
 
 This driver does not build, install fonts, change baselines, or claim Rust parity.
 Run it only after the batch's shared review and static gates have passed.
@@ -33,6 +33,26 @@ def subset(actual, expected, path="response"):
             subset(actual[key], value, f"{path}.{key}")
     elif actual != expected:
         raise AssertionError(f"{path}: expected {expected!r}, got {actual!r}")
+
+
+def validate_load(response, expected=None):
+    subset(response, {"ok": True})
+    if response.get("result", {}).get("termination") in {"error", "timeout", "instructionLimit", "quit"}:
+        raise AssertionError("oracle failed during fixture loading")
+    if expected is not None:
+        subset(response, expected)
+
+
+def step_expectations(step, response, oracle):
+    if "expect" in step:
+        subset(response, step["expect"][oracle])
+    rejection = step.get("expectedRejection", {}).get(oracle)
+    if rejection is None:
+        return []
+    if response.get("ok") is not False and response.get("result", {}).get("termination") != "error":
+        raise AssertionError("an expected operation rejection succeeded")
+    return [{"kind": "expected_rejection", "reason": rejection,
+             "diagnosticComparison": "incomparable_schema"}]
 
 
 def identity(directory):
@@ -141,7 +161,7 @@ class Oracle:
             raise TimeoutError(self.watchdog_failure)
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError("batch-0 oracle budget exhausted")
+            raise TimeoutError("oracle command budget exhausted")
         return remaining
 
     def windows_path(self, path):
@@ -340,6 +360,7 @@ def close_oracle(oracle, evidence, failure):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--oracle", choices=["original", "snake"], required=True)
+    parser.add_argument("--fixture", type=Path, default=FIXTURE)
     parser.add_argument("--exe", type=Path, required=True)
     parser.add_argument("--wrapper-sha", required=True)
     parser.add_argument("--rust-evidence", type=Path, required=True)
@@ -359,16 +380,17 @@ def main():
         parser.error("Wine requires an isolated --wine-prefix")
     if len(args.wrapper_sha) != 40 or any(c not in "0123456789abcdef" for c in args.wrapper_sha):
         parser.error("--wrapper-sha must be the full wrapper commit")
-    for name in ["exe", "font_file", "output", "wine_prefix"]:
+    for name in ["fixture", "exe", "font_file", "output", "wine_prefix"]:
         value = getattr(args, name)
         if value is not None:
             setattr(args, name, value.resolve())
     if args.output.exists():
         parser.error("--output must be a new directory; existing evidence is never overwritten")
-    manifest = json.loads((FIXTURE / "cases.json").read_text())
+    manifest = json.loads((args.fixture / "cases.json").read_text())
     rust = json.loads(args.rust_evidence.read_text())
-    source_fixture = identity(FIXTURE)
-    validate_rust_evidence(rust, args.oracle, source_fixture, manifest["seed"])
+    source_fixture = identity(args.fixture)
+    validate_rust_evidence(rust, args.oracle, source_fixture, manifest["seed"],
+                           manifest.get("requiredRustPolicy", {}).get(args.oracle))
     rust_cases = {case["id"]: case for case in rust["cases"]}
     if hashlib.sha256(args.font_file.read_bytes()).hexdigest() != manifest["font"]["sha256"]:
         parser.error("the supplied font does not match the pinned fixture font")
@@ -381,7 +403,7 @@ def main():
         parser.error("no matching cases")
     args.output.mkdir(parents=True)
     game = args.output / "game"
-    shutil.copytree(FIXTURE, game)
+    shutil.copytree(args.fixture, game)
     if args.drawing_mode == "SKIASHARP" and args.oracle != "snake":
         parser.error("SKIASHARP is a snake-only drawing mode")
     if args.oracle == "snake":
@@ -441,15 +463,15 @@ def main():
         for case in selected:
             oracle.case = case["id"]
             load_response = oracle.request(load)
-            subset(load_response, {"ok": True})
+            validate_load(load_response, manifest.get("loadExpect"))
             last = None
             observed_steps = []
+            findings = []
             for step in case["requests"]:
                 last = oracle.request(step["request"])
                 observed_steps.append({"request": step["request"], "response": last})
-                if "expect" in step:
-                    subset(last, step["expect"][args.oracle])
-            findings = assertions(oracle, case, last, load)
+                findings.extend(step_expectations(step, last, args.oracle))
+            findings.extend(assertions(oracle, case, last, load))
             evidence["rustComparison"]["cases"].append(
                 compare_case(case, observed_steps, rust_cases.get(case["id"]), load_response, rust["profile"])
             )

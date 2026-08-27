@@ -8,15 +8,20 @@ OPERATION_FIELDS = {
 }
 
 
-def validate_rust_evidence(evidence, oracle, fixture, seed):
+def validate_rust_evidence(evidence, oracle, fixture, seed, required_policy=None):
     if evidence.get("version") != 1:
         raise ValueError("unsupported Rust evidence version")
     identity = evidence.get("profile", {})
     if identity.get("profile") != PROFILES[oracle]:
         raise ValueError("Rust evidence belongs to a different compatibility profile")
+    versions = (identity.get("semantic_version"), identity.get("policy_version"))
+    supported = {(1, 1)} if oracle == "original" else {(1, 1), (2, 2)}
+    if versions not in supported:
+        raise ValueError(f"unsupported Rust semantic/policy versions: {versions!r}")
+    for key, value in (required_policy or {}).items():
+        if identity.get(key) != value:
+            raise ValueError(f"fixture requires Rust policy {key}={value!r}")
     expected = {
-        "semantic_version": 1,
-        "policy_version": 1,
         "arithmetic": "wrapping_i64_v1",
         "rng_algorithm": "sfmt19937",
         "rng_state_version": 1,
@@ -82,6 +87,13 @@ def split_setup_diagnostics(diagnostics, identity):
 def compare_case(case, oracle_steps, rust_case, load_response=None, identity=None):
     if rust_case is None:
         raise ValueError(f"Rust evidence missing case {case['id']}")
+    if case.get("requireSuccessfulLoad") and not (rust_case.get("load") or {}).get("success"):
+        return {
+            "case": case["id"], "status": "blocked", "steps": [],
+            "reason": "fixture did not load successfully; a load failure cannot satisfy an expected operation rejection",
+            "rustLoad": rust_case.get("load"), "oracleLoad": load_response,
+            "targetBatch": case["targetBatch"], "snakeTargetStatus": case["snakeTargetStatus"],
+        }
     if not case["requests"] and rust_case.get("status") == "blocked":
         return {
             "case": case["id"],
