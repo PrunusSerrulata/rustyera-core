@@ -25,6 +25,7 @@ pub fn run_cli() -> AuditResult<()> {
     let mut fixture_root = super::tool_root().join("fixture-snake-compatibility");
     let mut profile = None;
     let mut output = None;
+    let mut selected_cases = Vec::new();
     let mut arguments = std::env::args().skip(2);
     while let Some(argument) = arguments.next() {
         let value = arguments.next().ok_or("option requires a value")?;
@@ -32,6 +33,7 @@ pub fn run_cli() -> AuditResult<()> {
             "--profile" => profile = Some(value.parse::<CompatibilityProfileId>()?),
             "--fixture" => fixture_root = PathBuf::from(value),
             "--output" => output = Some(PathBuf::from(value)),
+            "--case" => selected_cases.push(value),
             _ => return Err(format!("unknown snake-observations option {argument}").into()),
         }
     }
@@ -49,8 +51,18 @@ pub fn run_cli() -> AuditResult<()> {
     let dirty = !git_output(&["status", "--porcelain", "--untracked-files=all"])?.is_empty();
     let mut cases = Vec::new();
     for case in fixture.cases {
+        if !selected_cases.is_empty()
+            && !selected_cases
+                .iter()
+                .any(|selection| selection == &case.id || selection == &case.group)
+        {
+            continue;
+        }
         // A failed group still emits its real load diagnostic; subsequent groups get fresh VMs.
         cases.push(observe_case(&fixture_root, &identity, fixture.seed, &case)?);
+    }
+    if cases.is_empty() {
+        return Err("no matching observation cases".into());
     }
     if fixture_identity(&fixture_root)? != source_fixture {
         return Err("fixture changed while collecting observations".into());
@@ -58,6 +70,7 @@ pub fn run_cli() -> AuditResult<()> {
     let report = json!({
         "version": 1, "coreSha": core_sha, "dirty": dirty, "profile": identity,
         "seed": fixture.seed, "sourceFixture": source_fixture, "cases": cases,
+        "selectedCases": selected_cases,
         "harness": {
             "version": 1,
             "runEngine": "runtime_session_compiled_call",

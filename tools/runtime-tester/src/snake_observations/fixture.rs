@@ -219,6 +219,29 @@ pub(super) fn build_manifest(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn arithmetic_fixture_preserves_observed_result_after_return() {
+        let root = crate::tool_root().join("fixture-snake-compatibility");
+        let fixture: Fixture =
+            serde_json::from_slice(&fs::read(root.join("cases.json")).unwrap()).unwrap();
+        let case = fixture
+            .cases
+            .iter()
+            .find(|case| case.id == "arithmetic-variable")
+            .unwrap();
+        let result = super::super::observe_case(
+            &root,
+            &CompatibilityIdentity::reference(),
+            fixture.seed,
+            case,
+        )
+        .unwrap();
+        let watches = &result["steps"][0]["result"]["watches"];
+        assert_eq!(watches["RESULT:0"], json!(i64::MIN));
+        assert_eq!(watches["RESULT:1"], json!(i64::MAX - 1));
+        assert_eq!(watches["RESULT:2"], json!(i64::MAX));
+    }
     #[test]
     fn wrapper_preserves_argument_expressions_and_omissions() {
         for arguments in ["7,", "7, COMPAT_SIDE_EFFECT()"] {
