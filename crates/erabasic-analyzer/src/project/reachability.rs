@@ -1,13 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use erabasic_ast::{Argument, Expr, ExprKind, Function as AstFunction, Statement, StatementKind};
+use erabasic_ast::{
+    Argument, Expr, ExprKind, FormPart, FormattedString, Function as AstFunction, Statement,
+    StatementKind,
+};
 use erabasic_hir::{
     EventAttributes, Function, FunctionId, FunctionKind, SemanticType, SourceLocation,
 };
 
 use crate::{
     AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerDiagnosticSeverity, AnalyzerOptions,
-    WarningPolicy, symbols::Symbols,
+    WarningPolicy, context::AnalysisParserContext, symbols::Symbols,
 };
 
 use super::{
@@ -20,6 +23,7 @@ pub(super) fn reachable_functions(
     definitions: &[FunctionDefinition],
     symbols: &Symbols,
     options: &AnalyzerOptions,
+    context: &AnalysisParserContext,
 ) -> BTreeSet<FunctionId> {
     if options.analysis_mode || !options.ignore_uncalled_functions {
         return definitions.iter().map(|definition| definition.id).collect();
@@ -45,8 +49,36 @@ pub(super) fn reachable_functions(
             break;
         }
         let mut calls = Vec::new();
+        // Private declarations are registered only after reachability. Until then a
+        // local may shadow even a known global string; retain both possible parses.
+        let private_types_pending = function.attributes.iter().any(|directive| {
+            matches!(directive.name.as_str(), "DIM" | "DIMS")
+        }) || function.body.iter().any(|statement| matches!(
+            &statement.kind,
+            StatementKind::Instruction { name, .. } if matches!(name.as_str(), "VARI" | "VARS")
+        ));
         for statement in &function.body {
             collect_statement_calls(statement, &mut calls);
+            collect_numeric_assignment_calls(
+                statement,
+                &mut calls,
+                symbols,
+                id,
+                context,
+                private_types_pending,
+            );
+        }
+        // Runtime STRFORM parses arbitrary expressions, so even a literal input
+        // cannot be treated as a closed static call graph here. EXISTMETH must
+        // retain target signatures/defaults although it does not execute bodies.
+        if calls.iter().any(|name| {
+            matches!(
+                name.to_ascii_uppercase().as_str(),
+                "GETMETH" | "GETMETHS" | "EXISTMETH" | "STRFORM"
+            )
+        }) {
+            reachable.extend(definitions.iter().map(|definition| definition.id));
+            break;
         }
         for call in calls {
             if let Some(target) = symbols.function(&call)
@@ -57,6 +89,40 @@ pub(super) fn reachable_functions(
         }
     }
     reachable
+}
+
+fn collect_numeric_assignment_calls(
+    statement: &Statement,
+    calls: &mut Vec<String>,
+    symbols: &Symbols,
+    function: FunctionId,
+    context: &AnalysisParserContext,
+    private_types_pending: bool,
+) {
+    let StatementKind::Assignment {
+        target,
+        op: erabasic_ast::AssignOp::Assign,
+        value,
+        raw_value,
+        ..
+    } = &statement.kind
+    else {
+        return;
+    };
+    if !private_types_pending
+        && symbols
+            .resolve_variable(function, &target.name)
+            .is_some_and(|variable| variable.value_type == SemanticType::String)
+    {
+        return;
+    }
+    // The initial parser keeps '=' as FORM text. Numeric assignments are reparsed
+    // by statement analysis, so their calls must also participate in this graph.
+    // Do not issue diagnostics here: the type-directed analysis owns those spans.
+    let parsed = erabasic_parser::parse_expression_list_at(raw_value, value.span.start, context);
+    for expression in parsed.value.iter().flatten() {
+        collect_expression_calls(expression, calls);
+    }
 }
 
 fn collect_statement_calls(statement: &Statement, calls: &mut Vec<String>) {
@@ -76,10 +142,13 @@ fn collect_statement_calls(statement: &Statement, calls: &mut Vec<String>) {
                 }
             }
             for argument in arguments {
-                if let Argument::Expression(expression)
-                | Argument::MixedExpression { expression, .. } = argument
-                {
-                    collect_expression_calls(expression, calls);
+                match argument {
+                    Argument::Expression(expression)
+                    | Argument::MixedExpression { expression, .. } => {
+                        collect_expression_calls(expression, calls);
+                    }
+                    Argument::Formatted(value) => collect_formatted_calls(value, calls),
+                    Argument::Raw(_) | Argument::Omitted(_) => {}
                 }
             }
         }
@@ -124,11 +193,39 @@ fn collect_expression_calls(expression: &Expr, calls: &mut Vec<String>) {
             collect_expression_calls(then_expr, calls);
             collect_expression_calls(else_expr, calls);
         }
-        ExprKind::Integer(_)
-        | ExprKind::String(_)
-        | ExprKind::Identifier(_)
-        | ExprKind::Formatted(_)
-        | ExprKind::Error => {}
+        ExprKind::Formatted(value) => collect_formatted_calls(value, calls),
+        ExprKind::Integer(_) | ExprKind::String(_) | ExprKind::Identifier(_) | ExprKind::Error => {}
+    }
+}
+
+fn collect_formatted_calls(value: &FormattedString, calls: &mut Vec<String>) {
+    for part in &value.parts {
+        match part {
+            FormPart::StringInterpolation {
+                expression, width, ..
+            }
+            | FormPart::IntegerInterpolation {
+                expression, width, ..
+            } => {
+                collect_expression_calls(expression, calls);
+                if let Some(width) = width {
+                    collect_expression_calls(width, calls);
+                }
+            }
+            FormPart::Conditional {
+                condition,
+                then_value,
+                else_value,
+                ..
+            } => {
+                collect_expression_calls(condition, calls);
+                collect_formatted_calls(then_value, calls);
+                if let Some(else_value) = else_value {
+                    collect_formatted_calls(else_value, calls);
+                }
+            }
+            FormPart::Text(_) | FormPart::Triple { .. } => {}
+        }
     }
 }
 
@@ -141,7 +238,11 @@ fn uses_dynamic_call(statement: &Statement) -> bool {
         StatementKind::Instruction { name, .. }
             if matches!(
                 name.as_str(),
-                "CALLFORM"
+                "GETMETH"
+                    | "GETMETHS"
+                    | "EXISTMETH"
+                    | "STRFORM"
+                    | "CALLFORM"
                     | "CALLFORMF"
                     | "JUMPFORM"
                     | "TRYCALLFORM"

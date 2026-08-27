@@ -204,7 +204,19 @@ impl Vm {
                     .push(VmValue::String(value));
             }
             Opcode::Pop => {
-                pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?;
+                let frame = fiber.frames.last_mut().expect("frame exists");
+                if let Some(call) = frame.method_calls.last()
+                    && call.stack_index + 1 == frame.stack.len()
+                {
+                    if call.captured != 0 {
+                        return Err(StepError::new(
+                            VmFaultCode::InvalidInstruction,
+                            "cannot discard a captured method token",
+                        ));
+                    }
+                    frame.method_calls.pop();
+                }
+                pop(&mut frame.stack)?;
             }
             Opcode::Dup => {
                 let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;

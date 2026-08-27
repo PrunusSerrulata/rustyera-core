@@ -12,6 +12,7 @@ use crate::{
 };
 
 mod frontend;
+mod methods;
 mod support;
 
 use frontend::parse_runtime_form;
@@ -28,7 +29,7 @@ pub(crate) struct RuntimeFormContinuation {
     work: Vec<RuntimeFormTask>,
     values: Vec<VmValue>,
     outputs: Vec<String>,
-    awaiting_user_result: bool,
+    awaiting_user_result: Option<BytecodeType>,
     remaining_nodes: usize,
     remaining_source_bytes: usize,
 }
@@ -69,6 +70,14 @@ enum RuntimeFormTask {
         else_value: Option<FormattedString>,
     },
     PushOmitted,
+    ResolveMethod {
+        result: erabasic_bytecode::MethodResult,
+        fallback: Option<Expr>,
+        arguments: Vec<Option<Expr>>,
+    },
+    MethodArgument(methods::RuntimeMethodCall),
+    CaptureMethodArgument(methods::RuntimeMethodCall),
+    ExistsMethod,
 }
 
 pub(super) enum RuntimeFormStep {
@@ -118,7 +127,7 @@ pub(super) fn begin_runtime_form(
         ],
         values: Vec::new(),
         outputs: Vec::new(),
-        awaiting_user_result: false,
+        awaiting_user_result: None,
         remaining_nodes: node_limit.saturating_sub(nodes),
         remaining_source_bytes: MAX_RUNTIME_FORM_BYTES.saturating_sub(source.len()),
     };
@@ -215,7 +224,7 @@ impl RuntimeFormContinuation {
         fiber: &mut Fiber,
         natives: &mut NativeServiceRegistry,
     ) -> Result<RuntimeFormStep, StepError> {
-        if self.awaiting_user_result {
+        if let Some(expected) = self.awaiting_user_result {
             let owner = owner_frame_mut(fiber, self.frame)?;
             let value = owner.stack.pop().ok_or_else(|| {
                 StepError::new(
@@ -223,8 +232,14 @@ impl RuntimeFormContinuation {
                     "STRFORM user function result is missing",
                 )
             })?;
+            if value.value_type() != expected {
+                return Err(StepError::new(
+                    VmFaultCode::TypeMismatch,
+                    "STRFORM method returned an incompatible type",
+                ));
+            }
             self.values.push(value);
-            self.awaiting_user_result = false;
+            self.awaiting_user_result = None;
             self.check_resources(vm)?;
             return Ok(RuntimeFormStep::Pending);
         }
@@ -279,7 +294,7 @@ impl RuntimeFormContinuation {
                 return Ok(RuntimeFormStep::Complete(value));
             }
             RuntimeFormTask::Evaluate(expression) => {
-                self.evaluate_expression(expression)?;
+                self.evaluate_expression(vm, expression)?;
             }
             RuntimeFormTask::ReadVariable { name, indices } => {
                 let indices = self.take_indices(indices)?;
@@ -395,6 +410,52 @@ impl RuntimeFormContinuation {
                 }
             }
             RuntimeFormTask::PushOmitted => self.values.push(VmValue::Integer(i64::MIN)),
+            RuntimeFormTask::ResolveMethod {
+                result,
+                fallback,
+                arguments,
+            } => {
+                self.resolve_method(vm, result, fallback, arguments)?;
+            }
+            RuntimeFormTask::MethodArgument(call) => {
+                self.advance_method_arguments(vm, fiber, call)?;
+            }
+            RuntimeFormTask::CaptureMethodArgument(mut call) => {
+                self.validate_method_call(vm, fiber, &call, true)?;
+                let actual = self.pop_value("STRFORM method argument is missing")?;
+                let slot = call.next_slot;
+                call.captured[slot] = Some(
+                    vm.capture_method_argument(
+                        fiber,
+                        self.frame,
+                        &call.method,
+                        &call.specs,
+                        slot,
+                        actual,
+                    )
+                    .map_err(map_vm_error)?,
+                );
+                call.next_slot += 1;
+                self.work.push(RuntimeFormTask::MethodArgument(call));
+            }
+            RuntimeFormTask::ExistsMethod => {
+                let VmValue::String(name) = self.pop_value("EXISTMETH name is missing")? else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "EXISTMETH expects a string",
+                    ));
+                };
+                let program = vm.generations.get(&self.generation).ok_or_else(|| {
+                    StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
+                })?;
+                self.values
+                    .push(VmValue::Integer(crate::state::methods::exists_method(
+                        program,
+                        self.generation,
+                        &name,
+                    )));
+                vm.invalidate_path_memo(fiber.id);
+            }
         }
         self.check_resources(vm)?;
         Ok(RuntimeFormStep::Pending)
@@ -486,7 +547,7 @@ impl RuntimeFormContinuation {
         Ok(())
     }
 
-    fn evaluate_expression(&mut self, expression: Expr) -> Result<(), StepError> {
+    fn evaluate_expression(&mut self, vm: &Vm, expression: Expr) -> Result<(), StepError> {
         match expression.kind {
             ExprKind::Integer(value) => self.values.push(VmValue::Integer(value)),
             ExprKind::String(value) => self.values.push(VmValue::String(value)),
@@ -531,6 +592,13 @@ impl RuntimeFormContinuation {
                 self.work.push(RuntimeFormTask::Evaluate(*condition));
             }
             ExprKind::Call { name, args } => {
+                let user_defined = vm
+                    .generations
+                    .get(&self.generation)
+                    .is_some_and(|program| program.function_by_name(&name).is_some());
+                if !user_defined && self.schedule_method(&name, &args)? {
+                    return Ok(());
+                }
                 let count = args.len();
                 self.work.push(RuntimeFormTask::FinishCall {
                     name,
@@ -614,7 +682,7 @@ impl RuntimeFormContinuation {
                 true,
                 event_context,
             ));
-            self.awaiting_user_result = true;
+            self.awaiting_user_result = target.result;
             return Ok(());
         }
 

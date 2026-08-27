@@ -32,6 +32,20 @@ pub(crate) struct Frame {
     pub event_dispatch: Option<EventDispatch>,
     /// Late-bound STRFORM work owned by this frame and resumed by the scheduler.
     pub runtime_form: Option<crate::interpreter::dynamic_form::RuntimeFormContinuation>,
+    /// Opaque method resolution identities are separate from the scalar operand stack.
+    pub method_calls: Vec<super::methods::PendingMethodCall>,
+}
+
+impl Frame {
+    pub(crate) fn operand_slots(&self) -> Option<usize> {
+        self.method_calls
+            .iter()
+            .try_fold(self.stack.len(), |slots, call| {
+                slots
+                    .checked_add(1)?
+                    .checked_add(call.method.bindings.len())
+            })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -119,6 +133,7 @@ impl Fiber {
     pub(crate) fn clear_runtime_forms(&mut self) {
         for frame in &mut self.frames {
             frame.runtime_form = None;
+            frame.method_calls.clear();
         }
     }
 }

@@ -357,3 +357,134 @@ fn structured_native_signatures_require_mutable_array_outputs() {
         invalid.diagnostics
     );
 }
+
+#[test]
+fn dynamic_method_signatures_validate_name_fallback_and_existence_arity() {
+    for (expression, expected) in [
+        (
+            "GETMETH()",
+            Some(AnalyzerDiagnosticCode::InvalidArgumentCount),
+        ),
+        (
+            "GETMETH(, 1)",
+            Some(AnalyzerDiagnosticCode::InvalidArgument),
+        ),
+        ("GETMETH(1)", Some(AnalyzerDiagnosticCode::TypeMismatch)),
+        (
+            "GETMETH(\"M\", \"wrong\")",
+            Some(AnalyzerDiagnosticCode::TypeMismatch),
+        ),
+        (
+            "GETMETHS(\"M\", 1)",
+            Some(AnalyzerDiagnosticCode::TypeMismatch),
+        ),
+        (
+            "EXISTMETH()",
+            Some(AnalyzerDiagnosticCode::InvalidArgumentCount),
+        ),
+        (
+            "EXISTMETH(\"M\", 1)",
+            Some(AnalyzerDiagnosticCode::InvalidArgumentCount),
+        ),
+        ("EXISTMETH(1)", Some(AnalyzerDiagnosticCode::TypeMismatch)),
+        ("GETMETH(\"M\")", None),
+        ("GETMETH(\"M\",, FLAG:1,, 3)", None),
+        ("EXISTMETH(\"M\")", None),
+    ] {
+        for statement in [
+            format!("RESULT = {expression}"),
+            expression
+                .replacen('(', " ", 1)
+                .strip_suffix(')')
+                .unwrap()
+                .to_owned(),
+        ] {
+            let report = analyze_project(
+                AnalysisInput {
+                    project_data: empty_project(),
+                    sources: vec![source(
+                        "methods.erb",
+                        &format!("@SYSTEM_TITLE\n{statement}\nRETURN\n"),
+                    )],
+                },
+                &AnalyzerOptions::analysis_mode(),
+                &ExtensionRegistry::default(),
+            );
+            if let Some(expected) = expected {
+                assert!(
+                    report
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.code == expected),
+                    "{expression}: {:#?}",
+                    report.diagnostics
+                );
+            } else {
+                assert!(
+                    !report
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.reference_level >= 2),
+                    "{expression}: {:#?}",
+                    report.diagnostics
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn dynamic_methods_preserve_omitted_slots_and_variables_without_constant_folding() {
+    use erabasic_hir::{HirCallArgument, HirExprKind};
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "methods.erb",
+                "@SYSTEM_TITLE\nRESULT = GETMETH(\"M\",, FLAG:1,, -9223372036854775807 - 1)\nRESULTS '= GETMETHS(\"S\", \"fallback\", STR:2)\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let project = report.project.expect("valid dynamic method expressions");
+    let function = &project.program.functions[0];
+    let HirStatementKind::Assignment { value, .. } = &function.lines[0].kind else {
+        panic!("assignment");
+    };
+    let HirExprKind::Call { arguments, .. } = &value.kind else {
+        panic!("method call");
+    };
+    assert!(value.constant.is_none());
+    assert_eq!(arguments.len(), 5);
+    assert!(matches!(arguments[1], HirCallArgument::Omitted));
+    let HirCallArgument::Place(place) = &arguments[2] else {
+        panic!("retained variable");
+    };
+    assert_eq!(place.indices.len(), 1);
+    assert!(matches!(arguments[3], HirCallArgument::Omitted));
+    let HirCallArgument::Value(minimum) = &arguments[4] else {
+        panic!("present integer");
+    };
+    assert_eq!(
+        minimum.constant,
+        Some(erabasic_hir::ConstantValue::Integer(i64::MIN))
+    );
+    let HirStatementKind::Assignment { value, .. } = &function.lines[1].kind else {
+        panic!("string assignment");
+    };
+    let HirExprKind::Call { arguments, .. } = &value.kind else {
+        panic!("string method call");
+    };
+    assert_eq!(value.value_type, SemanticType::String);
+    assert!(matches!(arguments[1], HirCallArgument::Value(_)));
+    assert!(matches!(arguments[2], HirCallArgument::Place(_)));
+}

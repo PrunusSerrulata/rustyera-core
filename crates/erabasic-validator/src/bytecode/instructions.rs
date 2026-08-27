@@ -6,11 +6,26 @@ use erabasic_bytecode::{
 
 use crate::ValidationCode;
 
+mod methods;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StackValue {
+    Value(BytecodeType),
+    MethodToken { resolve: u32 },
+    MethodArgument { resolve: u32, slot: u16 },
+}
+
+impl From<BytecodeType> for StackValue {
+    fn from(value: BytecodeType) -> Self {
+        Self::Value(value)
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) fn apply_instruction(
     function: &BytecodeFunction,
     index: usize,
-    stack: &mut Vec<BytecodeType>,
+    stack: &mut Vec<StackValue>,
     globals: &BTreeMap<SymbolKey, &erabasic_bytecode::BytecodeGlobal>,
     functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
     native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
@@ -35,7 +50,7 @@ pub(super) fn apply_instruction(
         }
         Opcode::PushInteger => {
             expect_payload(&instruction.payload, 8)?;
-            stack.push(BytecodeType::Integer);
+            stack.push(BytecodeType::Integer.into());
         }
         Opcode::PushString => {
             let length = read_u32(&instruction.payload, 0)? as usize;
@@ -47,7 +62,7 @@ pub(super) fn apply_instruction(
                     "invalid UTF-8 string operand".into(),
                 ));
             }
-            stack.push(BytecodeType::String);
+            stack.push(BytecodeType::String.into());
         }
         Opcode::LoadVariable | Opcode::StoreVariable | Opcode::MakePlace => {
             expect_payload(&instruction.payload, 19)?;
@@ -94,18 +109,21 @@ pub(super) fn apply_instruction(
                 pop_type(stack, BytecodeType::Integer)?;
             }
             if opcode_value == Opcode::LoadVariable {
-                stack.push(global.value_type);
+                stack.push(global.value_type.into());
             } else if opcode_value == Opcode::MakePlace {
-                stack.push(match global.value_type {
-                    BytecodeType::Integer => BytecodeType::IntegerPlace,
-                    BytecodeType::String => BytecodeType::StringPlace,
-                    BytecodeType::IntegerPlace | BytecodeType::StringPlace => {
-                        return Err((
-                            ValidationCode::InvalidOperand,
-                            "a variable schema cannot contain place values".into(),
-                        ));
-                    }
-                });
+                stack.push(
+                    (match global.value_type {
+                        BytecodeType::Integer => BytecodeType::IntegerPlace,
+                        BytecodeType::String => BytecodeType::StringPlace,
+                        BytecodeType::IntegerPlace | BytecodeType::StringPlace => {
+                            return Err((
+                                ValidationCode::InvalidOperand,
+                                "a variable schema cannot contain place values".into(),
+                            ));
+                        }
+                    })
+                    .into(),
+                );
             }
         }
         Opcode::Unary => {
@@ -117,7 +135,7 @@ pub(super) fn apply_instruction(
                 ));
             }
             pop_type(stack, BytecodeType::Integer)?;
-            stack.push(BytecodeType::Integer);
+            stack.push(BytecodeType::Integer.into());
         }
         Opcode::Binary => {
             expect_payload(&instruction.payload, 1)?;
@@ -127,14 +145,8 @@ pub(super) fn apply_instruction(
                     "unknown binary operation".into(),
                 ));
             }
-            let right = stack.pop().ok_or((
-                ValidationCode::StackMismatch,
-                "binary operation underflows the stack".into(),
-            ))?;
-            let left = stack.pop().ok_or((
-                ValidationCode::StackMismatch,
-                "binary operation underflows the stack".into(),
-            ))?;
+            let right = pop_value(stack, "binary operation")?;
+            let left = pop_value(stack, "binary operation")?;
             let string_repeat = instruction.payload[0] == 0
                 && matches!(
                     (left, right),
@@ -164,48 +176,48 @@ pub(super) fn apply_instruction(
                 } else {
                     BytecodeType::Integer
                 };
-            stack.push(result);
+            stack.push(result.into());
         }
         Opcode::ToString => {
             expect_payload(&instruction.payload, 0)?;
-            stack.pop().ok_or((
-                ValidationCode::StackMismatch,
-                "string conversion underflows the stack".into(),
-            ))?;
-            stack.push(BytecodeType::String);
+            pop_value(stack, "string conversion")?;
+            stack.push(BytecodeType::String.into());
         }
         Opcode::Concat => {
             expect_payload(&instruction.payload, 2)?;
             for _ in 0..read_u16(&instruction.payload, 0)? {
                 pop_type(stack, BytecodeType::String)?;
             }
-            stack.push(BytecodeType::String);
+            stack.push(BytecodeType::String.into());
         }
         Opcode::Pop => {
             expect_payload(&instruction.payload, 0)?;
-            stack.pop().ok_or((
-                ValidationCode::StackMismatch,
-                "pop underflows the stack".into(),
-            ))?;
+            match stack.pop() {
+                Some(StackValue::Value(_) | StackValue::MethodToken { .. }) => {}
+                Some(StackValue::MethodArgument { .. }) => {
+                    return Err((
+                        ValidationCode::TypeMismatch,
+                        "pop cannot discard a captured method argument".into(),
+                    ));
+                }
+                None => {
+                    return Err((
+                        ValidationCode::StackMismatch,
+                        "pop underflows the stack".into(),
+                    ));
+                }
+            }
         }
         Opcode::Dup => {
             expect_payload(&instruction.payload, 0)?;
-            let value = *stack.last().ok_or((
-                ValidationCode::StackMismatch,
-                "dup underflows the stack".into(),
-            ))?;
-            stack.push(value);
+            let value = pop_value(stack, "dup")?;
+            stack.push(value.into());
+            stack.push(value.into());
         }
         Opcode::StorePlace => {
             expect_payload(&instruction.payload, 0)?;
-            let place = stack.pop().ok_or((
-                ValidationCode::StackMismatch,
-                "indirect store underflows the stack".into(),
-            ))?;
-            let value = stack.pop().ok_or((
-                ValidationCode::StackMismatch,
-                "indirect store underflows the stack".into(),
-            ))?;
+            let place = pop_value(stack, "indirect store")?;
+            let value = pop_value(stack, "indirect store")?;
             if !matches!(
                 (place, value),
                 (BytecodeType::IntegerPlace, BytecodeType::Integer)
@@ -232,18 +244,15 @@ pub(super) fn apply_instruction(
             pop_type(stack, BytecodeType::Integer)?;
             pop_type(stack, BytecodeType::Integer)?;
             pop_type(stack, BytecodeType::IntegerPlace)?;
-            stack.push(BytecodeType::Integer);
+            stack.push(BytecodeType::Integer.into());
         }
         Opcode::ForNext => {
             expect_payload(&instruction.payload, 0)?;
-            stack.push(BytecodeType::Integer);
+            stack.push(BytecodeType::Integer.into());
         }
         Opcode::SelectStart => {
             expect_payload(&instruction.payload, 0)?;
-            stack.pop().ok_or((
-                ValidationCode::StackMismatch,
-                "SELECTCASE underflows the stack".into(),
-            ))?;
+            pop_value(stack, "SELECTCASE")?;
         }
         Opcode::SelectCompare => {
             expect_payload(&instruction.payload, 1)?;
@@ -259,17 +268,20 @@ pub(super) fn apply_instruction(
                 ));
             }
             for _ in 0..operands {
-                stack.pop().ok_or((
-                    ValidationCode::StackMismatch,
-                    "CASE comparison underflows the stack".into(),
-                ))?;
+                pop_value(stack, "CASE comparison")?;
             }
-            stack.push(BytecodeType::Integer);
+            stack.push(BytecodeType::Integer.into());
+        }
+        Opcode::ResolveMethod
+        | Opcode::SelectMethodArgument
+        | Opcode::CaptureMethodArgument
+        | Opcode::InvokeMethod => {
+            return methods::apply(function, index, opcode_value, stack, globals);
         }
         Opcode::ResolveFunction => {
             expect_payload(&instruction.payload, 6)?;
             pop_type(stack, BytecodeType::String)?;
-            stack.push(BytecodeType::String);
+            stack.push(BytecodeType::String.into());
             if instruction.payload[4] > 1 {
                 return Err((
                     ValidationCode::InvalidOperand,
@@ -295,10 +307,7 @@ pub(super) fn apply_instruction(
                 ));
             }
             for _ in 0..read_u16(&instruction.payload, 0)? {
-                stack.pop().ok_or((
-                    ValidationCode::StackMismatch,
-                    "dynamic call argument underflows the stack".into(),
-                ))?;
+                pop_value(stack, "dynamic call argument")?;
             }
             pop_type(stack, BytecodeType::String)?;
         }
@@ -383,7 +392,7 @@ pub(super) fn apply_instruction(
                 ));
             }
             if let Some(result) = result {
-                stack.push(result);
+                stack.push(result.into());
             }
         }
         Opcode::Return => {
@@ -426,7 +435,8 @@ pub(super) fn apply_instruction(
             expect_payload(&instruction.payload, 1)?;
             stack.push(
                 opcode::decode_type(instruction.payload[0])
-                    .ok_or((ValidationCode::InvalidOperand, "invalid resume type".into()))?,
+                    .ok_or((ValidationCode::InvalidOperand, "invalid resume type".into()))?
+                    .into(),
             );
         }
         Opcode::Trap => {
@@ -489,13 +499,10 @@ fn read_key(payload: &[u8]) -> Result<SymbolKey, (ValidationCode, String)> {
 }
 
 fn pop_type(
-    stack: &mut Vec<BytecodeType>,
+    stack: &mut Vec<StackValue>,
     expected: BytecodeType,
 ) -> Result<(), (ValidationCode, String)> {
-    let actual = stack.pop().ok_or((
-        ValidationCode::StackMismatch,
-        "instruction underflows the stack".into(),
-    ))?;
+    let actual = pop_value(stack, "instruction")?;
     if actual == expected {
         Ok(())
     } else {
@@ -503,5 +510,22 @@ fn pop_type(
             ValidationCode::TypeMismatch,
             format!("expected {expected:?}, found {actual:?}"),
         ))
+    }
+}
+
+fn pop_value(
+    stack: &mut Vec<StackValue>,
+    operation: &str,
+) -> Result<BytecodeType, (ValidationCode, String)> {
+    match stack.pop() {
+        Some(StackValue::Value(value)) => Ok(value),
+        Some(value) => Err((
+            ValidationCode::TypeMismatch,
+            format!("{operation} cannot consume opaque method state {value:?}"),
+        )),
+        None => Err((
+            ValidationCode::StackMismatch,
+            format!("{operation} underflows the stack"),
+        )),
     }
 }

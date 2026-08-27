@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_bytecode::{
     CandidatePolicy, CapabilityFallback, HostCapability, HostEffect, HostSnapshotCapability,
-    OperationContract, OperationDebugPolicy, OperationHotReloadPolicy, OperationPersistence,
-    OperationSnapshotPolicy, OperationState, OperationWaitPolicy, TransactionPolicy,
+    MethodResult, OperationContract, OperationDebugPolicy, OperationHotReloadPolicy,
+    OperationPersistence, OperationSnapshotPolicy, OperationState, OperationWaitPolicy,
+    TransactionPolicy,
 };
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +29,7 @@ pub struct HostBinding {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExecutionBinding {
     Native(OperationContract),
+    ExpressionMethod { result: MethodResult },
     Host(HostBinding),
     Unsupported { reason: String },
 }
@@ -71,7 +73,12 @@ impl HostRegistry {
     pub fn resolve(&self, era_name: &str) -> Option<HostBinding> {
         match self.classification(era_name) {
             Some(ExecutionBinding::Host(binding)) => Some(binding.clone()),
-            Some(ExecutionBinding::Native(_) | ExecutionBinding::Unsupported { .. }) | None => None,
+            Some(
+                ExecutionBinding::Native(_)
+                | ExecutionBinding::ExpressionMethod { .. }
+                | ExecutionBinding::Unsupported { .. },
+            )
+            | None => None,
         }
     }
 }
@@ -83,7 +90,15 @@ pub fn default_host_registry() -> HostRegistry {
         .into_iter()
         .chain(builtin_function_names())
     {
-        let binding = if native_is_implemented(&name) {
+        let binding = if matches!(name.as_str(), "GETMETH" | "GETMETHS") {
+            ExecutionBinding::ExpressionMethod {
+                result: if name == "GETMETHS" {
+                    MethodResult::String
+                } else {
+                    MethodResult::Integer
+                },
+            }
+        } else if native_is_implemented(&name) {
             ExecutionBinding::Native(native_contract(&name))
         } else {
             ExecutionBinding::Unsupported {
@@ -190,6 +205,7 @@ const IMPLEMENTED_NATIVE_NAMES: &[&str] = &[
     "strlen",
     "strlenu",
     "strform",
+    "existmeth",
     "toint",
     "isnumeric",
     "unicode",

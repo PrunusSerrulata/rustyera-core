@@ -761,6 +761,14 @@ fn analyze_instruction(
                 HirArgument::Omitted | HirArgument::Formatted(_) | HirArgument::Raw(_) => None,
             })
             .collect();
+        if matches!(key.as_str(), "GETMETH" | "GETMETHS")
+            && !catalog.extension_functions.contains(&key)
+        {
+            analyzer.check_dynamic_method_name(
+                &expression_arguments,
+                SourceLocation::new(source.source.id, statement.span),
+            );
+        }
         if key.contains("FORM") && !key.contains("FORMS") {
             if lowered.len() < signature.minimum_arguments {
                 diagnostics.push(AnalyzerDiagnostic::at(

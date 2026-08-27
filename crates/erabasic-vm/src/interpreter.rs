@@ -155,6 +155,9 @@ impl Vm {
         if let Some(outcome) = self.dispatch_basic(fiber, position, opcode, policy)? {
             return self.finish_dispatch(fiber, outcome);
         }
+        if let Some(outcome) = self.dispatch_methods(fiber, position, opcode)? {
+            return self.finish_dispatch(fiber, outcome);
+        }
         if let Some(outcome) =
             self.dispatch_calls(fiber, position, opcode, host, natives, host_calls, policy)?
         {
@@ -178,8 +181,11 @@ impl Vm {
             &outcome,
             StepOutcome::Continue | StepOutcome::Diagnostic { .. }
         ) {
-            let stack_len = fiber.frames.last().map_or(0, |frame| frame.stack.len());
-            if stack_len > self.config.maximum_operand_stack {
+            let stack_len = fiber
+                .frames
+                .last()
+                .map_or(Some(0), crate::state::Frame::operand_slots);
+            if stack_len.is_none_or(|len| len > self.config.maximum_operand_stack) {
                 return Err(StepError::new(
                     VmFaultCode::ResourceLimit,
                     "maximum operand stack exceeded",

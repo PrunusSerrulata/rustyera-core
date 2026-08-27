@@ -369,6 +369,11 @@ impl ExpressionAnalyzer<'_> {
             signature.allow_omitted,
             location,
         );
+        let dynamic_method = matches!(key.as_str(), "GETMETH" | "GETMETHS")
+            && !self.catalog.extension_functions.contains(&key);
+        if dynamic_method {
+            self.check_dynamic_method_name(&values, location);
+        }
         if let Some(expression) = self.fold_builtin_call(&signature.name, &key, &values, location) {
             return expression;
         }
@@ -379,28 +384,20 @@ impl ExpressionAnalyzer<'_> {
             .map(|(index, value)| match value {
                 None => HirCallArgument::Omitted,
                 Some(expression)
-                    if signature
-                        .arguments
-                        .get(index)
-                        .or_else(|| {
-                            signature
-                                .variadic
-                                .then(|| signature.arguments.last())
-                                .flatten()
-                        })
-                        .is_some_and(|constraint| {
-                            matches!(
-                                constraint,
-                                ArgumentConstraint::MutableInteger
-                                    | ArgumentConstraint::MutableString
-                                    | ArgumentConstraint::MutableAny
-                                    | ArgumentConstraint::ReferenceAny
-                                    | ArgumentConstraint::ReferenceOrString
-                                    | ArgumentConstraint::MutableReferenceOrString
-                            ) || *constraint == ArgumentConstraint::IntegerOrMutableString
-                                && expression.value_type == SemanticType::String
-                                || key == "REGEXPMATCH" && argument_count == 4 && index == 2
-                        }) =>
+                    if dynamic_method && index >= 2
+                        || signature
+                            .arguments
+                            .get(index)
+                            .or_else(|| {
+                                signature
+                                    .variadic
+                                    .then(|| signature.arguments.last())
+                                    .flatten()
+                            })
+                            .is_some_and(|constraint| {
+                                argument_keeps_place(*constraint, expression.value_type)
+                                    || key == "REGEXPMATCH" && argument_count == 4 && index == 2
+                            }) =>
                 {
                     match expression.kind {
                         HirExprKind::Variable { place } => HirCallArgument::Place(place),
@@ -675,6 +672,20 @@ impl ExpressionAnalyzer<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn check_dynamic_method_name(
+        &mut self,
+        values: &[Option<HirExpr>],
+        location: SourceLocation,
+    ) {
+        if values.first().is_some_and(Option::is_none) {
+            self.diagnostic(
+                AnalyzerDiagnosticCode::InvalidArgument,
+                location,
+                "dynamic method target name may not be omitted",
+            );
+        }
+    }
+
     pub fn check_arguments(
         &mut self,
         arguments: &[Option<HirExpr>],
@@ -846,4 +857,17 @@ impl ExpressionAnalyzer<'_> {
 
 fn value_call_argument(value: Option<HirExpr>) -> HirCallArgument {
     value.map_or(HirCallArgument::Omitted, HirCallArgument::Value)
+}
+
+fn argument_keeps_place(constraint: ArgumentConstraint, value_type: SemanticType) -> bool {
+    matches!(
+        constraint,
+        ArgumentConstraint::MutableInteger
+            | ArgumentConstraint::MutableString
+            | ArgumentConstraint::MutableAny
+            | ArgumentConstraint::ReferenceAny
+            | ArgumentConstraint::ReferenceOrString
+            | ArgumentConstraint::MutableReferenceOrString
+    ) || constraint == ArgumentConstraint::IntegerOrMutableString
+        && value_type == SemanticType::String
 }

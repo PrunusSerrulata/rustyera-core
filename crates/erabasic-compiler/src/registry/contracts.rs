@@ -12,7 +12,7 @@ pub(super) fn native_contract(name: &str) -> OperationContract {
         name.as_str(),
         "rand" | "randomize" | "initrand" | "dumprand"
     );
-    let variable_read = matches!(name.as_str(), "getvar" | "getvars");
+    let variable_read = matches!(name.as_str(), "getvar" | "getvars" | "existmeth");
     let variable_mutation = matches!(
         name.as_str(),
         "swap"
@@ -76,7 +76,9 @@ pub(super) fn native_contract(name: &str) -> OperationContract {
         hot_reload: OperationHotReloadPolicy::Preserve,
         wait: OperationWaitPolicy::Immediate,
         capability_fallback: CapabilityFallback::NotApplicable,
-        debug: if mutable {
+        debug: if name == "existmeth" {
+            OperationDebugPolicy::Forbidden
+        } else if mutable {
             OperationDebugPolicy::Transactional
         } else {
             OperationDebugPolicy::Pure

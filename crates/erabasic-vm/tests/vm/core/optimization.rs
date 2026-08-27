@@ -1,6 +1,203 @@
 use super::*;
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the inline method fixture and same-VM warmup/debug comparison in one scenario."
+)]
+fn dynamic_methods_remain_observable_after_memo_warmup_and_match_debug_execution() {
+    let warm_body = "INDEX = FINDELEMENT(RESULTS, NEEDLE, 0, 2, 1)\n".repeat(100);
+    let source = format!(
+        "@WARM_ENTRY\nRETURN LOOKUP(\"target\")\n@LOOKUP(NEEDLE)\n#FUNCTION\n#DIMS NEEDLE\n#DIM INDEX\n{warm_body}RETURNF INDEX\n"
+    ) + r#"
+@DYNAMIC_ENTRY
+RESULT:10 = WRAP_INT()
+RESULTS:10 '= WRAP_STR()
+RESULT:11 = WRAP_EXISTS()
+RESULTS:11 '= WRAP_FORM()
+RETURN
+@WRAP_INT
+#FUNCTION
+RETURNF GETMETH(STR:0, , FLAG)
+@WRAP_STR
+#FUNCTIONS
+RETURNF GETMETHS(STR:1)
+@WRAP_EXISTS
+#FUNCTION
+RETURNF EXISTMETH(STR:3)
+@WRAP_FORM
+#FUNCTIONS
+RETURNF STRFORM("{GETMETH(\"READ_VALUE\")}")
+@FIRST(NUMBERS)
+#FUNCTION
+#DIM REF NUMBERS
+NUMBERS:0 += 1
+FLAG:1 += 1
+RETURNF NUMBERS:0
+@SECOND(NUMBERS)
+#FUNCTION
+#DIM REF NUMBERS
+NUMBERS:0 += 10
+FLAG:1 += 1
+RETURNF NUMBERS:0
+@TEXT_A
+#FUNCTIONS
+FLAG:2 += 1
+RETURNF STR:2 + "A"
+@TEXT_B
+#FUNCTIONS
+FLAG:2 += 1
+RETURNF STR:2 + "B"
+@READ_VALUE
+#FUNCTION
+RETURNF FLAG:0
+@UNUSED_BREAKPOINT
+#FUNCTION
+RETURNF 0
+"#;
+    for snake in [false, true] {
+        let mut options = AnalyzerOptions::analysis_mode();
+        if snake {
+            options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            );
+        }
+        let artifact = compile_source_with_options(&source, &options);
+        let function = |name: &str| {
+            artifact
+                .functions
+                .iter()
+                .find(|function| function.name == name)
+                .unwrap()
+                .key
+        };
+        let variable = |name: &str| {
+            artifact
+                .globals
+                .iter()
+                .find(|global| global.name == name)
+                .unwrap()
+                .key
+        };
+        let mut results = Vec::new();
+        for debugging in [false, true] {
+            let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+            let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 7);
+            if debugging {
+                // An enabled breakpoint outside the exercised path uses the existing
+                // debug scheduler, which disables both VM memo paths without stopping.
+                vm.update_breakpoints(
+                    &[VmBreakpoint {
+                        id: 1,
+                        enabled: true,
+                        hit_count: 0,
+                        location: VmBreakpointLocation::Function(function("UNUSED_BREAKPOINT")),
+                    }],
+                    &[],
+                )
+                .unwrap();
+            }
+            vm.write_variable(
+                variable("RESULTS"),
+                &[0],
+                None,
+                VmValue::String("target".into()),
+            )
+            .unwrap();
+            let mut warm_instructions = Vec::new();
+            for _ in 0..2 {
+                vm.spawn_entry(function("WARM_ENTRY"), Vec::new()).unwrap();
+                let report = vm.run_slice(
+                    &mut ReadyHost::default(),
+                    &mut natives,
+                    RunBudget::default(),
+                );
+                assert!(
+                    !report.events.iter().any(|event| matches!(
+                        event,
+                        VmEvent::FiberFaulted { .. } | VmEvent::DebugStopped(_)
+                    )),
+                    "{report:?}"
+                );
+                warm_instructions.push(report.instructions);
+            }
+            if !debugging {
+                assert!(
+                    warm_instructions[1] < warm_instructions[0],
+                    "the same VM must have an actually warmed memo before dynamic calls: {warm_instructions:?}"
+                );
+            }
+            let mut observations = Vec::new();
+            for (round, (number, text, existence, expected_value, expected_exists)) in [
+                ("FIRST", "TEXT_A", "READ_VALUE", 1, 1),
+                ("FIRST", "TEXT_A", "TEXT_A", 2, 2),
+                ("SECOND", "TEXT_B", "MISSING", 12, 0),
+                ("SECOND", "TEXT_B", "READ_VALUE", 22, 1),
+                ("FIRST", "TEXT_A", "TEXT_B", 23, 2),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                for (slot, value) in [
+                    (0, number.to_owned()),
+                    (1, text.to_owned()),
+                    (2, format!("round{round}")),
+                    (3, existence.to_owned()),
+                ] {
+                    vm.write_variable(variable("STR"), &[slot], None, VmValue::String(value))
+                        .unwrap();
+                }
+                vm.spawn_entry(function("DYNAMIC_ENTRY"), Vec::new())
+                    .unwrap();
+                let report = vm.run_slice(
+                    &mut ReadyHost::default(),
+                    &mut natives,
+                    RunBudget::default(),
+                );
+                assert!(
+                    !report.events.iter().any(|event| matches!(
+                        event,
+                        VmEvent::FiberFaulted { .. } | VmEvent::DebugStopped(_)
+                    )),
+                    "{report:?}"
+                );
+                let observed = [
+                    ("RESULT", 10),
+                    ("RESULT", 11),
+                    ("RESULTS", 10),
+                    ("RESULTS", 11),
+                    ("FLAG", 0),
+                    ("FLAG", 1),
+                    ("FLAG", 2),
+                ]
+                .map(|(name, index)| vm.read_variable(variable(name), &[index], None).unwrap());
+                assert_eq!(
+                    observed,
+                    [
+                        VmValue::Integer(expected_value),
+                        VmValue::Integer(expected_exists),
+                        VmValue::String(format!(
+                            "round{round}{}",
+                            if text == "TEXT_A" { "A" } else { "B" }
+                        )),
+                        VmValue::String(expected_value.to_string()),
+                        VmValue::Integer(expected_value),
+                        VmValue::Integer(i64::try_from(round + 1).unwrap()),
+                        VmValue::Integer(i64::try_from(round + 1).unwrap()),
+                    ]
+                );
+                observations.push(observed);
+            }
+            results.push(observations);
+        }
+        assert_eq!(
+            results[0], results[1],
+            "memo-enabled and debugger execution differ"
+        );
+    }
+}
+
+#[test]
 fn title_startup_reports_memory_before_program_indexing_with_monotonic_progress() {
     let artifact = compile_source("@SYSTEM_TITLE\nRETURN\n");
     let mut events = Vec::new();

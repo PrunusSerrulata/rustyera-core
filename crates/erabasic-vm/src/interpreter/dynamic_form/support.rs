@@ -109,6 +109,9 @@ impl RuntimeFormContinuation {
     }
 
     fn retained_string_bytes(&self) -> Result<usize, StepError> {
+        let (_, method_bytes) = self
+            .method_resources()
+            .ok_or_else(|| resource_limit("STRFORM method resource count overflowed"))?;
         self.outputs
             .iter()
             .map(String::len)
@@ -116,12 +119,19 @@ impl RuntimeFormContinuation {
                 VmValue::String(value) => Some(value.len()),
                 _ => None,
             }))
-            .try_fold(0usize, usize::checked_add)
+            .try_fold(method_bytes, usize::checked_add)
             .ok_or_else(|| resource_limit("STRFORM retained string size overflowed"))
     }
 
     pub(super) fn check_resources(&self, vm: &Vm) -> Result<(), StepError> {
-        if self.work.len() > vm.config.maximum_operand_stack
+        let (method_slots, _) = self
+            .method_resources()
+            .ok_or_else(|| resource_limit("STRFORM method resource count overflowed"))?;
+        if self
+            .work
+            .len()
+            .checked_add(method_slots)
+            .is_none_or(|count| count > vm.config.maximum_operand_stack)
             || self.values.len() > vm.config.maximum_operand_stack
             || self.outputs.len() > MAX_RUNTIME_FORM_NESTING
         {

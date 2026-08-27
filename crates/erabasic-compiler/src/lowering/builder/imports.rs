@@ -24,6 +24,17 @@ impl Builder<'_> {
             Some(ExecutionBinding::Native(contract)) => {
                 self.emit_native_call(name, parameters, result, *contract, location);
             }
+            Some(ExecutionBinding::ExpressionMethod { .. }) => {
+                self.diagnostics.push(CompilerDiagnostic::at(
+                    CompilerDiagnosticCode::InvalidHir,
+                    location,
+                    "expression methods require lazy typed lowering",
+                ));
+                self.emit(
+                    EncodedInstruction::new(Opcode::Trap, b"invalid eager method call".to_vec()),
+                    location,
+                );
+            }
             Some(ExecutionBinding::Unsupported { reason }) => {
                 self.emit_unsupported_call(name, reason, location);
             }

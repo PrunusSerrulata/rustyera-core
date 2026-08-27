@@ -21,6 +21,11 @@ impl Builder<'_> {
             return;
         }
         if let InstructionTarget::BuiltinMethod { return_type, .. } = target {
+            if matches!(name, "GETMETH" | "GETMETHS") {
+                self.lower_expression_method_statement(name, arguments, location);
+                self.store_method_result(*return_type, location);
+                return;
+            }
             let parameter_types = arguments
                 .iter()
                 .map(|argument| self.lower_argument(argument, location))

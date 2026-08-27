@@ -625,7 +625,7 @@ fn project_build_populates_analyzer_diagnostic_line_and_byte_column() {
 
 #[test]
 fn owned_project_build_maps_compiler_errors_to_utf8_byte_columns() {
-    let text = "@SYSTEM_TITLE\nPRINTL 日本語\nRESULT = GETMETH(\"TARGET\")\nRETURN\n";
+    let text = "@SYSTEM_TITLE\nPRINTL 日本語\nRESULT = GETNUMB(\"TARGET\")\nRETURN\n";
     let build = build_project(
         &ProjectManifest {
             compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
@@ -655,7 +655,7 @@ fn owned_project_build_maps_compiler_errors_to_utf8_byte_columns() {
     assert_eq!(source.byte_column, Some(9));
     assert_eq!(
         source.byte_start,
-        u64::try_from(text.find("GETMETH").unwrap()).unwrap()
+        u64::try_from(text.find("GETNUMB").unwrap()).unwrap()
     );
 }
 

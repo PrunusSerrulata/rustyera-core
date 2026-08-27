@@ -466,6 +466,10 @@ fn analyze_function_memo(
             | Opcode::Call
             | Opcode::ResolveFunction
             | Opcode::InvokeDynamic
+            | Opcode::ResolveMethod
+            | Opcode::SelectMethodArgument
+            | Opcode::CaptureMethodArgument
+            | Opcode::InvokeMethod
             | Opcode::JumpDynamicLabel
             | Opcode::InvokeEvent
             | Opcode::Yield

@@ -660,7 +660,7 @@ fn validate_function(
         return;
     }
     let mut states = vec![None; function.code.len()];
-    states[0] = Some(Vec::<BytecodeType>::new());
+    states[0] = Some(Vec::<instructions::StackValue>::new());
     let mut work = VecDeque::from([0usize]);
     let mut observed_max = 0usize;
     while let Some(index) = work.pop_front() {

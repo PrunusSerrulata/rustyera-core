@@ -299,6 +299,39 @@ fn validate_form(
                                 format!("STRFORM target {name} has incompatible arguments"),
                             ));
                         }
+                    } else if super::methods::method_result(name).is_some()
+                        || name.eq_ignore_ascii_case("EXISTMETH")
+                    {
+                        let target = args.first().and_then(Option::as_ref).ok_or_else(|| {
+                            StepError::new(
+                                VmFaultCode::TypeMismatch,
+                                "dynamic method name cannot be omitted",
+                            )
+                        })?;
+                        if super::methods::expression_type(program, function, target, 0)?
+                            != BytecodeType::String
+                        {
+                            return Err(StepError::new(
+                                VmFaultCode::TypeMismatch,
+                                "dynamic method name must be a string",
+                            ));
+                        }
+                        if name.eq_ignore_ascii_case("EXISTMETH") && args.len() != 1 {
+                            return Err(StepError::new(
+                                VmFaultCode::TypeMismatch,
+                                "EXISTMETH expects one argument",
+                            ));
+                        }
+                        if let Some(result) = super::methods::method_result(name)
+                            && let Some(fallback) = args.get(1).and_then(Option::as_ref)
+                            && super::methods::expression_type(program, function, fallback, 0)?
+                                != result.bytecode_type()
+                        {
+                            return Err(StepError::new(
+                                VmFaultCode::TypeMismatch,
+                                "dynamic method fallback has an incompatible type",
+                            ));
+                        }
                     } else {
                         let supported_native =
                             program.artifact.native_imports.iter().any(|native| {

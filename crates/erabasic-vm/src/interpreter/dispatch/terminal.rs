@@ -136,6 +136,21 @@ impl Vm {
                 let value = has_value
                     .then(|| pop(&mut fiber.frames.last_mut().expect("frame exists").stack))
                     .transpose()?;
+                let target = self
+                    .generations
+                    .get(&position.generation)
+                    .and_then(|generation| generation.function(position.function))
+                    .ok_or_else(|| {
+                        StepError::new(VmFaultCode::MissingSymbol, "returning function is missing")
+                    })?;
+                if target.kind == BytecodeFunctionKind::Method
+                    && value.as_ref().map(VmValue::value_type) != target.result
+                {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "method returned an incompatible scalar type",
+                    ));
+                }
                 let returned_frame = fiber.frames.pop().expect("returning frame exists");
                 self.confirm_path_memo_result_read(
                     fiber.id,

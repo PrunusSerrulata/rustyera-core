@@ -837,6 +837,7 @@ mod compact_generation_index_tests {
 
 mod frames;
 mod lifecycle;
+pub(crate) mod methods;
 mod places;
 mod runtime;
 mod runtime_types;

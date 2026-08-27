@@ -86,6 +86,11 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("ISNUMERIC", IntType, &[String], 1, false);
     add("VARSIZE", IntType, &[String, Integer], 1, false);
     add("EXISTFUNCTION", IntType, &[String, Integer], 1, false);
+    add("EXISTMETH", IntType, &[String], 1, false);
+    // Only the target name is required. The second slot is a typed fallback;
+    // remaining slots retain their value/place shape for runtime resolution.
+    add("GETMETH", IntType, &[String, Integer, Any], 1, true);
+    add("GETMETHS", StrType, &[String, String, Any], 1, true);
     add("EXISTVAR", IntType, &[String], 1, false);
     add("GETVAR", IntType, &[String], 1, false);
     add("GETVARS", StrType, &[String], 1, false);
@@ -565,7 +570,7 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         .get_mut("RAND")
         .expect("RAND signature was inserted")
         .allow_omitted = true;
-    for name in ["FINDELEMENT", "FINDLASTELEMENT"] {
+    for name in ["GETMETH", "GETMETHS", "FINDELEMENT", "FINDLASTELEMENT"] {
         result
             .get_mut(name)
             .expect("find-element signature was inserted")

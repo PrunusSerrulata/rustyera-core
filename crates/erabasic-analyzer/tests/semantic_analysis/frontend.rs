@@ -208,3 +208,134 @@ fn structured_formatted_try_call_keeps_dynamic_targets_reachable() {
         "TRYCCALLFORM target was treated as unreachable"
     );
 }
+
+#[test]
+fn method_reachability_covers_formatted_values_widths_conditions_and_runtime_forms() {
+    for statement in [
+        "RESULT = GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)",
+        "#DIM DYNAMIC VALUE\nVALUE = GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)",
+        "#DIM DYNAMIC STR\nSTR = GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)",
+        "RESULTS '= GETMETHS(\"SCOM_\" + TOSTR(1), \"\")",
+        "RESULT = EXISTMETH(\"CAN_MOVE_\" + TOSTR(1))",
+        "PRINTFORML {GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)}",
+        "PRINTFORML {1, GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)}",
+        "PRINTFORML \\@ GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0) ? yes # no \\@",
+        "RESULTS '= STRFORM(STR:0)",
+    ] {
+        let report = analyze_project(
+            AnalysisInput {
+                project_data: empty_project(),
+                sources: vec![source(
+                    "reachability.erb",
+                    &format!(
+                        "@SYSTEM_TITLE\n{statement}\nRETURN\n@CAN_MOVE_1\n#FUNCTION\nRETURNF 1\n@SCOM_1\n#FUNCTIONS\nRETURNF \"one\"\n"
+                    ),
+                )],
+            },
+            &AnalyzerOptions::default(),
+            &ExtensionRegistry::default(),
+        );
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.reference_level >= 2),
+            "{statement}: {:#?}",
+            report.diagnostics
+        );
+        let project = report.project.expect("reachable method project");
+        for name in ["CAN_MOVE_1", "SCOM_1"] {
+            let method = project
+                .program
+                .functions
+                .iter()
+                .find(|function| function.name == name)
+                .expect("method definition");
+            assert!(!method.lines.is_empty(), "{statement} discarded {name}");
+        }
+    }
+}
+
+#[test]
+fn direct_method_calls_in_formatted_subexpressions_remain_reachable() {
+    for statement in [
+        "PRINTFORML {FORM_VALUE()}",
+        "PRINTFORML {1, FORM_VALUE()}",
+        "PRINTFORML \\@ FORM_VALUE() ? {FORM_VALUE()} # no \\@",
+        "RESULTS = @\"{FORM_VALUE()}\"",
+    ] {
+        let report = analyze_project(
+            AnalysisInput {
+                project_data: empty_project(),
+                sources: vec![source(
+                    "formatted-reachability.erb",
+                    &format!(
+                        "@SYSTEM_TITLE\n{statement}\nRETURN\n@FORM_VALUE\n#FUNCTION\nRETURNF 1\n@UNUSED\n#FUNCTION\nRETURNF 2\n"
+                    ),
+                )],
+            },
+            &AnalyzerOptions::default(),
+            &ExtensionRegistry::default(),
+        );
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.reference_level >= 2),
+            "{statement}: {:#?}",
+            report.diagnostics
+        );
+        let project = report.project.expect("formatted call project");
+        let called = project
+            .program
+            .functions
+            .iter()
+            .find(|function| function.name == "FORM_VALUE")
+            .unwrap();
+        let unused = project
+            .program
+            .functions
+            .iter()
+            .find(|function| function.name == "UNUSED")
+            .unwrap();
+        assert!(!called.lines.is_empty(), "{statement} discarded its method");
+        assert!(
+            unused.lines.is_empty(),
+            "static FORM unnecessarily disabled pruning"
+        );
+    }
+}
+
+#[test]
+fn dynamic_method_spelling_in_literal_string_assignment_is_not_a_call() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "literal.erb",
+                "@SYSTEM_TITLE\nRESULTS = GETMETH(\"UNUSED\", 0)\nRETURN\n@UNUSED\n#FUNCTION\nRETURNF 1\n",
+            )],
+        },
+        &AnalyzerOptions::default(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let project = report.project.unwrap();
+    assert!(
+        project
+            .program
+            .functions
+            .iter()
+            .find(|function| function.name == "UNUSED")
+            .unwrap()
+            .lines
+            .is_empty()
+    );
+}

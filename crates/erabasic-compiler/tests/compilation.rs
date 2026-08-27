@@ -161,6 +161,63 @@ fn folded_getnum_does_not_emit_a_native_call() {
 }
 
 #[test]
+fn expression_methods_use_typed_lazy_bytecode_in_expressions_and_statements() {
+    use erabasic_bytecode::{MethodArgumentSpec, MethodCallSpec, MethodResult};
+
+    let project = analyze(
+        "@SYSTEM_TITLE\nRESULT = GETMETH(\"TARGET\", 7, FLAG:1,, -9223372036854775807 - 1)\nGETMETHS \"TEXT\", \"fallback\", STR:2\nRETURN\n",
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let artifact = report.artifact.expect("typed method calls should compile");
+    assert!(artifact.native_imports.iter().all(|import| !matches!(
+        import.import.name.to_ascii_uppercase().as_str(),
+        "GETMETH" | "GETMETHS"
+    )));
+    let code = &artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .code;
+    let specs = code
+        .iter()
+        .filter(|instruction| instruction.opcode == Opcode::ResolveMethod as u16)
+        .map(|instruction| MethodCallSpec::decode(&instruction.payload).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(specs.len(), 2);
+    assert_eq!(specs[0].result, MethodResult::Integer);
+    assert!(matches!(
+        specs[0].arguments.as_slice(),
+        [
+            MethodArgumentSpec::Variable(_),
+            MethodArgumentSpec::Omitted,
+            MethodArgumentSpec::Value(BytecodeType::Integer)
+        ]
+    ));
+    assert_eq!(specs[1].result, MethodResult::String);
+    for opcode in [
+        Opcode::SelectMethodArgument,
+        Opcode::CaptureMethodArgument,
+        Opcode::InvokeMethod,
+    ] {
+        assert!(
+            code.iter()
+                .any(|instruction| instruction.opcode == opcode as u16)
+        );
+    }
+    let encoded = encode_artifact(&artifact).unwrap();
+    let decoded = decode_artifact(&encoded, &DecodeLimits::default()).unwrap();
+    let validation = validate_bytecode(decoded, &ValidationContext::for_artifact(&artifact));
+    assert!(validation.is_valid(), "{:?}", validation.diagnostics);
+}
+
+#[test]
 fn continuation_replacement_keeps_compiler_source_maps_in_bounds() {
     let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
         .data
@@ -616,7 +673,7 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
                     "incoherent Native contract for {name}"
                 );
             }
-            ExecutionBinding::Unsupported { .. } => {}
+            ExecutionBinding::ExpressionMethod { .. } | ExecutionBinding::Unsupported { .. } => {}
         }
     }
     assert!(matches!(
@@ -649,7 +706,9 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
     ));
     assert!(matches!(
         registry.classification("GETMETH"),
-        Some(ExecutionBinding::Unsupported { .. })
+        Some(ExecutionBinding::ExpressionMethod {
+            result: erabasic_bytecode::MethodResult::Integer
+        })
     ));
     assert!(matches!(
         registry.classification("CALLSHARP"),

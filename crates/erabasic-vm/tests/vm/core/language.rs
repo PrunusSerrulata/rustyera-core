@@ -1,4 +1,86 @@
 use super::*;
+
+#[test]
+fn dynamic_method_depth_failure_preserves_the_targets_persistent_argument() {
+    let artifact = compile_source(
+        r#"@DEPTH_ENTRY
+RESULT = GETMETH("PERSISTENT_TARGET", , 37)
+RETURN
+@PERSISTENT_TARGET, ARG
+#FUNCTION
+FLAG:1 += 1
+RETURNF ARG
+"#,
+    );
+    let target = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "PERSISTENT_TARGET")
+        .unwrap();
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "DEPTH_ENTRY")
+        .unwrap()
+        .key;
+    let argument = target.parameters[0].key;
+    assert_eq!(
+        artifact
+            .globals
+            .iter()
+            .find(|global| global.key == argument)
+            .unwrap()
+            .storage,
+        BytecodeStorage::FunctionPersistent
+    );
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(
+        validated(&artifact),
+        VmConfig {
+            maximum_call_depth: 1,
+            ..VmConfig::default()
+        },
+    );
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    // Prime the real persistent parameter through a legal root call, rather than
+    // asserting that a DYNAMIC local which never existed remained unchanged.
+    let primed = vm
+        .spawn_entry(target.key, vec![VmValue::Integer(999)])
+        .unwrap();
+    vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert_eq!(
+        vm.fiber_status(primed),
+        Some(FiberStatus::Completed(Some(VmValue::Integer(999))))
+    );
+    assert_eq!(
+        vm.read_variable(argument, &[0], None),
+        Ok(VmValue::Integer(999))
+    );
+    vm.write_variable(flag, &[1], None, VmValue::Integer(0))
+        .unwrap();
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(report.events.iter().any(|event| matches!(event, VmEvent::FiberFaulted { fault, .. } if fault.code == VmFaultCode::ResourceLimit)), "{report:?}");
+    assert_eq!(
+        vm.read_variable(argument, &[0], None),
+        Ok(VmValue::Integer(999))
+    );
+    assert_eq!(vm.read_variable(flag, &[1], None), Ok(VmValue::Integer(0)));
+}
+
 #[test]
 fn power_statement_writes_the_destination_instead_of_passing_its_place_as_an_operand() {
     let artifact = compile_source("@SYSTEM_TITLE\nPOWER RESULT, 2, 3\nRETURN RESULT\n");

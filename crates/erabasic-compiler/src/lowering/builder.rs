@@ -12,6 +12,7 @@ mod data_blocks;
 mod expressions;
 mod formatted;
 mod imports;
+mod methods;
 mod statements;
 
 pub(super) struct Builder<'a> {

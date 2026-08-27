@@ -43,6 +43,7 @@ pub(crate) fn make_frame<'a>(
         event_context,
         event_dispatch: None,
         runtime_form: None,
+        method_calls: Vec::new(),
     }
 }
 

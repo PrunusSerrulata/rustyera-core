@@ -68,6 +68,18 @@ impl Builder<'_> {
                 }
             }
             HirExprKind::Call { target, arguments } => {
+                // These built-ins must resolve the method before evaluating fallback or actuals.
+                if let CallTarget::Builtin { name } = target {
+                    let method_result = match name.as_str() {
+                        "GETMETH" => Some(erabasic_bytecode::MethodResult::Integer),
+                        "GETMETHS" => Some(erabasic_bytecode::MethodResult::String),
+                        _ => None,
+                    };
+                    if let Some(method_result) = method_result {
+                        self.lower_expression_method(arguments, method_result, location);
+                        return method_result.bytecode_type();
+                    }
+                }
                 let builtin = matches!(target, CallTarget::Builtin { .. });
                 let parameter_types: Vec<_> = if matches!(target, CallTarget::User { .. }) {
                     Vec::new()

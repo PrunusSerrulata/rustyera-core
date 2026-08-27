@@ -19,7 +19,7 @@ pub use self::model::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 11;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 12;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 
@@ -529,15 +529,7 @@ impl Vm {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let previous_native = natives.snapshots().map_err(VmError::Snapshot)?;
         let native_states = snapshot.native_states.iter().cloned().collect();
-        natives
-            .restore_snapshots(&native_states)
-            .map_err(VmError::Snapshot)?;
-        if let Err(error) = host.rebind_snapshot(&rebinds) {
-            let _ = natives.restore_snapshots(&previous_native);
-            return Err(VmError::Snapshot(error));
-        }
 
         let artifact = artifact.into_shared();
         let generation = snapshot.current_generation;
@@ -569,6 +561,31 @@ impl Vm {
             #[cfg(test)]
             path_memo_replays: 0,
         };
+        for fiber in vm.fibers.values() {
+            for frame in &fiber.frames {
+                if !vm.valid_frame_references(fiber, frame) || !vm.valid_frame_methods(fiber, frame)
+                {
+                    return Err(VmError::Snapshot(
+                        "snapshot method resolution state is invalid".into(),
+                    ));
+                }
+                if let Some(continuation) = &frame.runtime_form
+                    && !continuation.valid_method_state(&vm, fiber)
+                {
+                    return Err(VmError::Snapshot(
+                        "snapshot STRFORM method state is invalid".into(),
+                    ));
+                }
+            }
+        }
+        let previous_native = natives.snapshots().map_err(VmError::Snapshot)?;
+        natives
+            .restore_snapshots(&native_states)
+            .map_err(VmError::Snapshot)?;
+        if let Err(error) = host.rebind_snapshot(&rebinds) {
+            let _ = natives.restore_snapshots(&previous_native);
+            return Err(VmError::Snapshot(error));
+        }
         vm.retire_terminal_fibers();
         Ok(vm)
     }
@@ -640,7 +657,11 @@ fn validate_snapshot(
             }
         }
         for frame in &fiber.frames {
-            if !frame_ids.insert(frame.id) || frame.stack.len() > config.maximum_operand_stack {
+            if !frame_ids.insert(frame.id)
+                || frame
+                    .operand_slots()
+                    .is_none_or(|slots| slots > config.maximum_operand_stack)
+            {
                 return Err(VmError::Snapshot(
                     "snapshot frame identity or stack size is invalid".into(),
                 ));
@@ -724,7 +745,29 @@ fn validate_snapshot(
                         definition.name
                     )));
                 };
-                validate_cell(cell, definition)?;
+                if let Some(parameter) = function
+                    .parameters
+                    .iter()
+                    .find(|parameter| parameter.key == definition.key && parameter.by_reference)
+                {
+                    if cell.value_type != parameter.value_type
+                        || !matches!(
+                            cell.value_type,
+                            erabasic_bytecode::BytecodeType::IntegerPlace
+                                | erabasic_bytecode::BytecodeType::StringPlace
+                        )
+                        || cell.dimensions != [1]
+                        || cell.len() != 1
+                        || !cell.storage_is_valid()
+                    {
+                        return Err(VmError::Snapshot(format!(
+                            "snapshot REF local {} has invalid alias storage",
+                            definition.name
+                        )));
+                    }
+                } else {
+                    validate_cell(cell, definition)?;
+                }
             }
         }
     }

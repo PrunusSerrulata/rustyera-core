@@ -385,7 +385,30 @@ impl Vm {
                             self.observe_path_memo_native(fiber.id, native_name);
                         }
                         let mut rollback = None;
-                        let ready = if native_name == "strform" {
+                        let ready = if native_name == "existmeth" {
+                            if result_type != Some(BytecodeType::Integer)
+                                || target.parameters != [BytecodeType::String]
+                            {
+                                return Err(StepError::new(
+                                    VmFaultCode::InvalidInstruction,
+                                    "EXISTMETH import signature is invalid",
+                                ));
+                            }
+                            let [VmValue::String(name)] = arguments.as_slice() else {
+                                return Err(StepError::new(
+                                    VmFaultCode::TypeMismatch,
+                                    "EXISTMETH expects one string",
+                                ));
+                            };
+                            self.invalidate_path_memo(fiber.id);
+                            NativeReady::value(VmValue::Integer(
+                                crate::state::methods::exists_method(
+                                    &generation,
+                                    position.generation,
+                                    name,
+                                ),
+                            ))
+                        } else if native_name == "strform" {
                             if result_type != Some(BytecodeType::String) || arguments.len() != 1 {
                                 return Err(StepError::new(
                                     VmFaultCode::InvalidInstruction,

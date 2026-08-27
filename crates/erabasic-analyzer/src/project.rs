@@ -528,7 +528,7 @@ fn analyze_with_context(
         }
     }
 
-    let reachable = reachable_functions(sources.as_ref(), &definitions, &symbols, options);
+    let reachable = reachable_functions(sources.as_ref(), &definitions, &symbols, options, context);
     let declaration_progress = ProgressCounter::new(
         AnalysisProgressStage::DeclaringLocals,
         definitions.len(),
