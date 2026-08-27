@@ -3,6 +3,7 @@
 //! This development protocol intentionally has no backward-compatibility promise until
 //! a frontend exists. Filesystem, clock, rendering and device work remain outside it.
 
+mod compatibility;
 mod configuration;
 mod effect;
 mod extension;
@@ -16,6 +17,10 @@ mod project;
 mod service;
 mod value;
 
+pub use compatibility::{
+    CompatibilityDiagnosticContext, ProjectCompatibilityResolved, RequiredCapability,
+    ResolveProjectCompatibility,
+};
 pub use configuration::{
     CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ClientPreferenceLayers,
     ClientPreferencesApplied, ConfigurationApplication, ConfigurationChange,
@@ -28,6 +33,9 @@ pub use effect::{
     EffectOutcome, EffectOutcomeStatus, VideoEffect,
 };
 pub use era_protocol::ProtocolBytes;
+pub use erabasic_compat::{
+    CompatibilityIdentity, CompatibilityProfileId, CompatibilityServiceContract,
+};
 pub use erabasic_html::{
     HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlDocument, HtmlElementKind, HtmlElementSemantic,
     HtmlInteraction, HtmlLength, HtmlNode, parse_document,

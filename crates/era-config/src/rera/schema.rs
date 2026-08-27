@@ -29,6 +29,12 @@ pub fn generate_json_schema() -> String {
             .or_default()
             .insert(key.into(), schema_for(spec));
     }
+    sections.entry("compatibility").or_default().insert("profile".into(), json!({
+        "type": "string",
+        "enum": ["emuera.em", "emuera.skia.snake"],
+        "default": "emuera.em",
+        "description": "项目语言兼容 profile；蛇版为实验模式，变更必须完整重开项目，不属于客户端偏好。"
+    }));
     let paths = specs.iter().map(|spec| spec.path).collect::<Vec<_>>();
     let mut properties = JsonMap::new();
     properties.insert(
@@ -97,6 +103,9 @@ pub fn generate_annotated_example() -> String {
         output.push_str("\n[");
         output.push_str(section);
         output.push_str("]\n");
+        if section == "compatibility" {
+            output.push_str("# 项目语言兼容 profile；蛇版为实验模式，变更必须完整重开项目。\nprofile = \"emuera.em\"\n");
+        }
         for spec in specs {
             output.push_str("# ");
             output.push_str(&description_with_type(&spec));

@@ -1,14 +1,13 @@
 [package]
-name = "era-config"
+name = "erabasic-compat"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-erabasic-compat = { path = "../erabasic-compat" }
+blake3.workspace = true
+minicbor.workspace = true
 serde.workspace = true
-serde_json.workspace = true
-toml_edit.workspace = true
 
 [lints]
 workspace = true

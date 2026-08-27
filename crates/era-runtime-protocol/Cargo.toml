@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+erabasic-compat = { path = "../erabasic-compat" }
 era-protocol = { path = "../era-protocol" }
 erabasic-html = { path = "../erabasic-html" }
 minicbor.workspace = true

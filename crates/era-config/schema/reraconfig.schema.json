@@ -1,5 +1,5 @@
 {
-  "$id": "urn:rustyera:reraconfig:schema:3",
+  "$id": "urn:rustyera:reraconfig:schema:4",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "RustyEra 跨客户端项目配置。所有设置项均可省略，省略时采用各项统一默认值。",
@@ -223,6 +223,15 @@
           ],
           "x-rustyera-legacy-code": "CompatiLinefeedAs1739",
           "x-rustyera-setting-id": 58
+        },
+        "profile": {
+          "default": "emuera.em",
+          "description": "项目语言兼容 profile；蛇版为实验模式，变更必须完整重开项目，不属于客户端偏好。",
+          "enum": [
+            "emuera.em",
+            "emuera.skia.snake"
+          ],
+          "type": "string"
         },
         "require_character_variable_arguments": {
           "default": false,
@@ -545,7 +554,7 @@
     },
     "meta": {
       "additionalProperties": false,
-      "description": "配置格式元数据。所有字段均可省略，省略时按 schema 版本 1 输入并自动升级到版本 3，且没有锁定项。",
+      "description": "配置格式元数据。所有字段均可省略，省略时按 schema 版本 1 输入并自动升级到版本 4，且没有锁定项。",
       "properties": {
         "locked_settings": {
           "default": [],
@@ -646,9 +655,9 @@
           "uniqueItems": true
         },
         "schema_version": {
-          "const": 3,
-          "default": 3,
-          "description": "reraconfig.toml 的格式版本。新文件使用整数 3。",
+          "const": 4,
+          "default": 4,
+          "description": "reraconfig.toml 的格式版本。新文件使用整数 4。",
           "type": "integer"
         }
       },

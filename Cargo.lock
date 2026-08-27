@@ -141,6 +141,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 name = "era-config"
 version = "0.8.0"
 dependencies = [
+ "erabasic-compat",
  "serde",
  "serde_json",
  "toml_edit",
@@ -177,6 +178,7 @@ dependencies = [
  "erabasic-analyzer",
  "erabasic-ast",
  "erabasic-bytecode",
+ "erabasic-compat",
  "erabasic-compiler",
  "erabasic-csv",
  "erabasic-data",
@@ -201,6 +203,7 @@ dependencies = [
  "era-protocol",
  "era-runtime",
  "era-runtime-ffi",
+ "era-runtime-protocol",
  "minicbor",
 ]
 
@@ -216,6 +219,7 @@ name = "era-runtime-protocol"
 version = "0.8.0"
 dependencies = [
  "era-protocol",
+ "erabasic-compat",
  "erabasic-html",
  "minicbor",
  "serde",
@@ -226,7 +230,10 @@ dependencies = [
 name = "era-runtime-save"
 version = "0.8.0"
 dependencies = [
+ "blake3",
+ "erabasic-compat",
  "flate2",
+ "minicbor",
  "serde",
 ]
 
@@ -236,6 +243,7 @@ version = "0.8.0"
 dependencies = [
  "blake3",
  "erabasic-ast",
+ "erabasic-compat",
  "erabasic-csv",
  "erabasic-data",
  "erabasic-hir",
@@ -258,12 +266,22 @@ name = "erabasic-bytecode"
 version = "0.8.0"
 dependencies = [
  "blake3",
+ "erabasic-compat",
  "erabasic-csv",
  "erabasic-data",
  "erabasic-hir",
  "rayon",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "erabasic-compat"
+version = "0.8.0"
+dependencies = [
+ "blake3",
+ "minicbor",
+ "serde",
 ]
 
 [[package]]
@@ -274,6 +292,7 @@ dependencies = [
  "erabasic-analyzer",
  "erabasic-ast",
  "erabasic-bytecode",
+ "erabasic-compat",
  "erabasic-csv",
  "erabasic-data",
  "erabasic-hir",
@@ -306,6 +325,7 @@ name = "erabasic-hir"
 version = "0.8.0"
 dependencies = [
  "erabasic-ast",
+ "erabasic-compat",
  "erabasic-data",
  "serde",
 ]
@@ -330,6 +350,7 @@ name = "erabasic-parser"
 version = "0.8.0"
 dependencies = [
  "erabasic-ast",
+ "erabasic-compat",
  "erabasic-lexer",
  "serde",
 ]
@@ -366,6 +387,7 @@ dependencies = [
  "erabasic-analyzer",
  "erabasic-ast",
  "erabasic-bytecode",
+ "erabasic-compat",
  "erabasic-compiler",
  "erabasic-csv",
  "erabasic-data",

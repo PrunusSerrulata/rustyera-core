@@ -29,7 +29,7 @@ fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
             "missing pinned mapping {expected:?}"
         );
     }
-    assert_eq!(RERACONFIG_SCHEMA_VERSION, 3);
+    assert_eq!(RERACONFIG_SCHEMA_VERSION, 4);
     assert_eq!(
         ConfigStore::default().get_code("UseMenu"),
         Some(&ConfigValue::Enum {
@@ -386,7 +386,7 @@ fn schema_v1_is_upgraded_and_retired_locks_and_fields_are_removed() {
         &["TextDrawingMode", "CompatiDRAWLINE"]
     );
     let output = document.to_lf_string();
-    assert!(output.contains("schema_version = 3"));
+    assert!(output.contains("schema_version = 4"));
     assert!(output.contains("font_size = 20 # keep"));
     assert!(output.contains("legacy_nonbutton_wrapping = true"));
     assert!(!output.contains("drawing_method"));
@@ -413,7 +413,7 @@ fn schema_v2_menu_visibility_is_upgraded_to_menu_mode() {
         );
         assert!(document.values().unwrap().is_fixed("UseMenu"));
         let output = document.to_lf_string();
-        assert!(output.contains("schema_version = 3"));
+        assert!(output.contains("schema_version = 4"));
         assert!(output.contains(&format!(
             "menu_mode = \"{}\" # keep",
             expected.to_lowercase()
@@ -459,7 +459,7 @@ fn canonical_materialization_rejects_values_from_an_old_catalog_type() {
 fn schema_v2_menu_upgrade_preserves_unrelated_lock_formatting() {
     let input = "[meta]\nschema_version = 2\nlocked_settings = [\n  \"text.font_size\", # font\n  \"interface.menu_visible\", # menu\n  \"input.mouse_enabled\", # mouse\n] # locks\n\n[interface]\nmenu_visible = true # value\n";
     let expected = input
-        .replace("schema_version = 2", "schema_version = 3")
+        .replace("schema_version = 2", "schema_version = 4")
         .replace("interface.menu_visible", "interface.menu_mode")
         .replace("menu_visible = true", "menu_mode = \"auto\"");
     let document = ReraConfigDocument::parse(input).unwrap();
@@ -549,4 +549,36 @@ fn generated_artifacts_are_current_deterministic_and_document_every_setting() {
 
 fn specs_as_ids() -> BTreeSet<u16> {
     rera_catalog().into_iter().map(|spec| spec.id).collect()
+}
+
+#[test]
+fn compatibility_profile_is_strict_and_survives_canonicalization() {
+    use erabasic_compat::CompatibilityProfileId;
+    let source = "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n";
+    let document = ReraConfigDocument::parse(source).unwrap();
+    let values = document.values().unwrap();
+    assert_eq!(
+        values.compatibility_profile(),
+        CompatibilityProfileId::EmueraSkiaSnake
+    );
+    let rebuilt = ReraConfigDocument::from_values(&values).unwrap();
+    assert_eq!(
+        rebuilt.values().unwrap().compatibility_profile(),
+        values.compatibility_profile()
+    );
+    for invalid in [
+        source.replace("emuera.skia.snake", "snake"),
+        source.replace("schema_version = 4", "schema_version = 3"),
+        source.replace("\"emuera.skia.snake\"", "true"),
+    ] {
+        assert!(ReraConfigDocument::parse(&invalid).is_err());
+    }
+    assert_eq!(
+        ReraConfigDocument::parse("[meta]\nschema_version = 3\n")
+            .unwrap()
+            .values()
+            .unwrap()
+            .compatibility_profile(),
+        CompatibilityProfileId::EmueraEm
+    );
 }

@@ -115,6 +115,9 @@ typedef EraStatus (*EraSessionAllocateCompiledCacheFn)(EraCallHeader, EraSession
                                                         size_t, EraOwnedBuffer *);
 typedef EraStatus (*EraSessionCommitCompiledCacheFn)(EraCallHeader, EraSessionHandle,
                                                       EraOwnedBuffer, uint64_t *);
+/* Runtime protocol 36 requires ProjectManifest CBOR map key 2 to contain its resolved
+   compatibility identity. ResolveProjectCompatibility (72/73) uses session_submit/poll;
+   no new C function-table entry is required. */
 typedef EraStatus (*EraSessionStageProjectManifestFn)(EraCallHeader, EraSessionHandle,
                                                        EraByteSlice);
 

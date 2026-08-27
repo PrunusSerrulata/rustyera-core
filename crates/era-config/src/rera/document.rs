@@ -91,6 +91,10 @@ impl ReraConfigDocument {
             }
         }
         document.set_locked_codes_unchecked(locked_codes)?;
+        if values.compatibility_profile() != erabasic_compat::CompatibilityProfileId::EmueraEm {
+            ensure_table(&mut document.document, "compatibility")
+                .insert("profile", value(values.compatibility_profile().as_str()));
+        }
         Ok(document)
     }
 
@@ -119,6 +123,24 @@ impl ReraConfigDocument {
         })?;
         let source_spans = collect_source_spans(&document, source_offset);
         let source_version = source_schema_version(&document, source_offset, &source_spans)?;
+        if source_version < 4
+            && let Some(profile) = document
+                .get("compatibility")
+                .and_then(Item::as_table)
+                .and_then(|table| table.get("profile"))
+        {
+            return Err(error_at(
+                ReraConfigErrorKind::UnknownField,
+                Some("compatibility.profile"),
+                available_span(
+                    profile,
+                    "compatibility.profile",
+                    source_offset,
+                    &source_spans,
+                ),
+                "compatibility.profile requires schema version 4",
+            ));
+        }
         let mut document = document.into_mut();
         let retired_codes = if source_version == 1 {
             validate_previous_meta(&document, source_offset, &source_spans)?;
@@ -129,8 +151,12 @@ impl ReraConfigDocument {
         if source_version == 2 {
             validate_previous_meta(&document, source_offset, &source_spans)?;
         }
-        if source_version < RERACONFIG_SCHEMA_VERSION {
+        if source_version < 3 {
             upgrade_v2_document(&mut document);
+        }
+        if source_version < RERACONFIG_SCHEMA_VERSION {
+            ensure_table(&mut document, "meta")
+                .insert("schema_version", value(RERACONFIG_SCHEMA_VERSION));
         }
         let result = Self {
             document,
@@ -178,6 +204,28 @@ impl ReraConfigDocument {
             }
             for (key, field) in table {
                 let path = format!("{section}.{key}");
+                if path == "compatibility.profile" {
+                    let profile = field.as_str().ok_or_else(|| {
+                        self.error_for_item(
+                            ReraConfigErrorKind::InvalidType,
+                            Some(&path),
+                            field,
+                            "compatibility.profile must be a string",
+                        )
+                    })?;
+                    store.compatibility_profile =
+                        profile
+                            .parse()
+                            .map_err(|error: erabasic_compat::CompatibilityError| {
+                                self.error_for_item(
+                                    ReraConfigErrorKind::InvalidValue,
+                                    Some(&path),
+                                    field,
+                                    error.to_string(),
+                                )
+                            })?;
+                    continue;
+                }
                 let spec = by_path.get(path.as_str()).ok_or_else(|| {
                     self.error_for_item(
                         ReraConfigErrorKind::UnknownField,

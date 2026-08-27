@@ -1,8 +1,8 @@
 # RustyEra 跨客户端项目配置示例。所有字段都可以省略，省略时使用注释中的默认值。
 
 [meta]
-# 类型：整数；当前仅支持 3。
-schema_version = 3
+# 类型：整数；当前仅支持 4。
+schema_version = 4
 # 类型：字符串数组；列出的设置不可由客户端设置面板修改。
 locked_settings = []
 
@@ -25,6 +25,8 @@ selection = [255, 255, 0]
 history = [192, 192, 192]
 
 [compatibility]
+# 项目语言兼容 profile；蛇版为实验模式，变更必须完整重开项目。
+profile = "emuera.em"
 # 用途：CALLNAME 为空时回退到 NAME；类型：布尔
 callname_falls_back_to_name = false
 # 用途：使用 eramaker RAND 兼容语义；类型：布尔

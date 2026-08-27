@@ -1,3 +1,4 @@
+; Runtime channel version: 36.0.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -51,6 +52,8 @@ runtime-message =
   [69, state-transfer-cancel] /
   [70, full-project-manifest] /
   [71, state-export-cancel] /
+  [72, resolve-project-compatibility] /
+  [73, project-compatibility-resolved] /
   [90, shutdown-request] /
   [91, shutdown-ready] /
   [92, runtime-fault] /
@@ -72,12 +75,27 @@ server-hello = {
 }
 runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }
 version-rejected = { 0: any, 1: tstr }
-project-manifest = { 0: uint, 1: [* any] }
-project-identity = { 0: uint, 1: bstr }
+compatibility-profile-id = 0..1 ; emuera.em, emuera.skia.snake
+compatibility-service-contract = { 0: tstr, 1: uint }
+compatibility-identity = {
+  0: compatibility-profile-id, 1: uint, 2: uint, 3: tstr, 4: tstr,
+  5: uint, 6: tstr, 7: tstr, 8: [* compatibility-service-contract]
+}
+resolve-project-compatibility = { 0: uint, ? 1: any / null }
+project-compatibility-resolved = {
+  0: uint, ? 1: compatibility-identity / null, ? 2: bstr / null, 3: [* protocol-diagnostic]
+}
+required-capability = { 0: uint, 1: tstr, 2: { 0: uint, 1: uint } }
+compatibility-diagnostic-context = {
+  ? 0: compatibility-identity / null, 1: tstr, ? 2: tstr / null,
+  ? 3: required-capability / null
+}
+project-manifest = { 0: uint, 1: [* any], 2: compatibility-identity }
+project-identity = { 0: uint, 1: bstr, 2: compatibility-identity, ? 3: bstr / null }
 project-load-request = { 0: project-identity, ? 1: project-manifest / null, ? 2: uint / null }
 project-load-report = {
   0: uint, 1: bool, 2: [* any], 3: bool, ? 4: project-configuration-snapshot / null,
-  ? 5: project-game-information / null
+  ? 5: project-game-information / null, ? 6: compatibility-identity / null
 }
 project-game-information = {
   ? 0: tstr / null, ? 1: tstr / null, ? 2: tstr / null,
@@ -85,7 +103,7 @@ project-game-information = {
 }
 reload-project = { 0: uint, 1: uint, 2: [* any] }
 project-analysis-request = { 0: project-manifest, 1: [* tstr], 2: bool }
-project-analysis-report = { 0: uint, 1: bool, 2: [* any], 3: [* tstr] }
+project-analysis-report = { 0: uint, 1: bool, 2: [* protocol-diagnostic], 3: [* tstr], ? 4: compatibility-identity / null }
 key-macro-profile-submit = { 0: tstr, 1: any }
 key-macro-command = [0, uint] / [1, { 0: uint, 1: uint, 2: tstr }] / [2, { 0: uint, 1: uint }]
 key-macro-state = { 0: bool, 1: uint, 2: [* tstr], 3: [* tstr], 4: tstr }
@@ -104,7 +122,7 @@ project-configuration-entry = {
 }
 project-configuration-snapshot = {
   0: uint, 1: bstr, 2: [* project-configuration-entry], 3: bool,
-  4: tstr / null
+  4: tstr / null, 5: compatibility-identity
 }
 configuration-change = { 0: tstr, 1: tstr }
 prepare-configuration-update = { 0: uint, 1: bstr, 2: [* configuration-change] }
@@ -188,17 +206,17 @@ full-project-manifest = { 0: project-manifest }
 state-export-cancel = { 0: state-export-kind }
 shutdown-request = { 0: bool }
 shutdown-ready = { 0: uint, 1: uint }
-runtime-fault = { 0: uint, 1: tstr, 2: any / null }
+runtime-fault = { 0: uint, 1: tstr, 2: any / null, ? 3: compatibility-diagnostic-context / null }
 sequence-acknowledgement = { 0: uint }
 resynchronize-request = { 0: uint / null }
 runtime-resynchronized = {
   0: uint, 1: uint, 2: uint, 3: presentation-snapshot, 4: exit-requested / null,
   5: tstr, 6: input-undo-state, 7: key-macro-state,
-  ? 8: project-configuration-snapshot / null
+  ? 8: project-configuration-snapshot / null, ? 9: compatibility-identity / null
 }
-command-rejected = { 0: uint, 1: tstr, 2: bool, 3: any / null }
+command-rejected = { 0: uint, 1: tstr, 2: bool, 3: any / null, ? 4: compatibility-diagnostic-context / null }
 ; Runtime protocol 30 publishes parsed GameBase information in project load reports.
 runtime-log-level = 0..3 ; Debug, Info, Warning, Error
 diagnostic-notification = 0..1 ; Default, LogOnly
-protocol-diagnostic = { 0: tstr, 1: runtime-log-level, 2: tstr, 3: any / null, 4: diagnostic-notification }
+protocol-diagnostic = { 0: tstr, 1: runtime-log-level, 2: tstr, 3: any / null, 4: diagnostic-notification, ? 5: compatibility-diagnostic-context / null }
 runtime-log = { 0: runtime-log-level, 1: tstr }

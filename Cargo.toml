@@ -9,6 +9,7 @@ members = [
     "crates/era-runtime",
     "crates/era-config",
     "crates/erabasic-ast",
+    "crates/erabasic-compat",
     "crates/erabasic-bytecode",
     "crates/erabasic-compiler",
     "crates/erabasic-data",

@@ -486,6 +486,8 @@ pub enum CommandErrorCode {
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct CommandRejected {
+    #[n(4)]
+    pub context: Option<Box<crate::CompatibilityDiagnosticContext>>,
     #[n(0)]
     pub code: CommandErrorCode,
     #[n(1)]
@@ -499,6 +501,8 @@ pub struct CommandRejected {
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct RuntimeFault {
+    #[n(3)]
+    pub context: Option<Box<crate::CompatibilityDiagnosticContext>>,
     #[n(0)]
     pub code: FaultCode,
     #[n(1)]

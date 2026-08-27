@@ -162,7 +162,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(36, 0));
 }
 
 #[test]
@@ -172,6 +172,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         vec![1]
     );
     let message = RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+        context: None,
         code: "vm.control_flow.goto_into_structured_block".into(),
         level: RuntimeLogLevel::Warning,
         message: "structured GOTO".into(),
@@ -186,7 +187,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(36, 0));
 }
 
 #[test]
@@ -209,7 +210,7 @@ fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
     assert!(include_str!("../schema/runtime.cddl").contains(
         "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
     ));
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(36, 0));
 }
 
 #[test]
@@ -232,10 +233,13 @@ fn checked_runtime_schema_covers_lifecycle_control_messages() {
 fn protocol_23_carries_compiled_cache_loads_and_in_session_title_returns() {
     let load = RuntimeMessage::ProjectLoad(ProjectLoadRequest {
         identity: era_runtime_protocol::ProjectIdentity {
+            compatibility: Default::default(),
+            configuration_digest: None,
             project_revision: 7,
             source_digest: ProtocolBytes::new(vec![1; 32]),
         },
         manifest: Some(ProjectManifest {
+            compatibility: Default::default(),
             project_revision: 7,
             files: Vec::new(),
         }),
@@ -289,6 +293,7 @@ fn protocol_33_round_trips_configuration_and_client_preference_transactions() {
 
     let committed = RuntimeMessage::ConfigurationUpdateCommitted(ConfigurationUpdateCommitted {
         configuration: ProjectConfigurationSnapshot {
+            compatibility: Default::default(),
             project_revision: 9,
             source_digest: digest,
             entries: vec![ProjectConfigurationEntry {
@@ -351,7 +356,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(36, 0));
 }
 
 #[test]
@@ -360,7 +365,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(36, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -526,7 +531,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(36, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -565,7 +570,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(35, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(36, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 
@@ -650,6 +655,7 @@ fn state_transfers_are_versioned_and_chunked() {
 
     let manifest = RuntimeMessage::FullProjectManifest(FullProjectManifest {
         manifest: ProjectManifest {
+            compatibility: Default::default(),
             project_revision: 1,
             files: Vec::new(),
         },
@@ -767,4 +773,45 @@ fn resource_replay_is_a_renderer_independent_protocol_value() {
     };
     let encoded = encode_canonical(&replay).expect("encode resource replay");
     assert_eq!(decode_canonical(&encoded), Ok(replay));
+}
+
+#[test]
+fn protocol_36_resolves_versioned_profile_identity_before_project_load() {
+    use era_runtime_protocol::{
+        CompatibilityIdentity, CompatibilityProfileId, ProjectCompatibilityResolved,
+        ResolveProjectCompatibility,
+    };
+    let identity = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+    let request = RuntimeMessage::ResolveProjectCompatibility(ResolveProjectCompatibility {
+        request_id: 3,
+        configuration: None,
+    });
+    let response = RuntimeMessage::ProjectCompatibilityResolved(ProjectCompatibilityResolved {
+        request_id: 3,
+        identity: Some(identity.clone()),
+        configuration_digest: None,
+        diagnostics: Vec::new(),
+    });
+    for (message, tag) in [(request, 72), (response, 73)] {
+        assert_eq!(message.tag(), tag);
+        assert_eq!(
+            RuntimeMessage::decode_payload(tag, &message.encode_payload().unwrap()).unwrap(),
+            message
+        );
+    }
+    let encoded = encode_canonical(&identity).unwrap();
+    assert_eq!(
+        decode_canonical::<CompatibilityIdentity>(&encoded).unwrap(),
+        identity
+    );
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        files: Vec::new(),
+        compatibility: identity,
+    };
+    let bytes = encode_canonical(&manifest).unwrap();
+    assert_eq!(
+        decode_canonical::<ProjectManifest>(&bytes).unwrap(),
+        manifest
+    );
 }
