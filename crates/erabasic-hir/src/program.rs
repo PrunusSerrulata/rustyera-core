@@ -185,6 +185,7 @@ pub struct ControlFlowEdge {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Program {
     pub format_version: u32,
+    pub compatibility: erabasic_compat::CompatibilityIdentity,
     pub call_compatibility: CallCompatibility,
     pub sources: Vec<SourceFile>,
     pub variables: Vec<Variable>,
@@ -196,6 +197,7 @@ impl Program {
     pub fn new(sources: Vec<SourceFile>) -> Self {
         Self {
             format_version: HIR_FORMAT_VERSION,
+            compatibility: erabasic_compat::CompatibilityIdentity::default(),
             call_compatibility: CallCompatibility::default(),
             sources,
             variables: Vec::new(),

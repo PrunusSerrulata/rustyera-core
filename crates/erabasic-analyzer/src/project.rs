@@ -647,6 +647,7 @@ fn analyze_with_context(
     }
 
     let mut program = Program::new(sources.iter().map(|source| source.source.clone()).collect());
+    program.compatibility = options.compatibility.clone();
     program.call_compatibility = erabasic_hir::CallCompatibility {
         allow_event_as_normal: options.compatible_call_event,
         allow_omitted_arguments: options.compatible_function_argument_optional,

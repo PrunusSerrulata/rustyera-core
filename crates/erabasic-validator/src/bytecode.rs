@@ -173,6 +173,12 @@ fn validate_versions(
     diagnostics: &mut Vec<ValidationDiagnostic>,
 ) {
     let manifest = &artifact.manifest;
+    if let Err(error) = manifest.compatibility.validate() {
+        diagnostics.push(ValidationDiagnostic::project(
+            ValidationCode::UnsupportedVersion,
+            format!("unsupported artifact compatibility: {error}"),
+        ));
+    }
     if manifest.container_version.major != context.container_version.major
         || manifest.container_version.minor > context.container_version.minor
         || manifest.isa_version.major != context.isa_version.major

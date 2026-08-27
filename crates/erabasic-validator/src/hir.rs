@@ -12,6 +12,12 @@ use crate::{ValidationCode, ValidationDiagnostic, ValidationReport};
 #[allow(clippy::too_many_lines)]
 pub fn validate_hir(program: &Program, _data: &ProjectData) -> ValidationReport<()> {
     let mut diagnostics = Vec::new();
+    if let Err(error) = program.compatibility.validate() {
+        diagnostics.push(ValidationDiagnostic::project(
+            ValidationCode::UnsupportedVersion,
+            format!("unsupported HIR compatibility: {error}"),
+        ));
+    }
     if program.format_version != HIR_FORMAT_VERSION {
         diagnostics.push(ValidationDiagnostic::project(
             ValidationCode::UnsupportedVersion,

@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json = "1.0.112"
 
 [dev-dependencies]
+erabasic-compat = { path = "../erabasic-compat" }
 erabasic-csv = { path = "../erabasic-csv" }
 
 [lints]

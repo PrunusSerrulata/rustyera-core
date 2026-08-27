@@ -20,10 +20,9 @@ fn stable_wait_snapshot_round_trips_and_requires_exact_artifact() {
         vm.snapshot_eligibility(&natives),
         SnapshotEligibility::Eligible
     );
-    let direct = vm.encode_snapshot(&natives).unwrap();
     let snapshot = vm.snapshot(&natives).unwrap();
     let bytes = snapshot.encode().unwrap();
-    assert_eq!(direct, bytes);
+    assert_eq!(vm.encode_snapshot(&natives).unwrap(), bytes);
     let inspection = inspect_snapshot(&bytes, VmConfig::default().maximum_snapshot_bytes).unwrap();
     assert_eq!(inspection.container.magic, "RERAVMS\\0");
     assert_eq!(inspection.container.file_bytes, bytes.len() as u64);
@@ -65,6 +64,23 @@ fn stable_wait_snapshot_round_trips_and_requires_exact_artifact() {
     )
     .unwrap();
     assert_eq!(restored.artifact_id(), artifact.manifest.artifact_id);
+    assert_eq!(restore_host.rebound.len(), 1);
+
+    let mut wrong_profile = artifact.clone();
+    wrong_profile.manifest.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    wrong_profile.refresh_ids().unwrap();
+    let rejected = Vm::restore_snapshot(
+        validated(&wrong_profile),
+        VmConfig::default(),
+        decoded.clone(),
+        &mut restore_host,
+        &mut natives,
+    );
+    assert!(
+        matches!(rejected, Err(VmError::Snapshot(message)) if message.contains("compatibility"))
+    );
     assert_eq!(restore_host.rebound.len(), 1);
 
     let mut different = artifact.clone();

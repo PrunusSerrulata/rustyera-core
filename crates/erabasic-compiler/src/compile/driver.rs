@@ -352,8 +352,9 @@ fn compile_project_inner(
             host_registry,
         };
         let shared_dependencies = canonical_digest(
-            "rustyera.compiler.shared-dependencies.v2",
+            "rustyera.compiler.shared-dependencies.v3",
             &(
+                &project_ref.program.compatibility,
                 &project_ref.program.variables,
                 host_registry,
                 options.optimization,
@@ -363,8 +364,9 @@ fn compile_project_inner(
             .filter(|state| state.compiler_abi == erabasic_bytecode::COMPILER_ABI_VERSION)
             .map(|state| &state.functions);
         let previous_artifact = previous_artifact.filter(|artifact| {
-            previous.and_then(IncrementalState::base_artifact_id)
-                == Some(artifact.manifest.artifact_id)
+            artifact.manifest.compatibility == project_ref.program.compatibility
+                && previous.and_then(IncrementalState::base_artifact_id)
+                    == Some(artifact.manifest.artifact_id)
         });
         let previous_artifact_index = previous_artifact.map(PreviousArtifactIndex::new);
         let compile_one = |function: &Function| {
@@ -555,6 +557,7 @@ fn compile_project_inner(
         &variable_keys,
         &function_keys,
     );
+    let compatibility = project.project().program.compatibility.clone();
     let (project_data, source_ids, project_sources) = project.into_artifact_parts();
     drop(variable_keys);
     drop(function_keys);
@@ -693,7 +696,10 @@ fn compile_project_inner(
     drop(fingerprint_prefixes);
     finalizing_progress.checkpoint();
     let artifact = BytecodeArtifact {
-        manifest: ArtifactManifest::new(compiler_options),
+        manifest: ArtifactManifest {
+            compatibility,
+            ..ArtifactManifest::new(compiler_options)
+        },
         call_compatibility,
         project_data,
         globals: artifact_globals,

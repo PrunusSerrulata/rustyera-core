@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+erabasic-compat = { path = "../erabasic-compat" }
 erabasic-ast = { path = "../erabasic-ast" }
 erabasic-lexer = { path = "../erabasic-lexer" }
 serde.workspace = true

@@ -95,6 +95,11 @@ pub fn apply_patch(
     {
         return Err(PatchError::BaseMismatch);
     }
+    if base.manifest.compatibility != patch.target_manifest.compatibility {
+        return Err(PatchError::InvalidTarget(
+            "compatibility change requires a cold load".into(),
+        ));
+    }
     let mut functions: BTreeMap<_, _> = base
         .functions
         .iter()

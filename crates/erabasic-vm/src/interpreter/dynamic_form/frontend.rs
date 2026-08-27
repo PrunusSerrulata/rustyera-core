@@ -20,6 +20,7 @@ pub(super) fn parse_runtime_form(
     })?;
     let compatibility = program.artifact.call_compatibility;
     let mut context = DefaultParserContext::default();
+    context.set_compatibility(program.artifact.manifest.compatibility.clone());
     context.set_lexer_compatibility(
         compatibility.allow_full_width_space,
         compatibility.debug_semicolon,

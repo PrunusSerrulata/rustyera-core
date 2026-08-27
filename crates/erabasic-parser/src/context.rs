@@ -31,6 +31,10 @@ pub struct InstructionSpec {
 ///
 /// This registry interface is not a semantic-analysis pass.
 pub trait ParserContext {
+    /// The same resolved identity used by analysis and execution.
+    fn compatibility(&self) -> erabasic_compat::CompatibilityIdentity {
+        erabasic_compat::CompatibilityIdentity::reference()
+    }
     fn lexer_config(&self) -> &LexerConfig;
     fn macros(&self) -> &MacroTable;
     fn macros_mut(&mut self) -> &mut MacroTable;
@@ -61,6 +65,7 @@ pub trait ParserContext {
 /// because plugins can add instructions after Emuera starts.
 #[derive(Clone, Debug)]
 pub struct DefaultParserContext {
+    compatibility: erabasic_compat::CompatibilityIdentity,
     lexer: LexerConfig,
     macros: MacroTable,
     variables: HashSet<String>,
@@ -78,6 +83,7 @@ impl Default for DefaultParserContext {
         .map(str::to_owned)
         .collect();
         Self {
+            compatibility: erabasic_compat::CompatibilityIdentity::reference(),
             lexer: LexerConfig::default(),
             macros: MacroTable::new(),
             variables,
@@ -88,6 +94,11 @@ impl Default for DefaultParserContext {
 }
 
 impl DefaultParserContext {
+    /// Bind late-bound parsing to its artifact identity.
+    pub fn set_compatibility(&mut self, compatibility: erabasic_compat::CompatibilityIdentity) {
+        self.compatibility = compatibility;
+    }
+
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -115,6 +126,10 @@ impl DefaultParserContext {
 }
 
 impl ParserContext for DefaultParserContext {
+    fn compatibility(&self) -> erabasic_compat::CompatibilityIdentity {
+        self.compatibility.clone()
+    }
+
     fn lexer_config(&self) -> &LexerConfig {
         &self.lexer
     }

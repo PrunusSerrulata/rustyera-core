@@ -13,6 +13,7 @@ pub enum WarningPolicy {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct AnalyzerOptions {
+    pub compatibility: erabasic_compat::CompatibilityIdentity,
     pub ignore_case: bool,
     pub sort_with_filename: bool,
     pub allow_function_overloading: bool,
@@ -43,6 +44,7 @@ pub struct AnalyzerOptions {
 impl Default for AnalyzerOptions {
     fn default() -> Self {
         Self {
+            compatibility: erabasic_compat::CompatibilityIdentity::default(),
             ignore_case: true,
             sort_with_filename: false,
             allow_function_overloading: true,

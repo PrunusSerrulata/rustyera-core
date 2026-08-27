@@ -1107,3 +1107,46 @@ fn large_project_recompiles_only_the_changed_function() {
     assert_eq!(updated.stats.reused_functions, 511);
 }
 use std::fmt::Write as _;
+
+#[test]
+fn compatibility_identity_invalidates_function_cache_and_artifact() {
+    use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
+    let registry = default_host_registry();
+    let reference = analyze("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRESULT = 1\nRETURN\n");
+    let first = compile_project_with_artifact(
+        &reference,
+        &CompilerOptions::default(),
+        &registry,
+        None,
+        None,
+    );
+    let original = first.artifact.as_ref().unwrap();
+    let mut snake = reference.clone();
+    snake.program.compatibility =
+        CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+    let changed = compile_project_with_artifact(
+        &snake,
+        &CompilerOptions::default(),
+        &registry,
+        Some(&first.incremental_state),
+        Some(original),
+    );
+    assert!(changed.artifact.is_some(), "{:?}", changed.diagnostics);
+    assert_eq!(changed.stats.reused_functions, 0);
+    let target = changed.artifact.as_ref().unwrap();
+    assert_eq!(target.manifest.compatibility, snake.program.compatibility);
+    assert_ne!(
+        original.manifest.program_version.execution_id,
+        target.manifest.program_version.execution_id
+    );
+    let same = compile_project_with_artifact(
+        &snake,
+        &CompilerOptions::default(),
+        &registry,
+        Some(&changed.incremental_state),
+        Some(target),
+    );
+    assert_eq!(same.stats.compiled_functions, 0);
+    assert_eq!(same.stats.reused_functions, 2);
+    assert!(apply_patch(original, &erabasic_bytecode::create_patch(original, target)).is_err());
+}

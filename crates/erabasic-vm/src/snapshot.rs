@@ -19,7 +19,7 @@ pub use self::model::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 10;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 11;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 
@@ -28,6 +28,7 @@ pub struct VmSnapshot {
     format_version: u32,
     program_version: ProgramVersion,
     artifact_id: Digest,
+    compatibility: erabasic_compat::CompatibilityIdentity,
     current_generation: GenerationId,
     memory: Memory,
     fibers: BTreeMap<FiberId, Fiber>,
@@ -46,6 +47,7 @@ struct VmSnapshotRef<'a> {
     format_version: u32,
     program_version: ProgramVersion,
     artifact_id: Digest,
+    compatibility: erabasic_compat::CompatibilityIdentity,
     current_generation: GenerationId,
     memory: &'a Memory,
     fibers: &'a BTreeMap<FiberId, Fiber>,
@@ -58,6 +60,11 @@ struct VmSnapshotRef<'a> {
 }
 
 impl VmSnapshot {
+    #[must_use]
+    pub fn compatibility(&self) -> &erabasic_compat::CompatibilityIdentity {
+        &self.compatibility
+    }
+
     #[must_use]
     pub const fn program_version(&self) -> ProgramVersion {
         self.program_version
@@ -153,6 +160,10 @@ impl VmSnapshot {
                 "snapshot payload version differs from its container".into(),
             ));
         }
+        snapshot
+            .compatibility
+            .validate()
+            .map_err(|error| VmError::Snapshot(error.to_string()))?;
         Ok(snapshot)
     }
 }
@@ -398,6 +409,7 @@ impl Vm {
             format_version: SNAPSHOT_FORMAT_VERSION,
             program_version: self.artifact().manifest.program_version,
             artifact_id: self.artifact_id(),
+            compatibility: self.artifact().manifest.compatibility.clone(),
             current_generation: self.current_generation,
             memory: self.memory.clone(),
             fibers: self.fibers.clone(),
@@ -450,6 +462,7 @@ impl Vm {
             format_version: SNAPSHOT_FORMAT_VERSION,
             program_version: self.artifact().manifest.program_version,
             artifact_id: self.artifact_id(),
+            compatibility: self.artifact().manifest.compatibility.clone(),
             current_generation: self.current_generation,
             memory: &self.memory,
             fibers: &self.fibers,
@@ -477,6 +490,12 @@ impl Vm {
         natives: &mut NativeServiceRegistry,
     ) -> Result<Self, VmError> {
         let expected = artifact.artifact();
+        if snapshot.compatibility != expected.manifest.compatibility {
+            return Err(VmError::Snapshot(format!(
+                "snapshot compatibility differs: expected {:?}, received {:?}",
+                expected.manifest.compatibility, snapshot.compatibility
+            )));
+        }
         if snapshot.format_version != SNAPSHOT_FORMAT_VERSION
             || snapshot.artifact_id != expected.manifest.artifact_id
             || snapshot.program_version != expected.manifest.program_version

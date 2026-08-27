@@ -140,6 +140,7 @@ pub struct BytecodeEventGroup {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactManifest {
+    pub compatibility: erabasic_compat::CompatibilityIdentity,
     pub container_version: FormatVersion,
     pub isa_version: FormatVersion,
     pub compiler_abi: u32,
@@ -154,6 +155,7 @@ impl ArtifactManifest {
     #[must_use]
     pub fn new(compiler_options: Digest) -> Self {
         Self {
+            compatibility: erabasic_compat::CompatibilityIdentity::default(),
             container_version: CONTAINER_VERSION,
             isa_version: ISA_VERSION,
             compiler_abi: COMPILER_ABI_VERSION,
@@ -323,8 +325,9 @@ impl BytecodeArtifact {
 
     fn versions_identity(&self) -> Result<Digest, serde_json::Error> {
         canonical_digest(
-            "rustyera.bytecode.identity.versions.v2",
+            "rustyera.bytecode.identity.versions.v3",
             &(
+                &self.manifest.compatibility,
                 self.manifest.isa_version,
                 self.manifest.compiler_abi,
                 self.manifest.native_abi,
