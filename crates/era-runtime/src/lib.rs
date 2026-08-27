@@ -7,6 +7,7 @@
 /// Product version embedded in this runtime build.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+mod compatibility;
 mod compiled_cache;
 mod controller;
 mod host;
@@ -21,6 +22,7 @@ mod runtime_snapshot;
 mod save_adapter;
 mod session;
 
+pub use compatibility::{compatibility_configuration_digest, resolve_project_compatibility};
 pub use compiled_cache::{
     DecodedProjectFile, DecodedProjectFileStream, ProjectConfigurationUpdate, ProjectFileError,
     ProjectFileStreamDecoder, decode_project_file, decode_project_file_frontend_manifest,

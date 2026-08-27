@@ -22,6 +22,7 @@ fn phase_changes_emit_state_without_redundant_logs() {
 fn projection_observation_updates_draw_line_string_width() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -389,6 +390,7 @@ fn project_analysis_is_one_shot_and_does_not_replace_loaded_state() {
             3,
             &era_runtime_protocol::ProjectAnalysisRequest {
                 manifest: ProjectManifest {
+                    compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                     project_revision: 4,
                     files: vec![SubmittedFile {
                         relative_path: "unused.erb".into(),
@@ -411,3 +413,89 @@ fn project_analysis_is_one_shot_and_does_not_replace_loaded_state() {
 }
 
 include!("protocol_handshake_continued.rs");
+
+#[test]
+fn compatibility_resolution_does_not_mutate_session_or_create_vm() {
+    use era_runtime_protocol::{CompatibilityProfileId, ResolveProjectCompatibility};
+    let mut session = negotiated_session();
+    let before = (session.phase, session.epoch, session.revision);
+    session.handle_message(400, RuntimeMessage::ResolveProjectCompatibility(ResolveProjectCompatibility {
+        request_id: 11,
+        configuration: Some(SubmittedFile {
+            relative_path: "reraconfig.toml".into(), category: FileCategory::Configuration,
+            payload: FilePayload::Utf8("[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n".into()),
+            content_hash: None,
+        }),
+    })).unwrap();
+    let resolved = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ProjectCompatibilityResolved(report) => Some(report),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(resolved.request_id, 11);
+    assert_eq!(
+        resolved.identity.unwrap().profile,
+        CompatibilityProfileId::EmueraSkiaSnake
+    );
+    assert_eq!((session.phase, session.epoch, session.revision), before);
+    assert!(session.vm.is_none());
+    assert!(session.project_snapshot.is_none());
+    session
+        .handle_message(
+            401,
+            RuntimeMessage::ResolveProjectCompatibility(ResolveProjectCompatibility {
+                request_id: 12,
+                configuration: None,
+            }),
+        )
+        .unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(message,
+        RuntimeMessage::ProjectCompatibilityResolved(report)
+        if report.request_id == 12 && report.identity.as_ref().unwrap().profile == CompatibilityProfileId::EmueraEm
+    )));
+}
+
+#[test]
+fn profile_change_reload_is_rejected_before_active_project_changes() {
+    let mut session = negotiated_session();
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+            content_hash: None,
+        }],
+    };
+    session
+        .handle_message(400, RuntimeMessage::ProjectManifest(manifest))
+        .unwrap();
+    drain(&mut session);
+    let before = (
+        session.phase,
+        session.epoch,
+        session.project_snapshot.as_ref().unwrap().project_identity,
+    );
+    session.handle_message(401, RuntimeMessage::ReloadProject(ReloadProject {
+        base_revision: 1, target_revision: 2,
+        changes: vec![FileChange::Upsert { file: SubmittedFile {
+            relative_path: "reraconfig.toml".into(), category: FileCategory::Configuration,
+            payload: FilePayload::Utf8("[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n".into()), content_hash: None,
+        }}],
+    })).unwrap();
+    assert_eq!(
+        (
+            session.phase,
+            session.epoch,
+            session.project_snapshot.as_ref().unwrap().project_identity
+        ),
+        before
+    );
+    assert!(drain(&mut session).iter().any(|message| matches!(message,
+        RuntimeMessage::CommandRejected(rejection) if rejection.code == CommandErrorCode::VersionMismatch
+            && rejection.context.as_ref().unwrap().identity.as_ref().unwrap().profile == era_runtime_protocol::CompatibilityProfileId::EmueraEm
+    )));
+}

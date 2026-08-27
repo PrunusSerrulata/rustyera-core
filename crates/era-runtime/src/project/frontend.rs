@@ -209,6 +209,7 @@ pub(crate) fn project_diagnostic(
     source: Option<SourceLocation>,
 ) -> ProtocolDiagnostic {
     ProtocolDiagnostic {
+        context: None,
         code: code.into(),
         level,
         message: message.into(),

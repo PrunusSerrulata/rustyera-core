@@ -32,6 +32,7 @@ fn external_resource_metadata_avoids_startup_service_request() {
     let digest = blake3::hash(bytes);
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "resources/image.png".into(),
@@ -62,6 +63,7 @@ fn invalid_external_resource_metadata_falls_back_to_lazy_service_detection() {
     let digest = blake3::hash(bytes);
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "resources/image.png".into(),
@@ -181,7 +183,7 @@ fn reraconfig_takes_priority_and_legacy_sources_generate_it_only_when_absent() {
         relative_path: "reraconfig.toml".into(),
         category: FileCategory::Configuration,
         payload: FilePayload::Utf8(
-            "[meta]\r\nschema_version = 3\r\n[text]\r\nfont_size = 24\r\n".into(),
+            "[meta]\r\nschema_version = 4\r\n[text]\r\nfont_size = 24\r\n".into(),
         ),
         content_hash: None,
     };
@@ -218,8 +220,8 @@ fn schema_v1_reraconfig_is_returned_for_atomic_client_persistence() {
     );
     let generated = parsed
         .generated_source
-        .expect("schema version 1 must be persisted as version 3");
-    assert!(generated.contains("schema_version = 3"));
+        .expect("schema version 1 must be persisted as version 4");
+    assert!(generated.contains("schema_version = 4"));
     assert!(generated.contains("font_size = 20"));
     assert!(!generated.contains("drawing_method"));
     assert!(diagnostics.iter().any(|diagnostic| {
@@ -366,6 +368,7 @@ fn project_build_populates_analyzer_diagnostic_line_and_byte_column() {
     let text = "@SYSTEM_TITLE\nUNKNOWN 1\nRETURN\n";
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "ERB/bad.erb".into(),
@@ -398,6 +401,7 @@ fn owned_project_build_maps_compiler_errors_to_utf8_byte_columns() {
     let text = "@SYSTEM_TITLE\nPRINTL 日本語\nRESULT = GETMETH(\"TARGET\")\nRETURN\n";
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "ERB/compiler-error.erb".into(),
@@ -432,6 +436,7 @@ fn owned_project_build_maps_compiler_errors_to_utf8_byte_columns() {
 fn project_load_report_projects_only_defined_gamebase_information() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "CSV/GameBase.csv".into(),
@@ -460,6 +465,7 @@ fn project_load_report_projects_only_defined_gamebase_information() {
 
     let missing = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 2,
             files: vec![SubmittedFile {
                 relative_path: "GAMEBASE.CSV".into(),
@@ -506,6 +512,7 @@ fn focused_eratw_system_slices_exercise_runtime_owned_save_flows() {
 #[test]
 fn project_delta_is_monotonic_normalized_and_unique() {
     let current = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 4,
         files: vec![SubmittedFile {
             relative_path: "ERB\\main.erb".into(),
@@ -555,6 +562,7 @@ fn project_delta_is_monotonic_normalized_and_unique() {
 #[test]
 fn analysis_selection_checks_unreachable_code_without_loading_a_project() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 9,
         files: vec![
             SubmittedFile {
@@ -602,6 +610,7 @@ fn portable_extensions_participate_in_analysis_and_deterministic_host_lowering()
         operation_version: ProtocolVersion::new(1, 0),
     };
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -627,6 +636,7 @@ fn portable_extensions_participate_in_analysis_and_deterministic_host_lowering()
 #[test]
 fn query_visible_configuration_participates_in_project_identity() {
     let manifest = |font_size| ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {
@@ -657,6 +667,7 @@ fn query_visible_configuration_participates_in_project_identity() {
 fn search_subdirectories_configuration_loads_nested_character_templates() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -705,6 +716,7 @@ fn runtime_project_build_retains_a_compact_serializable_incremental_cache() {
     }
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -737,6 +749,7 @@ fn project_build_reports_real_workload_progress() {
     });
     let build = build_project_with_extensions_and_progress(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -781,4 +794,68 @@ fn project_build_reports_real_workload_progress() {
             "{stage:?} regressed"
         );
     }
+}
+
+#[test]
+fn experimental_profile_is_preserved_and_conflicting_configuration_is_rejected() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        compatibility: snake.clone(),
+        files: vec![
+            SubmittedFile {
+                relative_path: "reraconfig.toml".into(),
+                category: FileCategory::Configuration,
+                payload: FilePayload::Utf8("[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n".into()),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                content_hash: None,
+            },
+        ],
+    };
+    let built = build_project(&manifest, None);
+    assert!(built.report.success, "{:?}", built.report.diagnostics);
+    assert_eq!(built.report.compatibility.as_ref(), Some(&snake));
+    assert_eq!(
+        built
+            .artifact
+            .as_ref()
+            .unwrap()
+            .artifact()
+            .manifest
+            .compatibility,
+        snake
+    );
+    assert!(built.report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "runtime.experimental_compatibility_profile"
+            && diagnostic.context.as_ref().unwrap().identity.as_ref() == Some(&snake)
+    }));
+    let compact = build_owned_project_with_extensions_and_progress(
+        manifest.clone(),
+        None,
+        None,
+        &[],
+        ConfigurationClientProfile::Reference,
+        false,
+        None,
+    );
+    let snapshot = compact.snapshot.unwrap();
+    assert!(
+        matches!(&snapshot.manifest.files[0].payload, FilePayload::Utf8(source) if source.contains("emuera.skia.snake"))
+    );
+    let mut conflicting = manifest;
+    conflicting.compatibility = era_runtime_protocol::CompatibilityIdentity::default();
+    let rejected = build_project(&conflicting, None);
+    assert!(!rejected.report.success);
+    assert!(rejected.artifact.is_none());
+    assert_eq!(
+        rejected.report.diagnostics[0].code,
+        "runtime.compatibility_identity_mismatch"
+    );
 }

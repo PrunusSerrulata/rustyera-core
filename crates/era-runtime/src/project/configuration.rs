@@ -2,9 +2,7 @@ use era_config::{
     ConfigStore, ConfigValue, LegacyConfigSource, LegacyMigrationDiagnosticKind,
     ReraConfigDocument, migrate_legacy_configuration,
 };
-use era_runtime_protocol::{
-    FileCategory, FilePayload, ProtocolDiagnostic, RuntimeLogLevel, SourceLocation,
-};
+use era_runtime_protocol::{FilePayload, ProtocolDiagnostic, RuntimeLogLevel, SourceLocation};
 use erabasic_analyzer::WarningPolicy;
 use erabasic_data::LegacyEncoding;
 
@@ -20,13 +18,9 @@ pub(super) fn parse_configuration(
     files: &[era_runtime_protocol::SubmittedFile],
     diagnostics: &mut Vec<ProtocolDiagnostic>,
 ) -> ParsedConfiguration {
-    let root = files.iter().find(|file| {
-        file.category == FileCategory::Configuration
-            && file
-                .relative_path
-                .replace('\\', "/")
-                .eq_ignore_ascii_case("reraconfig.toml")
-    });
+    let root = files
+        .iter()
+        .find(|file| super::is_root_configuration_file(file));
     let (document, values, generated_source) = match root {
         Some(file) => parse_reraconfig(file, diagnostics),
         None => migrate_configuration(files, diagnostics),
@@ -44,6 +38,8 @@ pub(super) fn semantic_config(values: ConfigStore) -> SemanticConfig {
         values,
         ..SemanticConfig::default()
     };
+    config.analyzer.compatibility =
+        erabasic_compat::CompatibilityIdentity::for_profile(config.values.compatibility_profile());
     apply_catalog_semantics(&mut config);
     config
 }

@@ -51,6 +51,7 @@ fn portable_extension_service_validates_return_and_mutable_writes() {
         &mut session,
         2,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "extension.erb".into(),
@@ -130,7 +131,8 @@ fn start_html_query(
     operation: &str,
     operation_version: ProtocolVersion,
 ) -> (RuntimeSession, ServiceRequest) {
-    let (session, request, _) = start_html_query_with_messages(source, operation, operation_version);
+    let (session, request, _) =
+        start_html_query_with_messages(source, operation, operation_version);
     (session, request)
 }
 
@@ -166,6 +168,7 @@ fn start_html_query_with_messages(
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "projection.erb".into(),
@@ -340,6 +343,7 @@ fn ggetcolor_rejects_negative_y_without_frontend_raster_observation() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "canvas.erb".into(),
@@ -406,6 +410,7 @@ fn gsave_without_canvas_encoder_returns_failure_and_continues() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "canvas-save.erb".into(),
@@ -473,6 +478,7 @@ fn portable_graphics_and_textbox_compatibility_paths_are_runtime_owned() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "portable.erb".into(),
@@ -613,6 +619,7 @@ fn invalid_host_file_paths_return_reference_failure_values() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "invalid-path.erb".into(),

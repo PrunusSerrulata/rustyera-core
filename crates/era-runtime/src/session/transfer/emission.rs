@@ -67,6 +67,10 @@ impl RuntimeSession {
         self.pending_presentation_update = false;
         self.emit(
             RuntimeMessage::RuntimeResynchronized(Box::new(RuntimeResynchronized {
+                compatibility: self
+                    .project_snapshot
+                    .as_ref()
+                    .map(|project| project.manifest.compatibility.clone()),
                 epoch: self.epoch.0,
                 phase: self.phase,
                 runtime_revision: self.revision,
@@ -239,6 +243,7 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         self.emit(
             RuntimeMessage::CommandRejected(CommandRejected {
+                context: None,
                 code,
                 message: message.into(),
                 recoverable: true,
@@ -263,12 +268,23 @@ impl RuntimeSession {
         message: &str,
         origin: Option<erabasic_vm::VmExecutionOrigin>,
     ) -> Result<(), RuntimeError> {
+        self.fault_with_context(code, message, origin, None)
+    }
+
+    pub(in super::super) fn fault_with_context(
+        &mut self,
+        code: FaultCode,
+        message: &str,
+        origin: Option<erabasic_vm::VmExecutionOrigin>,
+        context: Option<Box<era_runtime_protocol::CompatibilityDiagnosticContext>>,
+    ) -> Result<(), RuntimeError> {
         self.emit_log(
             RuntimeLogLevel::Error,
             format!("runtime fault [{code:?}]: {message}"),
         )?;
         self.emit(
             RuntimeMessage::Fault(RuntimeFault {
+                context,
                 code,
                 message: message.into(),
                 origin: origin.map(protocol_execution_origin),
@@ -313,9 +329,10 @@ impl RuntimeSession {
     )]
     fn emit_immediate(
         &mut self,
-        message: RuntimeMessage,
+        mut message: RuntimeMessage,
         correlation_id: Option<u64>,
     ) -> Result<(), RuntimeError> {
+        self.attach_compatibility_context(&mut message);
         let envelope = message.envelope(
             Some(self.options.session_id),
             Some(self.epoch),
@@ -341,6 +358,57 @@ impl RuntimeSession {
         self.outbound_sequence = self.outbound_sequence.saturating_add(1);
         self.next_message_id = self.next_message_id.saturating_add(1);
         Ok(())
+    }
+
+    fn attach_compatibility_context(&self, message: &mut RuntimeMessage) {
+        let identity = self
+            .project_snapshot
+            .as_ref()
+            .map(|project| &project.manifest.compatibility);
+        match message {
+            RuntimeMessage::Diagnostic(diagnostic) => {
+                if let Some(identity) = identity {
+                    crate::compatibility::attach_diagnostic_identity(diagnostic, identity);
+                }
+            }
+            RuntimeMessage::Fault(fault) => {
+                let context = fault.context.get_or_insert_with(|| {
+                    Box::new(era_runtime_protocol::CompatibilityDiagnosticContext {
+                        identity: None,
+                        stage: "runtime".into(),
+                        api: fault.origin.as_ref().map(|origin| origin.command.clone()),
+                        required_capability: None,
+                    })
+                });
+                if context.identity.is_none() {
+                    context.identity = identity.cloned();
+                }
+            }
+            RuntimeMessage::CommandRejected(rejection) => {
+                let context = rejection.context.get_or_insert_with(|| {
+                    Box::new(era_runtime_protocol::CompatibilityDiagnosticContext {
+                        identity: None,
+                        stage: "protocol".into(),
+                        api: None,
+                        required_capability: None,
+                    })
+                });
+                if context.identity.is_none() {
+                    context.identity = identity.cloned();
+                }
+            }
+            RuntimeMessage::ProjectLoadReport(report) => {
+                if report.compatibility.is_none() {
+                    report.compatibility = identity.cloned();
+                }
+                if let Some(identity) = &report.compatibility {
+                    for diagnostic in &mut report.diagnostics {
+                        crate::compatibility::attach_diagnostic_identity(diagnostic, identity);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     pub(in super::super) fn allocate_request(&mut self) -> Result<u64, RuntimeError> {
@@ -387,6 +455,7 @@ impl RuntimeSession {
     pub(in super::super) fn emit_audio_unavailable(&mut self) -> Result<(), RuntimeError> {
         self.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                context: None,
                 code: "runtime.audio_device_unavailable".into(),
                 level: RuntimeLogLevel::Warning,
                 message: "audio intent was retained but no frontend audio device is available"
@@ -420,6 +489,7 @@ impl RuntimeSession {
             if outcome.status != EffectOutcomeStatus::Completed {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.device_effect_failed".into(),
                         level: RuntimeLogLevel::Warning,
                         message: outcome.message.unwrap_or_else(|| {

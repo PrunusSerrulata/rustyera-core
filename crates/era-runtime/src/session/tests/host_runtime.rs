@@ -7,6 +7,7 @@ fn goto_into_case_body_emits_a_nonfatal_warning_and_continues() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -74,6 +75,7 @@ fn run_immediate_query_project(
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -202,6 +204,7 @@ fn negative_printed_html_index_falls_back_to_a_sourced_vm_fault() {
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
+                ..
         }) if message == "HTML_GETPRINTEDSTR line number must be non-negative"
             && origin.command.eq_ignore_ascii_case("HTML_GETPRINTEDSTR")
                 && origin.source.as_ref().is_some_and(|source| source.relative_path == "main.erb")
@@ -390,6 +393,7 @@ fn malformed_immediate_html_print_falls_back_to_a_sourced_vm_fault() {
         messages.iter().any(|message| matches!(
             message,
             RuntimeMessage::Fault(RuntimeFault {
+                context: _,
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
@@ -412,6 +416,7 @@ fn malformed_immediate_html_query_falls_back_to_a_sourced_vm_fault() {
         messages.iter().any(|message| matches!(
             message,
             RuntimeMessage::Fault(RuntimeFault {
+                context: _,
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
@@ -427,6 +432,7 @@ fn malformed_immediate_html_query_falls_back_to_a_sourced_vm_fault() {
 fn moneystr_invalid_format_keeps_vm_fault_priority_without_project_context() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -480,6 +486,7 @@ fn moneystr_invalid_format_keeps_vm_fault_priority_without_project_context() {
         messages.iter().any(|message| matches!(
             message,
             RuntimeMessage::Fault(RuntimeFault {
+                context: _,
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
@@ -520,6 +527,7 @@ fn gcreatefromfile_defaults_to_content_directory_and_replays_dynamic_sprite() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -638,6 +646,7 @@ fn retired_drawing_backend_queries_keep_the_reference_compatibility_value() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -695,6 +704,7 @@ fn audio_commands_project_canonical_sound_directory_resources() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -820,6 +830,7 @@ fn one_message_skip_input_drains_non_value_waits_until_forcewait() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "message-skip.erb".into(),
@@ -986,6 +997,7 @@ fn message_skip_stops_when_can_skip_is_explicitly_omitted() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "message-skip-value.erb".into(),
@@ -1067,6 +1079,7 @@ fn project_load_start_and_print_cross_the_message_boundary() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -1196,6 +1209,7 @@ fn linecount_drives_clearline_and_bounded_padding_loops() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {

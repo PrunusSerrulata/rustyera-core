@@ -21,6 +21,7 @@ fn prepare() -> RuntimeSession {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 9,
             files: vec![SubmittedFile {
                 relative_path: "replay.erb".into(),
@@ -300,6 +301,7 @@ fn successful_global_and_character_loads_replace_the_segment_and_record_next_inp
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "external.erb".into(),

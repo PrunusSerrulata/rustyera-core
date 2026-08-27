@@ -286,6 +286,7 @@ impl RuntimeSession {
         {
             return self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: None,
                     code: "runtime.system_command_during_timed_wait".into(),
                     level: RuntimeLogLevel::Warning,
                     message: "system commands cannot be entered during a timed wait".into(),
@@ -323,6 +324,7 @@ impl RuntimeSession {
                 if !self.negotiated_features.contains(&RuntimeFeature::Storage) {
                     return self.emit(
                         RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                            context: None,
                             code: "runtime.system_output_unavailable".into(),
                             level: RuntimeLogLevel::Warning,
                             message: "@OUTPUT requires negotiated frontend storage".into(),
@@ -350,6 +352,7 @@ impl RuntimeSession {
             "CONFIG" => self.emit_effect(EffectKind::OpenConfiguration),
             "DEBUG" => self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: None,
                     code: "runtime.debug_command_requires_debug_channel".into(),
                     level: RuntimeLogLevel::Warning,
                     message: "@DEBUG is available only through the granted debug protocol".into(),
@@ -360,6 +363,7 @@ impl RuntimeSession {
             ),
             _ => self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: None,
                     code: "runtime.debug_command_requires_debug_channel".into(),
                     level: RuntimeLogLevel::Warning,
                     message: "arbitrary input debug commands are available only through the granted debug protocol".into(),

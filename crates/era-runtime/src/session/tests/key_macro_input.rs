@@ -705,7 +705,7 @@ fn every_vm_snapshot_purpose_rejects_an_active_input_set() {
     }
 }
 
-fn start_input_project(source: &str) -> RuntimeSession {
+pub(super) fn start_input_project(source: &str) -> RuntimeSession {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(
         &mut session,
@@ -726,6 +726,7 @@ fn start_input_project(source: &str) -> RuntimeSession {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "input-set.erb".into(),

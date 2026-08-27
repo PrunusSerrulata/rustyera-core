@@ -27,6 +27,7 @@ fn restart_redraws_string_and_integer_button_menus_in_the_current_function() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "restart.erb".into(),
@@ -224,6 +225,7 @@ fn inputs_accepts_an_automatic_button_from_the_pending_print_buffer() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "pending-button.erb".into(),
@@ -324,6 +326,7 @@ fn visible_buttons_from_an_earlier_wait_remain_usable_until_breakbutton() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "old-button.erb".into(),
@@ -455,6 +458,7 @@ fn skipdisp_silently_skips_wait_commands_like_the_reference() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "skipdisp.erb".into(),
@@ -539,6 +543,7 @@ fn input_undo_records_only_accepted_scalar_input_after_a_checkpoint() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -751,6 +756,7 @@ fn stopcalltrain_discards_its_caller_and_resumes_the_train_system_phase() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -827,6 +833,7 @@ fn continuous_train_reports_progress_and_routes_unavailable_commands_to_usercom(
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {

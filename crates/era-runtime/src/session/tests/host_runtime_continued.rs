@@ -20,6 +20,7 @@ fn nested_begin_returns_current_frame_then_applies_the_deferred_flow() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "begin.erb".into(),
@@ -94,6 +95,7 @@ fn builtin_title_precedes_reset_data_and_initial_character_insertion() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -206,6 +208,7 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
             &mut session,
             1,
             RuntimeMessage::ProjectManifest(ProjectManifest {
+                compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                 project_revision: 1,
                 files: vec![SubmittedFile {
                     relative_path: "metadata.erb".into(),
@@ -296,6 +299,7 @@ fn reference_presentation_fixture_preserves_logical_intent() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -398,6 +402,7 @@ fn printform_and_printc_family_preserve_reference_semantics() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -536,6 +541,7 @@ fn matching_timed_input_wins_over_queued_timer_and_starts_message_skip() {
             &mut session,
             1,
             RuntimeMessage::ProjectManifest(ProjectManifest {
+                compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                 project_revision: 1,
                 files: vec![SubmittedFile {
                     relative_path: "input.erb".into(),
@@ -635,6 +641,7 @@ fn untimed_one_input_message_skip_keeps_the_complete_default() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "input.erb".into(),
@@ -707,4 +714,3 @@ fn untimed_one_input_message_skip_keeps_the_complete_default() {
             .any(|line| projected_line_text(line).contains("got=LONG"))
     );
 }
-

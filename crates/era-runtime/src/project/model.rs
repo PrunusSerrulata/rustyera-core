@@ -94,6 +94,7 @@ impl NormalizedProjectSnapshot {
             .iter()
             .any(|entry| entry.value != entry.effective_value);
         ProjectConfigurationSnapshot {
+            compatibility: self.manifest.compatibility.clone(),
             project_revision: self.manifest.project_revision,
             source_digest: self.configuration_source_digest.clone(),
             entries,

@@ -4,6 +4,7 @@ use era_runtime_protocol::{ProjectManifest, SubmittedFile};
 #[test]
 fn compact_snapshot_preserves_and_validates_static_resource_identities() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![SubmittedFile {
             relative_path: "resources/opaque.bin".into(),
@@ -28,6 +29,7 @@ fn compact_snapshot_preserves_and_validates_static_resource_identities() {
     assert_eq!(snapshot.embedded_project_bytes(), 0);
 
     let changed_manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 2,
         files: vec![SubmittedFile {
             relative_path: "resources/opaque.bin".into(),
@@ -44,6 +46,7 @@ fn compact_snapshot_preserves_and_validates_static_resource_identities() {
 #[test]
 fn resolves_emuera_audio_names_from_the_sound_directory() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![SubmittedFile {
             relative_path: "sound/Theme.MP3".into(),
@@ -67,6 +70,7 @@ fn resolves_emuera_audio_names_from_the_sound_directory() {
 #[test]
 fn content_directory_images_create_frontend_resource_backed_canvases() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {
@@ -167,6 +171,7 @@ use super::*;
 #[test]
 fn parses_static_and_animation_sprites_then_validates_metadata() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {

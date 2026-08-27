@@ -605,6 +605,12 @@ impl RuntimeSession {
             );
         }
         match message {
+            RuntimeMessage::ResolveProjectCompatibility(request) => self.emit(
+                RuntimeMessage::ProjectCompatibilityResolved(crate::resolve_project_compatibility(
+                    &request,
+                )),
+                Some(message_id),
+            ),
             RuntimeMessage::ProjectManifest(manifest) => {
                 let identity = crate::compiled_cache::project_identity(&manifest);
                 self.load_project(
@@ -732,7 +738,8 @@ impl RuntimeSession {
             RuntimeMessage::StorageResponse(response) => {
                 self.complete_storage(message_id, response)
             }
-            RuntimeMessage::ClientHello(_)
+            RuntimeMessage::ProjectCompatibilityResolved(_)
+            | RuntimeMessage::ClientHello(_)
             | RuntimeMessage::ServerHello(_)
             | RuntimeMessage::VersionRejected(_)
             | RuntimeMessage::ProjectLoadReport(_)

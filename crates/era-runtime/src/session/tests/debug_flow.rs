@@ -31,6 +31,7 @@ fn chkdata_returns_its_status_and_updates_the_description() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "check.erb".into(),
@@ -113,6 +114,7 @@ fn saveinfo_candidate_is_isolated_until_the_storage_commit() {
             &mut session,
             1,
             RuntimeMessage::ProjectManifest(ProjectManifest {
+                compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                 project_revision: 1,
                 files: vec![SubmittedFile {
                     relative_path: "candidate.erb".into(),
@@ -432,6 +434,7 @@ fn outbound_journal_enforces_cumulative_encoded_bytes_at_the_exact_boundary() {
 fn configuration_is_parsed_and_resources_receive_stable_identities() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {

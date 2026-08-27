@@ -59,10 +59,8 @@ pub(crate) const fn project_diagnostic_notification(
 
 pub(crate) fn is_root_configuration_file(file: &SubmittedFile) -> bool {
     file.category == FileCategory::Configuration
-        && file
-            .relative_path
-            .replace('\\', "/")
-            .eq_ignore_ascii_case("reraconfig.toml")
+        && validate_relative_path(&file.relative_path)
+            .is_ok_and(|path| path.eq_ignore_ascii_case("reraconfig.toml"))
 }
 
 pub(crate) fn project_configuration_values(files: &[SubmittedFile]) -> era_config::ConfigStore {
@@ -94,7 +92,7 @@ fn release_manifest_payloads(
     release: impl Fn(FileCategory) -> bool,
 ) {
     for file in &mut manifest.files {
-        if !release(file.category) {
+        if !release(file.category) || is_root_configuration_file(file) {
             continue;
         }
         ensure_manifest_hash(file);
@@ -294,6 +292,7 @@ pub(crate) fn analyze_submitted_project_with_extensions(
         .collect::<Vec<_>>();
     analyzed_erb_paths.sort();
     ProjectAnalysisReport {
+        compatibility: build.report.compatibility.clone(),
         project_revision: request.manifest.project_revision,
         success: build.report.success,
         diagnostics: build.report.diagnostics,
@@ -336,6 +335,75 @@ fn build_project_inner_with_extensions(
     retain_project_source_payloads: bool,
     progress: Option<&ProjectProgressReporter>,
 ) -> ProjectBuild {
+    let compatibility = manifest.compatibility.clone();
+    let validation = compatibility
+        .validate()
+        .map_err(|error| {
+            crate::compatibility::configuration_error(
+                "runtime.unsupported_compatibility_identity",
+                error.to_string(),
+                None,
+            )
+        })
+        .and_then(|()| {
+            crate::compatibility::resolve_manifest_compatibility(&manifest).and_then(
+                |(resolved, _)| {
+                    if resolved == compatibility {
+                        Ok(())
+                    } else {
+                        Err(crate::compatibility::configuration_error(
+                            "runtime.compatibility_identity_mismatch",
+                            format!(
+                                "manifest profile {} does not match root configuration profile {}",
+                                compatibility.profile, resolved.profile
+                            ),
+                            None,
+                        ))
+                    }
+                },
+            )
+        });
+    let mut build = match validation {
+        Err(diagnostic) => failed(manifest.project_revision, vec![*diagnostic], previous),
+        Ok(()) => build_project_with_resolved_compatibility(
+            manifest,
+            previous,
+            previous_artifact,
+            analysis_selection,
+            analysis_debug_mode,
+            extension_declarations,
+            configuration_profile,
+            retain_project_source_payloads,
+            progress,
+        ),
+    };
+    build.report.compatibility = Some(compatibility.clone());
+    for diagnostic in &mut build.report.diagnostics {
+        crate::compatibility::attach_diagnostic_identity(diagnostic, &compatibility);
+    }
+    if compatibility.is_experimental() && build.report.success {
+        build
+            .report
+            .diagnostics
+            .push(crate::compatibility::experimental_profile_diagnostic(
+                &compatibility,
+            ));
+    }
+    build
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn build_project_with_resolved_compatibility(
+    manifest: ProjectManifest,
+    previous: Option<&IncrementalState>,
+    previous_artifact: Option<&BytecodeArtifact>,
+    analysis_selection: Option<&std::collections::BTreeSet<String>>,
+    analysis_debug_mode: bool,
+    extension_declarations: &[era_runtime_protocol::ExtensionDeclaration],
+    configuration_profile: ConfigurationClientProfile,
+    retain_project_source_payloads: bool,
+    progress: Option<&ProjectProgressReporter>,
+) -> ProjectBuild {
     // Cold loads already own the decoded manifest. Keep that allocation as the authoritative
     // reload snapshot so the end of compilation does not clone every source payload at once.
     let mut normalized_manifest = manifest;
@@ -357,13 +425,14 @@ fn build_project_inner_with_extensions(
             .files
             .iter_mut()
             .map(|file| {
-                let payload = if matches!(
-                    file.category,
-                    FileCategory::Erb
-                        | FileCategory::Erh
-                        | FileCategory::Csv
-                        | FileCategory::Configuration
-                ) {
+                let payload = if !is_root_configuration_file(file)
+                    && matches!(
+                        file.category,
+                        FileCategory::Erb
+                            | FileCategory::Erh
+                            | FileCategory::Csv
+                            | FileCategory::Configuration
+                    ) {
                     take_manifest_payload(file)
                 } else {
                     file.payload.clone()
@@ -552,6 +621,7 @@ fn build_project_inner_with_extensions(
             CsvDiagnosticSeverity::Error | CsvDiagnosticSeverity::Fatal => RuntimeLogLevel::Error,
         };
         ProtocolDiagnostic {
+            context: None,
             code: format!("csv.{:?}", diagnostic.code).to_ascii_lowercase(),
             level,
             message: diagnostic.message,
@@ -578,6 +648,7 @@ fn build_project_inner_with_extensions(
     config.money_first = data.static_data.replace.money_first;
     config.maximum_shop_items = u32::try_from(data.static_data.replace.max_shop_item).unwrap_or(0);
     let mut analyzer_options = config.analyzer.clone();
+    analyzer_options.compatibility = normalized_manifest.compatibility.clone();
     if analysis_selection.is_some() {
         analyzer_options.analysis_mode = true;
         analyzer_options.debug_mode = analysis_debug_mode;
@@ -637,6 +708,7 @@ fn build_project_inner_with_extensions(
             }
         };
         ProtocolDiagnostic {
+            context: None,
             code: format!("analyzer.{:?}", diagnostic.code).to_ascii_lowercase(),
             level,
             message: diagnostic.message,
@@ -655,6 +727,7 @@ fn build_project_inner_with_extensions(
             artifact: None,
             incremental: IncrementalState::default(),
             report: ProjectLoadReport {
+                compatibility: None,
                 project_revision: normalized_manifest.project_revision,
                 success,
                 diagnostics,
@@ -733,6 +806,7 @@ fn build_project_inner_with_extensions(
             erabasic_compiler::CompilerDiagnosticSeverity::Error => RuntimeLogLevel::Error,
         };
         ProtocolDiagnostic {
+            context: None,
             code: format!("compiler.{:?}", diagnostic.code).to_ascii_lowercase(),
             level,
             message: diagnostic.message,
@@ -763,12 +837,21 @@ fn build_project_inner_with_extensions(
     if let Some(contents) = &generated_configuration_source {
         let digest =
             era_protocol::ProtocolBytes::new(blake3::hash(contents.as_bytes()).as_bytes().to_vec());
-        normalized_manifest.files.push(SubmittedFile {
+        let generated_file = SubmittedFile {
             relative_path: "reraconfig.toml".into(),
             category: FileCategory::Configuration,
             payload: FilePayload::Utf8(contents.clone()),
             content_hash: Some(digest),
-        });
+        };
+        if let Some(existing) = normalized_manifest
+            .files
+            .iter_mut()
+            .find(|file| is_root_configuration_file(file))
+        {
+            *existing = generated_file;
+        } else {
+            normalized_manifest.files.push(generated_file);
+        }
     }
     if !retain_project_source_payloads {
         release_manifest_payloads(&mut normalized_manifest, |category| {
@@ -857,6 +940,7 @@ fn build_project_inner_with_extensions(
         artifact: Some(artifact),
         incremental,
         report: ProjectLoadReport {
+            compatibility: None,
             project_revision: normalized_manifest.project_revision,
             success,
             diagnostics,
@@ -972,6 +1056,7 @@ pub(crate) fn apply_project_delta(
         }
     }
     Ok(ProjectManifest {
+        compatibility: current.compatibility.clone(),
         project_revision: reload.target_revision,
         files: files.into_values().collect(),
     })

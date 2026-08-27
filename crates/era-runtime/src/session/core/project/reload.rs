@@ -36,6 +36,21 @@ impl RuntimeSession {
                 return self.reject(message_id, CommandErrorCode::InvalidValue, &error);
             }
         };
+        match crate::compatibility::resolve_manifest_compatibility(&manifest) {
+            Ok((identity, _)) if identity == current.manifest.compatibility => {}
+            Ok((identity, _)) => {
+                return self.reject(message_id, CommandErrorCode::VersionMismatch,
+                    &format!("compatibility profile change from {} to {} requires a complete project reopen", current.manifest.compatibility.profile, identity.profile));
+            }
+            Err(diagnostic) => {
+                self.emit(RuntimeMessage::Diagnostic(*diagnostic), Some(message_id))?;
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "reload compatibility configuration is invalid",
+                );
+            }
+        }
         self.set_phase(RuntimePhase::Reloading)?;
         let previous_artifact = self
             .vm
@@ -95,6 +110,18 @@ impl RuntimeSession {
             {
                 build.report.success = false;
                 build.report.diagnostics.push(ProtocolDiagnostic {
+                    context: Some(Box::new(
+                        era_runtime_protocol::CompatibilityDiagnosticContext {
+                            identity: build.report.compatibility.clone(),
+                            stage: "service".into(),
+                            api: None,
+                            required_capability: Some(era_runtime_protocol::RequiredCapability {
+                                kind: ServiceKind::Image,
+                                operation: IMAGE_METADATA_OPERATION.into(),
+                                version: IMAGE_METADATA_OPERATION_VERSION,
+                            }),
+                        },
+                    )),
                     code: "runtime.missing_image_metadata_service".into(),
                     level: RuntimeLogLevel::Error,
                     message:
@@ -460,9 +487,11 @@ fn report_project_progress_boundary(
 
 pub(super) fn project_payload_required_report(project_revision: u64) -> ProjectLoadReport {
     ProjectLoadReport {
+        compatibility: None,
         project_revision,
         success: false,
         diagnostics: vec![ProtocolDiagnostic {
+            context: None,
             code: "runtime.project_payload_required".into(),
             level: RuntimeLogLevel::Info,
             message: "compiled cache is missing or does not match the project".into(),
@@ -487,6 +516,7 @@ fn exact_cached_project(
         diagnostic.message = format!("[cached] {}", diagnostic.message);
     }
     exact.diagnostics.push(ProtocolDiagnostic {
+        context: None,
         code: "runtime.compiled_cache_hit".into(),
         level: RuntimeLogLevel::Debug,
         message: "loaded the exact compiled project cache".into(),
@@ -498,6 +528,7 @@ fn exact_cached_project(
         artifact: Some(exact.artifact),
         incremental: exact.incremental,
         report: ProjectLoadReport {
+            compatibility: Some(exact.snapshot.manifest.compatibility.clone()),
             project_revision,
             success: true,
             diagnostics: exact.diagnostics,

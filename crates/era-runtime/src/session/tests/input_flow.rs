@@ -389,6 +389,7 @@ fn one_input_activation_uses_the_loaded_allow_long_configuration() {
             &mut session,
             1,
             RuntimeMessage::ProjectManifest(ProjectManifest {
+                compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                 project_revision: 1,
                 files: vec![
                     SubmittedFile {
@@ -607,6 +608,7 @@ fn project_resource_metadata_is_frontend_decoded_before_load_commit() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -869,6 +871,7 @@ fn cold_project_metadata_is_transactional_and_low_memory_commit_is_sparse() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "old.erb".into(),
@@ -896,6 +899,7 @@ fn cold_project_metadata_is_transactional_and_low_memory_commit_is_sparse() {
     });
 
     let next_manifest = |project_revision| ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision,
         files: vec![
             SubmittedFile {

@@ -481,12 +481,27 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         if self.service_capabilities.get(&(kind, operation.to_owned())) != Some(&operation_version)
         {
-            return self.fault(
+            return self.fault_with_context(
                 FaultCode::UnsupportedRuntimeFeature,
                 &format!(
                     "frontend did not negotiate service {kind:?}/{operation} {operation_version:?}"
                 ),
                 Some(request.origin.clone()),
+                Some(Box::new(
+                    era_runtime_protocol::CompatibilityDiagnosticContext {
+                        identity: self
+                            .project_snapshot
+                            .as_ref()
+                            .map(|project| project.manifest.compatibility.clone()),
+                        stage: "service".into(),
+                        api: Some(request.import.import.name.clone()),
+                        required_capability: Some(era_runtime_protocol::RequiredCapability {
+                            kind,
+                            operation: operation.into(),
+                            version: operation_version,
+                        }),
+                    },
+                )),
             );
         }
         commit_completion(
@@ -613,6 +628,21 @@ impl RuntimeSession {
         {
             return self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: Some(Box::new(
+                        era_runtime_protocol::CompatibilityDiagnosticContext {
+                            identity: self
+                                .project_snapshot
+                                .as_ref()
+                                .map(|project| project.manifest.compatibility.clone()),
+                            stage: "service".into(),
+                            api: None,
+                            required_capability: Some(era_runtime_protocol::RequiredCapability {
+                                kind,
+                                operation: operation.into(),
+                                version: operation_version,
+                            }),
+                        },
+                    )),
                     code: "runtime.platform_capability_unavailable".into(),
                     level: RuntimeLogLevel::Warning,
                     message: format!("frontend did not negotiate service {kind:?}/{operation}"),
@@ -752,6 +782,7 @@ fn emit_html_warnings(
         };
         session.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                context: None,
                 code: code.into(),
                 level: RuntimeLogLevel::Warning,
                 message,

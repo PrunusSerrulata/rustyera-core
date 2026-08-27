@@ -53,6 +53,7 @@ impl RuntimeSession {
                     let report = &mut pending.candidate.build_mut().report;
                     report.success = false;
                     report.diagnostics.push(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.invalid_image_metadata".into(),
                         level: RuntimeLogLevel::Error,
                         message,
@@ -115,6 +116,7 @@ impl RuntimeSession {
             if let Some(message) = failure {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.platform_effect_failed".into(),
                         level: RuntimeLogLevel::Warning,
                         message,

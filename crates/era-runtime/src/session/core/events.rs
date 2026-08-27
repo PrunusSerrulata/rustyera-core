@@ -17,6 +17,7 @@ impl RuntimeSession {
                 ..
             } => self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: None,
                     code,
                     level: RuntimeLogLevel::Warning,
                     message,
