@@ -1257,3 +1257,58 @@ fn compatibility_identity_invalidates_function_cache_and_artifact() {
     assert_eq!(same.stats.reused_functions, 2);
     assert!(apply_patch(original, &erabasic_bytecode::create_patch(original, target)).is_err());
 }
+
+#[test]
+fn html_queries_lower_to_validated_lazy_host_steps() {
+    let project = analyze(
+        r#"@SYSTEM_TITLE
+RESULT:10 = HTML_STRINGLEN("<b>x</b>", FLAG_VALUE())
+RESULT:11 = HTML_STRINGLINES("abc", WIDTH_VALUE())
+HTML_STRINGLEN "x"
+HTML_STRINGLINES "abc", WIDTH_VALUE()
+RETURN
+@FLAG_VALUE
+#FUNCTION
+RETURNF 1
+@WIDTH_VALUE
+#FUNCTION
+RETURNF 2
+"#,
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = report.artifact.expect("HTML query lowering should compile");
+    let validation = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &ValidationContext::for_artifact(&artifact),
+    );
+    assert!(
+        validation.diagnostics.is_empty(),
+        "{:?}",
+        validation.diagnostics
+    );
+    let names = artifact
+        .host_imports
+        .iter()
+        .map(|host| host.import.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for name in [
+        "html__measure_length",
+        "html__length_unit",
+        "html__lines_begin",
+        "html__lines_more",
+        "html__lines_step",
+        "html__lines_end",
+    ] {
+        assert!(names.contains(name), "missing {name}");
+        assert!(
+            default_host_registry().classification(name).is_none(),
+            "private query steps cannot be called by scripts"
+        );
+    }
+    assert!(!names.contains("html_stringlen") && !names.contains("html_stringlines"));
+}

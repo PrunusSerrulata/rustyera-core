@@ -12,6 +12,7 @@ mod column_options;
 mod data_blocks;
 mod expressions;
 mod formatted;
+mod html_queries;
 mod imports;
 mod methods;
 mod statements;

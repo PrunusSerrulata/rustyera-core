@@ -278,6 +278,7 @@ impl RuntimeSession {
         origin: Option<erabasic_vm::VmExecutionOrigin>,
         context: Option<Box<era_runtime_protocol::CompatibilityDiagnosticContext>>,
     ) -> Result<(), RuntimeError> {
+        self.operations.html_lines.clear();
         self.emit_log(
             RuntimeLogLevel::Error,
             format!("runtime fault [{code:?}]: {message}"),

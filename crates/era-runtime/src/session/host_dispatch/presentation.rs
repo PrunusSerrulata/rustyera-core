@@ -191,54 +191,18 @@ impl RuntimeSession {
         }
         if matches!(
             name.as_str(),
-            "HTML_STRINGLEN" | "HTML_SUBSTRING" | "HTML_STRINGLINES"
+            "HTML_STRINGLEN"
+                | "HTML_SUBSTRING"
+                | "HTML_STRINGLINES"
+                | "HTML__MEASURE_LENGTH"
+                | "HTML__LENGTH_UNIT"
+                | "HTML__LINES_BEGIN"
+                | "HTML__LINES_MORE"
+                | "HTML__LINES_STEP"
+                | "HTML__LINES_END"
         ) {
             *status = HostDispatchStatus::Handled;
-            let context = self.projection_query_context();
-            let markup = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            let argument = request
-                .arguments
-                .get(1)
-                .and_then(|value| match value {
-                    VmValue::Integer(value) => Some(*value),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            let (operation, version) = match name.as_str() {
-                "HTML_STRINGLEN" => (HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION),
-                "HTML_SUBSTRING" => (HTML_SUBSTRING_OPERATION, HTML_SUBSTRING_OPERATION_VERSION),
-                _ => (
-                    HTML_STRING_LINES_OPERATION,
-                    HTML_STRING_LINES_OPERATION_VERSION,
-                ),
-            };
-            let completion = if name == "HTML_SUBSTRING" {
-                ExternalCompletion::HtmlSubstring {
-                    request: request.id,
-                    context,
-                }
-            } else {
-                ExternalCompletion::ProjectionInteger {
-                    request: request.id,
-                    context,
-                }
-            };
-            return self.issue_host_service(
-                vm,
-                request,
-                completion,
-                ServiceKind::PresentationQuery,
-                operation,
-                version,
-                &HtmlMeasureRequest {
-                    context,
-                    markup,
-                    argument,
-                },
-            );
+            return self.dispatch_html_query(vm, request, name);
         }
         if let Some(prepared) = PreparedLineEdit::prepare(name, &request.arguments) {
             *status = HostDispatchStatus::Handled;

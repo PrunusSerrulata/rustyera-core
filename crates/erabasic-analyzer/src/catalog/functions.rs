@@ -52,6 +52,9 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     ] {
         add(name, IntType, &[Any], 1, true);
     }
+    add("HTML_STRINGLEN", IntType, &[String, Integer], 1, false);
+    add("HTML_STRINGLINES", IntType, &[String, Integer], 2, false);
+    add("HTML_SUBSTRING", StrType, &[String, Integer], 2, false);
     add("RAND", IntType, &[Integer, Integer], 1, false);
     for name in ["MAX", "MIN", "LIMIT", "POWER", "INRANGE"] {
         add(name, IntType, &[Integer], 1, true);

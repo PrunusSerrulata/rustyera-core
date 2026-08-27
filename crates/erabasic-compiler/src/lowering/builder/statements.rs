@@ -25,6 +25,12 @@ impl Builder<'_> {
             return;
         }
         if let InstructionTarget::BuiltinMethod { return_type, .. } = target {
+            if matches!(name, "HTML_STRINGLEN" | "HTML_STRINGLINES") {
+                let arguments = Self::method_statement_arguments(arguments, location);
+                self.lower_html_query(name, &arguments, location);
+                self.store_method_result(*return_type, location);
+                return;
+            }
             if matches!(name, "GETMETH" | "GETMETHS") {
                 self.lower_expression_method_statement(name, arguments, location);
                 self.store_method_result(*return_type, location);

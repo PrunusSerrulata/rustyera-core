@@ -16,6 +16,9 @@ impl RuntimeSession {
                 "service response has no pending request",
             );
         };
+        if let PendingService::Host(ExternalCompletion::HtmlQuery { continuation }) = pending {
+            return self.complete_html_query(continuation, response.result);
+        }
         if let PendingService::ProjectImageMetadata { relative_path } = pending {
             let result = match response.result {
                 ServiceResult::Ready { payload } => {
@@ -219,14 +222,15 @@ impl RuntimeSession {
             PendingService::Host(completion) => {
                 let mut writes = Vec::new();
                 let host_request = match &completion {
+                    ExternalCompletion::HtmlQuery { .. } => {
+                        unreachable!("handled before payload decoding")
+                    }
                     ExternalCompletion::GetKey { request: id, .. }
                     | ExternalCompletion::LocalDateTime { request: id, .. }
                     | ExternalCompletion::SpritePixel { request: id }
                     | ExternalCompletion::UpdateCheck { request: id, .. }
                     | ExternalCompletion::PointerState { request: id, .. }
                     | ExternalCompletion::Extension { request: id, .. }
-                    | ExternalCompletion::ProjectionInteger { request: id, .. }
-                    | ExternalCompletion::HtmlSubstring { request: id, .. }
                     | ExternalCompletion::TextExtent { request: id, .. }
                     | ExternalCompletion::DrawTextExtent { request: id, .. }
                     | ExternalCompletion::CanvasPixel { request: id, .. }
@@ -465,35 +469,8 @@ impl RuntimeSession {
                             }
                         }
                     }
-                    ExternalCompletion::ProjectionInteger { context, .. } => {
-                        let result: ProjectionIntegerResponse =
-                            decode_canonical(payload.as_slice())?;
-                        if !self.validate_projection_query_context(context, result.context)? {
-                            return Ok(());
-                        }
-                        Some(VmValue::Integer(result.value))
-                    }
-                    ExternalCompletion::HtmlSubstring { context, .. } => {
-                        let result: HtmlSubstringResponse = decode_canonical(payload.as_slice())?;
-                        if !self.validate_projection_query_context(context, result.context)? {
-                            return Ok(());
-                        }
-                        let vm = self.vm.as_ref().ok_or_else(|| {
-                            RuntimeError::Internal("HTML substring completion has no VM".into())
-                        })?;
-                        if let Some(target) = global_place_at(vm, "RESULTS", 0) {
-                            writes.push(HostWrite {
-                                target,
-                                value: VmValue::String(result.head.clone()),
-                            });
-                        }
-                        if let Some(target) = global_place_at(vm, "RESULTS", 1) {
-                            writes.push(HostWrite {
-                                target,
-                                value: VmValue::String(result.tail),
-                            });
-                        }
-                        Some(VmValue::String(result.head))
+                    ExternalCompletion::HtmlQuery { .. } => {
+                        unreachable!("handled before payload decoding")
                     }
                     ExternalCompletion::TextExtent { context, .. } => {
                         let result: TextExtentResponse = decode_canonical(payload.as_slice())?;

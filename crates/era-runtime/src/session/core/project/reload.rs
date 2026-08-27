@@ -8,6 +8,13 @@ impl RuntimeSession {
         message_id: u64,
         reload: &ReloadProject,
     ) -> Result<(), RuntimeError> {
+        if !self.operations.html_lines.is_empty() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "ActiveBlocks: project reload cannot cross an active HTML_STRINGLINES expression",
+            );
+        }
         let previous_phase = self.phase;
         if !matches!(
             previous_phase,
@@ -162,6 +169,15 @@ impl RuntimeSession {
         previous_phase: RuntimePhase,
         replay_origin: Option<ReplayOrigin>,
     ) -> Result<(), RuntimeError> {
+        if !self.operations.html_lines.is_empty() {
+            return self.reject_incompatible_project_reload(
+                message_id,
+                build,
+                previous_phase,
+                "ActiveBlocks: project reload cannot cross an active HTML_STRINGLINES expression"
+                    .into(),
+            );
+        }
         let target = build
             .artifact
             .take()
@@ -227,6 +243,23 @@ impl RuntimeSession {
             );
         }
         self.sync_resource_replay();
+        self.rebind_reloaded_inputs();
+        self.invalidate_input_undo(Some(
+            "successful bytecode hot reload invalidated the Ctrl-Z checkpoint",
+        ))?;
+        if let Some(origin) = replay_origin {
+            self.install_input_replay(origin);
+        }
+        self.emit(
+            RuntimeMessage::ProjectLoadReport(build.report),
+            Some(message_id),
+        )?;
+        self.set_phase(previous_phase)?;
+        self.renew_debug_grant()?;
+        self.emit_presentation()
+    }
+
+    fn rebind_reloaded_inputs(&mut self) {
         let new_epoch = self.epoch.0.saturating_add(1);
         let (tokens, waits) = self.operations.rebind_stable_inputs(
             new_epoch,
@@ -245,19 +278,6 @@ impl RuntimeSession {
         self.epoch = SessionEpoch(new_epoch);
         self.accepted_message_ids.clear();
         self.accepted_debug_message_ids.clear();
-        self.invalidate_input_undo(Some(
-            "successful bytecode hot reload invalidated the Ctrl-Z checkpoint",
-        ))?;
-        if let Some(origin) = replay_origin {
-            self.install_input_replay(origin);
-        }
-        self.emit(
-            RuntimeMessage::ProjectLoadReport(build.report),
-            Some(message_id),
-        )?;
-        self.set_phase(previous_phase)?;
-        self.renew_debug_grant()?;
-        self.emit_presentation()
     }
 
     fn reject_incompatible_project_reload(

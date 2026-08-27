@@ -467,21 +467,16 @@ impl RuntimeSession {
         self.dispatch_services(vm, request, &name)
     }
 
-    // The typed operation tuple is deliberately explicit at this single protocol edge.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn issue_host_service<T: minicbor::Encode<()>>(
+    pub(in crate::session) fn require_host_service(
         &mut self,
-        vm: &mut RuntimeVm,
         request: &VmHostRequest,
-        completion: ExternalCompletion,
         kind: ServiceKind,
         operation: &str,
         operation_version: ProtocolVersion,
-        payload: &T,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<bool, RuntimeError> {
         if self.service_capabilities.get(&(kind, operation.to_owned())) != Some(&operation_version)
         {
-            return self.fault_with_context(
+            self.fault_with_context(
                 FaultCode::UnsupportedRuntimeFeature,
                 &format!(
                     "frontend did not negotiate service {kind:?}/{operation} {operation_version:?}"
@@ -502,7 +497,26 @@ impl RuntimeSession {
                         }),
                     },
                 )),
-            );
+            )?;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    // The typed operation tuple is deliberately explicit at this single protocol edge.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn issue_host_service<T: minicbor::Encode<()>>(
+        &mut self,
+        vm: &mut RuntimeVm,
+        request: &VmHostRequest,
+        completion: ExternalCompletion,
+        kind: ServiceKind,
+        operation: &str,
+        operation_version: ProtocolVersion,
+        payload: &T,
+    ) -> Result<(), RuntimeError> {
+        if !self.require_host_service(request, kind, operation, operation_version)? {
+            return Ok(());
         }
         commit_completion(
             vm,
@@ -528,7 +542,7 @@ impl RuntimeSession {
         )
     }
 
-    fn projection_query_context(&self) -> ProjectionQueryContext {
+    pub(in crate::session) fn projection_query_context(&self) -> ProjectionQueryContext {
         ProjectionQueryContext {
             presentation_revision: self.presentation.revision(),
             environment_revision: self.projection_environment_revision,
@@ -536,7 +550,9 @@ impl RuntimeSession {
         }
     }
 
-    fn presentation_observation_context(&mut self) -> Result<ProjectionQueryContext, RuntimeError> {
+    pub(in crate::session) fn presentation_observation_context(
+        &mut self,
+    ) -> Result<ProjectionQueryContext, RuntimeError> {
         // A presentation query is an observation barrier: its frontend response must describe
         // the canonical state that existed when the request was issued, even while ordinary
         // animation frames are being collapsed during a continuous message skip.

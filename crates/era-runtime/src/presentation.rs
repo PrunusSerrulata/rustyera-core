@@ -21,6 +21,19 @@ impl Default for PresentationModel {
 }
 
 impl PresentationModel {
+    pub(crate) fn html_query_style(&self) -> era_runtime_protocol::HtmlQueryStyleV2 {
+        let mut base = self.default_style.clone();
+        base.bold = false;
+        base.italic = false;
+        base.underline = false;
+        base.strikeout = false;
+        era_runtime_protocol::HtmlQueryStyleV2 {
+            current: self.current_style.clone(),
+            base,
+            settings: self.settings.clone(),
+        }
+    }
+
     pub(crate) fn set_character_width_mode(&mut self, mode: CharacterWidthMode) {
         if self.character_width_mode != mode {
             self.character_width_mode = mode;

@@ -34,16 +34,15 @@ use era_runtime_protocol::{
     HTML_GET_PRINTED_STR_OPERATION, HTML_GET_PRINTED_STR_OPERATION_VERSION,
     HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
     HTML_STRING_LINES_OPERATION_VERSION, HTML_SUBSTRING_OPERATION,
-    HTML_SUBSTRING_OPERATION_VERSION, HtmlMeasureRequest, HtmlSubstringResponse,
-    IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION, IMAGE_PIXEL_OPERATION,
-    IMAGE_PIXEL_OPERATION_VERSION, ImageMetadataRequest, ImageMetadataResponse, ImagePixelRequest,
-    ImagePixelResponse, InputIntent, InputUndoRequest, InputUndoState, InputWait, InteractionToken,
-    KeyMacroCommand, KeyMacroProfileSubmit, LOCAL_DATE_TIME_OPERATION,
-    LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment, LocalDateTimeRequest, LocalDateTimeResponse,
-    OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION, OpenUrlRequest, OpenUrlResponse,
-    POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
-    PointerStateResponse, PrepareConfigurationUpdate, PresentationLength, ProjectAnalysisRequest,
-    ProjectLoadReport, ProjectLoadRequest, ProjectManifest, ProjectionIntegerResponse,
+    HTML_SUBSTRING_OPERATION_VERSION, IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION,
+    IMAGE_PIXEL_OPERATION, IMAGE_PIXEL_OPERATION_VERSION, ImageMetadataRequest,
+    ImageMetadataResponse, ImagePixelRequest, ImagePixelResponse, InputIntent, InputUndoRequest,
+    InputUndoState, InputWait, InteractionToken, KeyMacroCommand, KeyMacroProfileSubmit,
+    LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment,
+    LocalDateTimeRequest, LocalDateTimeResponse, OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION,
+    OpenUrlRequest, OpenUrlResponse, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION,
+    PointerStateRequest, PointerStateResponse, PrepareConfigurationUpdate, PresentationLength,
+    ProjectAnalysisRequest, ProjectLoadReport, ProjectLoadRequest, ProjectManifest,
     ProjectionObservation, ProjectionQueryContext, ProjectionState, ProtocolDiagnostic,
     RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION,
     RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault, RuntimeFeature,
@@ -122,6 +121,7 @@ fn configured_character_width_mode(
 mod core;
 mod debug_session;
 mod host_dispatch;
+pub(crate) mod html_query;
 mod interaction;
 mod storage;
 mod support;

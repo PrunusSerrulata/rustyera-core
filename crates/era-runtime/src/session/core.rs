@@ -334,6 +334,7 @@ impl RuntimeSession {
                         self.handle_vm_event(&mut vm, event)?;
                     }
                     vm.retire_terminal_fibers();
+                    self.operations.html_lines.retain_live(&vm);
                     if self.operations.active_input().is_some()
                         && !vm.has_runnable_fibers()
                         && self.phase == RuntimePhase::Running

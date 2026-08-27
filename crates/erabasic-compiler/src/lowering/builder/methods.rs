@@ -18,7 +18,23 @@ impl Builder<'_> {
         arguments: &[HirArgument],
         location: SourceLocation,
     ) {
-        let arguments = arguments
+        let arguments = Self::method_statement_arguments(arguments, location);
+        self.lower_expression_method(
+            &arguments,
+            if name == "GETMETHS" {
+                MethodResult::String
+            } else {
+                MethodResult::Integer
+            },
+            location,
+        );
+    }
+
+    pub(super) fn method_statement_arguments(
+        arguments: &[HirArgument],
+        location: SourceLocation,
+    ) -> Vec<HirCallArgument> {
+        arguments
             .iter()
             .map(|argument| match argument {
                 HirArgument::Expression(expression)
@@ -44,16 +60,7 @@ impl Builder<'_> {
                     location,
                 }),
             })
-            .collect::<Vec<_>>();
-        self.lower_expression_method(
-            &arguments,
-            if name == "GETMETHS" {
-                MethodResult::String
-            } else {
-                MethodResult::Integer
-            },
-            location,
-        );
+            .collect::<Vec<_>>()
     }
 
     pub(super) fn lower_expression_method(

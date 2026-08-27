@@ -49,13 +49,8 @@ pub(crate) enum ExternalCompletion {
         return_type: era_runtime_protocol::ExtensionValueType,
         mutable_places: Vec<Option<(PlaceDescriptor, era_runtime_protocol::ExtensionValueType)>>,
     },
-    ProjectionInteger {
-        request: HostRequestId,
-        context: era_runtime_protocol::ProjectionQueryContext,
-    },
-    HtmlSubstring {
-        request: HostRequestId,
-        context: era_runtime_protocol::ProjectionQueryContext,
+    HtmlQuery {
+        continuation: Box<crate::session::html_query::HtmlQueryContinuation>,
     },
     TextExtent {
         request: HostRequestId,

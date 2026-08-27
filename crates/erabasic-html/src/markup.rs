@@ -9,7 +9,19 @@ pub use model::{
 
 mod attributes;
 mod normalize;
+mod query;
 mod serialize;
+
+pub use query::{
+    HtmlDecodedSource, HtmlLengthCut, HtmlLengthImageResolution, HtmlLengthMeasuredValue,
+    HtmlLengthMeasurement, HtmlLengthProbe, HtmlLengthProbeKind, HtmlLinesPoll, HtmlMappedDocument,
+    HtmlMappedText, HtmlOutputOrigin, HtmlOutputPiece, HtmlQueryEntityPolicy, HtmlQueryError,
+    HtmlQueryErrorKind, HtmlQueryLimits, HtmlQueryProbe, HtmlQueryProbeKind, HtmlScalarBoundary,
+    HtmlSourceEvent, HtmlSourceEventKind, HtmlSourceRange, HtmlStringLengthPlan,
+    HtmlStringLengthPoll, HtmlStringLengthResult, HtmlStringLengthSettings, HtmlStringLinesPlan,
+    HtmlSubstringPlan, HtmlSubstringPoll, HtmlSubstringResult, decode_query_entities,
+    html_string_length_units, parse_document_with_source_map,
+};
 
 use attributes::{error, find_tag_end, parse_attributes};
 use normalize::{decode_entities, normalize_element};
@@ -46,6 +58,14 @@ pub fn parse_document(source: &str) -> Result<HtmlDocument, HtmlError> {
 pub fn parse_document_with_warnings(
     source: &str,
 ) -> Result<(HtmlDocument, Vec<HtmlWarning>), HtmlError> {
+    parse_document_inner(source, false)
+}
+
+#[allow(clippy::too_many_lines)]
+fn parse_document_inner(
+    source: &str,
+    query_entities: bool,
+) -> Result<(HtmlDocument, Vec<HtmlWarning>), HtmlError> {
     let mut roots = Vec::new();
     let mut stack: Vec<OpenElement> = Vec::new();
     let mut warnings = Vec::new();
@@ -62,7 +82,11 @@ pub fn parse_document_with_warnings(
             let end = source[cursor..]
                 .find('<')
                 .map_or(source.len(), |at| cursor + at);
-            let text = decode_entities(&source[cursor..end], cursor)?;
+            let text = if query_entities {
+                query::decode_for_parser(&source[cursor..end], cursor)?
+            } else {
+                decode_entities(&source[cursor..end], cursor)?
+            };
             push_node(
                 &mut roots,
                 &mut stack,
@@ -171,7 +195,11 @@ pub fn parse_document_with_warnings(
             let Some(kind) = HtmlElementKind::parse(name) else {
                 return Err(error(HtmlErrorKind::UnknownTag, cursor, end));
             };
-            let attributes = parse_attributes(&raw[name_end..], cursor + 1 + name_end)?;
+            let attributes = if query_entities {
+                attributes::parse_query_attributes(&raw[name_end..], cursor + 1 + name_end)?
+            } else {
+                parse_attributes(&raw[name_end..], cursor + 1 + name_end)?
+            };
             let semantic = normalize_element(kind, &attributes, cursor, end)?;
             validate_nesting(kind, &stack, cursor, end)?;
             if self_closing || kind.is_void() {

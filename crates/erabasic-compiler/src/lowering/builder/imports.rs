@@ -50,7 +50,7 @@ impl Builder<'_> {
         }
     }
 
-    fn emit_host_call(
+    pub(super) fn emit_host_call(
         &mut self,
         name: &str,
         parameters: &[BytecodeType],

@@ -156,6 +156,7 @@ pub(crate) struct PendingOperations {
     entries: BTreeMap<u64, PendingOperation>,
     active_input: Option<u64>,
     queued_inputs: VecDeque<u64>,
+    pub(crate) html_lines: crate::session::html_query::HtmlLineFlows,
 }
 
 impl PendingOperations {
@@ -207,6 +208,7 @@ impl PendingOperations {
                 })
                 .collect();
         }
+        self.html_lines.rebind_epoch(epoch);
         self.epoch = epoch;
         (tokens, waits)
     }
@@ -219,7 +221,7 @@ impl PendingOperations {
     }
 
     pub(crate) fn total_count(&self) -> usize {
-        self.entries.len()
+        self.entries.len().saturating_add(self.html_lines.len())
     }
 
     pub(crate) fn has_transient_external(&self) -> bool {
@@ -393,6 +395,7 @@ impl PendingOperations {
     }
 
     pub(crate) fn clear(&mut self) {
+        self.html_lines.clear();
         self.entries.clear();
         self.active_input = None;
         self.queued_inputs.clear();

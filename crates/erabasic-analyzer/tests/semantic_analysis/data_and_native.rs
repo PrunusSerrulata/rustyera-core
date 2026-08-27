@@ -587,3 +587,47 @@ fn xml_replace_stored_key_overload_preserves_inline_mutability_rules() {
         }
     }
 }
+
+#[test]
+fn html_queries_require_reference_types_and_argument_counts() {
+    for (call, string_result, accepted) in [
+        ("HTML_STRINGLEN(\"x\")", false, true),
+        ("HTML_STRINGLEN(\"x\", 1)", false, true),
+        ("HTML_STRINGLEN()", false, false),
+        ("HTML_STRINGLEN(1)", false, false),
+        ("HTML_STRINGLEN(\"x\", \"pixels\")", false, false),
+        ("HTML_STRINGLEN(\"x\", 1, 2)", false, false),
+        ("HTML_STRINGLINES(\"x\", 2)", false, true),
+        ("HTML_STRINGLINES(\"x\")", false, false),
+        ("HTML_STRINGLINES(1, 2)", false, false),
+        ("HTML_SUBSTRING(\"x\", 2)", true, true),
+        ("HTML_SUBSTRING(\"x\")", true, false),
+        ("HTML_SUBSTRING(\"x\", \"2\")", true, false),
+    ] {
+        let assignment = if string_result {
+            "RESULTS '= "
+        } else {
+            "RESULT = "
+        };
+        let report = analyze_project(
+            AnalysisInput {
+                project_data: empty_project(),
+                sources: vec![source(
+                    "html-query.erb",
+                    &format!("@SYSTEM_TITLE\n{assignment}{call}\nRETURN\n"),
+                )],
+            },
+            &AnalyzerOptions::analysis_mode(),
+            &ExtensionRegistry::default(),
+        );
+        assert_eq!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.reference_level >= 2),
+            accepted,
+            "{call}: {:?}",
+            report.diagnostics
+        );
+    }
+}

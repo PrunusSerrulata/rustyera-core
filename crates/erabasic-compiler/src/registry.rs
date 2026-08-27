@@ -21,6 +21,20 @@ pub(crate) fn column_options_contract() -> OperationContract {
     contract
 }
 
+pub(crate) fn html_query_binding(name: &str) -> HostBinding {
+    // Only specialized lowering emits these imports; they are not catalog callables.
+    let contract = host_contract("rustyera.text", "HTML_STRINGLINES");
+    HostBinding {
+        namespace: "rustyera.text".into(),
+        name: name.to_ascii_lowercase(),
+        abi_version: 1,
+        effect: contract.effect(),
+        capability: HostCapability::Text,
+        snapshot_capability: contract.snapshot_capability(),
+        contract,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HostBinding {
     pub namespace: String,

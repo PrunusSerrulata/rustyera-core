@@ -323,6 +323,13 @@ impl RuntimeSession {
         }
         let mut vm = RuntimeVm::commit_restore(prepared)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        if let Err(error) = payload
+            .operations
+            .html_lines
+            .validate_snapshot(&vm, payload.epoch)
+        {
+            return self.reject(message_id, CommandErrorCode::InvalidValue, &error);
+        }
         vm.set_line_columns(self.line_columns);
         vm.set_character_width_mode(configured_character_width_mode(
             self.project_snapshot.as_ref(),
