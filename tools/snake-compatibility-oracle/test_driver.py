@@ -387,5 +387,307 @@ class DriverTests(unittest.TestCase):
             self.assertEqual(compared["status"], "different")
 
 
+
+
+class FrontendCaptureTests(unittest.TestCase):
+    """Synthetic validator-input tests, never evidence of frontend measurement."""
+
+    def make_capture(self, root):
+        import copy
+        import gzip
+        import hashlib
+        from frontend_capture_io import fixture_inventory, source_identity, frontend_files, project_payload_hashes
+
+        fixture = root / "fixture"
+        (fixture / "erb").mkdir(parents=True)
+        (fixture / "erb/base.erb").write_text("@SYSTEM_TITLE\nINPUT\nRETURN\n")
+        request = {"op": "run", "entry": "S04_CASE_EMPTY", "watch": ["RESULT:10"]}
+        case = {"id": "s04-empty-lazy", "group": "SERVICES", "requests": [{"request": request,
+                "expect": {"original": {"result": {"watches": {"RESULT:10": 999}}}}}]}
+        plan = {"version": 1, "seed": 123456, "cases": [case]}
+        (fixture / "cases.json").write_text(json.dumps(plan))
+        profile = {"profile": "emuera.em", "semantic_version": 1, "policy_version": 1,
+                   "arithmetic": "wrapping_i64_v1", "rng_algorithm": "sfmt19937",
+                   "rng_state_version": 1, "layout": "unicode_column_v1",
+                   "save_codec": "emuera1808", "services": []}
+        inventory = fixture_inventory(fixture)
+        artifacts = {}
+        artifact_hashes = {}
+        for role in ("runtime", "frontend", "client"):
+            path = root / (role + ".synthetic-unit-input")
+            payload = ("validator unit input " + role).encode()
+            path.write_bytes(payload)
+            artifacts[role] = path
+            artifact_hashes[role] = {"bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+        frontend_root = root / "frontend-root"
+        (frontend_root / "src").mkdir(parents=True)
+        (frontend_root / "src/main.ts").write_text("// validator input, not executed\n")
+        (frontend_root / "package.json").write_text("{}")
+        wasm_root = frontend_root / "public/wasm"
+        wasm_root.mkdir(parents=True)
+        wasm_hash, wasm_files = hashlib.sha256(), []
+        for name in ("era_web_wasm.js", "era_web_wasm_bg.wasm"):
+            payload = ("validator input, not executed: " + name).encode()
+            (wasm_root / name).write_bytes(payload)
+            wasm_hash.update(name.encode() + b"\0" + payload)
+            wasm_files.append({"path": name, "bytes": len(payload),
+                               "sha256": hashlib.sha256(payload).hexdigest()})
+        wasm_assets = {"revision": wasm_hash.hexdigest(), "files": wasm_files}
+        artifacts["runtime"] = wasm_root / "era_web_wasm_bg.wasm"
+        artifact_hashes["runtime"] = {key: wasm_files[1][key] for key in ("bytes", "sha256")}
+        source_manifest = {"version": 1, "kind": "frontend_source_manifest",
+                           "files": frontend_files(frontend_root, "frontend_source_manifest")}
+        source_bytes = json.dumps(source_manifest).encode()
+        artifacts["frontend"].write_bytes(source_bytes)
+        artifact_hashes["frontend"] = {"bytes": len(source_bytes), "sha256": hashlib.sha256(source_bytes).hexdigest()}
+        identity = {"frontend": "browser", "coreSha": "a" * 40, "corePin": "a" * 40,
+                    "wasmAssets": wasm_assets,
+                    "frontendRuntime": {"mode": "vite-dev", "artifactRole": "frontend", "artifactKind": "source-manifest"},
+                    "dirty": False, "frontendSha": "b" * 40, "frontendDirty": False,
+                    "profile": profile, "seed": 123456, "fixtureInventory": inventory,
+                    "sourceFixture": source_identity(inventory), "artifacts": artifact_hashes,
+                    "submittedPayloads": [{"path": row["path"], "rawSha256": row["sha256"],
+                                           "decodedUtf8Sha256": row["decodedUtf8Sha256"]}
+                                          for row in inventory if row["path"].endswith(".erb")],
+                    "provenance": {"synthetic": False, "captureMode": "real_client",
+                                   "clientFamily": "chromium", "clientVersion": "unit-schema-only",
+                                   "runtimeBackend": "wasm", "htmlProvider": "html_node_dom",
+                                   "canvasProvider": "canvas_replay_renderer",
+                                   "pointerProvider": "viewport_pointer"}}
+        # A test can author these claims. The adapter explicitly does not call
+        # hashes cryptographic proof of an executing real process.
+        records = []
+        def record(direction, channel, message_id, epoch, kind, value, sequence=None, correlation=None):
+            item = {"index": len(records), "direction": direction, "channel": channel,
+                    "messageId": message_id, "epoch": epoch, "message": {"type": kind, "value": value}}
+            if sequence is not None:
+                item["sequence"] = sequence
+            if correlation is not None:
+                item["correlationId"] = correlation
+            records.append(item)
+        record("receive", "runtime", 1, 0, "server_hello",
+               {"epoch": 0, "selected_capabilities": {"services": []}}, sequence=1)
+        record("receive", "runtime", 2, 0, "project_load_report",
+               {"success": True, "compatibility": profile, "diagnostics": []}, sequence=2)
+        record("send", "runtime", 10, 0, "start", {"mode": {"type": "new_game", "seed": 123456}})
+        record("receive", "runtime", 3, 1, "runtime_state_changed", {"phase": "waiting_input"}, sequence=3)
+        def snapshot(output):
+            return {"bridgeKind": "browser", "runtimeEpoch": 1, "buildIdentity": {"corePin": "a" * 40, "wasmRevision": wasm_assets["revision"]},
+                    "serviceEvidence": {"version": 1, "enabled": True, "overflow": False,
+                                        "failure": None, "bytes": 0, "records": copy.deepcopy(records)},
+                    "output": output, "phase": "waiting_input", "fault": None}
+        loaded = snapshot(["S04_ORACLE_READY"])
+        record("send", "runtime", 11, 1, "input", {"intent": {"type": "commit_text", "value": "1"}})
+        stop = {"program_generation": 1, "session_epoch": 1}
+        variable = {"name": "RESULT", "symbol_key": [1], "storage": "global", "dimensions": [100], "value_kind": "integer"}
+        listing = {"type": "list_variables", "stop": stop, "cursor": None, "limit": 256}
+        record("send", "debug", 12, 1, "request", {"grant": {"id": 1}, "command": listing})
+        record("receive", "debug", 5, 1, "response",
+               {"type": "variable_page", "value": {"stop": stop, "variables": [variable], "next_cursor": None}},
+               sequence=1, correlation=12)
+        reference = {"symbol_key": [1], "storage": "global", "fiber_id": None, "frame_id": None,
+                     "generation": 1, "character": None, "indices": [10]}
+        command = {"type": "read_variable", "stop": stop, "value": reference}
+        value = {"type": "integer", "value": 0}
+        response = {"type": "variable_value", "value": {"reference": reference, "value": value, "revision": 0}}
+        record("send", "debug", 13, 1, "request", {"grant": {"id": 1}, "command": command})
+        record("receive", "debug", 6, 1, "response", response, sequence=2, correlation=13)
+        final = snapshot(["S04_ORACLE_READY", "S04_ENTRY_BEGIN", "S04_CASE_COMPLETE"])
+        inspected = {"version": 1, "stop": stop, "values": {"RESULT:10": {
+            "present": True, "value": value, "command": command, "response": response}}}
+        project_hashes = project_payload_hashes(fixture, inventory)
+        exported = []
+        for name, hashes in project_hashes.items():
+            if name.endswith(".erb"):
+                exported.append({"relativePath": name, "category": "erb", "payloadKind": "utf8",
+                                 "contentHash": hashes["decodedUtf8Blake3"], "byteLength": hashes["decodedUtf8Bytes"]})
+        identity_snapshot = copy.deepcopy(final)
+        identity_snapshot["lastDownload"] = {"projectIdentityFiles": exported}
+        packets = [{"type": "header", "identity": identity, "caseIds": [case["id"]]},
+                   {"type": "case_begin", "case": case["id"], "requests": [request]},
+                   {"type": "observation", "case": case["id"], "stage": "loaded", "snapshot": loaded},
+                   {"type": "observation", "case": case["id"], "stage": "complete", "snapshot": final,
+                    "request": request, "inspect": inspected},
+                   {"type": "observation", "case": case["id"], "stage": "identity", "snapshot": identity_snapshot},
+                   {"type": "case_end", "case": case["id"], "captureComplete": True},
+                   {"type": "footer", "captureComplete": True}]
+        capture = {"version": 1, "kind": "rustyera_real_frontend_capture", "identity": identity,
+                   "caseIds": [case["id"]]}
+        def write():
+            lines = []
+            for index, packet in enumerate(packets):
+                lines.append(json.dumps({"index": index, **packet}).encode() + b"\n")
+            raw = b"".join(lines)
+            stored = gzip.compress(raw, mtime=0)
+            (root / "trace.ndjson.gz").write_bytes(stored)
+            capture["trace"] = {"path": "trace.ndjson.gz", "compression": "gzip",
+                                "storedBytes": len(stored), "storedSha256": hashlib.sha256(stored).hexdigest(),
+                                "decodedBytes": len(raw), "decodedSha256": hashlib.sha256(raw).hexdigest()}
+            path = root / "capture.json"
+            path.write_text(json.dumps(capture))
+            return path
+        return fixture, artifacts, capture, packets, write
+
+    def test_actual_typed_value_is_not_filled_from_fixture_expectation(self):
+        from frontend_capture import build_evidence
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, artifacts, _, _, write = self.make_capture(Path(directory))
+            evidence = build_evidence(write(), fixture, artifacts, Path(directory) / "frontend-root")
+            self.assertEqual(evidence["cases"][0]["steps"][0]["result"]["watches"], {"RESULT:10": 0})
+            self.assertEqual(evidence["frontendCapture"]["status"], "validated_observations_not_comparison_verdict")
+
+    def test_capture_rejects_hash_identity_order_and_provenance_tampering(self):
+        from frontend_capture import build_evidence
+        mutations = [
+            lambda capture, packets: capture["identity"].update(coreSha="a" * 39),
+            lambda capture, packets: capture["identity"].update(dirty="false"),
+            lambda capture, packets: capture["identity"].update(seed=1),
+            lambda capture, packets: capture["identity"]["provenance"].update(synthetic=True),
+            lambda capture, packets: capture["identity"]["fixtureInventory"][0].update(sha256="0" * 64),
+            lambda capture, packets: packets[1]["requests"][0].update(entry="UNRELATED"),
+            lambda capture, packets: packets[3]["snapshot"]["serviceEvidence"].update(overflow=True),
+            lambda capture, packets: packets[4]["snapshot"]["lastDownload"]["projectIdentityFiles"][0].update(contentHash="0" * 64),
+            lambda capture, packets: packets[3]["snapshot"]["serviceEvidence"]["records"][0].update(epoch=12),
+            lambda capture, packets: packets[3]["inspect"]["values"]["RESULT:10"].update(value={"type": "integer", "value": 55}),
+        ]
+        for mutate in mutations:
+            with self.subTest(mutation=mutate), tempfile.TemporaryDirectory() as directory:
+                fixture, artifacts, capture, packets, write = self.make_capture(Path(directory))
+                mutate(capture, packets)
+                with self.assertRaises((ValueError, KeyError)):
+                    build_evidence(write(), fixture, artifacts, Path(directory) / "frontend-root")
+
+    def test_truncated_trace_or_changed_artifact_never_emits_complete_evidence(self):
+        from frontend_capture import build_evidence
+        for mode in ("footer", "stored_hash", "artifact"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                fixture, artifacts, capture, packets, write = self.make_capture(Path(directory))
+                if mode == "footer":
+                    packets.pop()
+                path = write()
+                if mode == "stored_hash":
+                    capture["trace"]["storedSha256"] = "0" * 64
+                    path.write_text(json.dumps(capture))
+                if mode == "artifact":
+                    artifacts["runtime"].write_bytes(b"changed")
+                with self.assertRaises(ValueError):
+                    build_evidence(path, fixture, artifacts, Path(directory) / "frontend-root")
+
+    def test_missing_typed_inspection_stays_blocked(self):
+        from frontend_capture import build_evidence
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, artifacts, _, packets, write = self.make_capture(Path(directory))
+            packets[3].pop("inspect")
+            evidence = build_evidence(write(), fixture, artifacts, Path(directory) / "frontend-root")
+            self.assertEqual(evidence["cases"][0]["steps"][0]["status"], "blocked")
+            self.assertEqual(evidence["cases"][0]["steps"][0]["result"]["watches"], {})
+
+    def test_wasm_asset_revision_is_distinct_from_core_sha_and_checks_both_files(self):
+        from frontend_capture import build_evidence
+        for mode in ("core_sha", "wrapper", "runtime_path", "source_manifest"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture, artifacts, _, packets, write = self.make_capture(root)
+                if mode == "core_sha":
+                    packets[2]["snapshot"]["buildIdentity"]["wasmRevision"] = "a" * 40
+                elif mode == "wrapper":
+                    (root / "frontend-root/public/wasm/era_web_wasm.js").write_text("changed wrapper")
+                elif mode == "runtime_path":
+                    replacement = root / "copied-but-not-loaded.wasm"
+                    replacement.write_bytes(artifacts["runtime"].read_bytes())
+                    artifacts["runtime"] = replacement
+                else:
+                    (root / "frontend-root/src/main.ts").write_text("changed source")
+                with self.assertRaises(ValueError):
+                    build_evidence(write(), fixture, artifacts, root / "frontend-root")
+
+    def test_later_identity_export_cannot_supply_completion_debug_replies(self):
+        from frontend_capture import build_evidence
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, artifacts, _, packets, write = self.make_capture(Path(directory))
+            # Keep only load + menu input at completion. The later identity
+            # snapshot still has all debug replies and must not fill this gap.
+            packets[3]["snapshot"]["serviceEvidence"]["records"] = (
+                packets[3]["snapshot"]["serviceEvidence"]["records"][:5])
+            with self.assertRaises(ValueError):
+                build_evidence(write(), fixture, artifacts, Path(directory) / "frontend-root")
+
+    def test_raw_and_decoded_utf8_hashes_do_not_conflate_a_bom(self):
+        from frontend_capture_io import fixture_inventory
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "source.erb").write_bytes(b"\xef\xbb\xbf@A\nRETURN\n")
+            item = fixture_inventory(root)[0]
+            self.assertNotEqual(item["sha256"], item["decodedUtf8Sha256"])
+
+    def test_strict_cbor_rejects_duplicate_keys_trailing_data_tags_and_depth(self):
+        import cbor2
+        from frontend_capture_io import decode_payload
+        payloads = [bytes.fromhex("a200010002"), bytes.fromhex("a000"), bytes.fromhex("c20101"),
+                    bytes.fromhex("9fff"), b"\x81" * 129 + b"\x00"]
+        for payload in payloads:
+            with self.subTest(payload=payload[:20]), self.assertRaises((ValueError, cbor2.CBORDecodeError)):
+                decode_payload(list(payload))
+
+    def test_service_context_probe_unicode_cut_and_versions_are_checked(self):
+        import cbor2
+        from frontend_capture_services import check_pair, negotiated
+        context = {0: 10, 1: 11, 2: 12}
+        document = {0: [[0, ["😀", 0, 4]]]}
+        query = {0: context, 1: {}, 2: [{0: 3, 1: document, 2: 0,
+                                      3: [{0: 7, 1: [0], 2: 4, 3: 2}]}]}
+        answer = {0: context, 1: [{0: 3, 1: [0, [1000, [{0: 7, 1: 1000}]]]}]}
+        request = {"operation": "html_string_len", "payload": list(cbor2.dumps(query))}
+        response = {"result": {"type": "ready", "payload": list(cbor2.dumps(answer))}}
+        self.assertEqual(check_pair(request, response), "ready")
+        for cut in ({0: 7, 1: [0], 2: 1, 3: 1}, {0: 7, 1: [0], 2: 4, 3: 1}):
+            query[2][0][3] = [cut]
+            request["payload"] = list(cbor2.dumps(query))
+            with self.assertRaises(ValueError):
+                check_pair(request, response)
+        with self.assertRaises(ValueError):
+            negotiated({"services": [{"kind": "presentation_query", "operation": "html_string_len",
+                        "versions": {"minimum": {"major": 1, "minor": 0},
+                                     "maximum": {"major": 1, "minor": 0}}}]})
+
+    def test_canvas_reply_revision_and_argb_are_not_invented_or_clamped(self):
+        import cbor2
+        from frontend_capture_services import check_pair
+        request = {"operation": "sample_canvas_pixel", "payload": list(cbor2.dumps({
+            0: {0: 1, 1: 2, 2: 3}, 1: 751, 2: 9, 3: {0: 0, 1: 0}}))}
+        for context, revision, argb in (({0: 1, 1: 2, 2: 4}, 9, 0),
+                                        ({0: 1, 1: 2, 2: 3}, 8, 0),
+                                        ({0: 1, 1: 2, 2: 3}, 9, -1)):
+            response = {"result": {"type": "ready", "payload": list(cbor2.dumps({
+                0: context, 1: revision, 2: argb}))}}
+            with self.assertRaises(ValueError):
+                check_pair(request, response)
+
+    def test_actual_payload_inventory_does_not_accept_raw_bom_hash_as_utf8(self):
+        from frontend_capture_io import fixture_inventory, project_payload_hashes, validate_project_files
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "case.erb").write_bytes(b"\xef\xbb\xbf@A\nRETURN\n")
+            hashes = project_payload_hashes(root, fixture_inventory(root))
+            row = hashes["case.erb"]
+            exported = [{"relativePath": "case.erb", "category": "erb", "payloadKind": "utf8",
+                         "contentHash": row["rawBlake3"], "byteLength": row["rawBytes"]}]
+            with self.assertRaises(ValueError):
+                validate_project_files(exported, hashes, ["case.erb"])
+            exported[0].update(contentHash=row["decodedUtf8Blake3"], byteLength=row["decodedUtf8Bytes"])
+            self.assertEqual(validate_project_files(exported, hashes, ["case.erb"]), exported)
+
+    def test_json_duplicate_keys_and_fixture_symlinks_are_rejected(self):
+        from frontend_capture_io import fixture_inventory, json_bytes
+        with self.assertRaises(ValueError):
+            json_bytes(b'{"version":1,"version":2}')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "data.txt").write_text("data")
+            (root / "link.txt").symlink_to(root / "data.txt")
+            with self.assertRaises(ValueError):
+                fixture_inventory(root)
+
+
 if __name__ == "__main__":
     unittest.main()

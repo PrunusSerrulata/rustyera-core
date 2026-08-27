@@ -178,3 +178,59 @@ The pinned snake RNG roundtrip observation reports `pinned_oracle_rng_state_loss
 to `GetRand`, so `INITRAND` restores the unchanged zero RANDDATA. The driver preserves this
 as an observed baseline defect, not a successful roundtrip; original-oracle equality remains
 strict. Normal reference engine semantics are unchanged.
+
+
+## Batch 1D real frontend capture adapter
+
+## Python dependency contract
+
+Python 3.10+; `cbor2>=6.1.3,<7` and `blake3>=1.0.5,<2`. These are **tool-only**
+dependencies, neither installed nor imported during this implementation task.
+There is deliberately no permissive fallback if strict decoder options are
+unavailable. The normal suite now imports these only inside new adapter tests;
+the parent/test agent must prepare the declared environment before D tests.
+
+The decoder uses the maintained library's `allow_duplicate_keys=False`,
+`allow_indefinite=False`, `max_depth=128`, bounded source bytes and overrides for
+semantic tags; `tag_hook` alone would not reject builtin tags. It also rejects
+trailing bytes and checks the decoded structure. See the
+[official cbor2 decoder API](https://cbor2.readthedocs.io/en/latest/api.html#cbor2.CBORDecoder)
+and the [BLAKE3 Python binding](https://github.com/oconnor663/blake3-py).
+
+## Run after the parent's D review and static gates
+
+These are **future commands**, not results:
+
+```sh
+python3 tools/snake-compatibility-oracle/frontend_capture.py \
+  --capture /isolated/real-client/capture.json \
+  --fixture /isolated/paired-effective-fixture \
+  --artifact runtime=/actual/public/wasm/era_web_wasm_bg.wasm \
+  --artifact frontend=/isolated/frontend-source-manifest.json \
+  --artifact client=/actual/installed/browser-binary \
+  --frontend-root /actual/frontend-source-root \
+  --wasm-root /actual/public/wasm \
+  --output /isolated/real-client/comparison-evidence.json
+
+python3 tools/snake-compatibility-oracle/recompare.py \
+  --fixture /isolated/paired-effective-fixture \
+  --oracle-evidence /isolated/fixed-oracle/evidence.json \
+  --rust-evidence /isolated/real-client/comparison-evidence.json \
+  --output /isolated/real-client/comparison.json
+```
+
+For Tauri use actual native runtime/client artifacts and the actual embedded
+bundle manifest/root. The paired effective fixture bytes must be frozen before
+both engines run; no adapter-time config or source mutation. Run original and
+snake independently and preserve reference baseline/wrapper identities.
+
+`build_evidence(capture_path, fixture_root, artifact_paths, frontend_root=None,
+wasm_root=None)` exposes the same offline conversion for tools/tests. It returns
+the existing v1 comparison shape with `frontendCapture` provenance and status
+`validated_observations_not_comparison_verdict`. The existing comparator may
+report matched logical observables, different values, blocked or incomparable
+error schemas. Neither adapter success nor registration/grep/exit status proves
+service parity. Real font/platform differences, full DOM watchdog behavior and
+service side-effect equivalence require the actual raw-capture comparison and
+the parent's behavioral acceptance. Coverage trace binding remains
+`unverified_capture_requires_behavior_review` until that review is recorded.

@@ -1,0 +1,736 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1
+    },
+    "snake": {
+      "semantic_version": 2,
+      "policy_version": 2
+    }
+  },
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "status": "prepared_not_executed",
+  "cases": [
+    {
+      "id": "s04-empty-lazy",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_EMPTY",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULTS:0",
+              "RESULTS:1"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 0,
+                  "RESULT:12": 1,
+                  "RESULT:13": 0,
+                  "RESULTS:0": "head-sentinel",
+                  "RESULTS:1": "tail-sentinel"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 0,
+                  "RESULT:12": 1,
+                  "RESULT:13": 0,
+                  "RESULTS:0": "head-sentinel",
+                  "RESULTS:1": "tail-sentinel"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true
+    },
+    {
+      "id": "s04-first-row-half-units",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_FIRST_ROW",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15",
+              "RESULT:16",
+              "RESULT:17",
+              "RESULT:18"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:15": 1,
+                  "RESULT:16": 1,
+                  "RESULT:17": 1,
+                  "RESULT:18": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:15": 1,
+                  "RESULT:16": 1,
+                  "RESULT:17": 1,
+                  "RESULT:18": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true,
+      "observationNotes": "FontSize must actually be 16 in both sessions. Pixel values remain observed; half-unit relation uses that declared configuration, never CSS ch."
+    },
+    {
+      "id": "s04-lines-width-evaluation",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_LINES",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULTS:0",
+              "RESULTS:1"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 2,
+                  "RESULT:11": 2,
+                  "RESULT:12": 3,
+                  "RESULTS:0": "head-sentinel",
+                  "RESULTS:1": "tail-sentinel"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 2,
+                  "RESULT:11": 2,
+                  "RESULT:12": 3,
+                  "RESULTS:0": "head-sentinel",
+                  "RESULTS:1": "tail-sentinel"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true
+    },
+    {
+      "id": "s04-substring-explicit-break",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_SPLIT_BREAK",
+            "watch": [
+              "RESULTS:10",
+              "RESULTS:11",
+              "RESULTS:12"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:10": "<b>A</b>",
+                  "RESULTS:11": "<b>A</b>",
+                  "RESULTS:12": "<b>B</b>"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:10": "<b>A</b>",
+                  "RESULTS:11": "<b>A</b>",
+                  "RESULTS:12": "<b>B</b>"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true
+    },
+    {
+      "id": "s04-substring-unicode-cuts",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_UNICODE",
+            "watch": [
+              "RESULTS:10",
+              "RESULTS:11",
+              "RESULTS:12",
+              "RESULTS:13"
+            ]
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true,
+      "observationNotes": "Observe exact raw head/tail and UTF16 code units. Rust must not split a valid surrogate pair. Reference may split UTF16 code units; do not replace malformed raw evidence by a normalized replacement-character golden."
+    },
+    {
+      "id": "s04-entity-measurement",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_ENTITIES",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:14": 1,
+                  "RESULT:15": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:14": 1,
+                  "RESULT:15": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true
+    },
+    {
+      "id": "s04-substring-amp-error",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_AMP_ERROR",
+            "watch": [
+              "RESULTS:0",
+              "RESULTS:1"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULTS:0": "head-sentinel",
+                  "RESULTS:1": "tail-sentinel"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULTS:0": "head-sentinel",
+                  "RESULTS:1": "tail-sentinel"
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "Whole Unescape yields ampersand; GetSubStr measures that lone ampersand through HtmlLength, whose Unescape rejects a missing semicolon. Do not turn this into a successful split.",
+            "snake": "Whole Unescape yields ampersand; GetSubStr measures that lone ampersand through HtmlLength, whose Unescape rejects a missing semicolon. Do not turn this into a successful split."
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true
+    },
+    {
+      "id": "s04-late-parse-error-before-flag",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_LATE_ERROR",
+            "watch": [
+              "RESULT:10",
+              "FLAG:90"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:10": 777,
+                  "FLAG:90": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:10": 777,
+                  "FLAG:90": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "HtmlLength parses the full source and rejects the unmatched closing b after the first row, before evaluating the pixel flag.",
+            "snake": "HtmlLength parses the full source and rejects the unmatched closing b after the first row, before evaluating the pixel flag."
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true
+    },
+    {
+      "id": "s04-substring-lazy-error-frontier",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_LAZY_FRONTIER",
+            "watch": [
+              "RESULTS:10",
+              "RESULTS:11"
+            ]
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true,
+      "observationNotes": "Zero-budget cut can stop before the invalid closing tag. Raw outcome is observed; full-tree eager validation must not move an unreachable parse error ahead of the cut. Width of A must be observed, not assumed."
+    },
+    {
+      "id": "s04-style-and-position",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_STYLE",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true,
+      "observationNotes": "Record integer part quantization, core button grouping/position, no-wrap and sumWidths. Never substitute DOM bounding-box maximum or promise pixel equality between GDI/Skia/browser fonts."
+    },
+    {
+      "id": "s04-missing-image",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_MISSING_IMAGE",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:12": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:12": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true,
+      "observationNotes": "Missing sprite uses normalized AltText and default regular font. Width is an observation. A declared resource failing hash/decode is a different backend error, never this branch."
+    },
+    {
+      "id": "s04-canvas-two-pixels-revision",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_CANVAS",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15",
+              "RESULT:16",
+              "RESULT:17",
+              "RESULT:18",
+              "RESULT:19",
+              "RESULT:20",
+              "RESULT:21",
+              "RESULT:22",
+              "RESULT:23",
+              "RESULT:24",
+              "RESULT:25"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 1,
+                  "RESULT:12": 1,
+                  "RESULT:13": 4294901760,
+                  "RESULT:14": 4278190335,
+                  "RESULT:15": 1,
+                  "RESULT:16": 4278255360,
+                  "RESULT:17": 1,
+                  "RESULT:18": 2,
+                  "RESULT:19": 32
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 1,
+                  "RESULT:12": 1,
+                  "RESULT:13": 4294901760,
+                  "RESULT:14": 4278190335,
+                  "RESULT:15": 1,
+                  "RESULT:16": 4278255360,
+                  "RESULT:17": 1,
+                  "RESULT:18": 2,
+                  "RESULT:19": 32
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true,
+      "observationNotes": "Source-derived expectations require FontSize16 and actual initialized bitmap. Canvas is never mounted. Compare real replay at each revision; source authoring is not evidence. New watches20..25 observe alpha128 pure-red replacement, transparent clear, and unchanged opaque-blue neighbor; never prefill these from expected values."
+    },
+    {
+      "id": "s04-canvas-invalid-dimensions",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_CANVAS_ERROR",
+            "watch": [
+              "RESULT:10"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:10": 777
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:10": 777
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "GraphicsCreateMethod rejects nonpositive width with CodeEE; do not replace the exception by a successful zero result.",
+            "snake": "GraphicsCreateMethod rejects nonpositive width with CodeEE; do not replace the exception by a successful zero result."
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true
+    },
+    {
+      "id": "s04-canvas-outside-x",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_CANVAS_OUTSIDE",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": -1,
+                  "RESULT:12": -1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": -1,
+                  "RESULT:12": -1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true,
+      "observationNotes": "Use positive x overflow only. Pinned reference duplicates p.X<0 and does not check negative y correctly; negative-y is not folded into this golden."
+    },
+    {
+      "id": "s04-full-layout-later-rows",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_LATER_ROWS",
+            "watch": [
+              "RESULT:10"
+            ]
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true,
+      "observationNotes": "Observe full ButtonsToDisplayLines execution, including suffix reshaping and indivisible missing-image AltText. Depending on measured font widths this may reject after the first row; never predeclare success from first-row A."
+    },
+    {
+      "id": "s04-file-two-pixels",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_FILE",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true,
+      "observationNotes": "Default GCREATEFROMFILE resolves ContentDir/resources using service-pixels.png, not relative=1 process CWD. Observe actual decode/ARGB and alpha; do not invent cross-backend alpha rounding or successful file creation."
+    },
+    {
+      "id": "s04-length-int32-units",
+      "group": "SERVICES",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_LENGTH_UNITS",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15",
+              "RESULT:16",
+              "RESULT:17"
+            ]
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "s04_real_frontend_service_observations",
+      "snakeTargetStatus": "requires_batch_1d_acceptance",
+      "observation": true,
+      "observationNotes": "Reference-only int32 pixel/default/nonzero-flag observations use exact float32 power-of-two space geometry. Real Browser/Tauri reject the first 1073741824px slot at the 32768px projection limit with resource_limit before unit conversion or mounting. Record an explicit safety difference and blocked fault watches; do not report a conversion match or enlarge/bypass the projection limit. Core helper/planner unit checks separately use synthetic readiness and retain accumulated layout bounds."
+    }
+  ]
+}
