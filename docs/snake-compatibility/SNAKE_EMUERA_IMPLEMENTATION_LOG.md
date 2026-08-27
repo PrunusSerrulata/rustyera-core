@@ -438,7 +438,7 @@ WASM/native core SHA。不得自动推送/合并；远端不可获取的本地 S
 | 1A | 已完成，保留明确差异与观察限制 | 1 | 2026-08-27 23:25:42 +08:00 | core、runtime-tester、TUI、Web Vitest/Rust、oracle Python、supervisor unit 各启动一次 | S01/S02、三端摄取和只读资源清单；动态已启动，首次失败与定向复验分别记录 |
 | 1B | 已完成本子批范围，保留明确差分边界 | 1 | 2026-08-28 01:47:57 +08:00 | core workspace / runtime-tester 首次通过 | 双 oracle 各 23 可比项匹配；错误观察限制与批次 2 实参差异见下文 |
 | 1C | 已完成并分项提交；差异及首次失败保留 | 1 | 2026-08-28 03:17:34 +08:00 | core/tool/TUI/Web Vitest/Web Rust、双 smoke/列 Oracle、Python driver、四项 BBAS 各一次 | S12、GLOBAL、安全读取；三端实际数据断面通过 |
-| 1D | 隔离实现完成，唯一独立重构审查中 | 1 | 未启动 | 无 | S04；活动仓未合入，尚未测试 |
+| 1D | 静态门禁中，Clippy 失败修复中 | 1 | 已启动，无总时限 | 无 | 格式及 check 定向修复通过，尚无最小回归/全量/动态 |
 
 #### 1A 实施进度（静态已执行，动态验收未完成）
 
@@ -917,14 +917,15 @@ C ABI 由本组 `target/core-static/debug/libera_runtime_capi.dylib` 重建，SH
   XML_REPLACE 重载四项实际行为；测试工具、文档与流程不列为功能。1C 完成不等于
   批次 1 完成：1D 的真实 HTML/pointer/canvas 服务、覆盖报告及最终组合验收仍待执行。
 
-#### 1D 服务层实施入口（唯一审查中，未测试）
+#### 1D 服务层实施入口（core 首次全量通过，其余门禁进行中）
 
 - Web 独立执行者拥有 runtime service 生命周期、pointer 规范按钮值观察及独立 canvas
   replay sampling；不修改正在验证的 core，也不修改 1C 的 browserProject/resource/storage 文件。
 - pointer/canvas 保持 v1 payload，使用实际 viewport、三 projection revision、session epoch
   和 request ID；MOUSEY 按固定参考的 clientY-clientHeight 映射。HTML v2 留待 core 契约与
   规范树测量实现，不提前宣告能力；Rust bridge、共享版本、pin/锁文件由主串行整合。
-- 当前无测试/构建/格式化/审查/提交；1D 统一集成仍等待 1A–1C 门禁及本批唯一审查。
+- 以下隔离开发步骤为历史过程；当前 1A–1C 已收尾，D 唯一审查及源码整改已完成。
+  D 静态与动态结果单独记录，不继承 C 的通过结论。
 - 隔离实现已包含保留源码切分、完整参考 length layout 计划、编译器惰性 HTML 参数路径、
   runtime v2 多轮续接/flow/snapshot 身份约束；Web CBOR/provider 接线、TUI 明确拒绝
   的五项 C ABI 断面及覆盖报告 schema 3 已交付隔离源码。共享格式草案为 compiler ABI 42、host ABI 13、runtime snapshot 21，其余
@@ -937,6 +938,72 @@ C ABI 由本组 `target/core-static/debug/libera_runtime_capi.dylib` 重建，SH
 - 当前在隔离源码上启动本子批唯一独立 `$refactor-rustyera-code` 审查，次数 1，入口
   `1D/review-start.json`。未运行任何 D 测试/构建；待落实全部要求、1C 收尾及活动仓
   整合后，才能启动 D 的首条静态命令。该审查不是 1C 的二次审查。
+
+- 1C 收尾证据独立核对完毕：`1C/acceptance-summary.json` SHA-256 为
+  `02542a2f59330e0b7b6519ac81ab6438d39a9dc4b2d5e7a5785e83673a826e43`，Markdown 为
+  `5809e8eeec0afaca141119d9b1dbf42f36c17fd1b74d6ef62c37aa27e1959c8c`。
+  包含 174 条命令、17 套首次全量（13 项退出 0、4 项非零）、逐 case 有效证据及
+  完整日志/产物摘要；历史 dirty 构建身份与后续交付 commit 分列。core 收尾文档
+  `3640b9e`、根更新日志 `6449a62` 已提交，不推送、不合并。
+- 1D 唯一审查已结束，正式报告 `1D/review.md`、逐文件清单 `review-results.json`。
+  六项要求为 R1 单像素替换、R2 逻辑取消释放队列但保留底层解码配额、R3 巨型槽安全
+  拒绝差异、R4 坏回包 continuation 终止、R5 真实失焦/挂起取消/切项目驱动、R6 独立
+  no-progress 捕获入口。不得再次启动或恢复审查；所有要求落实后才能首测。
+- 三仓原 C 输入均已提交，180 项 D 源经活动基线与隔离输出逐项 SHA-256 核对后合入，
+  含三份 71 字节 PNG；记录 `1D/active-integration.json`。没有覆盖未列入的文件，
+  没有运行旧 assemble 脚本或测试。compiler42/host13/runtimeSnapshot21 仍需最终门禁。
+- R1/R2 已补产品及回归源码：单像素局部 ImageData 替换，每请求独有 renderer/surface，
+  取消解除逻辑等待；跨请求/代际共享 32 个未结束解码及像素配额，底层结束后才释放。
+  四种异步阶段的取消/迟到清理及配额测试已编写，尚未运行。真实 fixture 新增 alpha128
+  覆盖、透明清除及邻像素不变观察；不声称所有低 alpha RGB 在平台上逐字节相同。
+- R3 保留 Browser/Tauri 32768px 投影上限；menu17 的十亿像素 space 将作为
+  `resource_limit` 安全拒绝差异，不能证明单位换算或列作匹配。已补 provider 拒绝回归、
+  fixture 说明和验收性质；core 的 int32 单位/helper/累计溢出回归使用 synthetic ready。
+  R4 typed 解码失败现转为 `ServiceFailure`，增加三个查询 × 五种坏 CBOR 与重复回包
+  的实际 drive 回归源码，保持 RESULT/RESULTS 和后续语句 sentinel；尚未运行。
+- R5 已落实真实授权资源后的受限 PNG 流、真实 Image.decode 阶段记录、挂起中重启取消
+  与独立项目切换驱动；renderer 的 CORS 仅匹配已配置的精确测试 URL/资源。真实窗口
+  失焦不受支持时仍为验收阻塞，不能用合成事件通过。R6 的精确 ready marker 用例已
+  合入现有测试；完整快照保留历史，但两类 ledger 的累积记录不计为状态进展。
+- 六项整改源码及相应用例均已落实；主智能体完成统一格式化（Rust 60 文件、Web 65 文件），
+  未运行测试或构建。`1D/review-resolution.json` 记录逐项入口，`source-freeze.json` 记录
+  首测前文件摘要。静态执行仅授权 gpt-5.6-terra / low；先 core 格式/check/Clippy/最小
+  回归，随后唯一全量。core 契约提交与前端完整绑定完成后才进入前端静态门禁；所有
+  必需静态通过前，禁止任何动态客户端或 Oracle。磁盘约 17 GiB，构建串行且关闭 incremental。
+- `1D/command-matrix.json` 已记录静态顺序、单套全量及动态范围，尚未执行。监督器
+  逐字节复用已验证的 C 工具，仅输出目录隔离；`.venv-capture` 使用已有 Python3.12.13，
+  经批准仅补装 cbor2 6.1.4 与 blake3 1.0.9，不下载 Python/Chromium。四份待验证的
+  原版/蛇版普通/危险 fixture 副本位于 `1D/paired-fixtures/`，保留参考配置并显式设置
+  Rera font16/line20/window320/profile，项目 font 目录使用固定 4,486,740 字节字体。
+  未将准备输入或依赖安装写成测试通过。
+
+- D 首次格式门禁发现三处换行问题，cargo fmt 修复后定向通过；首次 workspace check
+  因测试访问私有模块失败，改用现有 re-export 后 era-runtime all-targets 定向通过。
+  首次 workspace Clippy 停于新增 HTML 查询模块的转换、导入、函数结构与文档 lint，
+  后续已按下述定向修复。首次失败时没有最小回归、全量或动态已启动。原始命令、起止时间及 gzip 日志保留于
+  `1D/validation/runs/`；首次失败与修复后结果分别记录，总测试时限仍取消。
+
+- 首测时间为 2026-08-28 05:52:36 +08:00。HTML 的 checked 转换、显式导入、私有拆分与
+  文档修复后，HTML 及依赖 crate 的 check/Clippy 均通过；格式门禁也恢复通过。运行时
+  最小回归发现两条 fixture 使用了普通字符串赋值而非表达式赋值，以及一条重载测试
+  错用 envelope 序号；分别修正后仅重跑三个失败节点，均通过。
+- canvas 最小回归发现实际产品问题：REDRAW 0 时观察屏障只发布已有 pending frame，
+  未 materialize 新绘图 replay。现显式观察先构建 stale replay，再发布；普通 flush
+  行为不变。回归检查 Snapshot/Delta 中真实 canvas id/revision/Clear 命令先于 service
+  请求，并验证 ARGB 返回。相关 check/Clippy、canvas、pointer、HTML 及原有 redraw/skip/
+  replay 边界定向通过；坏 CBOR 的三种查询 × 五类输入回归也通过。该修复单独提交。
+- core workspace 首次且唯一全量 `core-workspace-first` 退出 0，约 96 秒；没有再次运行。
+  独立 runtime-tester 的格式/check/Clippy 通过，coverage 最小集首次 17 通过、1 失败：
+  CHARADATA fixture 未启用 binary save，且报告用带维度的索引名查变量 schema。
+  已修正 fixture 选项与报告中的基变量名/维度映射，格式/check/Clippy 与失败单例
+  定向通过。随后工具首次且唯一全量 57 项通过（6.08 秒）；Python 捕获最小 12 项、
+  首次且唯一 driver 全量 34 项通过。tester 与 C ABI dev 构建通过。
+  前端门禁、真实客户端、双 Oracle 和真实蛇版 TW 新覆盖报告仍未执行。
+- 磁盘不足 20 GiB 后保持单构建，关闭 incremental。仅清理本组停用 Web target 内
+  30 个旧 runtime/bridge/native `.rlib`，逻辑大小 3,198,141,408 字节；逐项校验路径、
+  inode、mtime 与当前构建归属。空闲从约 15.7 增至 18.5 GiB，记录为
+  `1D/disk-reclaim-web-{plan,result}.json`。未删除 core 正在使用的 target、任何可执行
+  文件、WASM/C ABI、批次 0 或 1C 冻结证据；没有下载 Chromium。
 
 
 ### 所作改动
