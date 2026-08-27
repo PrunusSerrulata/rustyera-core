@@ -51,6 +51,12 @@ objects set the specified RESULT before failing. Value methods remove/recreate
 columns or whole tables, and replace a table through XML, proving that the old
 selection cannot target a replacement with the same name.
 
+Explicit Null uses an interior omitted value followed by the `s, ""` pair. The
+first Oracle run rejected a trailing omission because its parser discarded that
+slot, leaving an unmatched column argument. The corrected fixture exercises Null
+assignment without changing the engine's argument policy. First-run evidence is
+retained separately; this edit is not a claim that those observations were rerun.
+
 The XML-default roundtrip compares reconstructed values, not serializer spelling.
 It includes quotes, Unicode, ampersands, CR, LF and TAB; TAB uses a string escape
 because the reference UNICODE(9) reports a control-character warning and returns

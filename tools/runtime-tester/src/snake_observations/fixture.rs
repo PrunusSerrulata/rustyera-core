@@ -180,6 +180,15 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
             fs::read_to_string(root.join("csv/VarExt.csv"))?,
         ));
         load_fixture_resources(root, &root.join("plugins"), &mut files)?;
+        let patterns = root.join("patterns");
+        match fs::symlink_metadata(&patterns) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                load_fixture_resources(root, &patterns, &mut files)?;
+            }
+            Ok(_) => return Err("observation patterns must be a regular directory".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     Ok(files)
 }
@@ -355,6 +364,11 @@ mod tests {
             "plugins/map.xml",
             "plugins/dataset-schema.xml",
             "plugins/dataset.xml",
+            "patterns/SEED.TXT",
+            "patterns/[ab].txt",
+            "patterns/a.txt",
+            "patterns/é.txt",
+            "patterns/😀.txt",
         ] {
             let resource = manifest
                 .files
@@ -396,6 +410,10 @@ mod tests {
             (
                 "column-basic-defaults",
                 json!({"RESULT:10":777,"RESULT:11":11,"RESULTS:10":"默认&A<quote>"}),
+            ),
+            (
+                "column-empty-string-and-explicit-null",
+                json!({"RESULT:10":0,"RESULT:11":1,"RESULT:12":0,"RESULT:13":0}),
             ),
             (
                 "column-update-no-backfill",

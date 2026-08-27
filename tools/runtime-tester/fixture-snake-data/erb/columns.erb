@@ -79,11 +79,11 @@ CALL C1_SETUP
 DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, 11
 DT_COLUMN_OPTIONS "column_table", "s", DEFAULT, ""
 C1_DUMMY = DT_ROW_ADD("column_table")
-C1_DUMMY = DT_ROW_ADD("column_table", "n", )
+C1_DUMMY = DT_ROW_ADD("column_table", "n", , "s", "")
 RESULT:10 = DT_CELL_ISNULL("column_table", 0, "n")
 RESULT:11 = DT_CELL_ISNULL("column_table", 1, "n")
 RESULT:12 = DT_CELL_ISNULL("column_table", 0, "s")
-RESULT:13 = STRLEN(DT_CELL_GETS("column_table", 0, "s"))
+RESULT:13 = STRLENS(DT_CELL_GETS("column_table", 0, "s"))
 RETURN RESULT:0
 
 @C1_CASE_NON_NULL_DEFAULT
@@ -237,7 +237,7 @@ RETURN RESULT:0
 @C1_CASE_XML_NULL_OBSERVATION
 CALL C1_SETUP
 DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, 17
-C1_DUMMY = DT_ROW_ADD("column_table", "n", )
+C1_DUMMY = DT_ROW_ADD("column_table", "n", , "s", "")
 RESULT:10 = DT_CELL_ISNULL("column_table", 0, "n")
 C1_XML '= DT_TOXML("column_table", C1_SCHEMA)
 RESULTS:10 '= C1_SCHEMA
