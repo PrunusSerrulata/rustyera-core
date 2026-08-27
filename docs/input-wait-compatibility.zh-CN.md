@@ -1,8 +1,12 @@
 # 输入与等待兼容性
 
-本文记录 runtime 对输入操作的预期行为，参考基准为 Emuera 提交
+本文记录 runtime 对输入操作的预期行为，参考基准为原版 `emuera.em` 提交
 `26a35dc9334bb67590b96f7b8efbefbf199e391e`。当前 analyzer、compiler、协议、VM
 能力检查以及基础 runtime 等待/服务链路均已存在。
+
+本文中“固定参考实现未定义”仅指原版，不代表蛇版 emuera 也未定义。蛇版输入扩展
+（包括 NF 等待）的修改须按 [core 测试 skill](../.agents/skills/test-rustyera-core/SKILL.md)
+运行蛇版 oracle；涉及兼容行为或需要原版对照时，还必须运行原版并分别记录结果。
 
 ## 临时等待的含义
 

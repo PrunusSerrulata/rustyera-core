@@ -40,15 +40,26 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
   caller-pumped runtime。
 - `crates/era-runtime-ffi`、`crates/era-runtime-capi`：安全 Rust FFI 契约及唯一包含
   `unsafe` 指针边界的 C ABI 动态库实现。
-- `../emuera.em`：独立 Git 仓库中的固定版本 C# Emuera 参考实现。
-- `../eraTW`：本地真实游戏 eraTW 脚本集，不纳入版本控制。
+- `../emuera.em`：独立 Git 仓库中的固定版本原版 C# Emuera 参考实现。
+- `../emuera_lazyloading_selfmodified_version`：独立 Git 仓库中的蛇版 emuera。
+- `../games/eraTW`：原版 TW（eraTW）脚本集；`../games/eratw-sub-modding`：蛇版TW。
+  两者均为本地游戏，不纳入版本控制，不得混用。
 - `../emuera.em/emuera-reference-cli`：绕过 UI 调用参考实现的 NDJSON 测试工具；
   平台测试脚本位于 `tools/`。
+- `../emuera_lazyloading_selfmodified_version/emuera-reference-cli`：蛇版 emuera 的
+  NDJSON 测试工具；平台测试脚本和固定 fixture 位于其 `tests/`。
 - `rustyera-tui` 与 `rustyera-web` 是独立前端仓库；本仓库不得重新引入具体应用前端。
 - `tools/runtime-tester`：runtime 与 C ABI 的人工/长流程测试工具。
 
 保持各 crate 的职责边界。较大的实现应合理拆分为 module，不要堆积至单个源文件中。
 公共类型应尽量由 crate 根模块稳定地重新导出。
+
+## 术语与指代
+
+“蛇版emuera”专指 `../emuera_lazyloading_selfmodified_version`；“蛇版TW”专指
+`../games/eratw-sub-modding`；“eraTW”专指原版 TW `../games/eraTW`。单独的“蛇版”
+应根据上下文判断是引擎还是游戏；无法可靠推测时必须询问用户，不得默认映射。
+“原版参考实现”指 `../emuera.em`，不指任一 TW 游戏目录。
 
 ## 当前实现状态与范围
 
@@ -86,28 +97,33 @@ C ABI 或固定 Git revision 使用本仓库，不得让 runtime 反向依赖具
 
 ## C# 参考实现边界
 
-兄弟仓库 `../emuera.em` 是可移植语言与运行行为的兼容性标准，默认视为只读第三方代码。
+兄弟仓库 `../emuera.em` 是默认的可移植语言与运行行为兼容性基准；涉及蛇版 emuera
+的功能以 `../emuera_lazyloading_selfmodified_version` 为对应 oracle。两者均默认视为
+只读第三方代码，测试选择遵循下文与 `$test-rustyera-core`，不得将两者的结果混为一谈。
 若其行为依赖特定客户端或平台，应按最高设计准则提炼语义并记录有意差异，而不是把
 WinForms/GDI 的实现细节引入 runtime。
 
 - 除非用户明确要求修改 C# 参考实现，否则不允许修改、格式化、重构或自动修复
-  `../emuera.em` 中的任何代码。
+  两个参考仓库中的任何代码（下述 reference CLI 故障修复例外除外）。
 - 不要为了让 Rust 实现更容易而改变参考实现的语义。
 - 可以只读搜索和调试参考源码，以确认行为、错误条件和内部执行顺序。
 - 若任务明确授权修改参考实现，改动必须最小化，并使用仅在 headless/reference
   模式启用的隔离入口；同时单独报告所有参考目录内的改动。
 - 若 `emuera-reference-cli` 无法启动、提前退出或卡住，不得跳过 oracle 测试并把
   任务描述为已验证。应先定位并修复 reference CLI。为恢复 CLI 而确有必要时，
-  可以修改 `../emuera.em` 中仅供 reference/headless 路径使用的接入点，
+  可以修改本次选中的参考仓库中仅供 reference/headless 路径使用的接入点，
   无需改动正常游戏入口。
 - reference CLI 修复绝不得改变正常游戏链路的后端执行语义，也不得为迁就 Rust
   结果而改变 parser、数据加载、验证、执行或状态转移规则。正常模式必须继续调用
   原有逻辑；headless 分支只能隔离 UI、暴露只读状态或施加测试安全限制。
-- 所有 `../emuera.em` 内的 oracle 相关修改都必须逐文件、逐目的追加到
-  `../emuera.em/emuera-reference-cli/REFERENCE_CHANGES.md`，并在最终交付中另设清单报告。
+- 所有 oracle 相关修改都必须逐文件、逐目的追加到对应审计文档：原版为
+  `../emuera.em/emuera-reference-cli/REFERENCE_CHANGES.md`，蛇版为
+  `../emuera_lazyloading_selfmodified_version/emuera-reference-cli/HEADLESS_CHANGES.md`，
+  并在最终交付中按参考仓库另设清单报告。
   不得只用“修复了 reference CLI”概括参考目录改动。
 - 不要更新参考实现版本或 commit，除非用户明确要求。兼容基准固定为项目文档中
-  记录的 commit。
+  记录的 commit：原版为 `26a35dc9334bb67590b96f7b8efbefbf199e391e`，蛇版为
+  `fc4fb21416768c17256d0e82f997e5f99c9bba91`；wrapper 当前 commit 与语义基准分别记录。
 
 ## 实现规范
 
@@ -130,6 +146,18 @@ WinForms/GDI 的实现细节引入 runtime。
 每个开发任务都必须包含与改动对应的最小测试，不能仅以“可以编译”作为完成标准。
 修复 bug 时先添加稳定复现问题的回归用例；测试数据应尽可能小，并明确体现所验证
 的 Emuera 行为。
+
+在运行 C# reference 测试前，必须按本次开发、修改或修复涉及的行为选择 oracle：
+
+- 不涉及蛇版 emuera：沿用原版 `emuera.em` reference CLI。
+- 涉及蛇版 emuera：C# reference 测试改为运行蛇版 emuera 的 reference CLI 和对应
+  fixture，并执行 Rust/蛇版同输入差分，不能仍只跑原版。
+- 涉及蛇版 emuera 且涉及兼容行为，或还需要与原版参考实现对照：在蛇版测试之外，
+  还必须运行原版 reference CLI 并分别进行 Rust/原版对照，记录两套基准各自的结果和差异。
+
+上述选择不改变 Rust 静态门禁、回归测试和全量测试的顺序，也不扩大纯文档任务的验证
+范围。每套 oracle 的 smoke 只证明自身可用，不能替代 Rust 测试或同输入差分。
+蛇版TW与 eraTW 的真实游戏测试也不能替代对应引擎的 reference 测试。
 
 同一套全量测试每个任务只能启动一次；发现问题并修复后，只重跑直接受影响的最小
 测试集，不得重跑全量。端到端、长流程及 reference oracle 流程必须每 5 秒报告完整
@@ -179,6 +207,6 @@ reference oracle 与差分测试，以及结果报告要求；不得绕过或改
 ## 任务交付
 
 最终说明应简要列出实现行为、测试变更、`$test-rustyera-core` 要求的验证结果、尚未
-验证的内容或已知差异、commit message，以及对 `../emuera.em` 的全部修改。若未修改
-参考仓库，应明确写“无”；若有修改，应逐文件说明目的、headless 隔离条件及正常游戏
-语义不受影响的依据。
+验证的内容或已知差异、commit message，以及选用的 oracle、选择理由、两套参考仓库
+各自的测试结果与全部修改。若未修改参考仓库，应明确写“无”；若有修改，应逐文件说明
+目的、headless 隔离条件及正常游戏语义不受影响的依据。

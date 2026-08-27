@@ -70,8 +70,12 @@ API。共享契约优先采用可移植、确定性的逻辑表示，不能泄�
 
 ## 参考兼容性
 
-固定的 Emuera 源码树仍是语言语法、语义和可移植 runtime 行为的 oracle。调查参考实现
-也用于还原与 UI 耦合指令的意图。行为按以下类别记录：
+固定的 Emuera 源码树仍是语言语法、语义和可移植 runtime 行为的 oracle。默认基准为
+原版 `emuera.em`；涉及蛇版 emuera（`emuera_lazyloading_selfmodified_version`）的功能，
+改用蛇版 oracle；同时涉及兼容行为或需要原版对照时，两套 oracle 都必须运行并分别记录
+结果，不要求有意不同的变体行为强行一致。术语、固定 commit 和测试入口见
+[AGENTS.md](../AGENTS.md) 与 [core 测试 skill](../.agents/skills/test-rustyera-core/SKILL.md)。
+调查参考实现也用于还原与 UI 耦合指令的意图。行为按以下类别记录：
 
 - 已实现且兼容；
 - 因更高优先级原则而有意不同；

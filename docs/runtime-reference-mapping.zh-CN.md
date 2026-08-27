@@ -1,6 +1,9 @@
 # Emuera runtime 参考映射
 
-兼容基准固定为参考提交 `26a35dc9334bb67590b96f7b8efbefbf199e391e`。本清单记录
+本清单的兼容基准固定为原版 `emuera.em` 提交 `26a35dc9334bb67590b96f7b8efbefbf199e391e`，
+不代表蛇版 emuera 的行为清单。涉及蛇版的改动须按
+[core 测试 skill](../.agents/skills/test-rustyera-core/SKILL.md) 选择蛇版或双 oracle 验证，
+不能直接把本文结论套用到蛇版。本清单记录
 参考实现如何影响公共接口和当前 runtime 设计。表中一行描述的是目标契约，不能据此
 推断每个参考系统状态或 Host 操作都已经实现。
 

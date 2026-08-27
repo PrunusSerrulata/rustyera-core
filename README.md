@@ -1,8 +1,9 @@
 # RustyEra
 
-RustyEra 是用 Rust 重新实现的 EraBasic 语言工具链与运行环境，兼容目标固定为
-Emuera 参考实现提交 `26a35dc9334bb67590b96f7b8efbefbf199e391e`（Emuera 1.824
-系列）。项目覆盖从 UTF-8 源码、静态数据、语义分析、字节码、虚拟机到可移植
+RustyEra 是用 Rust 重新实现的 EraBasic 语言工具链与运行环境，默认兼容基准固定为
+原版 `emuera.em` 提交 `26a35dc9334bb67590b96f7b8efbefbf199e391e`（Emuera 1.824
+系列）；涉及蛇版 emuera 的功能使用其独立固定 oracle，具体选择见下文“验证与测试”。
+项目覆盖从 UTF-8 源码、静态数据、语义分析、字节码、虚拟机到可移植
 runtime 协议和 C ABI 的完整链路。独立的 Python/Textual TUI 与 Vue/WebAssembly/Tauri
 客户端通过公共边界集成 runtime。
 
@@ -24,6 +25,20 @@ Rust 实现已经支持对应能力。
 
 RustyEra 只接受 UTF-8 源码和配置内容，不负责识别或转换 Shift-JIS、GBK 等传统编码。
 详细原则见[设计原则](docs/design-principles.zh-CN.md)。
+
+## 术语与本地路径
+
+以下路径相对于包含本仓库的工作区：
+
+| 术语 | 对应目录 |
+| --- | --- |
+| 原版参考实现 | `emuera.em/` |
+| 蛇版emuera | `emuera_lazyloading_selfmodified_version/` |
+| eraTW（原版 TW） | `games/eraTW/` |
+| 蛇版TW | `games/eratw-sub-modding/` |
+
+“蛇版TW”不是“eraTW”，两者不得混用。单独的“蛇版”须结合语境判断指引擎还是游戏，
+无法可靠推测时必须询问用户。
 
 ## 项目结构
 
@@ -65,10 +80,11 @@ RustyEra 只接受 UTF-8 源码和配置内容，不负责识别或转换 Shift-
 | [rustyera-tui](https://github.com/PrunusSerrulata/rustyera-tui) | Python 3.12/Textual 前端，通过公共 C ABI 驱动 runtime。 |
 | [rustyera-web](https://github.com/PrunusSerrulata/rustyera-web) | Vue、WebAssembly 和 Tauri 前端；包含 `era-web-bridge`。 |
 | [emuera.em](https://github.com/PrunusSerrulata/emuera.em) | 固定版本的 C# 兼容性参考实现及 NDJSON oracle。 |
+| `../emuera_lazyloading_selfmodified_version/emuera-reference-cli` | 蛇版 emuera 的独立 C# oracle、固定 fixture 和平台测试入口。 |
 | `tools/project-extractor` | 项目解包器，从 `.reraproj` 中按原目录层级恢复 UTF-8 源码和二进制资产。 |
 | `tools/snapshot-analyzer` | Runtime 快照分析器，校验完整快照并以文本或 JSON 展开其中的全部状态。 |
 | `tools/runtime-tester` | runtime 与 C ABI 的人工/长流程测试工具。TUI 审计脚本位于 `rustyera-tui`。 |
-| `tools/protocol-smoke.ps1`、`tools/test-macos-wine.sh` | Windows 与 macOS/Wine 参考 CLI 冒烟测试。 |
+| `tools/protocol-smoke.ps1`、`tools/test-macos-wine.sh` | 原版参考 CLI 的 Windows 与 macOS/Wine 冒烟测试。 |
 
 ## 模块关系
 
@@ -104,8 +120,10 @@ flowchart LR
 
 - 当前稳定版 Rust 工具链，支持 workspace 使用的 Rust 2024 edition；
 - 构建 TUI 时需要 Python 3.12 或更高版本及 `uv`；
-- 运行 C# 参考 CLI 时需要 .NET 10 Windows Desktop 工具链；
-- macOS 上运行参考 CLI 还需要 Wine、`jq` 和 Perl。
+- 运行原版 C# 参考 CLI 需要 .NET 10 Windows Desktop 工具链；蛇版 CLI 需要支持
+  .NET 8 Windows Desktop 的 SDK，两者都使用 Windows x64 目标；
+- macOS 上运行参考 CLI 还需要 Wine；原版脚本需要 `jq` 和 Perl，蛇版测试驱动在
+  Windows/macOS 上都需要 Python 3.9+。
 
 所有命令默认从仓库根目录执行。
 
@@ -236,18 +254,27 @@ assert!(report.data.is_some());
 
 ## 验证与测试
 
-开发流程和测试职责以 [AGENTS.md](AGENTS.md) 为准。修改 Rust 实现时，先完成格式化，
-处理全部编译器错误和 Clippy 警告，再执行全量测试：
+开发流程和测试职责以 [AGENTS.md](AGENTS.md) 与
+[core 测试 skill](.agents/skills/test-rustyera-core/SKILL.md) 为准。修改 Rust 实现时，
+先格式化改动并编写最小回归用例，再依次执行：
 
 ```sh
-cargo fmt --all
+cargo fmt --all -- --check
 cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
+# 此处先运行直接覆盖改动的最小 Rust 回归测试；通过后才可启动下方全量。
 cargo test --workspace
 ```
 
-兼容性修改还必须运行当前平台的参考 CLI 冒烟测试，并使用相同输入比较 Rust 与 C#
-结果：
+所有适用静态门禁通过后，Rust 或 C# reference CLI 实现改动还须按行为选择当前平台
+的 C# 冒烟测试，并使用相同输入进行 Rust/C# 差分：
+
+- 不涉及蛇版 emuera：运行原版 reference CLI。
+- 涉及蛇版 emuera：改用蛇版 reference CLI 及对应 fixture。
+- 涉及蛇版 emuera 且涉及兼容行为，或还需要原版对照：两套 reference CLI 都必须运行，
+  分别记录 Rust/蛇版、Rust/原版结果和有意差异。
+
+原版入口（从本仓库根目录执行，按平台二选一）：
 
 ```powershell
 tools/protocol-smoke.ps1
@@ -256,6 +283,26 @@ tools/protocol-smoke.ps1
 ```sh
 tools/test-macos-wine.sh
 ```
+
+蛇版入口（按平台二选一）：
+
+```powershell
+& ../emuera_lazyloading_selfmodified_version/emuera-reference-cli/tests/protocol-smoke.ps1
+```
+
+```sh
+WINEPREFIX="$(cd .. && pwd)/.wine-prefix/emuera-selfmodified-cli" \
+  bash ../emuera_lazyloading_selfmodified_version/emuera-reference-cli/tests/test-macos-wine.sh
+```
+
+蛇版语义基准为 `fc4fb21416768c17256d0e82f997e5f99c9bba91`。两套 oracle 的进程、
+Wine prefix、临时 fixture 和结果必须分开；冒烟通过不等于差分通过。蛇版的具体覆盖、
+协议差异与失败后定向复验见
+[蛇版 oracle 测试指引](.agents/skills/test-rustyera-core/references/snake-oracle.md)。
+
+同一套全量测试每任务最多启动一次，失败后只复验直接受影响的最小集合，并分别报告
+首次全量与定向复验结果。所有测试共享 60 分钟墙钟预算；纯文档或 skill 改动只运行
+直接相关检查，不因此启动 Rust 全量或 C# oracle。
 
 ## 文档
 
