@@ -10,11 +10,11 @@ use era_protocol::{
 };
 use era_runtime::{RuntimeDriveBudget, RuntimeOptions, RuntimeSession};
 use era_runtime_protocol::{
-    ClientCapabilities, ClientHello, DisplayLine, FileCategory, FilePayload, FrontendInput,
-    FrontendIoError, FrontendIoErrorKind, HTML_GET_PRINTED_STR_OPERATION,
-    HTML_GET_PRINTED_STR_OPERATION_VERSION, InputIntent, InputModality, LOCAL_DATE_TIME_OPERATION,
-    LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment, LocalDateTimeResponse, PresentationOperation,
-    ProjectManifest, ProjectionStringIndexRequest, ProjectionStringResponse, ProtocolDiagnostic,
+    ClientCapabilities, ClientHello, DisplayLine, FileCategory, FrontendInput, FrontendIoError,
+    FrontendIoErrorKind, HTML_GET_PRINTED_STR_OPERATION, HTML_GET_PRINTED_STR_OPERATION_VERSION,
+    InputIntent, InputModality, LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION,
+    LineAlignment, LocalDateTimeResponse, PresentationOperation, ProjectManifest,
+    ProjectionStringIndexRequest, ProjectionStringResponse, ProtocolDiagnostic,
     RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeLogLevel, RuntimeMessage,
     SequenceAcknowledgement, ServiceCapability, ServiceKind, ServiceResponse, ServiceResult,
     ShutdownRequest, SnapshotExportPurpose, StartMode, StartRequest, StateExportKind,
@@ -28,6 +28,7 @@ use erabasic_compiler::{ExecutionBinding, default_host_registry};
 mod baseline;
 mod coverage;
 mod project_extractor;
+mod project_inputs;
 mod snake_observations;
 mod watchdog;
 
@@ -62,6 +63,22 @@ fn read_project_text(path: impl AsRef<Path>) -> std::io::Result<String> {
             format!("{} is not valid UTF-8, Windows-31J, or GBK", path.display()),
         )
     })
+}
+
+fn read_submitted_text(path: impl AsRef<Path>, category: FileCategory) -> std::io::Result<String> {
+    let path = path.as_ref();
+    if !matches!(category, FileCategory::Als | FileCategory::Erd)
+        && !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("reraconfig.toml"))
+    {
+        return read_project_text(path);
+    }
+    let bytes = fs::read(path)?;
+    std::str::from_utf8(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
+        .map(str::to_owned)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 fn repository_root() -> PathBuf {
@@ -150,29 +167,8 @@ fn run_audit_command(result: Result<(), Box<dyn std::error::Error>>) {
 fn audit_restore_saved() {
     let root = project_argument(2);
     let paths = collect_project_files(&root);
-    let mut files = Vec::new();
-    for relative in paths {
-        let lower = relative.to_ascii_lowercase();
-        let category = if lower.ends_with(".erb") {
-            FileCategory::Erb
-        } else if lower.ends_with(".erh") {
-            FileCategory::Erh
-        } else if lower.ends_with(".csv") {
-            FileCategory::Csv
-        } else if lower.ends_with(".config") {
-            FileCategory::Configuration
-        } else {
-            continue;
-        };
-        files.push(SubmittedFile {
-            relative_path: relative.clone(),
-            category,
-            payload: FilePayload::Utf8(
-                read_project_text(root.join(relative)).expect("decode submitted project source"),
-            ),
-            content_hash: None,
-        });
-    }
+    let files =
+        project_inputs::ProjectInputs::new(&root, &paths).submitted_files(&root, &paths, true);
     let save_path = env::args()
         .nth(3)
         .map(PathBuf::from)
@@ -185,25 +181,28 @@ fn audit_analyzer(compile: bool) {
     let total_started = std::time::Instant::now();
     let root = project_argument(2);
     let paths = collect_project_files(&root);
+    let inputs = project_inputs::ProjectInputs::new(&root, &paths);
     let mut csv_files = erabasic_csv::ProjectFiles::default();
     let mut sources = Vec::new();
     for relative in paths {
-        let lower = relative.to_ascii_lowercase();
-        if !matches!(lower.rsplit('.').next(), Some("csv" | "erb" | "erh")) {
+        let Some(category) = inputs.classify(&relative) else {
+            continue;
+        };
+        let data_root = inputs.data_root(&relative, category);
+        if data_root.is_none() && !matches!(category, FileCategory::Erb | FileCategory::Erh) {
             continue;
         }
-        let text = read_project_text(root.join(&relative)).unwrap();
-        if lower.ends_with(".csv") {
-            let stripped = relative
-                .strip_prefix("CSV/")
-                .or_else(|| relative.strip_prefix("csv/"))
-                .unwrap_or(&relative)
-                .to_owned();
-            csv_files.csv.push(erabasic_csv::FrontendFile {
-                source_path: None,
-                relative_path: stripped,
+        let text = read_submitted_text(root.join(&relative), category).unwrap();
+        if let Some(data_root) = data_root {
+            let file = erabasic_csv::FrontendFile {
+                relative_path: data_root.relative_path(&relative),
+                source_path: Some(relative),
                 payload: erabasic_csv::FilePayload::Utf8(text),
-            });
+            };
+            match data_root {
+                project_inputs::DataRoot::Csv => csv_files.csv.push(file),
+                project_inputs::DataRoot::Erb => csv_files.erb.push(file),
+            }
         } else {
             sources.push(erabasic_analyzer::ProjectSource {
                 relative_path: relative,
@@ -429,19 +428,19 @@ fn audit_analyzer(compile: bool) {
 fn audit_csv() {
     let root = project_argument(2);
     let paths = collect_project_files(&root);
+    let inputs = project_inputs::ProjectInputs::new(&root, &paths);
     let mut files = erabasic_csv::ProjectFiles::default();
     for relative in paths {
-        if !relative.to_ascii_lowercase().ends_with(".csv") {
+        let Some(category) = inputs.classify(&relative) else {
+            continue;
+        };
+        if inputs.data_root(&relative, category) != Some(project_inputs::DataRoot::Csv) {
             continue;
         }
-        let content = read_project_text(root.join(&relative)).unwrap();
-        let path = relative
-            .strip_prefix("CSV/")
-            .unwrap_or(&relative)
-            .to_owned();
+        let content = read_submitted_text(root.join(&relative), category).unwrap();
         files.csv.push(erabasic_csv::FrontendFile {
-            source_path: None,
-            relative_path: path,
+            relative_path: project_inputs::DataRoot::Csv.relative_path(&relative),
+            source_path: Some(relative),
             payload: erabasic_csv::FilePayload::Utf8(content),
         });
     }
@@ -542,39 +541,11 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         PathBuf::from,
     );
     let paths = collect_project_files(&root);
-    let mut files = Vec::new();
-    for relative in paths {
-        let lower = relative.to_ascii_lowercase();
-        let category = if lower.ends_with(".erb") {
-            FileCategory::Erb
-        } else if lower.ends_with(".erh") {
-            FileCategory::Erh
-        } else if lower.ends_with(".csv") {
-            FileCategory::Csv
-        } else if lower.ends_with(".config") {
-            FileCategory::Configuration
-        } else {
-            continue;
-        };
-        let text = read_project_text(root.join(&relative)).expect("decode project source");
-        let submitted_path = if keep_root_paths {
-            relative.clone()
-        } else {
-            relative
-                .strip_prefix("CSV/")
-                .or_else(|| relative.strip_prefix("ERB/"))
-                .or_else(|| relative.strip_prefix("csv/"))
-                .or_else(|| relative.strip_prefix("erb/"))
-                .unwrap_or(&relative)
-                .to_owned()
-        };
-        files.push(SubmittedFile {
-            relative_path: submitted_path,
-            category,
-            payload: FilePayload::Utf8(text),
-            content_hash: None,
-        });
-    }
+    let files = project_inputs::ProjectInputs::new(&root, &paths).submitted_files(
+        &root,
+        &paths,
+        keep_root_paths,
+    );
     let file_prepare_elapsed = total_started.elapsed();
     if !benchmark {
         println!("submitted_files={}", files.len());
@@ -1545,22 +1516,8 @@ fn collect(root: &Path, current: &Path, out: &mut Vec<String>) {
 fn collect_project_files(root: &Path) -> Vec<String> {
     let mut paths = Vec::new();
     collect(root, root, &mut paths);
-    let has_csv_root = has_direct_child_directory(root, "CSV");
-    let has_erb_root = has_direct_child_directory(root, "ERB");
-    paths.retain(|relative| {
-        let lower = relative.to_ascii_lowercase();
-        let first = lower.split('/').next().unwrap_or_default();
-        if lower.ends_with(".csv") && has_csv_root {
-            return first == "csv";
-        }
-        if (lower.ends_with(".erb") || lower.ends_with(".erh")) && has_erb_root {
-            return first == "erb";
-        }
-        if lower.ends_with(".config") && has_csv_root && lower.contains('/') {
-            return first == "csv";
-        }
-        true
-    });
+    let inputs = project_inputs::ProjectInputs::new(root, &paths);
+    paths.retain(|path| inputs.classify(path).is_some());
     paths.sort();
     paths
 }

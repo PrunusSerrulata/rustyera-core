@@ -111,6 +111,8 @@ pub(crate) enum ReplayFileCategory {
     Configuration,
     Resource,
     ResourceManifest,
+    Als,
+    Erd,
 }
 
 impl From<FileCategory> for ReplayFileCategory {
@@ -122,6 +124,8 @@ impl From<FileCategory> for ReplayFileCategory {
             FileCategory::Configuration => Self::Configuration,
             FileCategory::Resource => Self::Resource,
             FileCategory::ResourceManifest => Self::ResourceManifest,
+            FileCategory::Als => Self::Als,
+            FileCategory::Erd => Self::Erd,
         }
     }
 }
@@ -543,11 +547,14 @@ mod tests {
                 before_identity: "05".repeat(32),
                 after_revision: "13".into(),
                 after_identity: "06".repeat(32),
-                changes: vec![ReplayFileChange {
-                    operation: ReplayFileOperation::Upsert,
-                    relative_path: "ERB/reloaded.erb".into(),
-                    category: ReplayFileCategory::Erb,
-                }],
+                changes: [FileCategory::Erb, FileCategory::Als, FileCategory::Erd]
+                    .into_iter()
+                    .map(|category| ReplayFileChange {
+                        operation: ReplayFileOperation::Upsert,
+                        relative_path: format!("ERB/reloaded.{category:?}").to_ascii_lowercase(),
+                        category: category.into(),
+                    })
+                    .collect(),
             },
             ReplayOriginDetails::InputUndo {
                 checkpoint_slot: 0,
@@ -597,6 +604,11 @@ mod tests {
             assert_eq!(jsonl.lines().count(), 1);
             assert!(jsonl.contains(&format!(r#""kind":"{expected_kind}""#)));
             assert!(jsonl.contains(r#""step_count":0"#));
+            if expected_kind == "hot_reload" {
+                for category in ["erb", "als", "erd"] {
+                    assert!(jsonl.contains(&format!(r#""category":"{category}""#)));
+                }
+            }
         }
     }
 

@@ -12,12 +12,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use era_runtime_protocol::FileCategory;
 use erabasic_analyzer::AnalyzerOptions;
 use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
 use erabasic_csv::{CsvLoadOptions, FilePayload, FrontendFile, ProjectFiles};
 use serde_json::{Value, json};
 
-use super::baseline;
+use super::{
+    baseline,
+    project_inputs::{DataRoot, ProjectInputs},
+};
 
 #[derive(Default)]
 struct Arguments {
@@ -58,16 +62,8 @@ fn decode(bytes: &[u8]) -> Option<(String, &'static str)> {
         .map(|text| (text.into(), "utf-8"))
 }
 
-fn is_input(path: &str, root: &str, has_root: bool, extensions: &[&str]) -> bool {
-    let lower = path.to_ascii_lowercase();
-    let extension = lower.rsplit('.').next().unwrap_or_default();
-    extensions.contains(&extension) && (!has_root || lower.starts_with(&format!("{root}/")))
-}
-
 fn config_identity(root: &Path, inventory: &baseline::Inventory) -> Result<Value, Box<dyn Error>> {
-    use era_runtime_protocol::{
-        FileCategory, FilePayload, ResolveProjectCompatibility, SubmittedFile,
-    };
+    use era_runtime_protocol::{FilePayload, ResolveProjectCompatibility, SubmittedFile};
     let configurations = inventory
         .files
         .iter()
@@ -132,7 +128,7 @@ fn audit_project(
     analyzer_options.analysis_mode = true;
     analyzer_options.ignore_uncalled_functions = false;
     analyzer_options.compatibility = identity.clone();
-    let csv_options = arguments
+    let mut csv_options = arguments
         .csv_options
         .as_ref()
         .map(|path| -> Result<CsvLoadOptions, Box<dyn Error>> {
@@ -145,58 +141,66 @@ fn audit_project(
             sort_with_filename: true,
             ..Default::default()
         });
-    let has_erb = inventory
+    csv_options.compatibility.clone_from(&identity);
+    let paths = inventory
         .files
         .iter()
-        .any(|file| file.path.to_ascii_lowercase().starts_with("erb/"));
-    let has_csv = inventory
-        .files
-        .iter()
-        .any(|file| file.path.to_ascii_lowercase().starts_with("csv/"));
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    let project_inputs = ProjectInputs::new(root, &paths);
+    let has_erb = project_inputs.has_erb;
+    let has_csv = project_inputs.has_csv;
     let mut sources = Vec::new();
     let mut files = ProjectFiles::default();
     let mut inputs = Vec::new();
     let mut errors = Vec::new();
     for file in &inventory.files {
-        let script = is_input(&file.path, "erb", has_erb, &["erb", "erh"]);
-        let csv_input = is_input(&file.path, "csv", has_csv, &["csv", "als", "erd"]);
-        let erb_data = is_input(&file.path, "erb", has_erb, &["erd"]);
-        if !script && !csv_input && !erb_data {
+        let Some(category) = project_inputs.classify(&file.path) else {
+            continue;
+        };
+        let script = matches!(category, FileCategory::Erb | FileCategory::Erh);
+        let data_root = project_inputs.data_root(&file.path, category);
+        let resource = matches!(
+            category,
+            FileCategory::Resource | FileCategory::ResourceManifest
+        );
+        if !script && data_root.is_none() && !resource {
             continue;
         }
         crate::watchdog::publish(
             json!({"phase": "coverage_read_input", "case": name, "pending": file.path, "inputs_completed": inputs.len(), "input_errors": errors, "lastFullResponse": null}),
         )?;
-        let bytes = fs::read(root.join(&file.path))?;
+        let bytes = match fs::read(root.join(&file.path)) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                errors.push(json!({"path": file.path, "status": "read_failed", "error_kind": format!("{:?}", error.kind()), "message": error.to_string()}));
+                continue;
+            }
+        };
         if blake3::hash(&bytes).to_hex().to_string() != file.blake3 {
             errors.push(json!({"path": file.path, "status": "input_changed_since_inventory"}));
+            continue;
+        }
+        if resource {
+            inputs.push(json!({"path": file.path, "category": if category == FileCategory::Resource {"resource"} else {"resource_manifest"}, "data_root": null, "encoding": "raw_bytes_not_analyzed", "raw_byte_length": bytes.len(), "raw_blake3": file.blake3}));
             continue;
         }
         let Some((text, encoding)) = decode(&bytes) else {
             errors.push(json!({"path": file.path, "status": "unsupported_encoding"}));
             continue;
         };
-        inputs.push(json!({"path": file.path, "encoding": encoding, "raw_blake3": file.blake3, "decoded_utf8_blake3": blake3::hash(text.as_bytes()).to_hex().to_string()}));
+        inputs.push(json!({"path": file.path, "category": file.path.to_ascii_lowercase().rsplit('.').next(), "data_root": data_root.map(DataRoot::name), "encoding": encoding, "raw_byte_length": bytes.len(), "raw_blake3": file.blake3, "decoded_utf8_byte_length": text.len(), "decoded_utf8_blake3": blake3::hash(text.as_bytes()).to_hex().to_string()}));
         if script {
             sources.push((file.path.clone(), text));
-        } else {
-            let relative_path = if (csv_input && has_csv) || (erb_data && has_erb) {
-                file.path
-                    .split_once('/')
-                    .map_or(file.path.as_str(), |(_, rest)| rest)
-                    .into()
-            } else {
-                file.path.clone()
-            };
+        } else if let Some(data_root) = data_root {
             let item = FrontendFile {
-                source_path: None,
-                relative_path,
+                relative_path: data_root.relative_path(&file.path),
+                source_path: Some(file.path.clone()),
                 payload: FilePayload::Utf8(text),
             };
-            if csv_input {
-                files.csv.push(item);
-            } else {
-                files.erb.push(item);
+            match data_root {
+                DataRoot::Csv => files.csv.push(item),
+                DataRoot::Erb => files.erb.push(item),
             }
         }
     }
@@ -302,18 +306,6 @@ pub(super) fn run_cli() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn input_roots_do_not_mix_archived_scripts_into_active_project() {
-        assert!(is_input("ERB/sub/A.ERB", "erb", true, &["erb", "erh"]));
-        assert!(!is_input("backup/A.ERB", "erb", true, &["erb", "erh"]));
-        assert!(is_input(
-            "CSV/name.ALS",
-            "csv",
-            true,
-            &["csv", "als", "erd"]
-        ));
-    }
 
     #[test]
     fn coverage_options_reject_unknown_profile_and_preserve_profile_override() {

@@ -29,13 +29,13 @@ use crate::resource::ResourceGraph;
 use crate::{ProjectProgress, ProjectProgressReporter, ProjectProgressStage};
 
 use self::configuration::{apply_replace_configuration, parse_configuration};
-use self::extensions::{category_relative_path, is_deferred_index_source, prepare_extensions};
+use self::extensions::{category_relative_path, prepare_extensions};
 pub(crate) use self::frontend::project_diagnostic;
 #[cfg(test)]
 use self::frontend::project_source_location;
 use self::frontend::{
-    analyzer_source, csv_file, indexed_project_source_location, indexed_source_record_location,
-    payload_hash,
+    analyzer_source, csv_file, index_input_error, indexed_project_source_location,
+    indexed_source_record_location, payload_hash,
 };
 use self::model::SemanticConfig;
 pub(crate) use self::model::{
@@ -431,6 +431,8 @@ fn build_project_with_resolved_compatibility(
                         FileCategory::Erb
                             | FileCategory::Erh
                             | FileCategory::Csv
+                            | FileCategory::Als
+                            | FileCategory::Erd
                             | FileCategory::Configuration
                     ) {
                     take_manifest_payload(file)
@@ -464,6 +466,15 @@ fn build_project_with_resolved_compatibility(
     let mut sources = Vec::new();
     let mut resources = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
+    let erd_alias_paths = files
+        .iter()
+        .filter(|file| file.category == FileCategory::Erd)
+        .filter_map(|file| validate_relative_path(&file.relative_path).ok())
+        .filter_map(|path| {
+            path.rsplit_once('.')
+                .map(|(stem, _)| format!("{}.als", stem.to_ascii_lowercase()))
+        })
+        .collect::<std::collections::BTreeSet<_>>();
     let file_count = files.len();
     for (file_index, mut file) in files.into_iter().enumerate() {
         let path = match validate_relative_path(&file.relative_path) {
@@ -491,6 +502,16 @@ fn build_project_with_resolved_compatibility(
             }
         };
         file.relative_path.clone_from(&path);
+        if let Some(error) = index_input_error(&file) {
+            diagnostics.push(error);
+            report_fraction(
+                progress,
+                ProjectProgressStage::Normalizing,
+                file_index + 1,
+                file_count,
+            );
+            continue;
+        }
         if !seen.insert((file.category as u8, path.to_ascii_lowercase())) {
             diagnostics.push(project_diagnostic(
                 "runtime.duplicate_path",
@@ -566,19 +587,32 @@ fn build_project_with_resolved_compatibility(
             continue;
         }
         match file.category {
-            FileCategory::Csv => csv_files
-                .csv
-                .push(csv_file(category_relative_path(&path, "CSV"), file.payload)),
-            FileCategory::Erh | FileCategory::Erb => {
-                // The CSV loader consults the ERB root only for ERD deferred-index files.
-                // Copying every ordinary script here doubled the resident source payload for
-                // large projects before the analyzer had even started.
-                if is_deferred_index_source(&path) {
-                    csv_files.erb.push(csv_file(
-                        category_relative_path(&path, "ERB"),
-                        file.payload.clone(),
-                    ));
+            FileCategory::Csv => csv_files.csv.push(csv_file(
+                category_relative_path(&path, "CSV"),
+                path,
+                file.payload,
+            )),
+            FileCategory::Erd => csv_files.erb.push(csv_file(
+                category_relative_path(&path, "ERB"),
+                path,
+                file.payload,
+            )),
+            FileCategory::Als => {
+                // Alias identity includes its data root, not only its file stem.
+                let erb_root = path
+                    .split('/')
+                    .next()
+                    .is_some_and(|root| root.eq_ignore_ascii_case("ERB"))
+                    || erd_alias_paths.contains(&path.to_ascii_lowercase());
+                let root = if erb_root { "ERB" } else { "CSV" };
+                let file = csv_file(category_relative_path(&path, root), path, file.payload);
+                if erb_root {
+                    csv_files.erb.push(file);
+                } else {
+                    csv_files.csv.push(file);
                 }
+            }
+            FileCategory::Erh | FileCategory::Erb => {
                 if file.category == FileCategory::Erh
                     || analysis_selection.is_none_or(|selection| {
                         selection.is_empty() || selection.contains(&path.to_ascii_lowercase())
@@ -863,6 +897,8 @@ fn build_project_with_resolved_compatibility(
                 FileCategory::Erb
                     | FileCategory::Erh
                     | FileCategory::Csv
+                    | FileCategory::Als
+                    | FileCategory::Erd
                     | FileCategory::Configuration
             )
         });

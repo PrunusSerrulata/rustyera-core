@@ -207,7 +207,7 @@ pub type EraFunctionPointer = *const c_void;
 /// owned output starts with the little-endian `u64` truncation offset followed by bytes to append.
 /// `reserved[7]` in ABI 3.8 stages one CBOR-encoded project manifest for the next source-only
 /// project-load command. The implementation copies and decodes the input before returning.
-/// Runtime protocol 36 requires this manifest's resolved compatibility identity at CBOR key 2.
+/// Runtime protocol 37 requires this manifest's resolved compatibility identity at CBOR key 2.
 /// Compatibility resolution uses messages 72/73 through submit/poll without another C entry.
 #[repr(C)]
 pub struct EraRuntimeApi {

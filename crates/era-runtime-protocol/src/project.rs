@@ -54,6 +54,12 @@ pub enum FileCategory {
     Resource,
     #[n(5)]
     Configuration,
+    /// Symbolic aliases for a neighboring built-in or user index table.
+    #[n(6)]
+    Als,
+    /// Deferred user index data; never parsed as `EraBasic` script source.
+    #[n(7)]
+    Erd,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

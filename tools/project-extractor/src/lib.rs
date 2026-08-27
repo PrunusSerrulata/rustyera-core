@@ -178,6 +178,8 @@ fn prepare_files(manifest: &ProjectManifest) -> Result<Vec<PreparedFile>, Extrac
             (
                 FileCategory::Resource
                 | FileCategory::Csv
+                | FileCategory::Als
+                | FileCategory::Erd
                 | FileCategory::Erh
                 | FileCategory::Erb
                 | FileCategory::Configuration
@@ -481,7 +483,7 @@ mod tests {
         let directory = TestDirectory::new("exact");
         let text = "  ; comment\r\n@TEST\r\n\tPRINTL 界\r\n";
         let manifest = ProjectManifest {
-            compatibility: Default::default(),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 submitted(
@@ -505,6 +507,16 @@ mod tests {
                     FilePayload::Utf8("#DEFINE VALUE 1\n".into()),
                 ),
                 submitted(
+                    "ERB/BUFF.erd",
+                    FileCategory::Erd,
+                    FilePayload::Utf8("10,情绪\n".into()),
+                ),
+                submitted(
+                    "ERB/BUFF.als",
+                    FileCategory::Als,
+                    FilePayload::Utf8("10,情緒\n".into()),
+                ),
+                submitted(
                     "resources.csv",
                     FileCategory::ResourceManifest,
                     FilePayload::Utf8("sprite,image.png\n".into()),
@@ -519,7 +531,7 @@ mod tests {
 
         let summary = extract_manifest(&manifest, &directory.0, false).unwrap();
 
-        assert_eq!(summary.extracted_files, 6);
+        assert_eq!(summary.extracted_files, 8);
         assert_eq!(summary.extracted_binary_assets, 1);
         assert_eq!(
             fs::read(directory.0.join("ERB/nested/main.erb")).unwrap(),
@@ -529,6 +541,14 @@ mod tests {
             fs::read(directory.0.join("resources/nested/image.png")).unwrap(),
             vec![0, 0xff, 1, 2]
         );
+        assert_eq!(
+            fs::read_to_string(directory.0.join("ERB/BUFF.erd")).unwrap(),
+            "10,情绪\n"
+        );
+        assert_eq!(
+            fs::read_to_string(directory.0.join("ERB/BUFF.als")).unwrap(),
+            "10,情緒\n"
+        );
     }
 
     #[test]
@@ -537,7 +557,7 @@ mod tests {
         fs::create_dir(directory.0.join("ERB")).unwrap();
         fs::write(directory.0.join("ERB/main.erb"), "old").unwrap();
         let manifest = ProjectManifest {
-            compatibility: Default::default(),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 submitted(
@@ -580,7 +600,7 @@ mod tests {
     fn rejects_unsafe_duplicate_and_hash_mismatched_project_files() {
         let directory = TestDirectory::new("invalid");
         let invalid_path = ProjectManifest {
-            compatibility: Default::default(),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![submitted(
                 "../outside.erb",
@@ -591,7 +611,7 @@ mod tests {
         assert!(extract_manifest(&invalid_path, &directory.0, false).is_err());
 
         let duplicate = ProjectManifest {
-            compatibility: Default::default(),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 submitted(
@@ -615,7 +635,7 @@ mod tests {
         );
         mismatched.content_hash = Some(ProtocolBytes::new(vec![0; 32]));
         let mismatched = ProjectManifest {
-            compatibility: Default::default(),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![mismatched],
         };
@@ -628,14 +648,14 @@ mod tests {
         );
         mismatched_asset.content_hash = Some(ProtocolBytes::new(vec![0; 32]));
         let mismatched_asset = ProjectManifest {
-            compatibility: Default::default(),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![mismatched_asset],
         };
         assert!(extract_manifest(&mismatched_asset, &directory.0, false).is_err());
 
         let non_text = ProjectManifest {
-            compatibility: Default::default(),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![submitted(
                 "CSV/data.csv",
@@ -655,7 +675,7 @@ mod tests {
         let outside = TestDirectory::new("outside");
         symlink(&outside.0, directory.0.join("ERB")).unwrap();
         let manifest = ProjectManifest {
-            compatibility: Default::default(),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![submitted(
                 "ERB/main.erb",

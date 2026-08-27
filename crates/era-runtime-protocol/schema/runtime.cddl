@@ -1,4 +1,4 @@
-; Runtime channel version: 36.0.
+; Runtime channel version: 37.0.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -90,7 +90,9 @@ compatibility-diagnostic-context = {
   ? 0: compatibility-identity / null, 1: tstr, ? 2: tstr / null,
   ? 3: required-capability / null
 }
-project-manifest = { 0: uint, 1: [* any], 2: compatibility-identity }
+file-category = 0..7 ; Csv, Erh, Erb, ResourceManifest, Resource, Configuration, Als, Erd
+submitted-file = { 0: tstr, 1: file-category, 2: any, ? 3: bstr / null }
+project-manifest = { 0: uint, 1: [* submitted-file], 2: compatibility-identity }
 project-identity = { 0: uint, 1: bstr, 2: compatibility-identity, ? 3: bstr / null }
 project-load-request = { 0: project-identity, ? 1: project-manifest / null, ? 2: uint / null }
 project-load-report = {

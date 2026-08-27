@@ -9,18 +9,17 @@ use std::time::{Duration, Instant};
 use era_protocol::{ProtocolBytes, VersionRange, encode_canonical};
 use era_runtime::{RuntimeOptions, RuntimeSession};
 use era_runtime_protocol::{
-    ClientCapabilities, ClientHello, FileCategory, FilePayload, FullProjectManifest,
-    IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION, ImageMetadataResponse,
-    InputModality, ProjectManifest, RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeLogLevel,
-    RuntimeMessage, ServiceCapability, ServiceKind, ServiceResponse, ServiceResult,
-    SnapshotExportPurpose, StateExportChunkRequest, StateExportKind, StateExportRequest,
-    StateExportResult, StorageCapabilities, SubmittedFile,
+    ClientCapabilities, ClientHello, FilePayload, FullProjectManifest, IMAGE_METADATA_OPERATION,
+    IMAGE_METADATA_OPERATION_VERSION, ImageMetadataResponse, InputModality, ProjectManifest,
+    RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeLogLevel, RuntimeMessage, ServiceCapability,
+    ServiceKind, ServiceResponse, ServiceResult, SnapshotExportPurpose, StateExportChunkRequest,
+    StateExportKind, StateExportRequest, StateExportResult, StorageCapabilities, SubmittedFile,
 };
 
 use super::{
-    audit_service_capabilities, audit_wire_limits, diagnostics_with_level, drain, drive,
-    has_direct_child_directory, read_project_text, repository_root, submit, submit_with_epoch,
-    target_directory,
+    audit_service_capabilities, audit_wire_limits, collect_project_files, diagnostics_with_level,
+    drain, drive, has_direct_child_directory, project_inputs::ProjectInputs, repository_root,
+    submit, submit_with_epoch, target_directory,
 };
 
 const CACHE_BUILD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -124,56 +123,8 @@ fn audit_game(extractor: &Path, game: &Path) {
 }
 
 fn submitted_project_files(root: &Path) -> Vec<SubmittedFile> {
-    collect_project_paths(root)
-        .into_iter()
-        .filter_map(|relative_path| {
-            let lower = relative_path.to_ascii_lowercase();
-            let first = lower.split('/').next().unwrap_or_default();
-            let category = if first == "resources" && lower.ends_with(".csv") {
-                FileCategory::ResourceManifest
-            } else if first == "resources"
-                && [
-                    ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp", ".aac", ".flac", ".m4a",
-                    ".mp3", ".ogg", ".opus", ".wav",
-                ]
-                .iter()
-                .any(|suffix| lower.ends_with(suffix))
-            {
-                FileCategory::Resource
-            } else if lower.ends_with(".erb") {
-                FileCategory::Erb
-            } else if lower.ends_with(".erh") {
-                FileCategory::Erh
-            } else if lower.ends_with(".csv") {
-                FileCategory::Csv
-            } else if lower.ends_with(".config") {
-                FileCategory::Configuration
-            } else {
-                return None;
-            };
-            let payload = if category == FileCategory::Resource {
-                FilePayload::Bytes(ProtocolBytes::new(
-                    fs::read(root.join(&relative_path)).expect("read submitted project asset"),
-                ))
-            } else {
-                FilePayload::Utf8(
-                    read_project_text(root.join(&relative_path))
-                        .expect("decode submitted project source"),
-                )
-            };
-            let hash = match &payload {
-                FilePayload::Utf8(text) => blake3::hash(text.as_bytes()),
-                FilePayload::Bytes(bytes) => blake3::hash(bytes.as_slice()),
-                FilePayload::IoError(_) | FilePayload::ExternalResource(_) => unreachable!(),
-            };
-            Some(SubmittedFile {
-                relative_path,
-                category,
-                payload,
-                content_hash: Some(ProtocolBytes::new(hash.as_bytes().to_vec())),
-            })
-        })
-        .collect()
+    let paths = collect_project_files(root);
+    ProjectInputs::new(root, &paths).submitted_files(root, &paths, true)
 }
 
 fn expected_project_files(files: &[SubmittedFile]) -> BTreeMap<String, Vec<u8>> {
@@ -188,58 +139,6 @@ fn expected_project_files(files: &[SubmittedFile]) -> BTreeMap<String, Vec<u8>> 
             (file.relative_path.clone(), contents)
         })
         .collect()
-}
-
-fn collect_project_paths(root: &Path) -> Vec<String> {
-    fn collect(root: &Path, current: &Path, paths: &mut Vec<String>) {
-        for entry in fs::read_dir(current).expect("read project directory") {
-            let entry = entry.expect("read project entry");
-            let path = entry.path();
-            if path.is_dir() {
-                collect(root, &path, paths);
-            } else {
-                paths.push(
-                    path.strip_prefix(root)
-                        .unwrap()
-                        .to_string_lossy()
-                        .replace('\\', "/"),
-                );
-            }
-        }
-    }
-
-    let mut paths = Vec::new();
-    collect(root, root, &mut paths);
-    let has_csv_root = has_direct_child_directory(root, "CSV");
-    let has_erb_root = has_direct_child_directory(root, "ERB");
-    paths.retain(|relative| {
-        let lower = relative.to_ascii_lowercase();
-        let first = lower.split('/').next().unwrap_or_default();
-        if first == "resources" {
-            return lower.ends_with(".csv")
-                || [
-                    ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp", ".aac", ".flac", ".m4a",
-                    ".mp3", ".ogg", ".opus", ".wav",
-                ]
-                .iter()
-                .any(|suffix| lower.ends_with(suffix));
-        }
-        if lower.ends_with(".csv") && has_csv_root {
-            return first == "csv";
-        }
-        if (lower.ends_with(".erb") || lower.ends_with(".erh")) && has_erb_root {
-            return first == "erb";
-        }
-        if lower.ends_with(".config") && has_csv_root && lower.contains('/') {
-            return first == "csv";
-        }
-        lower.ends_with(".csv")
-            || lower.ends_with(".erb")
-            || lower.ends_with(".erh")
-            || lower.ends_with(".config")
-    });
-    paths.sort();
-    paths
 }
 
 fn compile_and_export(manifest: ProjectManifest) -> Vec<u8> {
@@ -480,5 +379,150 @@ impl TemporaryDirectory {
 impl Drop for TemporaryDirectory {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project_inputs::DataRoot;
+    use era_runtime_protocol::FileCategory;
+
+    fn write_input(root: &Path, path: &str, bytes: impl AsRef<[u8]>) {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn collector_and_extractor_include_data_resources_and_exclude_outside_indices() {
+        let directory = TemporaryDirectory::new();
+        let root = &directory.0;
+        for path in [
+            "resources/schema.xml",
+            "resources/story.txt",
+            "resources/seed.db",
+            "resources/seed.sqlite",
+        ] {
+            write_input(root, path, [0xff, 0x00, 0x42]);
+        }
+        write_input(root, "CSV/BUFF.csv", "0,csv_main\n");
+        write_input(root, "CSV/BUFF.als", "11,csv_alias\n");
+        write_input(root, "ERB/BUFF.erd", "0,erd_main\n");
+        write_input(root, "ERB/BUFF.als", "10,erb_alias\n");
+        for path in [
+            "backup/BUFF.als",
+            "backup/BUFF.erd",
+            "CSV/BUFF.erd",
+            "data/overlay.xml",
+            "sav/save.txt",
+            "logs/a.db",
+            ".rustyera/cache.sqlite",
+            "plugins/ignored.dll",
+        ] {
+            write_input(root, path, "ignored");
+        }
+        let paths = collect_project_files(root);
+        let files = submitted_project_files(root);
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| &file.relative_path)
+                .collect::<Vec<_>>(),
+            paths.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(paths.len(), 8);
+        for file in files
+            .iter()
+            .filter(|file| file.relative_path.starts_with("resources/"))
+        {
+            assert_eq!(file.category, FileCategory::Resource);
+            assert_eq!(
+                file.payload,
+                FilePayload::Bytes(ProtocolBytes::new(vec![0xff, 0x00, 0x42]))
+            );
+            assert_eq!(
+                file.content_hash.as_ref().unwrap().as_slice(),
+                blake3::hash(&[0xff, 0x00, 0x42]).as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn same_stem_csv_and_erb_aliases_remain_distinct_in_minimal_and_extracted_inputs() {
+        let directory = TemporaryDirectory::new();
+        let root = &directory.0;
+        for (path, content) in [
+            ("CSV/BUFF.csv", "0,csv_main\n"),
+            ("CSV/BUFF.als", "11,csv_alias\n"),
+            ("ERB/BUFF.erd", "0,erd_main\n"),
+            ("ERB/BUFF.als", "10,erb_alias\n"),
+        ] {
+            write_input(root, path, content);
+        }
+        let paths = collect_project_files(root);
+        let inputs = ProjectInputs::new(root, &paths);
+        let minimal = inputs.submitted_files(root, &paths, false);
+        assert_eq!(minimal, submitted_project_files(root));
+        let mut csv_files = erabasic_csv::ProjectFiles::default();
+        for file in minimal {
+            let data_root = inputs
+                .data_root(&file.relative_path, file.category)
+                .unwrap();
+            let FilePayload::Utf8(text) = file.payload else {
+                panic!("index input must be UTF-8")
+            };
+            let frontend_file = erabasic_csv::FrontendFile {
+                relative_path: data_root.relative_path(&file.relative_path),
+                source_path: Some(file.relative_path),
+                payload: erabasic_csv::FilePayload::Utf8(text),
+            };
+            match data_root {
+                DataRoot::Csv => csv_files.csv.push(frontend_file),
+                DataRoot::Erb => csv_files.erb.push(frontend_file),
+            }
+        }
+        let options = erabasic_csv::CsvLoadOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            use_erd: true,
+            ..Default::default()
+        };
+        let mut project = erabasic_csv::load_project(&csv_files, &options)
+            .data
+            .unwrap();
+        let diagnostics = erabasic_csv::resolve_deferred_indices(
+            &mut project,
+            &[erabasic_data::UserIndexRegistration {
+                variable_name: "BUFF".into(),
+                source_stem: "BUFF".into(),
+                dimension: None,
+                length: 50,
+            }],
+            &options,
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let resolved = &project.static_data.deferred_indices.resolved["BUFF"];
+        assert_eq!(resolved.entries["csv_alias"], 11);
+        assert_eq!(resolved.entries["erb_alias"], 10);
+    }
+
+    #[test]
+    fn new_index_inputs_reject_legacy_encoding_without_changing_csv_decoding() {
+        let directory = TemporaryDirectory::new();
+        for (path, category) in [
+            ("BUFF.als", FileCategory::Als),
+            ("BUFF.erd", FileCategory::Erd),
+        ] {
+            write_input(&directory.0, path, b"0,\x82\xa0\n");
+            let error = crate::read_submitted_text(directory.0.join(path), category).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        }
+        write_input(&directory.0, "BUFF.csv", b"0,\x82\xa0\n");
+        assert_eq!(
+            crate::read_submitted_text(directory.0.join("BUFF.csv"), FileCategory::Csv).unwrap(),
+            "0,あ\n"
+        );
     }
 }

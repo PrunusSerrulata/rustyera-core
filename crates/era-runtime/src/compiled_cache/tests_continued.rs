@@ -350,6 +350,33 @@ fn project_file_projection_honors_limits_and_version() {
         streamed_current.append(byte).unwrap();
     }
     assert_eq!(streamed_current.finish().unwrap().project.manifest, project);
+    // v9 has the same source-manifest representation but obsolete compiled semantics.
+    let mut profiled = bytes.clone();
+    profiled[8] = PROFILED_PROJECT_VERSION;
+    let digest_offset = profiled.len() - 32;
+    let digest = blake3::hash(&profiled[..digest_offset]);
+    profiled[digest_offset..].copy_from_slice(digest.as_bytes());
+    assert_eq!(
+        decode_project_file(&profiled, profiled.len())
+            .unwrap()
+            .manifest,
+        project
+    );
+    assert!(
+        decode(&profiled, profiled.len())
+            .err()
+            .unwrap()
+            .contains("requires a source rebuild")
+    );
+    let mut streamed_profiled =
+        ProjectFileStreamDecoder::new(profiled.len(), profiled.len()).unwrap();
+    for chunk in profiled.chunks(11) {
+        streamed_profiled.append(chunk).unwrap();
+    }
+    assert_eq!(
+        streamed_profiled.finish().unwrap().project.manifest,
+        project
+    );
     let mut stale_cache = previous.clone();
     stale_cache[..8].copy_from_slice(b"RERACACH");
     let error = decode(&stale_cache, stale_cache.len())
@@ -663,19 +690,38 @@ fn sharded_binary_cache_is_deterministic() {
 // Synthesize the old source section while leaving executable sections opaque: legacy
 // full projects support extraction only and must be recompiled by the current runtime.
 fn profileless_project_fixture(bytes: &[u8], version: u8) -> Vec<u8> {
+    project_manifest_fixture(bytes, version, None)
+}
+
+fn project_manifest_fixture(
+    bytes: &[u8],
+    version: u8,
+    identity: Option<&erabasic_compat::CompatibilityIdentity>,
+) -> Vec<u8> {
     let mut cursor = stream::HEADER_BYTES;
     for _ in 0..MANIFEST_SECTION_INDEX {
         read_section(bytes, &mut cursor, bytes.len()).unwrap();
     }
     let start = cursor;
     let section = read_section(bytes, &mut cursor, bytes.len()).unwrap();
-    let raw = zstd::bulk::decompress(section.compressed, usize::try_from(section.decoded_length).unwrap()).unwrap();
+    let raw = zstd::bulk::decompress(
+        section.compressed,
+        usize::try_from(section.decoded_length).unwrap(),
+    )
+    .unwrap();
     let mut remaining = &raw[4..];
     read_bytes(&mut remaining, 4096).unwrap();
     let legacy = encode_raw_section(PROJECT_COMPRESSION_LEVEL, None, |writer| {
         writer
-            .write_all(LEGACY_MANIFEST_SECTION_MAGIC)
+            .write_all(if identity.is_some() {
+                MANIFEST_SECTION_MAGIC
+            } else {
+                LEGACY_MANIFEST_SECTION_MAGIC
+            })
             .map_err(|error| error.to_string())?;
+        if let Some(identity) = identity {
+            write_bytes(writer, &serde_json::to_vec(identity).unwrap())?;
+        }
         writer
             .write_all(remaining)
             .map_err(|error| error.to_string())
@@ -750,6 +796,31 @@ fn profile_identity_survives_cache_and_full_project_without_cross_profile_keys()
     assert_eq!(
         stream.finish().unwrap().project.identity,
         project_identity(&project)
+    );
+    let mut old_snake = project.compatibility.clone();
+    old_snake.semantic_version = 1;
+    old_snake.policy_version = 1;
+    let historical = project_manifest_fixture(&full, PROFILED_PROJECT_VERSION, Some(&old_snake));
+    let error = decode_project_file(&historical, historical.len())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("unsupported compatibility identity"),
+        "{error}"
+    );
+    let mut old_stream = ProjectFileStreamDecoder::new(historical.len(), historical.len()).unwrap();
+    let result = (|| {
+        for chunk in historical.chunks(13) {
+            old_stream.append(chunk)?;
+        }
+        old_stream.finish()
+    })();
+    let error = result
+        .expect_err("historical snake identity must be rejected")
+        .to_string();
+    assert!(
+        error.contains("unsupported compatibility identity"),
+        "{error}"
     );
     let journal = encode_record(
         configuration_digest(&project).unwrap(),

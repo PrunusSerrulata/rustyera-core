@@ -466,6 +466,7 @@ fn parse_container_header(
             LEGACY_PROJECT_VERSION
                 | PREVIOUS_PROJECT_VERSION
                 | PROFILELESS_PROJECT_VERSION
+                | PROFILED_PROJECT_VERSION
                 | VERSION
         ) | (ProjectContainerKind::CompiledCache, VERSION)
     ) {

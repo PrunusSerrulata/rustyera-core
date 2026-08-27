@@ -121,6 +121,18 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
         payload: FilePayload::Utf8("[meta]\nschema_version = 3\n\n[text]\nfont_size = 21\n".into()),
         content_hash: None,
     });
+    for (path, category, text) in [
+        ("ERB/indices.erh", FileCategory::Erh, "#DIM CACHEINDEX,32\n"),
+        ("ERB/CACHEINDEX.erd", FileCategory::Erd, "10,main\n"),
+        ("ERB/CACHEINDEX.als", FileCategory::Als, "10,alias\n"),
+    ] {
+        project.files.push(SubmittedFile {
+            relative_path: path.into(),
+            category,
+            payload: FilePayload::Utf8(text.into()),
+            content_hash: None,
+        });
+    }
     let mut build = crate::project::build_project(&project, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
@@ -137,7 +149,7 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
 
     assert_eq!(&bytes[..8], b"RERAPROJ");
-    assert_eq!(bytes[8], 9);
+    assert_eq!(bytes[8], 10);
     assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
     assert_eq!(decoded_file.identity, project_identity(&project));
     assert_eq!(decoded_file.manifest, project);
@@ -182,6 +194,24 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
         project_key(&project_identity(&project), &[]),
         project_key(&project_identity(&changed), &[])
     );
+    for category in [FileCategory::Als, FileCategory::Erd] {
+        let mut changed = project.clone();
+        changed
+            .files
+            .iter_mut()
+            .find(|file| file.category == category)
+            .unwrap()
+            .payload = FilePayload::Utf8("11,changed\n".into());
+        assert_ne!(
+            project_key(&project_identity(&project), &[]),
+            project_key(&project_identity(&changed), &[])
+        );
+        changed.files.retain(|file| file.category != category);
+        assert_ne!(
+            project_key(&project_identity(&project), &[]),
+            project_key(&project_identity(&changed), &[])
+        );
+    }
 }
 
 fn small_compiled_cache() -> Vec<u8> {
