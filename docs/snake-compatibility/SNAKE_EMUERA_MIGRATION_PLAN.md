@@ -2,7 +2,7 @@
 
 > 来源：从[功能分类文档](SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md)原第 7 章独立抽取，保留已核对的批次 0–7 范围与依赖关系。本文是实施计划，不是完成状态或运行通过证明。
 
-本文维护总体架构、批次范围、前置依赖和验收目标；实际实施与验收记录单独维护。调整范围或依赖时须同步关联记录，不能仅修改计划就宣称完成。
+本文维护总体架构、批次范围、前置依赖和验收目标；具体实施方案、实际改动、验收结果和未完成项统一写入[分批次实施与验收记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md)。调整范围或依赖时须同步关联记录，不能仅修改计划就宣称完成。
 
 - 背景与证据：[蛇版兼容性详查](SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md)。历史审计不代表当前实现状态。
 - S/D/C/N 编号及第 1–4 类定义：[功能分类与替代契约](SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md)。通用验收原则亦见该文档第 9.2 节。
