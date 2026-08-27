@@ -51,6 +51,7 @@ impl RuntimeSession {
             (PendingStorage::KeyMacroWrite { resume_phase }, StorageResult::Error { error }) => {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.key_macro_persistence_failed".into(),
                         level: RuntimeLogLevel::Warning,
                         message: format!("macro.txt write failed: {error:?}"),
@@ -64,6 +65,7 @@ impl RuntimeSession {
             (PendingStorage::SystemOutputLog { resume_phase }, StorageResult::Error { error }) => {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.system_output_failed".into(),
                         level: RuntimeLogLevel::Warning,
                         message: format!("emuera.log write failed: {error:?}"),
@@ -312,9 +314,18 @@ impl RuntimeSession {
                     );
                 }
                 data.extend_from_slice(chunk.as_slice());
-                let inspection = era_runtime_save::inspect_metadata(
+                let compatibility = &self
+                    .vm
+                    .as_ref()
+                    .ok_or_else(|| RuntimeError::Internal("save menu scan has no VM".into()))?
+                    .vm()
+                    .artifact()
+                    .manifest
+                    .compatibility;
+                let inspection = era_runtime_save::inspect_compatible_metadata(
                     &data,
                     complete,
+                    compatibility,
                     era_runtime_save::SaveCodecLimits::default(),
                 );
                 if matches!(

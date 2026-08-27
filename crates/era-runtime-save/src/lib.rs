@@ -4,6 +4,7 @@
 //! all filesystem errors remain frontend responsibilities.
 
 mod binary;
+mod compatibility;
 mod format;
 mod metadata;
 mod model;
@@ -12,6 +13,9 @@ mod text;
 pub use binary::{
     decode_binary, decode_binary_sparse, decode_save_extension, encode_binary,
     encode_save_extension,
+};
+pub use compatibility::{
+    inspect_compatible_metadata, unwrap_compatible_save, wrap_compatible_save,
 };
 pub use metadata::{SaveMetadataInspection, inspect_metadata};
 pub use model::{

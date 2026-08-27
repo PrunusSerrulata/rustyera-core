@@ -18,6 +18,7 @@ impl RuntimeSession {
                 CandidateSaveContinuation::Autosave => {
                     self.emit(
                         RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                            context: None,
                             code: "runtime.candidate_save_failed".into(),
                             level: RuntimeLogLevel::Warning,
                             message:
@@ -183,6 +184,7 @@ impl RuntimeSession {
                             notification,
                             ..
                         } => candidate_diagnostics.push(ProtocolDiagnostic {
+                            context: None,
                             code,
                             level: RuntimeLogLevel::Warning,
                             message,
@@ -311,6 +313,7 @@ impl RuntimeSession {
         self.pending_candidate_commit = None;
         self.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                context: None,
                 code: "runtime.candidate_save_failed".into(),
                 level: RuntimeLogLevel::Warning,
                 message: message.into(),

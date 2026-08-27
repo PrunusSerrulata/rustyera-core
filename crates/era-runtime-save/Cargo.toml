@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+blake3.workspace = true
+erabasic-compat = { path = "../erabasic-compat" }
+minicbor.workspace = true
 flate2.workspace = true
 serde.workspace = true
 

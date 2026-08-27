@@ -20,6 +20,7 @@ fn project_title_can_open_loadgame() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "title.erb".into(),
@@ -84,6 +85,7 @@ fn vm_snapshot_export_accepts_a_runtime_owned_system_wait() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "snapshot.erb".into(),
@@ -141,6 +143,85 @@ fn vm_snapshot_export_accepts_a_runtime_owned_system_wait() {
 }
 
 #[test]
+fn snapshot_identity_mismatches_preserve_the_live_vm_and_wait() {
+    let mut session = super::key_macro_input::start_input_project("@SYSTEM_TITLE\nRESULT = 37\nINPUT\nRETURN\n");
+    session
+        .export_state(
+            100,
+            StateExportRequest {
+                kind: StateExportKind::VmSnapshot,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
+            },
+        )
+        .unwrap();
+    let bytes = session
+        .outbound_transfer
+        .take()
+        .expect("snapshot export")
+        .bytes;
+    drain(&mut session);
+    let before_vm = session.vm.as_ref().unwrap().snapshot().unwrap();
+    let before_wait = session.operations.active_input().unwrap().wait.clone();
+    let before_epoch = session.epoch;
+    let before_revision = session.revision;
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+
+    for mismatch in [
+        "outer_profile",
+        "inner_profile",
+        "outer_artifact",
+        "inner_artifact",
+    ] {
+        let mut payload = runtime_snapshot::decode(&bytes, usize::MAX).unwrap();
+        match mismatch {
+            "outer_profile" => payload.compatibility = snake.clone(),
+            "outer_artifact" => payload.artifact_id = erabasic_bytecode::Digest([7; 32]),
+            "inner_profile" | "inner_artifact" => {
+                let vm = erabasic_vm::VmSnapshot::decode(&payload.vm_snapshot, usize::MAX).unwrap();
+                let mut document = serde_json::to_value(vm).unwrap();
+                if mismatch == "inner_profile" {
+                    document["compatibility"] = serde_json::to_value(&snake).unwrap();
+                } else {
+                    document["artifact_id"] =
+                        serde_json::to_value(erabasic_bytecode::Digest([7; 32])).unwrap();
+                }
+                let modified: erabasic_vm::VmSnapshot = serde_json::from_value(document).unwrap();
+                payload.vm_snapshot = modified.encode().unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let encoded = runtime_snapshot::encode(&payload).unwrap();
+        session.start_vm_snapshot(101, &encoded).unwrap();
+        let messages = drain(&mut session);
+        assert!(
+            messages.iter().any(|message| matches!(
+                message,
+                RuntimeMessage::CommandRejected(CommandRejected {
+                    code: CommandErrorCode::VersionMismatch | CommandErrorCode::InvalidValue,
+                    ..
+                })
+            )),
+            "{mismatch}: {messages:?}"
+        );
+        assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{mismatch}");
+        assert_eq!(session.epoch, before_epoch, "{mismatch}");
+        assert_eq!(session.revision, before_revision, "{mismatch}");
+        assert_eq!(
+            session.operations.active_input().unwrap().wait,
+            before_wait,
+            "{mismatch}"
+        );
+        assert_eq!(
+            session.vm.as_ref().unwrap().snapshot().unwrap(),
+            before_vm,
+            "{mismatch}"
+        );
+    }
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn savedata_uses_atomic_frontend_storage_and_resumes_only_after_completion() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
@@ -163,6 +244,7 @@ fn savedata_uses_atomic_frontend_storage_and_resumes_only_after_completion() {
             &mut session,
             1,
             RuntimeMessage::ProjectManifest(ProjectManifest {
+                compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                 project_revision: 1,
                 files: vec![SubmittedFile {
                     relative_path: "save.erb".into(),
@@ -345,6 +427,7 @@ fn runtime_drive_reinstalls_the_vm_before_propagating_host_event_errors() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "invalid-save.erb".into(),
@@ -386,4 +469,3 @@ fn runtime_drive_reinstalls_the_vm_before_propagating_host_event_errors() {
         )
     }));
 }
-

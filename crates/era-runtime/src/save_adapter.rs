@@ -125,6 +125,11 @@ pub(crate) fn decode_era_save(
     bytes: &[u8],
     artifact: &BytecodeArtifact,
 ) -> Result<DecodedEraSave, SaveCodecError> {
+    let bytes = era_runtime_save::unwrap_compatible_save(
+        bytes,
+        &artifact.manifest.compatibility,
+        SaveCodecLimits::default(),
+    )?;
     // Both binary headers begin with the non-UTF-8 0x89 signature byte.
     let document = if bytes.starts_with(&[0x89]) {
         decode_sparse(bytes, SaveCodecLimits::default())?
@@ -166,6 +171,11 @@ pub(crate) fn decode_scoped_save(
     artifact: &BytecodeArtifact,
     kind: SaveFileKind,
 ) -> Result<DecodedEraSave, SaveCodecError> {
+    let bytes = era_runtime_save::unwrap_compatible_save(
+        bytes,
+        &artifact.manifest.compatibility,
+        SaveCodecLimits::default(),
+    )?;
     let document = if bytes.starts_with(&[0x89]) {
         decode_sparse(bytes, SaveCodecLimits::default())?
     } else {
@@ -299,7 +309,7 @@ pub(crate) fn encode_era_save(
         opaque_extensions,
         text_payload: None,
     };
-    if format == SaveFormat::Text1808 {
+    let payload = if format == SaveFormat::Text1808 {
         encode_text_with_layout(
             &document,
             &text_layout(artifact, SaveFileKind::Normal)?,
@@ -307,7 +317,12 @@ pub(crate) fn encode_era_save(
         )
     } else {
         encode(&document, format, SaveCodecLimits::default())
-    }
+    }?;
+    era_runtime_save::wrap_compatible_save(
+        payload,
+        &artifact.manifest.compatibility,
+        SaveCodecLimits::default(),
+    )
 }
 
 pub(crate) fn encode_scoped_save(
@@ -345,7 +360,7 @@ pub(crate) fn encode_scoped_save(
         opaque_extensions,
         text_payload: None,
     };
-    if format == SaveFormat::Text1808 {
+    let payload = if format == SaveFormat::Text1808 {
         encode_text_with_layout(
             &document,
             &text_layout(artifact, kind)?,
@@ -353,7 +368,12 @@ pub(crate) fn encode_scoped_save(
         )
     } else {
         encode(&document, format, SaveCodecLimits::default())
-    }
+    }?;
+    era_runtime_save::wrap_compatible_save(
+        payload,
+        &artifact.manifest.compatibility,
+        SaveCodecLimits::default(),
+    )
 }
 
 fn text_layout(
@@ -466,6 +486,74 @@ mod tests {
 
     use super::entries::decode_value;
     use super::*;
+
+    #[test]
+    fn snake_scoped_saves_round_trip_and_reference_sessions_reject_them() {
+        use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
+        let mut artifact = BytecodeArtifact {
+            manifest: ArtifactManifest::new(Digest::default()),
+            call_compatibility: BytecodeCallCompatibility::default(),
+            project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+                .data
+                .unwrap(),
+            globals: Vec::new(),
+            native_imports: Vec::new(),
+            host_imports: Vec::new(),
+            functions: Vec::new(),
+            event_groups: Vec::new(),
+            source_map: SourceMap::default(),
+        };
+        let reference = artifact.clone();
+        artifact.manifest.compatibility =
+            CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        let state = EraState {
+            unique_code: 1,
+            version: 2,
+            variables: BTreeMap::new(),
+            characters: Vec::new(),
+        };
+        for kind in [
+            SaveFileKind::Normal,
+            SaveFileKind::Global,
+            SaveFileKind::Variable,
+            SaveFileKind::Character,
+        ] {
+            for format in [SaveFormat::Binary1808, SaveFormat::Binary1808Gzip] {
+                let encoded = encode_scoped_save(
+                    &state,
+                    &artifact,
+                    kind,
+                    "profile fixture".into(),
+                    Vec::new(),
+                    format,
+                )
+                .unwrap();
+                let restored = decode_scoped_save(&encoded, &artifact, kind).unwrap();
+                assert_eq!(restored.state.unique_code, 1);
+                assert_eq!(restored.description, "profile fixture");
+                assert!(decode_scoped_save(&encoded, &reference, kind).is_err());
+            }
+        }
+        for format in [
+            SaveFormat::Text1808,
+            SaveFormat::Binary1808,
+            SaveFormat::Binary1808Gzip,
+        ] {
+            let encoded =
+                encode_era_save(&state, &artifact, "ordinary".into(), Vec::new(), format).unwrap();
+            assert_eq!(
+                decode_era_save(&encoded, &artifact).unwrap().description,
+                "ordinary"
+            );
+            let bare = encode_era_save(&state, &reference, "reference".into(), Vec::new(), format)
+                .unwrap();
+            assert!(decode_era_save(&bare, &artifact).is_err());
+            assert_eq!(
+                decode_era_save(&bare, &reference).unwrap().description,
+                "reference"
+            );
+        }
+    }
 
     #[test]
     fn sparse_binary_values_cross_the_adapter_without_dense_materialization() {
