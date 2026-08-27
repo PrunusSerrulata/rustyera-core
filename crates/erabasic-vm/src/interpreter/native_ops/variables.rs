@@ -288,7 +288,7 @@ pub(in super::super) fn execute_getnum(
     let Ok(data_dimension) = usize::try_from(data_dimension) else {
         return Ok(VmValue::Integer(-1));
     };
-    let value = resolve_named_index_value(program, &variable, &key, data_dimension);
+    let value = resolve_builtin_index_value(program, &variable, &key, data_dimension);
     Ok(VmValue::Integer(value.unwrap_or(-1)))
 }
 
@@ -307,9 +307,9 @@ pub(in super::super) fn execute_erdname(
             "ERDNAME argument 2 is not an integer".into(),
         ));
     };
-    let Ok(index) = usize::try_from(*index) else {
+    if *index < 0 {
         return Ok(VmValue::String(String::new()));
-    };
+    }
     let selector = match arguments.get(2) {
         None | Some(VmValue::Integer(i64::MIN)) => None,
         Some(VmValue::Integer(value)) => Some(*value),
@@ -347,10 +347,19 @@ pub(in super::super) fn execute_erdname(
                 .map(|(_, table)| table)
         })
         .and_then(|table| {
-            table
-                .entries
-                .iter()
-                .find_map(|(name, value)| (*value == index).then(|| name.clone()))
+            if program
+                .artifact
+                .manifest
+                .compatibility
+                .uses_snake_alias_rules()
+            {
+                table.canonical_names.get(index).cloned()
+            } else {
+                table
+                    .entries
+                    .iter()
+                    .find_map(|(name, value)| (value == index).then(|| name.clone()))
+            }
         })
         .unwrap_or_default();
     Ok(VmValue::String(value))
@@ -672,6 +681,37 @@ fn lookup_named_index_target<'a>(
 }
 
 pub(in super::super) fn resolve_named_index_value(
+    program: &crate::state::ProgramGeneration,
+    variable: &str,
+    key: &str,
+    dimension: usize,
+) -> Option<i64> {
+    if program
+        .artifact
+        .manifest
+        .compatibility
+        .uses_snake_alias_rules()
+    {
+        let tables = &program
+            .artifact
+            .project_data
+            .static_data
+            .deferred_indices
+            .resolved;
+        let dimension_key = format!("{variable}@{}", dimension.checked_add(1)?);
+        let table = tables.iter().find_map(|(name, table)| {
+            (name.eq_ignore_ascii_case(&dimension_key)
+                || (dimension == 0 && name.eq_ignore_ascii_case(variable)))
+            .then_some(table)
+        });
+        if let Some(table) = table {
+            return table.entries.get(key).copied();
+        }
+    }
+    resolve_builtin_index_value(program, variable, key, dimension)
+}
+
+fn resolve_builtin_index_value(
     program: &crate::state::ProgramGeneration,
     variable: &str,
     key: &str,

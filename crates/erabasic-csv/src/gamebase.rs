@@ -16,7 +16,7 @@ pub(crate) fn load_game_base(
     };
     let mut window_title_defined = false;
     let mut fatal = false;
-    for line in enabled_lines(&file.path, &file.content, options, diagnostics) {
+    for line in enabled_lines(&file.source_path, &file.content, options, diagnostics) {
         let tokens: Vec<_> = line.text.split(',').collect();
         if tokens.len() < 2 {
             continue;

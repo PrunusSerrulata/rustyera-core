@@ -43,18 +43,7 @@ impl IndexResolver {
                 .unwrap_or((name.as_str(), 0));
             result.tables.insert(
                 (variable.to_ascii_uppercase(), dimension),
-                Arc::new(
-                    table
-                        .entries
-                        .iter()
-                        .map(|(name, index)| {
-                            (
-                                name.clone(),
-                                i64::try_from(*index).expect("deferred index exceeds i64"),
-                            )
-                        })
-                        .collect(),
-                ),
+                Arc::new(table.entries.clone()),
             );
         }
         result.rename = project

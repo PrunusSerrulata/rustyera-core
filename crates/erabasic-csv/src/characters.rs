@@ -39,7 +39,7 @@ pub(crate) fn load_characters(
     let mut characters = Vec::new();
     for file in paths {
         load_character_file(
-            &file.path,
+            &file.source_path,
             &file.content,
             schema,
             tables,

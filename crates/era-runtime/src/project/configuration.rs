@@ -40,6 +40,10 @@ pub(super) fn semantic_config(values: ConfigStore) -> SemanticConfig {
     };
     config.analyzer.compatibility =
         erabasic_compat::CompatibilityIdentity::for_profile(config.values.compatibility_profile());
+    config
+        .csv
+        .compatibility
+        .clone_from(&config.analyzer.compatibility);
     apply_catalog_semantics(&mut config);
     config
 }

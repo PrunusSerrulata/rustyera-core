@@ -125,6 +125,14 @@ fn compile_source_with_data(
     source: &str,
     project_data: erabasic_data::ProjectData,
 ) -> BytecodeArtifact {
+    compile_source_with_data_and_options(source, project_data, &AnalyzerOptions::analysis_mode())
+}
+
+fn compile_source_with_data_and_options(
+    source: &str,
+    project_data: erabasic_data::ProjectData,
+    options: &AnalyzerOptions,
+) -> BytecodeArtifact {
     let analysis = analyze_project(
         AnalysisInput {
             project_data,
@@ -133,7 +141,7 @@ fn compile_source_with_data(
                 payload: SourcePayload::Utf8(source.into()),
             }],
         },
-        &AnalyzerOptions::analysis_mode(),
+        options,
         &ExtensionRegistry::default(),
     );
     assert!(analysis.project.is_some(), "{:#?}", analysis.diagnostics);

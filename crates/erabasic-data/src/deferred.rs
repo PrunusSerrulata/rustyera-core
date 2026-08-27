@@ -6,6 +6,15 @@ use serde::{Deserialize, Serialize};
 pub struct DeferredIndexFile {
     pub relative_path: String,
     pub content: String,
+    /// Only the alias file beside this primary table, in the same submitted file root.
+    #[serde(default)]
+    pub aliases: Option<DeferredIndexAliases>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeferredIndexAliases {
+    pub relative_path: String,
+    pub content: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -27,5 +36,8 @@ pub struct UserIndexRegistration {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedUserIndex {
     pub variable_name: String,
-    pub entries: BTreeMap<String, usize>,
+    /// Aliases may contain any signed i32 index; array access checks bounds separately.
+    pub entries: BTreeMap<String, i64>,
+    /// First inserted name for each index, after all primary tables and then aliases.
+    pub canonical_names: BTreeMap<i64, String>,
 }

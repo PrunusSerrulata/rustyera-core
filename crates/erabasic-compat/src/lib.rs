@@ -109,10 +109,14 @@ impl CompatibilityIdentity {
 
     #[must_use]
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
+        let version = match profile {
+            CompatibilityProfileId::EmueraEm => 1,
+            CompatibilityProfileId::EmueraSkiaSnake => 2,
+        };
         Self {
             profile,
-            semantic_version: 1,
-            policy_version: 1,
+            semantic_version: version,
+            policy_version: version,
             arithmetic: "wrapping_i64_v1".into(),
             rng_algorithm: "sfmt19937".into(),
             rng_state_version: 1,
@@ -129,6 +133,12 @@ impl CompatibilityIdentity {
     #[must_use]
     pub const fn is_experimental(&self) -> bool {
         matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake)
+    }
+
+    /// User ERD aliases and the snake built-in alias recovery rules arrived in policy v2.
+    #[must_use]
+    pub const fn uses_snake_alias_rules(&self) -> bool {
+        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 2
     }
 
     /// Validate the complete policy, including semantic service versions.
@@ -181,6 +191,12 @@ mod tests {
         assert_eq!(reference.arithmetic, snake.arithmetic);
         assert_eq!(reference.rng_algorithm, snake.rng_algorithm);
         assert!(snake.is_experimental());
+        assert!(snake.uses_snake_alias_rules());
+        assert!(!reference.uses_snake_alias_rules());
+        let mut previous_snake = snake.clone();
+        previous_snake.semantic_version = 1;
+        previous_snake.policy_version = 1;
+        assert!(previous_snake.validate().is_err());
         assert!(reference.validate().is_ok());
         assert!(snake.validate().is_ok());
         let mut unsupported = snake;

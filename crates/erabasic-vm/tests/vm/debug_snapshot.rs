@@ -409,6 +409,9 @@ fn erdname_resolves_a_user_defined_index_name_at_runtime() {
         "CUSTOM_NAMES".into(),
         erabasic_data::ResolvedUserIndex {
             variable_name: "CUSTOM_NAMES".into(),
+            canonical_names: [(0, "zero".into()), (1, "second".into())]
+                .into_iter()
+                .collect(),
             entries: [("zero".into(), 0), ("second".into(), 1)]
                 .into_iter()
                 .collect(),
@@ -421,6 +424,91 @@ fn erdname_resolves_a_user_defined_index_name_at_runtime() {
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(1));
 }
 
+fn alias_project_data() -> erabasic_data::ProjectData {
+    let mut data = project_data();
+    data.static_data.deferred_indices.resolved.insert(
+        "BUFF".into(),
+        erabasic_data::ResolvedUserIndex {
+            variable_name: "BUFF".into(),
+            entries: [
+                ("main".into(), 10),
+                ("alias".into(), 10),
+                ("negative".into(), -1),
+                ("outside".into(), 300),
+            ]
+            .into_iter()
+            .collect(),
+            canonical_names: [
+                (10, "main".into()),
+                (-1, "negative".into()),
+                (300, "outside".into()),
+            ]
+            .into_iter()
+            .collect(),
+        },
+    );
+    data
+}
+
+#[test]
+fn snake_aliases_resolve_dynamic_indices_and_keep_primary_reverse_names() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let artifact = compile_source_with_data_and_options(
+        "@SYSTEM_TITLE\n#DIM BUFF,32\nRESULTS:0 = alias\nBUFF:alias = 42\nRESULT = BUFF:(RESULTS:0) * 10 + (ERDNAME(BUFF,10) == \"main\")\nRETURN RESULT\n",
+        alias_project_data(),
+        &options,
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(421));
+
+    let original = compile_source_with_data(
+        "@SYSTEM_TITLE\n#DIM BUFF,32\nRESULT = ERDNAME(BUFF,10) == \"alias\"\nRETURN RESULT\n",
+        alias_project_data(),
+    );
+    assert_eq!(run_compiled_result(&original), VmValue::Integer(1));
+}
+
+#[test]
+fn snake_signed_aliases_still_fault_on_out_of_bounds_array_access() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    for alias in ["negative", "outside"] {
+        let artifact = compile_source_with_data_and_options(
+            &format!(
+                "@SYSTEM_TITLE\n#DIM BUFF,32\nRESULTS:0 = {alias}\nRESULT = BUFF:(RESULTS:0)\nRETURN RESULT\n"
+            ),
+            alias_project_data(),
+            &options,
+        );
+        let entry = artifact
+            .functions
+            .iter()
+            .find(|function| function.name == "SYSTEM_TITLE")
+            .unwrap()
+            .key;
+        let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        vm.spawn_entry(entry, Vec::new()).unwrap();
+        let report = vm.run_slice(
+            &mut ReadyHost::default(),
+            &mut natives,
+            RunBudget::default(),
+        );
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{alias}: {:?}",
+            report.events
+        );
+    }
+}
+
 #[test]
 fn erafl_compatibility_fixture_compiles_and_matches_the_reference_result() {
     const SOURCE: &str = "@ERAFL_COMPAT\n#DIM\u{3000}OUT\n#DIMS CONST PAD = \" \" * 3\nVARI COUNT = 2\nVARS WORD = \"xy\"\nVARI ITEMS, 3\n{\t\nCOUNT += 1\n}\t\nFOR LOCAL, , 2\nITEMS:LOCAL = COUNT\nNEXT\nIF 0\nOUT = ENUMFILES(\"missing-directory\", \"*.none\")\nCALLSHARP MISSING_PLUGIN()\nENDIF\nRESULT = COUNT * 10000 + (WORD == \"xy\") * 1000 + (ITEMS:1 == 3) * 100 + (PAD == \"   \") * 10 + (ERDNAME(CUSTOM_NAMES, 2) == \"later\")\nRETURN RESULT\n";
@@ -429,6 +517,9 @@ fn erafl_compatibility_fixture_compiles_and_matches_the_reference_result() {
         "CUSTOM_NAMES".into(),
         erabasic_data::ResolvedUserIndex {
             variable_name: "CUSTOM_NAMES".into(),
+            canonical_names: [(0, "zero".into()), (2, "later".into())]
+                .into_iter()
+                .collect(),
             entries: [("zero".into(), 0), ("later".into(), 2)]
                 .into_iter()
                 .collect(),

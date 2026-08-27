@@ -53,6 +53,7 @@ pub(crate) enum FileRoot {
 pub(crate) struct IndexedFile {
     pub root: FileRoot,
     pub path: String,
+    pub source_path: String,
     pub content: String,
     pub input_order: usize,
 }
@@ -96,12 +97,25 @@ impl FileIndex {
         input_order: &mut usize,
     ) {
         for entry in entries {
+            let submitted_source = entry.source_path.as_deref().unwrap_or(&entry.relative_path);
+            let Some(source_path) = normalize_path(submitted_source) else {
+                diagnostics.push(CsvDiagnostic::new(
+                    CsvDiagnosticCode::InvalidPath,
+                    CsvDiagnosticSeverity::Error,
+                    2,
+                    submitted_source,
+                    None,
+                    "source paths must be relative and may not contain '..'",
+                ));
+                *input_order += 1;
+                continue;
+            };
             let Some(path) = normalize_path(&entry.relative_path) else {
                 diagnostics.push(CsvDiagnostic::new(
                     CsvDiagnosticCode::InvalidPath,
                     CsvDiagnosticSeverity::Error,
                     2,
-                    &entry.relative_path,
+                    &source_path,
                     None,
                     "paths must be relative and may not contain '..'",
                 ));
@@ -111,12 +125,17 @@ impl FileIndex {
             let content = match entry.payload {
                 FilePayload::Utf8(content) => content,
                 FilePayload::IoError(error) => {
-                    if error.kind != FrontendIoErrorKind::NotFound {
+                    let extension = path.rsplit_once('.').map(|(_, extension)| extension);
+                    let required_index_input = extension.is_some_and(|extension| {
+                        extension.eq_ignore_ascii_case("als")
+                            || extension.eq_ignore_ascii_case("erd")
+                    });
+                    if error.kind != FrontendIoErrorKind::NotFound || required_index_input {
                         diagnostics.push(CsvDiagnostic::new(
                             CsvDiagnosticCode::IoError,
                             CsvDiagnosticSeverity::Error,
                             2,
-                            &path,
+                            &source_path,
                             None,
                             format!("frontend I/O error: {}", error.message),
                         ));
@@ -135,7 +154,7 @@ impl FileIndex {
                     CsvDiagnosticCode::DuplicatePath,
                     CsvDiagnosticSeverity::Error,
                     2,
-                    &path,
+                    &source_path,
                     None,
                     "duplicate normalized path; the first file is used",
                 ));
@@ -146,6 +165,7 @@ impl FileIndex {
             self.files.push(IndexedFile {
                 root,
                 path,
+                source_path,
                 content,
                 input_order: *input_order,
             });
@@ -155,8 +175,16 @@ impl FileIndex {
     }
 
     pub fn csv_file(&self, path: &str) -> Option<&IndexedFile> {
+        self.file(FileRoot::Csv, path)
+    }
+
+    pub fn file(&self, root: FileRoot, path: &str) -> Option<&IndexedFile> {
+        let root_key = match root {
+            FileRoot::Csv => 0,
+            FileRoot::Erb => 1,
+        };
         self.by_key
-            .get(&(0, ascii_fold(path)))
+            .get(&(root_key, ascii_fold(path)))
             .map(|index| &self.files[*index])
     }
 

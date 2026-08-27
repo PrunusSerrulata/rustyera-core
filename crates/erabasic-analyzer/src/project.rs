@@ -429,6 +429,7 @@ fn analyze_with_context(
     );
     if options.use_erd {
         let csv_options = CsvLoadOptions {
+            compatibility: options.compatibility.clone(),
             ignore_case: options.ignore_case,
             use_erd: options.use_erd,
             debug_mode: options.debug_mode,

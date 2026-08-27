@@ -321,6 +321,7 @@ dependencies = [
 name = "erabasic-csv"
 version = "0.8.0"
 dependencies = [
+ "erabasic-compat",
  "erabasic-data",
  "serde",
 ]
