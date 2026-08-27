@@ -1,0 +1,68 @@
+@SYSTEM_TITLE
+PRINTL SNAKE_DATA_START
+INPUT
+DATA_INDEX:alias = 2
+C1_METHOD_NAME '= @"DATA_VALUE_{DATA_INDEX:main}"
+C1_METHOD_VALUE = GETMETH(C1_METHOD_NAME, -1)
+PRINTFORML SNAKE_DATA_INDEX={DATA_INDEX:main}/%ERDNAME(DATA_INDEX,10)%/{C1_METHOD_VALUE}
+
+C1_RAW '= LOADTEXT("plugins/data.txt")
+C1_OBS:0 = C1_RAW == "resource-text\n"
+C1_OBS:1 = EXISTFILE("plugins/data.txt")
+C1_OBS:2 = EXISTFILE("plugins/missing.txt")
+PRINTFORML SNAKE_DATA_RESOURCE={C1_OBS:0}/{C1_OBS:1}/{C1_OBS:2}
+C1_OBS:3 = SAVETEXT("overlay-text", "plugins/data.txt", 0, 1)
+C1_RAW '= LOADTEXT("plugins/data.txt")
+C1_OBS:4 = C1_RAW == "overlay-text"
+C1_OBS:5 = ENUMFILES("plugins", "*.txt", 0)
+C1_OBS:6 = ENUMFILES("plugins", "*.txt", 1)
+PRINTFORML SNAKE_DATA_OVERLAY={C1_OBS:3}/{C1_OBS:4}/{C1_OBS:5}/{C1_OBS:6}
+
+C1_DUMMY = MAP_CREATE("fixture_map")
+C1_DUMMY = MAP_FROMXML("fixture_map", LOADTEXT("plugins/map.xml"))
+C1_SCHEMA '= LOADTEXT("plugins/dataset-schema.xml")
+C1_XML '= LOADTEXT("plugins/dataset.xml")
+C1_OBS:7 = DT_FROMXML("fixture_dataset", C1_SCHEMA, C1_XML)
+DT_COLUMN_OPTIONS "fixture_dataset", "n", DEFAULT, C1_METHOD_VALUE
+C1_DUMMY = DT_ROW_ADD("fixture_dataset")
+C1_DUMMY = XML_DOCUMENT("fixture_xml", C1_XML)
+C1_DUMMY = XML_GET_BYNAME("fixture_xml", "//n", C1_ITEMS, 1)
+PRINTFORML SNAKE_DATA_STRUCTURED={C1_OBS:7}/%MAP_GET("fixture_map","place")%/%C1_ITEMS:0%/{DT_CELL_GET("fixture_dataset",0,"n")}/{DT_CELL_GET("fixture_dataset",1,"n")}/%DT_CELL_GETS("fixture_dataset",1,"s")%
+
+GLOBAL:0 = 66
+FLAG:0 = 55
+LOADGLOBAL
+C1_OBS:8 = RESULT:0
+PRINTFORML SNAKE_DATA_GLOBAL_MISSING={C1_OBS:8}/{GLOBAL:0}/{FLAG:0}
+C1_DUMMY = DT_CREATE("column_global")
+C1_DUMMY = DT_COLUMN_ADD("column_global", "n", "int64")
+DT_COLUMN_OPTIONS "column_global", "n", DEFAULT, 12
+C1_DUMMY = DT_ROW_ADD("column_global")
+C1_DUMMY = MAP_CREATE("column_global_map")
+C1_DUMMY = MAP_SET("column_global_map", "value", "saved-map")
+C1_DUMMY = XML_DOCUMENT("column_global_xml", "<root value='saved-xml'/>")
+GLOBAL:0 = 7
+FLAG:0 = 8
+SAVEGLOBAL
+GLOBAL:0 = 66
+FLAG:0 = 55
+C1_DUMMY = DT_CLEAR("column_global")
+DT_COLUMN_OPTIONS "column_global", "n", DEFAULT, 99
+C1_DUMMY = MAP_SET("column_global_map", "value", "mutated-map")
+C1_DUMMY = XML_REPLACE("column_global_xml", "<root value='mutated-xml'/>")
+IF STRFIND(XML_TOSTR("column_global_xml"), "mutated-xml") < 0
+    THROW fixture XML mutation did not occur
+ENDIF
+LOADGLOBAL
+C1_OBS:9 = RESULT:0
+C1_OBS:10 = DT_ROW_LENGTH("column_global")
+C1_DUMMY = DT_ROW_ADD("column_global")
+C1_DUMMY = XML_GET_BYNAME("column_global_xml", "/root/@value", C1_ITEMS, 1)
+PRINTFORML SNAKE_DATA_GLOBAL={C1_OBS:9}/{GLOBAL:0}/{FLAG:0}/{C1_OBS:10}/{DT_CELL_GET("column_global",1,"n")}/%MAP_GET("column_global_map","value")%/%C1_ITEMS:0%
+PRINTL SNAKE_DATA_READY
+INPUT
+RETURN RESULT:0
+
+@DATA_VALUE_2
+#FUNCTION
+RETURNF 42

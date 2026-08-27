@@ -1,0 +1,355 @@
+; Batch 1C fixture: each C1_CASE_* runs in its own project with seed 123456.
+; Watch cells by row position, never compare reference TimePoint IDs with Rust IDs.
+@C1_SETUP
+C1_DUMMY = DT_RELEASE("column_table")
+C1_DUMMY = DT_CREATE("column_table")
+C1_DUMMY = DT_COLUMN_ADD("column_table", "n", "int64", 1)
+C1_DUMMY = DT_COLUMN_ADD("column_table", "s", "string", 1)
+C1_DUMMY = DT_COLUMN_ADD("column_table", "tiny", "int8", 1)
+C1_DUMMY = DT_COLUMN_ADD("column_table", "short", "int16", 1)
+C1_DUMMY = DT_COLUMN_ADD("column_table", "word", "int32", 1)
+C1_TABLE_TARGET '= "column_table"
+C1_COLUMN_TARGET '= "n"
+C1_TRACE = 0
+C1_BODY_COUNT = 0
+C1_PROBE = 0
+RETURN RESULT:0
+
+@C1_TABLE_NAME
+#FUNCTIONS
+C1_TRACE = C1_TRACE * 10 + 1
+RETURNF C1_TABLE_TARGET
+
+@C1_COLUMN_NAME
+#FUNCTIONS
+C1_TRACE = C1_TRACE * 10 + 2
+RETURNF C1_COLUMN_TARGET
+
+@C1_INT_VALUE
+#FUNCTION
+C1_BODY_COUNT += 1
+C1_TRACE = C1_TRACE * 10 + 3
+RETURNF 3
+
+@C1_STRING_VALUE
+#FUNCTIONS
+C1_BODY_COUNT += 1
+C1_TRACE = C1_TRACE * 10 + 4
+RETURNF "wrong"
+
+@C1_CASE_BASIC_DEFAULTS
+CALL C1_SETUP
+RESULT = 777
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, 11
+DT_COLUMN_OPTIONS "column_table", "s", DEFAULT, "默认&A<quote>"
+RESULT:10 = RESULT
+C1_DUMMY = DT_ROW_ADD("column_table")
+RESULT:11 = DT_CELL_GET("column_table", 0, "n")
+RESULTS:10 '= DT_CELL_GETS("column_table", 0, "s")
+RETURN RESULT:0
+
+@C1_CASE_I64_MIN
+CALL C1_SETUP
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, (-9223372036854775807 - 1)
+C1_DUMMY = DT_ROW_ADD("column_table")
+RESULT:10 = DT_CELL_ISNULL("column_table", 0, "n")
+RESULT:11 = DT_CELL_GET("column_table", 0, "n")
+RETURN RESULT:0
+
+@C1_CASE_SATURATION
+CALL C1_SETUP
+DT_COLUMN_OPTIONS "column_table", "tiny", DEFAULT, 999
+DT_COLUMN_OPTIONS "column_table", "short", DEFAULT, 999999
+DT_COLUMN_OPTIONS "column_table", "word", DEFAULT, 9223372036854775807
+C1_DUMMY = DT_ROW_ADD("column_table")
+DT_COLUMN_OPTIONS "column_table", "tiny", DEFAULT, -999
+DT_COLUMN_OPTIONS "column_table", "short", DEFAULT, -999999
+DT_COLUMN_OPTIONS "column_table", "word", DEFAULT, (-9223372036854775807 - 1)
+C1_DUMMY = DT_ROW_ADD("column_table")
+RESULT:10 = DT_CELL_GET("column_table", 0, "tiny")
+RESULT:11 = DT_CELL_GET("column_table", 0, "short")
+RESULT:12 = DT_CELL_GET("column_table", 0, "word")
+RESULT:13 = DT_CELL_GET("column_table", 1, "tiny")
+RESULT:14 = DT_CELL_GET("column_table", 1, "short")
+RESULT:15 = DT_CELL_GET("column_table", 1, "word")
+RETURN RESULT:0
+
+@C1_CASE_EMPTY_STRING_AND_EXPLICIT_NULL
+CALL C1_SETUP
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, 11
+DT_COLUMN_OPTIONS "column_table", "s", DEFAULT, ""
+C1_DUMMY = DT_ROW_ADD("column_table")
+C1_DUMMY = DT_ROW_ADD("column_table", "n", )
+RESULT:10 = DT_CELL_ISNULL("column_table", 0, "n")
+RESULT:11 = DT_CELL_ISNULL("column_table", 1, "n")
+RESULT:12 = DT_CELL_ISNULL("column_table", 0, "s")
+RESULT:13 = STRLEN(DT_CELL_GETS("column_table", 0, "s"))
+RETURN RESULT:0
+
+@C1_CASE_NON_NULL_DEFAULT
+CALL C1_SETUP
+C1_DUMMY = DT_COLUMN_ADD("column_table", "required", "int64", 0)
+DT_COLUMN_OPTIONS "column_table", "required", DEFAULT, 7
+C1_DUMMY = DT_ROW_ADD("column_table")
+RESULT:10 = DT_CELL_GET("column_table", 0, "required")
+RETURN RESULT:0
+
+@C1_CASE_NON_NULL_MISSING_ERROR
+CALL C1_SETUP
+C1_DUMMY = DT_COLUMN_ADD("column_table", "required", "int64", 0)
+RESULT = 777
+C1_DUMMY = DT_ROW_ADD("column_table")
+RETURN RESULT:0
+
+@C1_CASE_NON_NULL_EXPLICIT_VALUE
+CALL C1_SETUP
+C1_DUMMY = DT_COLUMN_ADD("column_table", "required", "int64", 0)
+C1_DUMMY = DT_ROW_ADD("column_table", "required", 8)
+RESULT:10 = DT_CELL_GET("column_table", 0, "required")
+RETURN RESULT:0
+
+@C1_CASE_UPDATE_NO_BACKFILL
+CALL C1_SETUP
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, 11
+C1_DUMMY = DT_ROW_ADD("column_table")
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, 22
+C1_DUMMY = DT_ROW_ADD("column_table")
+RESULT:10 = DT_CELL_GET("column_table", 0, "n")
+RESULT:11 = DT_CELL_GET("column_table", 1, "n")
+RETURN RESULT:0
+
+@C1_CASE_NAME_ORDER
+CALL C1_SETUP
+RESULT = 777
+DT_COLUMN_OPTIONS C1_TABLE_NAME(), C1_COLUMN_NAME(), DEFAULT, C1_INT_VALUE()
+RESULT:10 = RESULT
+RESULT:11 = C1_TRACE
+RESULT:12 = C1_BODY_COUNT
+RETURN RESULT:0
+
+@C1_CASE_TYPE_ERROR_BEFORE_VALUE
+CALL C1_SETUP
+RESULT = 777
+DT_COLUMN_OPTIONS C1_TABLE_NAME(), C1_COLUMN_NAME(), DEFAULT, C1_STRING_VALUE()
+RETURN RESULT:0
+
+@C1_CASE_MISSING_TABLE_ERROR
+CALL C1_SETUP
+C1_TABLE_TARGET '= "missing_table"
+RESULT = 777
+DT_COLUMN_OPTIONS C1_TABLE_NAME(), C1_COLUMN_NAME(), DEFAULT, C1_INT_VALUE()
+RETURN RESULT:0
+
+@C1_CASE_MISSING_COLUMN_ERROR
+CALL C1_SETUP
+C1_COLUMN_TARGET '= "missing_column"
+RESULT = 777
+DT_COLUMN_OPTIONS C1_TABLE_NAME(), C1_COLUMN_NAME(), DEFAULT, C1_INT_VALUE()
+RETURN RESULT:0
+
+@C1_CASE_PARTIAL_DEFAULT_ERROR
+CALL C1_SETUP
+RESULT = 777
+DT_COLUMN_OPTIONS C1_TABLE_NAME(), C1_COLUMN_NAME(), DEFAULT, C1_INT_VALUE(), DEFAULT, C1_STRING_VALUE()
+RETURN RESULT:0
+
+@C1_OBSERVE_EARLIER_DEFAULT
+#FUNCTION
+C1_BODY_COUNT += 1
+C1_DUMMY = DT_ROW_ADD("column_table")
+C1_PROBE = DT_CELL_GET("column_table", 0, "n")
+RETURNF C1_PROBE + 1
+
+@C1_CASE_EACH_DEFAULT_COMMITS
+CALL C1_SETUP
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, 3, DEFAULT, C1_OBSERVE_EARLIER_DEFAULT()
+C1_DUMMY = DT_ROW_ADD("column_table")
+RESULT:10 = C1_PROBE
+RESULT:11 = DT_CELL_GET("column_table", 0, "n")
+RESULT:12 = DT_CELL_GET("column_table", 1, "n")
+RETURN RESULT:0
+
+@C1_RECREATE_COLUMN
+#FUNCTION
+C1_BODY_COUNT += 1
+C1_DUMMY = DT_COLUMN_REMOVE("column_table", "n")
+C1_DUMMY = DT_COLUMN_ADD("column_table", "n", "string", 1)
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, "replacement"
+RETURNF 99
+
+@C1_CASE_DETACHED_COLUMN_IDENTITY
+CALL C1_SETUP
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, C1_RECREATE_COLUMN(), DEFAULT, 100
+C1_DUMMY = DT_ROW_ADD("column_table")
+RESULTS:10 '= DT_CELL_GETS("column_table", 0, "n")
+RETURN RESULT:0
+
+@C1_CASE_DETACHED_COLUMN_ORIGINAL_TYPE_ERROR
+CALL C1_SETUP
+RESULT = 777
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, C1_RECREATE_COLUMN(), DEFAULT, C1_STRING_VALUE()
+RETURN RESULT:0
+
+@C1_RECREATE_TABLE
+#FUNCTION
+C1_BODY_COUNT += 1
+C1_DUMMY = DT_RELEASE("column_table")
+C1_DUMMY = DT_CREATE("column_table")
+C1_DUMMY = DT_COLUMN_ADD("column_table", "n", "int64", 1)
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, 55
+RETURNF 99
+
+@C1_CASE_DETACHED_TABLE_IDENTITY
+CALL C1_SETUP
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, C1_RECREATE_TABLE()
+C1_DUMMY = DT_ROW_ADD("column_table")
+RESULT:10 = DT_CELL_GET("column_table", 0, "n")
+RETURN RESULT:0
+
+@C1_REPLACE_FROM_XML
+#FUNCTION
+C1_BODY_COUNT += 1
+C1_XML '= DT_TOXML("column_table", C1_SCHEMA)
+C1_DUMMY = DT_FROMXML("column_table", C1_SCHEMA, C1_XML)
+RETURNF 99
+
+@C1_CASE_IMPORTED_TABLE_IDENTITY
+CALL C1_SETUP
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, 55
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, C1_REPLACE_FROM_XML()
+C1_DUMMY = DT_ROW_ADD("column_table")
+RESULT:10 = DT_CELL_GET("column_table", 0, "n")
+RETURN RESULT:0
+
+@C1_CASE_XML_DEFAULT_ROUNDTRIP
+CALL C1_SETUP
+C1_SPECIAL '= "引号\" & < > " + UNICODE(13) + UNICODE(10) + "\t" + "尾"
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, 17
+DT_COLUMN_OPTIONS "column_table", "s", DEFAULT, C1_SPECIAL
+C1_XML '= DT_TOXML("column_table", C1_SCHEMA)
+C1_DUMMY = DT_FROMXML("column_table", C1_SCHEMA, C1_XML)
+C1_DUMMY = DT_ROW_ADD("column_table")
+RESULT:10 = DT_CELL_GET("column_table", 0, "n")
+RESULT:11 = DT_CELL_GETS("column_table", 0, "s") == C1_SPECIAL
+RESULTS:10 '= C1_SCHEMA
+RETURN RESULT:0
+
+@C1_CASE_XML_NULL_OBSERVATION
+CALL C1_SETUP
+DT_COLUMN_OPTIONS "column_table", "n", DEFAULT, 17
+C1_DUMMY = DT_ROW_ADD("column_table", "n", )
+RESULT:10 = DT_CELL_ISNULL("column_table", 0, "n")
+C1_XML '= DT_TOXML("column_table", C1_SCHEMA)
+RESULTS:10 '= C1_SCHEMA
+RESULTS:11 '= C1_XML
+C1_DUMMY = DT_FROMXML("column_table", C1_SCHEMA, C1_XML)
+RESULT:11 = DT_CELL_ISNULL("column_table", 0, "n")
+; Observation only: no assumed xsi:nil shape or unobserved XML golden.
+RETURN RESULT:0
+
+; Single-run roundtrip; the missing case uses a separate empty storage project.
+; Require csv/VarExt.csv. Never alter shared game saves.
+@C1_GLOBAL_WRITE
+C1_DUMMY = DT_RELEASE("column_global")
+C1_DUMMY = DT_CREATE("column_global")
+C1_DUMMY = DT_COLUMN_ADD("column_global", "n", "int64", 1)
+DT_COLUMN_OPTIONS "column_global", "n", DEFAULT, 12
+C1_DUMMY = DT_ROW_ADD("column_global")
+C1_DUMMY = MAP_CREATE("column_global_map")
+C1_DUMMY = MAP_SET("column_global_map", "value", "saved-map")
+C1_DUMMY = XML_DOCUMENT("column_global_xml", "<root value='saved-xml'/>")
+GLOBAL:0 = 7
+FLAG:0 = 8
+SAVEGLOBAL
+RETURN RESULT:0
+
+@C1_GLOBAL_READ
+GLOBAL:0 = 66
+FLAG:0 = 55
+C1_DUMMY = MAP_SET("column_global_map", "value", "mutated-map")
+C1_DUMMY = XML_REPLACE("column_global_xml", "<root value='mutated-xml'/>")
+IF STRFIND(XML_TOSTR("column_global_xml"), "mutated-xml") < 0
+    THROW fixture XML mutation did not occur
+ENDIF
+C1_DUMMY = DT_RELEASE("column_global")
+C1_DUMMY = DT_CREATE("column_global")
+C1_DUMMY = DT_COLUMN_ADD("column_global", "n", "int64", 1)
+DT_COLUMN_OPTIONS "column_global", "n", DEFAULT, 99
+LOADGLOBAL
+RESULT:10 = RESULT
+RESULT:11 = GLOBAL:0
+RESULT:12 = FLAG:0
+C1_PROBE = DT_ROW_LENGTH("column_global")
+C1_DUMMY = DT_ROW_ADD("column_global")
+RESULT:13 = DT_CELL_GET("column_global", C1_PROBE, "n")
+RESULT:14 = C1_PROBE
+RESULTS:10 '= MAP_GET("column_global_map", "value")
+C1_DUMMY = XML_GET_BYNAME("column_global_xml", "/root/@value", C1_ITEMS, 1)
+RESULTS:11 '= C1_ITEMS:0
+RETURN RESULT:0
+
+@C1_GLOBAL_MISSING
+GLOBAL:0 = 66
+FLAG:0 = 55
+RESULT = 777
+LOADGLOBAL
+RESULT:10 = RESULT
+RESULT:11 = GLOBAL:0
+RESULT:12 = FLAG:0
+RETURN RESULT:0
+
+@C1_CASE_GLOBAL_ROUNDTRIP
+CALL C1_GLOBAL_WRITE
+CALL C1_GLOBAL_READ
+RETURN RESULT:0
+
+@C1_CASE_RESOURCE_READ
+RESULTS:10 '= LOADTEXT("plugins/data.txt")
+RESULTS:11 '= LOADTEXT("plugins/nested/child.txt")
+RESULT:10 = EXISTFILE("plugins/data.txt")
+RESULT:11 = EXISTFILE("plugins/missing.txt")
+RETURN RESULT:0
+
+@C1_CASE_RESOURCE_OVERLAY_ENUMERATION
+RESULTS:10 '= LOADTEXT("plugins/data.txt")
+RESULT:10 = SAVETEXT("overlay-text", "plugins/data.txt", 0, 1)
+RESULTS:11 '= LOADTEXT("plugins/data.txt")
+RESULT:11 = ENUMFILES("plugins", "*.txt", 0)
+RESULT:12 = ENUMFILES("plugins", "*.txt", 1)
+RESULT:13 = EXISTFILE("plugins/data.txt")
+RETURN RESULT:0
+
+@C1_CASE_NUMBERED_AND_NAMED_TEXT
+RESULT:10 = SAVETEXT("numbered-text", 17, 0, 1)
+RESULT:11 = SAVETEXT("named-text", "named.txt", 0, 1)
+RESULTS:10 '= LOADTEXT(17, 0, 1)
+RESULTS:11 '= LOADTEXT("named.txt")
+RETURN RESULT:0
+
+@C1_CASE_RESOURCE_MAP_XML_DATATABLE
+C1_DUMMY = MAP_CREATE("fixture_map")
+C1_DUMMY = MAP_FROMXML("fixture_map", LOADTEXT("plugins/map.xml"))
+RESULTS:10 '= MAP_GET("fixture_map", "place")
+C1_SCHEMA '= LOADTEXT("plugins/dataset-schema.xml")
+C1_XML '= LOADTEXT("plugins/dataset.xml")
+RESULT:10 = DT_FROMXML("fixture_dataset", C1_SCHEMA, C1_XML)
+RESULT:11 = DT_CELL_GET("fixture_dataset", 0, "n")
+RESULTS:11 '= DT_CELL_GETS("fixture_dataset", 0, "s")
+C1_DUMMY = DT_ROW_ADD("fixture_dataset")
+RESULT:12 = DT_CELL_GET("fixture_dataset", 1, "n")
+RESULTS:12 '= DT_CELL_GETS("fixture_dataset", 1, "s")
+C1_DUMMY = XML_DOCUMENT("fixture_xml", C1_XML)
+RESULT:13 = XML_GET_BYNAME("fixture_xml", "//n", C1_ITEMS, 1)
+RESULTS:13 '= C1_ITEMS:0
+RETURN RESULT:0
+
+; Observe platform Directory.EnumerateFiles rules; no fabricated oracle golden.
+@C1_CASE_RESOURCE_PATTERN_RULES
+RESULT:10 = ENUMFILES("patterns", "*.txt", 0)
+RESULT:11 = ENUMFILES("patterns", "?.txt", 0)
+RESULT:12 = ENUMFILES("patterns", "[ab].txt", 0)
+RESULT:13 = ENUMFILES("patterns", "*.TXT", 0)
+RESULT:14 = ENUMFILES("patterns", "", 0)
+RESULT:15 = ENUMFILES("patterns", "é.txt", 0)
+RESULT:16 = ENUMFILES("patterns", "é.txt", 0)
+RETURN RESULT:0

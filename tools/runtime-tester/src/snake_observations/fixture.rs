@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 
@@ -128,6 +129,7 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
         "GETKEY" => "getkey",
         "INDEX" => "index",
         "METHODS" => "methods",
+        "COLUMNS" => "columns",
         _ => return Err(format!("unknown fixture group {group}").into()),
     };
     let mut files = Vec::new();
@@ -143,11 +145,12 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
             fs::read_to_string(root.join(&path))?,
         ));
     }
-    if group == "METHODS" {
+    if matches!(group, "METHODS" | "COLUMNS") {
+        let header = format!("erb/{group_file}.erh");
         files.push(submitted(
-            "erb/methods.erh",
+            &header,
             FileCategory::Erh,
-            fs::read_to_string(root.join("erb/methods.erh"))?,
+            fs::read_to_string(root.join(&header))?,
         ));
     } else if group == "INDEX" {
         // Index cases keep their own complete data inputs. Do not add these files
@@ -170,7 +173,76 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
             ));
         }
     }
+    if group == "COLUMNS" {
+        files.push(submitted(
+            "csv/VarExt.csv",
+            FileCategory::Csv,
+            fs::read_to_string(root.join("csv/VarExt.csv"))?,
+        ));
+        load_fixture_resources(root, &root.join("plugins"), &mut files)?;
+    }
     Ok(files)
+}
+
+fn load_fixture_resources(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<SubmittedFile>,
+) -> AuditResult<()> {
+    let mut pending = vec![directory.to_owned()];
+    let mut entry_count = 0_usize;
+    let mut total_bytes = 0_u64;
+    while let Some(directory) = pending.pop() {
+        let mut paths = Vec::new();
+        for entry in fs::read_dir(directory)? {
+            entry_count += 1;
+            if entry_count > 100_000 {
+                return Err("observation resource inventory exceeds its limit".into());
+            }
+            paths.push(entry?.path());
+        }
+        paths.sort();
+        for path in paths {
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                return Err("observation resources must not be symbolic links".into());
+            }
+            let relative = path
+                .strip_prefix(root)?
+                .to_str()
+                .ok_or("resource path is not UTF-8")?
+                .replace('\\', "/");
+            if relative.len() > 4096 || relative.split('/').count() > 64 {
+                return Err("observation resource path exceeds its limit".into());
+            }
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file() {
+                total_bytes = total_bytes
+                    .checked_add(metadata.len())
+                    .ok_or("observation resource size overflow")?;
+                if total_bytes > 64 * 1024 * 1024 {
+                    return Err("observation resources are oversized".into());
+                }
+                let mut contents = Vec::new();
+                fs::File::open(&path)?
+                    .take(metadata.len() + 1)
+                    .read_to_end(&mut contents)?;
+                if contents.len() as u64 != metadata.len() {
+                    return Err("observation resource changed during reading".into());
+                }
+                files.push(SubmittedFile {
+                    relative_path: relative,
+                    category: FileCategory::Resource,
+                    payload: FilePayload::Bytes(era_protocol::ProtocolBytes::new(contents)),
+                    content_hash: None,
+                });
+            } else {
+                return Err("observation resource is not a regular file".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn build_manifest(
@@ -231,14 +303,29 @@ pub(super) fn build_manifest(
         FileCategory::Erb,
         wrapper(request)?,
     ));
-    let effective_sources: Vec<_> = files.iter().map(|file| {
-        let FilePayload::Utf8(source) = &file.payload else { unreachable!() };
-        json!({"path": file.relative_path, "bytes": source.len(), "sha256": hash(source.as_bytes())})
-    }).collect();
-    let harness = json!({
+    let effective_sources: Vec<_> = files
+        .iter()
+        .map(|file| {
+            let source = match &file.payload {
+                FilePayload::Utf8(source) => source.as_bytes(),
+                FilePayload::Bytes(source) => source.as_slice(),
+                _ => unreachable!("observation inputs are eagerly loaded"),
+            };
+            json!({"path": file.relative_path, "bytes": source.len(), "sha256": hash(source)})
+        })
+        .collect();
+    let mut harness = json!({
         "effectiveSources": effective_sources, "migrationDiagnostics": migration_diagnostics,
         "wrapper": wrapper(request)?, "baseTitleReplaced": "erb/base.erb",
     });
+    if group == "COLUMNS" {
+        harness["storageSimulation"] = json!({
+            "backend": "case-local owned memory; no filesystem I/O",
+            "originalDataList": "existing Data directory, otherwise manifest resources; never union",
+            "originalPatterns": "bounded snake matcher for fixture patterns; not full original frontend matching",
+            "limitations": "NFC/lowercase keys and synthetic range tokens; no OS permissions or symlinks",
+        });
+    }
     Ok((
         ProjectManifest {
             project_revision: 1,
@@ -253,6 +340,110 @@ pub(super) fn build_manifest(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn data_fixture_keeps_resource_bytes_and_loads_persistent_declarations() {
+        let root = crate::tool_root().join("fixture-snake-data");
+        let identity = CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        );
+        let request = json!({"op":"run","entry":"C1_CASE_RESOURCE_READ"});
+        let (manifest, harness) = build_manifest(&root, &identity, "COLUMNS", &request).unwrap();
+        for path in [
+            "plugins/data.txt",
+            "plugins/nested/child.txt",
+            "plugins/map.xml",
+            "plugins/dataset-schema.xml",
+            "plugins/dataset.xml",
+        ] {
+            let resource = manifest
+                .files
+                .iter()
+                .find(|file| file.relative_path == path)
+                .unwrap();
+            assert_eq!(resource.category, FileCategory::Resource);
+            let FilePayload::Bytes(bytes) = &resource.payload else {
+                panic!("resource must retain raw bytes")
+            };
+            assert_eq!(bytes.as_slice(), fs::read(root.join(path)).unwrap());
+            let evidence = harness["effectiveSources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|value| value["path"] == path)
+                .unwrap();
+            assert_eq!(evidence["sha256"], hash(bytes.as_slice()));
+        }
+        assert!(manifest.files.iter().any(
+            |file| file.relative_path == "csv/VarExt.csv" && file.category == FileCategory::Csv
+        ));
+        assert!(
+            manifest
+                .files
+                .iter()
+                .any(|file| file.relative_path == "erb/columns.erh"
+                    && file.category == FileCategory::Erh)
+        );
+    }
+
+    #[test]
+    fn data_fixture_executes_defaults_global_and_resource_overlay() {
+        use erabasic_compat::CompatibilityProfileId;
+        let root = crate::tool_root().join("fixture-snake-data");
+        let fixture: Fixture =
+            serde_json::from_slice(&fs::read(root.join("cases.json")).unwrap()).unwrap();
+        for (id, expected) in [
+            (
+                "column-basic-defaults",
+                json!({"RESULT:10":777,"RESULT:11":11,"RESULTS:10":"默认&A<quote>"}),
+            ),
+            (
+                "column-update-no-backfill",
+                json!({"RESULT:10":11,"RESULT:11":22}),
+            ),
+            (
+                "column-global-roundtrip",
+                json!({"RESULT:10":1,"RESULT:11":7,"RESULT:12":55,"RESULT:13":12,"RESULT:14":1,"RESULTS:10":"saved-map","RESULTS:11":"saved-xml"}),
+            ),
+            (
+                "column-resource-map-xml-datatable",
+                json!({"RESULT:10":1,"RESULT:11":29,"RESULT:12":17,"RESULT:13":1,"RESULTS:10":"station","RESULTS:11":"from-data","RESULTS:12":"from-schema","RESULTS:13":"29"}),
+            ),
+            (
+                "column-resource-overlay-enumeration",
+                json!({"RESULT:10":1,"RESULT:11":1,"RESULT:12":2,"RESULT:13":1,"RESULTS:10":"resource-text\n","RESULTS:11":"overlay-text"}),
+            ),
+        ] {
+            let case = fixture.cases.iter().find(|case| case.id == id).unwrap();
+            for profile in [
+                CompatibilityProfileId::EmueraEm,
+                CompatibilityProfileId::EmueraSkiaSnake,
+            ] {
+                let mut expected = expected.clone();
+                if id == "column-resource-overlay-enumeration"
+                    && profile == CompatibilityProfileId::EmueraEm
+                {
+                    // The reference expectation remains 2. Original Rust hosts select
+                    // the existing Data directory; only snake runtime merges resources.
+                    expected["RESULT:12"] = json!(1);
+                }
+                let result = super::super::observe_case(
+                    &root,
+                    &CompatibilityIdentity::for_profile(profile),
+                    fixture.seed,
+                    case,
+                )
+                .unwrap();
+                assert_eq!(result["load"]["success"], true, "{id}: {result}");
+                assert_eq!(result["steps"][0]["status"], "executed", "{id}: {result}");
+                assert_eq!(result["steps"][0]["result"]["ok"], true, "{id}: {result}");
+                assert_eq!(
+                    result["steps"][0]["result"]["watches"], expected,
+                    "{id}: {result}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn arithmetic_fixture_preserves_observed_result_after_return() {

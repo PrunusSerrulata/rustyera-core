@@ -1,0 +1,1243 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1
+    },
+    "snake": {
+      "semantic_version": 2,
+      "policy_version": 2
+    }
+  },
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "cases": [
+    {
+      "id": "column-basic-defaults",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_BASIC_DEFAULTS",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULTS:10"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 777,
+                  "RESULT:11": 11,
+                  "RESULTS:10": "默认&A<quote>"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 777,
+                  "RESULT:11": 11,
+                  "RESULTS:10": "默认&A<quote>"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-i64-min",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_I64_MIN",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": -9223372036854775808
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": -9223372036854775808
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-saturation",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_SATURATION",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 127,
+                  "RESULT:11": 32767,
+                  "RESULT:12": 2147483647,
+                  "RESULT:13": -128,
+                  "RESULT:14": -32768,
+                  "RESULT:15": -2147483648
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 127,
+                  "RESULT:11": 32767,
+                  "RESULT:12": 2147483647,
+                  "RESULT:13": -128,
+                  "RESULT:14": -32768,
+                  "RESULT:15": -2147483648
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-empty-string-and-explicit-null",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_EMPTY_STRING_AND_EXPLICIT_NULL",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 1,
+                  "RESULT:12": 0,
+                  "RESULT:13": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 1,
+                  "RESULT:12": 0,
+                  "RESULT:13": 0
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-non-null-default",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_NON_NULL_DEFAULT",
+            "watch": [
+              "RESULT:10"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 7
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 7
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-non-null-missing-error",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_NON_NULL_MISSING_ERROR",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": 777
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": 777
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "A new row cannot leave a non-null column without a default or explicit value.",
+            "snake": "A new row cannot leave a non-null column without a default or explicit value."
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-non-null-explicit-value",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_NON_NULL_EXPLICIT_VALUE",
+            "watch": [
+              "RESULT:10"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 8
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 8
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-update-no-backfill",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_UPDATE_NO_BACKFILL",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 11,
+                  "RESULT:11": 22
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 11,
+                  "RESULT:11": 22
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-name-order",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_NAME_ORDER",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 777,
+                  "RESULT:11": 213,
+                  "RESULT:12": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 777,
+                  "RESULT:11": 213,
+                  "RESULT:12": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-type-error-before-value",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_TYPE_ERROR_BEFORE_VALUE",
+            "watch": [
+              "RESULT:0",
+              "C1_TRACE:0",
+              "C1_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": 777,
+                  "C1_TRACE:0": 21,
+                  "C1_BODY_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": 777,
+                  "C1_TRACE:0": 21,
+                  "C1_BODY_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "DEFAULT checks the static value type before executing a mismatched String method.",
+            "snake": "DEFAULT checks the static value type before executing a mismatched String method."
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-missing-table-error",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_MISSING_TABLE_ERROR",
+            "watch": [
+              "RESULT:0",
+              "C1_TRACE:0",
+              "C1_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": -1,
+                  "C1_TRACE:0": 21,
+                  "C1_BODY_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": -1,
+                  "C1_TRACE:0": 21,
+                  "C1_BODY_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "Missing table writes RESULT=-1, then faults before evaluating the DEFAULT value.",
+            "snake": "Missing table writes RESULT=-1, then faults before evaluating the DEFAULT value."
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-missing-column-error",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_MISSING_COLUMN_ERROR",
+            "watch": [
+              "RESULT:0",
+              "C1_TRACE:0",
+              "C1_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": 0,
+                  "C1_TRACE:0": 21,
+                  "C1_BODY_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": 0,
+                  "C1_TRACE:0": 21,
+                  "C1_BODY_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "Missing column writes RESULT=0, then faults before evaluating the DEFAULT value.",
+            "snake": "Missing column writes RESULT=0, then faults before evaluating the DEFAULT value."
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-partial-default-error",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_PARTIAL_DEFAULT_ERROR",
+            "watch": [
+              "RESULT:0",
+              "C1_TRACE:0",
+              "C1_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": 777,
+                  "C1_TRACE:0": 213,
+                  "C1_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": 777,
+                  "C1_TRACE:0": 213,
+                  "C1_BODY_COUNT:0": 1
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "The second mismatched DEFAULT faults after the first default and its side effects have committed.",
+            "snake": "The second mismatched DEFAULT faults after the first default and its side effects have committed."
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-each-default-commits",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_EACH_DEFAULT_COMMITS",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 3,
+                  "RESULT:12": 4
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 3,
+                  "RESULT:12": 4
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-detached-column-identity",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_DETACHED_COLUMN_IDENTITY",
+            "watch": [
+              "RESULTS:10",
+              "C1_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:10": "replacement",
+                  "C1_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:10": "replacement",
+                  "C1_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-detached-column-original-type-error",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_DETACHED_COLUMN_ORIGINAL_TYPE_ERROR",
+            "watch": [
+              "RESULT:0",
+              "C1_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": 777,
+                  "C1_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "RESULT:0": 777,
+                  "C1_BODY_COUNT:0": 1
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "A detached original Integer column still rejects a String DEFAULT without evaluating that String method.",
+            "snake": "A detached original Integer column still rejects a String DEFAULT without evaluating that String method."
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-detached-table-identity",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_DETACHED_TABLE_IDENTITY",
+            "watch": [
+              "RESULT:10",
+              "C1_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 55,
+                  "C1_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 55,
+                  "C1_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-imported-table-identity",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_IMPORTED_TABLE_IDENTITY",
+            "watch": [
+              "RESULT:10",
+              "C1_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 55,
+                  "C1_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 55,
+                  "C1_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-xml-default-roundtrip",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_XML_DEFAULT_ROUNDTRIP",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 17,
+                  "RESULT:11": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 17,
+                  "RESULT:11": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-xml-null-observation",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_XML_NULL_OBSERVATION",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULTS:10",
+              "RESULTS:11"
+            ]
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "observation": "Observation only: record pre/post Null and raw schema/data in both fixed references. Rust uses namespace-aware xsi:nil to preserve explicit Null with a non-null default; no .NET XML shape or post-import Null result is asserted before oracle execution."
+    },
+    {
+      "id": "column-global-roundtrip",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_GLOBAL_ROUNDTRIP",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULTS:10",
+              "RESULTS:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 7,
+                  "RESULT:12": 55,
+                  "RESULT:13": 12,
+                  "RESULT:14": 1,
+                  "RESULTS:10": "saved-map",
+                  "RESULTS:11": "saved-xml"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 7,
+                  "RESULT:12": 55,
+                  "RESULT:13": 12,
+                  "RESULT:14": 1,
+                  "RESULTS:10": "saved-map",
+                  "RESULTS:11": "saved-xml"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-global-missing",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_GLOBAL_MISSING",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 66,
+                  "RESULT:12": 55
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 66,
+                  "RESULT:12": 55
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-resource-read",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_RESOURCE_READ",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULTS:10",
+              "RESULTS:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 0,
+                  "RESULTS:10": "resource-text\n",
+                  "RESULTS:11": "nested-text\n"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 0,
+                  "RESULTS:10": "resource-text\n",
+                  "RESULTS:11": "nested-text\n"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-resource-overlay-enumeration",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_RESOURCE_OVERLAY_ENUMERATION",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULTS:10",
+              "RESULTS:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 1,
+                  "RESULT:12": 2,
+                  "RESULT:13": 1,
+                  "RESULTS:10": "resource-text\n",
+                  "RESULTS:11": "overlay-text"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 1,
+                  "RESULT:12": 2,
+                  "RESULT:13": 1,
+                  "RESULTS:10": "resource-text\n",
+                  "RESULTS:11": "overlay-text"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-numbered-and-named-text",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_NUMBERED_AND_NAMED_TEXT",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULTS:10",
+              "RESULTS:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 1,
+                  "RESULTS:10": "numbered-text",
+                  "RESULTS:11": "named-text"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 1,
+                  "RESULTS:10": "numbered-text",
+                  "RESULTS:11": "named-text"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-resource-map-xml-datatable",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_RESOURCE_MAP_XML_DATATABLE",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULTS:10",
+              "RESULTS:11",
+              "RESULTS:12",
+              "RESULTS:13"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 29,
+                  "RESULT:12": 17,
+                  "RESULT:13": 1,
+                  "RESULTS:10": "station",
+                  "RESULTS:11": "from-data",
+                  "RESULTS:12": "from-schema",
+                  "RESULTS:13": "29"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 29,
+                  "RESULT:12": 17,
+                  "RESULT:13": 1,
+                  "RESULTS:10": "station",
+                  "RESULTS:11": "from-data",
+                  "RESULTS:12": "from-schema",
+                  "RESULTS:13": "29"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "column_defaults_and_safe_data_batch_1c",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "column-resource-pattern-rules",
+      "group": "COLUMNS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "C1_CASE_RESOURCE_PATTERN_RULES",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15",
+              "RESULT:16"
+            ]
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "portable_nfc_lower_scalar_wildcards_empty_all",
+      "snakeTargetStatus": "observe_platform_reference_differences"
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 use super::input::{KeyState, parse_key_events};
+use super::storage::{self, FixtureStorage};
 use super::{AuditResult, COMPLETE, line_text};
 use era_debug_protocol::{
     AuthorizedDebugRequest, DEBUG_PROTOCOL_VERSION, DebugCommand, DebugHello, DebugMessage,
@@ -45,11 +46,19 @@ pub(super) struct ObservationSession {
     pub(super) await_pumps: VecDeque<Value>,
     pub(super) clock: u64,
     pub(super) input_evidence: Vec<Value>,
+    storage: Option<FixtureStorage>,
+    pub(super) storage_evidence: Option<Vec<Value>>,
     pub(super) instructions: u64,
 }
 
 impl ObservationSession {
-    pub(super) fn new(case: &str, group: &str, request: &Value) -> AuditResult<Self> {
+    pub(super) fn new(
+        case: &str,
+        group: &str,
+        request: &Value,
+        storage: Option<FixtureStorage>,
+    ) -> AuditResult<Self> {
+        let storage_enabled = storage.is_some();
         let options = RuntimeOptions {
             debug_scope_mask: u64::MAX,
             ..RuntimeOptions::default()
@@ -84,6 +93,8 @@ impl ObservationSession {
             await_pumps: VecDeque::new(),
             clock: 0,
             input_evidence: Vec::new(),
+            storage,
+            storage_evidence: storage_enabled.then(Vec::new),
             instructions: 0,
         };
         runtime.publish_snapshot()?;
@@ -98,17 +109,21 @@ impl ObservationSession {
                     serde_json::to_value(progress).expect("project progress serialization");
                 crate::watchdog::publish_or_exit(snapshot.clone());
             })));
+        let mut features = vec![
+            RuntimeFeature::ExternalServices,
+            RuntimeFeature::TimedInput,
+            RuntimeFeature::StateResynchronization,
+        ];
+        if storage_enabled {
+            features.push(RuntimeFeature::Storage);
+        }
         runtime.send(RuntimeMessage::ClientHello(ClientHello {
             runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
             client_name: "snake-observations".into(),
             configuration_profile: None,
             preferred_locales: vec!["en".into()],
             requested_limits: limits,
-            features: vec![
-                RuntimeFeature::ExternalServices,
-                RuntimeFeature::TimedInput,
-                RuntimeFeature::StateResynchronization,
-            ],
+            features,
             capabilities: ClientCapabilities {
                 input_modalities: vec![InputModality::Keyboard],
                 rich_text: false,
@@ -126,10 +141,10 @@ impl ObservationSession {
                     versions: VersionRange::exact(GET_KEY_STATE_OPERATION_VERSION),
                 }],
                 storage: StorageCapabilities {
-                    revisions: false,
-                    atomic_replace: false,
-                    missing_precondition: false,
-                    delete: false,
+                    revisions: storage_enabled,
+                    atomic_replace: storage_enabled,
+                    missing_precondition: storage_enabled,
+                    delete: storage_enabled,
                 },
             },
         }))?;
@@ -159,6 +174,9 @@ impl ObservationSession {
         snapshot["blocked"] = json!(self.blocked);
         snapshot["pending"] = json!(self.pending);
         snapshot["lastFullResponse"] = self.last_full_response.clone();
+        if let Some(evidence) = &self.storage_evidence {
+            snapshot["storageEvidence"] = json!(evidence);
+        }
         snapshot["inputState"] = json!({"active": self.active,
             "keys": self.keys.iter().map(|key| json!({"down":key.down,"toggle":key.toggle})).collect::<Vec<_>>(),
             "awaitPumps":self.await_pumps});
@@ -282,6 +300,21 @@ impl ObservationSession {
                 RuntimeMessage::WaitChanged(WaitChange::Closed(id)) => {
                     if self.wait.as_ref().is_some_and(|wait| wait.wait_id == id) {
                         self.wait = None;
+                    }
+                }
+                RuntimeMessage::StorageRequest(request) => {
+                    if let Some(storage) = &mut self.storage {
+                        let response = storage.respond(&request);
+                        self.storage_evidence
+                            .as_mut()
+                            .expect("enabled storage has evidence")
+                            .push(storage::evidence(&request, &response));
+                        responses.push(RuntimeMessage::StorageResponse(response));
+                    } else {
+                        self.blocked =
+                            Some("storage is not enabled for this observation group".into());
+                        self.host_logs
+                            .push(json!({"stage":"capability", "request":request}));
                     }
                 }
                 RuntimeMessage::ServiceRequest(request) => {
@@ -520,7 +553,8 @@ mod tests {
     #[test]
     fn each_step_starts_without_setup_or_previous_script_diagnostics() {
         let request = json!({"op": "run", "entry": "COMPAT_KEYS"});
-        let mut session = ObservationSession::new("diagnostic-scope", "GETKEY", &request).unwrap();
+        let mut session =
+            ObservationSession::new("diagnostic-scope", "GETKEY", &request, None).unwrap();
         session.host_logs.clear();
         session
             .setup_diagnostics

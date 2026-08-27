@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 mod fixture;
 mod input;
 mod session;
+mod storage;
 use fixture::{Case, Fixture, build_manifest, fixture_identity, git_output};
 use session::ObservationSession;
 type AuditResult<T> = Result<T, Box<dyn Error>>;
@@ -109,7 +110,13 @@ fn observe_case(
     }
     let (manifest, harness) =
         build_manifest(root, identity, &case.group, &case.requests[0].request)?;
-    let mut runtime = ObservationSession::new(&case.id, &case.group, &case.requests[0].request)?;
+    let storage = if case.group == "COLUMNS" {
+        Some(storage::FixtureStorage::from_manifest(&manifest)?)
+    } else {
+        None
+    };
+    let mut runtime =
+        ObservationSession::new(&case.id, &case.group, &case.requests[0].request, storage)?;
     runtime.send(RuntimeMessage::ProjectManifest(manifest))?;
     if let Err(error) = runtime.pump_until(|runtime| runtime.load.is_some()) {
         runtime.blocked = Some(format!("project loading did not produce a report: {error}"));
@@ -146,10 +153,14 @@ fn observe_case(
         };
         steps.push(observation);
     }
-    Ok(
-        json!({"id": case.id, "group": case.group, "steps": steps, "harness": harness, "load": runtime.load, "setupDiagnostics": runtime.setup_diagnostics,
-        "setupHostLogs": runtime.setup_host_logs, "rawMessages": runtime.raw_messages}),
-    )
+    let mut observation = json!({"id": case.id, "group": case.group, "steps": steps, "harness": harness, "load": runtime.load, "setupDiagnostics": runtime.setup_diagnostics,
+        "setupHostLogs": runtime.setup_host_logs, "rawMessages": runtime.raw_messages});
+    if let Some(evidence) = runtime.storage_evidence {
+        observation["storageEvidence"] = json!(evidence);
+        observation["storageBackend"] =
+            json!("owned-fixture-memory; not a frontend host validation");
+    }
+    Ok(observation)
 }
 
 fn observe_step(
@@ -276,15 +287,17 @@ fn observe_step(
         .collect();
     let output = lines.iter().map(line_text).collect::<Vec<_>>();
     let blocked = termination == "blocked" || required_observation_blocked;
-    Ok(
-        json!({"request": request, "status": if blocked { "blocked" } else { "executed" },
+    let mut observation = json!({"request": request, "status": if blocked { "blocked" } else { "executed" },
         "reason": if blocked { Some(blocks.join("; ")) } else { None },
         "result": {"ok": matches!(termination, "completed" | "waitingInput"), "termination": termination,
             "value": value, "watches": watches, "output": output, "diagnostics": runtime.diagnostics,
             "hostLogs": runtime.host_logs, "presentation": lines, "observationBlocks": blocks, "inputEvidence": runtime.input_evidence,
             "inputObservation": if inputs.is_empty() && runtime.await_pumps.is_empty() { "consumed" } else { "blocked" },
-            "runtimePhase": runtime.session.phase(), "instructions": runtime.instructions}}),
-    )
+            "runtimePhase": runtime.session.phase(), "instructions": runtime.instructions}});
+    if let Some(evidence) = &runtime.storage_evidence {
+        observation["result"]["storageEvidence"] = json!(evidence);
+    }
+    Ok(observation)
 }
 
 fn line_text(line: &DisplayLine) -> String {
