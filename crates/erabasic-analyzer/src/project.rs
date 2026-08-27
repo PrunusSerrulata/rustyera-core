@@ -109,7 +109,7 @@ pub(crate) struct ProgressCounter<'a> {
     stage: AnalysisProgressStage,
     total: usize,
     completed: AtomicUsize,
-    reported_percent: AtomicUsize,
+    reported_completed: AtomicUsize,
     callback_lock: Mutex<()>,
     callback: Option<&'a dyn AnalysisProgressCallback>,
 }
@@ -131,28 +131,38 @@ impl<'a> ProgressCounter<'a> {
             stage,
             total,
             completed: AtomicUsize::new(0),
-            reported_percent: AtomicUsize::new(0),
+            reported_completed: AtomicUsize::new(0),
             callback_lock: Mutex::new(()),
             callback,
         }
     }
 
     pub(crate) fn advance(&self) {
-        let completed = self.completed.fetch_add(1, Ordering::Relaxed) + 1;
+        self.completed.fetch_add(1, Ordering::Relaxed);
         let Some(callback) = self.callback else {
             return;
         };
-        let percent = completed
-            .saturating_mul(100)
-            .checked_div(self.total)
-            .unwrap_or(100);
         let _guard = self
             .callback_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = self.reported_percent.load(Ordering::Relaxed);
-        if percent > previous || completed == self.total {
-            self.reported_percent.store(percent, Ordering::Relaxed);
+        // Observe the latest completed count under the callback lock: parallel
+        // workers must never publish an older count after a newer one.
+        let completed = self.completed.load(Ordering::Relaxed);
+        let percent = completed
+            .saturating_mul(100)
+            .checked_div(self.total)
+            .unwrap_or(100);
+        let previous = self.reported_completed.load(Ordering::Relaxed);
+        let previous_percent = previous
+            .saturating_mul(100)
+            .checked_div(self.total)
+            .unwrap_or(100);
+        // Percentage-only reporting can hide thousands of completed functions.
+        if completed > previous
+            && (percent > previous_percent || completed - previous >= 64 || completed == self.total)
+        {
+            self.reported_completed.store(completed, Ordering::Relaxed);
             callback(AnalysisProgress {
                 stage: self.stage,
                 completed,
@@ -714,6 +724,24 @@ mod source_lifecycle_tests {
     use crate::{ProjectSource, SourcePayload};
     use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
     use erabasic_hir::SourceId;
+
+    #[test]
+    fn large_workload_progress_reports_completed_units_below_one_percent() {
+        let events = Mutex::new(Vec::new());
+        let callback = |event| events.lock().unwrap().push(event);
+        let progress = ProgressCounter::new(
+            AnalysisProgressStage::DeclaringLocals,
+            100_000,
+            Some(&callback),
+        );
+        for _ in 0..64 {
+            progress.advance();
+        }
+        let events = events.into_inner().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].completed, 64);
+        assert_eq!(events[1].total, 100_000);
+    }
 
     fn input(sources: &[(&str, &str)]) -> AnalysisInput {
         AnalysisInput {
