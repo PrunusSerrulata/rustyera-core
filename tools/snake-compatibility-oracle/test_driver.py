@@ -5,8 +5,10 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 
-from comparison import compare_case, validate_rust_evidence
+from comparison import compare_case, output_after_load, split_setup_diagnostics, validate_rust_evidence
+from recompare import recorded_steps
 
 
 spec = importlib.util.spec_from_file_location("oracle_driver", Path(__file__).with_name("run.py"))
@@ -15,6 +17,102 @@ spec.loader.exec_module(driver)
 
 
 class DriverTests(unittest.TestCase):
+    def test_handled_oracle_request_is_not_successful_script_execution(self):
+        request = {"op": "run", "entry": "DIVIDE_ZERO"}
+        case = {"id": "divide", "group": "arithmetic", "targetBatch": 2,
+                "snakeTargetStatus": "deferred_semantics", "requests": [{"request": request}]}
+        rust = {"steps": [{"request": request, "status": "executed", "result": {
+            "ok": False, "termination": "faulted", "diagnostics": [{"code": "vm_fault"}]}}]}
+        response = {"ok": True, "diagnostics": [], "result": {"termination": "error"}}
+        result = compare_case(case, [{"request": request, "response": response}], rust)
+        self.assertEqual(result["status"], "incomparable")
+        self.assertEqual(result["steps"][0]["differences"], [])
+        self.assertTrue(result["steps"][0]["oracleRequestAccepted"])
+        self.assertEqual(result["steps"][0]["oracle"]["result"]["termination"], "error")
+
+    def test_output_removes_only_the_exact_load_prefix_and_preserves_script_lines(self):
+        load = {"result": {"output": ["Now Loading...", "Elapsed time:3ms", "COMPAT_READY"]}}
+        raw = load["result"]["output"] + ["Now Loading...", "COMPAT_READY", "script"]
+        self.assertEqual(output_after_load(raw, load),
+                         (["Now Loading...", "COMPAT_READY", "script"], "exact_load_prefix_removed"))
+        self.assertEqual(len(raw), 6)
+        self.assertEqual(output_after_load(["different buffer"], load),
+                         (None, "incomparable_load_prefix_changed"))
+        with self.assertRaises(ValueError):
+            output_after_load([], {"result": {}})
+
+    def test_run_comparison_separates_setup_and_declines_changed_prefix(self):
+        request = {"op": "run", "entry": "CASE"}
+        case = {"id": "case", "group": "REF", "targetBatch": 6,
+                "snakeTargetStatus": "deferred_semantics", "requests": [{"request": request}]}
+        load = {"result": {"output": ["setup"]}}
+        response = {"ok": True, "diagnostics": [],
+                    "result": {"termination": "returned", "watches": {}, "output": ["setup", "script"]}}
+        rust = {"steps": [{"request": request, "status": "executed", "result": {
+            "ok": True, "diagnostics": [], "termination": "returned", "watches": {}, "output": ["script"]}}]}
+        steps = [{"request": request, "response": response}]
+        compared = compare_case(case, steps, rust, load)
+        self.assertEqual(compared["status"], "matched_observables")
+        self.assertEqual(compared["steps"][0]["oracle"]["result"]["output"], ["setup", "script"])
+        response["result"]["output"] = ["reset", "script"]
+        compared = compare_case(case, steps, rust, load)
+        self.assertEqual(compared["status"], "incomparable")
+        self.assertNotIn("output", compared["steps"][0]["compared"])
+
+    def test_only_exact_configuration_warning_is_setup_not_script_diagnostic(self):
+        identity = {"profile": "emuera.skia.snake", "policy_version": 1}
+        warning = {"code": "runtime.experimental_compatibility_profile", "level": "warning",
+                   "context": {"stage": "configuration", "identity": identity},
+                   "source": {"relative_path": "reraconfig.toml", "byte_start": 0, "byte_end": 0}}
+        script = {**warning, "source": {"relative_path": "ERB/main.erb", "byte_start": 0, "byte_end": 0}}
+        setup, remaining = split_setup_diagnostics([warning, script], identity)
+        self.assertEqual(setup, [warning])
+        self.assertEqual(remaining, [script])
+        self.assertEqual(split_setup_diagnostics([warning], None), ([], [warning]))
+        wrong_identity = {"profile": "emuera.skia.snake", "policy_version": 2}
+        self.assertEqual(split_setup_diagnostics([warning], wrong_identity), ([], [warning]))
+
+    def test_offline_record_selection_rejects_missing_load_or_changed_requests(self):
+        request = {"op": "eval", "source": "1"}
+        case = {"id": "case", "requests": [{"request": request}]}
+        envelope = {"ok": True, "schemaVersion": 2, "referenceCommit": "a" * 40}
+        evidence = {"semanticBaseline": "a" * 40, "requests": [
+            {"case": "case", "request": {"op": "load"}, "response": envelope},
+            {"case": "case", "request": request, "response": envelope}]}
+        self.assertEqual(recorded_steps(evidence, case)[1], evidence["requests"][1:])
+        evidence["requests"][1]["request"] = {"op": "eval", "source": "2"}
+        with self.assertRaises(ValueError):
+            recorded_steps(evidence, case)
+        evidence["requests"].pop(0)
+        with self.assertRaises(ValueError):
+            recorded_steps(evidence, case)
+
+    def test_rng_assertions_preserve_the_pinned_snake_state_loss(self):
+        case = {"assertions": ["rng_roundtrip"]}
+        snake = SimpleNamespace(args=SimpleNamespace(oracle="snake"))
+        last = {"result": {"randomSeed": 123456, "randomAlgorithm": "sfmt19937",
+                           "watches": {"RESULT:0": 192905, "RESULT:1": 520548,
+                                       "RESULT:2": 0, "RESULT:3": 0}}}
+        findings = driver.assertions(snake, case, last, {})
+        self.assertFalse(findings[0]["roundtrip"])
+        original = SimpleNamespace(args=SimpleNamespace(oracle="original"))
+        with self.assertRaises(AssertionError):
+            driver.assertions(original, case, last, {})
+        last["result"]["watches"]["RESULT:2"] = 192905
+        last["result"]["watches"]["RESULT:3"] = 520548
+        self.assertEqual(driver.assertions(original, case, last, {}), [])
+        with self.assertRaises(AssertionError):
+            driver.assertions(snake, case, last, {})
+
+    def test_cleanup_error_does_not_lose_the_primary_failure_or_requests(self):
+        def denied():
+            raise PermissionError("sandbox denied cleanup")
+        oracle = SimpleNamespace(case="setup", records=[{"request": "capabilities"}], close=denied)
+        evidence = {"failure": {"case": "setup", "error": "unchanged observations"}}
+        failure = driver.close_oracle(oracle, evidence, "unchanged observations")
+        self.assertEqual(failure, "unchanged observations")
+        self.assertEqual(evidence["requests"], oracle.records)
+        self.assertIn("PermissionError", evidence["cleanupFailure"])
     def test_comparison_preserves_differences_and_blocked_execution(self):
         request = {"op": "eval", "source": "9223372036854775807 + 1"}
         case = {

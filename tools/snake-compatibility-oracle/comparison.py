@@ -44,7 +44,42 @@ def validate_rust_evidence(evidence, oracle, fixture, seed):
         raise ValueError("Rust evidence has missing or duplicate cases")
 
 
-def compare_case(case, oracle_steps, rust_case):
+def output_after_load(output, load_response):
+    """Subtract only the exact observed load prefix; never match loading text patterns."""
+    if not isinstance(output, list) or not all(isinstance(line, str) for line in output):
+        raise ValueError("output observations must be arrays of logical lines")
+    if load_response is None:
+        return output, "already_operation_scoped"
+    baseline = load_response.get("result", {}).get("output")
+    if not isinstance(baseline, list) or not all(isinstance(line, str) for line in baseline):
+        raise ValueError("load must capture the full output baseline")
+    if output[:len(baseline)] != baseline:
+        return None, "incomparable_load_prefix_changed"
+    return output[len(baseline):], "exact_load_prefix_removed"
+
+
+def split_setup_diagnostics(diagnostics, identity):
+    if not isinstance(diagnostics, list):
+        raise ValueError("diagnostics must be an array")
+    setup, script = [], []
+    for diagnostic in diagnostics:
+        context = diagnostic.get("context") or {}
+        source = diagnostic.get("source") or {}
+        is_setup = (
+            identity is not None and identity.get("profile") == "emuera.skia.snake"
+            and diagnostic.get("code") == "runtime.experimental_compatibility_profile"
+            and diagnostic.get("level") == "warning"
+            and context.get("stage") == "configuration"
+            and context.get("identity") == identity
+            and context.get("api") is None and context.get("required_capability") is None
+            and source.get("relative_path") == "reraconfig.toml"
+            and source.get("byte_start") == 0 and source.get("byte_end") == 0
+        )
+        (setup if is_setup else script).append(diagnostic)
+    return setup, script
+
+
+def compare_case(case, oracle_steps, rust_case, load_response=None, identity=None):
     if rust_case is None:
         raise ValueError(f"Rust evidence missing case {case['id']}")
     if not case["requests"] and rust_case.get("status") == "blocked":
@@ -79,7 +114,8 @@ def compare_case(case, oracle_steps, rust_case):
         if rust.get("status") != "executed":
             raise ValueError(f"unobserved Rust step {case['id']}:{index}")
         response = oracle["response"]
-        actual = rust["result"]
+        actual = dict(rust["result"])
+        setup_diagnostics, actual["diagnostics"] = split_setup_diagnostics(actual.get("diagnostics"), identity)
         expected = {
             "ok": response["ok"],
             **response.get("result", {}),
@@ -88,11 +124,23 @@ def compare_case(case, oracle_steps, rust_case):
         operation = request["op"]
         if operation not in OPERATION_FIELDS:
             raise ValueError(f"unsupported comparison operation {operation}")
+        # The NDJSON envelope reports whether the request was handled. A run
+        # can be handled successfully while the actual console is in Error.
+        # Rust's ok describes execution, so compare that outcome, not transport.
+        if operation in ("run", "execute") and expected.get("termination") == "error":
+            expected["ok"] = False
         # Eval executes a generated wrapper in Rust; its output/termination are
         # harness state, not observable fields of the oracle's eval endpoint.
         fields = ["ok"]
         if actual.get("ok") and expected.get("ok"):
             fields.extend(OPERATION_FIELDS[operation])
+        output_comparison = None
+        output_incomparable = False
+        if "output" in fields:
+            expected["output"], output_comparison = output_after_load(expected.get("output"), load_response)
+            output_incomparable = expected["output"] is None
+            if output_incomparable:
+                fields.remove("output")
         compared, differences = [], []
         for field in fields:
             compared.append(field)
@@ -126,8 +174,11 @@ def compare_case(case, oracle_steps, rust_case):
             compared.append("diagnostics")
         result = {
             "step": index,
-            "status": "different" if differences else "incomparable" if diagnostic_incomparable else "matched_observables",
+            "status": "different" if differences else "incomparable" if diagnostic_incomparable or output_incomparable else "matched_observables",
             "compared": compared,
+            "outputComparison": output_comparison,
+            "setupDiagnostics": setup_diagnostics,
+            "oracleRequestAccepted": response["ok"],
             "differences": differences,
             "diagnosticComparison": {
                 "status": "incomparable_schema" if diagnostic_incomparable else "matched_empty",
@@ -163,6 +214,7 @@ def compare_case(case, oracle_steps, rust_case):
         "case": case["id"],
         "status": status,
         "steps": results,
+        "oracleLoad": load_response,
         "targetBatch": case["targetBatch"],
         "snakeTargetStatus": case["snakeTargetStatus"],
     }

@@ -108,8 +108,11 @@ class Oracle:
             )
             if failure:
                 self.watchdog_failure = failure
-                self.kill()
-                self.responses.put(TimeoutError(failure))
+                try:
+                    self.kill()
+                except OSError as error:
+                    self.watchdog_failure += f"; process cleanup failed: {error}"
+                self.responses.put(TimeoutError(self.watchdog_failure))
                 return
             previous = compared
             next_sample += 5
@@ -205,6 +208,7 @@ def observe(oracle, presentation=False):
 
 
 def assertions(oracle, case, last, load_request):
+    findings = []
     for assertion in case.get("assertions", []):
         if assertion == "observe_stable":
             first = observe(oracle, case["group"] == "PRINTC")
@@ -213,8 +217,19 @@ def assertions(oracle, case, last, load_request):
                 raise AssertionError("observation changed state")
         elif assertion == "rng_roundtrip":
             watches = last["result"]["watches"]
-            subset(watches["RESULT:2"], watches["RESULT:0"])
-            subset(watches["RESULT:3"], watches["RESULT:1"])
+            if oracle.args.oracle == "original":
+                subset(watches["RESULT:2"], watches["RESULT:0"])
+                subset(watches["RESULT:3"], watches["RESULT:1"])
+            else:
+                # Pinned snake DumpRanddata writes GetRand into ToArray's copy;
+                # the zero RANDDATA is then restored by InitRanddata. Record this
+                # oracle defect, never modify normal engine behavior to hide it.
+                subset(last["result"], {"randomSeed": 123456, "randomAlgorithm": "sfmt19937"})
+                subset(watches, {"RESULT:0": 192905, "RESULT:1": 520548,
+                                 "RESULT:2": 0, "RESULT:3": 0})
+                findings.append({"kind": "pinned_oracle_rng_state_loss", "roundtrip": False,
+                                 "source": "Emuera/Runtime/Script/Statements/Variable/VariableEvaluator.cs:DumpRanddata",
+                                 "reason": "GetRand writes a temporary RANDDATA.ToArray copy; INITRAND restores zeros"})
         elif assertion == "presentation":
             layout = last["result"]["presentation"]
             subset(layout, {"version": 1, "pending": False})
@@ -305,6 +320,21 @@ def assertions(oracle, case, last, load_request):
                     subset(key, {"latch": 0})
         else:
             raise ValueError(f"unknown assertion {assertion}")
+    return findings
+
+
+def close_oracle(oracle, evidence, failure):
+    """Keep primary failure and raw requests even when OS cleanup is denied."""
+    if oracle is None:
+        return failure
+    evidence["requests"] = oracle.records
+    try:
+        oracle.close()
+    except Exception as error:
+        evidence["cleanupFailure"] = f"{type(error).__name__}: {error}"
+        failure = failure or f"oracle cleanup failed: {error}"
+        evidence.setdefault("failure", {"case": oracle.case, "error": failure})
+    return failure
 
 
 def main():
@@ -410,7 +440,8 @@ def main():
         }
         for case in selected:
             oracle.case = case["id"]
-            subset(oracle.request(load), {"ok": True})
+            load_response = oracle.request(load)
+            subset(load_response, {"ok": True})
             last = None
             observed_steps = []
             for step in case["requests"]:
@@ -418,15 +449,16 @@ def main():
                 observed_steps.append({"request": step["request"], "response": last})
                 if "expect" in step:
                     subset(last, step["expect"][args.oracle])
-            assertions(oracle, case, last, load)
+            findings = assertions(oracle, case, last, load)
             evidence["rustComparison"]["cases"].append(
-                compare_case(case, observed_steps, rust_cases.get(case["id"]))
+                compare_case(case, observed_steps, rust_cases.get(case["id"]), load_response, rust["profile"])
             )
             evidence["cases"].append(
                 {
                     "id": case["id"],
                     "group": case["group"],
-                    "status": "observed" if case.get("observation") else "passed",
+                    "status": "observed" if case.get("observation") or findings else "passed",
+                    "findings": findings,
                     "targetBatch": case["targetBatch"],
                     "rustCurrentPolicy": case["rustCurrentPolicy"],
                     "snakeTargetStatus": case["snakeTargetStatus"],
@@ -439,9 +471,7 @@ def main():
         if oracle is not None and oracle.watchdog_failure and failure is None:
             failure = oracle.watchdog_failure
             evidence["failure"] = {"case": oracle.case, "error": failure}
-        if oracle is not None:
-            evidence["requests"] = oracle.records
-            oracle.close()
+        failure = close_oracle(oracle, evidence, failure)
         evidence["status"] = "failed" if failure else "completed_observations"
         evidence["rustComparison"]["status"] = "incomplete" if failure else "compared"
         (args.output / "evidence.json").write_text(

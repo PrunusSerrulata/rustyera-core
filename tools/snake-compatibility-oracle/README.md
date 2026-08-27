@@ -3,7 +3,8 @@
 This directory drives the core-owned `../runtime-tester/fixture-snake-compatibility`
 sources. It does not implement the deferred snake semantics or assert Rust parity.
 All commands are validation commands and must wait for the shared batch review,
-static gates, delegated test executor, and the remaining 60-minute batch budget.
+static gates and delegated test executor. The user removed the total batch-0 test
+time limit on 2026-08-27; per-command timeouts and stall detection still apply.
 
 ## Inputs and isolation
 
@@ -79,3 +80,33 @@ An independent watchdog samples the complete last observable state every five
 seconds across requests and cases. Consecutive identical samples fail immediately;
 only protocol envelope IDs are omitted from comparison, not script fields named
 `id`. A synchronous blocked oracle is never sent a concurrent observation request.
+
+## Correcting comparison-only defects without replaying engines
+
+Run/execute output is cumulative since load. The comparator removes only the exact complete
+output prefix captured by that case's successful load response. A changed/reset prefix is
+`incomparable`, not a regex-filtered match. Script lines that happen to say “Now Loading...”
+remain observable. A configuration warning is separated only when its exact code, level,
+configuration source/context and validated identity match the experimental-profile diagnostic.
+Raw load, step output and diagnostics remain attached. The NDJSON `ok` flag means a request
+was accepted; a console `termination=error` still means execution failed. Two engine failures
+remain incomparable until diagnostic schemas can be compared; they are not compatibility passes.
+
+For an existing completed observation captured from the current fixture, use:
+
+```sh
+python3 tools/snake-compatibility-oracle/recompare.py \
+  --oracle-evidence /isolated/old-run/evidence.json \
+  --rust-evidence /isolated/rust-observations.json \
+  --output /isolated/new-comparison.json
+```
+
+This validates semantic baseline, profile, seed, all fixture hashes and ordered requests, then
+creates new evidence with source-file hashes. It never changes old evidence or reruns either
+engine. Failed/incomplete captures cannot be relabeled completed.
+
+The pinned snake RNG roundtrip observation reports `pinned_oracle_rng_state_loss`: at seed
+123456 its values are 192905, 520548, 0, 0. `DumpRanddata` passes a temporary `ToArray` copy
+to `GetRand`, so `INITRAND` restores the unchanged zero RANDDATA. The driver preserves this
+as an observed baseline defect, not a successful roundtrip; original-oracle equality remains
+strict. Normal reference engine semantics are unchanged.
