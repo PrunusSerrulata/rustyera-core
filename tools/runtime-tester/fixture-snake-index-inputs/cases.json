@@ -856,10 +856,7 @@
             "original": {
               "ok": true,
               "result": {
-                "termination": "completed",
-                "watches": {
-                  "RESULT:0": 500
-                }
+                "termination": "error"
               }
             },
             "snake": {
@@ -871,13 +868,23 @@
                 }
               }
             }
+          },
+          "expectedRejection": {
+            "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message"
           }
         }
       ],
       "requireSuccessfulLoad": true,
       "targetBatch": 1,
       "rustCurrentPolicy": "profile_scoped_index_inputs",
-      "snakeTargetStatus": "requires_batch_1_acceptance"
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "knownRustDifference": {
+        "original": "original_builtin_alias_warning_existing_gap: Rust preserves its existing duplicate-index warning behavior and continues loading aliases; the fixed original oracle aborts at FLAG.als line 4"
+      },
+      "knownOracleDefect": {
+        "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message",
+        "source": "Emuera/Runtime/Script/Data/ConstantData.cs:1812 and Emuera/Runtime/Utils/EvilMask/Lang.cs:655"
+      }
     },
     {
       "id": "index-builtin-trimmed-name",
@@ -910,14 +917,18 @@
             }
           },
           "expectedRejection": {
-            "original": "original builtin ALS keeps whitespace in the alias name"
+            "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message; this fixture cannot independently prove original whitespace preservation after the earlier abort"
           }
         }
       ],
       "requireSuccessfulLoad": true,
       "targetBatch": 1,
       "rustCurrentPolicy": "profile_scoped_index_inputs",
-      "snakeTargetStatus": "requires_batch_1_acceptance"
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "knownOracleDefect": {
+        "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message",
+        "source": "Emuera/Runtime/Script/Data/ConstantData.cs:1812 and Emuera/Runtime/Utils/EvilMask/Lang.cs:655"
+      }
     },
     {
       "id": "index-builtin-untrimmed-name",
@@ -936,10 +947,7 @@
             "original": {
               "ok": true,
               "result": {
-                "termination": "completed",
-                "watches": {
-                  "RESULT:0": 210
-                }
+                "termination": "error"
               }
             },
             "snake": {
@@ -950,14 +958,22 @@
             }
           },
           "expectedRejection": {
-            "snake": "snake builtin ALS trims whitespace; the untrimmed lookup is absent"
+            "snake": "snake builtin ALS trims whitespace; the untrimmed lookup is absent",
+            "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message"
           }
         }
       ],
       "requireSuccessfulLoad": true,
       "targetBatch": 1,
       "rustCurrentPolicy": "profile_scoped_index_inputs",
-      "snakeTargetStatus": "requires_batch_1_acceptance"
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "knownRustDifference": {
+        "original": "original_builtin_alias_warning_existing_gap: Rust preserves its existing duplicate-index warning behavior and continues loading aliases; the fixed original oracle aborts at FLAG.als line 4"
+      },
+      "knownOracleDefect": {
+        "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message",
+        "source": "Emuera/Runtime/Script/Data/ConstantData.cs:1812 and Emuera/Runtime/Utils/EvilMask/Lang.cs:655"
+      }
     }
   ]
 }

@@ -55,6 +55,19 @@ def step_expectations(step, response, oracle):
              "diagnosticComparison": "incomparable_schema"}]
 
 
+def load_observation_options(logical_only, selected, font, font_path):
+    if logical_only:
+        if any(case.get("group") == "PRINTC" or "presentation" in case.get("assertions", [])
+               or any(step["request"].get("observePresentation") for step in case["requests"])
+               for case in selected):
+            raise ValueError("logical-output-only cannot run presentation assertions")
+        return {"observePresentation": False}
+    return {
+        "presentationFont": {**{key: font[key] for key in ["family", "sha256"]}, "file": font_path},
+        "observePresentation": True,
+    }
+
+
 def identity(directory):
     files = []
     for path in sorted(directory.rglob("*")):
@@ -371,6 +384,8 @@ def main():
     parser.add_argument("--wine-prefix", type=Path)
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--drawing-mode", choices=["SKIASHARP", "TEXTRENDERER"])
+    parser.add_argument("--logical-output-only", action="store_true",
+                        help="capture values and logical output only; reject presentation cases")
     parser.add_argument("--budget-seconds", type=float, default=300)
     parser.add_argument("--request-timeout", type=float, default=20)
     args = parser.parse_args()
@@ -424,6 +439,7 @@ def main():
         "effectiveFixture": identity(game),
         "font": {**manifest["font"], "byteSourceStatus": "unverified-installed-source"},
         "drawingMode": args.drawing_mode or ("SKIASHARP" if args.oracle == "snake" else "TEXTRENDERER"),
+        "presentationObservation": "not_requested" if args.logical_output_only else "font_pinned_snapshot",
         "rust": {key: rust[key] for key in ["coreSha", "dirty", "profile"]},
         "rustComparison": {"status": "pending", "cases": []},
         "cases": [],
@@ -454,11 +470,8 @@ def main():
             "seed": manifest["seed"],
             "instructionLimit": 100000,
             "timeoutMs": 3000,
-            "presentationFont": {
-                **{k: manifest["font"][k] for k in ["family", "sha256"]},
-                "file": oracle.windows_path(args.font_file),
-            },
-            "observePresentation": True,
+            **load_observation_options(args.logical_output_only, selected, manifest["font"],
+                                       oracle.windows_path(args.font_file)),
         }
         for case in selected:
             oracle.case = case["id"]

@@ -355,6 +355,36 @@ mod tests {
     }
 
     #[test]
+    fn original_builtin_alias_warning_keeps_later_aliases_available() {
+        let root = crate::tool_root().join("fixture-snake-index-inputs");
+        let fixture: Fixture =
+            serde_json::from_slice(&fs::read(root.join("cases.json")).unwrap()).unwrap();
+        // The pinned original oracle aborts this ALS file while formatting a warning.
+        // Preserve Rust's existing continue-after-warning behavior, not that defect.
+        for (case_id, expected) in [
+            ("index-builtin-alias-same-index", 500),
+            ("index-builtin-untrimmed-name", 210),
+        ] {
+            let case = fixture
+                .cases
+                .iter()
+                .find(|case| case.id == case_id)
+                .unwrap();
+            let result = super::super::observe_case(
+                &root,
+                &CompatibilityIdentity::reference(),
+                fixture.seed,
+                case,
+            )
+            .unwrap();
+            assert_eq!(result["load"]["success"], true, "{result}");
+            let observation = &result["steps"][0]["result"];
+            assert_eq!(observation["ok"], true, "{result}");
+            assert_eq!(observation["watches"]["RESULT:0"], expected, "{result}");
+        }
+    }
+
+    #[test]
     fn index_fixture_distinguishes_shared_static_names_from_original_dynamic_gap() {
         use erabasic_compat::CompatibilityProfileId;
 

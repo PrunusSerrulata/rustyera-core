@@ -61,6 +61,17 @@ Those three cases carry `original_dynamic_user_index_existing_gap` and
 the Rust/original comparison must remain `different`, never `expected_rejection`.
 Batch 1A freezes that existing original-profile gap instead of changing its resolver.
 
+The pinned original oracle also aborts the rest of `FLAG.als` at its duplicate-index
+warning: `ConstantData.cs:1812` supplies one formatting argument to the two-placeholder
+message at `Lang.cs:655`. The same-index and untrimmed-name cases therefore fail in
+that oracle, while Rust preserves its existing continue-after-warning behavior.
+Those cases retain `original_builtin_alias_warning_existing_gap` differences; the
+trimmed-name rejection cannot independently establish whitespace semantics after
+the earlier abort. These are explicit oracle defects, not Rust parity successes.
+Correcting this assertion metadata changes the fixture identity even though source
+files and request expressions are unchanged. Historical evidence stays immutable;
+targeted recovery must use matching fixture and Rust evidence hashes.
+
 Every oracle case must first reach the fixture title's input wait. A handled load
 request with error/timeout termination is a failure, and a Rust load failure cannot
 satisfy an expected operation rejection. Original user-ALS rejection and profile
@@ -74,8 +85,14 @@ is not batch acceptance.
 The smallest checks after the unique batch review are the existing Python driver
 tests and the runtime-tester `snake_observations::fixture::tests` module. All oracle
 runs remain downstream of the complete authorized static gates and use isolated
-game copies, output directories and Wine prefixes. Keep the pinned font requirement
-even though this fixture makes no pixel-measurement compatibility claim.
+game copies, output directories and Wine prefixes. A full presentation load may fail
+when diagnostic text needs a fallback font outside the pinned family. Preserve that
+failure as a presentation setup failure; do not relabel the substituted font as a match.
+For a separately recorded data-only recovery, `--logical-output-only` requests values,
+logical output and diagnostics without a presentation snapshot or font-family assertion.
+The evidence records `presentationObservation=not_requested`; it cannot establish font
+or pixel compatibility. This mode rejects PRINTC and explicit presentation assertions.
+It does not alter game source, expected values, error outcomes, or the five-second watchdog.
 
 ## Evidence and Rust integration
 

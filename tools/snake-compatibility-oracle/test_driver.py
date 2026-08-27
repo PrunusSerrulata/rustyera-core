@@ -17,6 +17,19 @@ spec.loader.exec_module(driver)
 
 
 class DriverTests(unittest.TestCase):
+    def test_logical_only_observation_never_claims_or_allows_presentation_validation(self):
+        font = {"family": "BIZ UDGothic", "sha256": "a" * 64}
+        case = {"group": "INDEX", "requests": [{"request": {"op": "eval", "source": "1"}}]}
+        self.assertEqual(driver.load_observation_options(True, [case], font, "font.ttf"),
+                         {"observePresentation": False})
+        self.assertEqual(driver.load_observation_options(False, [case], font, "font.ttf"),
+                         {"observePresentation": True, "presentationFont": {**font, "file": "font.ttf"}})
+        for presentation_case in [{**case, "group": "PRINTC"},
+                                  {**case, "assertions": ["presentation"]},
+                                  {**case, "requests": [{"request": {"op": "observe", "observePresentation": True}}]}]:
+            with self.assertRaisesRegex(ValueError, "presentation assertions"):
+                driver.load_observation_options(True, [presentation_case], font, "font.ttf")
+
     def test_expected_operation_rejection_cannot_hide_failed_fixture_loading(self):
         with self.assertRaises(AssertionError):
             driver.validate_load({"ok": True, "result": {"termination": "error"}})
