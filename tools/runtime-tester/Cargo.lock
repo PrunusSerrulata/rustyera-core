@@ -653,6 +653,7 @@ dependencies = [
  "erabasic-parser",
  "erabasic-validator",
  "erabasic-vm",
+ "flate2",
  "serde",
  "serde_json",
  "sha2",

@@ -26,6 +26,7 @@ pub(super) struct Pipeline {
     pub diagnostics: Vec<LocatedDiagnostic>,
     pub analyzer_options: AnalyzerOptions,
     pub csv_options: CsvLoadOptions,
+    pub symbols: Value,
 }
 
 pub(super) fn analyze(
@@ -43,6 +44,7 @@ pub(super) fn analyze(
         diagnostics: Vec::new(),
         analyzer_options,
         csv_options,
+        symbols: json!({"phase": "unavailable", "status": "no_project_data"}),
     };
     crate::watchdog::publish_or_exit(
         json!({"phase": "csv_load", "case": sources.first().map(|(path, _)| path), "pending": "load_project", "csv_files": files.csv.len(), "erb_data_files": files.erb.len(), "diagnostics": [], "lastFullResponse": null}),
@@ -84,6 +86,7 @@ pub(super) fn analyze(
     let Some(project_data) = csv.data else {
         return result;
     };
+    result.symbols = json!({"phase": "csv_load", "status": "declarations_not_resolved", "data": super::symbols::data(&project_data, "csv_load")});
     crate::watchdog::publish_or_exit(
         json!({"phase": "analysis", "pending": "analyze_project", "source_count": sources.len(), "diagnostics": result.diagnostics, "lastFullResponse": null}),
     );
@@ -119,6 +122,11 @@ pub(super) fn analyze(
         "accepted"
     }
     .into();
+    // A diagnostic-bearing analyzer result can still contain resolved symbols.
+    // Capture them before compile gating; never serialize its HIR bodies.
+    if let Some(project) = &report.project {
+        result.symbols = super::symbols::analyzed(project, sources);
+    }
     result
         .diagnostics
         .extend(report.diagnostics.into_iter().map(|item| {
@@ -317,5 +325,94 @@ mod tests {
         );
         assert_eq!(report.compiler, "blocked_by_incomplete_input");
         assert!(!report.artifact_produced);
+    }
+
+    #[test]
+    fn symbols_survive_compile_blocking_diagnostics_with_signed_aliases_and_reverse_names() {
+        use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
+        use erabasic_csv::{FilePayload, FrontendFile};
+        let file = |path: &str, text: &str| FrontendFile {
+            relative_path: path.into(),
+            source_path: Some(path.into()),
+            payload: FilePayload::Utf8(text.into()),
+        };
+        let files = ProjectFiles {
+            csv: vec![
+                file("BUFF.csv", "10,z_primary\n"),
+                file("BUFF.als", "10,a_alias\n11,eleven\n300,far\n-1,negative\n"),
+            ],
+            erb: vec![
+                file("COLUMNDIV@2.ERD", "10,column\n"),
+                file("COLUMNDIV@2.als", "11,column_alias\n"),
+                file("SEMEN_MATRIX@2.ERD", "11,matrix\n"),
+                file("SEMEN_MATRIX@2.als", "300,matrix_alias\n"),
+            ],
+        };
+        let sources = vec![("ERH/data.erh".into(), "#DIM BUFF, 400\n#DIM CHARADATA COLUMNDIV, 2, 12\n#DIM SEMEN_MATRIX, 2, 12\n".into()),
+            ("ERB/main.erb".into(), "@SYSTEM_TITLE\nUNKNOWN_COVERAGE_GATE 1\nRETURN\n@CAN_MOVE_A\n#FUNCTION\nRETURNF 1\n".into())];
+        let identity = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        let mut options = AnalyzerOptions::analysis_mode();
+        options.compatibility = identity.clone();
+        options.system_save_in_binary = true;
+        let report = analyze(
+            &sources,
+            &files,
+            options,
+            CsvLoadOptions {
+                compatibility: identity,
+                use_erd: true,
+                ..CsvLoadOptions::default()
+            },
+            true,
+        );
+        assert!(report.compiler.starts_with("blocked"));
+        assert_eq!(report.symbols["phase"], "analyzer_project");
+        let indices = report.symbols["data"]["resolved_user_indices"]
+            .as_array()
+            .unwrap();
+        let buff = indices
+            .iter()
+            .find(|table| table["stem"] == "BUFF")
+            .unwrap();
+        assert_eq!(buff["variable_name"], "BUFF");
+        assert_eq!(buff["data_dimension_length"], 400);
+        for (name, index) in [
+            ("a_alias", 10),
+            ("eleven", 11),
+            ("far", 300),
+            ("negative", -1),
+        ] {
+            assert_eq!(buff["signed_name_lookup"][name], index);
+        }
+        assert_eq!(
+            buff["reverse_names_in_primary_then_insertion_precedence"]["10"],
+            "z_primary"
+        );
+        let columns = indices
+            .iter()
+            .find(|table| table["stem"] == "COLUMNDIV@2")
+            .unwrap();
+        assert_eq!(columns["data_dimension"], 2);
+        assert_eq!(columns["variable_name"], "COLUMNDIV");
+        assert_eq!(columns["data_dimension_length"], 12);
+        let matrix = indices
+            .iter()
+            .find(|table| table["stem"] == "SEMEN_MATRIX@2")
+            .unwrap();
+        assert_eq!(matrix["variable_name"], "SEMEN_MATRIX");
+        assert_eq!(matrix["data_dimension_length"], 12);
+        assert_eq!(matrix["signed_name_lookup"]["matrix_alias"], 300);
+        let method = report.symbols["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|method| method["name"] == "CAN_MOVE_A")
+            .unwrap();
+        assert_eq!(method["kind"], "method");
+        assert_eq!(method["return_type"], "integer");
+        assert!(
+            method.get("lines").is_none(),
+            "coverage must not retain HIR bodies"
+        );
     }
 }

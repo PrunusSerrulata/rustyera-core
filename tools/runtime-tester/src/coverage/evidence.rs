@@ -84,15 +84,7 @@ impl SourceIndex {
     }
 
     pub fn vm(&self, name: &str) -> Value {
-        let mut result = self.references(name);
-        if name == "DT_COLUMN_OPTIONS" && !self.names.contains_key(name) {
-            result["status"] = json!("known_dispatch_gap");
-            result["reason"] = json!(
-                "Native registration covers all DT_ names, but the inspected data-table dispatcher has no DT_COLUMN_OPTIONS handler; no execution is claimed"
-            );
-            result["gap_evidence"] = json!({"path": "crates/erabasic-vm/src/structured/data_calls.rs", "blake3": self.files.get("crates/erabasic-vm/src/structured/data_calls.rs"), "method": "exact_API_literal_absent_from_inspected_dispatch_source"});
-        }
-        result
+        self.references(name)
     }
 }
 
@@ -121,6 +113,11 @@ pub(super) fn required_service(api: &str) -> Option<Value> {
             ServiceKind::InputState,
             GET_KEY_STATE_OPERATION,
             GET_KEY_STATE_OPERATION_VERSION,
+        ),
+        "MOUSEX" | "MOUSEY" | "MOUSEB" => (
+            ServiceKind::InputState,
+            POINTER_STATE_OPERATION,
+            POINTER_STATE_OPERATION_VERSION,
         ),
         "HTML_STRINGLEN" => (
             ServiceKind::PresentationQuery,
@@ -182,7 +179,7 @@ pub(super) fn migration(api: &str, raw: &str) -> Value {
             return json!({"classification": null, "batch": null, "fixture": null, "status": "unmapped_requires_triage"});
         }
     };
-    json!({"classification": classification, "batch": batch, "fixture": fixture, "status": "planned_not_implemented_by_batch0"})
+    json!({"classification": classification, "batch": batch, "fixture": fixture, "status": "scope_mapping_not_implementation_or_execution_evidence"})
 }
 
 #[cfg(test)]
@@ -195,6 +192,10 @@ mod tests {
         let evidence = registration(registry.classification("DT_COLUMN_OPTIONS"));
         assert_eq!(evidence["classification"], "Native");
         assert_eq!(evidence["implementation_verified"], false);
+        assert_eq!(
+            SourceIndex::default().vm("DT_COLUMN_OPTIONS")["status"],
+            "unverified"
+        );
     }
 
     #[test]
@@ -205,5 +206,20 @@ mod tests {
             "get_key_state"
         );
         assert_eq!(migration("DT_COLUMN_OPTIONS", "")["classification"], "S12");
+        for api in ["MOUSEX", "MOUSEY", "MOUSEB"] {
+            let service = required_service(api).unwrap();
+            assert_eq!(
+                service["operation"],
+                era_runtime_protocol::POINTER_STATE_OPERATION
+            );
+            assert_eq!(
+                service["version"],
+                json!(era_runtime_protocol::POINTER_STATE_OPERATION_VERSION)
+            );
+        }
+        assert_eq!(
+            required_service("HTML_STRINGLEN").unwrap()["version"],
+            json!(era_runtime_protocol::HTML_STRING_LEN_OPERATION_VERSION)
+        );
     }
 }

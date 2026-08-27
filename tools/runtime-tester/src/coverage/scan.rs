@@ -1,6 +1,6 @@
 //! Parser-derived appearances; unparsed/preprocessed candidates remain explicitly uncertain.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use erabasic_analyzer::AnalyzerOptions;
 use erabasic_ast::{
@@ -23,6 +23,21 @@ pub(super) struct Appearance {
     pub activity: String,
     pub raw: String,
     pub dynamic_target: Option<String>,
+    pub owning_function: Option<usize>,
+    pub ownership_status: String,
+    pub target: Option<super::targets::Target>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct ParsedFunction {
+    pub id: usize,
+    pub name: String,
+    pub path: String,
+    pub decoded_utf8_blake3: String,
+    pub span: Span,
+    pub span_status: String,
+    pub attributes: Vec<String>,
+    pub parameters: Vec<Value>,
 }
 
 struct Walker<'a> {
@@ -32,6 +47,8 @@ struct Walker<'a> {
     offset: usize,
     context: &'a DefaultParserContext,
     rows: &'a mut Vec<Appearance>,
+    owner: Option<usize>,
+    ownership_status: &'a str,
 }
 
 impl Walker<'_> {
@@ -44,8 +61,13 @@ impl Walker<'_> {
         span: Span,
         dynamic: Option<String>,
     ) {
-        let span = Span::new(span.start + self.offset, span.end + self.offset);
-        let raw = self.source.get(span.start..span.end);
+        let shifted = span
+            .start
+            .checked_add(self.offset)
+            .zip(span.end.checked_add(self.offset))
+            .map(|(start, end)| Span::new(start, end));
+        let raw = shifted.and_then(|span| self.source.get(span.start..span.end));
+        let span = shifted.unwrap_or(span);
         self.rows.push(Appearance {
             path: self.path.into(),
             api: api.to_ascii_uppercase(),
@@ -67,6 +89,9 @@ impl Walker<'_> {
             .into(),
             raw: raw.unwrap_or_default().into(),
             dynamic_target: dynamic,
+            owning_function: self.owner,
+            ownership_status: self.ownership_status.into(),
+            target: None,
         });
     }
 
@@ -118,6 +143,9 @@ impl Walker<'_> {
                     statement.span,
                     dynamic,
                 );
+                if let Some(row) = self.rows.last_mut() {
+                    row.target = super::targets::instruction(&upper, arguments);
+                }
                 self.arguments(arguments);
             }
             StatementKind::Assignment {
@@ -128,6 +156,14 @@ impl Walker<'_> {
                 raw_value,
                 ..
             } => {
+                self.add(
+                    &target.name,
+                    "variable_write",
+                    Some(target.indices.len()),
+                    0,
+                    target.span,
+                    None,
+                );
                 if !matches!(
                     op,
                     erabasic_ast::AssignOp::Assign | erabasic_ast::AssignOp::StringAssign
@@ -174,6 +210,8 @@ impl Walker<'_> {
                 offset: self.offset + start,
                 context: self.context,
                 rows: self.rows,
+                owner: self.owner,
+                ownership_status: self.ownership_status,
             }
             .expression(&expression);
         }
@@ -190,11 +228,22 @@ impl Walker<'_> {
                     expression.span,
                     None,
                 );
+                if let Some(row) = self.rows.last_mut() {
+                    row.target = Some(super::targets::expression(name, args));
+                }
                 for argument in args.iter().flatten() {
                     self.expression(argument);
                 }
             }
-            ExprKind::Variable { indices, .. } => {
+            ExprKind::Variable { name, indices } => {
+                self.add(
+                    name,
+                    "variable_read",
+                    Some(indices.len()),
+                    0,
+                    expression.span,
+                    None,
+                );
                 for index in indices {
                     self.expression(index);
                 }
@@ -232,7 +281,15 @@ impl Walker<'_> {
                 expression.span,
                 None,
             ),
-            ExprKind::Integer(_) | ExprKind::String(_) | ExprKind::Identifier(_) => {}
+            ExprKind::Identifier(name) => self.add(
+                name,
+                "variable_or_identifier",
+                None,
+                0,
+                expression.span,
+                None,
+            ),
+            ExprKind::Integer(_) | ExprKind::String(_) => {}
         }
     }
 
@@ -267,7 +324,13 @@ impl Walker<'_> {
         }
     }
 
-    fn script(&mut self, script: &Script, covered: &mut Vec<Span>) {
+    fn script(
+        &mut self,
+        script: &Script,
+        covered: &mut Vec<Span>,
+        functions: &mut Vec<ParsedFunction>,
+    ) {
+        let source_hash = blake3::hash(self.source.as_bytes()).to_hex().to_string();
         for directive in &script.declarations {
             covered.push(directive.span);
             self.directive(directive);
@@ -277,6 +340,15 @@ impl Walker<'_> {
             self.statement(statement);
         }
         for function in &script.functions {
+            let id = functions.len();
+            self.owner = Some(id);
+            self.ownership_status = "parser_function_membership_not_execution";
+            functions.push(ParsedFunction { id, name: function.name.clone(), path: self.path.into(),
+                decoded_utf8_blake3: source_hash.clone(), span: function.span,
+                span_status: if self.source.get(function.span.start..function.span.end).is_some() { "valid_decoded_utf8" } else { "invalid_parser_span" }.into(),
+                attributes: function.attributes.iter().map(|attribute| attribute.name.clone()).collect(),
+                parameters: function.parameters.iter().map(|parameter| json!({"name": parameter.name, "reference": parameter.is_reference,
+                    "optional": parameter.default.is_some(), "span": parameter.span, "phase": "parser_not_type_resolved"})).collect() });
             for attribute in &function.attributes {
                 covered.push(attribute.span);
                 self.directive(attribute);
@@ -291,6 +363,7 @@ impl Walker<'_> {
                 self.statement(statement);
             }
         }
+        self.owner = None;
     }
 }
 
@@ -298,6 +371,7 @@ pub(super) struct Scan {
     pub rows: Vec<Appearance>,
     pub diagnostics: Vec<Value>,
     pub user_functions: BTreeSet<String>,
+    pub functions: Vec<ParsedFunction>,
 }
 
 pub(super) fn scan(sources: &[(String, String)], options: &AnalyzerOptions) -> Scan {
@@ -313,8 +387,10 @@ pub(super) fn scan(sources: &[(String, String)], options: &AnalyzerOptions) -> S
         rows: Vec::new(),
         diagnostics: Vec::new(),
         user_functions: BTreeSet::new(),
+        functions: Vec::new(),
     };
     for (path, text) in sources {
+        let first_function = result.functions.len();
         crate::watchdog::publish_or_exit(
             json!({"phase": "appearance_parse", "case": path, "pending": "parse_source", "source_bytes": text.len(), "appearances_completed": result.rows.len(), "diagnostics": result.diagnostics, "lastFullResponse": null}),
         );
@@ -344,17 +420,33 @@ pub(super) fn scan(sources: &[(String, String)], options: &AnalyzerOptions) -> S
                 offset: 0,
                 context: &context,
                 rows: &mut result.rows,
+                owner: None,
+                ownership_status: "top_level",
             }
-            .script(&script, &mut covered);
+            .script(&script, &mut covered, &mut result.functions);
         }
         // Recover appearances from lines excluded by preprocessing or parser recovery,
         // but never label those lexical candidates as active executable code.
         covered.sort_by_key(|span| span.start);
         let mut coverage_cursor = 0;
         let mut offset = 0;
+        let mut lexical_owner = None;
+        let header_owners = result.functions[first_function..]
+            .iter()
+            .filter(|function| function.span_status == "valid_decoded_utf8")
+            .map(|function| (function.span.start, function.id))
+            .collect::<BTreeMap<_, _>>();
         for line in text.split_inclusive('\n') {
             let trimmed = line.trim_start();
             let start = offset + line.len() - trimmed.len();
+            if trimmed.starts_with('@') {
+                // An excluded/invalid header breaks ownership inference; do not
+                // attribute its body to the preceding active function.
+                lexical_owner = header_owners
+                    .range(offset..offset + line.len())
+                    .next()
+                    .map(|(_, &id)| id);
+            }
             while coverage_cursor < covered.len() && covered[coverage_cursor].end <= start {
                 coverage_cursor += 1;
             }
@@ -373,6 +465,8 @@ pub(super) fn scan(sources: &[(String, String)], options: &AnalyzerOptions) -> S
                     offset,
                     context: &context,
                     rows: &mut result.rows,
+                    owner: lexical_owner,
+                    ownership_status: "lexical_header_candidate_not_ast_membership",
                 }
                 .statement(&statement);
             }
@@ -404,17 +498,24 @@ mod tests {
             offset: 0,
             context: &Default::default(),
             rows: &mut rows,
+            owner: Some(3),
+            ownership_status: "parser_function_membership_not_execution",
         }
         .add("PRINTL", "instruction", Some(1), 0, Span::new(9, 2), None);
         assert_eq!(rows[0].span, Span::new(9, 2));
         assert_eq!(rows[0].span_status, "invalid_parser_span");
         assert_eq!(rows[0].activity, "unverified_invalid_parser_span");
         assert!(rows[0].raw.is_empty());
+        assert_eq!(
+            rows[0].owning_function,
+            Some(3),
+            "structural membership is retained without validating the span"
+        );
     }
 
     #[test]
     fn scans_uncalled_functions_and_preserves_unknown_and_preprocessed_apis() {
-        let sources = vec![("ERB/a.erb".into(), "@SYSTEM_TITLE\nRETURN\n@UNUSED\nSQL_CONNECT \"x\"\nRESULT = DT_COLUMN_OPTIONS(\"x\")\n[SKIPSTART]\nREMOVED_API 1\n[SKIPEND]\nRETURN\n".into())];
+        let sources = vec![("ERB/a.erb".into(), "@SYSTEM_TITLE\nRETURN\n@UNUSED\nSQL_CONNECT \"x\"\nRESULT = DT_COLUMN_OPTIONS(\"x\")\n[SKIPSTART]\n@REMOVED_FUNCTION\nREMOVED_API 1\n[SKIPEND]\nRETURN\n".into())];
         let report = scan(&sources, &AnalyzerOptions::analysis_mode());
         assert!(
             report
@@ -436,6 +537,15 @@ mod tests {
                 .iter()
                 .any(|row| row.api == "REMOVED_API"
                     && row.activity == "unverified_not_in_active_ast")
+        );
+        assert!(
+            report
+                .rows
+                .iter()
+                .find(|row| row.api == "REMOVED_API")
+                .unwrap()
+                .owning_function
+                .is_none()
         );
     }
 
@@ -459,6 +569,83 @@ mod tests {
             call.dynamic_target
                 .as_deref()
                 .is_some_and(|target| target.contains("TARGET_"))
+        );
+    }
+
+    #[test]
+    fn dynamic_methods_inside_form_defaults_and_numeric_rhs_keep_ownership_and_patterns() {
+        let source = "@SYSTEM_TITLE\nCALLFORM CAN_MOVE_{ARG}(1)\nPRINTFORML %GETMETHS(\"ODEKAKEMAP_SETTING_\" + ARGS, \"\")%\nPRINTFORML %STRFORM(ARGS)%\nRESULT = GETMETH(\"CAN_MOVE_\" + \"A\", 0)\nRETURN\n@UNUSED(ARG = GETMETH(\"FALLBACK\", 1))\nRETURN\n";
+        let report = scan(
+            &[("a.erb".into(), source.into())],
+            &AnalyzerOptions::analysis_mode(),
+        );
+        assert_eq!(report.functions.len(), 2);
+        for name in ["CALLFORM", "GETMETHS", "GETMETH"] {
+            assert!(report.rows.iter().any(|row| row.api == name
+                && row.owning_function == Some(0)
+                && row.target.is_some()));
+        }
+        let call = report
+            .rows
+            .iter()
+            .find(|row| row.api == "CALLFORM")
+            .unwrap();
+        let pattern = &call.target.as_ref().unwrap().pattern;
+        assert!(pattern.matches("CAN_MOVE_11", true));
+        assert!(!pattern.matches("OTHER_11", true));
+        assert!(
+            report
+                .rows
+                .iter()
+                .filter(|row| row.api == "GETMETH")
+                .any(
+                    |row| row.target.as_ref().unwrap().pattern.exact().as_deref()
+                        == Some("CAN_MOVE_A")
+                )
+        );
+        assert!(
+            report
+                .rows
+                .iter()
+                .any(|row| row.api == "GETMETH" && row.owning_function == Some(1))
+        );
+        let generated = report
+            .rows
+            .iter()
+            .find(|row| row.api == "STRFORM")
+            .unwrap()
+            .target
+            .as_ref()
+            .unwrap();
+        assert_eq!(generated.dispatch, "dynamic_form_evaluation");
+        assert!(generated.pattern.matches("ANY_USER_FUNCTION", true));
+    }
+
+    #[test]
+    fn unknown_name_segments_preserve_suffix_anchors_and_literal_glob_characters() {
+        use super::super::targets::{Pattern, Segment};
+        let pattern = Pattern {
+            segments: vec![
+                Segment::Unknown("runtime".into()),
+                Segment::Literal("AB".into()),
+            ],
+        };
+        assert!(pattern.matches("ABAB", true));
+        assert!(!pattern.matches("ABA", true));
+        let pattern = Pattern {
+            segments: vec![
+                Segment::Literal("CAN_*_".into()),
+                Segment::Unknown("runtime".into()),
+                Segment::Literal("_END".into()),
+            ],
+        };
+        assert!(pattern.matches("CAN_*_A_END", true));
+        assert!(!pattern.matches("CAN_X_A_END", true));
+        assert!(
+            Pattern {
+                segments: vec![Segment::Unknown("runtime".into())]
+            }
+            .matches("ANY_METHOD", false)
         );
     }
 }
