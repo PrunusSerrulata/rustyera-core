@@ -137,6 +137,11 @@ impl Vm {
                     .then(|| pop(&mut fiber.frames.last_mut().expect("frame exists").stack))
                     .transpose()?;
                 let returned_frame = fiber.frames.pop().expect("returning frame exists");
+                self.confirm_path_memo_result_read(
+                    fiber.id,
+                    returned_frame.id,
+                    position.instruction,
+                );
                 if !fiber.frames.is_empty() {
                     // Completing a function call is finite forward progress even when the
                     // enclosing calculation needs more than one caller-visible run budget.

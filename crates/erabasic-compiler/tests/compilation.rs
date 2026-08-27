@@ -373,6 +373,48 @@ fn dynamic_call_uses_vm_resolution_before_argument_evaluation() {
 }
 
 #[test]
+fn width_free_form_interpolation_stays_inside_bytecode() {
+    let project = analyze(
+        "@SYSTEM_TITLE\n#DIMS TEXT\nLOCAL = 7\nTEXT '= \"ok\"\nCALLFORM TARGET_{LOCAL}\nRESULTS = @\"value={LOCAL} %TEXT%\"\nRETURN\n@TARGET_7\nRETURN\n",
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
+    let artifact = report.artifact.expect("width-free forms should compile");
+    assert!(
+        artifact
+            .functions
+            .iter()
+            .flat_map(|function| &function.code)
+            .any(|instruction| instruction.opcode == Opcode::ToString as u16)
+    );
+    assert!(artifact.native_imports.iter().all(|native| !matches!(
+        native.import.name.as_str(),
+        "format_integer" | "format_string"
+    )));
+
+    let project = analyze("@SYSTEM_TITLE\nLOCAL = 7\nRESULTS = @\"{LOCAL, 3}\"\nRETURN\n");
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
+    let artifact = report.artifact.expect("width-bearing forms should compile");
+    assert!(
+        artifact
+            .native_imports
+            .iter()
+            .any(|native| native.import.name == "format_integer")
+    );
+}
+
+#[test]
 fn input_wait_and_getkey_bindings_preserve_dynamic_stability() {
     let registry = default_host_registry();
     for name in ["TINPUT", "TONEINPUTS", "TWAIT", "FORCEWAIT"] {

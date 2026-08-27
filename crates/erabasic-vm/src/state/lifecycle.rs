@@ -166,9 +166,12 @@ impl Vm {
             function_memo_cache_retained_bytes: 0,
             active_function_memos: HashMap::new(),
             path_memo_cache: HashMap::new(),
+            path_memo_key_count: 0,
             path_memo_retained_bytes: 0,
             active_path_memo_fiber: std::cell::Cell::new(None),
             active_path_memo: std::cell::RefCell::new(None),
+            #[cfg(test)]
+            path_memo_replays: 0,
         }
     }
 

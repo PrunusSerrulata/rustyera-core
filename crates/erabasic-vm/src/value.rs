@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{FiberId, FrameId};
 
 /// Values crossing the VM/runtime boundary are deliberately small and Serde-friendly.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum VmValue {
     Integer(i64),
@@ -37,7 +37,7 @@ impl VmValue {
 
 /// A place is opaque to the host. It can only be returned in a [`HostWrite`](crate::HostWrite),
 /// where the VM validates its variable, frame, character and indices again.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct PlaceDescriptor {
     pub variable: SymbolKey,
     pub indices: Vec<u64>,

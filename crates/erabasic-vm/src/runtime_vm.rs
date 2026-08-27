@@ -100,8 +100,7 @@ impl RuntimeVm {
         vm.next_fiber = 1;
         vm.pending_reload = None;
         vm.debug = DebugState::default();
-        vm.path_memo_cache.clear();
-        vm.path_memo_retained_bytes = 0;
+        vm.clear_path_memo_cache();
         vm.active_path_memo_fiber.set(None);
         vm.active_path_memo.borrow_mut().take();
         let natives = self
@@ -240,9 +239,20 @@ impl RuntimeVm {
 
     /// Synchronize runtime formatting and calculated strings with project width policy.
     pub fn set_character_width_mode(&mut self, mode: crate::CharacterWidthMode) {
+        let changed = self.natives.character_width_mode() != mode;
         self.natives.set_character_width_mode(mode);
         if let Some(pending) = &mut self.pending_natives {
             pending.set_character_width_mode(mode);
+        }
+        if changed {
+            // Width-sensitive compiler natives are memo-safe only within one width policy.
+            // Configuration changes happen between VM slices, so discard both completed and
+            // in-progress execution memos before subsequent formatting can observe the new mode.
+            self.vm.clear_derived_caches();
+            self.vm.active_function_memos.clear();
+            self.vm.clear_path_memo_cache();
+            self.vm.active_path_memo_fiber.set(None);
+            self.vm.active_path_memo.borrow_mut().take();
         }
         self.refresh_draw_line_string();
     }
@@ -453,6 +463,10 @@ struct CapturingRuntimeHost<'a, H> {
 }
 
 impl<H: VmHost> VmHost for CapturingRuntimeHost<'_, H> {
+    fn path_memo_safe(&self, import: &erabasic_bytecode::RuntimeImport) -> bool {
+        self.immediate.path_memo_safe(import)
+    }
+
     fn call_immediate(&mut self, request: ImmediateHostCall<'_>) -> ImmediateHostCallResult {
         self.immediate.call_immediate(request)
     }

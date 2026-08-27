@@ -149,8 +149,7 @@ impl Vm {
         self.current_generation = new_generation;
         self.next_generation = self.next_generation.saturating_add(1);
         self.clear_derived_caches();
-        self.path_memo_cache.clear();
-        self.path_memo_retained_bytes = 0;
+        self.clear_path_memo_cache();
         self.active_path_memo_fiber.set(None);
         self.active_path_memo.borrow_mut().take();
         let report = HotReloadReport {

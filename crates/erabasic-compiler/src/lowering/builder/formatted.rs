@@ -23,9 +23,13 @@ impl Builder<'_> {
                     integer,
                     location,
                 } => {
-                    let mut parameters = vec![self.lower_expression(expression, fallback)];
+                    let value_type = self.lower_expression(expression, fallback);
                     if let Some(width) = width {
-                        parameters.push(self.lower_expression(width, fallback));
+                        let parameters = vec![
+                            value_type,
+                            self.lower_expression(width, fallback),
+                            BytecodeType::Integer,
+                        ];
                         self.emit(
                             opcode::push_integer(i64::from(matches!(
                                 alignment,
@@ -33,19 +37,27 @@ impl Builder<'_> {
                             ))),
                             *location,
                         );
-                        parameters.push(BytecodeType::Integer);
+                        self.emit_native_call(
+                            if *integer {
+                                "format_integer"
+                            } else {
+                                "format_string"
+                            },
+                            &parameters,
+                            Some(BytecodeType::String),
+                            compiler_native_contract(true),
+                            *location,
+                        );
+                    } else if *integer {
+                        // Width-free integer formatting is exactly decimal conversion. Keep it in
+                        // bytecode so dynamic function names do not cross a native-call boundary.
+                        self.emit(
+                            EncodedInstruction::new(Opcode::ToString, Vec::new()),
+                            *location,
+                        );
+                    } else {
+                        debug_assert_eq!(value_type, BytecodeType::String);
                     }
-                    self.emit_native_call(
-                        if *integer {
-                            "format_integer"
-                        } else {
-                            "format_string"
-                        },
-                        &parameters,
-                        Some(BytecodeType::String),
-                        compiler_native_contract(true),
-                        *location,
-                    );
                 }
                 HirFormPart::Conditional {
                     condition,

@@ -161,8 +161,7 @@ impl Vm {
         self.next_fiber = 1;
         self.clear_derived_caches();
         self.active_function_memos.clear();
-        self.path_memo_cache.clear();
-        self.path_memo_retained_bytes = 0;
+        self.clear_path_memo_cache();
         self.active_path_memo_fiber.set(None);
         self.active_path_memo.borrow_mut().take();
         self.reclaim_generations();

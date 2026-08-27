@@ -6,16 +6,16 @@ use crate::debug::DebugState;
 use crate::memory::SymbolKeyHasher;
 use crate::regex_compat::RegexCache;
 use crate::{
-    FiberId, FiberStatus, FrameId, GenerationId, HostReady, HostRequestId, Memory, PlaceDescriptor,
-    VariableCell, VariableMap, VmConfig, VmError, VmValue,
+    FiberId, FiberStatus, FrameId, GenerationId, HostReady, HostRequestId, Memory,
+    NativeServiceRegistry, PlaceDescriptor, VariableCell, VariableMap, VmConfig, VmError, VmValue,
 };
 use crate::{
     PreparedRuntimeState, VmRuntimeFill, VmRuntimeRead, VmRuntimeStatePort,
     VmRuntimeStateTransaction,
 };
 use erabasic_bytecode::{
-    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeFunctionKind, BytecodeStorage,
-    BytecodeType, Digest, ImportKind, Opcode, SourceMapEntry, SymbolKey,
+    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeFunctionKind, BytecodeGlobal,
+    BytecodeStorage, BytecodeType, Digest, ImportKind, Opcode, SourceMapEntry, SymbolKey,
 };
 use erabasic_validator::ValidatedArtifact;
 
@@ -23,9 +23,11 @@ mod derived_cache;
 mod path_memo;
 mod planning;
 
+pub(crate) use path_memo::path_memo_cache_usage;
+
 use planning::{
     build_function_memo_plans, case_insensitive_index, index_source_entries, literal_group_match,
-    memoized_indexed_read, simple_bulk_fill_loop, structured_scope_ranges,
+    memoized_indexed_read, path_memo_result_reads, simple_bulk_fill_loop, structured_scope_ranges,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,6 +65,7 @@ pub(crate) struct ProgramGeneration {
     literal_group_match_plans: Vec<Vec<(u32, LiteralGroupMatchPlan)>>,
     function_memo_plans: Vec<Option<FunctionMemoPlan>>,
     memoized_indexed_read_plans: Vec<Option<MemoizedIndexedReadPlan>>,
+    path_memo_result_read_plans: Vec<Vec<PathMemoResultReadPlan>>,
     // Canonical owner-free definitions always win system-name lookup.
     global_name_indices: HashMap<String, usize>,
     // Runtime inspection historically exposes otherwise unique function variables.
@@ -314,6 +317,7 @@ impl ProgramGeneration {
             },
         );
         let mut memoized_indexed_read_plans = Vec::with_capacity(artifact.functions.len());
+        let mut path_memo_result_read_plans = Vec::with_capacity(artifact.functions.len());
         for (function_index, function) in artifact.functions.iter().enumerate() {
             memoized_indexed_read_plans.push(memoized_indexed_read(
                 &artifact,
@@ -322,6 +326,12 @@ impl ProgramGeneration {
                 &variable_global_indices,
                 &function_indices,
                 &function_memo_plans,
+            ));
+            path_memo_result_read_plans.push(path_memo_result_reads(
+                &artifact,
+                function_index,
+                function,
+                &variable_global_indices,
             ));
             advance_vm_preparation(
                 &mut progress,
@@ -446,6 +456,7 @@ impl ProgramGeneration {
             literal_group_match_plans,
             function_memo_plans,
             memoized_indexed_read_plans,
+            path_memo_result_read_plans,
             global_name_indices,
             runtime_name_fallback_indices,
             target_global_index,
@@ -551,6 +562,18 @@ impl ProgramGeneration {
     ) -> Option<&MemoizedIndexedReadPlan> {
         let index = *self.function_index(function)?;
         self.memoized_indexed_read_plans.get(index)?.as_ref()
+    }
+
+    pub(crate) fn path_memo_result_read_plan(
+        &self,
+        function: SymbolKey,
+        instruction: usize,
+    ) -> Option<&PathMemoResultReadPlan> {
+        let index = *self.function_index(function)?;
+        self.path_memo_result_read_plans
+            .get(index)?
+            .iter()
+            .find(|plan| plan.instruction == instruction)
     }
 
     pub(crate) fn bulk_fill_loop_plan(
@@ -823,12 +846,13 @@ pub(crate) use runtime_types::{
     ActivePathMemo, BulkFillLoopPlan, EventDispatch, EventDispatchEntry, Fiber, FiberState,
     FindElementCacheKey, FindElementNeedle, ForLoopState, Frame, FunctionMemoEntry,
     FunctionMemoKey, FunctionMemoPlan, LiteralGroupMatchPlan, MemoValue, MemoizedIndexedReadPlan,
-    PathMemoBaseKey, PathMemoDependency, PathMemoEntry, PathMemoMutation, PathMemoPlace,
-    WaitingHost,
+    PathMemoBaseKey, PathMemoCache, PathMemoDependency, PathMemoEntry, PathMemoHead,
+    PathMemoMutation, PathMemoMutationGroup, PathMemoPlace, PathMemoResultReadPlan, WaitingHost,
 };
 
 pub(crate) use frames::{
-    bind_persistent_arguments, make_frame, prepare_dynamic_arguments, validate_arguments,
+    PersistentArgumentDestination, bind_persistent_arguments, make_frame,
+    persistent_argument_destination, prepare_dynamic_arguments, validate_arguments,
 };
 use frames::{find_frame, find_frame_mut, find_global};
 use runtime::replace_cell_values;

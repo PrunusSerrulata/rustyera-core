@@ -87,6 +87,13 @@ pub struct HostRebindRequest {
 }
 
 pub trait VmHost {
+    /// Returns whether an immediately handled Host operation is a deterministic function of its
+    /// arguments. Path memoization may only cross operations whose current implementation makes
+    /// this guarantee; the default keeps arbitrary and replaceable hosts as hard boundaries.
+    fn path_memo_safe(&self, _import: &RuntimeImport) -> bool {
+        false
+    }
+
     fn call_immediate(&mut self, _request: ImmediateHostCall<'_>) -> ImmediateHostCallResult {
         ImmediateHostCallResult::Unsupported
     }
@@ -273,6 +280,9 @@ impl NativeServiceRegistry {
                         character_width_mode: registry.character_width_mode.clone(),
                     },
                 );
+                if compiler_native_path_memo_safe(name) {
+                    registry.path_memo_safe_keys.insert(native.import.key);
+                }
             } else if matches!(name, "rand" | "randomize" | "initrand" | "dumprand") {
                 registry.register(
                     native.import.key,
@@ -566,6 +576,10 @@ impl NativeServiceRegistry {
         target.set_character_width_mode(self.character_width_mode.get());
         Ok(target)
     }
+}
+
+fn compiler_native_path_memo_safe(name: &str) -> bool {
+    matches!(name, "format_integer" | "format_string")
 }
 
 mod core;

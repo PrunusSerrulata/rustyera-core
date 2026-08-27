@@ -78,38 +78,68 @@ pub(crate) fn bind_persistent_arguments(
     program: &ProgramGeneration,
     arguments: &[VmValue],
 ) -> Result<(), VmError> {
-    let artifact = &program.artifact;
     for (parameter, argument) in function.parameters.iter().zip(arguments) {
-        let Some(definition) = program.global(parameter.key) else {
-            return Err(VmError::InvalidState("parameter storage is missing".into()));
-        };
-        if definition.storage == BytecodeStorage::FunctionLocal {
+        let Some(destination) =
+            persistent_argument_destination(memory, generation, parameter, program)?
+        else {
             continue;
-        }
-        let (character, indices) = if definition.storage == BytecodeStorage::Character
-            && parameter.indices.len() > definition.dimensions.len()
-        {
-            (
-                usize::try_from(parameter.indices[0]).unwrap_or(usize::MAX),
-                &parameter.indices[1..],
-            )
-        } else {
-            (
-                if definition.storage == BytecodeStorage::Character {
-                    memory.target_character(artifact, generation)
-                } else {
-                    0
-                },
-                parameter.indices.as_slice(),
-            )
         };
         memory
-            .cell_mut(generation, definition.key, definition.storage, character)
+            .cell_mut(
+                generation,
+                destination.definition.key,
+                destination.definition.storage,
+                destination.character,
+            )
             .ok_or_else(|| VmError::InvalidState("parameter storage is missing".into()))?
-            .write(indices, argument.clone())
+            .write(destination.indices, argument.clone())
             .map_err(VmError::InvalidState)?;
     }
     Ok(())
+}
+
+pub(crate) struct PersistentArgumentDestination<'a> {
+    pub definition: &'a BytecodeGlobal,
+    pub character: usize,
+    pub implicit_target: bool,
+    pub indices: &'a [u64],
+}
+
+pub(crate) fn persistent_argument_destination<'a>(
+    memory: &Memory,
+    generation: GenerationId,
+    parameter: &'a erabasic_bytecode::BytecodeParameter,
+    program: &'a ProgramGeneration,
+) -> Result<Option<PersistentArgumentDestination<'a>>, VmError> {
+    let Some(definition) = program.global(parameter.key) else {
+        return Err(VmError::InvalidState("parameter storage is missing".into()));
+    };
+    if definition.storage == BytecodeStorage::FunctionLocal {
+        return Ok(None);
+    }
+    if definition.storage == BytecodeStorage::Character {
+        if parameter.indices.len() > definition.dimensions.len() {
+            let character = usize::try_from(parameter.indices[0]).unwrap_or(usize::MAX);
+            return Ok(Some(PersistentArgumentDestination {
+                definition,
+                character,
+                implicit_target: false,
+                indices: &parameter.indices[1..],
+            }));
+        }
+        return Ok(Some(PersistentArgumentDestination {
+            definition,
+            character: memory.target_character(&program.artifact, generation),
+            implicit_target: true,
+            indices: &parameter.indices,
+        }));
+    }
+    Ok(Some(PersistentArgumentDestination {
+        definition,
+        character: 0,
+        implicit_target: false,
+        indices: &parameter.indices,
+    }))
 }
 
 pub(crate) fn prepare_dynamic_arguments(

@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use erabasic_bytecode::{BytecodeType, SymbolKey};
@@ -11,7 +11,7 @@ use crate::hot_reload::HotReloadPlan;
 use crate::regex_compat::RegexCache;
 use crate::{
     FiberId, FiberStatus, FrameId, GenerationId, HostRequestId, HostWaitStability, Memory,
-    PlaceDescriptor, VariableMap, VmConfig, VmExecutionOrigin, VmFault, VmValue,
+    PlaceDescriptor, VariableCell, VariableMap, VmConfig, VmExecutionOrigin, VmFault, VmValue,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -144,10 +144,13 @@ pub struct Vm {
     pub(crate) function_memo_cache: HashMap<FunctionMemoKey, FunctionMemoEntry>,
     pub(crate) function_memo_cache_retained_bytes: usize,
     pub(crate) active_function_memos: HashMap<FrameId, FunctionMemoKey>,
-    pub(crate) path_memo_cache: HashMap<PathMemoBaseKey, Vec<Arc<PathMemoEntry>>>,
+    pub(crate) path_memo_cache: PathMemoCache,
+    pub(crate) path_memo_key_count: usize,
     pub(crate) path_memo_retained_bytes: usize,
     pub(crate) active_path_memo_fiber: Cell<Option<FiberId>>,
     pub(crate) active_path_memo: RefCell<Option<ActivePathMemo>>,
+    #[cfg(test)]
+    pub(crate) path_memo_replays: u64,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -208,6 +211,12 @@ pub(crate) struct MemoizedIndexedReadPlan {
     pub target: SymbolKey,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PathMemoResultReadPlan {
+    pub instruction: usize,
+    pub variable: SymbolKey,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct BulkFillLoopPlan {
     pub prefix: SymbolKey,
@@ -229,11 +238,16 @@ pub(crate) struct FunctionMemoEntry {
     pub scratch: Vec<(SymbolKey, VmValue)>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct PathMemoBaseKey {
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct PathMemoHead {
     pub generation: GenerationId,
     pub function: SymbolKey,
-    pub arguments: Vec<MemoValue>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PathMemoBaseKey {
+    pub head: PathMemoHead,
+    pub arguments: Vec<VmValue>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -302,6 +316,32 @@ pub(crate) enum PathMemoMutation {
 }
 
 impl PathMemoMutation {
+    pub(crate) const fn cell_key(&self) -> (GenerationId, SymbolKey, usize) {
+        match self {
+            Self::Write { place, .. } => (place.generation, place.variable, place.character),
+            Self::Fill {
+                generation,
+                variable,
+                character,
+                ..
+            }
+            | Self::Replace {
+                generation,
+                variable,
+                character,
+                ..
+            } => (*generation, *variable, *character),
+        }
+    }
+
+    pub(crate) fn covers_entire_cell(&self, length: usize) -> bool {
+        match self {
+            Self::Write { .. } => false,
+            Self::Fill { start, end, .. } => *start == 0 && *end == length,
+            Self::Replace { values, .. } => values.len() == length,
+        }
+    }
+
     pub(crate) fn writes_cell(&self, generation: GenerationId, variable: SymbolKey) -> bool {
         match self {
             Self::Write { place, .. } => {
@@ -370,11 +410,32 @@ impl PathMemoMutation {
 #[derive(Clone, Debug)]
 pub(crate) struct PathMemoEntry {
     pub dependencies: Vec<PathMemoDependency>,
-    pub mutations: Vec<PathMemoMutation>,
+    pub safe_natives: Vec<SymbolKey>,
+    pub safe_hosts: Vec<SymbolKey>,
+    pub mutation_groups: Vec<PathMemoMutationGroup>,
     pub result: VmValue,
+    pub result_dependency: Option<usize>,
     pub body_instructions: u64,
     pub backward_branches: u64,
     pub retained_bytes: usize,
+}
+
+pub(crate) type PathMemoCache =
+    HashMap<PathMemoHead, HashMap<Vec<VmValue>, Vec<Arc<PathMemoEntry>>>>;
+
+#[derive(Clone, Debug)]
+pub(crate) struct PathMemoMutationGroup {
+    pub generation: GenerationId,
+    pub variable: SymbolKey,
+    pub character: usize,
+    pub mutations: Vec<PathMemoMutation>,
+    pub final_cell: Option<VariableCell>,
+}
+
+impl PathMemoMutationGroup {
+    pub(crate) const fn key(&self) -> (GenerationId, SymbolKey, usize) {
+        (self.generation, self.variable, self.character)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -383,7 +444,12 @@ pub(crate) struct ActivePathMemo {
     pub frame: FrameId,
     pub key: PathMemoBaseKey,
     pub dependencies: Vec<PathMemoDependency>,
+    pub repeated_value_dependencies: BTreeSet<usize>,
+    pub safe_natives: Vec<SymbolKey>,
+    pub safe_hosts: Vec<SymbolKey>,
     pub mutations: Vec<PathMemoMutation>,
+    pub pending_result_dependency: Option<(usize, usize)>,
+    pub result_dependency: Option<usize>,
     pub retained_bytes: usize,
     pub body_instructions: u64,
     pub maximum_body_instructions: u64,

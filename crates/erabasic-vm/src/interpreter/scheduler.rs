@@ -24,7 +24,7 @@ impl Vm {
         {
             self.runnable.push_front(selected);
         }
-        let quantum = budget.fiber_quantum.max(1);
+        let base_quantum = budget.fiber_quantum.max(1);
         let mut budget_exhausted = false;
         let mut function_cursor = None;
         // Debug controls cannot be installed concurrently while this mutable VM
@@ -44,6 +44,21 @@ impl Vm {
                 budget_exhausted = true;
                 break;
             }
+            // Round-robin preemption matters only while another fiber is ready. Let a sole
+            // runnable fiber consume the caller-visible slice directly: this removes repeated
+            // queue churn and lets deterministic function traces span an otherwise artificial
+            // quantum boundary without weakening the total instruction budget.
+            let quantum = if self.runnable.is_empty() {
+                u32::try_from(
+                    budget
+                        .maximum_instructions
+                        .saturating_sub(report.instructions),
+                )
+                .unwrap_or(u32::MAX)
+                .max(base_quantum)
+            } else {
+                base_quantum
+            };
             let Some(mut fiber) = self.fibers.remove(&fiber_id) else {
                 continue;
             };
@@ -212,9 +227,7 @@ impl Vm {
                             break;
                         }
                     }
-                    Ok(StepOutcome::DeferredNative) => {
-                        self.invalidate_path_memo(fiber.id);
-                    }
+                    Ok(StepOutcome::DeferredNative) => self.invalidate_path_memo(fiber.id),
                     Ok(StepOutcome::Yielded) => {
                         self.invalidate_path_memo(fiber.id);
                         fiber.mark_progress();

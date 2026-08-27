@@ -260,6 +260,49 @@ pub(super) fn memoized_indexed_read(
     None
 }
 
+pub(super) fn path_memo_result_reads(
+    artifact: &BytecodeArtifact,
+    function_index: usize,
+    function: &BytecodeFunction,
+    variable_global_indices: &[Vec<u32>],
+) -> Vec<PathMemoResultReadPlan> {
+    // A value return may live inside a branch rather than at the lexical end of the function.
+    // Runtime tracing later confirms that a candidate pair was actually executed contiguously.
+    function
+        .code
+        .windows(2)
+        .enumerate()
+        .filter_map(|(instruction, pair)| {
+            let [load, returned] = pair else {
+                return None;
+            };
+            if Opcode::try_from(load.opcode).ok()? != Opcode::LoadVariable
+                || Opcode::try_from(returned.opcode).ok()? != Opcode::Return
+                || returned.payload.first().copied() != Some(1)
+            {
+                return None;
+            }
+            let global_index =
+                compact_global_index(variable_global_indices.get(function_index)?, instruction)?;
+            let variable = artifact.globals.get(global_index)?;
+            if !matches!(
+                variable.storage,
+                BytecodeStorage::Project
+                    | BytecodeStorage::Constant
+                    | BytecodeStorage::FunctionStatic
+                    | BytecodeStorage::FunctionPersistent
+            ) || function.result != Some(variable.value_type)
+            {
+                return None;
+            }
+            Some(PathMemoResultReadPlan {
+                instruction,
+                variable: variable.key,
+            })
+        })
+        .collect()
+}
+
 pub(super) fn build_function_memo_plans(
     artifact: &BytecodeArtifact,
     variable_global_indices: &[Vec<u32>],

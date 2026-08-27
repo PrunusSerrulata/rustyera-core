@@ -15,6 +15,25 @@ fn registered_override_is_not_path_memo_safe() {
 }
 
 #[test]
+fn compiler_formatters_are_path_memo_safe_until_overridden() {
+    assert!(compiler_native_path_memo_safe("format_integer"));
+    assert!(compiler_native_path_memo_safe("format_string"));
+    assert!(!compiler_native_path_memo_safe("times"));
+
+    let formatter = SymbolKey([9; 16]);
+    let mut registry = NativeServiceRegistry::default();
+    registry.path_memo_safe_keys.insert(formatter);
+    assert!(registry.register(
+        formatter,
+        CompilerNative {
+            name: "format_integer".into(),
+            character_width_mode: CharacterWidthModeHandle::default(),
+        },
+    ));
+    assert!(!registry.path_memo_safe(formatter));
+}
+
+#[test]
 fn form_width_honors_alignment_and_unicode_display_columns() {
     assert_eq!(
         apply_width("7", Some(&VmValue::Integer(3)), Some(&VmValue::Integer(0)),).unwrap(),

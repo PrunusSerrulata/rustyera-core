@@ -238,15 +238,11 @@ impl Vm {
             self.generations.remove(&generation);
             self.memory.reclaim_generation(generation);
             self.path_memo_cache
-                .retain(|key, _| key.generation != generation);
-            self.path_memo_retained_bytes = self
-                .path_memo_cache
-                .values()
-                .flatten()
-                .map(|entry| entry.retained_bytes)
-                .sum();
+                .retain(|head, _| head.generation != generation);
         }
         if reclaimed {
+            (self.path_memo_key_count, self.path_memo_retained_bytes) =
+                path_memo_cache_usage(&self.path_memo_cache);
             self.clear_derived_caches();
         }
     }

@@ -748,6 +748,299 @@ fn path_memo_validates_values_and_replays_persistent_split_state() {
 }
 
 #[test]
+fn path_memo_observes_vm_owned_place_mutations() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         FLAG:0 = 4\nFLAG:1 = 9\n\
+         RESULT:10 = MUTATE_PLACES(0)\n\
+         FLAG:0 = 4\nFLAG:1 = 9\n\
+         RESULT:11 = MUTATE_PLACES(0)\nRETURN RESULT\n\
+         @MUTATE_PLACES, ARG\n#FUNCTION\n\
+         SWAP FLAG:ARG, FLAG:(ARG + 1)\n\
+         SETBIT FLAG:ARG, 1\n\
+         RETURNF FLAG:ARG * 100 + FLAG:(ARG + 1)\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .expect("FLAG")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (10..=11)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        [1104, 1104].map(VmValue::Integer)
+    );
+    assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(11)));
+    assert_eq!(vm.read_variable(flag, &[1], None), Ok(VmValue::Integer(4)));
+}
+
+#[test]
+fn path_memo_traces_dynamic_getters_and_replays_target_arguments() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         FLAG:0 = 3\n\
+         RESULT:10 = DYNAMIC_GET(0)\n\
+         RESULT:11 = DYNAMIC_GET(0)\n\
+         FLAG:0 = 4\nRESULT:12 = DYNAMIC_GET(0)\n\
+         CALLFORMF TARGET_0, 7\n\
+         FLAG:0 = 3\nRESULT:13 = DYNAMIC_GET(0)\nRETURN RESULT\n\
+         @DYNAMIC_GET, ARG\n#FUNCTION\n\
+         CALLFORMF TARGET_{ARG}, ARG\nRETURNF RESULT\n\
+         @TARGET_0, ARG\n#FUNCTION\n#DIM DYNAMIC TOTAL\n\
+         FOR LOCAL, 0, 100\n\
+         TOTAL += MAX(FLAG:ARG, STRCOUNT(\"aaa\", \"a\"))\n\
+         NEXT\nRESULT = TOTAL\nRETURNF RESULT\n",
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let target = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "TARGET_0")
+        .expect("TARGET_0")
+        .key;
+    let target_argument = artifact
+        .globals
+        .iter()
+        .find(|global| global.owner == Some(target) && global.name == "ARG")
+        .expect("TARGET_0 ARG")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (10..=13)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        [300, 300, 400, 300].map(VmValue::Integer)
+    );
+    assert_eq!(
+        vm.read_variable(target_argument, &[], None),
+        Ok(VmValue::Integer(0)),
+        "memo replay must restore a dynamic target's persistent argument"
+    );
+}
+
+#[test]
+fn registered_native_override_remains_a_dynamic_path_memo_boundary() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct CountingNative {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl NativeService for CountingNative {
+        fn call(&mut self, _request: NativeCallRequest) -> Result<NativeReady, String> {
+            let value = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(NativeReady::value(VmValue::Integer(
+                i64::try_from(value).unwrap(),
+            )))
+        }
+
+        fn requires_rollback_checkpoint(&self) -> bool {
+            false
+        }
+    }
+
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         RESULT:10 = DYNAMIC_GET(0)\n\
+         RESULT:11 = DYNAMIC_GET(0)\nRETURN RESULT\n\
+         @DYNAMIC_GET, ARG\n#FUNCTION\n\
+         CALLFORMF TARGET_{ARG}\nRETURNF RESULT\n\
+         @TARGET_0\n#FUNCTION\nRESULT = MAX(1, 0)\nRETURNF RESULT\n",
+    );
+    let max = artifact
+        .native_imports
+        .iter()
+        .find(|native| native.import.name == "max")
+        .expect("MAX native")
+        .import
+        .key;
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    assert!(!natives.register(
+        max,
+        CountingNative {
+            calls: Arc::clone(&calls),
+        },
+    ));
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        (10..=11)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        [1, 2].map(VmValue::Integer)
+    );
+}
+
+#[test]
+fn dynamic_path_memo_rechecks_safe_natives_after_a_registry_override() {
+    struct ConstantNative;
+
+    impl NativeService for ConstantNative {
+        fn call(&mut self, _request: NativeCallRequest) -> Result<NativeReady, String> {
+            Ok(NativeReady::value(VmValue::Integer(41)))
+        }
+
+        fn requires_rollback_checkpoint(&self) -> bool {
+            false
+        }
+    }
+
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULT = DYNAMIC_GET(0)\nRETURN RESULT\n\
+         @DYNAMIC_GET, ARG\n#FUNCTION\n\
+         CALLFORMF TARGET_{ARG}\nRETURNF RESULT\n\
+         @TARGET_0\n#FUNCTION\nRESULT = MAX(1, 0)\nRETURNF RESULT\n",
+    );
+    let max = artifact
+        .native_imports
+        .iter()
+        .find(|native| native.import.name == "max")
+        .expect("MAX native")
+        .import
+        .key;
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .expect("SYSTEM_TITLE")
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .expect("RESULT")
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let first = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !first
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        first.events
+    );
+    assert_eq!(vm.read_variable(result, &[], None), Ok(VmValue::Integer(1)));
+
+    assert!(!natives.register(max, ConstantNative));
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let second = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+
+    assert!(
+        !second
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        second.events
+    );
+    assert_eq!(
+        vm.read_variable(result, &[], None),
+        Ok(VmValue::Integer(41)),
+        "a registry override installed between slices must invalidate the old replay candidate"
+    );
+}
+
+#[test]
 fn reset_new_game_does_not_replay_show_day_with_missing_show_week_statics() {
     let mut data = project_data();
     data.static_data

@@ -113,6 +113,16 @@ impl Vm {
                                 .then_some(frame.id),
                         )
                         .map_err(map_vm_error)?;
+                    self.mark_path_memo_result_read(
+                        fiber.id,
+                        frame.id,
+                        position.generation,
+                        position.function,
+                        position.instruction,
+                        definition,
+                        0,
+                        value_indices,
+                    );
                     fiber
                         .frames
                         .last_mut()

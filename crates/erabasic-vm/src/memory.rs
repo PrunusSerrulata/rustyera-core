@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
+use std::mem::size_of;
 use std::ops::{Deref, DerefMut};
 
 use erabasic_bytecode::{
@@ -191,6 +192,12 @@ impl VariableCell {
         self.values.len()
     }
 
+    pub(crate) fn retained_bytes(&self) -> usize {
+        size_of::<Self>()
+            .saturating_add(self.dimensions.capacity().saturating_mul(size_of::<u64>()))
+            .saturating_add(self.values.retained_allocation_bytes())
+    }
+
     #[inline]
     pub(crate) fn first(&self) -> Option<VmValue> {
         self.values.get(0)
@@ -261,6 +268,15 @@ impl VariableCell {
             replacement.set(index, value)?;
         }
         self.values = replacement;
+        self.bump_revision();
+        Ok(())
+    }
+
+    pub(crate) fn replace_contents_from(&mut self, source: &Self) -> Result<(), String> {
+        if self.value_type != source.value_type || self.dimensions != source.dimensions {
+            return Err("array replacement differs from its storage shape or type".into());
+        }
+        self.values = source.values.clone();
         self.bump_revision();
         Ok(())
     }

@@ -32,6 +32,10 @@ pub(in crate::session) struct ImmediateRuntimeHost<'a> {
 }
 
 impl VmHost for ImmediateRuntimeHost<'_> {
+    fn path_memo_safe(&self, import: &erabasic_bytecode::RuntimeImport) -> bool {
+        immediate_host_path_memo_safe(&import.namespace, &import.name)
+    }
+
     fn call_immediate(&mut self, request: ImmediateHostCall<'_>) -> ImmediateHostCallResult {
         let name = request.normalized_name;
         if skips_runtime_command_immediately(
@@ -113,6 +117,13 @@ impl VmHost for ImmediateRuntimeHost<'_> {
     fn call(&mut self, _request: HostCallRequest) -> HostCallResult {
         HostCallResult::Error("immediate presentation host cannot capture deferred calls".into())
     }
+}
+
+fn immediate_host_path_memo_safe(namespace: &str, name: &str) -> bool {
+    namespace.eq_ignore_ascii_case("rustyera.text")
+        && ["HTML_ESCAPE", "HTML_TAGSPLIT", "HTML_TOPLAINTEXT", "TOSTR"]
+            .iter()
+            .any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
 struct PreparedButton {
@@ -826,9 +837,9 @@ mod immediate_tests {
     use super::{
         CellAlignment, ImmediateTagSplitTargets, ImmediateTextFormatting, LineAlignment,
         PreparedButton, PreparedHtmlPrint, PreparedPresentationState, RuntimeQueryEvaluation,
-        RuntimeQueryState, evaluate_runtime_query, immediate_html_tag_split, immediate_text_value,
-        is_immediate_committed_text_print, is_immediate_text_print,
-        skips_runtime_command_immediately,
+        RuntimeQueryState, evaluate_runtime_query, immediate_host_path_memo_safe,
+        immediate_html_tag_split, immediate_text_value, is_immediate_committed_text_print,
+        is_immediate_text_print, skips_runtime_command_immediately,
     };
     use crate::presentation::PresentationModel;
     use era_runtime_protocol::ProtocolValue;
@@ -1098,6 +1109,20 @@ mod immediate_tests {
             immediate_text_value("TOSTR", &[VmValue::String("1".into())], formatting).is_none()
         );
         assert!(immediate_text_value("MONEYSTR", &[VmValue::Integer(7)], None).is_none());
+    }
+
+    #[test]
+    fn path_memo_only_crosses_argument_pure_immediate_text_hosts() {
+        for name in ["HTML_ESCAPE", "html_tagsplit", "HTML_TOPLAINTEXT", "tostr"] {
+            assert!(immediate_host_path_memo_safe("rustyera.text", name));
+        }
+        for name in ["GETBGCOLOR", "GETCOLOR", "GETFONT", "MONEYSTR"] {
+            assert!(!immediate_host_path_memo_safe("rustyera.text", name));
+        }
+        assert!(!immediate_host_path_memo_safe(
+            "rustyera.extension",
+            "TOSTR",
+        ));
     }
 
     #[test]

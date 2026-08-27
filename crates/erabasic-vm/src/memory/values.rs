@@ -95,6 +95,44 @@ impl VariableValues {
         }
     }
 
+    pub(super) fn retained_allocation_bytes(&self) -> usize {
+        fn place_bytes(place: &PlaceDescriptor) -> usize {
+            place.indices.capacity().saturating_mul(size_of::<u64>())
+        }
+
+        match self {
+            Self::Integers(values) => values.capacity().saturating_mul(size_of::<i64>()),
+            Self::Strings(values) => values
+                .capacity()
+                .saturating_mul(size_of::<String>())
+                .saturating_add(values.iter().fold(0_usize, |bytes, value| {
+                    bytes.saturating_add(value.capacity())
+                })),
+            Self::IntegerPlaces(values) | Self::StringPlaces(values) => values
+                .capacity()
+                .saturating_mul(size_of::<PlaceDescriptor>())
+                .saturating_add(values.iter().fold(0_usize, |bytes, place| {
+                    bytes.saturating_add(place_bytes(place))
+                })),
+            Self::SparseIntegers { entries, .. } => {
+                entries.capacity().saturating_mul(size_of::<(usize, i64)>())
+            }
+            Self::SparseStrings { entries, .. } => entries
+                .capacity()
+                .saturating_mul(size_of::<(usize, String)>())
+                .saturating_add(entries.iter().fold(0_usize, |bytes, (_, value)| {
+                    bytes.saturating_add(value.capacity())
+                })),
+            Self::SparseIntegerPlaces { entries, .. }
+            | Self::SparseStringPlaces { entries, .. } => entries
+                .capacity()
+                .saturating_mul(size_of::<(usize, PlaceDescriptor)>())
+                .saturating_add(entries.iter().fold(0_usize, |bytes, (_, place)| {
+                    bytes.saturating_add(place_bytes(place))
+                })),
+        }
+    }
+
     pub(super) fn to_values_range(&self, start: usize, end: usize) -> Option<Vec<VmValue>> {
         (start <= end && end <= self.len())
             .then(|| (start..end).filter_map(|index| self.get(index)).collect())

@@ -89,6 +89,12 @@ impl Vm {
             Opcode::InvokeDynamic => {
                 let argument_count = read_u16(position.encoded.payload, 0)? as usize;
                 let tail = position.encoded.payload.get(2).copied() == Some(1);
+                // A tail call replaces the frame that owns an active trace, so there is no
+                // matching return at which to complete that trace. Ordinary dynamic calls keep
+                // their owner frame and can be observed safely.
+                if tail {
+                    self.invalidate_path_memo(fiber.id);
+                }
                 let new_frame = self.allocate_frame_id();
                 let arguments = pop_arguments(
                     &mut fiber.frames.last_mut().expect("frame exists").stack,
@@ -137,6 +143,13 @@ impl Vm {
                     &arguments,
                 )
                 .map_err(map_vm_error)?;
+                self.observe_path_memo_arguments(
+                    fiber.id,
+                    position.generation,
+                    target,
+                    generation,
+                    &arguments,
+                );
                 let event_context = fiber.frames.last().expect("frame exists").event_context
                     || target.kind == BytecodeFunctionKind::Event;
                 let frame = make_frame(
@@ -270,21 +283,23 @@ impl Vm {
                         // let the value-validated path memo cover that case. Indexed getters are
                         // excluded because their first execution must warm the nested selector
                         // memo used by the dedicated fast path.
-                        let path_memo_candidate =
-                            generation.memoized_indexed_read_plan(target.key).is_none();
+                        let path_memo_candidate = target.result.is_some()
+                            && generation.memoized_indexed_read_plan(target.key).is_none();
                         let frame_id = new_frame.expect("function call reserved a frame id");
-                        let path_memo_key = (policy.allow_function_memo
+                        let path_memo_head = (policy.allow_function_memo
                             && !path_memo_active
                             && path_memo_candidate)
                             .then(|| {
-                                Self::path_memo_key(position.generation, target.key, &arguments)
+                                Self::path_memo_head(position.generation, target.key, &arguments)
                             })
                             .flatten();
-                        if let Some(path_memo_key) = path_memo_key.as_ref()
+                        if let Some(path_memo_head) = path_memo_head.as_ref()
                             && let Some((value, body_instructions)) = self
                                 .try_replay_path_memo(
                                     fiber,
-                                    path_memo_key,
+                                    (path_memo_head, &arguments),
+                                    host,
+                                    natives,
                                     policy.remaining_quantum,
                                     policy.remaining_instructions,
                                 )
@@ -304,12 +319,13 @@ impl Vm {
                             .expect("caller frame exists")
                             .event_context
                             || target.kind == BytecodeFunctionKind::Event;
-                        if let Some(path_memo_key) = path_memo_key {
+                        if let Some(path_memo_head) = path_memo_head {
                             self.begin_path_memo(
                                 fiber,
                                 frame_id,
                                 target,
-                                path_memo_key,
+                                path_memo_head,
+                                &arguments,
                                 u64::from(policy.remaining_quantum.saturating_sub(1))
                                     .min(policy.remaining_instructions.saturating_sub(1)),
                             );
@@ -355,7 +371,19 @@ impl Vm {
                                     "native import is missing",
                                 )
                             })?;
-                        self.observe_path_memo_native(fiber.id, native_name);
+                        // Registered pure Core natives are safe inside a path trace, and the trace
+                        // records their keys so replay can reject a later service override.
+                        // Unregistered interpreter-special natives use the conservative name
+                        // policy. STRFORM can evaluate arbitrary script and is always a boundary.
+                        if native_name == "strform" || natives.contains(import.key) {
+                            if natives.path_memo_safe(import.key) && native_name != "strform" {
+                                self.observe_path_memo_safe_native(fiber.id, import.key);
+                            } else {
+                                self.invalidate_path_memo(fiber.id);
+                            }
+                        } else {
+                            self.observe_path_memo_native(fiber.id, native_name);
+                        }
                         let mut rollback = None;
                         let ready = if native_name == "strform" {
                             if result_type != Some(BytecodeType::String) || arguments.len() != 1 {
@@ -544,9 +572,6 @@ impl Vm {
                                 .map_err(map_vm_error)?;
                             NativeReady::default()
                         } else {
-                            if !natives.path_memo_safe(import.key) {
-                                self.invalidate_path_memo(fiber.id);
-                            }
                             let (ready, checkpoint) = self.call_registered_native(
                                 fiber,
                                 import.key,
@@ -576,7 +601,6 @@ impl Vm {
                         }
                     }
                     (Opcode::CallHost, ImportKind::Host) => {
-                        self.invalidate_path_memo(fiber.id);
                         let target_index =
                             generation.host_import_index(import.key).ok_or_else(|| {
                                 StepError::new(VmFaultCode::MissingSymbol, "host import is missing")
@@ -598,6 +622,11 @@ impl Vm {
                             }) {
                                 ImmediateHostCallResult::Unsupported => {}
                                 ImmediateHostCallResult::Ready(ready) => {
+                                    if host.path_memo_safe(&target.import) {
+                                        self.observe_path_memo_safe_host(fiber.id, import.key);
+                                    } else {
+                                        self.invalidate_path_memo(fiber.id);
+                                    }
                                     *host_calls = host_calls.saturating_add(1);
                                     self.apply_host_ready(fiber, target.import.result, ready)
                                         .map_err(map_vm_error)?;
@@ -605,6 +634,7 @@ impl Vm {
                                 }
                             }
                         }
+                        self.invalidate_path_memo(fiber.id);
                         let target = target.clone();
                         let request = self.allocate_request_id();
                         *host_calls = host_calls.saturating_add(1);
