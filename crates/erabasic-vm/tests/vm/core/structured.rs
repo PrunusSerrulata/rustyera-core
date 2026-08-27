@@ -932,3 +932,47 @@ RETURN RESULT:0
     ));
     assert_eq!(column_result(&restored, &artifact, 21), VmValue::Integer(7));
 }
+
+#[test]
+fn xml_replace_stored_key_overload_executes_without_rewriting_the_key() {
+    let artifact = compile_source(
+        r#"@SYSTEM_TITLE
+#DIMS XML_KEY
+RESULT = XML_DOCUMENT("doc", "<root>old</root>")
+RESULT:10 = XML_REPLACE("doc", "<root>expression</root>")
+XML_KEY '= "doc"
+XML_REPLACE XML_KEY, "<root>statement</root>"
+RESULT:11 = RESULT
+RESULTS:10 '= XML_KEY
+RESULTS:11 '= XML_TOSTR("doc")
+RETURN RESULT
+"#,
+    );
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    vm.spawn_entry(artifact.functions[0].key, Vec::new())
+        .unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert_column_success(&report);
+    for index in [10, 11] {
+        assert_eq!(column_result(&vm, &artifact, index), VmValue::Integer(1));
+    }
+    let results = artifact
+        .globals
+        .iter()
+        .find(|v| v.name == "RESULTS")
+        .unwrap()
+        .key;
+    assert_eq!(
+        vm.read_variable(results, &[10], None).unwrap(),
+        VmValue::String("doc".into())
+    );
+    assert_eq!(
+        vm.read_variable(results, &[11], None).unwrap(),
+        VmValue::String("<root>statement</root>".into())
+    );
+}

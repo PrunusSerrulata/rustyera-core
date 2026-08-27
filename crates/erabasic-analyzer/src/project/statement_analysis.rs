@@ -621,11 +621,9 @@ fn analyze_instruction(
                         })
                         .or_else(|| {
                             method_signature.and_then(|signature| {
-                                signature.arguments.get(index).or_else(|| {
-                                    signature
-                                        .variadic
-                                        .then(|| signature.arguments.last())
-                                        .flatten()
+                                let constraints = signature.arguments_for_arity(arguments.len());
+                                constraints.get(index).or_else(|| {
+                                    signature.variadic.then(|| constraints.last()).flatten()
                                 })
                             })
                         });
@@ -819,7 +817,7 @@ fn analyze_instruction(
         } else {
             analyzer.check_arguments(
                 &expression_arguments,
-                &signature.arguments,
+                signature.arguments_for_arity(expression_arguments.len()),
                 signature.minimum_arguments,
                 signature.variadic,
                 signature.allow_omitted,

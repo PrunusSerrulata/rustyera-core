@@ -531,3 +531,59 @@ fn dynamic_methods_preserve_omitted_slots_and_variables_without_constant_folding
     assert!(matches!(arguments[1], HirCallArgument::Value(_)));
     assert!(matches!(arguments[2], HirCallArgument::Place(_)));
 }
+
+#[test]
+fn xml_replace_stored_key_overload_preserves_inline_mutability_rules() {
+    for (operands, accepted) in [
+        ("\"doc\", \"<root/>\"", true),
+        ("1, \"<root/>\"", true),
+        ("XML_SOURCE, \"<root/>\"", true),
+        ("\"<root/>\", \"/root\", \"<next/>\"", false),
+        ("XML_SOURCE, \"/root\", \"<next/>\"", true),
+    ] {
+        for statement in [true, false] {
+            let call = if statement {
+                format!("XML_REPLACE {operands}")
+            } else {
+                format!("RESULT = XML_REPLACE({operands})")
+            };
+            let report = analyze_project(
+                AnalysisInput {
+                    project_data: empty_project(),
+                    sources: vec![source(
+                        "xml-replace.erb",
+                        &format!("@SYSTEM_TITLE\n#DIMS XML_SOURCE\n{call}\nRETURN\n"),
+                    )],
+                },
+                &AnalyzerOptions::analysis_mode(),
+                &ExtensionRegistry::default(),
+            );
+            assert_eq!(
+                !report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.reference_level >= 2),
+                accepted,
+                "{call}: {:?}",
+                report.diagnostics
+            );
+            if accepted && operands.starts_with("XML_SOURCE,") && !operands.contains("/root") {
+                let project = report.project.unwrap();
+                let line = &project.program.functions[0].lines[0].kind;
+                let kept_value = match line {
+                    HirStatementKind::Instruction { arguments, .. } => {
+                        matches!(arguments[0], erabasic_hir::HirArgument::Expression(_))
+                    }
+                    HirStatementKind::Assignment { value, .. } => {
+                        matches!(&value.kind, erabasic_hir::HirExprKind::Call { arguments, .. } if matches!(arguments[0], erabasic_hir::HirCallArgument::Value(_)))
+                    }
+                    _ => false,
+                };
+                assert!(
+                    kept_value,
+                    "stored key is a value, not an inline XML writeback place"
+                );
+            }
+        }
+    }
+}

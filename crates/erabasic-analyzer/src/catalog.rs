@@ -89,6 +89,18 @@ pub struct CallableSignature {
     pub allow_omitted: bool,
 }
 
+impl CallableSignature {
+    pub(crate) fn arguments_for_arity(&self, arity: usize) -> &[ArgumentConstraint] {
+        // The two-argument form replaces a stored document by numeric or string key.
+        // Only the longer inline-XML form writes back into a mutable string argument.
+        if self.name == "XML_REPLACE" && arity == 2 {
+            &[ArgumentConstraint::Any, ArgumentConstraint::String]
+        } else {
+            &self.arguments
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InstructionSignature {
     pub name: String,

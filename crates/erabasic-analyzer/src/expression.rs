@@ -361,9 +361,10 @@ impl ExpressionAnalyzer<'_> {
                 location,
             };
         };
+        let constraints = signature.arguments_for_arity(values.len());
         self.check_arguments(
             &values,
-            &signature.arguments,
+            constraints,
             signature.minimum_arguments,
             signature.variadic,
             signature.allow_omitted,
@@ -385,15 +386,9 @@ impl ExpressionAnalyzer<'_> {
                 None => HirCallArgument::Omitted,
                 Some(expression)
                     if dynamic_method && index >= 2
-                        || signature
-                            .arguments
+                        || constraints
                             .get(index)
-                            .or_else(|| {
-                                signature
-                                    .variadic
-                                    .then(|| signature.arguments.last())
-                                    .flatten()
-                            })
+                            .or_else(|| signature.variadic.then(|| constraints.last()).flatten())
                             .is_some_and(|constraint| {
                                 argument_keeps_place(*constraint, expression.value_type)
                                     || key == "REGEXPMATCH" && argument_count == 4 && index == 2
