@@ -2,17 +2,17 @@
 
 mod evidence;
 mod pipeline;
+mod report;
 mod scan;
 
 use std::{
-    collections::BTreeMap,
     error::Error,
     fs,
-    io::Write,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
-use erabasic_analyzer::{AnalyzerOptions, builtin_function_names, builtin_instruction_names};
+use erabasic_analyzer::AnalyzerOptions;
 use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
 use erabasic_csv::{CsvLoadOptions, FilePayload, FrontendFile, ProjectFiles};
 use serde_json::{Value, json};
@@ -100,7 +100,8 @@ fn audit_project(
     arguments: &Arguments,
     vm: &evidence::SourceIndex,
     runtime: &evidence::SourceIndex,
-) -> Result<Value, Box<dyn Error>> {
+    output: &mut dyn Write,
+) -> Result<String, Box<dyn Error>> {
     let name = root
         .file_name()
         .and_then(|name| name.to_str())
@@ -217,80 +218,19 @@ fn audit_project(
         csv_options,
         errors.is_empty() && configuration_valid && !unresolved_links,
     );
-    let registry = erabasic_compiler::default_host_registry();
-    let functions = builtin_function_names();
-    let instructions = builtin_instruction_names();
-    let mut counts = BTreeMap::<String, BTreeMap<String, usize>>::new();
-    let rows = scan.rows.iter().enumerate().map(|(index, appearance)| {
-        if index % 128 == 0 {
-            crate::watchdog::publish_or_exit(json!({"phase": "coverage_rows", "case": name, "pending": appearance, "rows_completed": index, "rows_total": scan.rows.len(), "diagnostics": pipeline.diagnostics, "lastFullResponse": null}));
-        }
-        *counts.entry(appearance.api.clone()).or_default().entry(appearance.activity.clone()).or_default() += 1;
-        let known = match appearance.form.as_str() {
-            "expression" => functions.contains(&appearance.api) || scan.user_functions.contains(&appearance.api),
-            "instruction" => instructions.contains(&appearance.api),
-            "declaration" | "operator" | "compound_assignment" => true,
-            _ => false,
-        };
-        let analyzer_diagnostics = pipeline::overlapping(&pipeline, &appearance.path, appearance.span, "analyzer");
-        let compiler_diagnostics = pipeline::overlapping(&pipeline, &appearance.path, appearance.span, "compiler");
-        let analyzer_status = if !known { "unknown" } else if appearance.activity != "active_ast" { "unverified" } else if analyzer_diagnostics.iter().any(|item| item.error) { "rejected" } else if pipeline.analyzer == "accepted" { "accepted_under_reported_audit_options" } else { "unverified_due_to_project_errors" };
-        let compiler_status = if compiler_diagnostics.iter().any(|item| item.code == "UnsupportedConstruct") { "compiler_trap" } else if compiler_diagnostics.iter().any(|item| item.error) { "rejected" } else if appearance.activity != "active_ast" { "unverified" } else if pipeline.compiler == "accepted" { "project_compiled_occurrence_not_executed" } else { "blocked" };
-        json!({
-            "appearance": appearance,
-            "overload": {"argument_count": appearance.arity, "omitted_arguments": appearance.omitted_arguments, "resolution": "not_inferred_from_arity_consult_analyzer_diagnostics"},
-            "analyzer": {"status": analyzer_status, "catalog_known": known, "diagnostics": analyzer_diagnostics},
-            "compiler": {"status": compiler_status, "project_status": pipeline.compiler, "diagnostics": compiler_diagnostics},
-            "registry": evidence::registration(registry.classification(&appearance.api)),
-            "vm": vm.vm(&appearance.api), "runtime": runtime.references(&appearance.api),
-            "required_service": evidence::required_service(&appearance.api),
-            "frontends": {"tui": {"status": "unverified", "reason": "no_runtime_capability_handshake_or_execution_capture"}, "browser": {"status": "unverified", "reason": "no_runtime_capability_handshake_or_execution_capture"}, "tauri": {"status": "unverified", "reason": "no_runtime_capability_handshake_or_execution_capture"}},
-            "migration": evidence::migration(&appearance.api, &appearance.raw),
-            "dynamic_verification": "not_run"
-        })
-    }).collect::<Vec<_>>();
-    Ok(
-        json!({"project": name, "inventory": inventory, "configuration_resolution": resolution,
+    let metadata = json!({"project": name, "inventory": inventory, "configuration_resolution": resolution,
         "analysis_identity": identity, "profile_override": arguments.profile, "configuration_valid": configuration_valid,
         "input_policy": {"script_root": if has_erb { "ERB_case_insensitive" } else { "recursive_project_fallback" }, "csv_root": if has_csv { "CSV_case_insensitive" } else { "recursive_project_fallback" }, "spans": "decoded_utf8_bytes", "encoding_fallback": "none_strict_UTF8_only_optional_BOM", "audit_options": "explicit_audit_defaults_or_JSON_overrides_not_inferred_game_semantics", "legacy_configuration_semantics": "not_applied_by_coverage_use_explicit_options_for_comparison", "appearance_parser_context": "DefaultParserContext_with_profile_lexer_switches_debug_symbol_and_ERH_macros; not full analyzer symbol resolution; continuation separator is parser default", "uncalled_functions": "included", "unresolved_links": unresolved_links},
-        "inputs": inputs, "input_errors": errors, "parser_diagnostics": scan.diagnostics, "pipeline": pipeline, "api_counts": counts, "rows": rows}),
+        "inputs": inputs, "input_errors": errors, "parser_diagnostics": scan.diagnostics, "pipeline": pipeline});
+    report::write_project(
+        output,
+        metadata,
+        &scan.rows,
+        &scan.user_functions,
+        &pipeline,
+        vm,
+        runtime,
     )
-}
-
-fn markdown(report: &Value) -> String {
-    let mut output = String::from(
-        "# Snake compatibility coverage\n\nThis is static evidence, not a compatibility pass. Native registration and source references do not prove implementation. All runtime/frontend execution remains unverified.\n\n",
-    );
-    for project in report["projects"].as_array().into_iter().flatten() {
-        output.push_str(&format!("## {}\n\n| API | Form | Location (UTF-8 bytes) | Activity | Analyzer | Compiler | Registry | VM | Classification / batch |\n|---|---|---|---|---|---|---|---|---|\n", project["project"].as_str().unwrap_or("?")));
-        for row in project["rows"].as_array().into_iter().flatten() {
-            let appearance = &row["appearance"];
-            let cell = |value: &Value| {
-                value
-                    .as_str()
-                    .unwrap_or("—")
-                    .replace('|', "\\|")
-                    .replace('\n', " ")
-            };
-            output.push_str(&format!(
-                "| {} | {} | {}:{}-{} | {} | {} | {} | {} | {} | {} / {} |\n",
-                cell(&appearance["api"]),
-                cell(&appearance["form"]),
-                cell(&appearance["path"]),
-                appearance["span"]["start"],
-                appearance["span"]["end"],
-                cell(&appearance["activity"]),
-                cell(&row["analyzer"]["status"]),
-                cell(&row["compiler"]["status"]),
-                cell(&row["registry"]["classification"]),
-                cell(&row["vm"]["status"]),
-                cell(&row["migration"]["classification"]),
-                row["migration"]["batch"]
-            ));
-        }
-        output.push('\n');
-    }
-    output
 }
 
 pub(super) fn run_cli() -> Result<(), Box<dyn Error>> {
@@ -308,23 +248,54 @@ pub(super) fn run_cli() -> Result<(), Box<dyn Error>> {
         .unwrap_or_else(|| workspace.join("games"));
     let vm = evidence::SourceIndex::collect(&core, "crates/erabasic-vm/src")?;
     let runtime = evidence::SourceIndex::collect(&core, "crates/era-runtime/src")?;
-    let projects = if arguments.all_games {
+    let metadata = json!({"version": 2, "kind": "snake_compatibility_static_coverage", "hash_algorithm": "blake3", "tool_revision": baseline::git_identity(&core)?, "frontend_revisions": {"tui": baseline::git_identity(&workspace.join("rustyera-tui"))?, "web": baseline::git_identity(&workspace.join("rustyera-web"))?}, "source_evidence": {"vm": vm, "runtime": runtime}, "status_vocabulary": ["unknown", "compiler_trap", "unsupported_capability", "blocked", "unverified"], "unsupported_capability_policy": "only an actual capability handshake/rejection can establish this state; absent capture stays unverified", "row_evidence_policy": "api_evidence_ref indexes project.api_evidence; diagnostic_ids index project.pipeline.diagnostics; all appearances retained, Markdown is an API summary"});
+    let destination: Box<dyn Write> = match &arguments.output {
+        Some(path) => Box::new(
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)?,
+        ),
+        None => Box::new(std::io::stdout().lock()),
+    };
+    let mut output = BufWriter::new(destination);
+    // Write metadata and rows incrementally: a failed run leaves incomplete JSON,
+    // never a complete-looking report that silently omits the remaining projects.
+    report::object_prefix(&mut output, &metadata)?;
+    output.write_all(b",\"projects\":[")?;
+    let roots = if arguments.all_games {
         baseline::GAMES
             .iter()
-            .map(|name| audit_project(&root.join(name), &arguments, &vm, &runtime))
-            .collect::<Result<Vec<_>, _>>()?
+            .map(|name| root.join(name))
+            .collect::<Vec<_>>()
     } else {
-        vec![audit_project(&root, &arguments, &vm, &runtime)?]
+        vec![root]
     };
-    let report = json!({"version": 1, "kind": "snake_compatibility_static_coverage", "hash_algorithm": "blake3", "tool_revision": baseline::git_identity(&core)?, "frontend_revisions": {"tui": baseline::git_identity(&workspace.join("rustyera-tui"))?, "web": baseline::git_identity(&workspace.join("rustyera-web"))?}, "source_evidence": {"vm": vm, "runtime": runtime}, "status_vocabulary": ["unknown", "compiler_trap", "unsupported_capability", "blocked", "unverified"], "unsupported_capability_policy": "only an actual capability handshake/rejection can establish this state; absent capture stays unverified", "projects": projects});
+    let mut markdown = String::from(
+        "# Snake compatibility coverage\n\nStatic evidence only, not a compatibility pass. Every appearance and diagnostic is retained in the JSON report. API-level source references and registration are shared evidence, not proof of execution. Runtime/frontend execution remains unverified.\n\n",
+    );
+    for (index, root) in roots.iter().enumerate() {
+        if index != 0 {
+            output.write_all(b",")?;
+        }
+        markdown.push_str(&audit_project(
+            root,
+            &arguments,
+            &vm,
+            &runtime,
+            &mut output,
+        )?);
+    }
+    output.write_all(b"]}\n")?;
+    output.flush()?;
     if let Some(path) = &arguments.markdown {
         fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(path)?
-            .write_all(markdown(&report).as_bytes())?;
+            .write_all(markdown.as_bytes())?;
     }
-    baseline::write_json(&report, arguments.output.as_deref())
+    Ok(())
 }
 
 #[cfg(test)]

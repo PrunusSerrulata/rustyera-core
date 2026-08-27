@@ -60,6 +60,22 @@ operators, declarations, arity/omitted arguments and raw dynamic targets. Statem
 appear in its active AST are reparsed as explicitly unverified candidates, so preprocessing and
 unknown syntax do not silently remove names. The appearance pass uses the default parser context
 with profile/lexer/debug switches and ERH macros, not the analyzer's complete symbol context.
+Plain `=` RHS expressions are also parsed as `unverified_type_directed_rhs` candidates: only
+semantic target typing can distinguish their numeric interpretation from literal FORM text.
+Schema version 2 streams every appearance directly to JSON. `api_evidence_ref` resolves into
+`project.api_evidence`, and each stage's `diagnostic_ids` resolves into the single
+`project.pipeline.diagnostics` array. API source/registry/service/frontend metadata is not copied
+millions of times. `migration_override` retains declaration-specific REF/OUT classification.
+`api_counts` and the compact Markdown summarize all occurrences, not a sample. Invalid parser spans
+remain verbatim with `span_status=invalid_parser_span` and an explicitly unverified activity; they
+never become accepted source locations. Partial writes fail and do not form a complete JSON report.
+
+For large projects, use the existing system gzip rather than retain multi-gigabyte plain JSON.
+With shell `pipefail` and `noclobber` enabled, omit OUTPUT.json and pipe stdout to
+`gzip -1 -c > /absolute/new-report.json.gz`; watchdog snapshots still use stderr. Validate the full
+JSON through streaming decompression, not a whole-file in-memory `json.load`. Input and report
+checksums remain checksums of actual bytes; record compressed and decompressed hashes separately.
+
 Analyzer and compiler diagnostics remain independent evidence. A project failure preserves all
 appearances and available diagnostic locations; it never produces a fabricated compile pass.
 
@@ -71,6 +87,11 @@ entry. Frontend TUI/Browser/Tauri fields remain `unverified` without runtime cap
 capture; `unsupported_capability` cannot be inferred from missing text matches. Every row's dynamic
 verification is `not_run`; the separate oracle driver owns dynamic results.
 
-Tests for these modules are written but were not executed during implementation. A baseline or
-coverage JSON is generated only when the reviewed tool is actually run; no illustrative result is
-checked in as evidence.
+Validation results, the first full-suite failures and targeted repairs are tracked in
+`docs/snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md`. A baseline or coverage JSON is
+generated only by an actual run; no illustrative result is checked in as evidence.
+
+`snake-observations --case CASE_OR_GROUP` selects targeted observations after a fixture repair.
+The resulting report records the filter and the complete current fixture hash; never relabel
+old observations with a new fixture hash. The batch-0 owner explicitly removed the total test
+time limit on 2026-08-27; individual command timeouts and the five-second stall watchdog remain.

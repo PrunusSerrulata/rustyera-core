@@ -204,29 +204,83 @@ pub(super) fn analyze(
     result
 }
 
-pub(super) fn overlapping<'a>(
-    pipeline: &'a Pipeline,
-    path: &str,
-    span: Span,
-    stage: &str,
-) -> Vec<&'a LocatedDiagnostic> {
-    pipeline
-        .diagnostics
-        .iter()
-        .filter(|item| {
-            item.stage == stage
-                && item.path.as_deref() == Some(path)
-                && item.span.is_some_and(|location| {
+/// Stable IDs refer to the single authoritative diagnostics array in the report.
+/// Index by both path and stage so millions of appearances do not rescan every
+/// project's diagnostic. Unlocated diagnostics remain in the project evidence.
+pub(super) struct DiagnosticIndex<'a> {
+    by_path: std::collections::BTreeMap<&'a str, std::collections::BTreeMap<&'a str, Vec<usize>>>,
+    diagnostics: &'a [LocatedDiagnostic],
+}
+
+impl<'a> DiagnosticIndex<'a> {
+    pub fn new(diagnostics: &'a [LocatedDiagnostic]) -> Self {
+        let mut result = Self {
+            by_path: Default::default(),
+            diagnostics,
+        };
+        for (id, diagnostic) in diagnostics.iter().enumerate() {
+            if let Some(path) = diagnostic.path.as_deref() {
+                result
+                    .by_path
+                    .entry(path)
+                    .or_default()
+                    .entry(&diagnostic.stage)
+                    .or_default()
+                    .push(id);
+            }
+        }
+        result
+    }
+
+    pub fn overlapping(&self, path: &str, span: Span, stage: &str) -> Vec<usize> {
+        self.by_path
+            .get(path)
+            .and_then(|stages| stages.get(stage))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&id| {
+                self.diagnostics[id].span.is_some_and(|location| {
                     location.start < span.end && span.start < location.end
                         || location.start == span.start
                 })
-        })
-        .collect()
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_index_preserves_stage_path_span_and_stable_ids() {
+        let diagnostics = [
+            ("a.erb", "analyzer", 0, 4),
+            ("b.erb", "analyzer", 0, 4),
+            ("a.erb", "compiler", 2, 5),
+            ("a.erb", "analyzer", 4, 4),
+        ]
+        .into_iter()
+        .map(|(path, stage, start, end)| LocatedDiagnostic {
+            stage: stage.into(),
+            path: Some(path.into()),
+            span: Some(Span::new(start, end)),
+            code: "test".into(),
+            error: true,
+            details: json!({}),
+        })
+        .collect::<Vec<_>>();
+        let index = DiagnosticIndex::new(&diagnostics);
+        assert_eq!(index.overlapping("a.erb", Span::new(1, 3), "analyzer"), [0]);
+        assert_eq!(index.overlapping("a.erb", Span::new(1, 3), "compiler"), [2]);
+        assert_eq!(index.overlapping("a.erb", Span::new(4, 4), "analyzer"), [3]);
+        assert!(
+            index
+                .overlapping("missing.erb", Span::new(0, 5), "analyzer")
+                .is_empty()
+        );
+    }
 
     #[test]
     fn unknown_instruction_preserves_analysis_diagnostics_and_blocks_compile() {

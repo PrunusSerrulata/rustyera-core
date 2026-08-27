@@ -19,6 +19,7 @@ pub(super) struct Appearance {
     pub arity: Option<usize>,
     pub omitted_arguments: usize,
     pub span: Span,
+    pub span_status: String,
     pub activity: String,
     pub raw: String,
     pub dynamic_target: Option<String>,
@@ -44,6 +45,7 @@ impl Walker<'_> {
         dynamic: Option<String>,
     ) {
         let span = Span::new(span.start + self.offset, span.end + self.offset);
+        let raw = self.source.get(span.start..span.end);
         self.rows.push(Appearance {
             path: self.path.into(),
             api: api.to_ascii_uppercase(),
@@ -51,12 +53,19 @@ impl Walker<'_> {
             arity,
             omitted_arguments: omitted,
             span,
-            activity: self.activity.into(),
-            raw: self
-                .source
-                .get(span.start..span.end)
-                .unwrap_or_default()
-                .into(),
+            span_status: if raw.is_some() {
+                "valid_decoded_utf8"
+            } else {
+                "invalid_parser_span"
+            }
+            .into(),
+            activity: if raw.is_some() {
+                self.activity
+            } else {
+                "unverified_invalid_parser_span"
+            }
+            .into(),
+            raw: raw.unwrap_or_default().into(),
             dynamic_target: dynamic,
         });
     }
@@ -384,6 +393,24 @@ pub(super) fn scan(sources: &[(String, String)], options: &AnalyzerOptions) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_parser_span_remains_visible_but_never_claims_active_evidence() {
+        let mut rows = Vec::new();
+        Walker {
+            path: "a.erb",
+            source: "PRINTL text",
+            activity: "active_ast",
+            offset: 0,
+            context: &Default::default(),
+            rows: &mut rows,
+        }
+        .add("PRINTL", "instruction", Some(1), 0, Span::new(9, 2), None);
+        assert_eq!(rows[0].span, Span::new(9, 2));
+        assert_eq!(rows[0].span_status, "invalid_parser_span");
+        assert_eq!(rows[0].activity, "unverified_invalid_parser_span");
+        assert!(rows[0].raw.is_empty());
+    }
 
     #[test]
     fn scans_uncalled_functions_and_preserves_unknown_and_preprocessed_apis() {
