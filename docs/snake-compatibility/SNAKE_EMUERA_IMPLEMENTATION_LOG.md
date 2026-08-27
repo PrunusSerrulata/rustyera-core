@@ -436,9 +436,9 @@ WASM/native core SHA。不得自动推送/合并；远端不可获取的本地 S
 | 子批次 | 状态 | 重构审查启动次数 | 首次测试 | 全量启动记录 | 当前边界 |
 |---|---|---|---|---|---|
 | 1A | 已完成，保留明确差异与观察限制 | 1 | 2026-08-27 23:25:42 +08:00 | core、runtime-tester、TUI、Web Vitest/Rust、oracle Python、supervisor unit 各启动一次 | S01/S02、三端摄取和只读资源清单；动态已启动，首次失败与定向复验分别记录 |
-| 1B | 实施中 | 0 | 未启动 | 无 | S03；未审查或测试 |
-| 1C | 待实施 | 0 | 未启动 | 无 | S12、GLOBAL、安全读取 |
-| 1D | 待实施 | 0 | 未启动 | 无 | S04、统一集成与覆盖报告 |
+| 1B | 已完成本子批范围，保留明确差分边界 | 1 | 2026-08-28 01:47:57 +08:00 | core workspace / runtime-tester 首次通过 | 双 oracle 各 23 可比项匹配；错误观察限制与批次 2 实参差异见下文 |
+| 1C | 列默认值、GLOBAL、三端安全资源层实施中 | 0 | 未启动 | 无 | S12、GLOBAL、安全读取 |
+| 1D | Web pointer/canvas 独立实施中 | 0 | 未启动 | 无 | S04；core 与 HTML 待实施，未验证 |
 
 #### 1A 实施进度（静态已执行，动态验收未完成）
 
@@ -608,7 +608,7 @@ C ABI 由本组 `target/core-static/debug/libera_runtime_capi.dylib` 重建，SH
 - 测试无总截止；首次 full 结果和受影响定向复验见上表及 validation/*.json。磁盘约 24 GiB。
   证据和复现材料继续保留供 1D 集成；无游戏/参考实现改动，没有推送或合并主线。
 
-#### 1B 实施入口（未审查、未测试）
+#### 1B 实施入口与静态验证进展（唯一审查已结束）
 
 - 主智能体负责公共 method operand/四 opcode、compiler 惰性 expression/method-statement
   lowering、执行分类、格式版本和 fixture/harness 集成；独立执行者分别拥有 VM/STRFORM
@@ -620,9 +620,102 @@ C ABI 由本组 `target/core-static/debug/libera_runtime_capi.dylib` 重建，SH
   runtime protocol、native ABI、C ABI，也不提前改变 profile 算术/RNG/variadic 策略。
 - Validator 使用私有 opaque token/slot 栈，检查 operand、origin、连续 slot、分支合流和结果类型；
   VM 校验实际 REF 身份/rank、generation 和 snapshot/STRFORM continuation。不将动态调用送入 memo。
-- 新 fixture 已准备，仍未加载/编译/执行；将补 method-statement 和 error-side-effect 比较。
+- 新 fixture 35 项已准备，仍未加载/编译/执行；已加入 method-statement 和双 profile VM
+  error-side-effect 断言。runtime fault 后 debugger watch 不可用，不能把该缺失说成跨引擎副作用已比较。
   本批全部实质代码完成后才启动唯一 `$refactor-rustyera-code` 审查，再由 terra/low 执行测试。
   1A 的 oracle 使用固定已验证 binary 和 fixture，未因并行 1B 改动重建。
+- 实现冻结基线为 core `44ffcbc` 加当前 1B 未提交改动。`review_batch_1b` 已启动本批唯一
+  独立审查，使用 `$refactor-rustyera-code`，覆盖全部 analyzer/compiler/bytecode/validator/VM
+  以及 runtime-tester fixture/执行断言。审查者不得测试或修改产品；全部要求落实前不启动门禁。
+  详细调度计划位于本组 `batch-1-work/1B/validation-plan.md`。
+- 唯一审查完整报告已返回本组 `batch-1-work/1B/review.md`；无需架构重做，有四项必需修复：
+  R1 活动 REF frame 的 snapshot alias 校验；R2 validator 的先行 resolve、missing 首条 Pop
+  和 FunctionLocal owner；R3 STRFORM 无副作用的运算类型预检；R4 暖 memo、持久参数深度限制、
+  immutable/Character REF 以及前三项回归。审查未测试、未改产品，也不再启动或恢复。
+- R1–R4 已全部落实并由主智能体核对；未启动第二次审查。R1 增加活动 Integer/String REF、
+  caller-local/forwarding 与损坏 alias 恢复拒绝；R2 覆盖绕跳至后部 resolve、非法 missing
+  入口和不同 owner 的 local；R3 共用无副作用运算类型检查并拒绝损坏 pending AST；R4 增加
+  同 VM 暖 memo/debug 对照、真实持久 ARG 深度失败及 immutable/Character REF 拒绝断言。
+  完成上述要求后统一格式化；测试尚未启动。冻结 core 输入，由 terra/low 串行执行 1B 门禁，
+  使用本组 target/core-static、CARGO_INCREMENTAL=0；磁盘约 24 GiB，不下载 Chromium。
+- 首次 fmt 与 workspace all-target check 通过；首次 Clippy 在 VM 报五项警告后停止，
+  没有启动 focused/full/oracle。主将方法 dispatch 拆为 resolve、consumer 校验与执行阶段，
+  拆出 supplied argument binding，并修正借用/分号/方法引用；仅做相关定向复验后继续尚未
+  完成的门禁。原始命令、退出码与修复后结果分别保留在 `batch-1-work/1B/validation/`。
+
+
+- 后续 Clippy 暴露测试代码的长函数、字符串追加、转换等警告，已逐处修复；少量保持单一
+  corruption matrix/fixture 上下文的测试使用带原因的局部 `expect(too_many_lines)`，没有全局压制。
+  受影响 VM 定向 lint 和 workspace Clippy 均通过。
+- Analyzer 定向测试发现数字赋值 RHS 在类型重解析前仍为 FORM 文本，动态可达性会漏掉
+  GETMETH。补数字 RHS 的无诊断预解析，考虑未注册局部声明与全局字符串被局部整数遮蔽；
+  已知纯字符串文字不会因此保留无关函数。新增及修复后的 method 七例通过。
+- Compiler expression method、bytecode operand、validator method 定向通过；VM 惰性 fallback、
+  签名错误副作用、STRFORM、挂起 snapshot、活动 REF snapshot、暖 memo/debug 对照与持久 ARG
+  深度限制定向通过。初次失败中还修正 fixture 的裸 RETURN 清空 RESULT、默认 ARG 被误当
+  必填、TOSTR 依赖测试 Host、DATA 名称撞专用语法等问题；没有改变相关既有产品语义。
+- core workspace **唯一实际全量** `core-workspace-full-run` 退出 0，约 120.2 秒。此前
+  `full-core-workspace` label 与 supervisor marker 同名，创建记录失败且未启动 Cargo；保留
+  `dispatch-core-workspace-label-conflict.json`，不把该调度失败算作执行成功或第二次全量。
+- runtime-tester fmt/check/Clippy 通过；首次 `method_fixture` 定向失败，因为 debug watch
+  对 `#DIM` 一维变量未写 `:0`，观察状态变为 blocked。已明确四个计数器的索引并保持预期值，
+  仅复验工具相关门禁；工具全量/build、两参考 smoke/差分尚未执行。磁盘约 21 GiB，串行构建。
+
+
+#### 1B 收尾结论与提交
+
+- runtime-tester 四计数器改为明确 `:0` 后，fmt/check/Clippy 与 method fixture 定向复验
+  通过；工具唯一全量 **41/41** 通过，observation build 退出 0。未重跑 core 全量。
+- 原版、蛇版平台 smoke 均通过；原版首次 sandbox 禁止 Wine socket，未进入用例，审批后
+  同一命令实际执行一次成功；蛇版八组通过。两参考源码改动：**无**。
+- 两 profile 35-case Rust 观察均退出 0；原版差分为 23 matched / 12 incomparable，
+  蛇版为 23 matched / 11 incomparable / 1 different。全部 oracle case 自身断言通过，
+  不把 runner 退出 0 解释为全部差分相等。不可比项是 runtime fault 后 debugger watch
+  与错误诊断形状限制；对应副作用已由 VM 直接执行断言覆盖，但未声称跨引擎错误状态完全相同。
+- 蛇版 `method-extra-argument-policy` 差异保留：当前非 variadic 签名严格拒绝多余实参，
+  蛇版参考仅执行固定形参，按既定边界批次 2 统一。没有为通过而删除 case 或改参考语义。
+- 本轮显式 logical-output-only，只验证结构、逻辑输出、返回/变量及可比诊断；未验证字体
+  或平台像素。STRFORM observation-only case 保持原始定义，不倒填预先通过声明。
+- source fixture SHA-256：`ee38b6a112e3c10e7ec320d5da35c291b87a74090b223fa6ad26bed503f4d779`。
+  frozen binary SHA-256：`e11b716adbf5e8750af11f35599dfb82516caaddd4216a8fde98767b0350bedc`。
+  Rust original evidence：`36f97c2413edaf756a6527bf43b0a050196887ae799ad49a2f4df063caf81bee`；
+  snake evidence：`e2267777acdf1c8b77348b8fcb251b8456e2558903898eb1fc986a4870d1b745`。
+  完整清单、双 oracle 请求/响应及结果位于 `batch-1-work/1B/`，源码与二进制冻结在 `frozen/`。
+- 固定语义原版 `26a35dc9334bb67590b96f7b8efbefbf199e391e`、蛇版
+  `fc4fb21416768c17256d0e82f997e5f99c9bba91`；wrapper 原版
+  `ffe560dad2fe480c8babddcae0122137350bf021`、蛇版
+  `2c67518c594a638c2fbdef3e780341eb66ace294`。使用本组已有发布程序与 Wine prefix。
+- core 分项提交：`46d8bbd` typed bytecode 基础、`9ba6fb5` S03 执行链、`14c8533`
+  fixture/观察工具。TUI/Web 本子批无提交，后续绑定随 1C core 契约同步；不把旧 pin 的
+  动态库/WASM 当作已验证 S03。三端组合执行仍属 1D，批次 1 整体未完成。
+- 所有测试由 terra/low 执行，无批次 deadline；单命令限制、卡死观察与 full-once 保持。
+  收尾可用磁盘约 22 GiB。续做保留必要证据，没有推送、合并或产品版本调整。
+
+#### 1C 资源层实施入口（未审查、未测试）
+
+- 1A/1B 前置门禁已完成；1C core 与前端分模块实施。1B binary/fixture 与源码证据已冻结，
+  未将 1C 改动混入 1B 验证。具体执行设计见本组 `batch-1-work/1C/`，不属于重构审查。
+- 前端执行者拥有 TUI storage/resource 接线与测试、Browser project storage/manifest 读取与测试、
+  Tauri StorageHost/ProjectHost 授权接线与测试；不修改 core 协议、版本、pin 或锁文件。
+- Resource Read/ReadRange/Stat/List 仅面向当前提交清单，校验原始 hash/长度并执行读取、枚举限额；
+  写入/删除在任何文件系统变更前拒绝。Data 的原版根回退策略保持，snake 的 Data→Resource
+  顺序由后续 core pending storage 明确表达，前端不得自行回退。
+- DT DEFAULT 的专用解析、逐项类型检查/求值/提交、默认值/XML/persistence，以及 GLOBAL
+  失败不丢 VM 的事务修复正在实施。真实缺失地图资源不创建替代文件。
+- Web 的 21 个 D-only 文件已逐字节保存并移出当前输入，位于 `1D/isolated-pointer-canvas/`；
+  1C 验证不会夹带未审查的服务改动。Data 路径逐段 NFC/大小写身份一致性也归 1C，
+  避免枚举合并认为 overlay 覆盖但文本查找命中 Resource 的矛盾；原版 profile 保持既有行为。
+- 每个子批次仍只进行一次覆盖全部实质代码的重构审查；1C 当前审查次数 0、测试次数 0。
+  当前可用磁盘约 24 GiB，构建串行，不下载 Chromium。
+
+#### 1D 服务层实施入口（未审查、未测试）
+
+- Web 独立执行者拥有 runtime service 生命周期、pointer 规范按钮值观察及独立 canvas
+  replay sampling；不修改正在验证的 core，也不修改 1C 的 browserProject/resource/storage 文件。
+- pointer/canvas 保持 v1 payload，使用实际 viewport、三 projection revision、session epoch
+  和 request ID；MOUSEY 按固定参考的 clientY-clientHeight 映射。HTML v2 留待 core 契约与
+  规范树测量实现，不提前宣告能力；Rust bridge、共享版本、pin/锁文件由主串行整合。
+- 当前无测试/构建/格式化/审查/提交；1D 统一集成仍等待 1A–1C 门禁及本批唯一审查。
 
 
 ### 所作改动
