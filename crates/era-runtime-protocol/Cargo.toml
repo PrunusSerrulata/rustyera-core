@@ -10,6 +10,7 @@ era-protocol = { path = "../era-protocol" }
 erabasic-html = { path = "../erabasic-html" }
 minicbor.workspace = true
 serde.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 serde_json = "1.0.112"

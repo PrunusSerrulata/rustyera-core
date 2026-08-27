@@ -15,6 +15,7 @@ mod message;
 mod presentation;
 mod project;
 mod service;
+pub mod storage_pattern;
 mod value;
 
 pub use compatibility::{

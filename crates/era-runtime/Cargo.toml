@@ -30,6 +30,7 @@ serde_json = "1.0.112"
 rmp-serde.workspace = true
 rayon.workspace = true
 unicode-segmentation.workspace = true
+unicode-normalization.workspace = true
 
 [lints]
 workspace = true
