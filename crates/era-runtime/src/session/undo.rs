@@ -46,6 +46,7 @@ impl RuntimeSession {
         if let Some(message) = reason.filter(|_| invalidated) {
             self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: None,
                     code: "runtime.input_undo_invalidated".into(),
                     level: RuntimeLogLevel::Warning,
                     message: message.into(),

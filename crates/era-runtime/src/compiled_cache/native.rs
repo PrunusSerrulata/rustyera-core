@@ -258,7 +258,7 @@ pub(super) fn encode_manifest_section(
     kind: ProjectContainerKind,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, String> {
-    let mut encoder = ManifestSectionEncoder::new(manifest.files.len(), kind)?;
+    let mut encoder = ManifestSectionEncoder::new(manifest, kind)?;
     loop {
         if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             return Err("compiled cache build cancelled".into());

@@ -53,7 +53,8 @@ const COMPILED_CACHE_PROJECT_REVISION: u64 = 0;
 // Older readers reject the extension as trailing data instead of using it as an incremental seed.
 const LEGACY_PROJECT_VERSION: u8 = 6;
 const PREVIOUS_PROJECT_VERSION: u8 = 7;
-const VERSION: u8 = 8;
+const PROFILELESS_PROJECT_VERSION: u8 = 8;
+const VERSION: u8 = 9;
 const PROJECT_COMPRESSION_LEVEL: i32 = 3;
 const CACHE_COMPRESSION_LEVEL: i32 = 1;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
@@ -62,8 +63,10 @@ const MANIFEST_SECTION_INDEX: usize = 6;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const SOURCE_SECTION_MAGIC: &[u8; 4] = b"RSM2";
 const DIGEST_SECTION_MAGIC: &[u8; 4] = b"RDI2";
-const MANIFEST_SECTION_MAGIC: &[u8; 4] = b"RMF2";
-const COMPACT_MANIFEST_SECTION_MAGIC: &[u8; 4] = b"RMF3";
+const LEGACY_MANIFEST_SECTION_MAGIC: &[u8; 4] = b"RMF2";
+const LEGACY_COMPACT_MANIFEST_SECTION_MAGIC: &[u8; 4] = b"RMF3";
+const MANIFEST_SECTION_MAGIC: &[u8; 4] = b"RMF4";
+const COMPACT_MANIFEST_SECTION_MAGIC: &[u8; 4] = b"RMF5";
 const SOURCE_RECORD_SECTION_MAGIC: &[u8; 4] = b"RSR2";
 const COMPACT_SOURCE_RECORD_SECTION_MAGIC: &[u8; 4] = b"RSR3";
 const INCREMENTAL_SECTION_MAGIC: &[u8; 4] = b"RIC2";
@@ -116,10 +119,25 @@ struct EncodedSectionRef<'a> {
     compressed: &'a [u8],
 }
 
+// The fixed container header owns only source identity; v9 policy identity is in the
+// checksummed manifest and must also agree with the artifact before executable reuse.
+struct ProjectSourceIdentity {
+    project_revision: u64,
+    source_digest: ProtocolBytes,
+}
+
+impl ProjectSourceIdentity {
+    fn matches(&self, manifest: &ProjectManifest) -> bool {
+        let actual = project_identity(manifest);
+        self.project_revision == actual.project_revision
+            && self.source_digest == actual.source_digest
+    }
+}
+
 struct CompiledCacheSections<'a> {
     kind: ProjectContainerKind,
     version: u8,
-    identity: ProjectIdentity,
+    identity: ProjectSourceIdentity,
     key: [u8; 32],
     metadata: EncodedSectionRef<'a>,
     globals: EncodedSectionRef<'a>,
@@ -230,6 +248,13 @@ impl CompiledSnapshotMetadata {
     }
 
     fn into_snapshot(self, manifest: ProjectManifest) -> Result<NormalizedProjectSnapshot, String> {
+        let resolved = crate::compatibility::resolve_manifest_compatibility(&manifest)
+            .map_err(|diagnostic| diagnostic.message)?;
+        if resolved.0 != manifest.compatibility
+            || self.configuration.compatibility_profile() != manifest.compatibility.profile
+        {
+            return Err("cached configuration compatibility differs from manifest".into());
+        }
         let resource_graph = self.resource_graph;
         let configuration_source_digest =
             crate::project::project_configuration_source_digest(&manifest.files);
@@ -563,6 +588,10 @@ impl ProjectIdentityPlanner {
                     else {
                         return Some(ProjectIdentity {
                             project_revision: manifest.project_revision,
+                            compatibility: manifest.compatibility.clone(),
+                            configuration_digest: crate::compatibility_configuration_digest(
+                                manifest,
+                            ),
                             source_digest: ProtocolBytes::new(
                                 self.hasher.finalize().as_bytes().to_vec(),
                             ),

@@ -9,11 +9,12 @@ use std::time::{Duration, Instant};
 use era_protocol::{ProtocolBytes, VersionRange, encode_canonical};
 use era_runtime::{RuntimeOptions, RuntimeSession};
 use era_runtime_protocol::{
-    ClientCapabilities, ClientHello, FileCategory, FilePayload, IMAGE_METADATA_OPERATION,
-    FullProjectManifest, IMAGE_METADATA_OPERATION_VERSION, ImageMetadataResponse, InputModality, ProjectManifest,
-    RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeLogLevel, RuntimeMessage, ServiceCapability,
-    ServiceKind, ServiceResponse, ServiceResult, SnapshotExportPurpose, StateExportChunkRequest,
-    StateExportKind, StateExportRequest, StateExportResult, StorageCapabilities, SubmittedFile,
+    ClientCapabilities, ClientHello, FileCategory, FilePayload, FullProjectManifest,
+    IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION, ImageMetadataResponse,
+    InputModality, ProjectManifest, RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeLogLevel,
+    RuntimeMessage, ServiceCapability, ServiceKind, ServiceResponse, ServiceResult,
+    SnapshotExportPurpose, StateExportChunkRequest, StateExportKind, StateExportRequest,
+    StateExportResult, StorageCapabilities, SubmittedFile,
 };
 
 use super::{
@@ -78,6 +79,7 @@ fn audit_game(extractor: &Path, game: &Path) {
     let files = submitted_project_files(game);
     let expected = expected_project_files(&files);
     let project_file = compile_and_export(ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files,
     });
@@ -131,11 +133,11 @@ fn submitted_project_files(root: &Path) -> Vec<SubmittedFile> {
                 FileCategory::ResourceManifest
             } else if first == "resources"
                 && [
-                    ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp", ".aac", ".flac",
-                    ".m4a", ".mp3", ".ogg", ".opus", ".wav",
+                    ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp", ".aac", ".flac", ".m4a",
+                    ".mp3", ".ogg", ".opus", ".wav",
                 ]
-                    .iter()
-                    .any(|suffix| lower.ends_with(suffix))
+                .iter()
+                .any(|suffix| lower.ends_with(suffix))
             {
                 FileCategory::Resource
             } else if lower.ends_with(".erb") {
@@ -162,7 +164,7 @@ fn submitted_project_files(root: &Path) -> Vec<SubmittedFile> {
             let hash = match &payload {
                 FilePayload::Utf8(text) => blake3::hash(text.as_bytes()),
                 FilePayload::Bytes(bytes) => blake3::hash(bytes.as_slice()),
-                FilePayload::IoError(_) => unreachable!(),
+                FilePayload::IoError(_) | FilePayload::ExternalResource(_) => unreachable!(),
             };
             Some(SubmittedFile {
                 relative_path,
@@ -181,7 +183,7 @@ fn expected_project_files(files: &[SubmittedFile]) -> BTreeMap<String, Vec<u8>> 
             let contents = match &file.payload {
                 FilePayload::Utf8(text) => text.as_bytes().to_vec(),
                 FilePayload::Bytes(bytes) => bytes.as_slice().to_vec(),
-                FilePayload::IoError(_) => unreachable!(),
+                FilePayload::IoError(_) | FilePayload::ExternalResource(_) => unreachable!(),
             };
             (file.relative_path.clone(), contents)
         })
@@ -216,11 +218,11 @@ fn collect_project_paths(root: &Path) -> Vec<String> {
         if first == "resources" {
             return lower.ends_with(".csv")
                 || [
-                    ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp", ".aac", ".flac",
-                    ".m4a", ".mp3", ".ogg", ".opus", ".wav",
+                    ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp", ".aac", ".flac", ".m4a",
+                    ".mp3", ".ogg", ".opus", ".wav",
                 ]
-                    .iter()
-                    .any(|suffix| lower.ends_with(suffix));
+                .iter()
+                .any(|suffix| lower.ends_with(suffix));
         }
         if lower.ends_with(".csv") && has_csv_root {
             return first == "csv";
@@ -374,10 +376,7 @@ fn compile_and_export(manifest: ProjectManifest) -> Vec<u8> {
     let _ = drain(&mut session);
     let deadline = Instant::now() + CACHE_BUILD_TIMEOUT;
     let transfer = loop {
-        assert!(
-            Instant::now() < deadline,
-            "full project worker timed out"
-        );
+        assert!(Instant::now() < deadline, "full project worker timed out");
         drive(&mut session);
         let _ = drain(&mut session);
         submit_with_epoch(

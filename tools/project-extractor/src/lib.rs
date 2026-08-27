@@ -481,6 +481,7 @@ mod tests {
         let directory = TestDirectory::new("exact");
         let text = "  ; comment\r\n@TEST\r\n\tPRINTL 界\r\n";
         let manifest = ProjectManifest {
+            compatibility: Default::default(),
             project_revision: 1,
             files: vec![
                 submitted(
@@ -536,6 +537,7 @@ mod tests {
         fs::create_dir(directory.0.join("ERB")).unwrap();
         fs::write(directory.0.join("ERB/main.erb"), "old").unwrap();
         let manifest = ProjectManifest {
+            compatibility: Default::default(),
             project_revision: 1,
             files: vec![
                 submitted(
@@ -578,6 +580,7 @@ mod tests {
     fn rejects_unsafe_duplicate_and_hash_mismatched_project_files() {
         let directory = TestDirectory::new("invalid");
         let invalid_path = ProjectManifest {
+            compatibility: Default::default(),
             project_revision: 1,
             files: vec![submitted(
                 "../outside.erb",
@@ -588,6 +591,7 @@ mod tests {
         assert!(extract_manifest(&invalid_path, &directory.0, false).is_err());
 
         let duplicate = ProjectManifest {
+            compatibility: Default::default(),
             project_revision: 1,
             files: vec![
                 submitted(
@@ -611,6 +615,7 @@ mod tests {
         );
         mismatched.content_hash = Some(ProtocolBytes::new(vec![0; 32]));
         let mismatched = ProjectManifest {
+            compatibility: Default::default(),
             project_revision: 1,
             files: vec![mismatched],
         };
@@ -623,12 +628,14 @@ mod tests {
         );
         mismatched_asset.content_hash = Some(ProtocolBytes::new(vec![0; 32]));
         let mismatched_asset = ProjectManifest {
+            compatibility: Default::default(),
             project_revision: 1,
             files: vec![mismatched_asset],
         };
         assert!(extract_manifest(&mismatched_asset, &directory.0, false).is_err());
 
         let non_text = ProjectManifest {
+            compatibility: Default::default(),
             project_revision: 1,
             files: vec![submitted(
                 "CSV/data.csv",
@@ -648,6 +655,7 @@ mod tests {
         let outside = TestDirectory::new("outside");
         symlink(&outside.0, directory.0.join("ERB")).unwrap();
         let manifest = ProjectManifest {
+            compatibility: Default::default(),
             project_revision: 1,
             files: vec![submitted(
                 "ERB/main.erb",

@@ -57,6 +57,7 @@ fn project_resource_metadata_requests_respect_pending_request_backpressure() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files,
         }),
@@ -183,6 +184,7 @@ fn title_session_fixture() -> (
     erabasic_bytecode::Digest,
 ) {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -505,6 +507,7 @@ fn retained_title_program_is_released_on_failure_shutdown_load_and_reload() {
 #[test]
 fn compiled_cache_export_prepares_the_payload_off_thread() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {
@@ -929,6 +932,7 @@ fn queued_input_is_processed_before_one_cooperative_cache_quantum() {
             &mut session,
             1,
             RuntimeMessage::ProjectManifest(ProjectManifest {
+                compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                 project_revision: 1,
                 files: vec![SubmittedFile {
                     relative_path: "main.erb".into(),
@@ -1015,6 +1019,7 @@ fn cooperative_cache_session_with_options(
     options: RuntimeOptions,
 ) -> (RuntimeSession, ProjectManifest, ProjectIdentity) {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {

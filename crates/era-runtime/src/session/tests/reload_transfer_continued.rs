@@ -36,10 +36,13 @@ fn project_load_rejects_an_uncommitted_cache_without_changing_phase() {
             99,
             ProjectLoadRequest {
                 identity: ProjectIdentity {
+                    compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+                    configuration_digest: None,
                     project_revision: 1,
                     source_digest: ProtocolBytes::new(vec![0; 32]),
                 },
                 manifest: Some(ProjectManifest {
+                    compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                     project_revision: 1,
                     files: Vec::new(),
                 }),
@@ -61,6 +64,7 @@ fn project_load_rejects_an_uncommitted_cache_without_changing_phase() {
 #[test]
 fn identity_only_project_load_requests_payload_after_a_cache_miss() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 4,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -99,6 +103,7 @@ fn cold_project_load_reuses_the_owned_manifest_source_allocation() {
     let source = String::from("@SYSTEM_TITLE\nPRINTL MEMORY_STABLE\nRETURN\n");
     let source_pointer = source.as_ptr();
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -143,6 +148,7 @@ fn low_memory_project_load_releases_source_payloads_but_preserves_identity() {
     let source = String::from("@SYSTEM_TITLE\nPRINTL MEMORY_STABLE\nRETURN\n");
     let digest = ProtocolBytes::new(blake3::hash(source.as_bytes()).as_bytes().to_vec());
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -171,9 +177,15 @@ fn low_memory_project_load_releases_source_payloads_but_preserves_identity() {
         )
         .unwrap();
 
-    let snapshot = session.project_snapshot.as_ref().expect("the project should load");
+    let snapshot = session
+        .project_snapshot
+        .as_ref()
+        .expect("the project should load");
     assert_eq!(snapshot.manifest.project_revision, 1);
-    assert_eq!(crate::compiled_cache::project_identity(&snapshot.manifest), identity);
+    assert_eq!(
+        crate::compiled_cache::project_identity(&snapshot.manifest),
+        identity
+    );
     assert!(matches!(
         &snapshot.manifest.files[0].payload,
         FilePayload::Utf8(source) if source.is_empty() && source.capacity() == 0
@@ -185,6 +197,7 @@ fn low_memory_full_payload_reload_remains_sparse_and_uses_the_new_source() {
     let initial = "@SYSTEM_TITLE\nPRINTL OLD\nRETURN\n";
     let initial_digest = ProtocolBytes::new(blake3::hash(initial.as_bytes()).as_bytes().to_vec());
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -233,13 +246,19 @@ fn low_memory_full_payload_reload_remains_sparse_and_uses_the_new_source() {
         )
         .unwrap();
 
-    let snapshot = session.project_snapshot.as_ref().expect("the reload should commit");
+    let snapshot = session
+        .project_snapshot
+        .as_ref()
+        .expect("the reload should commit");
     assert_eq!(snapshot.manifest.project_revision, 2);
     assert!(matches!(
         &snapshot.manifest.files[0].payload,
         FilePayload::Utf8(source) if source.is_empty() && source.capacity() == 0
     ));
-    assert_eq!(snapshot.manifest.files[0].content_hash, Some(changed_digest));
+    assert_eq!(
+        snapshot.manifest.files[0].content_hash,
+        Some(changed_digest)
+    );
     assert_eq!(
         session
             .artifact
@@ -261,6 +280,7 @@ fn low_memory_configuration_commit_preserves_sparse_sources_and_allows_full_relo
     let other = "@OTHER\nRETURN\n";
     let configuration = "[meta]\nschema_version = 3\n[text]\nfont_size = 20\n";
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {
@@ -313,11 +333,7 @@ fn low_memory_configuration_commit_preserves_sparse_sources_and_allows_full_relo
         initial_configuration.source_digest.as_slice(),
         blake3::hash(era_config::normalize_line_endings(configuration).as_bytes()).as_bytes()
     );
-    let initial_identity = session
-        .project_snapshot
-        .as_ref()
-        .unwrap()
-        .project_identity;
+    let initial_identity = session.project_snapshot.as_ref().unwrap().project_identity;
     session
         .prepare_configuration_update(
             51,
@@ -354,9 +370,19 @@ fn low_memory_configuration_commit_preserves_sparse_sources_and_allows_full_relo
         prepared.prepared_source_digest
     );
     assert_ne!(committed.project_identity, initial_identity);
-    assert!(committed.manifest.files.iter().filter(|file| {
-        matches!(file.category, FileCategory::Erb | FileCategory::Erh | FileCategory::Csv)
-    }).all(|file| matches!(&file.payload, FilePayload::Utf8(value) if value.is_empty())));
+    assert!(
+        committed
+            .manifest
+            .files
+            .iter()
+            .filter(|file| {
+                matches!(
+                    file.category,
+                    FileCategory::Erb | FileCategory::Erh | FileCategory::Csv
+                )
+            })
+            .all(|file| matches!(&file.payload, FilePayload::Utf8(value) if value.is_empty()))
+    );
 
     session
         .reload_project(
@@ -399,15 +425,24 @@ fn low_memory_configuration_commit_preserves_sparse_sources_and_allows_full_relo
     )));
     let reloaded = session.project_snapshot.as_ref().unwrap();
     assert_eq!(reloaded.manifest.project_revision, 2);
-    assert!(reloaded.manifest.files.iter().all(|file| matches!(
-        &file.payload,
-        FilePayload::Utf8(value) if value.is_empty() && value.capacity() == 0
-    )));
+    assert!(
+        reloaded
+            .manifest
+            .files
+            .iter()
+            .all(|file| match &file.payload {
+                FilePayload::Utf8(value) if file.relative_path == "reraconfig.toml" =>
+                    !value.is_empty(),
+                FilePayload::Utf8(value) => value.is_empty() && value.capacity() == 0,
+                _ => false,
+            })
+    );
 }
 
 #[test]
 fn host_staged_manifest_is_owned_busy_single_use_and_identity_checked() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 4,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -470,6 +505,8 @@ fn host_staged_manifest_is_owned_busy_single_use_and_identity_checked() {
             43,
             ProjectLoadRequest {
                 identity: ProjectIdentity {
+                    compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+                    configuration_digest: None,
                     project_revision: identity.project_revision,
                     source_digest: ProtocolBytes::new(vec![0; 32]),
                 },
@@ -497,6 +534,7 @@ fn host_staged_manifest_is_owned_busy_single_use_and_identity_checked() {
 #[test]
 fn rejected_or_explicit_project_load_discards_a_host_staged_manifest() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: Vec::new(),
     };
@@ -536,6 +574,7 @@ fn rejected_or_explicit_project_load_discards_a_host_staged_manifest() {
 #[allow(clippy::too_many_lines)]
 fn exact_compiled_cache_load_does_not_require_a_manifest() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {
@@ -556,7 +595,7 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
                 relative_path: "reraconfig.toml".into(),
                 category: FileCategory::Configuration,
                 payload: FilePayload::Utf8(
-                    "[meta]\r\nschema_version = 3\r\n[text]\r\nfont_size = 20\r\n".into(),
+                    "[meta]\r\nschema_version = 4\r\n[text]\r\nfont_size = 20\r\n".into(),
                 ),
                 content_hash: None,
             },
@@ -571,6 +610,7 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
     let mut initial = crate::project::build_project(&manifest, None);
     assert!(initial.report.success, "{:?}", initial.report.diagnostics);
     initial.report.diagnostics.push(ProtocolDiagnostic {
+        context: None,
         code: "compiler.cached_warning".into(),
         level: RuntimeLogLevel::Warning,
         message: "warning retained with compiled output".into(),
@@ -605,7 +645,7 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
         expected_configuration_digest.as_slice(),
         blake3::hash(
             era_config::normalize_line_endings(
-                "[meta]\r\nschema_version = 3\r\n[text]\r\nfont_size = 20\r\n"
+                "[meta]\r\nschema_version = 4\r\n[text]\r\nfont_size = 20\r\n"
             )
             .as_bytes()
         )
@@ -659,12 +699,162 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
         cached_snapshot.configuration_snapshot().source_digest,
         expected_configuration_digest
     );
-    assert!(cached_snapshot.manifest.files.iter().all(|file| match &file.payload {
-        FilePayload::Utf8(value) => value.is_empty() && value.capacity() == 0,
-        FilePayload::Bytes(value) => value.as_slice().is_empty(),
-        FilePayload::IoError(_) | FilePayload::ExternalResource(_) => true,
-    }));
+    assert!(
+        cached_snapshot
+            .manifest
+            .files
+            .iter()
+            .all(|file| match &file.payload {
+                FilePayload::Utf8(value) if file.relative_path == "reraconfig.toml" => {
+                    !value.is_empty() && era_config::ReraConfigDocument::parse(value).is_ok()
+                }
+                FilePayload::Utf8(value) => value.is_empty() && value.capacity() == 0,
+                FilePayload::Bytes(value) => value.as_slice().is_empty(),
+                FilePayload::IoError(_) | FilePayload::ExternalResource(_) => true,
+            })
+    );
     assert_exact_cache_preparing_progress(&progress);
+}
+
+fn compatibility_cache_fixture() -> (ProjectManifest, Vec<u8>) {
+    let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+        project_revision: 1,
+        files: vec![
+            SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "reraconfig.toml".into(),
+                category: FileCategory::Configuration,
+                payload: FilePayload::Utf8("[meta]\nschema_version = 4\n".into()),
+                content_hash: None,
+            },
+        ],
+    };
+    let mut build = crate::project::build_project(&manifest, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let cache = crate::compiled_cache::encode_compiled_cache_for_test(
+        &manifest,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    (manifest, cache)
+}
+
+#[test]
+fn profileless_cache_is_never_executed_and_rebuilds_from_submitted_sources() {
+    let (manifest, mut old_cache) = compatibility_cache_fixture();
+    old_cache[8] = 8;
+    let checksum_start = old_cache.len() - 32;
+    let checksum = blake3::hash(&old_cache[..checksum_start]);
+    old_cache[checksum_start..].copy_from_slice(checksum.as_bytes());
+    let rebuilt = RuntimeSession::new(RuntimeOptions::default())
+        .build_project_from_cache(
+            ProjectLoadRequest {
+                identity: crate::compiled_cache::project_identity(&manifest),
+                manifest: Some(manifest),
+                compiled_cache_transfer_id: None,
+            },
+            Some(&old_cache),
+            None,
+        )
+        .expect("old cache must fall back to the full supplied source manifest");
+    assert!(rebuilt.report.success, "{:?}", rebuilt.report.diagnostics);
+    assert!(
+        rebuilt
+            .report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "runtime.compiled_cache_ignored")
+    );
+    assert!(
+        rebuilt
+            .report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "runtime.compiled_cache_hit")
+    );
+    assert_eq!(
+        rebuilt.artifact.unwrap().artifact().manifest.compatibility,
+        erabasic_compat::CompatibilityIdentity::reference()
+    );
+}
+
+#[test]
+fn invalid_profile_configuration_precedes_cache_consumption_and_cannot_fallback() {
+    let (manifest, cache) = compatibility_cache_fixture();
+    let mut session = negotiated_session();
+    session
+        .load_project(
+            100,
+            ProjectLoadRequest {
+                identity: crate::compiled_cache::project_identity(&manifest),
+                manifest: Some(manifest.clone()),
+                compiled_cache_transfer_id: None,
+            },
+        )
+        .unwrap();
+    drain(&mut session);
+    let artifact_id = session
+        .artifact
+        .as_ref()
+        .unwrap()
+        .artifact()
+        .manifest
+        .artifact_id;
+    let old_revision = session.project_revision();
+    let transfer_id = session.stage_compiled_project_cache(cache).unwrap();
+    let mut invalid = manifest;
+    invalid.project_revision += 1;
+    invalid.files[1].payload = FilePayload::Utf8(
+        "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"unknown.profile\"\n".into(),
+    );
+    session
+        .load_project(
+            101,
+            ProjectLoadRequest {
+                identity: crate::compiled_cache::project_identity(&invalid),
+                manifest: Some(invalid),
+                compiled_cache_transfer_id: Some(transfer_id),
+            },
+        )
+        .unwrap();
+    let messages = drain(&mut session);
+    assert!(messages.iter().any(|message| matches!(message,
+        RuntimeMessage::ProjectLoadReport(report) if !report.success && !report.payload_required
+            && report.diagnostics.iter().any(|diagnostic| diagnostic.code == "runtime.invalid_reraconfig")
+            && report.diagnostics.iter().all(|diagnostic| !diagnostic.code.starts_with("runtime.compiled_cache_"))
+    )), "{messages:?}");
+    assert_eq!(session.phase(), RuntimePhase::Ready);
+    assert_eq!(session.project_revision(), old_revision);
+    assert_eq!(
+        session
+            .artifact
+            .as_ref()
+            .unwrap()
+            .artifact()
+            .manifest
+            .artifact_id,
+        artifact_id
+    );
+    assert_eq!(
+        session
+            .inbound_transfer
+            .as_ref()
+            .unwrap()
+            .descriptor
+            .transfer_id,
+        transfer_id
+    );
 }
 
 fn assert_exact_cache_preparing_progress(progress: &Arc<std::sync::Mutex<Vec<ProjectProgress>>>) {
@@ -695,6 +885,7 @@ fn assert_exact_cache_preparing_progress(progress: &Arc<std::sync::Mutex<Vec<Pro
 #[allow(clippy::too_many_lines)]
 fn host_staged_exact_cache_uses_the_normal_project_load_contract() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -796,6 +987,8 @@ fn host_staged_exact_cache_uses_the_normal_project_load_contract() {
             46,
             ProjectLoadRequest {
                 identity: ProjectIdentity {
+                    compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+                    configuration_digest: None,
                     project_revision: manifest.project_revision,
                     source_digest: ProtocolBytes::new(vec![0; 32]),
                 },
@@ -833,6 +1026,8 @@ fn host_staged_corrupt_cache_reports_a_normal_cache_miss() {
             51,
             ProjectLoadRequest {
                 identity: ProjectIdentity {
+                    compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+                    configuration_digest: None,
                     project_revision: 9,
                     source_digest: ProtocolBytes::new(vec![0; 32]),
                 },
@@ -869,6 +1064,7 @@ fn host_staged_corrupt_cache_reports_a_normal_cache_miss() {
 #[test]
 fn compiled_cache_is_reused_across_configuration_profiles() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -887,14 +1083,8 @@ fn compiled_cache_is_reused_across_configuration_profiles() {
             ConfigurationClientProfile::Tui,
         ),
     ] {
-        let mut initial = build_project_with_extensions_and_progress(
-            &manifest,
-            None,
-            None,
-            &[],
-            producer,
-            None,
-        );
+        let mut initial =
+            build_project_with_extensions_and_progress(&manifest, None, None, &[], producer, None);
         assert!(initial.report.success, "{:?}", initial.report.diagnostics);
         initial.incremental.compact();
         let cache = crate::compiled_cache::encode_compiled_cache_for_test(
@@ -946,6 +1136,7 @@ fn compiled_cache_is_reused_across_configuration_profiles() {
 #[test]
 fn compiled_cache_with_a_stale_configuration_type_is_rebuilt_from_sources() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {
@@ -1006,11 +1197,13 @@ fn compiled_cache_with_a_stale_configuration_type_is_rebuilt_from_sources() {
         diagnostic.code == "runtime.compiled_cache_ignored"
             && diagnostic.message.contains("interface.menu_mode")
     }));
-    assert!(rebuilt
-        .report
-        .diagnostics
-        .iter()
-        .all(|diagnostic| diagnostic.code != "runtime.compiled_cache_hit"));
+    assert!(
+        rebuilt
+            .report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "runtime.compiled_cache_hit")
+    );
     let configuration = rebuilt.snapshot.unwrap().configuration_snapshot();
     assert!(!configuration.restart_pending);
     assert_eq!(
@@ -1027,6 +1220,7 @@ fn compiled_cache_with_a_stale_configuration_type_is_rebuilt_from_sources() {
 fn journaled_configuration_rebuilds_instead_of_exact_hitting_the_old_artifact() {
     let old_configuration = "[audio]\nvolume = 100\n";
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {
@@ -1103,7 +1297,7 @@ fn journaled_configuration_rebuilds_instead_of_exact_hitting_the_old_artifact() 
             .iter()
             .any(|file| matches!(
                 &file.payload,
-                FilePayload::Utf8(source) if source == "[audio]\nvolume = 42\n"
+                FilePayload::Utf8(source) if source == &era_config::ReraConfigDocument::parse("[audio]\nvolume = 42\n").unwrap().to_lf_string()
             ))
     );
 }

@@ -12,8 +12,9 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 18;
-const LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 17;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 19;
+#[cfg(test)]
+const LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 18;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 60;
@@ -78,6 +79,7 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) format_version: u32,
     pub(crate) origin: RuntimeSnapshotOrigin,
     pub(crate) artifact_id: Digest,
+    pub(crate) compatibility: erabasic_compat::CompatibilityIdentity,
     pub(crate) project_identity: [u8; 32],
     pub(crate) resource_count: u64,
     pub(crate) resource_graph: ResourceGraph,
@@ -246,10 +248,7 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<RuntimeSnapsh
             .try_into()
             .map_err(|_| "truncated runtime snapshot version")?,
     );
-    if !matches!(
-        version,
-        LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION | RUNTIME_SNAPSHOT_FORMAT_VERSION
-    ) {
+    if version != RUNTIME_SNAPSHOT_FORMAT_VERSION {
         return Err(format!("unsupported runtime snapshot format {version}"));
     }
     let length = u64::from_le_bytes(
@@ -310,9 +309,20 @@ pub fn inspect_runtime_snapshot(
     maximum_bytes: usize,
 ) -> Result<RuntimeSnapshotInspection, RuntimeSnapshotInspectionError> {
     let snapshot = decode(bytes, maximum_bytes).map_err(inspection_error)?;
+    snapshot
+        .compatibility
+        .validate()
+        .map_err(|error| inspection_error(error.to_string()))?;
     let format_version = snapshot.format_version;
     let execution = erabasic_vm::inspect_snapshot(&snapshot.vm_snapshot, maximum_bytes)
         .map_err(|error| inspection_error(format!("invalid embedded snapshot: {error}")))?;
+    let expected = serde_json::to_value(&snapshot.compatibility)
+        .map_err(|error| inspection_error(error.to_string()))?;
+    if execution.state.get("compatibility") != Some(&expected) {
+        return Err(inspection_error(
+            "runtime and embedded snapshot compatibility differ",
+        ));
+    }
     let mut payload = serde_json::to_value(&snapshot)
         .map_err(|error| inspection_error(format!("cannot inspect runtime state: {error}")))?;
     let fields = payload
@@ -498,6 +508,7 @@ mod tests {
             format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
             origin: RuntimeSnapshotOrigin::Normal,
             artifact_id: Digest([1; 32]),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_identity: [2; 32],
             resource_count: 0,
             resource_graph,
@@ -547,11 +558,7 @@ mod tests {
 
         payload.format_version = LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION;
         let legacy = encode_container(&payload, LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION).unwrap();
-        let decoded = decode(&legacy, usize::MAX).unwrap();
-        assert_eq!(
-            decoded.format_version,
-            LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION
-        );
+        assert!(decode(&legacy, usize::MAX).is_err());
     }
 
     #[test]
@@ -562,6 +569,7 @@ mod tests {
             format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
             origin: RuntimeSnapshotOrigin::Debug,
             artifact_id: Digest([1; 32]),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_identity: [2; 32],
             resource_count: 0,
             resource_graph,

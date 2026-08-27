@@ -8,6 +8,7 @@ use super::*;
 
 fn manifest(source: &str, revision: u64) -> ProjectManifest {
     ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: revision,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -27,6 +28,7 @@ fn project_identity_matches_the_cross_host_fixed_vector() {
         content_hash: Some(ProtocolBytes::new(digest)),
     };
     let left = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             file("ERB/a.erb", FileCategory::Erb, vec![1; 32]),
@@ -36,6 +38,7 @@ fn project_identity_matches_the_cross_host_fixed_vector() {
         ],
     };
     let right = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             file("resources/icon.png", FileCategory::Resource, vec![255; 32]),
@@ -69,6 +72,7 @@ fn cooperative_planning_bounds_manifest_and_function_traversal() {
         })
         .collect();
     let resource_manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 7,
         files,
     };
@@ -133,7 +137,7 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
 
     assert_eq!(&bytes[..8], b"RERAPROJ");
-    assert_eq!(bytes[8], 8);
+    assert_eq!(bytes[8], 9);
     assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
     assert_eq!(decoded_file.identity, project_identity(&project));
     assert_eq!(decoded_file.manifest, project);
@@ -462,7 +466,7 @@ fn streamed_project_file_decode_skips_compiled_sections_and_preserves_journal() 
     let (interrupted_record, _) =
         encode_record(Some(final_digest), "[audio]\nvolume = 80\n").unwrap();
     let sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
-    let embedded_identity = sections.identity.clone();
+    let embedded_source_digest = sections.identity.source_digest.clone();
     let manifest_compressed_bytes = sections.manifest.compressed.len();
     bytes.extend_from_slice(&first_record);
     bytes.extend_from_slice(&final_record);
@@ -484,7 +488,10 @@ fn streamed_project_file_decode_skips_compiled_sections_and_preserves_journal() 
     let retained_bound =
         stream::HEADER_BYTES + manifest_compressed_bytes * 2 + maximum_record_bytes * 2 + 13;
     assert!(maximum_retained <= retained_bound);
-    assert_ne!(streamed.project.identity, embedded_identity);
+    assert_ne!(
+        streamed.project.identity.source_digest,
+        embedded_source_digest
+    );
     assert!(streamed.project.manifest.files.iter().any(|file| {
         file.relative_path == "reraconfig.toml"
             && file.payload == FilePayload::Utf8("[audio]\nvolume = 42\n".into())
@@ -705,7 +712,10 @@ fn compact_sections_reject_noncanonical_omission_hashes_and_source_metadata() {
         usize::try_from(encoded.decoded_length).unwrap(),
     )
     .unwrap();
-    let first_tags = COMPACT_MANIFEST_SECTION_MAGIC.len() + 1 + 1 + "main.erb".len();
+    let mut prefix = &decoded[COMPACT_MANIFEST_SECTION_MAGIC.len()..];
+    let _ = read_bytes(&mut prefix, 4096).unwrap();
+    let policy_prefix = decoded.len() - prefix.len();
+    let first_tags = policy_prefix + 1 + 1 + "main.erb".len();
     decoded[first_tags + 2] = 0;
     let compressed = zstd::bulk::compress(&decoded, CACHE_COMPRESSION_LEVEL).unwrap();
     let corrupt = EncodedSectionRef {
@@ -713,7 +723,7 @@ fn compact_sections_reject_noncanonical_omission_hashes_and_source_metadata() {
         compressed: &compressed,
     };
     assert!(
-        decode_manifest_section(&corrupt, 1)
+        decode_manifest_section(&corrupt, 1, VERSION)
             .unwrap_err()
             .contains("omission policy")
     );
@@ -732,7 +742,7 @@ fn compact_sections_reject_noncanonical_omission_hashes_and_source_metadata() {
         compressed: &compressed,
     };
     assert!(
-        decode_manifest_section(&corrupt, 1)
+        decode_manifest_section(&corrupt, 1, VERSION)
             .unwrap_err()
             .contains("payload hash mismatch")
     );

@@ -14,6 +14,7 @@ pub(super) fn encode_section<T: Serialize + ?Sized>(
 pub(super) fn decode_manifest_section(
     section: &EncodedSectionRef<'_>,
     project_revision: u64,
+    version: u8,
 ) -> Result<ProjectManifest, String> {
     decode_raw_section(section, |reader| {
         let mut magic = [0_u8; 4];
@@ -21,9 +22,20 @@ pub(super) fn decode_manifest_section(
             .read_exact(&mut magic)
             .map_err(|error| error.to_string())?;
         let compact = match &magic {
-            value if value == MANIFEST_SECTION_MAGIC => false,
-            value if value == COMPACT_MANIFEST_SECTION_MAGIC => true,
+            value if value == MANIFEST_SECTION_MAGIC && version == VERSION => false,
+            value if value == COMPACT_MANIFEST_SECTION_MAGIC && version == VERSION => true,
+            value if value == LEGACY_MANIFEST_SECTION_MAGIC && version < VERSION => false,
+            value if value == LEGACY_COMPACT_MANIFEST_SECTION_MAGIC && version < VERSION => true,
             _ => return Err("project manifest has invalid magic".into()),
+        };
+        let compatibility = if version == VERSION {
+            let bytes = read_bytes(reader, 4096)?;
+            let identity: erabasic_compat::CompatibilityIdentity =
+                serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+            identity.validate().map_err(|error| error.to_string())?;
+            identity
+        } else {
+            erabasic_compat::CompatibilityIdentity::default()
         };
         let count = read_count(reader, section.decoded_length, "project manifest file")?;
         let mut files = Vec::new();
@@ -58,6 +70,7 @@ pub(super) fn decode_manifest_section(
         }
         Ok(ProjectManifest {
             project_revision,
+            compatibility,
             files,
         })
     })

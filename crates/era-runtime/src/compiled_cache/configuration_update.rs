@@ -175,7 +175,22 @@ pub(super) fn apply_journal(
     {
         return Err("project configuration record does not follow the embedded source".into());
     }
+    validate_configuration_profile(manifest, &final_update.source)?;
     replace_configuration(manifest, &final_update.source, final_update.source_digest);
+    Ok(())
+}
+
+pub(super) fn validate_configuration_profile(
+    manifest: &ProjectManifest,
+    source: &str,
+) -> Result<(), String> {
+    let profile = ReraConfigDocument::parse(source)
+        .and_then(|document| document.values())
+        .map_err(|error| error.to_string())?
+        .compatibility_profile();
+    if profile != manifest.compatibility.profile {
+        return Err("configuration profile change requires a full project reopen".into());
+    }
     Ok(())
 }
 
@@ -290,6 +305,7 @@ mod tests {
         assert_eq!(journal.valid_end, complete_end);
         assert!(maximum_retained <= maximum_record_bytes * 2 + 1);
         let mut manifest = ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: Vec::new(),
         };

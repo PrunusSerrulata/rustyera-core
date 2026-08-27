@@ -1,9 +1,9 @@
 use super::{
     DecodedProjectFile, EncodedSectionRef, FIXED_SECTION_COUNT, LEGACY_PROJECT_VERSION,
-    MANIFEST_SECTION_INDEX, MAXIMUM_DECODED_PAYLOAD_BYTES, PREVIOUS_PROJECT_VERSION, PROJECT_MAGIC,
-    ProjectFileError, ProjectIdentity, ProtocolBytes, StreamingConfigurationJournal,
-    TARGET_PARALLEL_SECTIONS, VERSION, apply_journal, decode_manifest_section, project_identity,
-    read_u32, read_u64,
+    MANIFEST_SECTION_INDEX, MAXIMUM_DECODED_PAYLOAD_BYTES, PREVIOUS_PROJECT_VERSION,
+    PROFILELESS_PROJECT_VERSION, PROJECT_MAGIC, ProjectFileError, ProjectSourceIdentity,
+    ProtocolBytes, StreamingConfigurationJournal, TARGET_PARALLEL_SECTIONS, VERSION, apply_journal,
+    decode_manifest_section, project_identity, read_u32, read_u64,
 };
 
 pub(super) const HEADER_BYTES: usize = PROJECT_MAGIC.len() + 1 + 8 + 32 + 32 + 4 + 4;
@@ -41,7 +41,7 @@ pub struct ProjectFileStreamDecoder {
     container_bytes: usize,
     phase: StreamPhase,
     header: Vec<u8>,
-    identity: Option<ProjectIdentity>,
+    identity: Option<ProjectSourceIdentity>,
     section_header: [u8; SECTION_HEADER_BYTES],
     section_header_len: usize,
     section_index: usize,
@@ -153,9 +153,13 @@ impl ProjectFileStreamDecoder {
         let identity = self
             .identity
             .ok_or_else(|| error("project file identity is missing"))?;
-        let mut manifest = decode_manifest_section(&section, identity.project_revision)
-            .map_err(ProjectFileError::from)?;
-        if project_identity(&manifest) != identity {
+        let mut manifest = decode_manifest_section(
+            &section,
+            identity.project_revision,
+            self.header[PROJECT_MAGIC.len()],
+        )
+        .map_err(ProjectFileError::from)?;
+        if !identity.matches(&manifest) {
             return Err(error(
                 "project file identity does not match its embedded manifest",
             ));
@@ -198,7 +202,10 @@ impl ProjectFileStreamDecoder {
         let version = self.header[PROJECT_MAGIC.len()];
         if !matches!(
             version,
-            LEGACY_PROJECT_VERSION | PREVIOUS_PROJECT_VERSION | VERSION
+            LEGACY_PROJECT_VERSION
+                | PREVIOUS_PROJECT_VERSION
+                | PROFILELESS_PROJECT_VERSION
+                | VERSION
         ) {
             return Err(error(&format!(
                 "unsupported project file version {version:02x}"
@@ -227,7 +234,7 @@ impl ProjectFileStreamDecoder {
             .checked_add(function_sections)
             .and_then(|count| count.checked_add(source_sections))
             .ok_or_else(|| error("compiled project cache section count overflows"))?;
-        self.identity = Some(ProjectIdentity {
+        self.identity = Some(ProjectSourceIdentity {
             project_revision,
             source_digest: ProtocolBytes::new(source_digest),
         });

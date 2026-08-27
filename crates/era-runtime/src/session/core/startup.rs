@@ -22,10 +22,21 @@ impl RuntimeSession {
                 "start requires a loaded project in a replaceable state",
             );
         }
+        if let Some(identity) = self
+            .project_snapshot
+            .as_ref()
+            .map(|project| project.manifest.compatibility.clone())
+            && identity.is_experimental()
+        {
+            self.emit(
+                RuntimeMessage::Diagnostic(crate::compatibility::experimental_profile_diagnostic(
+                    &identity,
+                )),
+                Some(message_id),
+            )?;
+        }
         if matches!(request.mode, StartMode::NewGame { .. }) {
             self.advance_epoch();
-        } else {
-            self.retained_title_program = None;
         }
         match request.mode {
             StartMode::NewGame { seed: Some(seed) } => self.start_new_game(seed),
@@ -76,7 +87,6 @@ impl RuntimeSession {
         message_id: u64,
         bytes: &[u8],
     ) -> Result<(), RuntimeError> {
-        self.retained_title_program = None;
         let artifact = self
             .artifact
             .as_ref()
@@ -134,6 +144,7 @@ impl RuntimeSession {
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         vm.commit_runtime_state(last_load)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        self.retained_title_program = None;
         self.save_extensions = decoded.opaque_extensions;
         if let Some(project) = &mut self.project_snapshot {
             project.resource_graph.reset_runtime_graph();
@@ -168,7 +179,6 @@ impl RuntimeSession {
         message_id: u64,
         bytes: &[u8],
     ) -> Result<(), RuntimeError> {
-        self.retained_title_program = None;
         let maximum =
             usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
         let mut payload = match runtime_snapshot::decode(bytes, maximum) {
@@ -204,6 +214,17 @@ impl RuntimeSession {
             .project_snapshot
             .as_ref()
             .ok_or_else(|| RuntimeError::Internal("loaded project identity is missing".into()))?;
+        if payload.compatibility != artifact.artifact().manifest.compatibility {
+            return self.reject(
+                message_id,
+                CommandErrorCode::VersionMismatch,
+                &format!(
+                    "runtime snapshot profile {} does not match active profile {}",
+                    payload.compatibility.profile,
+                    artifact.artifact().manifest.compatibility.profile
+                ),
+            );
+        }
         if payload.artifact_id != artifact.artifact().manifest.artifact_id
             || payload.project_identity != project.project_identity
             || payload.resource_count != u64::try_from(project.resources.len()).unwrap_or(u64::MAX)
@@ -267,6 +288,13 @@ impl RuntimeSession {
                 );
             }
         };
+        if vm_snapshot.compatibility() != &payload.compatibility {
+            return self.reject(
+                message_id,
+                CommandErrorCode::VersionMismatch,
+                "embedded VM snapshot compatibility identity does not match runtime snapshot",
+            );
+        }
         let prepared =
             match RuntimeVm::prepare_restore(artifact.clone(), self.options.vm_config, vm_snapshot)
             {
@@ -318,6 +346,7 @@ impl RuntimeSession {
                 .collect()
         };
 
+        self.retained_title_program = None;
         self.epoch = SessionEpoch(new_epoch);
         self.accepted_message_ids.clear();
         self.vm = Some(vm);
@@ -385,6 +414,7 @@ impl RuntimeSession {
         if let Some((code, message)) = origin_warning {
             self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: None,
                     code: code.into(),
                     level: RuntimeLogLevel::Warning,
                     message: message.into(),

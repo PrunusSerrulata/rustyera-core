@@ -194,6 +194,7 @@ impl RuntimeSession {
                 self.compiled_project_cache = Some(Arc::new(bytes));
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.compiled_cache_ready".into(),
                         level: RuntimeLogLevel::Info,
                         message: "compiled project cache is ready for frontend persistence".into(),
@@ -207,6 +208,7 @@ impl RuntimeSession {
                 self.compiled_cache_failure = Some(error.clone());
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.compiled_cache_failed".into(),
                         level: RuntimeLogLevel::Warning,
                         message: error,

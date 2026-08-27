@@ -313,6 +313,7 @@ impl RuntimeSession {
                             SnapshotExportPurpose::Diagnosis => RuntimeSnapshotOrigin::Diagnosis,
                         },
                         artifact_id: vm.artifact_id(),
+                        compatibility: vm.vm().artifact().manifest.compatibility.clone(),
                         project_identity: project.project_identity,
                         resource_count: u64::try_from(project.resources.len()).unwrap_or(u64::MAX),
                         resource_graph: project.resource_graph.compact_snapshot(),

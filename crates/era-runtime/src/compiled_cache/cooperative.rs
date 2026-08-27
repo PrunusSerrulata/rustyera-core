@@ -218,10 +218,7 @@ impl CooperativeCompiledCacheEncoder {
             MANIFEST_SECTION_INDEX => {
                 let encoder = self
                     .manifest_encoder
-                    .get_or_insert(ManifestSectionEncoder::new(
-                        self.manifest.files.len(),
-                        self.kind,
-                    )?);
+                    .get_or_insert(ManifestSectionEncoder::new(&self.manifest, self.kind)?);
                 let Some(section) = encoder.step(&self.manifest)? else {
                     return Ok(None);
                 };
@@ -320,7 +317,10 @@ pub(super) struct ManifestSectionEncoder {
 }
 
 impl ManifestSectionEncoder {
-    pub(super) fn new(file_count: usize, kind: ProjectContainerKind) -> Result<Self, String> {
+    pub(super) fn new(
+        manifest: &ProjectManifest,
+        kind: ProjectContainerKind,
+    ) -> Result<Self, String> {
         let encoder = zstd::stream::Encoder::new(Vec::new(), kind.compression_level())
             .map_err(|error| error.to_string())?;
         let mut writer = super::io::CountingWriter::new(encoder, None);
@@ -330,9 +330,18 @@ impl ManifestSectionEncoder {
                 ProjectContainerKind::FullProject => MANIFEST_SECTION_MAGIC,
             })
             .map_err(|error| error.to_string())?;
+        manifest
+            .compatibility
+            .validate()
+            .map_err(|error| error.to_string())?;
+        write_bytes(
+            &mut writer,
+            &serde_json::to_vec(&manifest.compatibility).map_err(|error| error.to_string())?,
+        )?;
         write_varint(
             &mut writer,
-            u64::try_from(file_count).map_err(|_| "project manifest has too many files")?,
+            u64::try_from(manifest.files.len())
+                .map_err(|_| "project manifest has too many files")?,
         )?;
         Ok(Self {
             writer: Some(writer),
