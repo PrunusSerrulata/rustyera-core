@@ -954,6 +954,56 @@ mod console_tests {
     }
 
     #[test]
+    fn safe_console_native_policy_keeps_unchecked_wrapping_and_the_pure_boundary() {
+        let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        for (source, expected) in [
+            ("TOINT(\"9223372036854775808\")", 0),
+            ("UNCHECKED_ADD(9223372036854775807, 1)", i64::MIN),
+            (
+                "UNCHECKED_SUB(TOINT(\"-9223372036854775808\"), 1)",
+                i64::MAX,
+            ),
+            ("UNCHECKED_MUL(9223372036854775807, 2)", -2),
+            ("UNCHECKED_NEG(TOINT(\"-9223372036854775808\"))", i64::MIN),
+        ] {
+            let mut diagnostics = Vec::new();
+            assert_eq!(
+                parse_console_expression_with_compatibility(source, &[], &snake, &mut diagnostics),
+                Ok(VmValue::Integer(expected)),
+                "{source}",
+            );
+            assert!(diagnostics.is_empty(), "{source}");
+        }
+        assert!(parse_console_expression("TOINT(\"9223372036854775808\")", &[]).is_err());
+        for source in [
+            "RAND(2)",
+            "GETKEY(1)",
+            "TOINT(1)",
+            "UNCHECKED_ADD(1, 2, 3)",
+            "UNCHECKED_NEG(1, 2)",
+        ] {
+            assert!(
+                parse_console_expression_with_compatibility(source, &[], &snake, &mut Vec::new())
+                    .is_err()
+            );
+            assert!(parse_console_expression(source, &[]).is_err());
+        }
+        assert_eq!(
+            parse_console_expression("UNCHECKED_ADD(9223372036854775807, 1)", &[]),
+            Ok(VmValue::Integer(i64::MIN)),
+        );
+        assert_eq!(
+            parse_console_expression_with_compatibility(
+                "ISNUMERIC(\"9223372036854775808\")",
+                &[],
+                &snake,
+                &mut Vec::new()
+            ),
+            parse_console_expression("ISNUMERIC(\"9223372036854775808\")", &[]),
+        );
+    }
+
+    #[test]
     fn safe_console_keeps_ternary_evaluation_lazy() {
         for compatibility in [
             CompatibilityIdentity::reference(),

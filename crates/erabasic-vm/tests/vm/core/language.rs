@@ -117,6 +117,108 @@ fn prefix_and_postfix_preserve_profile_specific_return_and_storage_at_integer_bo
 }
 
 #[test]
+fn snake_unchecked_calls_and_toint_use_the_compiled_native_policy() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#DIM HIGH
+#DIM LOW
+#DIMS NUMBER
+HIGH = 9223372036854775807
+LOW = -9223372036854775807 - 1
+RESULT:0 = UNCHECKED_ADD(HIGH, 1)
+RESULT:1 = UNCHECKED_SUB(LOW, 1)
+RESULT:2 = UNCHECKED_MUL(HIGH, 2)
+RESULT:3 = UNCHECKED_NEG(LOW)
+NUMBER '= "9223372036854775808"
+RESULT:4 = TOINT(NUMBER)
+RESULT:5 = TOINT("0b102")
+RESULT:6 = TOINT("12.99")
+RETURN RESULT:0
+"#,
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::default()
+        },
+    );
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm
+        .spawn_entry(artifact.functions[0].key, Vec::new())
+        .unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        matches!(vm.fiber_status(fiber), Some(FiberStatus::Completed(_))),
+        "{report:?}"
+    );
+    for (index, expected) in [i64::MIN, i64::MAX, -2, i64::MIN, 0, 0, 12]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(
+            vm.read_variable(result, &[index as u64], None),
+            Ok(VmValue::Integer(expected))
+        );
+    }
+}
+
+#[test]
+fn snake_toint_does_not_catch_errors_evaluating_its_argument() {
+    let artifact = compile_source_with_options(
+        r"@SYSTEM_TITLE
+#DIMS VALUES, 1
+#DIM INDEX
+INDEX = 99
+RESULT = 73
+RESULT = TOINT(VALUES:INDEX)
+RETURN
+",
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::default()
+        },
+    );
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(artifact.functions[0].key, Vec::new())
+        .unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(73))
+    );
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. }))
+    );
+}
+
+#[test]
 fn dynamic_method_depth_failure_preserves_the_targets_persistent_argument() {
     let artifact = compile_source(
         r#"@DEPTH_ENTRY

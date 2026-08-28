@@ -200,6 +200,62 @@ fn era_numeric_parser_keeps_reference_prefix_fraction_and_whitespace_rules() {
 }
 
 #[test]
+fn snake_toint_catches_integer_reader_errors_without_changing_isnumeric() {
+    let reference = erabasic_compat::CompatibilityIdentity::reference();
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    for value in [
+        "9223372036854775808",
+        "-9223372036854775809",
+        "0x10000000000000000",
+        "0b102",
+        "2e",
+        "2e2147483648",
+        "2e999",
+    ] {
+        let arguments = vec![VmValue::String(value.into())];
+        assert!(
+            evaluate_pure_native_with_compatibility("TOINT", arguments.clone(), &reference)
+                .is_err(),
+            "{value}",
+        );
+        assert_eq!(
+            evaluate_pure_native_with_compatibility("TOINT", arguments.clone(), &snake),
+            Ok(VmValue::Integer(0)),
+            "{value}",
+        );
+        assert_eq!(
+            evaluate_pure_native_with_compatibility("ISNUMERIC", arguments.clone(), &snake),
+            evaluate_pure_native_with_compatibility("ISNUMERIC", arguments, &reference),
+            "{value}",
+        );
+    }
+    for (value, expected) in [
+        ("12.99", 12),
+        ("0x10", 16),
+        ("0b101", 5),
+        ("2e3", 2000),
+        (" 12", 0),
+        ("12x", 0),
+        ("", 0),
+    ] {
+        assert_eq!(
+            evaluate_pure_native_with_compatibility(
+                "TOINT",
+                vec![VmValue::String(value.into())],
+                &snake,
+            ),
+            Ok(VmValue::Integer(expected)),
+        );
+    }
+    assert!(
+        evaluate_pure_native_with_compatibility("TOINT", vec![VmValue::Integer(1)], &snake)
+            .is_err(),
+    );
+}
+
+#[test]
 fn unchecked_natives_wrap_even_under_the_snake_arithmetic_policy() {
     let snake = erabasic_compat::CompatibilityIdentity::for_profile(
         erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,

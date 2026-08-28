@@ -622,22 +622,46 @@ fn postmortem_error(messages: &[DebugMessage], expected: DebugErrorCode) {
 }
 
 fn faulted_debug_session(fault_expression: &str) -> (RuntimeSession, GrantToken) {
+    faulted_debug_session_with_profile(fault_expression, false)
+}
+
+fn faulted_debug_session_with_profile(
+    fault_expression: &str,
+    snake: bool,
+) -> (RuntimeSession, GrantToken) {
     let mut session = negotiated_session();
     session.options.debug_scope_mask = u64::MAX;
+    let mut files = vec![SubmittedFile {
+        relative_path: "main.erb".into(),
+        category: FileCategory::Erb,
+        payload: FilePayload::Utf8(format!(
+            "@SYSTEM_TITLE\nRESULT:10 = 777\nRESULT:10 = {fault_expression}\nRESULT:11 = 999\nRETURN\n",
+        )),
+        content_hash: None,
+    }];
+    let compatibility = if snake {
+        files.push(SubmittedFile {
+            relative_path: "reraconfig.toml".into(),
+            category: FileCategory::Configuration,
+            payload: FilePayload::Utf8(
+                "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n"
+                    .into(),
+            ),
+            content_hash: None,
+        });
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        )
+    } else {
+        erabasic_compat::CompatibilityIdentity::reference()
+    };
     submit(
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
-            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+            compatibility,
             project_revision: 1,
-            files: vec![SubmittedFile {
-                relative_path: "main.erb".into(),
-                category: FileCategory::Erb,
-                payload: FilePayload::Utf8(format!(
-                    "@SYSTEM_TITLE\nRESULT:10 = 777\nRESULT:10 = {fault_expression}\nRESULT:11 = 999\nRETURN\n",
-                )),
-                content_hash: None,
-            }],
+            files,
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -673,6 +697,61 @@ fn faulted_debug_session(fault_expression: &str) -> (RuntimeSession, GrantToken)
         ],
     );
     (session, grant)
+}
+
+#[test]
+fn postmortem_console_uses_active_snake_policy_without_mutating_stop() {
+    let (mut session, grant) = faulted_debug_session_with_profile("GCREATE(752, 0, 1)", true);
+    let stop = postmortem_pause(&mut session, grant);
+    for (source, expected, warning) in [
+        (
+            "9223372036854775807 + 1",
+            i64::MAX,
+            Some("compat.arithmetic.overflow"),
+        ),
+        (
+            "9223372036854775807 + 1",
+            i64::MAX,
+            Some("compat.arithmetic.overflow"),
+        ),
+        ("TOINT(\"9223372036854775808\")", 0, None),
+        ("UNCHECKED_MUL(9223372036854775807, 2)", -2, None),
+        ("1 || (1 / 0)", 1, None),
+    ] {
+        let messages = postmortem_request(
+            &mut session,
+            grant,
+            DebugCommand::Console {
+                stop,
+                command: ConsoleCommand::Evaluate {
+                    source: source.into(),
+                },
+            },
+        );
+        let [DebugMessage::Response(DebugResponse::Console(outcome))] = messages.as_slice() else {
+            panic!("expected safe snake evaluation: {messages:?}");
+        };
+        assert_eq!(
+            outcome.value,
+            Some(DebugValue::Integer(expected)),
+            "{source}"
+        );
+        assert_eq!(
+            outcome
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>(),
+            warning.into_iter().collect::<Vec<_>>()
+        );
+        assert!(outcome.changed_variables.is_empty());
+        assert_eq!(outcome.stop, stop);
+    }
+    assert_eq!(session.revision, stop.runtime_revision);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[10], None).unwrap(),
+        777
+    );
 }
 
 fn postmortem_result_reference(

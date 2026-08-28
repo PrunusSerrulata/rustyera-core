@@ -344,7 +344,8 @@ impl NativeServiceRegistry {
                     CoreNative::new(
                         name.into(),
                         artifact.project_data.static_data.legacy_encoding,
-                    ),
+                    )
+                    .with_compatibility(&artifact.manifest.compatibility),
                 );
                 registry.path_memo_safe_keys.insert(native.import.key);
             }

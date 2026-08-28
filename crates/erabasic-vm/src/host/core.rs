@@ -5,6 +5,7 @@ pub(super) struct CoreNative {
     pub(super) name: String,
     pub(super) legacy_encoding: LegacyEncoding,
     regex_cache: RegexCache,
+    numeric_read_fallback: bool,
 }
 
 const REGEX_CACHE_CAPACITY: usize = 16;
@@ -48,7 +49,16 @@ impl CoreNative {
             name,
             legacy_encoding,
             regex_cache: RegexCache::default(),
+            numeric_read_fallback: false,
         }
+    }
+
+    pub(super) fn with_compatibility(
+        mut self,
+        compatibility: &erabasic_compat::CompatibilityIdentity,
+    ) -> Self {
+        self.numeric_read_fallback = compatibility.uses_snake_numeric_read_fallback();
+        self
     }
 }
 
@@ -147,6 +157,7 @@ pub fn evaluate_pure_native_with_compatibility(
         implicit_places: BTreeMap::new(),
     };
     CoreNative::new(name, LegacyEncoding::default())
+        .with_compatibility(compatibility)
         .call(request)?
         .value
         .ok_or_else(|| "pure core-native service returned no value".into())
@@ -237,7 +248,17 @@ impl NativeService for CoreNative {
                 }
                 VmValue::String(value.into())
             }
-            "toint" => VmValue::Integer(parse_era_numeric(string(0)?, false)?.unwrap_or(0)),
+            "toint" => {
+                // Only integer-reader errors are swallowed. Evaluating or obtaining the string
+                // argument remains outside the fallback, matching the snake evaluator's try block.
+                let value = string(0)?;
+                let parsed = match parse_era_numeric(value, false) {
+                    Ok(value) => value,
+                    Err(_) if self.numeric_read_fallback => None,
+                    Err(error) => return Err(error.into()),
+                };
+                VmValue::Integer(parsed.unwrap_or(0))
+            }
             "isnumeric" => {
                 VmValue::Integer(i64::from(parse_era_numeric(string(0)?, true)?.is_some()))
             }
@@ -551,6 +572,22 @@ fn checked_float_to_integer(value: f64, operation: &str) -> Result<VmValue, Stri
     Ok(VmValue::Integer(value as i64))
 }
 
+/// Failure confined to the reference integer reader, before TOINT's trailing-fraction check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct NumericReadError(&'static str);
+
+impl From<&'static str> for NumericReadError {
+    fn from(message: &'static str) -> Self {
+        Self(message)
+    }
+}
+
+impl From<NumericReadError> for String {
+    fn from(error: NumericReadError) -> Self {
+        error.0.into()
+    }
+}
+
 /// Parse the numeric grammar used by Emuera's TOINT and ISNUMERIC methods.
 /// Unlike Rust's `FromStr`, the reference accepts binary/hex prefixes,
 /// integer exponents, and a discarded decimal fraction, but never whitespace.
@@ -561,7 +598,10 @@ fn checked_float_to_integer(value: f64, operation: &str) -> Result<VmValue, Stri
     clippy::cast_precision_loss,
     clippy::too_many_lines
 )]
-pub(super) fn parse_era_numeric(value: &str, numeric_check: bool) -> Result<Option<i64>, String> {
+pub(super) fn parse_era_numeric(
+    value: &str,
+    numeric_check: bool,
+) -> Result<Option<i64>, NumericReadError> {
     if value.is_empty() || !value.is_ascii() {
         return Ok(None);
     }
