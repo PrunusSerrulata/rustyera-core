@@ -7,6 +7,8 @@ PRINTBUTTON "SNAKE_POINTER_TARGET", 41
 PRINTL
 PRINTL SNAKE_POINTER_READY
 INPUT
+; Accepted input adds a console row; restore the actual hover geometry before sampling.
+CLEARLINE 1
 RESULT:70 = MOUSEX()
 RESULT:71 = MOUSEY()
 RESULTS:72 '= MOUSEB()

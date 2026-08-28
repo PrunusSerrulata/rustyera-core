@@ -9,7 +9,7 @@ Split budgets use the actual `HTML_STRINGLEN` half-width units. A literal one-un
 
 Canvas 741 is never mounted: sample opaque red then blue immediately after writes. Expected SNAKE_CANVAS=4294901760/4278190335/2/2 for independent revision replay and two explicit 2px sprite widths. Default image height follows the configured font size and is covered separately; it is not the source bitmap height. The declared PNG is two authored pixels (2x1 red/half-alpha blue). Missing image measurement is observed but never conflated with a declared-file decode/hash failure.
 
-Pointer is sampled after actual visible button input. Assert the String MOUSEB="41", logical x in viewport and y relative to lower client edge. Separate driver actions must cover scroll/resize/leave/blur and stale async replies; this script alone is not evidence for those cases.
+Pointer is sampled after actual visible button input. `CLEARLINE 1` removes the accepted input row before sampling so the target remains under the real pointer. Assert the String MOUSEB="41", logical x in viewport and y relative to lower client edge. Hover remains observable while the input button is retired; it does not grant permission to submit it again. Separate driver actions must cover scroll/resize/leave/blur and stale async replies; this script alone is not evidence for those cases.
 
 No SQL, title playability, new tags, Float or scene claims. TUI must refuse HTML v2; use the data-only combination fixture for its successful ingestion/structured/GLOBAL path. Distinct minimal unsupported fixtures are below the ignored staging area and will be promoted with tests.
 

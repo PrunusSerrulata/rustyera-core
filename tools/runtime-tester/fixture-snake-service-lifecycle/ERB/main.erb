@@ -26,6 +26,8 @@ PRINTL
 PRINTL SNAKE_LIFECYCLE_POINTER_READY
 INPUT
 REPEAT 6
+    ; Remove only the accepted input row so the pointer target does not shift before sampling.
+    CLEARLINE 1
     LIFE_X:COUNT = MOUSEX()
     LIFE_Y:COUNT = MOUSEY()
     LIFE_BUTTON:COUNT '= MOUSEB()
