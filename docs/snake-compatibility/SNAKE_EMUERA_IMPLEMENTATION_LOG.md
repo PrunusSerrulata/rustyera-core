@@ -1,6 +1,6 @@
 # 蛇版 Emuera 适配：分批次实施与验收记录
 
-> 文档状态：批次 0 已完成；批次 1 实施中，其他批次仍待登记。批次 0 完成范围是 profile、隔离、基线与门禁，不是完整蛇版语义或蛇版 TW 可玩性。
+> 文档状态：批次 0、批次 1 已完成，保留各批明确差异；其他批次仍待登记。批次 0 完成范围是 profile、隔离、基线与门禁，不是完整蛇版语义或蛇版 TW 可玩性。
 
 ## 文档职责与填写规则
 
@@ -37,7 +37,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | 批次 | 范围 | 状态 | 最近更新 / 负责人 | 当前结论 / 下一步 |
 |---|---|---|---|---|
 | [0](#batch-0) | 建立基线、profile 与门禁 | 已完成 | 2026-08-27 / Codex | 三端、双 oracle、8 游戏基线与 9 份覆盖报告已验证；后续语义差异逐例保留，磁盘已治理 |
-| [1](#batch-1) | 完整摄取与参考能力阻塞项 | 实施中 | 2026-08-27 / Codex | 详细方案已确认；开始 1A 摄取/ERD/ALS，尚未审查或测试 |
+| [1](#batch-1) | 完整摄取与参考能力阻塞项 | 已完成 | 2026-08-28 / Codex | 1A–1D分项提交及必要验收完成；参考/像素差异与后置资源阻塞见验收汇总，不代表蛇版TW完整可玩 |
 | [2](#batch-2) | 确定性 API、输入与兼容差异骨架 | 待登记 | 待填写 | 待填写 |
 | [3](#batch-3) | 安全 SQL（蛇版 TW P0） | 待登记 | 待填写 | 待填写 |
 | [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 待登记 | 待填写 | 待填写 |
@@ -423,7 +423,7 @@ WASM/native core SHA。不得自动推送/合并；远端不可获取的本地 S
 
 ## 批次 1：完整摄取与参考能力阻塞项
 
-计划入口：[改造思路 / 批次 1](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-1)。状态：实施中；负责人 / 最近更新：Codex / 2026-08-28。
+计划入口：[改造思路 / 批次 1](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-1)。状态：已完成（保留明确差异）；负责人 / 最近更新：Codex / 2026-08-28。
 
 ### 具体实施方案
 
@@ -438,7 +438,7 @@ WASM/native core SHA。不得自动推送/合并；远端不可获取的本地 S
 | 1A | 已完成，保留明确差异与观察限制 | 1 | 2026-08-27 23:25:42 +08:00 | core、runtime-tester、TUI、Web Vitest/Rust、oracle Python、supervisor unit 各启动一次 | S01/S02、三端摄取和只读资源清单；动态已启动，首次失败与定向复验分别记录 |
 | 1B | 已完成本子批范围，保留明确差分边界 | 1 | 2026-08-28 01:47:57 +08:00 | core workspace / runtime-tester 首次通过 | 双 oracle 各 23 可比项匹配；错误观察限制与批次 2 实参差异见下文 |
 | 1C | 已完成并分项提交；差异及首次失败保留 | 1 | 2026-08-28 03:17:34 +08:00 | core/tool/TUI/Web Vitest/Web Rust、双 smoke/列 Oracle、Python driver、四项 BBAS 各一次 | S12、GLOBAL、安全读取；三端实际数据断面通过 |
-| 1D | 静态门禁中，Clippy 失败修复中 | 1 | 已启动，无总时限 | 无 | 格式及 check 定向修复通过，尚无最小回归/全量/动态 |
+| 1D | 已完成；差异与首次失败保留 | 1 | 2026-08-28 05:52:36 +08:00，无总时限 | core/tool/Python/TUI/Web Vitest/Web Rust/双 smoke 各一次；另有用户单次授权TW重跑 | 三浏览器/TUI/Tauri组合、四端生命周期与服务对照、有效TW v3报告已具证据；已披露参考/像素差异，分项提交与最终来源检查完成 |
 
 #### 1A 实施进度（静态已执行，动态验收未完成）
 
@@ -1006,6 +1006,72 @@ C ABI 由本组 `target/core-static/debug/libera_runtime_capi.dylib` 重建，SH
   文件、WASM/C ABI、批次 0 或 1C 冻结证据；没有下载 Chromium。
 
 
+#### 1D 集成进度（2026-08-28，尚未完成）
+
+- 发布契约 core `375e48d3d39f7f146a64edf580bd6648bcf21829`，两前端完整 pin 相同。
+  core 分项提交见 `1D/commits/core-commits.json`；TUI 当前
+  `93fd19b8c63491a95342e28dcb9f4c76be078af1`。产品版本未调整，无推送/主线合并。
+  捕获期间暂保持 core HEAD，不提交后续 fixture/记录更正；这些更正按实际 source hash 与
+  dirty 状态披露，不能被误称为已发布代码。
+- 唯一重构审查仍为一次，R1–R6 均在首条测试前落实；没有重启审查或重跑已消耗的全量。
+  所有测试由 gpt-5.6-terra/low 执行者只读执行。无测试总 deadline，保留单命令限制、
+  静态先于相关动态及五秒完整状态看门狗。
+- TUI 首次 pytest 480 通过、5 跳过。真实 C ABI 能力测试首次因 basetemp 父目录缺失而
+  未执行任何参数；修复任务目录后仅定向 5/5 通过。源码库和打包库均完成实际 RuntimeWorker
+  数据组合，GLOBAL:0=7、FLAG:0=55、C1_METHOD_VALUE:0=42；seed=123456。
+  `1D/tui-dynamic-summary.json` 保留命令、trace 和库摘要，不能把原跳过描述为首次通过。
+- Web 首次完整 Vitest 为 1209 通过、1 失败；mediaImage 测试卸载隔离修复后定向 20 通过，
+  不称修复后全量通过。Web Rust 首次 130 通过、1 既有 ignored。类型、lint、格式、build、
+  WASM、core pin 检查与适用 Rust 门禁通过。普通 cargo webdriver build 只证明原生 Rust
+  宿主构建；真实 Tauri 还须另行嵌入当前 dist 并验收。
+- Chromium 真实服务依次暴露并修复：WASM number/bigint 边界（`8e25729`）、相同 viewport
+  重复观察误增 revision（`afd6ea4`）、sprite 尺寸/编码 canvas 字节边界（`69f847e`）。
+  对应定向测试分别 81、302、155 通过，相关类型/lint/格式/build 恢复通过。
+  fallback 字体下一半角单位不足以容纳 A 是正确 NoProgress；两个 client fixture 改用实际
+  HTML_STRINGLEN 半角单位生成宽度，保留宽度回调副作用，专用 no-progress fixture 不变。
+- DOM 诊断证明按钮已渲染，但逐字符 text-layout 的无障碍名称不等于完整脚本文本。
+  `7b06413` 以规范文本提供 aria-label，`dd3584f` 修复测量用 HTML 节点的静态 ref 警告。
+  158 项定向与相关静态通过，保留原精确 role/name 断言。
+- 两套参考源码均由 PointingString 提供 MOUSEB，与能否提交按钮分开。
+  Web `ce58c9ab2e39d91b26e8eb12ebd49bcc6a19498c` 移除错误的输入资格过滤，保留真实 hit test、
+  epoch 和原点击门禁。fixture 在 INPUT 后 CLEARLINE 1 移除输入行以恢复实际 hover 几何。
+  158 项定向及相关静态通过；两个更改后的 fixture 由正确 core-static 工具编译接受。
+- `chromium-snake-services-repair-6` exit0：真实 role/name、hover/click、RESULTS:72="41"，
+  HTML、canvas 与像素覆盖标记全部满足；`chromium-snake-batch1-first` exit0，数据和服务组合
+  目标满足。此前失败逐条保留于 `1D/chromium-dynamic-summary.json` 和独立 trace。
+- 首次 headful lifecycle 在挂起图片 race 处失败：驱动认为 canvas service 已提前回复。
+  失败瞬间完整 DOM/runtime 诊断确认：当前请求记录 195 无回复，旧记录 35 因重用 epoch/ID
+  被误匹配。`26547e4` 保留失败边界快照，`4fd100c` 增加实际前端会话代次和记录顺序匹配；
+  271 项定向与相关静态通过后，repair-1 被五秒看门狗判停：旧解码已取消、新服务已完成，
+  但所选 lifecycleGeneration 只随 teardown 变化，重启仍为 0，驱动无法区分。现改为在两处真实
+  createSession 时递增独立观察代次，补首次打开/连续重启回归；`59fb408` 的 271 项与相关静态通过。
+  repair-2/3 的前五项 pointer 和两个真实 held-image race 均通过内部断言，旧解码 cancelled 后
+  新 session 服务完成，随后释放剩余 38/71 字节并观察旧解码 settled；没有旧 session 晚回复。
+  整体仍 exit1，唯一阻塞为 trusted blur 未出现。`32cfe7a` 改为独立原生 Chromium 进程、
+  default context 与 noDefaults 连接，避免 Playwright 默认焦点模拟；未注入事件或放宽断言。
+  `6e623f0` 修复最小服务捕获缺少 remoteFS HTTP 路由的问题，使用真实 FileList 摄取；首次
+  original 捕获判停、snake/adapter 尚未运行。两个脚本 syntax、137 项与 lint/format 通过，
+  后续定向动态待完成。Firefox 生命周期另需有窗口模式，其余流程保持原来的 headless 设置。
+- 固定原版、蛇版 smoke 各首次 exit0；蛇版 8 组共 66 请求通过。
+  baseline 仍为原版 `26a35dc9334bb67590b96f7b8efbefbf199e391e`、蛇版
+  `fc4fb21416768c17256d0e82f997e5f99c9bba91`，wrapper 与发布 EXE 摘要另见
+  `1D/oracle-smoke-summary.json`。本阶段无参考仓修改。smoke 不是同输入差分。
+  四个 original/snake 普通/危险 fixture 的 v3 静态报告均编译接受、0 error，
+  `1D/oracle-fixture-static-summary.json` 记录实际输入摘要；136 个客户端服务捕获尚未开始。
+- TW 覆盖执行者误用了旧 `target/runtime-tester-static`，首次 exit0 的报告实际是 v2 裸
+  JSON，不能计入 1D。正确工具应为 `target/core-static/debug/rustyera-runtime-tester`，
+  SHA256 `40519bd4475f22b77bcd5c59556b79f23afa11bf314e2be7a625a9f50df9a588`。
+  首次 full claim 保留，正确重跑等待用户明确许可，不暗中重置次数。
+  2,166,129,477 字节错误报告按原字节流压缩为 120,929,866 字节归档，核对解压 SHA 后
+  经批准只删展开重复，见 `1D/tw-coverage/invalid-v2-archive.json`。
+- 当前空闲约 16 GiB，保持单构建，不删除 B0/1C 证据、共享游戏、用户数据或其他任务产物。
+  没有下载 Chromium，仅复用既有可执行文件，依赖/target/WASM/会话仍属于本组。
+  尚需 Firefox/Safari/Tauri、完整生命周期、双 profile 服务差分、有效 TW v3 及最终提交记录；
+  根 CHANGELOG_PENDING 尚未追加 1D 功能，批次 1 不标完成，不作真实标题/SQL/GRAPH_DB_INIT
+  已运行结论。当前恢复入口为 `1D/delivery-notes-draft.md`、`dynamic-authorization.json`、
+  `validation/runs/` 与每条独立 trace。
+
+
 ### 所作改动
 
 | 功能/修复项编号 | 组件与文件 | 实际改动及理由 | 契约/兼容性影响 | commit 与依赖 |
@@ -1035,6 +1101,925 @@ C ABI 由本组 `target/core-static/debug/libera_runtime_capi.dylib` 重建，SH
 - 各组件提交、分项对应关系、发布/迁移注意事项、CHANGELOG_PENDING 更新情况：待填写。
 - 当前轮次/起止时间、最近观察状态或指标、材料与复现命令、下一步恢复入口：待填写。
 - 临时材料保留/清理、相关进程停止与资源释放情况：待填写。
+
+#### 1D 用户要求暂停（2026-08-28，本次验证已结束）
+
+- 用户要求“运行完本次验证后先暂停”；两位执行者已经完成当前命令并停止，未开启新验证。
+  只读进程检查没有发现本组 worktree 路径的残留进程。测试总 deadline 仍为 null，
+  续做保留唯一审查和已消耗的全量次数，不重置批次。
+- Web 当前 `49605f940643de967370ac9b30f31b020f2c693e`，工作树干净。
+  新修复分项：`f19849e` canonical full manifest CBOR；`e1ce84d` transfer 前保存 bulk 摘要；
+  `91de00c` terminal fault 前写完整快照；`6aeaea9` 全体 HTML 前缀在同一已就绪 DOM 布局中
+  独立 shaping 并同步读宽度；`3e63d27` 覆盖真实 bridge 顶层 dataBytes；`49605f9` 捕获阶段日志。
+  1D 初次完整 Vitest 的 1209 通过/1 失败不改写，后续全部为定向复验。
+- repair16 初次定向 443/444，修正 Node structuredClone 的接收 realm 建模后 testingControl
+  11/11；repair17 HTML/service/capture support 162/162，sidecar/runtimeStore 197/197。
+  两轮相关 typecheck/lint/format/build 与脚本语法均通过。当前 dist 主包
+  `index-DdDviIux.js`，WASM/core pin 未变化。
+- Firefox services 定向 repair1 通过；Firefox batch1 初次因 full-prefix/whole-width 不一致
+  失败，实际 payload 为 AAAA 整体 48000 millipixels、前缀 0/9000/18000/27000/36000。
+  同一 DOM 布局修复后 batch1 repair1 通过所有数据、HTML、canvas、GLOBAL 标记。
+  完整原始快照和精确请求/回复见 `1D/firefox-html-font-failure.json`。
+- Firefox lifecycle 首次退出 1：resize 后 pointer #3 坐标吻合，但实际命中 INPUT，MOUSEB
+  为空而驱动要求 41；两个挂起图片 race 尚未开始。下一步应修正驱动的真实滚动/悬停准备并
+  观察命中目标，不修改 runtime 返回值来满足预期。Chromium trusted blur 仍未验收通过。
+- Chromium 原版最小服务捕获 repair4 已完成真实项目身份导出，但比对 csv/GAMEBASE.CSV
+  时失败：源文件 80 字节，download summary 的 UTF-8 payload 长度为 0。
+  下一步核查 projectFileManifest 的轻量身份表示与实际导出 payload 的关系；未证实是产品
+  数据丢失，不移除 hash/长度校验。adapter、蛇版最小捕获和后续服务差分均未启动。
+- core 继续冻结 `375e48d3d39f7f146a64edf580bd6648bcf21829`，TUI 干净
+  `93fd19b8c63491a95342e28dcb9f4c76be078af1`；两前端发布 pin 指向该 core。
+  core 的已验证 fixture 更正和实施记录暂保留 dirty，避免在捕获链路中间改变冻结身份；
+  暂停清单逐文件记录摘要，恢复后先核对。未增加未验证产品代码，不推送、不合并、不改产品版本。
+- 暂停时磁盘可用约 15 GiB，1D 证据约 580 MiB。保留全部 trace、fixture、专属项目副本和
+  失败报告；没有下载 Chromium，也没有删除用户数据或批次 0/1C 证据。
+  `CHANGELOG_PENDING.md` 本段未追加 1D 功能，最终验收完成后再汇总。
+- 恢复入口：本组 `batch-1-work/1D/pause-20260828.json`、`delivery-notes-draft.md`、
+  `repair16-acceptance.json`、`repair17-acceptance.json`；继续未完成的三浏览器/Tauri、双 Oracle
+  服务差分及有效 TW v3 覆盖。TW 首次误用旧工具的记录保留，重跑例外仍待用户明确同意。
+  批次 1 未完成；SQL 和缺失 bbas_map_schema.xml/bbas_map.xml 仍是后续明确阻塞。
+
+#### 1D 恢复与 repair18（2026-08-28）
+
+- 用户恢复执行并再次要求管理磁盘；核对暂停清单中的全部 core dirty 文件摘要一致，
+  Web/TUI 基线未变化。空闲约 16 GiB，保持单构建，10 GiB 以下停止新增高写入任务。
+- 已确认 capture 的零长度来自 `decode_project_file_frontend_manifest` 的既有 compact
+  行为，并非已证实的项目导出数据丢失。Web shared bridge 新增只读、有界的实际导出
+  identity 观察：复用完整项目 decoder，逐 payload 校验 BLAKE3 并返回长度/摘要，无源码
+  或资源字节回传。Browser 经 WASM Worker、Tauri 经 native blocking command 调用同一实现，
+  仅测试诊断记录使用；不改变 core 协议、C ABI、产品版本或前端 core pin。
+- 生命周期驱动在目标 hover 前显式执行真实 scrollIntoView，避免 resize 后 WebDriver 将
+  指针移到被 INPUT 覆盖的元素中心；不修改 pointer 返回值或降低坐标/脚本值断言。
+- 161 个 JS 定向用例及 typecheck/lint/format/脚本语法通过；Rust workspace check、Clippy、
+  最小真实项目导出回归通过。WASM 与后续动态验证进行中，不能据此标记批次完成。
+  唯一审查、首次全量及失败记录全部继承，未重置；没有下载 Chromium。
+
+
+#### 1D repair18–20 定向验证进展（2026-08-28）
+
+- repair18 的 WASM/build/core-rev 均已通过，Web `488aa44` 保存实际导出 payload identity，
+  `e87b30d` 修正生命周期 hover 前滚动。Firefox lifecycle repair1 exit0，含真实失焦和两个
+  挂起解码换代场景；大 stdout JSON 被 driver warning 插入，保留原始记录，不宣称它是完整
+  可解析报告，后续原生报告需单独持久化。
+- Safari services 首次因真实输入框已填写 `1` 但 pointer submit 未推进而被原有看门狗终止。
+  `cc1ef9b` 复用已有 Safari 原生 Enter 提交，repair1 exit0；Safari batch1 首次 exit0，
+  摄取/动态方法/资源/MAP/XML/DT/GLOBAL/HTML/canvas 组合标记均达成。
+- `7ecca52` 补充 typed inspection 失败现场记录。capture repair6 证实同 epoch2、wait7 下，
+  BigInt debug stop 被 JSON.stringify 拒绝，停留 debug_paused；并非游戏流程越过终点。
+  主体修复以精确整数比较全部 stop 字段，并对测试观察返回值复用 JSON 安全序列化。
+  定向行为回归已运行；首轮类型检查的测试 mock 错误已记录，修复后门禁仍在进行。
+- repair19 的 49 项定向测试及全部相关静态门禁通过，证据位于 `1D/repair19-static.json`；
+  动态证据索引 `1D/repair19-dynamic-summary.json`。未重跑全量、未重开审查、未下载 Chromium。
+  1D 尚未完成：Tauri、其余生命周期/真实采集差分及 TW v3 覆盖例外授权仍待处理。
+- 当前磁盘约 23 GiB 可用，继续串行构建；未清理任何用户数据、批次0证据或续做材料。
+
+#### 1D repair21–24：证据整数与覆盖看门狗（2026-08-28）
+
+- Web `79ed2eb` 保留精确 BigInt debug stop 身份并安全返回测试观察，`af1c545` 复用 Safari
+  原生输入提交。repair20 最终 188 个 runtimeStore 定向用例及 typecheck/lint/format/build
+  均通过；此前两次类型失败保留，未重跑 workspace 全量。
+- Python adapter 分别修复合法十进制版本号、JS UTF-16 完整路径排序与 Path 分段排序差异、
+  typed reference 的整数表示及省略/null 可选字段等价。原始协议证据不改写，错误 index、
+  generation、fiber 仍拒绝。repair21/22/23 定向测试分别 14/14/15 通过；最初错误 Python
+  环境缺 blake3 的失败单列，不当成产品问题，也不删除失败证据。
+- Chromium `s04-empty-lazy` 两个 profile 均完成真实 capture、adapter 校验及固定 seed123456
+  的同输入 Oracle 差分：原版、蛇版均 `matched_observables`，ok/termination/output/watches/
+  diagnostics 无差异。原版 adapter SHA256 `95903d3e06221ce4f208dd404b1e4945d22e478cdb428dca99efb239df259840`，
+  蛇版 `af429ea0eb83250bbba47e6b3b6c0da999f532a0e76c654dbfb49a5ae6b57584`；证据在
+  `1D/oracle-original-empty-first/`、`1D/oracle-snake-empty-first/`。仅一个用例，不代表服务矩阵通过。
+- 上次获准的 TW v3 全量重跑使用正确 tester `40519bd…`，115.46s exit2：最后状态为
+  `appearance_parse`、`PLAY_GOMOKU.ERB`、5,068,424 appearances；连续两次 5s 状态相同，
+  看门狗正确执行终止，未生成完整报告。首次旧 v2 工具报告和此次失败分别保留；没有用重命名
+  批次恢复次数。用户随后仅有条件允许再跑一次：先证明能解决该看门狗终止，避免重复浪费。
+- 排查发现排序阶段沿用最后一个文件的解析状态。repair21/24 在相同稳定排序比较器中每
+  16,384 次真实比较发布状态；补齐标题/GRAPH_DB_INIT 断面的索引、引用与边遍历进度。
+  不改变排序键、稳定同键顺序、报告字段或 watchdog 的 5s 相同即失败规则。
+  流式报告已有实际成功写入字节进度，未改用计时心跳。新增显式 ignored 压力测试使用生产
+  watchdog 父子进程、5,068,424 条乱序记录、100,000 条断面引用，不落地大报告。
+- repair24 fmt/check/Clippy/build、19 个 coverage 定向测试、5 个 watchdog 测试均通过。
+  首次压力主体通过：100,823,044 次比较、排序 14.39s、引用图 1.15s、完整键稳定顺序正确；
+  三个 5s 排序样本实际比较数持续增加。外层 `/usr/bin/time -l` 因系统资源读取权限返回1，
+  该命令仍记失败，正以审批后的同一定向命令补齐峰值内存记录；TW 全量尚未释放执行。
+- 下游最小断面保留真实 TW 的 206CSV/20ALS/2ERD/169ERH 和最后一个 ERB；只有约1MiB。
+  原游戏没有 reraconfig.toml，隔离副本复用既有最小 fixture 的显式 snake 配置并注明来源。
+  此断面用于验证数据加载、声明分析及报告生成，不宣称完整游戏可编译或初始化成功。
+  恢复材料为 `1D/coverage-post-sort-minimum-provenance.json` 和对应目录。
+- core HEAD 仍为 `375e48d`，前端 pin 不变；上述工具及 fixture 改动尚未提交，保留真实 dirty
+  身份。没有修改参考仓库、游戏、产品版本；没有下载 Chromium。当前约21–23GiB可用，
+  继续单构建，不删除批次0或暂停续做证据。1D 仍未完成。
+
+#### 1D repair24 全量例外的结果与 repair25 定位边界（2026-08-28）
+
+- 经审批的压力资源记录命令 exit0：同为5,068,424行、100,823,044次比较，本次排序28.98s、
+  引用图2.79s；六个连续5s排序样本均推进。`time` maximum resident set size 为2,510,848,000B；
+  peak memory footprint 字段24,625,776B的父/子进程统计范围不同，不当作总内存，也不把该命令
+  swaps=0解释成系统未使用swap。上一条外层exit1的压力结果仍单列。
+- 399文件断面11.51s exit0，CSV accepted、9,503 rows、0输入错误；有109项分析错误，编译
+  被加载诊断阻断。gzip 757,261B，原始JSON13,959,621B，completion manifest齐全。
+  新的忽略工具 `1D/summarize_coverage_stream.py` 语法和此断面定向验证均通过，使用ijson3.5.1，
+  单遍流式核对压缩/原始SHA256、BLAKE3和字节数，不展开大JSON；没有读取0B的TW失败产物。
+- 主智能体核验八项前置结果后释放用户附条件的第二次例外，使用tester
+  `1f40d3c756116d41a119b1a13f5e2389595cea7546a811bfcd2b78319a8f4e05`。
+  `tw-coverage-user-authorized-repeat2` 200.50s exit2：完整排序完成（5,069,815条，比上一轮
+  最后解析开始时的计数多出最后一个ERB的1,391条），随后分析计数到达112,727/112,727，
+  连续两个5s观察相同而终止。stdout SHA256
+  `b91b3dc96d4d15c3ccc3300dd63c14bc32d8acd5895aee110c61b8164d5868f0`。
+  仅有0B gzip，无manifest/Markdown；绝不标记覆盖报告通过。证据
+  `1D/tw-coverage-authorized-repeat2/summary.json` 与原始validation目录保留。
+- 排序修复得到验证，但前置断面未覆盖11万函数的分析收尾，不能证明后续全部阶段都有进度。
+  本次授权已经消耗，不再自动全量重跑，也不以改名批次恢复次数。磁盘约21.85GiB可用，
+  未触及容量停止阈值，因此此次失败不能归因为磁盘不足。
+- 源码显示 `Analyzing` 完成之后还有可移植性固定点、诊断排序、AST释放；返回后还有工具符号
+  投影。现有失败快照无法确定具体阻塞在哪一步。repair25仅补上工具的`analysis_returned`
+  边界及真实已投影符号计数，增加112,727函数规模的显式ignored定向压力；产品crate和公共
+  协议未改。该压力只验证符号投影，不冒充分析收尾修复。repair25 fmt/check/Clippy/build、
+  pipeline 4项、report 4项均通过；112,727函数投影1.733s、监督命令2.51s exit0，名称完整且不含
+  HIR body。该小于5s的投影运行没有跨越采样周期，不宣称它证明整个分析收尾可持续推进。
+  新工具SHA256 `b39f7b3fd33164524a03c182980f4547776fb5fbff1678c91fb28f2923810189`，
+  证据 `1D/repair25-targeted-summary.json`；不得将它与上一轮全量使用的`1f40d3c…`混淆。
+- 1D仍待分析收尾诊断、有效TW v3报告、Tauri、剩余生命周期与服务差分矩阵。根CHANGELOG
+  未追加这些工具/测试/流程改动，前端pin与core HEAD仍保持375e48d；无推送或合并。
+
+#### 1D 用户再次授权 TW 全量（repeat3，2026-08-28）
+
+- 用户在上一条失败说明后明确要求“在尝试重跑一次全量”，本次仅增加一次TW v3覆盖例外，
+  不扩展其他全量次数，不重开审查。使用repair25已通过门禁的tester `b39f7b3f…`，
+  未将分析收尾根因描述为已修复。开跑前核对门禁结果文件摘要、二进制SHA与专用worktree，
+  磁盘约21.82GiB；单任务执行，直接gzip输出，不展开大JSON。
+- 命令及授权分别保存在 `1D/tw-coverage-repeat3-command.json`、
+  `1D/tw-coverage-repeat3-authorization.json`；独立证据目录为
+  `1D/tw-coverage-authorized-repeat3/`。5s完整状态相同即失败的规则不变，失败不自动重跑。
+  若再次停留在函数分析终点，尝试旁路采集实际进程栈，不延迟看门狗终止。
+- 本次252.35s exit2。已确认分析API返回，越过变量投影（总数480,574）并完成112,727个
+  函数条目的投影；最后状态为`coverage_symbol_projection/functions 112727/112727`，
+  连续两个5s观察相同而终止。具体停滞操作仍未由快照证明，但范围已缩小到函数条目投影后、
+  graph/rows之前，不再把它表述为分析API内部未返回。
+- stdout SHA256 `89bd0e5629ae9e4f1eb07883a6e7d4cdd962afcf99cef6db57987a0935cddf8a`。
+  仅留下0B gzip，无completion manifest或Markdown，故未运行流式完整报告校验。旁路栈采样
+  未触发：约定条件是分析终点后未返回，而本次越过该边界；没有伪造栈定位结论。
+  `1D/tw-coverage-authorized-repeat3/summary.json` 保存实际结果、快照路径与压缩日志信息。
+- 此次授权已消耗，未自动重试。结束时约21.81GiB可用，容量未触发停止；代码输入未变，
+  本轮仅追加实施/证据记录，未新增提交或更新根CHANGELOG，批次1仍未完成。
+
+#### 1D 加载阶段看门狗规则调整及 repeat4 授权（2026-08-28）
+
+- 用户要求“项目加载阶段放宽为4个5s周期不变才退出，之后再次重跑tw全量”。本次将 core
+  审计工具的明确加载阶段改为连续4次5s完整观察相同才终止：文件摄取/hash、解析/排序、
+  CSV、分析/编译、符号准备，以及真实runtime LoadingProject/Reloading/ProjectProgress。
+  首次相同观察计为1；有真实进展或阶段变化则重置。非加载与未知阶段仍为2次。
+- 观察快照与采样频率不变，策略/计数日志独立于实际观察，不能用它掩盖停滞；进入报告图
+  准备时显式切到非加载阶段，避免继承加载宽限。此调整未改变Browser/Tauri周期规则，
+  未修改产品crate、格式协议、版本、core pin或已有测试总时限。
+- 在现有watchdog测试中覆盖第4次终止、真实进展重置、request id不能重置计数、离开加载
+  恢复2次及未知阶段保守处理；增加显式ignored父子进程测试，实际观察20秒无进展后终止。
+  仍沿用1D唯一审查及原全量结果；先通过相关静态和定向看门狗验证，再启动此次获准的唯一
+  TW全量repeat4。所有旧失败材料保留，构建串行，gzip直写并监控10/20GiB阈值。
+- repair26 fmt/check/Clippy/build、watchdog 7项、report 4项通过；真实父子负向回归监督命令
+  20.35s exit0，证据确认为同一状态的`1/4 → 2/4 → 3/4 → 4/4`后终止，而非伪造进度。
+  工具SHA256 `f22a4759ff4513e520b9cb3dce32698af7be4a5e90f90d955ed3e0c268c64fad`；
+  `1D/repair26-watchdog-summary.json` 保存门禁摘要与实际策略样本。
+  前置结果核验后释放 `1D/tw-coverage-repeat4-authorization.json` 的唯一授权，命令在
+  `1D/tw-coverage-repeat4-command.json`。
+- repeat4 `tw-coverage-user-authorized-repeat4` exit0，耗时2012.55s（约33分33秒）。完成
+  manifest确认JSON闭合、gzip结束及目标flush：原始4,668,806,077B，gzip150,730,066B；
+  最后进度中的150,730,047B尚未包含完整gzip收尾，不能替代最终文件长度。
+  原始SHA256 `b4dd4441e7f0e731fd1434fecfb54a24f3f706640b4a54ab6960f362a57700db`，
+  gzip SHA256 `d365704edff41c8e47b3179b52db8a7b0239d469d001765efa337f9d9d45c88b`。
+  独立流式解析/摘要核验另行记录，不能只凭退出码认定内容验收完成。
+- 主智能体复核全部403条完整观察：函数符号112727/112727处确有一次`2/4`，随后进入
+  报告准备并持续推进；非加载阶段相同计数最大为1。旧规则会在该`2/4`处终止，新规则
+  本次允许继续；专门父子进程负向回归则证明`4/4`仍会终止。实时汇报遗漏了该`2/4`，
+  因此未取得现场调用栈，不能将“未采到”写成“没有触发条件”。完整日志及更正证据在
+  `1D/tw-coverage-authorized-repeat4/watchdog-observations-summary.json`；日志原始SHA256
+  `751f972ad703c8e34528da82d3f134bbbffd83b7ef67d1cc376ec881910172fd`。
+- 随后的 `tw-coverage-stream-repeat4` exit0，89.49s：以ijson完整解析到EOF，验证gzip尾部
+  及原始/压缩SHA256、BLAKE3和长度，未落盘展开副本。v3报告保留5,069,815条记录、
+  112,727个函数、44,431条目标解析及title/GRAPH_DB_INIT静态断面。15,761项输入中
+  ALS20、ERD2、CSV206、ERB3931、ERH169、Resource11337、ResourceManifest96，读取
+  错误0，另明确排除901项。原始/压缩BLAKE3分别为
+  `3fd9c56657263cdea7ec12ce1f3b3ceab3dbd6de0b87460335ba4be6036d6d40` /
+  `afd28f320f201b9336fb09888123c00ff3b1e0239fd1a03dba79c8820c2a3978`。
+  可读摘要和清单在 `1D/tw-coverage-authorized-repeat4/summary-verified.json`，流式核验
+  命令/结果在 `1D/validation/runs/tw-coverage-stream-repeat4/`。
+- 结论仅为完整静态覆盖报告生成与校验成功：CSV accepted；analyzer仍有8601项诊断，
+  其中8198项error，compiler为`blocked_by_load_diagnostics`，未产生字节码。该报告没有
+  执行游戏或GRAPH_DB_INIT，也没有绑定前端执行capture。索引摘要只见COLUMNDIV@2的
+  已解析条目；BUFF/SEMEN_MATRIX未出现在选定resolved摘要中，不能用完整摄取代替其
+  真实项目索引解析通过结论，留待按原始报告和已有最小fixture定位。
+- 本次授权已消耗，不再自动重跑。末次流式核验后约22.67GiB可用，原始JSON只在流中
+  处理；保留gzip、manifest、摘要、失败历史及续做材料，未清理B0或用户数据，未下载
+  Chromium。core仍为`375e48d3d39f7f146a64edf580bd6648bcf21829`，Web/TUI仍为
+  `af1c545f0842918fb8a586800dbb987b78f5a1df` /
+  `93fd19b8c63491a95342e28dcb9f4c76be078af1`。为保留1D尚未完成的capture绑定，暂不
+  推进core HEAD；本次工具/记录改动随1D分项提交收尾，产品crate/pin/根CHANGELOG未改。
+  1D其余客户端、Oracle差分和批次1集成门禁仍未完成，本次验证结束后暂停，不开展新全量。
+
+#### 本批验收后：TW验证流程与输出优化待办（2026-08-28）
+
+- 用户要求等本批次验收完毕后再考虑优化；当前仅登记，不修改1D验收输入、报告格式、
+  看门狗或门禁，不恢复测试，也不因此增加本批全量次数。
+- 基线为repeat4：覆盖报告2012.55s，随后独立完整性核验89.49s，原始JSON4.67GB、
+  gzip150.73MB。403条5s观察中，328条处于`coverage_write_report`、5条处于
+  `coverage_rows`，约八成观察在报告生成阶段，粗估27–28分钟。采样不能精确区分
+  序列化、诊断关联、压缩、hash或磁盘I/O耗时，不能据此声称已找到具体热点。
+- 验收后先做分阶段计时和资源测量，再评估重复数据/序列化、flush频率、压缩参数与
+  缓冲策略；报告生成时同步产出小摘要，评估避免重复扫描大报告的方案，同时保留独立
+  完整性检查。日常定向回归与完整审计的输出需求分开设计，完整审计仍保留全部证据，
+  不以删记录、抽样、忽略诊断或放宽看门狗换取提速。
+- 比较指标包括总耗时、各阶段耗时、峰值内存、原始/压缩字节、磁盘峰值及报告语义等价；
+  输入与工具身份必须可核验，缓存失效和冷/热路径分别验证。沿用本任务磁盘隔离及
+  10/20GiB阈值，不保留多份展开报告。尚未实施，不预先承诺提速比例。
+
+#### 1D 验收恢复（2026-08-28，repeat4之后）
+
+- 用户要求继续完成批次1，恢复原1D验收，唯一审查及既有全量次数不重置。确认三仓仍为
+  同组分支：core375e48d、Webaf1c545、TUI93fd19b；产品crate/pin没有新增变化，磁盘
+  约22.6GiB。复用本组产物和已安装Chromium，原生窗口测试串行，不下载浏览器。
+- 按既有repair20/23/26及原门禁恢复剩余生命周期、Tauri、真实服务采集/双Oracle差分，
+  并核清TW索引断面；不再运行TW全量，不提前实施已登记的验收后性能/输出优化。
+- repair27仅修复原生生命周期报告的证据完整性：Firefox此前通过但大stdout被driver
+  warning穿插，改为复用现有CaptureWriter写独立gzip，stdout只给摘要/摘要hash。没有
+  删除观察或改变断言/看门狗，不影响产品bundle；先执行现有writer/runner定向回归及
+  Node语法、lint/format，恢复相关门禁后再做Firefox定向复验和Safari首次生命周期。
+- repair27的79项及Node/lint/format通过；Web分项提交`acc4b27`。Firefox生命周期定向
+  12.86s exit0，独立gzip355644B/解压8058927B，SHA256分别
+  `72087d4e8d1d8dd44a482c7a8b8e8d7b7ac74ea8708b92f1c2cb998fbd604501` /
+  `0ed5b9ac5053d6f0693f9fb0152b41ffdc8f45111317602835f7ed19b7f3b349`；6组pointer、
+  trusted blur清零及两个真实挂起解码换代均通过，blocked为空、显示canvas数量0。
+  Safari生命周期首次7.10s exit1，在“blur后新pointer事件前清零”断言失败，未进入两组
+  race；不改写为通过。repair28只补充原生失败即时完整快照及真实DOM事件顺序，保持
+  清零断言和产品不变，先恢复相关静态门禁再采集定向失败现场。
+- TW索引问题闭环：已验证报告的实际`system_save_in_binary=false`，BUFF和SEMEN_MATRIX
+  两条真实CHARADATA声明恰被`user-defined CHARADATA variables require binary saves`
+  拒绝；工具明确不推断legacy配置，而真实`emuera.config`启用binary。不是漏摄取或
+  resolved投影过滤。原始选项、精确span及诊断在
+  `1D/tw-coverage-authorized-repeat4/selected-index-audit-options.json`。
+- `1D/tw-index-configuration/`保留真实CHARADATA声明、常量200、BUFF主表/ALS及两份ERD，
+  仅对照binary=false/true。首次小断面遗漏已启用的_Rename.csv导致验证失败，保留原结果；
+  补齐真实_Rename/_Replace后两份小coverage和严格校验均exit0。false仍拒绝两声明；
+  true得到BUFF Character[50]、SEMEN_MATRIX Character[200,4]、COLUMNDIV[10,20]及三个
+  索引，alias/主名和ERD第二维断言通过。该断面可编译但未执行游戏，不覆盖其他legacy
+  选项，也不把TW原8198项审计错误当成真实游戏配置下的错误总数。provenance、两次
+  报告及`acceptance-summary.json`保留，没有重跑TW全量或修改产品/原始游戏。
+
+
+- repair28 的79项定向及语法/lint/格式通过，Web提交`6d37865`。Safari诊断复验保留
+  失败完整gzip，确认前五组pointer和两组解码race已执行，但独立焦点窗口未创建，整条
+  命令仍exit1。随后repair29改用WebDriver原生createWindow返回的精确handle，不再
+  依赖高层window.open与无序句柄列表；未改产品、清零断言或快照规则。新增3项使相关
+  定向共82项通过；首次lint仅因遗留globals注释失败，清理后定向通过，其他相关门禁通过。
+- repair29首次Safari复验在pointer采样前失败，未走到新窗口验证；同时启动过无头Chrome，
+  是否存在macOS焦点干扰尚无证据。恢复时确认无残留测试进程，改为串行原生会话。
+  Chromium原版`s04-first-row-half-units`已采集完成；首次adapter误把配置JSON当作客户端
+  可执行文件而拒绝hash。保留失败记录，纠正clientArtifact参数后离线定向exit0，未重新
+  采集或放宽校验，adapter SHA256为
+  `c41e25d8ac2a96b6e7a32a3de27bd3726b70647056b810154e98224484cd0361`。
+  此结果仅验证观察证据，尚非Oracle差分通过；snake对应case尚未启动。磁盘恢复时约24GiB。
+
+
+#### 1D 用户暂停（2026-08-28，原生验收续做中）
+
+- 用户要求“先暂停”，停止全部后续测试和实现；检查无本任务残留构建、浏览器或Wine进程。
+  磁盘约23.8GiB，未清理任何续做材料或批次0证据。当前core375e48d、Web6d37865、
+  TUI93fd19b，三端pin仍375e48d；本次续做没有新提交、推送、合并或产品版本变更。
+- 原版`s04-first-row-half-units`单case Oracle首次差分exit0（26.20s），输出、termination、
+  watches与空diagnostics为matched_observables。evidence SHA256
+  `346bb1c4997be22a6c29ce516dca1b8ce9fdd317a5fc5cfff3e08a3e18e10935`。
+  snake同case及其余服务矩阵仍待执行；没有重跑TW全量或提前做验收后性能优化。
+- repair30修正WebDriver createWindow的字符串参数；相关82项与语法/lint/格式通过。
+  随后Chrome失败现场显示：两次trusted blur后确实发生新的可信pointermove，非零值
+  不能据此判为旧状态泄漏。repair32按Enter前的事件序列和几何决定期待值：无新pointer
+  仍严格要求0/0/，有新pointer则必须trusted/focused且返回其新坐标；取消/离开恢复清零。
+  同时先移动到独立位置再hover，避免已有OS位置不产生事件；失败保留完整事件现场。
+- repair32的84项及语法/lint/格式通过；Chromium lifecycle定向repair7 exit0（16.80s），
+  六组pointer完成，本次第六组实际为cleared-after-blur、blur=2、0/0/，两种真实挂起
+  解码取消/换代均完成，blocked为空。result SHA256
+  `2cd5eb2b02f9bf8f3fcf646d2a65c0f851b67b9aaf221435a86da9e5f938c8b2`。
+  Safari随后exit1（12.59s），五组pointer及两race完成，但新窗口未实际得到focus，
+  不计完整lifecycle通过。历史失败及完整gzip均保留，不能用此前Chrome结论代替Safari。
+- repair33在独立焦点窗口中导航到固定DOM探针并经WebDriver可见button点击取得焦点，
+  不合成DOM事件、不放宽trusted blur或5秒看门狗。84项、两项语法、lint/格式均通过；
+  用户暂停前尚未运行这版动态。当前三个Web dirty文件仅为上述驱动和测试修复。
+- Tauri本地provider1.2.0源码确认newWindow不支持、switch仅换上下文，键鼠使用JS事件，
+  不能据此证明真实pointer/blur。隔离草稿`1D/tauri-native-provider-source/`仅修改依赖侧
+  四个文件，用当前WKWebView所属NSWindow投递AppKit事件，提供受限原生窗口/焦点；
+  不更改产品unsafe规则、全局registry或运行时语义。主格式化及rustfmt检查通过；
+  Cargo check/Clippy/unit/build均未启动。集成草稿尚未合入Web，可信事件必须由最小真实
+  WKWebView探针证明，不能把源码或格式检查写成验收成功。
+- 暂停清单、源hash、已完成命令和恢复次序在
+  `1D/pause-2026-08-28-native-acceptance.json`；repair33静态记录单列。恢复后先核对源与
+  静态门禁，再串行处理Safari焦点和Tauri provider；随后完成服务矩阵、最终提交及整批
+  验收。批次1仍未完成，根CHANGELOG_PENDING本次未改。
+
+#### 1D 再次续做（2026-08-28，原生输入验收）
+
+- 恢复后核对暂停文件摘要、三个 worktree 与 core pin，未发现输入漂移。继续复用已有
+  Chromium，不再次运行已完成的 TW repeat4；批次 1 仍未完成。
+- 当前 repair33 的 Safari 定向生命周期通过：六个 pointer 样本、真实 window blur 后
+  `0/0/` 清理、两种异步解码取消/项目切换竞态。证据
+  `browser-compat-safari-1787902768683/lifecycle/capture.ndjson.gz`，压缩摘要
+  `ec05ca878609668760839f610626e248922937dc521939274d3333e5d8ed6b61`。
+- 同输入 Chromium 定向通过，六个 pointer 样本及两种竞态均满足断言；
+  `1D/validation/artifacts/chromium-snake-lifecycle-focus-control-repair8/result.json`
+  摘要 `fe4da000d9f6c86ed176526edfd980050c4986e71939d405ecae8376a42adb3f`。
+- Firefox repair3 在第二个 pointer 样本失败：请求后出现额外 trusted pointermove，
+  预查询坐标与执行查询时坐标不同。保留失败采集，不放宽坐标断言，不据此认定产品错误；
+  已请求短暂安静输入时段后再定向复验。原有通过记录只代表当时驱动输入。
+- Tauri 测试专用 provider 的宿主 check 通过；独立 manifest 的 Clippy 首次发现上游两处
+  integer cast API 不符合其 Rust 1.77 声明。用等宽 `as` 转换修复，保持数据与接口不变；
+  修复后 Clippy 与两项 native key 回归通过。命令选择和格式失败分别保留，不混作成功。
+- 将带摘要清单的 provider overlay、显式 runner 选项和真实 WKWebView 输入探针接入 Web
+  测试工具。普通构建、发布锁文件与 core pin 不变；这些代码不是原生行为通过的证据。
+  既有 `tauriTestSupport.test.js` 定向 68 项通过；探针 lint 发现并修复重复 globals 与
+  finally 抛错问题，后续静态复验及真实宿主构建/输入探针仍在推进。
+- 继续使用本组 target，关闭 incremental，串行 Cargo；本次观测可用空间约 22–23 GiB。
+  未删除批次 0、失败采集或续做材料。精确命令、退出码、gzip 摘要见
+  `1D/validation/runs/` 与 `1D/resume-native-acceptance-progress.json`。
+
+#### 1D pointer 边界事件修复（repair35，2026-08-28）
+
+- 用户授权安静输入后，Firefox repair4 在 index4（滚动）失败：实际 `99/-85/`，预期
+  `580/-294/`。采集明确显示新 `pointermove/down/up(580,332)` 后出现滚动引发的
+  `pointerout(99,541)`，且 relatedTarget 存在。前端 `outside` 将旧边界坐标重新写入
+  pointer position；这次确认为产品缺陷，而非沿用上次“额外移动”的推测。
+- 修复仅让 move/down/up 更新坐标；元素间 pointerout 不改写坐标，离开窗口、cancel、
+  blur 仍清理。扩展既有 runtimeServices 回归，覆盖滚动后的旧坐标与失焦后的边界事件；
+  生命周期测试也不再将单独的 pointerout 当作失焦后新移动。断言仍使用实际预查询几何，
+  不放宽误差或删除滚动场景。定向两文件 150 项、typecheck/lint/format 均通过。
+- repair34 原生测试宿主构建成功，发布锁摘要仍为
+  `6fe3a08d45b45542dcab8e29a0f6b97530ad6c7a562aed70d10c317edb239a70`；其二进制摘要
+  `156dbdfa30bc4932a32690854d1c75c92bc69d4a22f07db1d81419d65f983145` 只对应修复前
+  输入。待该构建退出后才应用 repair35；修复后单独重建，不混用旧产物作为新输入证据。
+- 用户随后要求使用电脑期间暂不运行需要静止的测试。暂停 Firefox/Safari/Tauri 的
+  焦点相关动态验收，不暂停开发、静态检查及不占用桌面的 headless 测试；真实客户端
+  生命周期仍待授权后定向复验。未再次启动 TW 全量，也未新增重构审查。
+
+#### 1D 错误现场观察阻塞（repair36，2026-08-28）
+
+- repair35 重建通过，二进制摘要
+  `0f163981c00a5a05d52976869531af190797fd64b58f6e6b811f09a18bc99e98`，core 仍为
+  `375e48d3d39f7f146a64edf580bd6648bcf21829`，发布锁未变。静态结果不能代替尚未执行
+  的真实 WKWebView 输入探针。
+- 继续不占用桌面的 Chromium headless 采集。蛇版 first-row capture 与 adapter 通过，
+  adapter 摘要 `5cac183ea02290c8280926b00f0554e350df8ee711e93667caa26583ce5203fb`，
+  状态仅为 `validated_observations_not_comparison_verdict`，尚无该项 reference 差分。
+- 下一项 original canvas-invalid-dimensions 正确进入 fault，但 typed observation 无法
+  取得 `RESULT:10`。capture exit2，保留 `captured_with_observation_blocks`，未执行其
+  adapter。队列首错停止，后续 59 条命令未启动；不把成功保存 capture 文件当作通过。
+- 根因同时位于 frontend 的 pause 阶段过滤和 core 的 `DebugCommand::Pause` 阶段限制：
+  faulted 不可建立 stop。延长 timeout 无效；删除 watch、填入预期 777 或只观察异常前
+  值均不能证明错误后的副作用。正在沿用现有 grant/stop 协议补齐故障现场只读观察；
+  结束观察必须恢复 Faulted，不能重启脚本或修改现场。该修复属于本次错误差分阻塞，
+  不新建批次、不重置全量次数、不新增重构审查。
+- Web 请求路径与 typed stop 测试已更新：定向 describe 29 项通过，另 160 项因明确
+  name filter 未选中；typecheck/lint/format 通过。core 实现与协议回归尚在进行，
+  之后先完成验证和契约提交，再同步三端 core pin/锁/本组产物。当前停止新 capture。
+- 固定参考源码只读核查表明剩余服务脚本本身不读取桌面鼠标/焦点，但 Wine 启动层没有
+  证明不抢焦点的证据。用户使用电脑期间仍不启动 Wine；不以 headless 名称替代证明。
+
+#### 1D repair36 契约提交与恢复桌面验收（2026-08-28）
+
+- core 故障现场只读观察已经提交为 `b8b5bee45d1a7d3fc31f4df42dcbe0048422794a`。
+  workspace fmt/check/Clippy 及 7 项定向回归通过：4 项 postmortem、1 项 revoke、2 项
+  safe console。测试确认异常后读取 `RESULT:10=777`，拒绝写入/步进/执行，Continue
+  或 revoke 后仍为 Faulted，不执行故障后的语句；未重跑全量。
+- Web/TUI 的完整 core pin 及 Web Cargo Git source/锁已机械同步；不改变依赖版本图或
+  C ABI/协议布局。构建与两 host 契约验证仍在推进，不能使用旧产物作为新 SHA 的证据。
+  当前发布锁 SHA256 为 `f164ec73c5e0846673d42fdf55cd536e1861ce935e9ac2b269019a1021b16002`。
+- 用户随后允许恢复需要鼠标的测试。待当前绑定静态门禁通过后，串行复验三个浏览器
+  生命周期并执行 Tauri 原生输入探针；不会并发占用桌面，不自动重跑 TW 全量。
+  仍复用已安装 Chromium。命令与新证据位于 `1D/*postmortem*` 和 `validation/runs/`。
+
+#### 1D 离线比较器握手前缀修复（repair37，2026-08-28）
+
+- 为复用已有 reference 观察核查离线比较器，发现其只接受 load 开头，但当前真实记录为
+  capabilities→load→run。修复仅接受可选的精确 capabilities 前缀，校验能力版本和成功
+  状态；保留全部消息的 schema/baseline 校验，并拒绝重复握手、缺失或额外步骤。
+- 既有测试文件内 2 项定向回归通过；随后使用现有 original empty/first-row 和 snake
+  empty 的不可变证据进行 3 次离线重比较，均为 `matched_observables`。没有重启参考
+  引擎、没有更改旧 capture/adapter 身份，也不新增三端动态覆盖。
+- 首次 reference 仍有 31 项未运行；完整清单与前置条件见
+  `1D/first-reference-queue-repair36.json`，无进展 hazard 单列，不伪装成成功结果。
+  以上证据及摘要见 `1D/recompare-prefix-repair37-*-evidence.json`。
+
+#### 1D 构建结果与终端回报规则更正（2026-08-28）
+
+- 新 core 绑定的 Web revision/fmt/check/Clippy、bridge 定向 3+1、WASM 和原生宿主构建
+  均有正常落盘结果。WASM SHA256 `bbe455923aca722a49c8f4dde3cc35498393455eae7f3a301b2f9d9d439205bf`；
+  原生直接 Cargo 目标 SHA256 `1d42f2d831152d157759e6a438939d5f4a3d3db40b2e7753ad110186c286ba8e`。
+- 主智能体因外层 PTY 退出回报被回收，重复了本来已有 exit0/Finished/产物证据的构建，
+  造成不必要耗时。用户明确要求不再关注此回报回收，只要实际结果正常即可。今后按保存的
+  退出码、完整日志和实际产物判断；不得仅因 PTY 回收重跑。真实失败、超时和五秒看门狗
+  仍须处理。原始记录不改写，具体授权见 `1D/terminal-result-acceptance-user-override.json`。
+- TUI CABI 构建及增量确认正常，库 SHA256
+  `a190f4957816d7ed973179efeb03e7f19ddfa9a986f17310d9237183d462014c`，core 锁未变。
+  PyInstaller 首次因用户级缓存权限失败，改用任务专属缓存及新输出目录后打包/--help
+  均正常；不改原用户缓存。打包库摘要单独记录，仍须实际 RuntimeWorker 场景验证。
+- 此次未重跑完整测试套件或 TW；开始新 pin 的定向生命周期、CABI 和组合场景。
+
+#### 1D 新绑定动态结果（2026-08-28）
+
+- Firefox 与 Safari 的 repair35 生命周期定向通过：各 6 个样本、真实失焦后 `0/0/`、
+  restart 取消和切换项目的异步解码竞态。Firefox 原滚动失败点现在准确返回 `580/-294/`。
+  gzip 摘要分别为 `cf191a90cd5cecb785cc34f8e80c48680df46a9a0af9a87a0da5fa6d2f9b3558`、
+  `bf93ebefd3d26b365aa76ec31d836834eee1b0e168c0388d8dd0f093e11c5aa1`。
+- Chromium 同输入在失焦后的 pre-query focus 断言失败，实际输出 `1133/-98/`；前置
+  事件记录为 focused=false，而查询后的观察已有同位置 focused=true 事件。保留失败
+  `24eeca190afb39713b6689cfa77a8ce3b32142692711883a6b3192dcade4590e`，正在只读分析，
+  不盲目重跑或把两个浏览器通过扩展为 Chromium 通过。Tauri 原生输入探针独立开展。
+- original canvas-invalid-dimensions 的新 Chromium capture 和 adapter 均成功，真实
+  `RESULT:10=777`，终止保持 Faulted，watch 具有实际 stop/request/response provenance。
+  adapter SHA256 `566892dea13dd48501772564422ebf1ae3ade7059c7e23dfd3afb1b448ba3fce`；
+  当前仅为有效观察，尚未进行本项 reference 差分。
+- TUI 新绑定提交 `ad5c018b7c73bac441a9064d3339a174eff7dcfa`，依赖 core `b8b5bee…`。
+  真实 debug/step/fault 3 项通过；缺能力 5 项最初因漏传显式开关跳过，补上 opt-in 后
+  仅这 5 项定向通过（HTML v2、pointer/canvas v1），不把跳过算通过。source 和打包库
+  的 snake-data RuntimeWorker 组合场景均通过。未重跑完整 pytest，TUI worktree 已干净。
+
+#### 1D 验收效率修复与继续（repair38，2026-08-28）
+
+- 用户 17:20 暂停时 Tauri 原生探针仍在编译，未进入 GUI；相关进程已停止，部分日志保留。
+  用户随后要求先修复拖慢验收的问题再继续。恢复核查无残留构建/测试进程，可用约 21 GiB。
+- 实施范围为同一 1D 的定向修复，不重置审查或全量次数。已有唯一重构审查及 R1–R6
+  落实继续有效，不启动第二次审查；TW repeat4 结果保留，不再运行 TW 全量。
+- Web 正式 Tauri runner 增加受校验的 `--reuse-build` 和 `--build-only`：仅蛇版/native-input
+  无 state 场景可复用，项目路径走已有测试 picker 配置，源码/绑定/锁/配置/工具链/资源/
+  provider 与实际二进制摘要匹配才复用。仅使用正式 CLI 参数，不混入直接 Cargo 确认构建。
+  编译、构建完成/复用、GUI 启动分别报告；PTY 回报回收不再触发重复运行。
+- 同时修复 Chromium 失败的两条已定位原因：后台/隐藏 pointer 事件不得复活失焦前坐标；
+  测试须关闭焦点探针并恢复主窗口后再确认焦点，在实际 pointer 查询点记录独立 DOM
+  观察并按三个实际请求分别验证 X/Y/B，不能拿 Enter 前快照代表查询时状态。
+- 新改动完成后仅运行受影响 Vitest、类型/lint/格式/build 门禁；随后优先原生输入探针，
+  再恢复服务/组合/生命周期验收。磁盘串行复用本组 target，无 Chromium 下载，不改参考库。
+  本节为实施方案，尚不代表上述新改动已通过验证；实际结果随后追加。
+
+#### 1D repair38 静态与首次真实 Tauri 探针结果
+
+- 定向 Vitest 首次 361/361 通过（测试执行者选择了完整 store 入口，范围比所需 describe
+  更宽）；其后误补跑 describe 29/29，记录保留但不重复计覆盖。typecheck 通过。
+  ESLint 首次缺少 Node runner 中浏览器回调的 `window` global 声明，修复后最小复验通过；
+  Prettier、Web build 均通过。后续不得对已被通过集合覆盖的用例做形式性确认重跑。
+- 正式 Tauri `--reuse-build --build-only` exit0，132.18s，未启动 GUI；实际产物
+  SHA256 `314dd31fb47a414d2793f13a43a7e445acaf2393e02bc693fa2ceb1645964492`，
+  53,881,120 bytes，主智能体核对与 manifest 一致。结束可用约 20.8 GiB。
+- `repair38-tauri-native-input` 实际复用了上述产物并启动真实 WebView，确认
+  `bridgeKind=tauri`；未进行第二次编译。首次探针在“禁止关闭主窗口”的预期错误处
+  被 WDIO 自动重试拖住，5 秒完整快照看门狗正确判定静止。exit7，约59.4s，失败和
+  cleanup 日志保留，不记为原生输入通过。
+- repair39 定位到本地 `@wdio/tauri-service` standalone 实现硬编码十次连接重试；
+  已在 session 建立后关闭动作重试、限制单次请求 5s，不改产品或看门狗。仅两份非编译
+  Node 入口变化时，在其他源码、build argv/env、工具链、资源、provider、二进制摘要
+  完全一致的情况下复用原构建；旧 manifest 不改写。补充最小缓存拒绝/复用回归后，
+  仅复验受影响的 Node 静态门禁，再定向重跑此探针，不重新编译产品。
+
+#### 1D 后续证据与驱动修复（repair39–41）
+
+- repair39 缓存定向 2 项、ESLint/格式/Node 语法均通过；原生探针 2.25s 内失败，
+  证明十次自动重试已关闭。实际原生错误被 WDIO ContextManager 的 closeWindow
+  回调错误地改写为“所有窗口消失”。repair40 仅把这条负向基础设施检查改为同一
+  loopback WebDriver session 的真实 DELETE 请求，仍严格检查 400/invalid argument，
+  并确认主窗口存在；正向输入仍使用 WDIO selectors/actions。
+- repair40 的文件级静态门禁通过；探针真实窗口创建、主窗口关闭保护、缺失窗口拒绝均
+  通过，后续 data 页面上 `__NATIVE_INPUT_PROBE__` 一直不存在，exit7/5.29s。
+  `No window could be found` 属于刻意的 missing-window 负向测试，不是创建窗口失败；
+  已更正测试执行者首次错误归因。尚无 trusted pointer/Unicode/Enter/PageUp/blur 通过结论。
+- repair41 将独立探针页放到只返回固定 HTML 的随机 loopback HTTP 端口，避免依赖
+  provider 的 location.href 顶层 data 导航；Tauri 生命周期使用已有原生 focus window
+  验证实际 blur/focus，Browser 的可见按钮路径不变。仅改测试 Node 文件，不重建产品；
+  原有二进制摘要保持，编译输入完全一致才复用。
+- Chromium 剩余 29 对首次 capture→adapter 共58条命令全部 exit0，主智能体逐条核验。
+  输出为 `1D/captures/chromium/{original,snake}/*-repair38/`；连同已有5份，34个普通
+  host/profile 观察齐全。它们是有效实际观察，不自动等于参考差分匹配。
+- 首次 reference 队列完成 snake first-row-half-units：`matched_observables`；下一项
+  original canvas-invalid-dimensions 工具 exit0 但 `incomparable_schema`，队列按规则停止，
+  29项未执行。参考错误进入 output/termination=error，而 Rust 为 diagnostics/faulted；
+  正在核查保守规范化或真实差异。不可把工具成功冒充行为匹配，不重新执行已采集引擎。
+  汇总为 `1D/repair38-chromium-remaining-result.json`、`repair38-first-reference-result.json`。
+
+#### 1D 原生坐标与错误观察定向修复（repair41–42）
+
+- repair41 静态缓存/生命周期 18 项及文件级 lint/格式/语法通过。原生探针复用实际
+  构建，5.81s 内失败：loopback 页面已加载，pointer move/down/up/click 均为 trusted，
+  但事件落在约 `(98, 5.5)`，未命中按钮。Unicode/Enter/PageUp/blur 尚未执行。
+  正在修复 WKWebView 标题栏遮挡与 viewport→NSView→NSWindow 坐标转换，不使用固定偏移。
+- repair42 的比较器最小 3 项通过；仅离线重比已有 original canvas-invalid-dimensions，
+  未重跑任一引擎。报错终止及整数 `RESULT:10=777` 相同，错误时也比较变量类型和缺项；
+  timeout/limit/quit 不可冒充脚本拒绝。机器结论仍为 `incomparable_schema`。
+- 对该份实际证据逐项登记有意错误呈现差异：原版在 output 写入 GCREATE 宽度0错误，
+  Rust 发带 api/source 的 vm_fault；双方定位 services.erb:109、拒绝宽度0且未覆盖777。
+  不声称错误文本等价，也不将其他未知错误统一豁免。该项允许继续下一首次 reference，
+  后续未审定差异仍须停止。重比 SHA256
+  `1a0c8a83c01cf7deabc7b8c97067c66c0d8eccdc2194fdc3ceb27f84ffeb91a4`，
+  具体限定见 `1D/repair42-original-canvas-disposition.json`。批次1仍未完成。
+- 蛇版同项首次 reference 也观察到 line109 拒绝宽度0且777不变；独立登记相同呈现差异，
+  未声称机器比较通过。证据 SHA256
+  `630385c7ccfdb03e6f94c5173ffb4c26880624cfa6012f7509e0f56cb898fa81`，
+  限定见 `1D/repair42-snake-canvas-disposition.json`；余下首次 reference 为28项。
+
+#### 1D 定向门禁与验收推进（repair43）
+
+- 原生坐标修复以实际 contentLayoutRect 与 WebKit 顶部遮挡条件转换，不硬编码标题栏。
+  provider fmt/check/Clippy 及5项native_input_tests全部通过；新provider inventory为
+  `5d6f3ee812ea13e6236997403f539caa37c2062fce7f36488979bc2ce58b9643`。
+- Chromium repair42 在真实输出 `118/-28/41` 后被测试证据解码拒绝：bridge BigInt 字节
+  经JSON保存为规范十进制字符串。仅修复辅助解码，仍严格限制0..255且拒绝非法表示，
+  不改请求/session/revision绑定。8项定向测试、lint/format/语法通过；动态复验待执行。
+- 因provider源码确实改变，正式Tauri build-only执行一次并通过，约74s、未启动GUI；
+  二进制53,887,472 bytes，SHA256
+  `bea1513467e9854ea159e415940afe946f649518bfe12befeda325b8a4adc6e4`。
+  可用空间20.01 GiB，继续串行复用本组target。真实native-input接续，尚未宣称通过。
+- 首次reference队列已完成15项：11项matched_observables，4项机器incomparable，另有
+  repair37保留的3项匹配。新通过10项包括两profile的canvas外界、两像素revision、实体、
+  文件像素及后续行布局。两profile的late-parse-error均在services.erb:64未匹配闭合标签
+  处拒绝，FLAG:90=0、RESULT:10=777一致；分别登记错误呈现差异，原始诊断不改写。
+  见 `repair43-first-reference-progress.json` 与 `repair43-*-late-error-disposition.json`。
+  剩余16项首次reference未运行；已retire Wine以交出GUI焦点，不重跑已完成项。
+
+#### 1D 原生输入通过、服务定位与监督器效率修复（repair44–45）
+
+- repair43 Chromium lifecycle通过：6样本/2竞态/无blocked；Firefox同样通过，gzip
+  `721447b5447360321b15d8afdaa18aaa3b30daab90c60e9de1b1d4c2f9203e1d`。
+  Safari在重启后的clear失败；快照证明仍negotiating、input disabled。旧restart判断
+  误接受保留的旧ready，现要求确认前后的sessionGeneration/epoch变化及新integer wait。
+- 主智能体发现之前8项过滤漏掉20项invalid-byte负向测试，已补齐20/20；不得称这些
+  负向检查在此前Browser运行前已通过。后续改用受影响单文件避免过滤漏选；repair44
+  生命周期helper单文件100/100及lint/format/语法通过。Safari修复后动态仍待复验。
+- 原生坐标已实际命中后，repair43点击仍失败；移除elementClick/Down中额外异步激活，
+  同一window发送前检查active/key，坐标公式不变。新增可捕获stderr几何诊断及焦点测试。
+  repair44 provider fmt/check/Clippy/6测试通过；正式build-only约75s通过，二进制
+  SHA256 `4b88a856b28720f646d4f6854b41087fe02e21f7012005324d486d502d01a570`。
+- repair44 native-input真实通过：trusted move/down/up/click命中(98,35)，clicks=1；
+  Unicode输入/清空、Enter submit=1、PageUp及blur/focus恢复均验证。仅测试用例0.721s，
+  总命令53.99s；不再重跑探针，直接进入集成。当前原生provider inventory
+  `711f8c2cc45f7ec315125bfe49809b97bf5ca520eab322a53b063bbf6b702d32`。
+- Tauri services首次集成失败，未启动其后的lifecycle/batch1。实际fault为
+  `presentation_query/html_substring@2.0` backend_failure，services.erb:15等待HTML
+  字体/媒体超时；完整snapshot明确捕获。不能凭统一错误消息判定是fonts.ready还是rAF，
+  正在补等待阶段诊断，不延长10s截止或跳过服务。失败记录为repair44-tauri-snake-services。
+- 发现D/run_check.py每消费一行输出都启动ps扫描；6102行日志造成重复进程扫描和反压。
+  改为250ms限频，启动/退出/finally仍扫描，deadline/cancel/disk检查和完整gzip不变。
+  新增扫描数、观察退出及cleanup时间字段；继承既有监督器回归并加6102行完整性检查，
+  权限正确的直接验证11/11通过。首次沙箱ps被拒单独保留；不因PTY回收重试业务测试。
+  仅本任务监督器变更，源码与测试位于 `1D/run_check.py`、`1D/test_run_check.py`。
+- 两profile的int32十亿像素case实际different：reference完成，Browser返回resource_limit
+  且RESULT保持0。这是唯一审查R3已要求保留的32768px安全边界，分别记录实际证据
+  `repair45-*-int32-resource-disposition.json`，不作单位换算通过证明。
+- 低于20GiB后仅清理已被替代的本任务host rlib/rmeta：427.1MiB及284.1MiB；当前binary、
+  旧执行证据、fixture、批次0均保留。清理清单 `repair43-cache-cleanup.json` 与
+  `repair44-cache-cleanup.json`，最近恢复约20.12GiB；继续串行构建。
+
+#### 1D 隐藏窗口测量修复与普通服务差分收束（repair45–47，进行中）
+
+- repair45 定向真实 Tauri 证据将阻塞定位为 `phase=animation-frame`，同时
+  `visibilityState=hidden`、`hasFocus=false`、`fonts.status=loaded`；不是字体下载失败。
+  HTML projection 不再以绘制帧作为同步 DOM 测量的前置，保留 Vue flush、字体、媒体、
+  revision 校验、10s 截止和同步几何读取。错误中保留并发等待阶段及窗口/字体状态。
+- repair46 受影响 HTML/canvas 单元 77/77、typecheck、对应 lint/format、Web build
+  通过；正式 Tauri build-only 通过（69.53s）。当前二进制 53,888,272 bytes，SHA256
+  `4ae8f024d90d83219ffd96141700569e47c88974faa7aafe631dae0112db0fa6`，core pin
+  仍为 `b8b5bee45d1a7d3fc31f4df42dcbe0048422794a`，provider 为 materialized-repair44。
+- repair46 Tauri services 在 5.67s 后失败于原生鼠标的前台窗口 guard；完整日志已出现
+  `SNAKE_HTML=0/0/0/1/1/1/1` 和 `SNAKE_CANVAS=4294901760/4278190335/2/2`。
+  首个5s快照尚在协商，不能据此否定后续 HTML/canvas 的真实执行，也不能将整项标为通过。
+  repair47 仅调整 Node 测试启动流程：通过当前 WebDriver handle 激活同一原生窗口，
+  确认可见且有焦点后才运行用例；不逐事件抢焦点，不使用合成 DOM 输入，不放宽 native guard。
+  本次仅 Node helper 改动通过精确缓存排除复用上述二进制；仍须受影响静态检查通过才续验。
+- 本地监督器修复已通过11项定向测试（2.419s）：将逐日志行全进程扫描改为250ms采样，
+  子进程退出和最终清理仍强制扫描；完整 gzip/摘要/截止/取消/磁盘检查保留。原6102行输出
+  导致数十秒监督开销的原因已消除，不以回收不到 PTY 退出回报为理由重跑。
+- 普通服务的34项双参考执行已齐全；不同平台字形像素、预先确认的32768px资源限制、
+  错误诊断表示及 Unicode 边界差异分别登记，原始 `different/incomparable` 结论不改写。
+  蛇版 Unicode 用例在 services.erb:40 因 `GetSubStr` 按 UTF-16 单单元测量，触发
+  `BuildFallbacks/Char.ConvertToUtf32` 非法代理项异常，四个 watches 均未赋值；这不同于
+  原版返回替换字符。Rust 保留有效 Unicode 字符的完整性，符合本批明确要求，证据为
+  `repair46-{original,snake}-unicode-disposition.json`；参考正常执行源码未修改。
+- 删除的仅为本组已替换的 rlib/rmeta，清单为 `repair46-cache-cleanup.json`（184.6MiB）；
+  原生二进制、WASM/C ABI、fixture、失败记录与批次0证据保留。当前约20GiB，继续串行构建。
+  Tauri services/lifecycle/组合fixture、Safari race修复复验、各原生客户端服务矩阵与
+  no-progress 用例仍待完成；1D及批次1继续标为未完成，无第二次审查或全量次数重置。
+
+#### 1D repair47–48 定向结果与剩余前置修复
+
+- repair47 原生窗口前置对应单文件104/104、lint/format/Node检查通过。Tauri services
+  复用上述 `4ae8f024…` 二进制，4.15s 后在最终鼠标断言失败：HTML/canvas标记齐全，
+  `SNAKE_POINTER=84/0/` 缺少期望41。native实际move/down/up处于相同窗口、active/key=true，
+  CSS点均为(84,454)；目前缺查询时独立DOM观察，不能先把预期改为空或认定按钮模型错误。
+  下一次只补充独立事件、几何、命中元素与实际请求/回复证据，不替换输入或服务返回值。
+- Safari repair47（6.30s）在首次图片gate启用前读取restart session时，过早要求decode
+  evidence enabled。已将真实transport identity与已启用的decode记录要求分开；图片待决、
+  取消和迟到结果断言仍严格要求完整decode证据。repair48受影响104/104及lint/format/Node
+  通过。Safari repair48（3.77s）随后因前台缺失而未捕获可信pointer事件停止，尚未到race；
+  Firefox未因此启动。准备以一次原生应用激活和WebDriver当前窗口选择替换无效的
+  `window.focus()`+固定200ms等待，不对每个事件抢焦点，不伪造focus/输入。
+- 已核对普通双参考34项：22项 `matched_observables`、6项 `incomparable`、6项
+  `different`。12项非匹配均有逐项处置及原始证据hash，汇总为
+  `1D/repair46-ordinary-reference-audit.json`；这些处置不将机器结论改为通过。
+  8项跨客户端 no-progress capture及2项参考命令已准备在
+  `1D/repair48-hazard-queue.json`，尚未执行；参考看门狗终止仍记录为未完成的失败观察。
+
+#### 1D repair49 原生服务与组合断面通过，生命周期与跨端证据继续修复
+
+- Browser foreground helper 的受影响单文件69/69、lint/format/Node通过；services独立
+  DOM观察器相关106/106通过，随后lint因测试缺`console`声明失败；仅注释修复后定向
+  lint及余下format/Node恢复通过，未重复全量或将首次lint失败隐去。
+- Tauri services（`repair49-tauri-snake-services`）exit0，3.83s；真实
+  `SNAKE_POINTER=84/-28/41`，HTML/canvas及替换像素标记齐全。随后lifecycle
+  `repair49-tauri-snake-lifecycle` 在33.72s因 `pointer stage 2 did not complete`
+  失败；已完成pointer0/1与基本service查询，未到图片gate。原生输入均有active/key窗口，
+  最新完整DOM的prompt为空、当前wait未推进，继续定位真实输入/提交时序，不延长等待。
+- 与上述生命周期测试步骤独立的 Tauri 组合断面 `repair49-tauri-snake-batch1` exit0，
+  3.67s。实际到达 DATA_INDEX=2/main/42、RESOURCE=1/1/0、OVERLAY=1/1/1/2、
+  STRUCTURED=1/station/29/29/42/from-schema、GLOBAL_MISSING=0/66/55、
+  GLOBAL=1/7/55/1/12/saved-map/saved-xml，及HTML、canvas、BATCH1_READY。
+  本组三条命令均复用SHA256 `4ae8f024…db0fa6` 二进制，无重建；不是整批完成。
+- Firefox普通服务矩阵使用无头原生Firefox，不使用OS鼠标键盘，已确认可与Tauri独立
+  并行。首项 original/empty capture exit0，但adapter关联校验失败后停止，其余33项
+  未执行。实际6个watch均有同epoch/messageId关联；wire的可选reference字段省略、
+  inspect显式null导致原始dict比较误拒绝。正对该既有Option契约做限定规范化及负例测试，
+  保留原capture、不重跑浏览器、不放宽真实引用、值或关联ID校验。首次修复的16项定向
+  测试有1项失败，尚未放行adapter重验；系统Python缺blake3的尝试单独记录为环境错误。
+- 最新磁盘约20.09GiB。剩余为生命周期、Safari/Firefox当前定向复验、各端普通服务
+  capture/离线比较与no-progress断面；批次1保持未完成。
+
+#### 1D repair50–52 输入证据与 Firefox 对照结果
+
+- core adapter仅将 `variable_value.value.reference` 的 `fiber_id/frame_id/character`
+  省略与null规范化，关联ID/epoch、其它字段及typed值仍严格检查。首轮16项中的新增测试
+  因fixture共享reference别名而误改请求；修正测试复制边界后，该项含11个submode定向
+  通过，其余15项原结果保留。Firefox首项adapter离线重验通过，不重复已完成capture。
+- Firefox其余33项 capture→adapter 共66条命令全部exit0（首项已有）；随后34条离线
+  对照全部完成，逐项与Chromium结论相同：22 matched_observables、6 incomparable、
+  6 different。12项非匹配的具体watches和终止字段逐项核对通过，未改写机器结论。
+  汇总为 `repair51-firefox-remaining-result.json` 与 `repair52-firefox-comparison-result.json`。
+- 生命周期输入前置改为确认真实DOM文本、enabled及焦点后再移动指针；107/107及对应
+  lint/format/Node通过。Tauri repair50实际文本0已就绪，但原生Enter前active/key丢失；
+  repair51加入失败时OS前台观察，证实该次前台仍是era-web-tauri，实际失败变为指针回到
+  输入框(316,507)、未悬停目标；不把两次不同错误归为同一根因。Safari repair51则在
+  文本2已就绪后记录documentFocused=false，未到图片race。
+- 新的本地只读前台追踪工具每100ms查询NSWorkspace、仅变化时记录，不激活应用；烟测
+  保留被包裹命令exit7且退出后observer已回收。后续原生复验附该记录，避免仅凭DOM猜测。
+- provider源码核实原路径只构造NSEvent而不移动系统cursor；修复先将验证后的窗口点
+  转到主屏原点的逻辑屏幕坐标，检查所有显示器半开边界，调用CGWarpMouseCursorPosition，
+  检查错误后仍由原NSWindow投送事件。不用全局CGEvent、不绕过active/key、不乘Retina比例，
+  不裁剪屏幕外/显示器间隙。新增映射测试，零依赖变更；保留edition2021/MSRV1.77语法。
+  这处静态缺口已修，不声称此前所有失焦/回跳都已因此解决，仍需真实断面确认。
+- repair52 provider格式、check、Clippy、8项inline测试及来源校验已通过；正式测试host
+  构建与独立probe/生命周期仍在推进。最终overlay SHA256为
+  `c8694a73f0c3ea41bc230fb2ba94a94c7563869f0dad59ed69b4e7c60de2bc4d`，使用
+  `tauri-native-provider-source/materialized-repair52`；旧materialized44和此前失败证据保留。
+
+
+#### 1D repair52–53 原生光标通过，滚动断面继续定位
+
+- repair52 正式测试host构建exit0，72.14s；本组原生二进制53,886,912 bytes，SHA256
+  `fe66494b0295f23ad2ef4e1cf7cb704068adde7c0f29777f2411a5b409f7f882`。
+  独立native-input探针exit0，3.95s，真实系统光标、可信事件、Unicode输入、清除、Enter、
+  PageUp与blur断言通过；没有重复探针或因PTY回报回收重新构建。
+- repair52 lifecycle前3项指针通过，随后resize因测试错误要求旧pointer非空而失败：窗口
+  缩小时旧光标离开新窗口、pointerout清空是合法状态。repair53仅将尺寸/scroll观察与
+  旧pointer是否存在解耦，仍要求文档前台、实际后续查询的独立指针断言不变。
+- repair53受影响单文件108/108、ESLint、Prettier、Node及观察脚本语法均通过。
+  lifecycle exit7，7.86s，已通过pointer0–3，实际失败为
+  `PageUp did not scroll the real viewport`；未继续services/batch1。
+  完整证据为 `validation/runs/repair53-tauri-lifecycle/`，失败时OS前台为era-web-tauri。
+- 只读前台追踪改用NSRunLoop刷新NSWorkspace缓存；旧NSThread sleep版本只记录初始
+  应用，不能据此断言整段前台未变化。新的trace实际记录Firefox→Tauri，不抢焦点。
+- Safari34普通服务capture→adapter与离线对照已接续，期间冻结Web源码/产物；Tauri
+  PageUp问题只读诊断，禁止为了抢测而修改正在使用的输入或同时启动第二个GUI会话。
+- `repair53-cache-cleanup.json`记录仅删除已替换的provider44 rlib/rmeta，共297,859,604
+  bytes；provider52二进制及其当前rlib/rmeta、WASM、所有fixture/失败证据与批次0均保留。
+  当前可用约19.6GiB，继续串行，暂不新增大型构建。批次1仍未完成。
+
+
+#### 1D repair53 Safari普通服务证据完成
+
+- Safari34组capture→adapter共68命令全部exit0，随后34条离线对照全部完成；复用固定
+  参考输出，不启动Wine。22 matched_observables、6 incomparable、6 different，逐项与
+  Chromium/Firefox结论相同；12项非匹配的watches/终止状态核验符合已登记处置，原机器
+  结论完整保留。结果为 `repair53-safari-ordinary-result.json`、
+  `repair53-safari-comparison-result.json`；不包含尚未通过的生命周期或no-progress。
+- Tauri普通34项使用 `repair54-tauri-followup-queue.json` 接续，固定provider52和
+  当前fe664…测试host；独立PageUp诊断尚未影响产品或队列输入。
+- 危险断面队列准备时发现首个Chromium `--case` 错指普通canvas条目，在启动前已改成
+  fixture唯一的 `s04-lines-no-progress`，并核对全部8条实际fixture/config/case匹配。
+  `repair54-hazard-queue.json`同样同步provider52；尚未执行，不能算作验收证据。
+
+
+#### 1D repair54–55 矩阵缓存未命中与禁止隐式重建
+
+- Tauri矩阵首条repair54在GUI启动前出现缓存未命中并开始正式构建，按本次“不得重建”
+  要求中断；未执行任何case、adapter或后续33项。外层返回130且cleanup遇PermissionError，
+  保留原request/gzip，不补造成功result；随后确认本任务构建进程已无残留。
+  原fe664…二进制未替换，publish lock仍为f164ec73…；不重跑已通过native-input探针。
+- 只读比对确认core/public/config及编译产品源码均未改变；仅允许的Node生命周期helper
+  与构建时不同。执行者shell的PATH构造不同，不能把shell中尚未由queue/runner注入的
+  Cargo/Vite变量误报为launcher缺失。新增明确 `--require-reuse-build`：同一严格契约，
+  不匹配时报告字段名并在编译/GUI前退出；原`--reuse-build`回退语义保留。
+- 本地 `run_cached_tauri.py`以已核验构建manifest还原构建敏感环境、使用同一Node执行
+  官方launcher；不放宽compiler/SDK/来源/二进制hash校验。整个外层监督器使用原生GUI
+  所需权限，避免沙箱父进程无法回收自身外部子进程。
+- repair55同次加入PageUp真实DOM焦点前置和有界key/scroll事件，捕获dispatch后的取消状态，
+  失败完整记录是否焦点未到、事件取消或实际滚动回弹；不合成焦点/滚动，不修改产品或
+  provider，不延长3秒等待。静态与定向原生结果待下条登记。
+
+
+#### 1D repair55–56 PageUp遮挡根因已确认
+
+- repair55受影响单文件116/116、ESLint、Prettier、Node均通过。严格cached wrapper实际
+  命中fe664…，没有build-start；原生lifecycle exit7，4.82s，GUI已结束。
+- 完整PageUp独立观察显示点击(350,233)命中兼容警告SPAN，pointer事件97–99的
+  targetScope=other，实际activeElement=BODY；viewport仍在scrollTop2091底部。
+  这解释了此前PageUp未滚动：resize后的警告浮层遮住视口中心。不是provider键映射问题，
+  也不是已到顶部；probe的实际538→529→418滚动证据保留。
+- repair56只在该步骤前通过真实UI关闭warning通知（不关闭error、不删日志），有16次
+  限额和每项3s快速状态等待；然后仍要求真实viewport焦点与PageUp实际scrollTop下降。
+  新增同一测试中的warning遮挡分支；未修改产品滚动逻辑，后续定向结果待登记。
+
+
+#### 1D repair56–58 生命周期收敛与Tauri导出前置
+
+- repair56受影响117/117及lint/format/Node通过；Tauri严格复用fe664…，lifecycle
+  exit0/11.13s，6个独立pointer样本、2次真实image race、blocked=[]、未挂载canvas=0；
+  真实blur、取消、新session进展、旧decode晚settle及无旧回复均通过。
+  services exit0/3.73s，pointer=84/-28/41；batch1 exit0/3.42s，数据、HTML、canvas与
+  BATCH1_READY齐全。三个命令无编译，不重复native-input探针。
+- repair57 Safari lifecycle exit0/10.58s、Firefox exit0/22.01s。Chromium exit1/6.22s，
+  Playwright适配器的警告关闭selector同时匹配4项，严格模式拒绝，而WDIO `$`默认首项；
+  repair58仅将适配器click对齐首项语义，原警告/焦点/PageUp断言不变，正在定向验证。
+- Tauri普通矩阵repair55首项严格缓存命中，但在actual project identity export阶段
+  保存诊断归档等待原生save对话框。两次完整快照相同触发watchdog；最终result exit7，
+  17.27s。ECONNREFUSED/重复done均为关闭后的次生错误，不是实际首败；未运行case或adapter。
+  不能把摘要中的“exit1/连接拒绝”当作本次根因。普通34项仍未完成。
+- 现有可复用测试host只在会话配置project picker，未配置saveDiagnosis的原生输出路径；
+  计划在同一test-build配置提供一次性隔离诊断路径，仍真实inspect project identity和
+  stream archive/write_export_chunk。此项涉及嵌入TS，需静态门禁后重建一次；后续所有case
+  使用同一验证二进制，不编译per-case路径。no-progress危险断面尚未运行。
+
+#### 1D repair59–63 原生捕获前置修复与真实首败
+
+- repair58 Chromium lifecycle 定向 exit0/17.62s，四客户端生命周期均已有成功执行证据。
+- repair59在仅测试构建的会话配置中增加一次性诊断输出路径；真实原生项目身份检查、Worker
+  流式归档和写盘链路不变。55项定向、类型/lint/格式/core pin通过；官方build-only 69.05s、
+  GUI未启动，二进制9869e095…（53,886,912 bytes）。后续严格cache-only，不因PTY回报重复构建。
+- repair60项目归档实际写出，但转移给Worker的ArrayBuffer已detached，归档完成后的测试证据
+  再读取该buffer抛错。保留首败，不将已写归档等同于整个capture成功。修复仅在转移前复制
+  小型测试证据，并在回归中使用真实structuredClone transfer复现所有权转移；已知导出失败
+  立即结束，不再等待看门狗。严格复用入口补充capture.json完整性检查，子进程exit0但缺证据
+  不再被接受。
+- repair62相关147/147、类型/lint/格式/Node及本地完成清单回归通过；一次官方build-only约68s。
+  二进制178f59b027c8703cb90b45de1dee543e9f354c7b345e0f0c01ad6f53c9619955，53,886,912 bytes，
+  core pin b8b5bee45d1a7d3fc31f4df42dcbe0048422794a，provider52未变。当前源码Chromium组合
+  断面通过，三项HTML操作、canvas与BATCH1_READY实际执行；使用已安装Chromium，无下载。
+  之前repair61默认headless-shell缺失属于启动基础设施失败，未启动浏览器。
+- repair63严格命中上述二进制，首项s04-empty-lazy归档与脚本执行成功，但typed inspection
+  超时。保存的inspection-frontier表明同epoch2/wait7，输出与值未变，检查停在debug_paused；
+  调试variable_value响应correlation47先于submitDebug返回后的sent47记录，等待者登记过晚。
+  未产生capture.json，持久化命令结果exit7；adapter、后续33项及对照均未执行。当前修复通用调试响应
+  登记竞争，保留终态、stop/generation和错误断言，不靠延长超时或重试掩盖问题。
+- 磁盘约19GiB，构建/GUI串行；core发布绑定、WASM和既有参考输入不变。
+  无进展危险边界仍未执行，批次1D及整批尚未完成。
+
+#### 1D repair64 调试响应登记竞争修复
+
+- Web通用debugCommand/debugRequest在原生提交ID返回前登记submission，按精确correlation
+  暂存早到完成通知（最多64条）；UI响应保持实际receive顺序，不重排证据账本。
+  reset立即取消未返回的提交并清缓存，迟到旧ID不能登记到替换会话；pump不等待提交回报。
+- request-state定向4/4通过。store相关describe首次31通过/2失败：新增fixture的fiber_page
+  写死旧stop、生产暂停计数误含初始化hello。仅修fixture为实际command.stop及操作前计数，
+  两个失败用例定向复验2/2通过；其余31项不重跑。覆盖早到值/错误、合法i64::MIN、旧stop
+  不恢复、故障后只读观察和生产register-only暂停命令。
+- 四文件ESLint/Prettier、typecheck通过。官方build-only exit0/67.95s，GUI未启动；
+  二进制53,903,424 bytes，SHA256
+  `7c109b37f7d2a97c926e1e21984547691ab4353f7e1ae524282f46b4613908ef`，
+  contract SHA256 `d2b08da50260ceac05d01154479a7ae81a52aa6c983c1dbe035351d1d7dfeef7`。
+  core pin及provider52未变，磁盘约19.32GiB。
+- repair65准备34个新输出目录，保留repair63失败现场；使用严格复用入口继续Tauri捕获，
+  不重跑TW、普通参考引擎或已通过浏览器矩阵。最终结果尚待登记。
+
+#### 1D repair65–68 原生导出后输入焦点边界
+
+- repair65首项严格复用7c109b…，诊断导出后在setValue的原生clear步骤失败：session window
+  不是active/key。OS现场前台为Firefox（用户默认profile，PID37148，自8月27日运行），
+  不是本组残留driver；未终止、隐藏或修改该用户浏览器。命令exit1，无capture，未运行adapter。
+- 仅native oracle spec在导出后、首次真实输入前调用既有focusCurrentTauriWindow，显式
+  激活当前WebDriver窗口并确认DOM焦点；随后仍原生setValue/Enter。provider焦点保护不变，
+  不增加输入重试或忽略错误。属于Node测试脚本，不嵌入产品binary，未重建。
+- repair67 spec Node语法、ESLint、Prettier与既有foreground helper 4/4通过；repair68使用
+  新目录继续普通矩阵。前述失败、无进展危险断面和整批未完成状态均保留。
+
+#### 1D repair68 Tauri普通矩阵捕获完成
+
+- 34个case均已实际完成capture→adapter，共68条命令exit0；持久结果
+  `batch-1-work/1D/repair68-tauri-matrix-result.json` 为completed_success，34个capture.json齐全。
+  首项typed变量观察与输入恢复均成功，修复后的早到响应不再丢失。
+- 所有case严格复用7c109b…二进制，没有逐项构建、普通oracle重跑或TW重跑。
+  固定34参考证据离线对照与12项已知差异实际值核对仍在执行，不预先称全部差分相等。
+- 余下no-progress独立危险断面按repair66队列启动；Rust必须明确runtime错误并保留777，
+  参考的看门狗/超时仅作为未完成/失败证据，不能替代成功返回。整批仍待收尾。
+
+#### 1D repair68 离线对照首败与视口候选回退
+
+- 34项capture/adapter完整不代表语义通过。离线对照首项empty匹配，第二项原版first-row
+  发现新差异后停止：实际stale_projection，参考正常完成。随后只读逐项终态审计确认18项
+  因同类stale_projection失败，见repair68-terminal-audit.json；未将其豁免为平台差异。
+- 精确账本：env5/space5、325×430已提交；输入2后env6/space6、327×430使用旧presentation45，
+  core明确拒绝；HTML请求用presentation50/env5/space5，实际尺寸已回325×430，前端却因
+  清空全部观测而拒绝。修复保留有界未拒绝候选，仅在最新候选被明确拒绝后恢复前一候选；
+  新候选pending或未被拒绝时仍不能使用旧identity，实际尺寸/样式/三revision继续严格检查。
+- repair66仅Chromium/original危险断面已执行：capture与adapter exit0，实际vm_fault、
+  context.api=html__lines_step、诊断`html.query.NoProgress`，RESULT:10=777。
+  预案中的runtime.html_query_no_progress不是实现的实际诊断名，不能按manifest字串搜索
+  漏掉trace中的真实错误；不修改fixture或重测来追逐预案名称。其余7个host/profile和两个
+  参考尚未运行，因视口修复暂停；GUI已释放。
+- 修复后只定向重验18个失败Tauri case，保留其余16项原capture；旧7c109b二进制与构建清单
+  冻结在本组1D/frozen/native-repair64/（53.9MB），避免新构建覆盖既有证据对应产物。
+
+#### 1D repair69 视口拒绝回退门禁通过
+
+- RuntimeViewportState保留最多256个已提交未拒绝候选，只有最高候选可参与matches；较新
+  提交未返回时仍不可回退，明确reject仅删除对应候选，恢复前一有效候选。matches未放宽。
+  IPC异常使当时所有在途revision失效，迟到旧ack不能重新填候选；reset隔离新会话。
+- runtimeServices 85/85、store投影定向9/9、两文件ESLint/Prettier、typecheck通过。
+  官方build-only exit0/68.74s，GUI未启动；新binary53,903,424 bytes，SHA256
+  `ae9d33dae648ea17f3523d538863fcbe4d017f155c16dc58e962ea41b01355fc`。
+- repair70只重新捕获18个stale_projection失败用例，每个adapter后立即做对应离线对照，
+  首个新行为差异立即停止；原16个capture保留。未重跑任何全量或普通参考引擎。
+  剩余7个危险断面排队等待GUI释放；Chromium/original已有明确NoProgress/777证据。
+
+#### 1D repair70–74 原生窄窗口布局根因与定向修复
+
+- repair70首例capture后即时对照仍发现stale_projection并停止；这次327px观测已在输入前被
+  core接纳，输入后实际宽度变为325px，拒绝正确，不能继续放宽revision校验。
+- repair73只读原生几何记录确认：window.innerWidth始终320；app-shell的隐式Grid列及
+  game-area/game-viewport实际宽324.6875→326.6875→324.6875，input自身宽度随填入/清空
+  变化183.15625→185.15625→183.15625。没有status-bar元素参与，不归因于滚动条。
+  此次诊断执行exit0但脚本终态faulted，明确保留为失败证据。
+- 修复仅为app-shell和game-area增加`grid-template-columns: minmax(0, 1fr)`，让原生窄窗口
+  不再被输入框intrinsic width撑宽。现有原生oracle用例保留只读几何日志，并断言两个容器
+  不超出window.innerWidth及输入前/填入后/提交后viewport clientWidth一致。
+- repair74 spec语法、ESLint、spec/CSS格式检查全部通过；官方build-only exit0/67.26s，
+  guiStarted=false，实际执行vue-tsc与Vite。新二进制53,903,424 bytes，SHA256
+  `e6355b5425d1e25926871b1f4f9cecea4a3d80147dd81a966c3b3f58e77bc6be`，provider52不变。
+- repair75仅重验18个受影响Tauri用例，每项capture→adapter→实际终态检查→固定参考离线
+  对照后才继续；其余16项旧证据继续绑定冻结7c109b产物。相关输入和HEAD保持不变，
+  无全量、TW或普通参考重跑。磁盘19GiB，构建/原生会话串行，未清理续做或批次0证据。
+
+#### 1D repair75 定向捕获与实际比较分开记账
+
+- 18个受影响用例capture及adapter共36条命令exit0，原生输入宽度断言全部通过，实际终态
+  不再出现stale_projection。错误断面保留vm_fault/resource_limit，不改写为成功。
+- 首项first-row的9个watch均与固定原版参考一致，ok=true、completed、output一致。
+  原机器结论incomparable的唯一原因是额外info级runtime.compiled_cache_ready；已单列
+  repair75-cache-info-disposition.json，保留原结论，不清洗原日志或扩大到其他诊断。
+- 执行者随后17项未按要求逐项插入comparison，是调度偏差。未将其capture exit0称为
+  差分通过；改为repair76明确命令队列离线核对现有18新+16旧adapter，不重跑客户端。
+- 来源检查repair75-final-source-audit.json确认root/core/Web/TUI diff --check通过，
+  core crates相对b8b5bee无差异，Web发布锁f164ec…、WASM bbe455…、native e6355b…
+  均保持；磁盘18.78GiB。产品/fixture/HEAD在捕获期间冻结。
+
+#### 1D repair76 / repair71 最终服务对照与无进展边界
+
+- Tauri普通34项实际对照已完成：33次离线recompare exit0，首项直接复用；旧repair68
+  adapter16份、新repair75 adapter18份。每份路径/hash和实际watches、output、termination
+  位于repair76-tauri-offline-result.json，不重新启动客户端或普通参考。
+- Tauri原始分类为7 matched_observables、21 incomparable、6 different。相比三浏览器
+  各22/6/6，多出的不可比来自info级compiled_cache_ready；未过滤日志或把原分类改为匹配。
+  既有12项差异均核对；混合字体样式的Tauri RESULT:10为85，三浏览器84，固定原版104、
+  蛇版88；其余RESULT:11–15为16/32/0/0/0，错误仍在services.erb:76 InvalidMarkup。
+  平台像素差异按已确认边界单列repair76-tauri-style-pixel-disposition.json，不承诺字节级字体来源。
+- 无进展断面8/8 Rust host/profile均已验证：Chromium/original复用repair66，其余7项
+  repair71实际capture和adapter exit0；全部ok=false、faulted、RESULT:10=777，诊断
+  vm_fault、context.api=html__lines_step及html.query.NoProgress。明确错误来自runtime，
+  不是监督器杀死客户端。首次临时检查器把完整message与诊断前缀作相等比较的错误保留，
+  修正检查后复用既有捕获，不重跑真实用例。
+- 两个固定reference各只执行一次相同输入：capabilities/load成功到WaitInput；进入
+  S04_CASE_NO_PROGRESS后连续两次5s完整观察相同，看门狗终止，exit1、warm0/retire0。
+  都没有可比返回值或最终watch，均保留status=failed，不称oracle通过或预期拒绝匹配。
+  本批要求无法推进必须明确报错，故Rust的有界NoProgress与该参考停滞作为明确安全差异登记，
+  不延长等待、不修改参考实现，也不以此重跑普通矩阵。
+- 原版失败evidence SHA256：4653686e8084dc93abeac5e03af818a068f928a790920fb68a9ce583358db107；
+  蛇版：19645b3e493a35dc43062d7d6920ee2cc61af50b5d53ff6f773e6567f12ffadf。
+  完整请求/5s快照、失败原因和清理结果在repair71-hazard-result.json及oracle-*-no-progress目录。
+- 所有本轮原生/Wine会话已结束，未下载浏览器、未新增全量、未再运行TW，转入分项提交和
+  文档/来源最终检查。上述差异不改写为兼容成功，不扩大到SQL、缺失资源或真实标题可玩性。
+
+#### 1D 交付完成（2026-08-28）
+
+- 批次1的1A–1D必要实施、唯一审查、静态与实际客户端断面、TW覆盖及分项交付已完成。
+  [验收汇总](BATCH_1_ACCEPTANCE_SUMMARY.md)保留首次失败、定向结果、原始差分类别与未可比范围；
+  [交付提交](BATCH_1_DELIVERY_COMMITS.md)列本次31个分项提交的标题、正文和验证依据。
+- Web最终`e3633311233df4a502faa41b32d8807c8c38de33`，TUI`ad5c018b7c73bac441a9064d3339a174eff7dcfa`，
+  发布core pin均为`b8b5bee45d1a7d3fc31f4df42dcbe0048422794a`。core工具收尾为
+  `e919d3719a2b0f5394c545783caa27289dcd7f7d`，此后的文档提交不改产品crate或前端绑定。
+- 根CHANGELOG_PENDING已追加五项已验收产品功能/修复，独立提交`40fdea805c2fac3065a69fe541b8dd6265046efb`；
+  未把构建/测试/流程改进登记成功能。无推送、合并主线或产品版本调整。
+- repair77所有产品来源、48文件内容、pin/lock/产物和文档链接检查通过；仅新增native-input.patch
+  中14个合法单空格context行被git diff --check报错，保留首次失败。只在.gitattributes对该
+  patch设置精确whitespace规则，repair78属性/历史及工作树diff检查通过，补丁SHA不变。
+- 测试原生/Wine进程已释放，磁盘约19GiB；仅清除本次可再生Oracle .pyc缓存116594 bytes。
+  原失败、fixture、流式压缩报告及批次0证据保留，未删除用户数据或其他任务产物。
+- 后续仍受SQL、bbas_map_schema.xml/bbas_map.xml缺失与批次2/4/6语义约束；真实游戏完整编译、
+  标题和GRAPH_DB_INIT执行未宣称通过。TW测试耗时/输出优化备忘继续保留，不借本批收尾启动新全量。
 
 <a id="batch-2"></a>
 
