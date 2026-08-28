@@ -30,6 +30,7 @@ pub(super) struct TypeAnalysis<'a> {
     program: &'a crate::ProgramGeneration,
     function: SymbolKey,
     generation: GenerationId,
+    probe: bool,
     natives: Option<&'a NativeServiceRegistry>,
     nodes: usize,
     limit: usize,
@@ -40,13 +41,15 @@ impl<'a> TypeAnalysis<'a> {
         program: &'a crate::ProgramGeneration,
         function: SymbolKey,
         generation: GenerationId,
-            limit: usize,
+        probe: bool,
+        limit: usize,
         natives: Option<&'a NativeServiceRegistry>,
     ) -> Self {
         Self {
             program,
             function,
             generation,
+            probe,
             natives,
             nodes: 0,
             limit,
@@ -94,9 +97,14 @@ impl<'a> TypeAnalysis<'a> {
                     ExprKind::Variable { indices, .. } => indices.as_slice(),
                     _ => &[],
                 };
+                if self.probe {
+                    probe_variable_shape(self.program, definition, indices)?;
+                }
                 for index in indices {
                     let kind = self.expression(index, depth + 1)?;
-                    if kind != BytecodeType::Integer {
+                    if kind != BytecodeType::Integer
+                        && !(self.probe && kind == BytecodeType::String)
+                    {
                         return Err(bad_type("runtime variable index must be an integer"));
                     }
                 }
@@ -228,7 +236,7 @@ impl<'a> TypeAnalysis<'a> {
         if !definition.mutable || definition.value_type != BytecodeType::Integer {
             return Err(bad_type("increment/decrement needs a writable Integer"));
         }
-        {
+        if !self.probe {
             let expression = ungroup(expression);
             if let ExprKind::Variable { indices, .. } = &expression.kind
                 && indices.len()
@@ -289,6 +297,22 @@ impl<'a> TypeAnalysis<'a> {
             .map_err(map_vm_error)?;
             return Ok(result);
         }
+        if self.probe {
+            let symbol = self
+                .program
+                .artifact
+                .runtime_builtins
+                .iter()
+                .find(|symbol| symbol.name.eq_ignore_ascii_case(name))
+                .ok_or_else(|| missing(name))?;
+            return if symbol.shapes.iter().any(|shape| shape.accepts(shapes)) {
+                Ok(symbol.result)
+            } else {
+                Err(bad_type(format!(
+                    "expression callable {name} has incompatible arguments"
+                )))
+            };
+        }
         self.normal_call(name, shapes)
     }
 
@@ -313,6 +337,29 @@ impl<'a> TypeAnalysis<'a> {
                 return Err(bad_type("EXISTMETH expects one String"));
             }
             require_type(types[0], BytecodeType::String)?;
+            return Ok(BytecodeType::Integer);
+        }
+        if name.eq_ignore_ascii_case("EXISTVAR") {
+            let max = if self
+                .program
+                .artifact
+                .manifest
+                .compatibility
+                .supports_existvar_expression_probe()
+            {
+                2
+            } else {
+                1
+            };
+            if types.is_empty() || types.len() > max {
+                return Err(bad_type(
+                    "EXISTVAR expects String and optional Integer mode",
+                ));
+            }
+            require_type(types[0], BytecodeType::String)?;
+            if let Some(Some(mode)) = types.get(1) {
+                require_type(Some(*mode), BytecodeType::Integer)?;
+            }
             return Ok(BytecodeType::Integer);
         }
         if name.eq_ignore_ascii_case("STRFORM") || name.eq_ignore_ascii_case("STRFORMCHECK") {
@@ -463,6 +510,7 @@ pub(super) fn expression_type(
         program,
         function,
         GenerationId::default(),
+        false,
         MAX_RUNTIME_FORM_BYTES,
         None,
     )
@@ -522,6 +570,49 @@ fn binary_result_type(
     Err(bad_type("STRFORM binary operands must be integers"))
 }
 
+fn probe_variable_shape(
+    program: &crate::ProgramGeneration,
+    definition: &erabasic_bytecode::BytecodeGlobal,
+    indices: &[Expr],
+) -> Result<(), StepError> {
+    let rank = definition.dimensions.len();
+    let character = definition.storage == erabasic_bytecode::BytecodeStorage::Character;
+    let policy = program.artifact.call_compatibility;
+    let valid = if character && rank == 1 {
+        indices.is_empty() || indices.len() == 2 || (indices.len() == 1 && !policy.system_no_target)
+    } else if rank >= 2 {
+        indices.is_empty() || indices.len() == rank + usize::from(character)
+    } else {
+        indices.len() <= rank + usize::from(character)
+    };
+    if !valid {
+        return Err(bad_type(
+            "expression variable index count differs from its schema",
+        ));
+    }
+    // The reference rejects omitted/literal zero RAND while constructing VariableTerm,
+    // before any Restructure or value access. Unary plus/group preserve SingleLongTerm;
+    // unary minus and binary expressions do not, so they must not be folded here.
+    if definition.storage == erabasic_bytecode::BytecodeStorage::Calculated
+        && definition.name.eq_ignore_ascii_case("RAND")
+        && !policy.compatible_rand
+        && (indices.is_empty() || indices.first().is_some_and(probe_literal_zero))
+    {
+        return Err(bad_type("RAND argument is omitted or literal zero"));
+    }
+    Ok(())
+}
+fn probe_literal_zero(expression: &Expr) -> bool {
+    match &expression.kind {
+        ExprKind::Integer(0) => true,
+        ExprKind::Group(inner)
+        | ExprKind::Unary {
+            op: UnaryOp::Plus,
+            operand: inner,
+        } => probe_literal_zero(inner),
+        _ => false,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -555,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_types_visit_each_node_once_in_normal_mode() {
+    fn nested_types_visit_each_node_once_in_normal_and_probe_modes() {
         let program = program();
         let function = program.function_by_name("SYSTEM_TITLE").unwrap().key;
         let natives = NativeServiceRegistry::for_artifact(&program.artifact);
@@ -573,24 +664,26 @@ mod tests {
             let parsed =
                 erabasic_parser::parse_expression(&source, &DefaultParserContext::default());
             let expression = parsed.value.expect("nested expression");
-            {
+            for probe in [false, true] {
                 let mut analysis = TypeAnalysis::new(
                     &program,
                     function,
                     GenerationId::default(),
-                            25,
+                    probe,
+                    25,
                     Some(&natives),
                 );
                 assert_eq!(
                     analysis.expression(&expression, 0).unwrap(),
                     BytecodeType::Integer
                 );
-                assert_eq!(analysis.nodes(), 25, "{source}");
+                assert_eq!(analysis.nodes(), 25, "{probe}: {source}");
                 let mut bounded = TypeAnalysis::new(
                     &program,
                     function,
                     GenerationId::default(),
-                            24,
+                    probe,
+                    24,
                     Some(&natives),
                 );
                 assert_eq!(

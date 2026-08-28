@@ -186,6 +186,7 @@ impl CooperativeCompiledCacheEncoder {
                 &CompiledCacheMetadataRef {
                     manifest: &self.artifact.artifact().manifest,
                     call_compatibility: &self.artifact.artifact().call_compatibility,
+                    runtime_builtins: &self.artifact.artifact().runtime_builtins,
                     native_imports: &self.artifact.artifact().native_imports,
                     host_imports: &self.artifact.artifact().host_imports,
                     event_groups: &self.artifact.artifact().event_groups,

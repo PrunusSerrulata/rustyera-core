@@ -30,6 +30,7 @@ fn decode_sections_with_progress(
     let artifact = BytecodeArtifact {
         manifest: parts.metadata.manifest,
         call_compatibility: parts.metadata.call_compatibility,
+        runtime_builtins: parts.metadata.runtime_builtins,
         project_data: parts.project_data,
         globals: parts.globals,
         native_imports: parts.metadata.native_imports,

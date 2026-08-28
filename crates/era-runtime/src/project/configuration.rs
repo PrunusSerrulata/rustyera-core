@@ -261,6 +261,9 @@ fn apply_catalog_semantics(config: &mut SemanticConfig) {
     if let Some(value) = integer("DisplayWarningLevel").and_then(|value| u8::try_from(value).ok()) {
         config.analyzer.display_warning_level = value;
     }
+    if let Some(value) = boolean("StrictUserCallArguments") {
+        config.analyzer.strict_user_call_arguments = value;
+    }
     if let Some(value) = boolean("IgnoreUncalledFunction") {
         config.analyzer.ignore_uncalled_functions = value;
     }

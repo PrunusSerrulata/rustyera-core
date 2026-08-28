@@ -12,6 +12,7 @@ fn artifact() -> BytecodeArtifact {
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        runtime_builtins: Vec::new(),
         project_data,
         globals: Vec::new(),
         native_imports: Vec::new(),

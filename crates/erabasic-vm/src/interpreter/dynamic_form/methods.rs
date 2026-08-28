@@ -1,5 +1,4 @@
 pub(super) use super::typing::{argument_spec, expression_type};
-pub(super) use super::typing::{argument_spec, expression_type};
 #[allow(clippy::wildcard_imports)]
 use super::*;
 use crate::state::user_calls::{
@@ -445,6 +444,18 @@ impl RuntimeFormContinuation {
                     .iter()
                     .all(|value| argument_spec(program, self.function, value.as_ref()).is_ok())
             }
+            RuntimeFormTask::ExistVarFirst { source, mode } => {
+                expression_type(program, self.function, source, 0).ok()
+                    == Some(BytecodeType::String)
+                    && mode.as_ref().is_none_or(|mode| {
+                        expression_type(program, self.function, mode, 0).ok()
+                            == Some(BytecodeType::Integer)
+                    })
+            }
+            RuntimeFormTask::ExistVarMode { source } => {
+                expression_type(program, self.function, source, 0).ok()
+                    == Some(BytecodeType::String)
+            }
             RuntimeFormTask::MutateVariable {
                 variable,
                 indices,
@@ -463,6 +474,11 @@ impl RuntimeFormContinuation {
         let mut expressions = Vec::new();
         for task in &self.work {
             match task {
+                RuntimeFormTask::ExistVarFirst { source, mode } => {
+                    expressions.push(source);
+                    expressions.extend(mode.iter());
+                }
+                RuntimeFormTask::ExistVarMode { source } => expressions.push(source),
                 RuntimeFormTask::MethodArgument(call)
                 | RuntimeFormTask::CaptureMethodArgument(call) => {
                     slots = slots

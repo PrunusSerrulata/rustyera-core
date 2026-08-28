@@ -14,6 +14,7 @@ pub struct BytecodePatch {
     pub base_execution_id: Digest,
     pub target_manifest: ArtifactManifest,
     pub call_compatibility: Option<BytecodeCallCompatibility>,
+    pub runtime_builtins: Option<Vec<crate::RuntimeBuiltinSymbol>>,
     pub project_data: Option<ProjectData>,
     pub globals: Option<Vec<BytecodeGlobal>>,
     pub native_imports: Option<Vec<NativeImport>>,
@@ -58,6 +59,8 @@ pub fn create_patch(base: &BytecodeArtifact, target: &BytecodeArtifact) -> Bytec
             .then_some(target.call_compatibility),
         project_data: (base.project_data != target.project_data)
             .then(|| target.project_data.clone()),
+        runtime_builtins: (base.runtime_builtins != target.runtime_builtins)
+            .then(|| target.runtime_builtins.clone()),
         globals: (base.globals != target.globals).then(|| target.globals.clone()),
         native_imports: (base.native_imports != target.native_imports)
             .then(|| target.native_imports.clone()),
@@ -119,6 +122,10 @@ pub fn apply_patch(
             .project_data
             .clone()
             .unwrap_or_else(|| base.project_data.clone()),
+        runtime_builtins: patch
+            .runtime_builtins
+            .clone()
+            .unwrap_or_else(|| base.runtime_builtins.clone()),
         globals: patch
             .globals
             .clone()

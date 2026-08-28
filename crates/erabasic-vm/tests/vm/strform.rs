@@ -2470,10 +2470,277 @@ RETURNF STRFORM("{VALUES:0++}|{++VALUES:0}")
     );
 }
 
+#[test]
+fn existvar_evaluates_source_then_mode_then_source_only_for_nonzero_mode() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:0 = EXISTVAR(NAME_SOURCE(), MODE_VALUE())
+RESULT:1 = FLAG:0
+FLAG:0 = 0
+RESULTS:0 '= STRFORM("{EXISTVAR(NAME_SOURCE(), MODE_VALUE())}")
+RESULT:2 = FLAG:0
+FLAG:0 = 0
+FLAG:1 = 1
+RESULT:3 = EXISTVAR(NAME_SOURCE(), MODE_VALUE())
+RESULT:4 = FLAG:0
+RETURN RESULT:0
+@NAME_SOURCE
+#FUNCTIONS
+FLAG:0 = FLAG:0 * 10 + 1
+RETURNF "FLAG"
+@MODE_VALUE
+#FUNCTION
+FLAG:0 = FLAG:0 * 10 + 2
+RETURNF FLAG:1
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    for (index, value) in [(0, 1), (1, 12), (2, 12), (3, 1), (4, 121)] {
+        assert_method_watch(&vm, &artifact, "RESULT", index, VmValue::Integer(value));
+    }
+    assert_method_watch(&vm, &artifact, "RESULTS", 0, VmValue::String("1".into()));
+}
 
+#[test]
+fn existvar_expression_probe_resolves_without_reading_cells_or_executing_terms() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#DIM LOCAL_ONLY, 2
+RESULT:0 = EXISTVAR("LOCAL_ONLY")
+RESULT:1 = EXISTVAR("LOCAL_ONLY:999999", 1)
+RESULT:2 = EXISTVAR("1 / 0", 1)
+RESULT:3 = EXISTVAR("SIDE()", 1)
+RESULT:4 = EXISTVAR("GETTIME()", 1)
+RESULT:5 = EXISTVAR("FLAG:\"not a real key\"", 1)
+RESULT:6 = EXISTVAR("", 1)
+RESULT:7 = EXISTVAR("NO_SUCH_VARIABLE", 1)
+RESULT:8 = EXISTVAR("1 +", 1)
+CALL CHECK_REF, LOCAL_ONLY
+RETURN RESULT:0
+@SIDE
+#FUNCTION
+FLAG:0 += 1
+RETURNF FLAG:99999999
+@CHECK_REF(VALUES)
+#DIM REF VALUES
+RESULT:9 = EXISTVAR("VALUES:999999", 1)
+RETURN RESULT:0
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    for (index, value) in [
+        (0, 1),
+        (1, 1),
+        (2, 1),
+        (3, 1),
+        (4, 1),
+        (5, 1),
+        (6, 1),
+        (7, 0),
+        (8, 0),
+        (9, 1),
+    ] {
+        assert_method_watch(&vm, &artifact, "RESULT", index, VmValue::Integer(value));
+    }
+    assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(0));
+}
 
+#[test]
+fn existvar_catches_only_second_source_script_failure_and_preserves_effects() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:0 = EXISTVAR(NAME_SOURCE(), 1)
+FLAG:1 = 1
+RETURN
+@NAME_SOURCE
+#FUNCTIONS
+FLAG:0 += 1
+IF FLAG:0 == 2
+RESULT:9 = FLAG:99999999
+ENDIF
+RETURNF "FLAG"
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "RESULT", 0, VmValue::Integer(0));
+    assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(2));
+    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(1));
+    for source in [
+        "@SYSTEM_TITLE\nRESULT = EXISTVAR(BAD_NAME(), 1)\nFLAG:1 = 1\nRETURN\n@BAD_NAME\n#FUNCTIONS\nRESULT:9 = FLAG:99999999\nRETURNF \"FLAG\"\n",
+        "@SYSTEM_TITLE\nRESULT = EXISTVAR(\"FLAG\", BAD_MODE())\nFLAG:1 = 1\nRETURN\n@BAD_MODE\n#FUNCTION\nRETURNF FLAG:99999999\n",
+    ] {
+        let artifact = compile_source_with_options(source, &method_options(true));
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert!(matches!(
+            take_fault(report).category,
+            erabasic_vm::FaultCategory::Script(_)
+        ));
+        assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(0));
+    }
+}
 
+#[test]
+fn existvar_second_source_wait_preserves_checkpoint_and_rejects_deleted_snapshot_state() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:0 = EXISTVAR(NAME_SOURCE(), 1)
+RETURN RESULT:0
+@NAME_SOURCE
+#FUNCTIONS
+FLAG:0 += 1
+IF FLAG:0 == 2
+INPUT
+ENDIF
+RETURNF "FLAG:999999"
+"#,
+        &method_options(true),
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|f| f.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let suspended = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    let request = suspended
+        .events
+        .iter()
+        .find_map(|event| match event {
+            VmEvent::HostPending { request, .. } => Some(*request),
+            _ => None,
+        })
+        .unwrap();
+    let saved = serde_json::to_value(vm.snapshot(&natives).unwrap()).unwrap();
+    let mut bad = saved.clone();
+    bad["fibers"][fiber.0.to_string()]["frames"][0]["existvar_checks"] = serde_json::json!([]);
+    let mut rejected = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    assert!(
+        Vm::restore_snapshot(
+            validated(&artifact),
+            VmConfig::default(),
+            serde_json::from_value(bad).unwrap(),
+            &mut rejected,
+            &mut natives
+        )
+        .is_err()
+    );
+    assert!(rejected.rebound.is_empty());
+    let mut restored = Vm::restore_snapshot(
+        validated(&artifact),
+        VmConfig::default(),
+        serde_json::from_value(saved).unwrap(),
+        &mut host,
+        &mut natives,
+    )
+    .unwrap();
+    restored.resume_host(request, HostReady::empty()).unwrap();
+    let report = restored.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert_eq!(report.stop, erabasic_vm::VmRunStop::Idle);
+    assert!(
+        report.events.iter().any(|event| matches!(event,
+            VmEvent::FiberCompleted { fiber: completed, value: Some(VmValue::Integer(1)) }
+            if *completed == fiber
+        )),
+        "{report:?}"
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&restored, &artifact, "RESULT", 0, VmValue::Integer(1));
+    assert_method_watch(&restored, &artifact, "FLAG", 0, VmValue::Integer(2));
+}
 
+#[test]
+fn existvar_probe_preserves_rand_and_character_parse_policy_without_cell_reads() {
+    for compatible_rand in [false, true] {
+        for system_no_target in [false, true] {
+            let mut options = method_options(true);
+            options.compatible_rand = compatible_rand;
+            options.system_no_target = system_no_target;
+            let artifact = compile_source_with_options(
+                r#"@SYSTEM_TITLE
+RESULT:0 = EXISTVAR("RAND", 1)
+RESULT:1 = EXISTVAR("RAND:0", 1)
+RESULT:2 = EXISTVAR("RAND:(+0)", 1)
+RESULT:3 = EXISTVAR("RAND:(-0)", 1)
+RESULT:4 = EXISTVAR("RAND:(0 + 0)", 1)
+RESULT:5 = EXISTVAR("CFLAG:0", 1)
+RESULT:6 = EXISTVAR("CFLAG:0:0", 1)
+RESULT:7 = EXISTVAR("CFLAG", 1)
+RETURN RESULT:0
+"#,
+                &options,
+            );
+            assert_eq!(artifact.call_compatibility.compatible_rand, compatible_rand);
+            assert_eq!(
+                artifact.call_compatibility.system_no_target,
+                system_no_target
+            );
+            let (vm, report) = run_entry(&artifact, VmConfig::default());
+            assert!(
+                !report
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+                "{report:?}"
+            );
+            for (index, value) in [
+                (0, i64::from(compatible_rand)),
+                (1, i64::from(compatible_rand)),
+                (2, i64::from(compatible_rand)),
+                (3, 1),
+                (4, 1),
+                (5, i64::from(!system_no_target)),
+                (6, 1),
+                (7, 1),
+            ] {
+                assert_method_watch(&vm, &artifact, "RESULT", index, VmValue::Integer(value));
+            }
+        }
+    }
+}
 
 fn pending_lease_snapshot_artifact() -> BytecodeArtifact {
     compile_source_with_options(
@@ -2503,6 +2770,21 @@ RETURNF LEFT * 10 + RIGHT
 #FUNCTION
 INPUT
 RETURNF RESULT:0
+@PROBE_TITLE
+RESULT:10 = GETMETH("IDENTITY_LEASE", , EXISTVAR(PROBE_LEASE_SOURCE(), 1))
+FLAG:9 = 1
+RETURN
+@IDENTITY_LEASE(VALUE)
+#FUNCTION
+#DIM DYNAMIC VALUE
+RETURNF VALUE
+@PROBE_LEASE_SOURCE
+#FUNCTIONS
+FLAG:0 += 1
+IF FLAG:0 == 2
+INPUT
+ENDIF
+RETURNF "FLAG:0"
 @JUMP_TITLE
 CALL JUMP_OWNER
 FLAG:9 = 1
@@ -2580,7 +2862,7 @@ fn lease_snapshot_natives(
 fn pending_call_snapshot_lease_list_must_match_validated_cfg_before_native_restore() {
     use std::sync::atomic::Ordering;
     let artifact = pending_lease_snapshot_artifact();
-    for entry_name in ["SYSTEM_TITLE"] {
+    for entry_name in ["SYSTEM_TITLE", "PROBE_TITLE"] {
         let entry = artifact
             .functions
             .iter()
@@ -2608,7 +2890,11 @@ fn pending_call_snapshot_lease_list_must_match_validated_cfg_before_native_resto
         let frame = &original["fibers"][fiber.0.to_string()]["frames"][0];
         assert_eq!(
             frame["user_calls"].as_array().unwrap().len(),
-            2
+            if entry_name == "SYSTEM_TITLE" { 2 } else { 1 }
+        );
+        assert_eq!(
+            frame["existvar_checks"].as_array().unwrap().len(),
+            usize::from(entry_name == "PROBE_TITLE")
         );
         let mut attacks = vec![
             "delete_calls",
@@ -2618,7 +2904,8 @@ fn pending_call_snapshot_lease_list_must_match_validated_cfg_before_native_resto
         ];
         if entry_name == "SYSTEM_TITLE" {
             attacks.extend(["rewind_progress", "forge_compatible_origin", "forge_ref"]);
-
+        } else {
+            attacks.extend(["delete_probe", "duplicate_probe", "forge_probe_origin"]);
         }
         for attack in attacks {
             let mut corrupted = original.clone();
@@ -2662,6 +2949,12 @@ fn pending_call_snapshot_lease_list_must_match_validated_cfg_before_native_resto
                     frame["user_calls"][0]["captured"][0] =
                         serde_json::to_value(VmValue::IntegerPlace(Box::default())).unwrap();
                 }
+                "delete_probe" => frame["existvar_checks"] = serde_json::json!([]),
+                "duplicate_probe" => {
+                    let copy = frame["existvar_checks"][0].clone();
+                    frame["existvar_checks"].as_array_mut().unwrap().push(copy);
+                }
+                "forge_probe_origin" => frame["existvar_checks"][0]["begin"] = serde_json::json!(0),
                 "operand_budget" => {}
                 _ => unreachable!(),
             }
@@ -2744,15 +3037,18 @@ fn pending_call_snapshot_lease_list_must_match_validated_cfg_before_native_resto
             &artifact,
             "RESULT",
             10,
-            VmValue::Integer(923),
+            VmValue::Integer(if entry_name == "SYSTEM_TITLE" { 923 } else { 1 }),
         );
         assert_method_watch(
             &restored,
             &artifact,
             "FLAG",
             9,
-            VmValue::Integer(9),
+            VmValue::Integer(if entry_name == "SYSTEM_TITLE" { 9 } else { 1 }),
         );
+        if entry_name == "PROBE_TITLE" {
+            assert_method_watch(&restored, &artifact, "FLAG", 0, VmValue::Integer(2));
+        }
     }
 }
 
@@ -2867,6 +3163,7 @@ fn faulted_snapshot_keeps_partial_operand_diagnostics_but_no_active_leases() {
         .unwrap()
     {
         assert_eq!(frame["user_calls"], serde_json::json!([]));
+        assert_eq!(frame["existvar_checks"], serde_json::json!([]));
         assert!(frame["runtime_form"].is_null());
     }
     let restored = Vm::restore_snapshot(
@@ -3036,6 +3333,40 @@ RETURNF FLAG:0
     assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(-1));
 }
 
+#[test]
+fn arrayshift_extreme_offsets_do_not_panic_inside_a_checked_method() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+FLAG:0 = -9223372036854775807 - 1
+RESULT:0 = STRFORMCHECK("{SHIFT()}")
+RESULT:1 = TFLAG:0
+RETURN RESULT:0
+@SHIFT
+#FUNCTION
+TFLAG:0 = 3
+ARRAYSHIFT TFLAG, FLAG:0, 9, 0, 1
+RETURNF TFLAG:0
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "RESULT", 0, VmValue::Integer(1));
+    assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(9));
+}
 // Append to the existing tests/vm/strform.rs; not a new test module.
 
 #[test]
@@ -3834,9 +4165,356 @@ fn checked_user_method_catches_read_only_negative_and_out_of_range_setvar_domain
 
 // Exercise real script scopes. Candidate oracle captures are separate from these
 // Rust contract assertions and remain pending until the authorized matrix runs.
+fn run_nested_checkpoint_contract(
+    source: &str,
+    expected_integers: &[(&str, u64, i64)],
+    expected_string: Option<(&str, u64, &str)>,
+) {
+    let artifact = compile_source_with_options(source, &method_options(true));
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    for &(name, index, value) in expected_integers {
+        assert_method_watch(&vm, &artifact, name, index, VmValue::Integer(value));
+    }
+    if let Some((name, index, value)) = expected_string {
+        assert_method_watch(&vm, &artifact, name, index, VmValue::String(value.into()));
+    }
+}
 
+#[test]
+fn nearest_existvar_checkpoint_precedes_enclosing_strformcheck_in_bytecode_and_form() {
+    // nearest-existvar-bytecode
+    run_nested_checkpoint_contract(
+        r#"@SYSTEM_TITLE
+RESULT:10 = 73
+RESULT:20 = STRFORMCHECK("{PROBE()}{AFTER()}")
+RESULT:21 = STRFORMCHECK("fresh")
+FLAG:9 = 1
+RETURN RESULT
+@PROBE
+#FUNCTION
+RESULT:10 = EXISTVAR(NAME_SOURCE(), 1)
+FLAG:1 += 1
+RETURNF 7
+@NAME_SOURCE
+#FUNCTIONS
+FLAG:0 += 1
+IF FLAG:0 == 2
+RESULT:19 = FLAG:9999999
+ENDIF
+RETURNF "FLAG"
+@AFTER
+#FUNCTION
+FLAG:2 += 1
+RETURNF 8
+"#,
+        &[
+            ("RESULT", 10, 0),
+            ("RESULT", 20, 1),
+            ("RESULT", 21, 1),
+            ("FLAG", 0, 2),
+            ("FLAG", 1, 1),
+            ("FLAG", 2, 1),
+            ("FLAG", 9, 1),
+        ],
+        None,
+    );
+    // nearest-existvar-form
+    run_nested_checkpoint_contract(
+        r#"@SYSTEM_TITLE
+RESULT:10 = 73
+RESULT:20 = STRFORMCHECK("{PROBE()}{AFTER()}")
+RESULT:21 = STRFORMCHECK("fresh")
+FLAG:9 = 1
+RETURN RESULT
+@PROBE
+#FUNCTION
+RESULTS:1 '= STRFORM("{EXISTVAR(NAME_SOURCE(), 1)}")
+FLAG:1 += 1
+RETURNF 7
+@NAME_SOURCE
+#FUNCTIONS
+FLAG:0 += 1
+IF FLAG:0 == 2
+RESULT:19 = FLAG:9999999
+ENDIF
+RETURNF "FLAG"
+@AFTER
+#FUNCTION
+FLAG:2 += 1
+RETURNF 8
+"#,
+        &[
+            ("RESULT", 10, 73),
+            ("RESULT", 20, 1),
+            ("RESULT", 21, 1),
+            ("FLAG", 0, 2),
+            ("FLAG", 1, 1),
+            ("FLAG", 2, 1),
+            ("FLAG", 9, 1),
+        ],
+        Some(("RESULTS", 1, "0")),
+    );
+    // nearest-existvar-same-frame
+    run_nested_checkpoint_contract(
+        r#"@SYSTEM_TITLE
+RESULT:10 = 73
+RESULT:20 = STRFORMCHECK("{EXISTVAR(NAME_SOURCE(), 1)}{AFTER()}")
+RESULT:21 = STRFORMCHECK("fresh")
+FLAG:9 = 1
+RETURN RESULT
+@NAME_SOURCE
+#FUNCTIONS
+FLAG:0 += 1
+IF FLAG:0 == 2
+RESULT:19 = FLAG:9999999
+ENDIF
+RETURNF "FLAG"
+@AFTER
+#FUNCTION
+FLAG:2 += 1
+RETURNF 8
+"#,
+        &[
+            ("RESULT", 10, 73),
+            ("RESULT", 20, 1),
+            ("RESULT", 21, 1),
+            ("FLAG", 0, 2),
+            ("FLAG", 2, 1),
+            ("FLAG", 9, 1),
+        ],
+        None,
+    );
+}
 
+#[test]
+fn nearest_strformcheck_checkpoint_precedes_enclosing_existvar_in_bytecode_and_form() {
+    // nearest-strformcheck-bytecode
+    run_nested_checkpoint_contract(
+        r#"@SYSTEM_TITLE
+RESULT:10 = 73
+RESULT:20 = 73
+RESULT:20 = EXISTVAR(NAME_SOURCE(), 1)
+RESULT:21 = STRFORMCHECK("fresh")
+FLAG:9 = 1
+RETURN RESULT
+@NAME_SOURCE
+#FUNCTIONS
+FLAG:0 += 1
+IF FLAG:0 == 2
+RESULT:10 = STRFORMCHECK("{BAD()}")
+FLAG:1 += 1
+ENDIF
+RETURNF "FLAG"
+@BAD
+#FUNCTION
+FLAG:2 += 1
+RETURNF FLAG:9999999
+"#,
+        &[
+            ("RESULT", 10, 0),
+            ("RESULT", 20, 1),
+            ("RESULT", 21, 1),
+            ("FLAG", 0, 2),
+            ("FLAG", 1, 1),
+            ("FLAG", 2, 1),
+            ("FLAG", 9, 1),
+        ],
+        None,
+    );
+    // nearest-strformcheck-form
+    run_nested_checkpoint_contract(
+        r#"@SYSTEM_TITLE
+RESULT:10 = 73
+RESULT:20 = 73
+RESULTS:1 '= STRFORM("{EXISTVAR(NAME_SOURCE(), 1)}")
+RESULT:21 = STRFORMCHECK("fresh")
+FLAG:9 = 1
+RETURN RESULT
+@NAME_SOURCE
+#FUNCTIONS
+FLAG:0 += 1
+IF FLAG:0 == 2
+RESULT:10 = STRFORMCHECK("{BAD()}")
+FLAG:1 += 1
+ENDIF
+RETURNF "FLAG"
+@BAD
+#FUNCTION
+FLAG:2 += 1
+RETURNF FLAG:9999999
+"#,
+        &[
+            ("RESULT", 10, 0),
+            ("RESULT", 20, 73),
+            ("RESULT", 21, 1),
+            ("FLAG", 0, 2),
+            ("FLAG", 1, 1),
+            ("FLAG", 2, 1),
+            ("FLAG", 9, 1),
+        ],
+        Some(("RESULTS", 1, "1")),
+    );
+    // nearest-strformcheck-same-frame
+    run_nested_checkpoint_contract(
+        r#"@SYSTEM_TITLE
+RESULTS:0 '= "{BAD()}"
+RESULT:20 = EXISTVAR(STRFORM("{STRFORMCHECK(RESULTS:0)}"), 1)
+RESULT:21 = STRFORMCHECK("fresh")
+FLAG:9 = 1
+RETURN RESULT
+@BAD
+#FUNCTION
+FLAG:2 += 1
+RETURNF FLAG:9999999
+"#,
+        &[
+            ("RESULT", 20, 1),
+            ("RESULT", 21, 1),
+            ("FLAG", 2, 2),
+            ("FLAG", 9, 1),
+        ],
+        None,
+    );
+}
 
+#[test]
+#[allow(clippy::too_many_lines)] // Keep each fixture and its lifecycle assertions together.
+fn outer_check_catches_failed_inner_parameters_in_order_without_entering_inner_scope() {
+    // parameter-failure-existvar-first-source
+    run_nested_checkpoint_contract(
+        r#"@SYSTEM_TITLE
+RESULT:10 = 73
+RESULT:19 = 61
+RESULT:20 = STRFORMCHECK("{CHILD()}{AFTER()}")
+RESULT:21 = STRFORMCHECK("fresh")
+FLAG:9 = 1
+RETURN RESULT
+@CHILD
+#FUNCTION
+RESULT:10 = EXISTVAR(NAME_SOURCE(), MODE_SOURCE())
+FLAG:1 += 1
+RETURNF 7
+@NAME_SOURCE
+#FUNCTIONS
+FLAG:0 = FLAG:0 * 10 + 1
+RESULT:19 = FLAG:9999999
+RETURNF "FLAG"
+@MODE_SOURCE
+#FUNCTION
+FLAG:0 = FLAG:0 * 10 + 2
+RETURNF 1
+@AFTER
+#FUNCTION
+FLAG:2 += 1
+RETURNF 8
+"#,
+        &[
+            ("RESULT", 10, 73),
+            ("RESULT", 19, 61),
+            ("RESULT", 20, 0),
+            ("RESULT", 21, 1),
+            ("FLAG", 0, 1),
+            ("FLAG", 1, 0),
+            ("FLAG", 2, 0),
+            ("FLAG", 9, 1),
+        ],
+        None,
+    );
+    // parameter-failure-existvar-mode
+    run_nested_checkpoint_contract(
+        r#"@SYSTEM_TITLE
+RESULT:10 = 73
+RESULT:19 = 61
+RESULT:20 = STRFORMCHECK("{CHILD()}{AFTER()}")
+RESULT:21 = STRFORMCHECK("fresh")
+FLAG:9 = 1
+RETURN RESULT
+@CHILD
+#FUNCTION
+RESULT:10 = EXISTVAR(NAME_SOURCE(), MODE_SOURCE())
+FLAG:1 += 1
+RETURNF 7
+@NAME_SOURCE
+#FUNCTIONS
+FLAG:0 = FLAG:0 * 10 + 1
+RETURNF "FLAG"
+@MODE_SOURCE
+#FUNCTION
+FLAG:0 = FLAG:0 * 10 + 2
+RESULT:19 = FLAG:9999999
+RETURNF 1
+@AFTER
+#FUNCTION
+FLAG:2 += 1
+RETURNF 8
+"#,
+        &[
+            ("RESULT", 10, 73),
+            ("RESULT", 19, 61),
+            ("RESULT", 20, 0),
+            ("RESULT", 21, 1),
+            ("FLAG", 0, 12),
+            ("FLAG", 1, 0),
+            ("FLAG", 2, 0),
+            ("FLAG", 9, 1),
+        ],
+        None,
+    );
+    // parameter-failure-strformcheck-source
+    run_nested_checkpoint_contract(
+        r#"@SYSTEM_TITLE
+RESULT:10 = 73
+RESULT:19 = 61
+RESULT:20 = STRFORMCHECK("{CHILD()}{AFTER()}")
+RESULT:21 = STRFORMCHECK("fresh")
+FLAG:9 = 1
+RETURN RESULT
+@CHILD
+#FUNCTION
+RESULT:10 = STRFORMCHECK(NAME_SOURCE())
+FLAG:1 += 1
+RETURNF 7
+@NAME_SOURCE
+#FUNCTIONS
+FLAG:0 = FLAG:0 * 10 + 1
+RESULT:19 = FLAG:9999999
+RETURNF "FLAG"
+@MODE_SOURCE
+#FUNCTION
+FLAG:0 = FLAG:0 * 10 + 2
+RETURNF 1
+@AFTER
+#FUNCTION
+FLAG:2 += 1
+RETURNF 8
+"#,
+        &[
+            ("RESULT", 10, 73),
+            ("RESULT", 19, 61),
+            ("RESULT", 20, 0),
+            ("RESULT", 21, 1),
+            ("FLAG", 0, 1),
+            ("FLAG", 1, 0),
+            ("FLAG", 2, 0),
+            ("FLAG", 9, 1),
+        ],
+        None,
+    );
+}
 
 #[test]
 fn checked_forms_classify_root_and_nested_source_types_before_execution() {
@@ -3939,36 +4617,22 @@ RETURN RESULT:0
 }
 
 #[test]
-fn arrayshift_extreme_offsets_do_not_panic_inside_a_checked_method() {
-    let artifact = compile_source_with_options(
-        r#"@SYSTEM_TITLE
-FLAG:0 = -9223372036854775807 - 1
-RESULT:0 = STRFORMCHECK("{SHIFT()}")
-RESULT:1 = TFLAG:0
-RETURN RESULT:0
-@SHIFT
-#FUNCTION
-TFLAG:0 = 3
-ARRAYSHIFT TFLAG, FLAG:0, 9, 0, 1
-RETURNF TFLAG:0
-"#,
-        &method_options(true),
+fn existvar_probe_node_budget_is_not_a_catchable_script_failure() {
+    let expression = (0..24).fold("1".to_owned(), |inner, _| format!("ABS({inner})"));
+    let source = format!(
+        "@SYSTEM_TITLE\nRESULT = STRFORMCHECK(\"{{PROBE()}}\")\nFLAG:1 = 1\nRETURN\n@PROBE\n#FUNCTION\nFLAG:0 = 1\nRETURNF EXISTVAR(\"{expression}\", 1)\n"
     );
-    let (vm, report) = run_entry(&artifact, VmConfig::default());
-    assert!(
-        report
-            .events
-            .iter()
-            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
-        "{report:?}"
+    let artifact = compile_source_with_options(&source, &method_options(true));
+    let (vm, report) = run_entry(
+        &artifact,
+        VmConfig {
+            maximum_operand_stack: 16,
+            ..VmConfig::default()
+        },
     );
-    assert!(
-        !report
-            .events
-            .iter()
-            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
-        "{report:?}"
-    );
-    assert_method_watch(&vm, &artifact, "RESULT", 0, VmValue::Integer(1));
-    assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(9));
+    let fault = take_fault(report);
+    assert_eq!(fault.category, erabasic_vm::FaultCategory::ResourceLimit);
+    assert!(fault.message.contains("AST"), "{fault:?}");
+    assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(1));
+    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(0));
 }

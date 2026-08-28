@@ -365,15 +365,32 @@ impl ExpressionAnalyzer<'_> {
                 location,
             };
         };
-        let constraints = signature.arguments_for_arity(values.len());
+        let existvar_mode = key == "EXISTVAR"
+            && self
+                .options
+                .compatibility
+                .supports_existvar_expression_probe();
+        let existvar_constraints = [ArgumentConstraint::String, ArgumentConstraint::Integer];
+        let constraints = if existvar_mode {
+            &existvar_constraints[..]
+        } else {
+            signature.arguments_for_arity(values.len())
+        };
         self.check_arguments(
             &values,
             constraints,
             signature.minimum_arguments,
             signature.variadic,
-            signature.allow_omitted,
+            signature.allow_omitted || existvar_mode,
             location,
         );
+        if existvar_mode && values.first().is_some_and(Option::is_none) {
+            self.diagnostic(
+                AnalyzerDiagnosticCode::InvalidArgument,
+                location,
+                "EXISTVAR source may not be omitted",
+            );
+        }
         let dynamic_method = matches!(key.as_str(), "GETMETH" | "GETMETHS")
             && !self.catalog.extension_functions.contains(&key);
         if dynamic_method {

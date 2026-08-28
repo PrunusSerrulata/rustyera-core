@@ -1,0 +1,86 @@
+[
+  {
+    "repository": "emuera.em",
+    "path": "Emuera/Runtime/Script/Process.CalledFunction.cs",
+    "sha256": "ecea99e660f8cdf0ef26b37d511edc6cf3d551b588f4b2d148a65d8dad22fedb",
+    "semanticBaseline": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "baselineSha256": "ecea99e660f8cdf0ef26b37d511edc6cf3d551b588f4b2d148a65d8dad22fedb",
+    "currentEqualsBaseline": true
+  },
+  {
+    "repository": "emuera.em",
+    "path": "Emuera/Runtime/Script/Statements/Instraction.Child.cs",
+    "sha256": "000f8cc99b7065aa671ba9cea1e22efed358662104fb3cfdeffbcd9a6a8d68a6",
+    "semanticBaseline": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "baselineSha256": "9451cc56af500aab5274ceee7bc21a126b532b0950368ccf5c45636d83f75889",
+    "currentEqualsBaseline": false,
+    "differenceScope": "Six existing headless ApplyTextBoxChanges forwarding substitutions in input instructions; no CALLS_Instruction changes."
+  },
+  {
+    "repository": "emuera.em",
+    "path": "Emuera/Runtime/Script/Statements/FunctionIdentifier.cs",
+    "sha256": "543e793a29a18b2c8fc69555b6f0fcde83e39663714211addb1317101ee68c71",
+    "semanticBaseline": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "baselineSha256": "543e793a29a18b2c8fc69555b6f0fcde83e39663714211addb1317101ee68c71",
+    "currentEqualsBaseline": true
+  },
+  {
+    "repository": "emuera.em",
+    "path": "Emuera/Runtime/Script/Statements/Function/Creator.Method.cs",
+    "sha256": "76793521d2a880c2deb0393d3867c1889d3749af4f9c7406cf107077d4e81095",
+    "semanticBaseline": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "baselineSha256": "76793521d2a880c2deb0393d3867c1889d3749af4f9c7406cf107077d4e81095",
+    "currentEqualsBaseline": true
+  },
+  {
+    "repository": "emuera_lazyloading_selfmodified_version",
+    "path": "Emuera/Runtime/Script/Process.CalledFunction.cs",
+    "sha256": "acd11bd53aebc7ed5fcc0006ad9bcaf27109f875ac01ec4dec19e9fff3051aa7",
+    "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+    "baselineSha256": "acd11bd53aebc7ed5fcc0006ad9bcaf27109f875ac01ec4dec19e9fff3051aa7",
+    "currentEqualsBaseline": true
+  },
+  {
+    "repository": "emuera_lazyloading_selfmodified_version",
+    "path": "Emuera/Runtime/Script/Statements/Instraction.Child.cs",
+    "sha256": "0bfbcf0dba612af114dcfb1cf4323341a02156594e9d37b49c8fbe4a80c4dce3",
+    "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+    "baselineSha256": "05339d88287254a78d72f11f41fc41f8e6edb8c8b8b0f8601e93faf1c7752548",
+    "currentEqualsBaseline": false,
+    "differenceScope": "Six existing headless ApplyTextBoxChanges forwarding substitutions in input instructions; no CALLS_Instruction changes.",
+    "callTextFragmentEqualsBaseline": true,
+    "callTextFragmentSha256": "b8f5672d05c74ce15be0ea93c512ec3b6ac2fac9b40d99c0eb4debc6f4b06549"
+  },
+  {
+    "repository": "emuera_lazyloading_selfmodified_version",
+    "path": "Emuera/Runtime/Script/Statements/FunctionIdentifier.cs",
+    "sha256": "ef87aee8eca0dacb9bf96287637835e35c26b8c54bc0b75caa49a5fea817512b",
+    "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+    "baselineSha256": "ef87aee8eca0dacb9bf96287637835e35c26b8c54bc0b75caa49a5fea817512b",
+    "currentEqualsBaseline": true
+  },
+  {
+    "repository": "emuera_lazyloading_selfmodified_version",
+    "path": "Emuera/Runtime/Script/Statements/Function/Creator.Method.cs",
+    "sha256": "f48cdabeaad4549127b1c13b50ff674a70da028db64b26eba44fd3a2de4aa160",
+    "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+    "baselineSha256": "f48cdabeaad4549127b1c13b50ff674a70da028db64b26eba44fd3a2de4aa160",
+    "currentEqualsBaseline": true
+  },
+  {
+    "repository": "emuera.em",
+    "path": "Emuera/Runtime/Script/Process.State.cs",
+    "sha256": "db01da849955992a02db49af3a829d9dc17e9bba278337c95113dc22dfad91f9",
+    "semanticBaseline": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "baselineSha256": "db01da849955992a02db49af3a829d9dc17e9bba278337c95113dc22dfad91f9",
+    "currentEqualsBaseline": true
+  },
+  {
+    "repository": "emuera_lazyloading_selfmodified_version",
+    "path": "Emuera/Runtime/Script/Process.State.cs",
+    "sha256": "fa654ed18cc25663c16ffd2f2db4c244449e1181e6127889f91b868a8cf7d6a7",
+    "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+    "baselineSha256": "fa654ed18cc25663c16ffd2f2db4c244449e1181e6127889f91b868a8cf7d6a7",
+    "currentEqualsBaseline": true
+  }
+]

@@ -515,6 +515,9 @@ fn analyze_function_memo(
             | Opcode::AdvanceUserArgument
             | Opcode::AbandonUserCall
             | Opcode::InvokeCallText
+            | Opcode::ProbeVariableName
+            | Opcode::BeginExistVarProbe
+            | Opcode::FinishExistVarProbe
             | Opcode::JumpDynamicLabel
             | Opcode::InvokeEvent
             | Opcode::Yield

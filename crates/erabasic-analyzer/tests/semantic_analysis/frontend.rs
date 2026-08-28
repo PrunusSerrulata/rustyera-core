@@ -221,7 +221,15 @@ fn method_reachability_covers_formatted_values_widths_conditions_and_runtime_for
         "PRINTFORML {1, GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)}",
         "PRINTFORML \\@ GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0) ? yes # no \\@",
         "RESULTS '= STRFORM(STR:0)",
+        "RESULT = STRFORMCHECK(STR:0)",
+        "RESULT = EXISTVAR(STR:0, 1)",
     ] {
+        let mut options = AnalyzerOptions::default();
+        if statement.contains("STRFORMCHECK") || statement.contains("EXISTVAR") {
+            options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            );
+        }
         let report = analyze_project(
             AnalysisInput {
                 project_data: empty_project(),
@@ -232,7 +240,7 @@ fn method_reachability_covers_formatted_values_widths_conditions_and_runtime_for
                     ),
                 )],
             },
-            &AnalyzerOptions::default(),
+            &options,
             &ExtensionRegistry::default(),
         );
         assert!(

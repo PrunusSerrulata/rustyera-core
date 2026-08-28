@@ -306,5 +306,4 @@ impl Builder<'_> {
             self.patch_jump(success, self.code.len());
         }
     }
-
 }

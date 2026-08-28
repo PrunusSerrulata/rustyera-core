@@ -25,7 +25,9 @@ use crate::{
 };
 
 mod artifact;
+mod call_dependencies;
 mod incremental;
+mod runtime_symbols;
 
 use artifact::{canonical_digest, event_groups, function_keys, globals, variable_keys};
 use incremental::{
@@ -33,7 +35,6 @@ use incremental::{
     materialize_cached_function, materialized_function,
 };
 
-mod call_dependencies;
 mod driver;
 
 pub use driver::{
@@ -217,6 +218,7 @@ struct IncrementalBase {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct IncrementalMetadata {
     call_compatibility: erabasic_bytecode::BytecodeCallCompatibility,
+    runtime_builtins: Vec<erabasic_bytecode::RuntimeBuiltinSymbol>,
     project_data: erabasic_data::ProjectData,
     globals: Vec<BytecodeGlobal>,
     native_imports: Vec<NativeImport>,
@@ -231,6 +233,7 @@ impl IncrementalBase {
             metadata: include_metadata.then(|| {
                 Box::new(IncrementalMetadata {
                     call_compatibility: artifact.call_compatibility,
+                    runtime_builtins: artifact.runtime_builtins.clone(),
                     project_data: artifact.project_data.clone(),
                     globals: artifact.globals.clone(),
                     native_imports: artifact.native_imports.clone(),

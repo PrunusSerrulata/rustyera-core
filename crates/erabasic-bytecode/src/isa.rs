@@ -55,6 +55,9 @@ pub enum Opcode {
     InvokeCallText = 47,
     Yield = 48,
     AwaitResume = 49,
+    ProbeVariableName = 50,
+    BeginExistVarProbe = 51,
+    FinishExistVarProbe = 52,
     Trap = 255,
 }
 
@@ -100,6 +103,9 @@ impl TryFrom<u16> for Opcode {
             47 => Self::InvokeCallText,
             48 => Self::Yield,
             49 => Self::AwaitResume,
+            50 => Self::ProbeVariableName,
+            51 => Self::BeginExistVarProbe,
+            52 => Self::FinishExistVarProbe,
             255 => Self::Trap,
             unknown => return Err(unknown),
         })

@@ -44,4 +44,6 @@ pub use version::{
 pub const BYTECODE_MAGIC: [u8; 8] = *b"RERABC\0\0";
 
 mod runtime_symbols;
-pub use runtime_symbols::RuntimeExpressionShape;
+pub use runtime_symbols::{
+    RuntimeArgumentConstraint, RuntimeBuiltinSymbol, RuntimeCallableShape, RuntimeExpressionShape,
+};

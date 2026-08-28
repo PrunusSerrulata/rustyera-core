@@ -10,6 +10,7 @@ use crate::{ExecutionFailure, FiberId};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(super) struct FormatCheckpoint {
     pub id: u64,
+    pub expression_probe: bool,
     pub work_depth: usize,
     pub value_depth: usize,
     pub output_depth: usize,
@@ -147,6 +148,7 @@ impl RuntimeFormContinuation {
             .ok_or_else(|| resource_limit("STRFORMCHECK checkpoint identity exhausted"))?;
         self.checkpoints.push(FormatCheckpoint {
             id,
+            expression_probe: false,
             work_depth: self.work.len(),
             value_depth: self.values.len(),
             output_depth: self.outputs.len(),
@@ -193,7 +195,11 @@ impl RuntimeFormContinuation {
                 || checkpoint.value_depth > self.values.len()
                 || checkpoint.output_depth > self.outputs.len()
                 || self.work.get(checkpoint.work_depth)
-                    != Some(&RuntimeFormTask::FinishCheck(checkpoint.id))
+                    != Some(&if checkpoint.expression_probe {
+                        RuntimeFormTask::FinishExpressionProbe(checkpoint.id)
+                    } else {
+                        RuntimeFormTask::FinishCheck(checkpoint.id)
+                    })
             {
                 return false;
             }
@@ -214,7 +220,7 @@ impl RuntimeFormContinuation {
             .filter(|task| {
                 matches!(
                     task,
-                    RuntimeFormTask::FinishCheck(_)
+                    RuntimeFormTask::FinishCheck(_) | RuntimeFormTask::FinishExpressionProbe(_)
                 )
             })
             .count()

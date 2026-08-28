@@ -560,6 +560,8 @@ fn compile_project_inner(
             .allow_full_width_space,
         debug_semicolon: project_ref.program.call_compatibility.debug_semicolon,
         ignore_triple_symbols: project_ref.program.call_compatibility.ignore_triple_symbols,
+        compatible_rand: project_ref.program.call_compatibility.compatible_rand,
+        system_no_target: project_ref.program.call_compatibility.system_no_target,
     };
     let artifact_globals = globals(
         &project_ref.program.variables,
@@ -704,12 +706,23 @@ fn compile_project_inner(
     drop(fingerprint_order);
     drop(fingerprint_prefixes);
     finalizing_progress.checkpoint();
+    let mut expression_signatures = erabasic_analyzer::builtin_function_signatures(&compatibility);
+    for signature in &mut expression_signatures {
+        if signature.name == "EXISTVAR" && compatibility.supports_existvar_expression_probe() {
+            signature.arguments = vec![
+                erabasic_analyzer::ArgumentConstraint::String,
+                erabasic_analyzer::ArgumentConstraint::Integer,
+            ];
+        }
+    }
+    let runtime_builtins = super::runtime_symbols::runtime_builtin_symbols(expression_signatures);
     let artifact = BytecodeArtifact {
         manifest: ArtifactManifest {
             compatibility,
             ..ArtifactManifest::new(compiler_options)
         },
         call_compatibility,
+        runtime_builtins,
         project_data,
         globals: artifact_globals,
         native_imports,

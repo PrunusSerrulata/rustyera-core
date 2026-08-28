@@ -10,6 +10,10 @@ pub enum ValidatedStackToken {
         resolve: u32,
         next_slot: u16,
     },
+    ExistVarProbe {
+        stack_index: usize,
+        begin: u32,
+    },
 }
 
 /// Ordinary operands need no duplicated type storage for lease validation.
@@ -33,7 +37,11 @@ impl ValidatedStackState {
                         next_slot: *next_slot,
                     })
                 }
-            })
+                StackValue::ExistVarProbeToken { begin } => {
+                    Some(ValidatedStackToken::ExistVarProbe {
+                        stack_index,
+                        begin: *begin,
+                    })
                 }
             })
             .collect();

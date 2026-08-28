@@ -1,7 +1,5 @@
 //! Validator state tracks only an opaque lease and its next syntactic slot.
 //! Captures live in bounded VM pending state, never in this operand stack.
-//! Validator state tracks only an opaque lease and its next syntactic slot.
-//! Captures live in bounded VM pending state, never in this operand stack.
 use std::collections::BTreeMap;
 
 use erabasic_bytecode::{

@@ -24,6 +24,11 @@ pub(super) fn create_incremental_patch(
         base_artifact_id: metadata.manifest.artifact_id,
         base_execution_id: metadata.manifest.program_version.execution_id,
         target_manifest: target.manifest.clone(),
+        runtime_builtins: exact_base
+            .map(|artifact| &artifact.runtime_builtins)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.runtime_builtins))
+            .is_none_or(|base| base != &target.runtime_builtins)
+            .then(|| target.runtime_builtins.clone()),
         call_compatibility: exact_base
             .map(|artifact| artifact.call_compatibility)
             .or_else(|| compact_metadata.map(|metadata| metadata.call_compatibility))

@@ -39,6 +39,10 @@ pub struct AnalyzerOptions {
     pub allow_full_width_space: bool,
     pub debug_semicolon: bool,
     pub ignore_triple_symbols: bool,
+    /// Parse-time RAND argument compatibility used by runtime expression probes.
+    pub compatible_rand: bool,
+    /// Do not infer omitted character indices in runtime expression probes.
+    pub system_no_target: bool,
     /// Replacement inserted between physical lines in `{ ... }` continuations.
     pub continuation_separator: String,
 }
@@ -68,6 +72,8 @@ impl Default for AnalyzerOptions {
             allow_full_width_space: true,
             debug_semicolon: false,
             ignore_triple_symbols: false,
+            compatible_rand: false,
+            system_no_target: false,
             continuation_separator: " ".into(),
         }
     }

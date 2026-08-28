@@ -179,6 +179,7 @@ fn encode_native_section(index: usize, plan: &NativeSectionPlan<'_>) -> Result<V
             &CompiledCacheMetadataRef {
                 manifest: &plan.bytecode.manifest,
                 call_compatibility: &plan.bytecode.call_compatibility,
+                runtime_builtins: &plan.bytecode.runtime_builtins,
                 native_imports: &plan.bytecode.native_imports,
                 host_imports: &plan.bytecode.host_imports,
                 event_groups: &plan.bytecode.event_groups,

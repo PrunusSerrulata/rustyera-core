@@ -184,6 +184,7 @@ fn validate_form(
         program,
         function,
         generation,
+        false,
         node_limit,
         Some(natives),
     );
@@ -209,6 +210,7 @@ pub(super) fn validate_runtime_expression(
         program,
         function,
         generation,
+        false,
         node_limit,
         Some(natives),
     );
@@ -276,6 +278,60 @@ pub(super) fn preflight_nesting(source: &str) -> Result<(), StepError> {
     Ok(())
 }
 
+/// Fixed EXISTVAR reduction, with no Restructure, cell access, or service execution.
+pub(in crate::interpreter) fn probe_runtime_expression(
+    vm: &Vm,
+    generation: GenerationId,
+    function: SymbolKey,
+    source: &str,
+) -> Result<(), StepError> {
+    if source.len() > MAX_RUNTIME_FORM_BYTES {
+        return Err(resource_limit("EXISTVAR parser source limit"));
+    }
+    preflight_nesting(source)?;
+    let program = vm
+        .generations
+        .get(&generation)
+        .ok_or_else(|| StepError::new(VmFaultCode::MissingSymbol, "probe generation is missing"))?;
+    let policy = program.artifact.call_compatibility;
+    let mut context = DefaultParserContext::default();
+    context.set_compatibility(program.artifact.manifest.compatibility.clone());
+    context.set_lexer_compatibility(
+        policy.allow_full_width_space,
+        policy.debug_semicolon,
+        policy.ignore_triple_symbols,
+    );
+    let parsed = erabasic_parser::parse_expression(source, &context);
+    if parsed.has_errors() {
+        return Err(StepError::script(
+            crate::ScriptFaultKind::Parse,
+            VmFaultCode::Native,
+            parsed
+                .diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; "),
+        ));
+    }
+    // ReduceAll returns null for an empty token stream; fixed EXISTVAR still returns 1.
+    let Some(mut expression) = parsed.value else {
+        return Ok(());
+    };
+    resolve_expression_named_indices(program, function, &mut expression, 0)?;
+    // This resolves only named-index membership from existing schema/ERD/ALS data.
+    // Explicit String indices remain String and do not look up keys or bounds.
+    super::typing::TypeAnalysis::new(
+        program,
+        function,
+        generation,
+        true,
+        vm.config.maximum_operand_stack.min(MAX_RUNTIME_FORM_BYTES),
+        None,
+    )
+    .expression(&expression, 0)?;
+    Ok(())
+}
 
 pub(super) fn parser_context(program: &crate::ProgramGeneration) -> DefaultParserContext {
     let compatibility = program.artifact.call_compatibility;

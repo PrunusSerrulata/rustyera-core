@@ -93,6 +93,10 @@ pub struct BytecodeCallCompatibility {
     pub allow_full_width_space: bool,
     pub debug_semicolon: bool,
     pub ignore_triple_symbols: bool,
+    /// Parse-time RAND argument compatibility used by runtime expression probes.
+    pub compatible_rand: bool,
+    /// Do not infer omitted character indices in runtime expression probes.
+    pub system_no_target: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -177,6 +181,7 @@ impl ArtifactManifest {
 pub struct BytecodeArtifact {
     pub manifest: ArtifactManifest,
     pub call_compatibility: BytecodeCallCompatibility,
+    pub runtime_builtins: Vec<crate::RuntimeBuiltinSymbol>,
     pub project_data: ProjectData,
     pub globals: Vec<BytecodeGlobal>,
     pub native_imports: Vec<NativeImport>,
@@ -191,6 +196,7 @@ impl BytecodeArtifact {
     pub fn canonicalize(&mut self) {
         sort_if_needed_by_key(&mut self.manifest.required_features, Clone::clone);
         self.manifest.required_features.dedup();
+        sort_if_needed_by_key(&mut self.runtime_builtins, |symbol| symbol.name.clone());
         sort_if_needed_by_key(&mut self.globals, |global| global.key);
         sort_if_needed_by_key(&mut self.native_imports, |import| import.import.key);
         sort_if_needed_by_key(&mut self.host_imports, |import| import.import.key);
@@ -268,15 +274,7 @@ impl BytecodeArtifact {
                                     &self.host_imports,
                                 )
                             },
-                            || {
-                                parallel_binary_digest(
-                                    "rustyera.bytecode.identity.functions.v4",
-                                    "rustyera.bytecode.identity.function-chunk.v4",
-                                    &self.functions,
-                                    256,
-                                    encode_function_chunk,
-                                )
-                            },
+                            || self.functions_identity(),
                         )
                     },
                     || {
@@ -309,6 +307,10 @@ impl BytecodeArtifact {
             events?,
             call_compatibility?,
         );
+        let runtime_builtins = canonical_digest(
+            "rustyera.bytecode.identity.runtime-builtins.v1",
+            &self.runtime_builtins,
+        )?;
         Ok(Digest::hash(
             "rustyera.bytecode.execution.v2",
             &[
@@ -320,8 +322,19 @@ impl BytecodeArtifact {
                 &functions.0,
                 &events.0,
                 &call_compatibility.0,
+                &runtime_builtins.0,
             ],
         ))
+    }
+
+    fn functions_identity(&self) -> Digest {
+        parallel_binary_digest(
+            "rustyera.bytecode.identity.functions.v4",
+            "rustyera.bytecode.identity.function-chunk.v4",
+            &self.functions,
+            256,
+            encode_function_chunk,
+        )
     }
 
     fn versions_identity(&self) -> Result<Digest, serde_json::Error> {

@@ -349,6 +349,7 @@ fn binary_save_adapter_encodes_zero_length_saved_arrays() {
     let artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: BytecodeCallCompatibility::default(),
+        runtime_builtins: Vec::new(),
         project_data,
         globals: vec![BytecodeGlobal {
             key,

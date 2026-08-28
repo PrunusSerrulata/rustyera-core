@@ -102,6 +102,7 @@ impl ProjectContainerKind {
 struct CompiledCacheMetadataRef<'a> {
     manifest: &'a ArtifactManifest,
     call_compatibility: &'a BytecodeCallCompatibility,
+    runtime_builtins: &'a [erabasic_bytecode::RuntimeBuiltinSymbol],
     native_imports: &'a [NativeImport],
     host_imports: &'a [HostImport],
     event_groups: &'a [BytecodeEventGroup],
@@ -111,6 +112,7 @@ struct CompiledCacheMetadataRef<'a> {
 struct CompiledCacheMetadata {
     manifest: ArtifactManifest,
     call_compatibility: BytecodeCallCompatibility,
+    runtime_builtins: Vec<erabasic_bytecode::RuntimeBuiltinSymbol>,
     native_imports: Vec<NativeImport>,
     host_imports: Vec<HostImport>,
     event_groups: Vec<BytecodeEventGroup>,

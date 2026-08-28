@@ -58,6 +58,10 @@ pub struct CallCompatibility {
     pub allow_full_width_space: bool,
     pub debug_semicolon: bool,
     pub ignore_triple_symbols: bool,
+    /// Parse-time RAND argument compatibility used by runtime expression probes.
+    pub compatible_rand: bool,
+    /// Do not infer omitted character indices in runtime expression probes.
+    pub system_no_target: bool,
 }
 
 /// Reference event modifiers retained after parsing. They affect dispatch order rather

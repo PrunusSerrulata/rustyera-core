@@ -16,6 +16,7 @@ pub(super) fn valid_frame(artifact: &ValidatedArtifact, fiber: &Fiber, index: us
         // Diagnostic frames may be stopped halfway through a failing instruction.
         // They cannot resume, and must not retain executable lease/checkpoint state.
         return frame.user_calls.is_empty()
+            && frame.existvar_checks.is_empty()
             && frame.runtime_form.is_none();
     }
     let child = fiber.frames.get(index + 1);
@@ -48,6 +49,7 @@ pub(super) fn valid_frame(artifact: &ValidatedArtifact, fiber: &Fiber, index: us
         return false;
     }
     let mut user_calls = frame.user_calls.iter();
+    let mut probes = frame.existvar_checks.iter();
     for token in &summary.tokens {
         match *token {
             ValidatedStackToken::UserCall {
@@ -66,10 +68,21 @@ pub(super) fn valid_frame(artifact: &ValidatedArtifact, fiber: &Fiber, index: us
                     return false;
                 }
             }
+            ValidatedStackToken::ExistVarProbe { stack_index, begin } => {
+                let Some(probe) = probes.next() else {
+                    return false;
+                };
+                if probe.stack_index != stack_index
+                    || probe.begin != begin as usize
+                    || frame.stack.get(stack_index) != Some(&VmValue::Integer(i64::from(begin)))
+                {
+                    return false;
+                }
+            }
         }
     }
     // Both directions matter: deleting a list and forging an extra lease are invalid.
-    user_calls.next().is_none()
+    user_calls.next().is_none() && probes.next().is_none()
 }
 
 /// The CFG models completed instructions. A suspended call has consumed its inputs
@@ -82,7 +95,7 @@ fn unreturned_result(
     child: Option<&Frame>,
 ) -> Option<bool> {
     if let Some(form) = &frame.runtime_form {
-        // valid_origin separately binds this root to STRFORM or InvokeCallText.
+        // valid_origin separately binds this root to STRFORM/CHECK or InvokeCallText.
         return Some(form.root_result_type().is_some());
     }
     if child.is_none()

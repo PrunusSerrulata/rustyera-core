@@ -787,47 +787,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 
-## 批次 2B：普通用户调用与诊断发布
+## 批次 2B：调用、受控捕获与错误完成
 
-- snake policy/semantic identity `4/4` 启用非 variadic 用户函数多余实参策略。旧 snake identity、旧字节码与旧 VM snapshot 明确拒绝，没有静默迁移。
+- snake policy/semantic identity `4/4` 启用完整 CALLSTR 文本、STRFORMCHECK 和非 variadic
+  用户函数多余实参策略。旧 snake identity、旧字节码与旧 VM snapshot 明确拒绝，没有静默迁移。
 - 用户调用解析、逐实参保留/省略/丢弃、REF 捕获和调用由统一指令与 continuation 处理。
   动态 JUMP 保留 caller LOCAL/REF 至 callee 成功返回，再展开 caller；不能提前释放引用。
 - `ExecutionFailure` 在失败源处区分脚本、资源、取消、内部不变量、Host 契约、协议、权限和
   基础设施。旧 fault code 与消息不足以取得可捕获权限。Native/Host 返回错误保持分类；
   无效返回值、写集合与 rollback 失败强制属于不可捕获的契约失败。
+- `STRFORMCHECK` 的外层字符串先求值，再建立捕获范围并实际展开。脚本解析或展开失败返回
+  0，成功返回 1；已经提交的脚本/服务副作用不回滚。嵌套范围按最近 owner 恢复，执行与资源
+  限额不会因捕获而重置；资源、取消、权限、坏字节码等失败继续终止。
+- 异步 `VmHostCompletion::Error` 经同一恢复路径进入捕获或排队一个原始 fault 事件。必须先
+  `drive` 交付排队结果，再执行 snapshot、reload、isolated fork 或候选状态提交。
+  `into_candidate_state` 因此返回 `Result`，不能丢弃尚未观测的终态。
 - 静态诊断缓存保存无活动 generation 的模板；发布时绑定实际作用域。动态诊断继续按位置、
   generation 和稳定 code 去重，并阻止 memo 隐藏其副作用。诊断不进入游戏历史文本。
 - 该版本不包含 BEFORE_* 故障钩子；钩子由后续 2D 接入最终故障生命周期。
 
 ### 批次 2B 的缓存与诊断身份
 
-HIR 格式为 `15`，编译缓存/项目容器执行版本为 `11`。旧项目容器仍可提取源码，
-但旧字节码必须重建。RuntimeExpressionShape 仅为运行期表达式类型分析的非序列化 carrier。
-`ReturnCurrent` 的完成事件先由 `drive` 交付，再允许 snapshot、reload、isolated fork
-或候选状态提交；`into_candidate_state` 返回 `Result`，不丢弃尚未观测的终态。
+HIR 格式为 `15`，编译缓存/项目容器执行版本为 `11`。运行时表达式所需的完整内置函数签名
+作为 `runtime_builtins` 保存在字节码及缓存元数据中，参与内容身份与增量补丁；该表只允许
+解析和类型检查，不授予服务执行权限。旧项目容器仍可提取源码，但旧字节码必须重建。
 
 Runtime 协议 `37.1` 为兼容诊断 context 增加可选 CBOR 字段 4–7：artifact、project_load_id、
 runtime_epoch、generation。静态多余实参警告在成功加载/重载发布时绑定当前作用域；冷加载
 尚无 VM 时 generation 为空，重载使用实际 VM generation。只保留当前作用域的已发布位置，
 失败发布不消费去重记录。可复用缓存中的诊断不包含这些会话身份，快照和 undo 不回退发布身份。
-
-### CALLSTR 完整文本调用
-
-snake policy/semantic `4/4` 增加 CALLSTR、JUMPSTR、TRYCALLSTR、TRYJUMPSTR、
-TRYCCALLSTR、TRYCJUMPSTR 与 `InvokeCallText`。解析器接受括号和逗号两种实参语法；
-空白 JUMP 文本正常继续。调用复用普通惰性实参与 REF 生命周期。
-
-CALLSTR 的局部 TRY 只处理指定的实参归约、目标缺失和绑定阶段；词法、名字/类型重构、
-实参执行以及 callee/Host/Native 失败继续传播。RuntimeForm Call 根与原 String 根分离，
-恢复快照须验证真实 InvokeCallText 来源与子调用身份。此阶段没有通用 FORM 服务捕获。
-
-### STRFORMCHECK 与可信失败恢复
-
-外层 String 先求值，再建立 STRFORMCHECK 捕获范围；正常展开返回 1，可信脚本解析或展开
-错误返回 0。已经提交的脚本、REF、Host/Native 副作用不回滚，展开资源与看门狗计数不重置。
-运行期 FORM 的 prefix/postfix 修改使用当前 compatibility 算术策略和真实变量/REF 索引。
-
-异步 `VmHostCompletion::Error` 经相同的可信分类进入最近 FORM 捕获范围，或排队原始 fault
-事件。坏 NativeReady/写集合、失败 rollback、权限、资源和取消不能通过错误文本取得捕获权。
-待交付终态必须先 `drive`，不允许 snapshot/fork/reload/候选提交丢弃未观测的完成事件。
-此阶段不包含 EXISTVAR 的第二次 source 检查点。

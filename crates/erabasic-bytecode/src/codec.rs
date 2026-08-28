@@ -17,6 +17,7 @@ const FUNCTIONS: u16 = 6;
 const SOURCE_MAP: u16 = 7;
 const EVENT_GROUPS: u16 = 8;
 const CALL_COMPATIBILITY: u16 = 9;
+const RUNTIME_BUILTINS: u16 = 10;
 
 #[derive(Debug)]
 pub enum EncodeError {
@@ -80,6 +81,7 @@ pub fn encode_artifact(artifact: &BytecodeArtifact) -> Result<Vec<u8>, EncodeErr
         section(FUNCTIONS, &artifact.functions)?,
         section(EVENT_GROUPS, &artifact.event_groups)?,
         section(CALL_COMPATIBILITY, &artifact.call_compatibility)?,
+        section(RUNTIME_BUILTINS, &artifact.runtime_builtins)?,
         section(SOURCE_MAP, &artifact.source_map)?,
     ];
     let mut output = Vec::new();
@@ -142,7 +144,7 @@ pub fn decode_artifact(
         if blake3::hash(payload).as_bytes() != expected {
             return Err(DecodeError::CorruptSection(kind));
         }
-        if !(MANIFEST..=CALL_COMPATIBILITY).contains(&kind) {
+        if !(MANIFEST..=RUNTIME_BUILTINS).contains(&kind) {
             if required {
                 return Err(DecodeError::UnknownRequiredSection(kind));
             }
@@ -163,6 +165,7 @@ pub fn decode_artifact(
     let mut artifact = BytecodeArtifact {
         manifest,
         call_compatibility: parse::<BytecodeCallCompatibility>(&sections, CALL_COMPATIBILITY)?,
+        runtime_builtins: parse(&sections, RUNTIME_BUILTINS)?,
         project_data: parse(&sections, PROJECT_DATA)?,
         globals: parse::<Vec<BytecodeGlobal>>(&sections, GLOBALS)?,
         native_imports: parse::<Vec<NativeImport>>(&sections, NATIVE_IMPORTS)?,

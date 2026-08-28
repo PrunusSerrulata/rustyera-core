@@ -10,6 +10,7 @@ use crate::{
 
 mod call_text;
 mod checkpoints;
+mod existvar;
 mod frontend;
 mod methods;
 mod mutations;
@@ -21,6 +22,7 @@ pub(crate) use checkpoints::{
     RuntimeFormCatchTarget, finish_runtime_form_catch, select_runtime_form_catch,
 };
 use frontend::parse_runtime_form;
+pub(super) use frontend::probe_runtime_expression;
 use support::{binary_tag, owner_frame, owner_frame_mut, resource_limit, unary_tag, unsupported};
 const MAX_RUNTIME_FORM_BYTES: usize = 1024 * 1024;
 const MAX_RUNTIME_FORM_NESTING: usize = 256;
@@ -51,6 +53,14 @@ enum RuntimeFormTask {
     CompleteRoot,
     BeginCheckedForm(String),
     FinishCheck(u64),
+    FinishExpressionProbe(u64),
+    ExistVarFirst {
+        source: Expr,
+        mode: Option<Expr>,
+    },
+    ExistVarMode {
+        source: Expr,
+    },
     ParseCallText {
         source: String,
         spec: erabasic_bytecode::CallTextSpec,
@@ -463,6 +473,11 @@ impl RuntimeFormContinuation {
             RuntimeFormTask::ParseCallText { source, spec } => {
                 self.parse_call_text(vm, fiber, natives, &source, spec)?;
             }
+            RuntimeFormTask::ExistVarFirst { source, mode } => {
+                self.existvar_first(vm, source, mode)?;
+            }
+            RuntimeFormTask::ExistVarMode { source } => self.existvar_mode(vm, fiber, source)?,
+            RuntimeFormTask::FinishExpressionProbe(id) => self.finish_expression_probe(vm, id)?,
             RuntimeFormTask::Evaluate(expression) => {
                 self.evaluate_expression(vm, expression)?;
             }
@@ -789,6 +804,10 @@ impl RuntimeFormContinuation {
                     .is_some_and(|program| program.function_by_name(&name).is_some());
                 if user_defined {
                     self.schedule_direct_user_call(vm, &name, args)?;
+                    return Ok(());
+                }
+                if name.eq_ignore_ascii_case("EXISTVAR") {
+                    self.schedule_existvar(&args)?;
                     return Ok(());
                 }
                 if self.schedule_method(&name, &args)? {

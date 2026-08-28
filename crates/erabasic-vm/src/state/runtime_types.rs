@@ -36,12 +36,14 @@ pub(crate) struct Frame {
     pub runtime_form: Option<crate::interpreter::dynamic_form::RuntimeFormContinuation>,
     /// Opaque method resolution identities are separate from the scalar operand stack.
     pub user_calls: Vec<super::user_calls::PendingUserCall>,
+    /// Catch boundaries for the second EXISTVAR source evaluation.
+    pub existvar_checks: Vec<crate::interpreter::existvar::ExistVarCheckpoint>,
 }
 
 impl Frame {
     pub(crate) fn operand_slots(&self) -> Option<usize> {
         self.user_calls.iter().try_fold(
-            self.stack.len(),
+            self.stack.len().checked_add(self.existvar_checks.len())?,
             |slots, call| slots.checked_add(1)?.checked_add(call.call.bindings.len()),
         )
     }
@@ -133,6 +135,7 @@ impl Fiber {
         for frame in &mut self.frames {
             frame.runtime_form = None;
             frame.user_calls.clear();
+            frame.existvar_checks.clear();
         }
     }
 }

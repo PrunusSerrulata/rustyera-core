@@ -21,6 +21,7 @@ mod character_ops;
 pub(crate) mod compatibility_diagnostics;
 mod dispatch;
 pub(crate) mod dynamic_form;
+pub(crate) mod existvar;
 mod extended_ops;
 mod fastpaths;
 mod lookup;
@@ -148,6 +149,9 @@ impl Vm {
         frame.instruction = frame.instruction.saturating_add(1);
         if let Some(outcome) = self.dispatch_basic(fiber, position, opcode, policy)? {
             return self.finish_dispatch(fiber, outcome);
+        }
+        if let Some(outcome) = self.dispatch_existvar(fiber, position, opcode)? {
+            return Ok(outcome);
         }
         if let Some(outcome) = self.dispatch_methods(fiber, position, opcode)? {
             return self.finish_dispatch(fiber, outcome);

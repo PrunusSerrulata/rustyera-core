@@ -155,6 +155,16 @@ pub fn builtin_function_names() -> Vec<String> {
     builtin_functions().into_keys().collect()
 }
 
+/// Built-in signatures retained for parse-only runtime expression validation.
+#[must_use]
+pub fn builtin_function_signatures(
+    identity: &erabasic_compat::CompatibilityIdentity,
+) -> Vec<CallableSignature> {
+    builtin_functions()
+        .into_values()
+        .filter(|signature| builtin_available(&signature.name, identity))
+        .collect()
+}
 
 pub(crate) fn builtin_available(
     name: &str,

@@ -544,6 +544,7 @@ mod tests {
         let artifact = BytecodeArtifact {
             manifest: ArtifactManifest::new(Digest::default()),
             call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+            runtime_builtins: Vec::new(),
             project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
                 .data
                 .unwrap(),

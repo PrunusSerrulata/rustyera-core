@@ -493,6 +493,7 @@ mod tests {
         let mut artifact = BytecodeArtifact {
             manifest: ArtifactManifest::new(Digest::default()),
             call_compatibility: BytecodeCallCompatibility::default(),
+            runtime_builtins: Vec::new(),
             project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
                 .data
                 .unwrap(),
@@ -628,6 +629,7 @@ mod tests {
         let artifact = BytecodeArtifact {
             manifest: ArtifactManifest::new(Digest::default()),
             call_compatibility: BytecodeCallCompatibility::default(),
+            runtime_builtins: Vec::new(),
             project_data,
             globals: Vec::new(),
             native_imports: Vec::new(),
@@ -698,6 +700,7 @@ mod tests {
         let artifact = BytecodeArtifact {
             manifest: ArtifactManifest::new(Digest::default()),
             call_compatibility: BytecodeCallCompatibility::default(),
+            runtime_builtins: Vec::new(),
             project_data,
             globals: definitions.to_vec(),
             native_imports: Vec::new(),

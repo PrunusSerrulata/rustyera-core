@@ -3,12 +3,14 @@
 use super::dynamic_form::{
     RuntimeFormCatchTarget, finish_runtime_form_catch, select_runtime_form_catch,
 };
+use super::existvar::{ExistVarCatchTarget, finish_existvar_catch, select_existvar_catch};
 use super::{StepError, Vm};
 use crate::{Fiber, FiberState, HostRequestId, VmError, VmFault, VmFaultCode};
 
 #[derive(Clone, Copy)]
 enum CatchTarget {
     Form(RuntimeFormCatchTarget),
+    Expression(ExistVarCatchTarget),
 }
 
 impl Vm {
@@ -17,7 +19,8 @@ impl Vm {
         fiber: &mut Fiber,
         error: &crate::ExecutionFailure,
     ) -> Result<bool, StepError> {
-        // Recover the nearest active checked form in the actual frame chain.
+        // A callee's bytecode probe is nearer than its caller's format check.
+        // Within one frame, form evaluation started inside the bytecode probe.
         let Some((owner_index, target)) =
             fiber
                 .frames
@@ -27,6 +30,9 @@ impl Vm {
                 .find_map(|(index, frame)| {
                     select_runtime_form_catch(fiber.id, frame, error)
                         .map(CatchTarget::Form)
+                        .or_else(|| {
+                            select_existvar_catch(frame, error).map(CatchTarget::Expression)
+                        })
                         .map(|target| (index, target))
                 })
         else {
@@ -38,6 +44,17 @@ impl Vm {
                 target.function,
                 target.owner_stack_depth,
                 target.owner_user_calls,
+            ),
+            CatchTarget::Expression(target) => (
+                target.generation,
+                target.function,
+                target.stack_index.checked_add(1).ok_or_else(|| {
+                    StepError::new(
+                        VmFaultCode::InvalidInstruction,
+                        "probe stack watermark overflow",
+                    )
+                })?,
+                target.user_calls,
             ),
         };
         let owner = &fiber.frames[owner_index];
@@ -63,6 +80,10 @@ impl Vm {
         owner.user_calls.truncate(user_calls);
         match target {
             CatchTarget::Form(target) => finish_runtime_form_catch(fiber, target)?,
+            CatchTarget::Expression(target) => {
+                owner.runtime_form = None;
+                finish_existvar_catch(fiber, target)?;
+            }
         }
         fiber.state = FiberState::Runnable;
         // Do not reset either watchdog: repeated caught script failures are not an

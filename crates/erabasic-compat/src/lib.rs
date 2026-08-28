@@ -175,6 +175,10 @@ impl CompatibilityIdentity {
         self.supports_call_text()
     }
 
+    #[must_use]
+    pub const fn supports_existvar_expression_probe(&self) -> bool {
+        self.supports_call_text()
+    }
 
     /// Policy for non-variadic user calls; builtin signatures remain exact.
     #[must_use]

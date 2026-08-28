@@ -6,12 +6,15 @@ use erabasic_bytecode::{
 
 use crate::ValidationCode;
 
+mod existvar;
 mod methods;
+pub(super) use existvar::ProbeIndex;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StackValue {
     Value(BytecodeType),
     UserCallToken { resolve: u32, next_slot: u16 },
+    ExistVarProbeToken { begin: u32 },
 }
 
 impl From<BytecodeType> for StackValue {
@@ -20,7 +23,7 @@ impl From<BytecodeType> for StackValue {
     }
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_instruction(
     function: &BytecodeFunction,
     index: usize,
@@ -29,6 +32,27 @@ pub(super) fn apply_instruction(
     functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
     native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
     host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
+    probes: &ProbeIndex,
+) -> Result<Vec<usize>, (ValidationCode, String)> {
+    let successors = apply_instruction_inner(
+        function, index, stack, globals, functions, native, host, probes,
+    )?;
+    for target in &successors {
+        existvar::validate_edge(function, index, *target)?;
+    }
+    Ok(successors)
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn apply_instruction_inner(
+    function: &BytecodeFunction,
+    index: usize,
+    stack: &mut Vec<StackValue>,
+    globals: &BTreeMap<SymbolKey, &erabasic_bytecode::BytecodeGlobal>,
+    functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
+    native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
+    host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
+    probes: &ProbeIndex,
 ) -> Result<Vec<usize>, (ValidationCode, String)> {
     let instruction = &function.code[index];
     let opcode_value = Opcode::try_from(instruction.opcode).map_err(|unknown| {
@@ -193,7 +217,7 @@ pub(super) fn apply_instruction(
             expect_payload(&instruction.payload, 0)?;
             match stack.pop() {
                 Some(StackValue::Value(_)) => {}
-                Some(StackValue::UserCallToken { .. }) => {
+                Some(StackValue::UserCallToken { .. } | StackValue::ExistVarProbeToken { .. }) => {
                     return Err((
                         ValidationCode::TypeMismatch,
                         "pop cannot discard a pending user-call token; use AbandonUserCall".into(),
@@ -270,6 +294,9 @@ pub(super) fn apply_instruction(
                 pop_value(stack, "CASE comparison")?;
             }
             stack.push(BytecodeType::Integer.into());
+        }
+        Opcode::ProbeVariableName | Opcode::BeginExistVarProbe | Opcode::FinishExistVarProbe => {
+            return existvar::apply(function, index, opcode_value, stack, probes);
         }
         Opcode::ResolveUserCall
         | Opcode::SelectUserArgument

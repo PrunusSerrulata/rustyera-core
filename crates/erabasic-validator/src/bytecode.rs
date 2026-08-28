@@ -1,5 +1,6 @@
 mod instructions;
 mod provenance;
+mod runtime_symbols;
 mod source_map;
 
 pub use provenance::{ValidatedOperandStacks, ValidatedStackState, ValidatedStackToken};
@@ -167,6 +168,12 @@ fn validate_artifact(
         validate_identities(&mut artifact, &mut diagnostics);
     }
     validate_symbols(&artifact, context, &mut diagnostics);
+    if let Err(message) = runtime_symbols::validate_runtime_builtins(&artifact.runtime_builtins) {
+        diagnostics.push(ValidationDiagnostic::project(
+            ValidationCode::InvalidOperand,
+            message,
+        ));
+    }
     validate_source_map(&artifact, &mut diagnostics);
     let operand_stacks = validate_functions(&artifact, context, &mut diagnostics);
     ValidationReport {
@@ -673,6 +680,18 @@ fn validate_function(
         ));
         return provenance::FunctionStackProvenance::default();
     }
+    let probes = match instructions::ProbeIndex::new(function) {
+        Ok(probes) => probes,
+        Err((index, (code, message))) => {
+            diagnostics.push(ValidationDiagnostic::instruction(
+                code,
+                &function.name,
+                index,
+                message,
+            ));
+            return provenance::FunctionStackProvenance::default();
+        }
+    };
     let mut states = vec![None; function.code.len()];
     states[0] = Some(Vec::<instructions::StackValue>::new());
     let mut work = VecDeque::from([0usize]);
@@ -683,7 +702,7 @@ fn validate_function(
             continue;
         };
         let successors = match apply_instruction(
-            function, index, &mut stack, globals, functions, native, host,
+            function, index, &mut stack, globals, functions, native, host, &probes,
         ) {
             Ok(successors) => successors,
             Err((code, message)) => {

@@ -10,6 +10,7 @@ use super::{
 mod calls;
 mod column_options;
 mod data_blocks;
+mod existvar;
 mod expressions;
 mod formatted;
 mod html_queries;

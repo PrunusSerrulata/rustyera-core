@@ -22,6 +22,7 @@ fn rejects_stack_type_mismatches_before_vm_execution() {
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        runtime_builtins: Vec::new(),
         project_data: project_data(),
         globals: Vec::new(),
         native_imports: Vec::new(),
@@ -64,6 +65,7 @@ fn rejects_unknown_opcodes() {
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        runtime_builtins: Vec::new(),
         project_data: project_data(),
         globals: Vec::new(),
         native_imports: Vec::new(),
@@ -104,6 +106,7 @@ fn compiler_output_validation_defers_identity_checks_only() {
     let artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        runtime_builtins: Vec::new(),
         project_data: project_data(),
         globals: Vec::new(),
         native_imports: Vec::new(),
@@ -152,6 +155,7 @@ fn accepts_a_builtin_array_disabled_by_variable_size() {
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        runtime_builtins: Vec::new(),
         project_data: data,
         globals: vec![BytecodeGlobal {
             key: variable_key,
@@ -220,6 +224,7 @@ fn total_variable_limit_counts_each_function_storage_group_independently() {
         let mut artifact = BytecodeArtifact {
             manifest: ArtifactManifest::new(Digest::default()),
             call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+            runtime_builtins: Vec::new(),
             project_data: project_data(),
             globals: [first_function, second_function]
                 .into_iter()
@@ -272,6 +277,7 @@ fn rejects_snapshot_vm_abi_mismatch() {
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        runtime_builtins: Vec::new(),
         project_data: project_data(),
         globals: Vec::new(),
         native_imports: Vec::new(),
@@ -328,6 +334,7 @@ fn rejects_contradictory_persisted_operation_contracts() {
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        runtime_builtins: Vec::new(),
         project_data: project_data(),
         globals: Vec::new(),
         native_imports: Vec::new(),
@@ -374,6 +381,7 @@ fn method_artifact(
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        runtime_builtins: Vec::new(),
         project_data: project_data(),
         globals,
         native_imports: Vec::new(),
@@ -1027,6 +1035,50 @@ fn user_call_procedure_discard_and_jump_modes_have_explicit_result_effects() {
     }
 }
 
+#[test]
+fn call_text_has_equal_empty_successor_stacks_and_rejects_bad_wire_targets() {
+    use erabasic_bytecode::{CallTextMode, CallTextSpec};
+    let spec = CallTextSpec {
+        mode: CallTextMode::CatchCall,
+        catch_target: 4,
+    };
+    let codes = method_validation_codes(vec![
+        opcode::push_string("TARGET(1)"),
+        opcode::invoke_call_text(spec),
+        opcode::push_integer(1),
+        opcode::jump(Opcode::Jump, 5),
+        opcode::push_integer(0),
+        opcode::return_value(true),
+    ]);
+    assert!(codes.is_empty(), "{codes:?}");
+    for payload in [
+        vec![6, 0, 0, 0, 0],
+        vec![0, 1, 0, 0, 0],
+        vec![0; 4],
+        vec![0; 6],
+    ] {
+        let codes = method_validation_codes(vec![
+            opcode::push_string(""),
+            erabasic_bytecode::EncodedInstruction::new(Opcode::InvokeCallText, payload),
+            opcode::push_integer(0),
+            opcode::return_value(true),
+        ]);
+        assert!(codes.contains(&ValidationCode::InvalidOperand), "{codes:?}");
+    }
+    let codes = method_validation_codes(vec![
+        opcode::push_string(""),
+        opcode::invoke_call_text(CallTextSpec {
+            mode: CallTextMode::CatchJump,
+            catch_target: u32::MAX,
+        }),
+        opcode::push_integer(0),
+        opcode::return_value(true),
+    ]);
+    assert!(
+        codes.contains(&ValidationCode::InvalidControlFlow),
+        "{codes:?}"
+    );
+}
 
 #[test]
 fn retired_eager_user_call_wire_is_unknown() {
@@ -1078,49 +1130,4 @@ fn rejects_guard_and_advance_invalid_slot_shape_flags_and_payload_lengths() {
         ]);
         assert!(codes.contains(&ValidationCode::InvalidOperand), "{codes:?}");
     }
-}
-
-#[test]
-fn call_text_has_equal_empty_successor_stacks_and_rejects_bad_wire_targets() {
-    use erabasic_bytecode::{CallTextMode, CallTextSpec};
-    let spec = CallTextSpec {
-        mode: CallTextMode::CatchCall,
-        catch_target: 4,
-    };
-    let codes = method_validation_codes(vec![
-        opcode::push_string("TARGET(1)"),
-        opcode::invoke_call_text(spec),
-        opcode::push_integer(1),
-        opcode::jump(Opcode::Jump, 5),
-        opcode::push_integer(0),
-        opcode::return_value(true),
-    ]);
-    assert!(codes.is_empty(), "{codes:?}");
-    for payload in [
-        vec![6, 0, 0, 0, 0],
-        vec![0, 1, 0, 0, 0],
-        vec![0; 4],
-        vec![0; 6],
-    ] {
-        let codes = method_validation_codes(vec![
-            opcode::push_string(""),
-            erabasic_bytecode::EncodedInstruction::new(Opcode::InvokeCallText, payload),
-            opcode::push_integer(0),
-            opcode::return_value(true),
-        ]);
-        assert!(codes.contains(&ValidationCode::InvalidOperand), "{codes:?}");
-    }
-    let codes = method_validation_codes(vec![
-        opcode::push_string(""),
-        opcode::invoke_call_text(CallTextSpec {
-            mode: CallTextMode::CatchJump,
-            catch_target: u32::MAX,
-        }),
-        opcode::push_integer(0),
-        opcode::return_value(true),
-    ]);
-    assert!(
-        codes.contains(&ValidationCode::InvalidControlFlow),
-        "{codes:?}"
-    );
 }

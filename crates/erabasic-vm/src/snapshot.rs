@@ -605,6 +605,15 @@ fn validate_restored_continuations(vm: &Vm) -> Result<(), VmError> {
                     "snapshot method resolution state is invalid".into(),
                 ));
             }
+            if matches!(
+                fiber.state,
+                FiberState::Runnable | FiberState::WaitingHost(_) | FiberState::WaitingResume(_)
+            ) && !crate::interpreter::existvar::valid_existvar_state(vm, frame)
+            {
+                return Err(VmError::Snapshot(
+                    "snapshot EXISTVAR probe state is invalid".into(),
+                ));
+            }
             if let Some(continuation) = &frame.runtime_form
                 && !continuation.valid_method_state(vm, fiber)
             {
