@@ -75,6 +75,8 @@ pub(super) fn write_project(
     vm: &evidence::SourceIndex,
     runtime: &evidence::SourceIndex,
 ) -> Result<String, Box<dyn Error>> {
+    crate::watchdog::publish(json!({"phase": "coverage_prepare_report",
+        "pending": "build_reference_graph", "appearances_total": scan.rows.len()}))?;
     let Scan {
         rows: appearances,
         user_functions,

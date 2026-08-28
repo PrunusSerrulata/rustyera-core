@@ -473,7 +473,37 @@ pub(super) fn scan(sources: &[(String, String)], options: &AnalyzerOptions) -> S
             offset += line.len();
         }
     }
-    result.rows.sort_by(|left, right| {
+    sort_with_observation(&mut result.rows);
+    result
+}
+
+fn sort_with_observation(rows: &mut [Appearance]) -> usize {
+    let total = rows.len();
+    crate::watchdog::publish_or_exit(json!({"phase": "appearance_sort", "pending": "stable_sort",
+        "appearances_total": total, "comparisons_completed": 0, "lastFullResponse": null}));
+    let comparisons = sort_appearances(rows, |comparisons, left, right| {
+        // Report work actually performed by the comparator, not elapsed time. A stalled sort
+        // still produces identical observations and is terminated by the unchanged watchdog.
+        crate::watchdog::publish_or_exit(json!({"phase": "appearance_sort", "pending": {
+            "left": {"path": left.path, "span": left.span, "api": left.api, "form": left.form},
+            "right": {"path": right.path, "span": right.span, "api": right.api, "form": right.form}},
+            "appearances_total": total, "comparisons_completed": comparisons, "lastFullResponse": null}));
+    });
+    crate::watchdog::publish_or_exit(json!({"phase": "appearance_sort_complete",
+        "appearances_total": total, "comparisons_completed": comparisons, "pending": null, "lastFullResponse": null}));
+    comparisons
+}
+
+fn sort_appearances(
+    rows: &mut [Appearance],
+    mut progress: impl FnMut(usize, &Appearance, &Appearance),
+) -> usize {
+    let mut comparisons = 0usize;
+    rows.sort_by(|left, right| {
+        comparisons += 1;
+        if comparisons.is_multiple_of(16_384) {
+            progress(comparisons, left, right);
+        }
         (&left.path, left.span.start, &left.api, &left.form).cmp(&(
             &right.path,
             right.span.start,
@@ -481,12 +511,104 @@ pub(super) fn scan(sources: &[(String, String)], options: &AnalyzerOptions) -> S
             &right.form,
         ))
     });
-    result
+    comparisons
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Explicit opt-in: the real TW failure had this many appearances. Keep this out
+    // of ordinary unit runs and use the production parent/child watchdog unchanged.
+    #[test]
+    #[ignore = "five-million-row supervised coverage stress; several GiB of memory"]
+    fn tw_scale_sort_and_reference_index_keep_real_progress() {
+        crate::watchdog::supervise("coverage_scale_stress", run_scale_stress).unwrap();
+    }
+
+    fn run_scale_stress() -> Result<(), Box<dyn std::error::Error>> {
+        use std::time::Instant;
+        const COUNT: usize = 5_068_424;
+        const OWNED: usize = 100_000;
+        let source = [("ERB/stress.erb".into(), "@SYSTEM_TITLE\nRETURN\n".into())];
+        let mut scan = scan(&source, &AnalyzerOptions::analysis_mode());
+        let sample = scan.rows.remove(0);
+        scan.rows = Vec::with_capacity(COUNT);
+        for index in 0..COUNT {
+            let mut row = sample.clone();
+            // Repeated keys exercise stable ties; shuffled paths/spans force a
+            // full comparison sort instead of an already-sorted fast path.
+            row.path = format!("ERB/魔改内容/示例函数/{:04}.ERB", index * 7919 % 4096);
+            row.span = Span::new(index * 3571 % 65536, index * 3571 % 65536 + 1);
+            row.arity = Some(index); // Original order, without an extra allocation.
+            row.owning_function = (index < OWNED).then_some(0);
+            scan.rows.push(row);
+            if (index + 1).is_multiple_of(16_384) {
+                crate::watchdog::publish(json!({"phase": "stress_allocate",
+                    "rows_completed": index + 1, "rows_total": COUNT}))?;
+            }
+        }
+        let started = Instant::now();
+        let comparisons = sort_with_observation(&mut scan.rows);
+        let sort_seconds = started.elapsed().as_secs_f64();
+        for (index, pair) in scan.rows.windows(2).enumerate() {
+            // Compare the original complete key and preserve insertion order on ties.
+            let left = &pair[0];
+            let right = &pair[1];
+            let order = (&left.path, left.span.start, &left.api, &left.form).cmp(&(
+                &right.path,
+                right.span.start,
+                &right.api,
+                &right.form,
+            ));
+            assert!(!order.is_gt());
+            if order.is_eq() {
+                assert!(pair[0].arity < pair[1].arity);
+            }
+            if (index + 1).is_multiple_of(16_384) {
+                crate::watchdog::publish(json!({"phase": "stress_verify_sort",
+                    "pairs_completed": index + 1, "pairs_total": COUNT - 1}))?;
+            }
+        }
+        let pipeline = super::super::pipeline::analyze(
+            &source,
+            &Default::default(),
+            AnalyzerOptions::analysis_mode(),
+            Default::default(),
+            true,
+        );
+        let started = Instant::now();
+        let graph = super::super::graph::Graph::build(&scan.rows, &scan.functions, &pipeline);
+        let graph_seconds = started.elapsed().as_secs_f64();
+        assert_eq!(graph.row_resolution.len(), COUNT);
+        assert_eq!(
+            graph.slices[0]["outgoing_reference_rows"]
+                .as_array()
+                .unwrap()
+                .len(),
+            OWNED
+        );
+        assert!(
+            graph.slices[1]["outgoing_reference_rows"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        drop(graph);
+        // Release in bounded batches so allocator work is observable as well.
+        while !scan.rows.is_empty() {
+            scan.rows.truncate(scan.rows.len().saturating_sub(16_384));
+            crate::watchdog::publish(json!({"phase": "stress_release",
+                "rows_remaining": scan.rows.len(), "rows_total": COUNT}))?;
+        }
+        let summary = json!({"phase": "stress_complete", "rows": COUNT,
+            "sort_comparisons": comparisons, "sort_seconds": sort_seconds,
+            "graph_seconds": graph_seconds, "reference_rows": OWNED,
+            "stable_full_key_order": true, "report_bytes_written": 0});
+        crate::watchdog::publish(summary.clone())?;
+        println!("{summary}");
+        Ok(())
+    }
 
     #[test]
     fn invalid_parser_span_remains_visible_but_never_claims_active_evidence() {
@@ -546,6 +668,34 @@ mod tests {
                 .unwrap()
                 .owning_function
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn stable_sort_reports_real_comparator_progress_without_losing_equal_key_order() {
+        let sample = scan(
+            &[("x.erb".into(), "@SYSTEM_TITLE\nRETURN\n".into())],
+            &AnalyzerOptions::analysis_mode(),
+        )
+        .rows
+        .remove(0);
+        let mut rows = (0..20_000)
+            .map(|index| {
+                let mut row = sample.clone();
+                row.span = Span::new(index * 7919 % 4096, index * 7919 % 4096 + 1);
+                row.raw = index.to_string();
+                row
+            })
+            .collect::<Vec<_>>();
+        let mut expected = rows.clone();
+        expected.sort_by_key(|row| row.span.start);
+        let mut observations = Vec::new();
+        sort_appearances(&mut rows, |completed, _, _| observations.push(completed));
+        assert!(!observations.is_empty());
+        assert!(observations.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(
+            serde_json::to_value(rows).unwrap(),
+            serde_json::to_value(expected).unwrap()
         );
     }
 

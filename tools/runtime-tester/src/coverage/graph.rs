@@ -318,6 +318,11 @@ impl Graph {
             if let Some(owner) = appearance.owning_function {
                 rows_by_owner.entry(owner).or_default().push(row);
             }
+            if row.is_multiple_of(16_384) || row + 1 == appearances.len() {
+                crate::watchdog::publish_or_exit(json!({"phase": "coverage_slice_index",
+                    "case": name, "rows_completed": row + 1, "rows_total": appearances.len(),
+                    "owners_indexed": rows_by_owner.len(), "pending": appearance.path}));
+            }
         }
         let mut references = BTreeSet::new();
         let mut static_edges = Vec::new();
@@ -328,6 +333,12 @@ impl Graph {
             for row_id in rows_by_owner.get(&owner).into_iter().flatten().copied() {
                 let row = &appearances[row_id];
                 references.insert(row_id);
+                if references.len() == 1 || references.len().is_multiple_of(4096) {
+                    crate::watchdog::publish_or_exit(json!({"phase": "coverage_slice_references",
+                        "case": name, "references_discovered": references.len(),
+                        "functions_discovered": visited.len(), "functions_pending": queue.len(),
+                        "pending": {"owner": owner, "row": row_id, "path": row.path}}));
+                }
                 let valid = row.activity == "active_ast"
                     && row.span_status == "valid_decoded_utf8"
                     && row.ownership_status == "parser_function_membership_not_execution"
@@ -384,6 +395,12 @@ impl Graph {
                     };
                     static_edges.push(json!({"from": owner, "to": next, "row_id": row_id,
                         "evidence": "active_ast_exact_name_reference_not_proven_runtime_binding"}));
+                    if static_edges.len().is_multiple_of(16_384) {
+                        crate::watchdog::publish_or_exit(json!({"phase": "coverage_slice_edges",
+                            "case": name, "static_edges_completed": static_edges.len(),
+                            "references_discovered": references.len(),
+                            "pending": {"owner": owner, "next": next, "row": row_id}}));
+                    }
                     if visited.insert(next) {
                         queue.push_back(next);
                     }

@@ -110,6 +110,12 @@ pub(super) fn analyze(
         &Default::default(),
         &progress,
     );
+    // A completed body counter is not proof that the analyzer has returned: its
+    // portability pass, diagnostic ordering and AST teardown still run afterward.
+    crate::watchdog::publish_or_exit(json!({"phase": "analysis_returned",
+        "pending": "capture_symbols_and_diagnostics", "diagnostics_completed": report.diagnostics.len(),
+        "functions_completed": report.project.as_ref().map(|project| project.program.functions.len()),
+        "lastFullResponse": null}));
     let analyzer_failed = report.diagnostics.iter().any(|item| {
         matches!(
             item.severity,
