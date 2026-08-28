@@ -320,6 +320,26 @@ fn unchecked_natives_reject_missing_extra_and_noninteger_arguments_in_both_profi
 }
 
 #[test]
+fn invalid_randdata_does_not_replace_native_rng_state() {
+    let mut registry = NativeServiceRegistry {
+        random: Some(Arc::new(Mutex::new(Sfmt19937::new(1234)))),
+        ..NativeServiceRegistry::default()
+    };
+    let before = registry.random_values().unwrap();
+    let replacement = Sfmt19937::new(4321).era_values();
+    for index in [-1, 625, i64::MAX] {
+        let mut invalid = replacement.clone();
+        invalid[624] = index;
+        assert!(registry.set_random_values(&invalid).is_err());
+        assert_eq!(registry.random_values().unwrap(), before);
+    }
+    assert!(registry.set_random_values(&replacement[..624]).is_err());
+    assert_eq!(registry.random_values().unwrap(), before);
+    registry.set_random_values(&replacement).unwrap();
+    assert_eq!(registry.random_values().unwrap(), replacement);
+}
+
+#[test]
 fn random_native_implements_one_and_two_argument_ranges() {
     let mut native = RandomNative {
         name: "rand".into(),

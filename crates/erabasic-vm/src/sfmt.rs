@@ -79,6 +79,15 @@ impl Sfmt19937 {
         if bytes.len() != STATE_WORDS * 4 + 4 {
             return Err("SFMT snapshot has an invalid length".into());
         }
+        let index = u32::from_le_bytes(
+            bytes[STATE_WORDS * 4..]
+                .try_into()
+                .expect("four-byte index"),
+        ) as usize;
+        if index > STATE_WORDS {
+            return Err("SFMT snapshot index is out of range".into());
+        }
+        // Validate every fallible field before replacing any part of the live stream.
         for (word, chunk) in self
             .state
             .iter_mut()
@@ -86,14 +95,7 @@ impl Sfmt19937 {
         {
             *word = u32::from_le_bytes(chunk.try_into().expect("four-byte chunk"));
         }
-        self.index = u32::from_le_bytes(
-            bytes[STATE_WORDS * 4..]
-                .try_into()
-                .expect("four-byte index"),
-        ) as usize;
-        if self.index > STATE_WORDS {
-            return Err("SFMT snapshot index is out of range".into());
-        }
+        self.index = index;
         Ok(())
     }
 
@@ -203,6 +205,22 @@ mod tests {
         let mut invalid = values;
         invalid[STATE_WORDS] = 625;
         assert!(Sfmt19937::from_era_values(&invalid).is_err());
+    }
+
+    #[test]
+    fn rejected_snapshot_preserves_the_existing_random_stream() {
+        let mut source = Sfmt19937::new(1234);
+        let _ = source.next_u64();
+        let before = source.encode();
+        let mut invalid = Sfmt19937::new(4321).encode();
+        invalid[STATE_WORDS * 4..].copy_from_slice(&625_u32.to_le_bytes());
+        assert_eq!(
+            source.decode(&invalid),
+            Err("SFMT snapshot index is out of range".into()),
+        );
+        assert_eq!(source.encode(), before);
+        assert!(source.decode(&invalid[..invalid.len() - 1]).is_err());
+        assert_eq!(source.encode(), before);
     }
 
     #[test]

@@ -626,6 +626,117 @@ fn global_fixture_at_load(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn ordinary_save_load_restores_randdata_but_keeps_the_active_native_stream() {
+    fn next_request(session: &mut RuntimeSession) -> StorageRequest {
+        for _ in 0..32 {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            for message in drain(session) {
+                if let RuntimeMessage::StorageRequest(request) = message {
+                    assert_eq!(request.namespace, StorageNamespace::Save);
+                    assert_eq!(request.relative_path, "save03.sav");
+                    return request;
+                }
+            }
+        }
+        panic!("missing RNG save request: {:?}", session.phase());
+    }
+    let randdata = |vm: &RuntimeVm| {
+        (0..625)
+            .map(|index| read_runtime_integer(vm, "RANDDATA", &[index], None).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let mut reference_stream = None;
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let mut session = global_storage_fixture(
+            profile,
+            concat!(
+                "FLAG:20 = RAND:1000000000\nDUMPRAND\nSAVEDATA 3, \"rng\"\n",
+                "RANDOMIZE 4321\nFLAG:21 = RAND:1000000000\nDUMPRAND\nLOADDATA 3\nRETURN\n",
+                "@SHOW_SHOP\nWAIT",
+            ),
+            true,
+        );
+        let write = next_request(&mut session);
+        let StorageOperation::Write { data, .. } = write.operation else {
+            panic!("SAVEDATA must write the ordinary save");
+        };
+        let saved_randdata = randdata(session.vm.as_ref().unwrap());
+        assert_eq!(saved_randdata.len(), 625);
+        assert_eq!(
+            session.vm.as_ref().unwrap().export_random_state().unwrap(),
+            saved_randdata
+        );
+        submit(
+            &mut session,
+            3,
+            RuntimeMessage::StorageResponse(StorageResponse {
+                request_id: write.request_id,
+                result: StorageResult::Written {
+                    revision: Some("rng-save".into()),
+                },
+            }),
+        );
+        let read = next_request(&mut session);
+        assert!(matches!(read.operation, StorageOperation::Read));
+        let vm = session.vm.as_mut().unwrap();
+        let active = vm.export_random_state().unwrap();
+        assert_ne!(
+            active, saved_randdata,
+            "fixture must change the actual random stream"
+        );
+        assert_eq!(randdata(vm), active);
+        if let Some(reference) = &reference_stream {
+            assert_eq!(
+                &active, reference,
+                "both profiles use the same legal SFMT state"
+            );
+        } else {
+            reference_stream = Some(active.clone());
+        }
+        for invalid_index in [-1, 625, i64::MAX] {
+            let mut invalid = saved_randdata.clone();
+            invalid[624] = invalid_index;
+            assert!(vm.restore_random_state(&invalid).is_err());
+            assert_eq!(vm.export_random_state().unwrap(), active);
+        }
+        assert!(vm.restore_random_state(&saved_randdata[..624]).is_err());
+        assert_eq!(vm.export_random_state().unwrap(), active);
+        vm.restore_random_state(&active).unwrap();
+        submit(
+            &mut session,
+            4,
+            RuntimeMessage::StorageResponse(StorageResponse {
+                request_id: read.request_id,
+                result: StorageResult::Read {
+                    data,
+                    revision: Some("rng-save".into()),
+                },
+            }),
+        );
+        for _ in 0..32 {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            if session.operations.active_input().is_some() {
+                break;
+            }
+        }
+        assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+        let vm = session.vm.as_ref().unwrap();
+        // Ordinary saves store RANDDATA as a variable. Loading does not INITRAND:
+        // the current native stream is retained; Ctrl-Z separately restores it.
+        assert_eq!(randdata(vm), saved_randdata);
+        assert_eq!(vm.export_random_state().unwrap(), active);
+        assert_eq!(
+            session.undo_checkpoint.as_ref().unwrap().random_state,
+            active
+        );
+    }
+}
+
+#[test]
 fn global_storage_respects_save_format_and_restores_only_global_variables() {
     for profile in [
         erabasic_compat::CompatibilityProfileId::EmueraEm,
