@@ -151,6 +151,35 @@ impl RuntimeSession {
         message_id: u64,
         command: DebugCommand,
     ) -> Result<(), RuntimeError> {
+        // A postmortem stop exposes the existing fault without making the game
+        // executable or writable again. Keep ordinary grant and stop checks intact.
+        if self.phase == RuntimePhase::DebugPaused
+            && self.debug_resume_phase == Some(RuntimePhase::Faulted)
+            && !matches!(
+                command_scope(&command),
+                DebugScope::VariablesRead
+                    | DebugScope::GameFieldsRead
+                    | DebugScope::ExecutionRead
+                    | DebugScope::ConsoleEvaluate
+                    | DebugScope::ScriptOutput
+            )
+            && !matches!(&command, DebugCommand::Continue { .. })
+        {
+            match &command {
+                DebugCommand::Step { stop, .. }
+                | DebugCommand::WriteVariables { stop, .. }
+                | DebugCommand::WriteGameFields { stop, .. }
+                | DebugCommand::Console { stop, .. } => {
+                    self.validate_stop(*stop, message_id)?;
+                }
+                _ => {}
+            }
+            return self.emit_debug_error(
+                DebugErrorCode::InvalidState,
+                "postmortem debug stops only allow read-only inspection and continue",
+                Some(message_id),
+            );
+        }
         match command {
             DebugCommand::Pause => {
                 if !matches!(
@@ -158,6 +187,7 @@ impl RuntimeSession {
                     RuntimePhase::Running
                         | RuntimePhase::WaitingInput
                         | RuntimePhase::WaitingExternal
+                        | RuntimePhase::Faulted
                 ) {
                     return self.emit_debug_error(
                         DebugErrorCode::InvalidState,
