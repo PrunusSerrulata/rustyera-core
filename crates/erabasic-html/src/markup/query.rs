@@ -64,11 +64,35 @@ pub enum HtmlQueryErrorKind {
     NoProgress,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Trusted construction provenance, separate from the public diagnostic kind.
+/// Deserialization always loses `ScriptInput` provenance; wire/save data cannot assert it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum HtmlQueryErrorOrigin {
+    ScriptInput,
+    #[default]
+    NonScript,
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HtmlQueryError {
     pub kind: HtmlQueryErrorKind,
     pub range: HtmlSourceRange,
     pub message: String,
+    #[serde(skip)]
+    origin: HtmlQueryErrorOrigin,
+}
+
+// Keep existing Debug text independent of trusted routing metadata.
+#[allow(clippy::missing_fields_in_debug)] // Preserve existing public diagnostic text.
+impl std::fmt::Debug for HtmlQueryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HtmlQueryError")
+            .field("kind", &self.kind)
+            .field("range", &self.range)
+            .field("message", &self.message)
+            .finish()
+    }
 }
 
 impl std::fmt::Display for HtmlQueryError {
@@ -84,11 +108,26 @@ impl std::fmt::Display for HtmlQueryError {
 impl std::error::Error for HtmlQueryError {}
 
 impl HtmlQueryError {
-    fn new(kind: HtmlQueryErrorKind, start: usize, end: usize, message: &str) -> Self {
+    /// Construct an unclassified, noncatchable failure. Only source parsers mark input faults.
+    #[must_use]
+    pub fn new(kind: HtmlQueryErrorKind, start: usize, end: usize, message: &str) -> Self {
         Self {
             kind,
             range: HtmlSourceRange { start, end },
             message: message.into(),
+            origin: HtmlQueryErrorOrigin::NonScript,
+        }
+    }
+
+    #[must_use]
+    pub const fn origin(&self) -> HtmlQueryErrorOrigin {
+        self.origin
+    }
+
+    fn input(kind: HtmlQueryErrorKind, start: usize, end: usize, message: &str) -> Self {
+        Self {
+            origin: HtmlQueryErrorOrigin::ScriptInput,
+            ..Self::new(kind, start, end, message)
         }
     }
 
@@ -98,7 +137,10 @@ impl HtmlQueryError {
             super::HtmlErrorKind::UnknownTag => HtmlQueryErrorKind::UnsupportedTag,
             _ => HtmlQueryErrorKind::InvalidMarkup,
         };
-        Self::new(kind, error.start, error.end, &format!("{:?}", error.kind))
+        Self {
+            origin: error.origin(),
+            ..Self::new(kind, error.start, error.end, &format!("{:?}", error.kind))
+        }
     }
 }
 

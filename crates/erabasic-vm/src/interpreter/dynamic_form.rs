@@ -375,13 +375,15 @@ impl RuntimeFormContinuation {
                     (true, VmValue::String(value)) => value,
                     (false, VmValue::Integer(value)) => value.to_string(),
                     (true, _) => {
-                        return Err(StepError::new(
+                        return Err(StepError::script(
+                            crate::ScriptFaultKind::Argument,
                             VmFaultCode::TypeMismatch,
                             "STRFORM string interpolation expects a string",
                         ));
                     }
                     (false, _) => {
-                        return Err(StepError::new(
+                        return Err(StepError::script(
+                            crate::ScriptFaultKind::Argument,
                             VmFaultCode::TypeMismatch,
                             "STRFORM integer interpolation expects an integer",
                         ));
@@ -396,8 +398,7 @@ impl RuntimeFormContinuation {
                     width_value.as_ref(),
                     alignment_value.as_ref(),
                     natives.character_width_mode(),
-                )
-                .map_err(|message| StepError::new(VmFaultCode::Native, message))?;
+                )?;
                 self.append_output(&value)?;
             }
             RuntimeFormTask::ChooseConditional {
@@ -534,7 +535,11 @@ impl RuntimeFormContinuation {
                     ));
                 };
                 let index = u64::try_from(index).map_err(|_| {
-                    StepError::new(VmFaultCode::Bounds, "STRFORM triple index is negative")
+                    StepError::script(
+                        crate::ScriptFaultKind::Bounds,
+                        VmFaultCode::Bounds,
+                        "STRFORM triple index is negative",
+                    )
                 })?;
                 let value = self.read_variable(vm, fiber, value, &[index])?;
                 let VmValue::String(value) = value else {
@@ -715,7 +720,7 @@ impl RuntimeFormContinuation {
         }
 
         if crate::structured::is_internal_column_native(name) {
-            return Err(unsupported(
+            return Err(support::permission_denied(
                 "STRFORM cannot invoke an internal column operation",
             ));
         }
@@ -765,10 +770,23 @@ impl RuntimeFormContinuation {
             )
         });
         if let Err(error) = commit {
-            if let Some(checkpoint) = rollback {
-                let _ = natives.rollback(native.key, &checkpoint);
+            if let Some(checkpoint) = rollback
+                && let Err(rollback) = natives.rollback(native.key, &checkpoint)
+            {
+                return Err(StepError::classified(
+                    crate::FaultCategory::HostContract,
+                    VmFaultCode::Native,
+                    format!("runtime-form Native rollback failed: {rollback}"),
+                ));
             }
-            return Err(map_vm_error(error));
+            // Ready values/writes belong to the service contract. A bad returned
+            // place is not a script bounds error, even when the storage validator
+            // uses that category for a script-originated read of the same place.
+            return Err(StepError::classified(
+                crate::FaultCategory::HostContract,
+                VmFaultCode::Native,
+                error.to_string(),
+            ));
         }
         let owner = owner_frame_mut(fiber, self.frame)?;
         if owner.stack.len() != owner_stack.saturating_add(1) {

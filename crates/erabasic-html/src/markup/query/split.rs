@@ -260,13 +260,14 @@ impl HtmlSubstringPlan {
             HtmlQueryEntityPolicy::ReferenceQuery,
             self.limits,
         )
-        .map_err(|error| {
-            HtmlQueryError::new(
-                error.kind,
-                self.cursor,
+        .map_err(|mut error| {
+            // Rebase the diagnostic without erasing trusted parser provenance.
+            error.range = HtmlSourceRange {
+                start: self.cursor,
                 end,
-                &format!("measurement fragment: {}", error.message),
-            )
+            };
+            error.message = format!("measurement fragment: {}", error.message);
+            error
         })?
         .document;
         let probe = HtmlQueryProbe {
@@ -310,7 +311,7 @@ impl HtmlSubstringPlan {
         if let Some(closing) = raw.strip_prefix('/') {
             let name = closing.trim();
             if HtmlElementKind::parse(name).is_none() {
-                return Err(HtmlQueryError::new(
+                return Err(HtmlQueryError::input(
                     HtmlQueryErrorKind::UnsupportedTag,
                     start,
                     end,
@@ -318,7 +319,7 @@ impl HtmlSubstringPlan {
                 ));
             }
             self.open.pop().ok_or_else(|| {
-                HtmlQueryError::new(
+                HtmlQueryError::input(
                     HtmlQueryErrorKind::InvalidMarkup,
                     start,
                     end,
@@ -337,7 +338,7 @@ impl HtmlSubstringPlan {
             .unwrap_or("");
         let comment = self.decoded.text[start..].starts_with("<!--");
         if !comment && HtmlElementKind::parse(canonical_name).is_none() {
-            return Err(HtmlQueryError::new(
+            return Err(HtmlQueryError::input(
                 HtmlQueryErrorKind::UnsupportedTag,
                 start,
                 end,
@@ -353,7 +354,7 @@ impl HtmlSubstringPlan {
                     *tail <= self.decoded.text.len() && self.decoded.text.is_char_boundary(*tail)
                 })
                 .ok_or_else(|| {
-                    HtmlQueryError::new(
+                    HtmlQueryError::input(
                         HtmlQueryErrorKind::InvalidMarkup,
                         start,
                         end,
@@ -708,4 +709,37 @@ impl HtmlStringLinesPlan {
         self.measurements += 1;
         Ok(())
     }
+}
+
+#[cfg(test)]
+#[test]
+fn same_markup_kind_preserves_script_input_vs_invalid_owned_state() {
+    let mut source = HtmlSubstringPlan::new("</b>", 1, HtmlQueryLimits::default()).unwrap();
+    let source_error = source.poll().unwrap_err();
+    let mut invalid = HtmlSubstringPlan::new("x", 1, HtmlQueryLimits::default()).unwrap();
+    invalid.cursor = usize::MAX;
+    let state_error = invalid.poll().unwrap_err();
+    assert_eq!(source_error.kind, HtmlQueryErrorKind::InvalidMarkup);
+    assert_eq!(state_error.kind, source_error.kind);
+    assert_eq!(
+        source_error.origin(),
+        super::HtmlQueryErrorOrigin::ScriptInput
+    );
+    assert_eq!(state_error.origin(), super::HtmlQueryErrorOrigin::NonScript);
+}
+
+#[cfg(test)]
+#[test]
+fn same_unicode_kind_preserves_entity_input_vs_invalid_internal_cut() {
+    let source_error =
+        HtmlSubstringPlan::new("&#55357;", 1, HtmlQueryLimits::default()).unwrap_err();
+    let mut invalid = HtmlSubstringPlan::new("中", 1, HtmlQueryLimits::default()).unwrap();
+    let cut_error = invalid.finish(1, 1).unwrap_err();
+    assert_eq!(source_error.kind, HtmlQueryErrorKind::InvalidUnicode);
+    assert_eq!(cut_error.kind, source_error.kind);
+    assert_eq!(
+        source_error.origin(),
+        super::HtmlQueryErrorOrigin::ScriptInput
+    );
+    assert_eq!(cut_error.origin(), super::HtmlQueryErrorOrigin::NonScript);
 }

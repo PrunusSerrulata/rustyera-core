@@ -243,7 +243,10 @@ struct ImportCheckingNative {
 }
 
 impl NativeService for ImportCheckingNative {
-    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String> {
+    fn call(
+        &mut self,
+        request: NativeCallRequest,
+    ) -> Result<NativeReady, erabasic_vm::ExecutionFailure> {
         assert_eq!(request.import, self.expected);
         assert_eq!(request.arguments, [VmValue::Integer(-4)]);
         assert!(request.places.is_empty());
@@ -1107,7 +1110,10 @@ fn registered_native_override_remains_a_dynamic_path_memo_boundary() {
     }
 
     impl NativeService for CountingNative {
-        fn call(&mut self, _request: NativeCallRequest) -> Result<NativeReady, String> {
+        fn call(
+            &mut self,
+            _request: NativeCallRequest,
+        ) -> Result<NativeReady, erabasic_vm::ExecutionFailure> {
             let value = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
             Ok(NativeReady::value(VmValue::Integer(
                 i64::try_from(value).unwrap(),
@@ -1184,7 +1190,10 @@ fn dynamic_path_memo_rechecks_safe_natives_after_a_registry_override() {
     struct ConstantNative;
 
     impl NativeService for ConstantNative {
-        fn call(&mut self, _request: NativeCallRequest) -> Result<NativeReady, String> {
+        fn call(
+            &mut self,
+            _request: NativeCallRequest,
+        ) -> Result<NativeReady, erabasic_vm::ExecutionFailure> {
             Ok(NativeReady::value(VmValue::Integer(41)))
         }
 

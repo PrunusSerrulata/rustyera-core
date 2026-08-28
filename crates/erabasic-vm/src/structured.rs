@@ -8,7 +8,10 @@ use quick_xml::escape::resolve_predefined_entity;
 use quick_xml::events::Event;
 use serde::{Deserialize, Serialize};
 
-use crate::{HostWrite, NativeCallRequest, NativePlaceView, NativeReady, PlaceDescriptor, VmValue};
+use crate::{
+    ExecutionFailure, FaultCategory, HostWrite, NativeCallRequest, NativePlaceView, NativeReady,
+    PlaceDescriptor, ScriptFaultKind, VmFaultCode, VmValue,
+};
 
 mod column_identity;
 mod column_options;
@@ -239,12 +242,16 @@ impl crate::NativeService for StructuredNative {
         &["RESULT", "RESULTS"]
     }
 
-    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "structured native state lock is poisoned".to_owned())?;
-        state.call(&self.name, &request)
+    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, crate::ExecutionFailure> {
+        let mut state = self.state.lock().map_err(|_| {
+            crate::host::native_contract_failure("structured native state lock is poisoned")
+        })?;
+        state.call(&self.name, &request).map_err(|mut failure| {
+            // All structured native errors historically used Native. Keep that legacy code
+            // without deriving or changing source-assigned catch permission.
+            failure.code = VmFaultCode::Native;
+            failure
+        })
     }
 
     fn requires_rollback_checkpoint(&self) -> bool {
@@ -259,7 +266,8 @@ impl crate::NativeService for StructuredNative {
 
 impl StructuredState {
     pub(crate) fn encode(&self) -> Result<Vec<u8>, String> {
-        self.validate_identity_state()?;
+        self.validate_identity_state()
+            .map_err(|failure| failure.to_string())?;
         let payload = serde_json::to_vec(self).map_err(|error| error.to_string())?;
         let mut output = STRUCTURED_BUNDLE_VERSION.to_le_bytes().to_vec();
         output.extend(payload);
@@ -278,7 +286,9 @@ impl StructuredState {
             ));
         }
         let state: Self = serde_json::from_slice(&bytes[4..]).map_err(|error| error.to_string())?;
-        state.validate_identity_state()?;
+        state
+            .validate_identity_state()
+            .map_err(|failure| failure.to_string())?;
         Ok(state)
     }
 
@@ -420,12 +430,16 @@ impl StructuredState {
                     imported.insert((0x20, key.clone()));
                 }
                 StructuredExtension::Xml { key, document } if xmls.contains(key) => {
-                    self.xml_documents.insert(key.clone(), parse_xml(document)?);
+                    self.xml_documents.insert(
+                        key.clone(),
+                        parse_xml(document).map_err(|failure| failure.to_string())?,
+                    );
                     imported.insert((0x21, key.clone()));
                 }
                 StructuredExtension::DataTable { key, schema, data } if tables.contains(key) => {
                     let table = decode_data_table_extension(key, schema, data)?;
-                    self.install_fresh_table(key.clone(), table)?;
+                    self.install_fresh_table(key.clone(), table)
+                        .map_err(|failure| failure.to_string())?;
                     imported.insert((0x22, key.clone()));
                 }
                 _ => {}
@@ -435,7 +449,11 @@ impl StructuredState {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn call(&mut self, name: &str, request: &NativeCallRequest) -> Result<NativeReady, String> {
+    fn call(
+        &mut self,
+        name: &str,
+        request: &NativeCallRequest,
+    ) -> Result<NativeReady, ExecutionFailure> {
         let name = name.to_ascii_lowercase();
         if name.starts_with("map_") {
             return self.call_map(&name, request);
@@ -449,11 +467,17 @@ impl StructuredState {
         if name.starts_with("dt_") {
             return self.call_data_table(&name, request);
         }
-        Err(format!("unknown structured native service {name}"))
+        Err(contract_failure(format!(
+            "unknown structured native service {name}"
+        )))
     }
 
     #[allow(clippy::too_many_lines)]
-    fn call_map(&mut self, name: &str, request: &NativeCallRequest) -> Result<NativeReady, String> {
+    fn call_map(
+        &mut self,
+        name: &str,
+        request: &NativeCallRequest,
+    ) -> Result<NativeReady, ExecutionFailure> {
         let map_name = string_argument(request, 0)?.to_owned();
         match name {
             "map_create" => {
@@ -592,15 +616,15 @@ impl StructuredState {
                 }
                 ready_integer(1)
             }
-            _ => Err(format!("unsupported map native {name}")),
+            _ => Err(contract_failure(format!("unsupported map native {name}"))),
         }
     }
 }
 
 fn decode_data_table_extension(key: &str, schema: &str, data: &str) -> Result<DataTable, String> {
     let mut table = if schema.trim_start().starts_with('<') {
-        let schema = parse_data_table_schema(key, schema)?;
-        parse_data_table_xml(key, &schema, data)?
+        let schema = parse_data_table_schema(key, schema).map_err(|failure| failure.to_string())?;
+        parse_data_table_xml(key, &schema, data).map_err(|failure| failure.to_string())?
     } else {
         // RustyEra briefly wrote its internal serde representation before the
         // reference-compatible DataSet XML boundary was implemented. Keep those
@@ -623,3 +647,19 @@ mod xml_calls;
 
 #[cfg(test)]
 mod tests;
+
+fn contract_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::classified(FaultCategory::HostContract, VmFaultCode::Native, message)
+}
+
+fn parse_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::script(ScriptFaultKind::Parse, VmFaultCode::Native, message)
+}
+
+fn argument_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::script(ScriptFaultKind::Argument, VmFaultCode::Native, message)
+}
+
+fn resource_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::classified(FaultCategory::ResourceLimit, VmFaultCode::Native, message)
+}

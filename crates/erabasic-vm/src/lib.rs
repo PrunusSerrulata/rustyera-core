@@ -9,6 +9,7 @@ mod debug;
 mod debug_port;
 mod display_width;
 mod extended_pictographic;
+mod failure;
 mod fault;
 mod host;
 mod hot_reload;
@@ -38,6 +39,7 @@ pub use display_width::{
     CharacterWidthMode, display_width, emuera_display_width, logical_line_string,
     logical_line_string_with_mode,
 };
+pub use failure::{ExecutionFailure, FaultCategory, ScriptFaultKind};
 pub use fault::{VmError, VmFault, VmFaultCode};
 pub use host::{
     HostCallRequest, HostCallResult, HostReady, HostRebindRequest, HostWaitStability,

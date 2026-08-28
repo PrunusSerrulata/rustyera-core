@@ -320,11 +320,12 @@ pub(in super::super) fn i32_argument_value(
     arguments: &[VmValue],
     index: usize,
 ) -> Result<i32, RuntimeError> {
-    i32::try_from(integer_argument_value(arguments, index)?).map_err(|_| {
-        RuntimeError::Internal(format!(
+    i32::try_from(integer_argument_value(arguments, index)?).map_err(|_| RuntimeError::Script {
+        kind: erabasic_vm::ScriptFaultKind::Bounds,
+        message: format!(
             "host argument {} must fit a signed 32-bit drawing coordinate",
             index + 1
-        ))
+        ),
     })
 }
 
@@ -332,9 +333,25 @@ pub(in super::super) fn checked_argb(value: i64) -> Result<i64, RuntimeError> {
     if (0..=i64::from(u32::MAX)).contains(&value) {
         Ok(value)
     } else {
-        Err(RuntimeError::Internal(
-            "graphics ARGB value must fit an unsigned 32-bit value".into(),
-        ))
+        Err(RuntimeError::Script {
+            kind: erabasic_vm::ScriptFaultKind::Argument,
+            message: "graphics ARGB value must fit an unsigned 32-bit value".into(),
+        })
+    }
+}
+
+// Preserve only a VM failure whose source category was already established by
+// a trusted read. Implicit storage/type/state failures cannot choose Script by text/code.
+pub(in super::super) fn runtime_script_read_error(error: erabasic_vm::VmError) -> RuntimeError {
+    match error {
+        erabasic_vm::VmError::ScriptFailure(failure) => match failure.category {
+            erabasic_vm::FaultCategory::Script(kind) => RuntimeError::Script {
+                kind,
+                message: failure.message,
+            },
+            _ => RuntimeError::Internal(failure.to_string()),
+        },
+        error => RuntimeError::Internal(error.to_string()),
     }
 }
 
@@ -364,7 +381,7 @@ pub(in super::super) fn read_color_matrix(
             place.indices[column] = base_column.saturating_add(x);
             let VmValue::Integer(value) = vm
                 .read_host_place(fiber, &place)
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?
+                .map_err(runtime_script_read_error)?
             else {
                 return Err(RuntimeError::Internal(
                     "graphics color matrix contains a non-integer value".into(),
@@ -554,7 +571,7 @@ pub(in super::super) fn read_runtime_integer(
             indices: indices.to_vec(),
             character,
         }])
-        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        .map_err(runtime_script_read_error)?;
     match values.as_slice() {
         [VmValue::Integer(value)] => Ok(*value),
         _ => Err(RuntimeError::Internal(format!(

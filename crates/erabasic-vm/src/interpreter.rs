@@ -72,19 +72,7 @@ struct ExecutionPolicy {
     remaining_instructions: u64,
 }
 
-struct StepError {
-    code: VmFaultCode,
-    message: String,
-}
-
-impl StepError {
-    fn new(code: VmFaultCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-}
+type StepError = crate::ExecutionFailure;
 
 struct InstructionPosition<'a> {
     generation: crate::GenerationId,

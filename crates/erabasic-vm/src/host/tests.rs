@@ -479,7 +479,11 @@ fn regex_string_natives_match_non_overlapping_reference_semantics() {
             vec![VmValue::Integer(1), VmValue::String("[".into())],
         ))
         .unwrap_err();
-    assert!(error.starts_with("STRCOUNT argument 2 is not a regex:"));
+    assert!(
+        error
+            .message
+            .starts_with("STRCOUNT argument 2 is not a regex:")
+    );
 
     let mut escape = CoreNative::new("escape".into(), LegacyEncoding::default());
     assert_eq!(
@@ -584,6 +588,210 @@ fn replace_native_uses_reference_regex_literal_and_array_modes() {
                 vec![],
             ))
             .unwrap_err()
+            .message
             .starts_with("REPLACE argument 2 is not a regex:")
     );
+}
+
+fn classified_native_request(name: &str, arguments: Vec<VmValue>) -> NativeCallRequest {
+    NativeCallRequest {
+        import: RuntimeImport {
+            key: SymbolKey::default(),
+            namespace: "typed-test".into(),
+            name: name.into(),
+            abi_version: 1,
+            parameters: Vec::new(),
+            result: None,
+        },
+        arguments,
+        places: Vec::new(),
+        implicit_places: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn core_native_domains_are_script_failures_but_malformed_arguments_are_contract_failures() {
+    for (name, arguments, kind) in [
+        (
+            "abs",
+            vec![VmValue::Integer(i64::MIN)],
+            ScriptFaultKind::Arithmetic,
+        ),
+        (
+            "sqrt",
+            vec![VmValue::Integer(-1)],
+            ScriptFaultKind::Argument,
+        ),
+        (
+            "log",
+            vec![VmValue::Integer(0)],
+            ScriptFaultKind::Arithmetic,
+        ),
+        (
+            "toint",
+            vec![VmValue::String("0b2".into())],
+            ScriptFaultKind::Parse,
+        ),
+        (
+            "strcount",
+            vec![VmValue::String("text".into()), VmValue::String("[".into())],
+            ScriptFaultKind::Parse,
+        ),
+        (
+            "encodetouni",
+            vec![VmValue::String("a".into()), VmValue::Integer(2)],
+            ScriptFaultKind::Bounds,
+        ),
+        (
+            "unicodetostr",
+            vec![VmValue::Integer(0xD800)],
+            ScriptFaultKind::Argument,
+        ),
+    ] {
+        let failure = CoreNative::new(name.into(), LegacyEncoding::default())
+            .call(classified_native_request(name, arguments))
+            .unwrap_err();
+        assert_eq!(failure.category, FaultCategory::Script(kind), "{name}");
+        assert_eq!(failure.code, VmFaultCode::Native, "{name}");
+    }
+    for name in ["unchecked_add", "toint", "not_a_native"] {
+        let failure = CoreNative::new(name.into(), LegacyEncoding::default())
+            .call(classified_native_request(
+                name,
+                vec![VmValue::Integer(1), VmValue::String("wrong".into())],
+            ))
+            .unwrap_err();
+        assert_eq!(failure.category, FaultCategory::HostContract, "{name}");
+        assert!(!failure.is_script());
+    }
+}
+
+#[test]
+fn snake_numeric_read_fallback_does_not_hide_native_contract_failures() {
+    let compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let mut native = CoreNative::new("toint".into(), LegacyEncoding::default())
+        .with_compatibility(&compatibility);
+    assert_eq!(
+        native
+            .call(classified_native_request(
+                "toint",
+                vec![VmValue::String("0b2".into())]
+            ))
+            .unwrap()
+            .value,
+        Some(VmValue::Integer(0))
+    );
+    let failure = native
+        .call(classified_native_request(
+            "toint",
+            vec![VmValue::Integer(1)],
+        ))
+        .unwrap_err();
+    assert_eq!(failure.category, FaultCategory::HostContract);
+    let pure = evaluate_pure_native("sqrt", vec![VmValue::Integer(-1)]).unwrap_err();
+    assert_eq!(pure, "SQRT argument 1 is negative");
+}
+
+#[test]
+fn regex_compilation_capacity_is_uncatchable_even_with_native_legacy_code() {
+    let error = regex::RegexBuilder::new(r"\w+")
+        .size_limit(0)
+        .build()
+        .unwrap_err();
+    assert!(matches!(error, regex::Error::CompiledTooBig(_)));
+    let failure = super::core::regex_failure("STRCOUNT", &error);
+    assert_eq!(failure.category, FaultCategory::ResourceLimit);
+    assert_eq!(failure.code, VmFaultCode::Native);
+    assert!(!failure.is_script());
+}
+
+#[test]
+fn replace_mode_domain_is_separate_from_missing_native_place_views() {
+    let mut native = CoreNative::new("replace".into(), LegacyEncoding::default());
+    let request = |third| {
+        classified_native_request(
+            "replace",
+            vec![
+                VmValue::String("a".into()),
+                VmValue::String("a".into()),
+                third,
+                VmValue::Integer(1),
+            ],
+        )
+    };
+    let domain = native
+        .call(request(VmValue::String("replacement".into())))
+        .unwrap_err();
+    assert_eq!(
+        domain.category,
+        FaultCategory::Script(ScriptFaultKind::Argument)
+    );
+    let malformed = native
+        .call(request(VmValue::StringPlace(Box::default())))
+        .unwrap_err();
+    assert_eq!(malformed.category, FaultCategory::HostContract);
+}
+
+#[test]
+fn native_registry_preserves_classification_and_never_promotes_legacy_messages() {
+    struct FailingNative(ExecutionFailure);
+    impl NativeService for FailingNative {
+        fn call(&mut self, _: NativeCallRequest) -> Result<NativeReady, ExecutionFailure> {
+            Err(self.0.clone())
+        }
+    }
+    let key = SymbolKey([29; 16]);
+    for expected in [
+        native_script_failure(ScriptFaultKind::Argument, "bad script value"),
+        ExecutionFailure::from("Script(Arithmetic): catch this external-looking message"),
+    ] {
+        let mut registry = NativeServiceRegistry::default();
+        registry.register(key, FailingNative(expected.clone()));
+        let failure = registry
+            .call(key, classified_native_request("test", Vec::new()))
+            .unwrap_err();
+        assert_eq!(failure, expected);
+    }
+    let failure = NativeServiceRegistry::default()
+        .call(key, classified_native_request("missing", Vec::new()))
+        .unwrap_err();
+    assert_eq!(failure.category, FaultCategory::HostContract);
+}
+
+#[test]
+fn format_width_rejects_script_domain_without_promoting_bad_argument_types() {
+    let failure = apply_width("a", Some(&VmValue::Integer(-1)), None).unwrap_err();
+    assert_eq!(
+        failure.category,
+        FaultCategory::Script(ScriptFaultKind::Argument)
+    );
+    let failure = apply_width("a", Some(&VmValue::String("3".into())), None).unwrap_err();
+    assert_eq!(failure.category, FaultCategory::HostContract);
+}
+
+#[test]
+fn randdata_execution_distinguishes_invalid_state_from_missing_service() {
+    let mut registry = NativeServiceRegistry {
+        random: Some(Arc::new(Mutex::new(Sfmt19937::new(1234)))),
+        ..NativeServiceRegistry::default()
+    };
+    let before = registry.random_values().unwrap();
+    let mut invalid = before.clone();
+    invalid[624] = 625;
+    let failure = registry.set_random_values_execution(&invalid).unwrap_err();
+    assert_eq!(
+        failure.category,
+        FaultCategory::Script(ScriptFaultKind::Argument)
+    );
+    assert_eq!(failure.code, VmFaultCode::Native);
+    assert_eq!(failure.message, "RANDDATA index exceeds 624");
+    assert_eq!(registry.random_values().unwrap(), before);
+    let failure = NativeServiceRegistry::default()
+        .set_random_values_execution(&before)
+        .unwrap_err();
+    assert_eq!(failure.category, FaultCategory::InternalInvariant);
+    assert_eq!(failure.code, VmFaultCode::Native);
+    assert_eq!(failure.message, "random native service is not registered");
 }

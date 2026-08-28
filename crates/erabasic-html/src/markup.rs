@@ -16,11 +16,11 @@ pub use query::{
     HtmlDecodedSource, HtmlLengthCut, HtmlLengthImageResolution, HtmlLengthMeasuredValue,
     HtmlLengthMeasurement, HtmlLengthProbe, HtmlLengthProbeKind, HtmlLinesPoll, HtmlMappedDocument,
     HtmlMappedText, HtmlOutputOrigin, HtmlOutputPiece, HtmlQueryEntityPolicy, HtmlQueryError,
-    HtmlQueryErrorKind, HtmlQueryLimits, HtmlQueryProbe, HtmlQueryProbeKind, HtmlScalarBoundary,
-    HtmlSourceEvent, HtmlSourceEventKind, HtmlSourceRange, HtmlStringLengthPlan,
-    HtmlStringLengthPoll, HtmlStringLengthResult, HtmlStringLengthSettings, HtmlStringLinesPlan,
-    HtmlSubstringPlan, HtmlSubstringPoll, HtmlSubstringResult, decode_query_entities,
-    html_string_length_units, parse_document_with_source_map,
+    HtmlQueryErrorKind, HtmlQueryErrorOrigin, HtmlQueryLimits, HtmlQueryProbe, HtmlQueryProbeKind,
+    HtmlScalarBoundary, HtmlSourceEvent, HtmlSourceEventKind, HtmlSourceRange,
+    HtmlStringLengthPlan, HtmlStringLengthPoll, HtmlStringLengthResult, HtmlStringLengthSettings,
+    HtmlStringLinesPlan, HtmlSubstringPlan, HtmlSubstringPoll, HtmlSubstringResult,
+    decode_query_entities, html_string_length_units, parse_document_with_source_map,
 };
 
 use attributes::{error, find_tag_end, parse_attributes};

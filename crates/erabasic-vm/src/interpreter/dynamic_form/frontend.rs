@@ -34,7 +34,8 @@ pub(super) fn parse_runtime_form(
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("; ");
-        return Err(StepError::new(
+        return Err(StepError::script(
+            crate::ScriptFaultKind::Parse,
             VmFaultCode::Native,
             format!("STRFORM expansion failed: {message}"),
         ));

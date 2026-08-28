@@ -7,11 +7,11 @@ pub(super) struct CompilerNative {
 }
 
 impl NativeService for CompilerNative {
-    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String> {
+    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, ExecutionFailure> {
         match self.name.as_str() {
             "format_integer" => {
                 let Some(VmValue::Integer(value)) = request.arguments.first() else {
-                    return Err("format_integer expects an integer".into());
+                    return Err(native_contract_failure("format_integer expects an integer"));
                 };
                 Ok(NativeReady::value(VmValue::String(
                     apply_owned_width_with_mode(
@@ -24,13 +24,15 @@ impl NativeService for CompilerNative {
             }
             "format_string" => {
                 let Some(value) = request.arguments.first() else {
-                    return Err("format_string expects a value".into());
+                    return Err(native_contract_failure("format_string expects a value"));
                 };
                 let value = match value {
                     VmValue::Integer(value) => value.to_string(),
                     VmValue::String(value) => value.clone(),
                     VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => {
-                        return Err("format_string cannot dereference a place".into());
+                        return Err(native_contract_failure(
+                            "format_string cannot dereference a place",
+                        ));
                     }
                 };
                 Ok(NativeReady::value(VmValue::String(
@@ -47,18 +49,24 @@ impl NativeService for CompilerNative {
                     .places
                     .iter()
                     .find(|place| place.argument_index == 0)
-                    .ok_or("TIMES expects an integer place")?;
+                    .ok_or_else(|| native_contract_failure("TIMES expects an integer place"))?;
                 let Some(VmValue::Integer(value)) = place.values.first() else {
-                    return Err("TIMES expects an integer place".into());
+                    return Err(native_contract_failure("TIMES expects an integer place"));
                 };
                 let Some(VmValue::Integer(numerator)) = request.arguments.get(1) else {
-                    return Err("TIMES expects an integer numerator".into());
+                    return Err(native_contract_failure(
+                        "TIMES expects an integer numerator",
+                    ));
                 };
                 let Some(VmValue::Integer(denominator)) = request.arguments.get(2) else {
-                    return Err("TIMES expects an integer denominator".into());
+                    return Err(native_contract_failure(
+                        "TIMES expects an integer denominator",
+                    ));
                 };
                 if *denominator <= 0 {
-                    return Err("TIMES denominator must be positive".into());
+                    return Err(native_contract_failure(
+                        "TIMES denominator must be positive",
+                    ));
                 }
                 // Emuera's default rigorous path multiplies through decimal and
                 // truncates toward zero. i128 preserves that result for every i64
@@ -74,10 +82,13 @@ impl NativeService for CompilerNative {
                     }],
                 })
             }
-            name if name.starts_with("control_") => Err(format!(
+            name if name.starts_with("control_") => Err(native_contract_failure(format!(
                 "compiler control placeholder {name} reached execution"
-            )),
-            _ => Err(format!("unknown compiler-native service {}", self.name)),
+            ))),
+            _ => Err(native_contract_failure(format!(
+                "unknown compiler-native service {}",
+                self.name
+            ))),
         }
     }
 }
@@ -88,11 +99,11 @@ pub(super) struct RandomNative {
 }
 
 impl NativeService for RandomNative {
-    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String> {
+    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, ExecutionFailure> {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| "SFMT state lock is poisoned".to_owned())?;
+            .map_err(|_| native_contract_failure("SFMT state lock is poisoned"))?;
         match self.name.as_str() {
             "rand" => {
                 let (minimum, maximum) = match request.arguments.as_slice() {
@@ -102,35 +113,48 @@ impl NativeService for RandomNative {
                         // operand as i64::MIN. RAND(, max) is equivalent to RAND(max).
                         (if *minimum == i64::MIN { 0 } else { *minimum }, *maximum)
                     }
-                    _ => return Err("RAND expects one or two integer arguments".into()),
+                    _ => {
+                        return Err(native_contract_failure(
+                            "RAND expects one or two integer arguments",
+                        ));
+                    }
                 };
                 let Some(width) = maximum.checked_sub(minimum) else {
-                    return Err("RAND range overflows i64".into());
+                    return Err(native_script_failure(
+                        ScriptFaultKind::Arithmetic,
+                        "RAND range overflows i64",
+                    ));
                 };
                 if width <= 0 {
-                    return Err("RAND maximum must be greater than its minimum".into());
+                    return Err(native_script_failure(
+                        ScriptFaultKind::Argument,
+                        "RAND maximum must be greater than its minimum",
+                    ));
                 }
                 let offset = state.next_u64() % width.cast_unsigned();
                 let value = i64::try_from(offset)
                     .expect("RAND modulo positive i64 fits i64")
                     .checked_add(minimum)
-                    .ok_or_else(|| "RAND result overflows i64".to_owned())?;
+                    .ok_or_else(|| native_contract_failure("RAND result overflows i64"))?;
                 Ok(NativeReady::value(VmValue::Integer(value)))
             }
             "randomize" => {
                 let seed = match request.arguments.first() {
                     Some(VmValue::Integer(seed)) => (*seed).cast_unsigned(),
                     None => 0,
-                    _ => return Err("RANDOMIZE seed must be an integer".into()),
+                    _ => return Err(native_contract_failure("RANDOMIZE seed must be an integer")),
                 };
                 state.reseed(seed);
                 Ok(NativeReady::default())
             }
-            "initrand" | "dumprand" => Err(format!(
+            "initrand" | "dumprand" => Err(native_contract_failure(format!(
                 "{} must be executed through the VM place transaction",
                 self.name.to_ascii_uppercase()
-            )),
-            _ => Err(format!("unknown random-native service {}", self.name)),
+            ))),
+            _ => Err(native_contract_failure(format!(
+                "unknown random-native service {}",
+                self.name
+            ))),
         }
     }
 
@@ -155,7 +179,7 @@ pub(crate) fn apply_width_with_mode(
     width: Option<&VmValue>,
     alignment: Option<&VmValue>,
     mode: crate::CharacterWidthMode,
-) -> Result<String, String> {
+) -> Result<String, ExecutionFailure> {
     apply_owned_width_with_mode(value.to_owned(), width, alignment, mode)
 }
 
@@ -164,18 +188,28 @@ pub(crate) fn apply_owned_width_with_mode(
     width: Option<&VmValue>,
     alignment: Option<&VmValue>,
     mode: crate::CharacterWidthMode,
-) -> Result<String, String> {
+) -> Result<String, ExecutionFailure> {
     let Some(width) = width else {
         return Ok(value);
     };
     let VmValue::Integer(signed_width) = width else {
-        return Err("format width must be an integer".into());
+        return Err(native_contract_failure("format width must be an integer"));
     };
+    if *signed_width < 0 {
+        return Err(native_script_failure(
+            ScriptFaultKind::Argument,
+            "format width exceeds this platform",
+        ));
+    }
     let width = usize::try_from(*signed_width)
-        .map_err(|_| "format width exceeds this platform".to_owned())?;
+        .map_err(|_| native_resource_failure("format width exceeds this platform"))?;
     let left_align = match alignment {
         Some(VmValue::Integer(value)) => *value != 0,
-        Some(_) => return Err("format alignment must be an integer".into()),
+        Some(_) => {
+            return Err(native_contract_failure(
+                "format alignment must be an integer",
+            ));
+        }
         None => false,
     };
     let characters = crate::display_width(&value, mode);
@@ -184,11 +218,19 @@ pub(crate) fn apply_owned_width_with_mode(
     }
     let padding = width - characters;
     if left_align {
-        value.reserve(padding);
+        value.try_reserve_exact(padding).map_err(|_| {
+            native_resource_failure("format width allocation exceeds available capacity")
+        })?;
         value.extend(std::iter::repeat_n(' ', padding));
         return Ok(value);
     }
-    let mut padded = String::with_capacity(value.len() + padding);
+    let capacity = value.len().checked_add(padding).ok_or_else(|| {
+        native_resource_failure("format width allocation exceeds available capacity")
+    })?;
+    let mut padded = String::new();
+    padded.try_reserve_exact(capacity).map_err(|_| {
+        native_resource_failure("format width allocation exceeds available capacity")
+    })?;
     padded.extend(std::iter::repeat_n(' ', padding));
     padded.push_str(&value);
     Ok(padded)
@@ -199,7 +241,7 @@ pub(super) fn apply_width(
     value: &str,
     width: Option<&VmValue>,
     alignment: Option<&VmValue>,
-) -> Result<String, String> {
+) -> Result<String, ExecutionFailure> {
     apply_width_with_mode(
         value,
         width,

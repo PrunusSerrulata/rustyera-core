@@ -1268,3 +1268,73 @@ fn linecount_drives_clearline_and_bounded_padding_loops() {
 }
 
 include!("host_runtime_continued.rs");
+
+#[test]
+fn html_error_wire_data_cannot_claim_script_provenance() {
+    let error = erabasic_html::decode_query_entities(
+        "&unknown;",
+        erabasic_html::HtmlQueryEntityPolicy::ReferenceQuery,
+        erabasic_html::HtmlQueryLimits::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.origin(),
+        erabasic_html::HtmlQueryErrorOrigin::ScriptInput
+    );
+    let mut serialized = serde_json::to_value(&error).unwrap();
+    assert!(serialized.get("origin").is_none());
+    serialized["origin"] = serde_json::json!("ScriptInput");
+    let decoded: erabasic_html::HtmlQueryError = serde_json::from_value(serialized).unwrap();
+    assert_eq!(
+        decoded.origin(),
+        erabasic_html::HtmlQueryErrorOrigin::NonScript
+    );
+    assert_eq!(
+        (decoded.kind, &decoded.range, &decoded.message),
+        (error.kind, &error.range, &error.message)
+    );
+}
+
+#[test]
+fn host_scalar_and_read_failures_only_preserve_explicit_script_sources() {
+    assert!(matches!(
+        i32_argument_value(&[VmValue::Integer(i64::MAX)], 0),
+        Err(RuntimeError::Script {
+            kind: erabasic_vm::ScriptFaultKind::Bounds,
+            ..
+        })
+    ));
+    assert!(matches!(
+        i32_argument_value(&[VmValue::String("bad".into())], 0),
+        Err(RuntimeError::Internal(_))
+    ));
+    assert!(matches!(
+        checked_argb(-1),
+        Err(RuntimeError::Script {
+            kind: erabasic_vm::ScriptFaultKind::Argument,
+            ..
+        })
+    ));
+    let explicit = erabasic_vm::ExecutionFailure::script(
+        erabasic_vm::ScriptFaultKind::Bounds,
+        erabasic_vm::VmFaultCode::InvalidInstruction,
+        "bounds",
+    );
+    assert!(matches!(
+        runtime_script_read_error(erabasic_vm::VmError::ScriptFailure(explicit)),
+        RuntimeError::Script {
+            kind: erabasic_vm::ScriptFaultKind::Bounds,
+            ..
+        }
+    ));
+    let internal =
+        erabasic_vm::ExecutionFailure::new(erabasic_vm::VmFaultCode::InvalidInstruction, "bounds");
+    assert!(matches!(
+        runtime_script_read_error(erabasic_vm::VmError::ScriptFailure(internal)),
+        RuntimeError::Internal(_)
+    ));
+    assert!(matches!(
+        runtime_script_read_error(erabasic_vm::VmError::InvalidArguments("bounds".into())),
+        RuntimeError::Internal(_)
+    ));
+}

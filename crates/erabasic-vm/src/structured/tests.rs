@@ -838,3 +838,204 @@ fn imported_data_tables_receive_fresh_column_identities_and_preserve_defaults() 
         Cell::Integer(8)
     );
 }
+
+#[test]
+fn structured_native_input_parse_is_catchable_but_contract_failure_is_not() {
+    let state = Arc::new(Mutex::new(StructuredState::default()));
+    let mut native = StructuredNative::new("xml_document", Arc::clone(&state));
+    let bad_xml = column_request(
+        "xml_document",
+        vec![
+            VmValue::String("doc".into()),
+            VmValue::String("<root>".into()),
+        ],
+    );
+    let failure = crate::NativeService::call(&mut native, bad_xml).unwrap_err();
+    assert_eq!(
+        failure.category,
+        FaultCategory::Script(ScriptFaultKind::Parse)
+    );
+    assert_eq!(failure.code, VmFaultCode::Native);
+    assert!(state.lock().unwrap().xml_documents.is_empty());
+    let bad_argument = column_request(
+        "xml_document",
+        vec![VmValue::String("doc".into()), VmValue::Integer(1)],
+    );
+    let failure = crate::NativeService::call(&mut native, bad_argument).unwrap_err();
+    assert_eq!(failure.category, FaultCategory::HostContract);
+    assert_eq!(failure.code, VmFaultCode::Native);
+}
+
+#[test]
+fn xpath_input_errors_do_not_promote_internal_selection_failures() {
+    let document = parse_xml("<root>text<item /></root>").unwrap();
+    for expression in ["//root[", "//ns:item", "//root[contains('a')]", "//root |"] {
+        let failure = document.select(expression).unwrap_err();
+        assert_eq!(
+            failure.category,
+            FaultCategory::Script(ScriptFaultKind::Parse)
+        );
+    }
+    let failure = document.select("//root/text()").unwrap_err();
+    assert_eq!(
+        failure.category,
+        FaultCategory::Script(ScriptFaultKind::Argument)
+    );
+    let failure = document.element(&[usize::MAX]).unwrap_err();
+    assert_eq!(failure.category, FaultCategory::HostContract);
+}
+
+#[test]
+fn data_table_script_row_domains_preserve_state_and_shared_validation_is_contract_only() {
+    let mut state = table_with_default(DataType::Int8, Cell::Null);
+    state.data_tables.get_mut("table").unwrap().columns[1].nullable = false;
+    let original = state.clone();
+    for arguments in [
+        vec![VmValue::String("table".into())],
+        vec![
+            VmValue::String("table".into()),
+            VmValue::String("value".into()),
+            VmValue::Integer(256),
+        ],
+        vec![
+            VmValue::String("table".into()),
+            VmValue::String("missing".into()),
+            VmValue::Integer(1),
+        ],
+    ] {
+        let failure = state
+            .call("dt_row_add", &column_request("dt_row_add", arguments))
+            .unwrap_err();
+        assert_eq!(
+            failure.category,
+            FaultCategory::Script(ScriptFaultKind::Argument)
+        );
+        assert_eq!(state, original);
+    }
+    let failure = super::column_identity::validate_row_cells(
+        &state.data_tables["table"],
+        &[Cell::Null, Cell::Null],
+    )
+    .unwrap_err();
+    assert_eq!(failure.category, FaultCategory::HostContract);
+}
+
+#[test]
+fn data_table_fromxml_preserves_local_parse_fallback_without_swallowing_resource_limits() {
+    let mut state = StructuredState::default();
+    state
+        .install_fresh_table("table".into(), DataTable::new())
+        .unwrap();
+    let original = state.clone();
+    let schema = data_table_schema_xml("table", &DataTable::new());
+    for (schema_input, data) in [
+        ("<bad>".to_owned(), "<DocumentElement />"),
+        (
+            schema.clone(),
+            "<DocumentElement><table><id>bad</id></table></DocumentElement>",
+        ),
+    ] {
+        let result = state
+            .call(
+                "dt_fromxml",
+                &column_request(
+                    "dt_fromxml",
+                    vec![
+                        VmValue::String("table".into()),
+                        VmValue::String(schema_input),
+                        VmValue::String(data.into()),
+                    ],
+                ),
+            )
+            .unwrap();
+        assert_eq!(result.value, Some(VmValue::Integer(0)));
+        assert_eq!(state, original);
+    }
+    state.next_column_identity = u64::MAX - 1;
+    let exhausted = state.clone();
+    let failure = state
+        .call(
+            "dt_fromxml",
+            &column_request(
+                "dt_fromxml",
+                vec![
+                    VmValue::String("table".into()),
+                    VmValue::String(schema),
+                    VmValue::String("<DocumentElement />".into()),
+                ],
+            ),
+        )
+        .unwrap_err();
+    assert_eq!(failure.category, FaultCategory::ResourceLimit);
+    assert_eq!(state, exhausted);
+}
+
+#[test]
+fn data_table_select_keeps_filter_false_but_sort_and_result_contract_are_distinct() {
+    let mut state = StructuredState::default();
+    let mut table = DataTable::new();
+    table.rows.push(DataRow {
+        id: 1,
+        cells: vec![Cell::Null],
+    });
+    table.next_id = 2;
+    state.install_fresh_table("table".into(), table).unwrap();
+    let mut request = column_request(
+        "dt_select",
+        vec![
+            VmValue::String("table".into()),
+            VmValue::String("id=invalid".into()),
+            VmValue::String(String::new()),
+        ],
+    );
+    request.implicit_places.insert(
+        "RESULT".into(),
+        NativePlaceView {
+            argument_index: usize::MAX,
+            target: PlaceDescriptor::default(),
+            values: vec![VmValue::Integer(77), VmValue::Integer(88)],
+        },
+    );
+    let result = state.call("dt_select", &request).unwrap();
+    assert_eq!(result.value, Some(VmValue::Integer(0)));
+    assert_eq!(result.writes[0].value, VmValue::Integer(0));
+    request.arguments[2] = VmValue::String("missing".into());
+    let failure = state.call("dt_select", &request).unwrap_err();
+    assert_eq!(
+        failure.category,
+        FaultCategory::Script(ScriptFaultKind::Argument)
+    );
+    request.arguments[2] = VmValue::String(String::new());
+    request.implicit_places.clear();
+    let failure = state.call("dt_select", &request).unwrap_err();
+    assert_eq!(failure.category, FaultCategory::HostContract);
+}
+
+#[test]
+fn data_table_cell_set_only_converts_script_domain_failures_to_minus_two() {
+    let mut state = table_with_default(DataType::Int8, Cell::Integer(1));
+    state
+        .call(
+            "dt_row_add",
+            &column_request("dt_row_add", vec![VmValue::String("table".into())]),
+        )
+        .unwrap();
+    let mut request = column_request(
+        "dt_cell_set",
+        vec![
+            VmValue::String("table".into()),
+            VmValue::Integer(0),
+            VmValue::String("value".into()),
+            VmValue::Integer(256),
+        ],
+    );
+    let original = state.clone();
+    assert_eq!(
+        state.call("dt_cell_set", &request).unwrap().value,
+        Some(VmValue::Integer(-2))
+    );
+    request.arguments[3] = VmValue::IntegerPlace(Box::default());
+    let failure = state.call("dt_cell_set", &request).unwrap_err();
+    assert_eq!(failure.category, FaultCategory::HostContract);
+    assert_eq!(state, original);
+}

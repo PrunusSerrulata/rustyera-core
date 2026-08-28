@@ -23,6 +23,7 @@ pub enum VmFaultCode {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct VmFault {
+    pub category: crate::FaultCategory,
     pub code: VmFaultCode,
     pub message: String,
     pub fiber: FiberId,
@@ -44,6 +45,8 @@ impl std::error::Error for VmFault {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VmError {
+    /// Classified at the script operation which failed, never from its message.
+    ScriptFailure(crate::ExecutionFailure),
     MissingFunction(SymbolKey),
     InvalidArguments(String),
     ResourceLimit(&'static str),

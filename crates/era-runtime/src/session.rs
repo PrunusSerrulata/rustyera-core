@@ -520,10 +520,18 @@ pub struct RuntimeDriveReport {
 #[derive(Debug)]
 pub enum RuntimeError {
     Protocol(ProtocolError),
-    InvalidSequence { expected: u64, actual: u64 },
+    InvalidSequence {
+        expected: u64,
+        actual: u64,
+    },
     SessionMismatch,
     ResourceLimit(&'static str),
     Busy(&'static str),
+    /// A trusted script domain/read failure; only the Host dispatch boundary catches it.
+    Script {
+        kind: erabasic_vm::ScriptFaultKind,
+        message: String,
+    },
     Internal(String),
 }
 
@@ -536,7 +544,7 @@ impl fmt::Display for RuntimeError {
             }
             Self::SessionMismatch => formatter.write_str("runtime session identity differs"),
             Self::ResourceLimit(message) | Self::Busy(message) => formatter.write_str(message),
-            Self::Internal(message) => formatter.write_str(message),
+            Self::Script { message, .. } | Self::Internal(message) => formatter.write_str(message),
         }
     }
 }

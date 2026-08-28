@@ -73,7 +73,7 @@ enum Unit {
 }
 
 fn invalid_unicode(start: usize, end: usize) -> HtmlQueryError {
-    HtmlQueryError::new(
+    HtmlQueryError::input(
         HtmlQueryErrorKind::InvalidUnicode,
         start,
         end,
@@ -87,7 +87,7 @@ fn decode_unit(
     policy: HtmlQueryEntityPolicy,
 ) -> Result<(Unit, usize), HtmlQueryError> {
     let invalid = |end| {
-        HtmlQueryError::new(
+        HtmlQueryError::input(
             HtmlQueryErrorKind::InvalidEntity,
             cursor,
             end,
@@ -95,7 +95,12 @@ fn decode_unit(
         )
     };
     let Some(character) = source[cursor..].chars().next() else {
-        return Err(invalid_unicode(cursor, cursor));
+        return Err(HtmlQueryError::new(
+            HtmlQueryErrorKind::InvalidUnicode,
+            cursor,
+            cursor,
+            "entity produces an unpaired UTF-16 surrogate",
+        ));
     };
     if character != '&' {
         return Ok((Unit::Scalar(character), cursor + character.len_utf8()));
@@ -154,6 +159,7 @@ pub(in crate::markup) fn decode_for_parser(source: &str, base: usize) -> Result<
         kind: HtmlErrorKind::InvalidEntity,
         start: base + error.range.start,
         end: base + error.range.end,
+        origin: error.origin(),
     })
 }
 
@@ -268,7 +274,7 @@ fn source_events(
                 .find("-->")
                 .map(|end| cursor + 4 + end + 3)
                 .ok_or_else(|| {
-                    HtmlQueryError::new(
+                    HtmlQueryError::input(
                         HtmlQueryErrorKind::InvalidMarkup,
                         cursor,
                         source.len(),
@@ -284,7 +290,7 @@ fn source_events(
             HtmlSourceEventKind::Text
         } else {
             cursor = attributes::find_tag_end(source, cursor).ok_or_else(|| {
-                HtmlQueryError::new(
+                HtmlQueryError::input(
                     HtmlQueryErrorKind::InvalidMarkup,
                     cursor,
                     source.len(),
@@ -375,7 +381,7 @@ fn close_source_element(
 }
 
 fn unsupported(start: usize, end: usize) -> HtmlQueryError {
-    HtmlQueryError::new(
+    HtmlQueryError::input(
         HtmlQueryErrorKind::UnsupportedTag,
         start,
         end,

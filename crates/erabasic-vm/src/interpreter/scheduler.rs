@@ -274,7 +274,7 @@ impl Vm {
                     Err(error) => {
                         self.abort_path_memo(fiber.id);
                         fiber.clear_runtime_forms();
-                        let fault = self.make_fault(fiber.id, &position, error.code, error.message);
+                        let fault = self.make_classified_fault(fiber.id, &position, error);
                         fiber.state = FiberState::Faulted(fault.clone());
                         report.events.push(VmEvent::FiberFaulted {
                             fiber: fiber.id,

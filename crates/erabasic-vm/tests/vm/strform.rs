@@ -80,10 +80,13 @@ impl VmHost for ArchiveFixtureHost {
                 writes: Vec::new(),
             });
         }
-        HostCallResult::Error(format!(
-            "unexpected archive fixture host call: {}",
-            request.import.name
-        ))
+        HostCallResult::Error(
+            format!(
+                "unexpected archive fixture host call: {}",
+                request.import.name
+            )
+            .into(),
+        )
     }
 }
 

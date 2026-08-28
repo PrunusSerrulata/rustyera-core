@@ -52,17 +52,29 @@ impl Vm {
         let rollback = natives
             .checkpoint(key)
             .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
-        let ready = natives
-            .call(
-                key,
-                NativeCallRequest {
-                    import,
-                    arguments,
-                    places,
-                    implicit_places,
-                },
-            )
-            .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
+        let ready = match natives.call(
+            key,
+            NativeCallRequest {
+                import,
+                arguments,
+                places,
+                implicit_places,
+            },
+        ) {
+            Ok(ready) => ready,
+            Err(error) => {
+                if let Some(state) = &rollback {
+                    natives.rollback(key, state).map_err(|failure| {
+                        StepError::classified(
+                            crate::FaultCategory::HostContract,
+                            VmFaultCode::Native,
+                            format!("native rollback failed: {failure}"),
+                        )
+                    })?;
+                }
+                return Err(error);
+            }
+        };
         Ok((ready, rollback))
     }
 
@@ -315,11 +327,21 @@ impl Vm {
         code: VmFaultCode,
         message: impl Into<String>,
     ) -> VmFault {
+        self.make_classified_fault(fiber, position, super::StepError::new(code, message))
+    }
+
+    pub(super) fn make_classified_fault(
+        &self,
+        fiber: FiberId,
+        position: &InstructionPosition<'_>,
+        failure: super::StepError,
+    ) -> VmFault {
         let command = self.command_for_position(position);
         let origin = self.execution_origin(position, &command);
         VmFault {
-            code,
-            message: message.into(),
+            category: failure.category,
+            code: failure.code,
+            message: failure.message,
             fiber,
             generation: position.generation,
             function: position.function,

@@ -127,7 +127,7 @@ pub enum VmHostCompletion {
         stability: HostWaitStability,
         rebind_payload: Vec<u8>,
     },
-    Error(String),
+    Error(crate::ExecutionFailure),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

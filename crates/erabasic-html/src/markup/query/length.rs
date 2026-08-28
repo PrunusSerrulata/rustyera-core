@@ -558,6 +558,9 @@ fn validate_value(
 fn error(kind: HtmlQueryErrorKind, message: &str) -> HtmlQueryError {
     HtmlQueryError::new(kind, 0, 0, message)
 }
+fn input_error(kind: HtmlQueryErrorKind, message: &str) -> HtmlQueryError {
+    HtmlQueryError::input(kind, 0, 0, message)
+}
 fn invalid_measurement() -> HtmlQueryError {
     error(
         HtmlQueryErrorKind::InvalidMeasurement,

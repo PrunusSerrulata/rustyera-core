@@ -756,8 +756,9 @@ impl VmRuntimePort for RuntimeVm {
                 wait.rebind_payload = rebind_payload;
                 Ok(fiber_id)
             }
-            VmHostCompletion::Error(message) => Err(VmError::InvalidState(format!(
-                "host request failed: {message}"
+            VmHostCompletion::Error(failure) => Err(VmError::InvalidState(format!(
+                "host request failed: {}",
+                failure.message
             ))),
         }
     }
@@ -1008,7 +1009,13 @@ fn validate_ready(
                 "host write value type differs".into(),
             ));
         }
-        let _ = vm.read_place(fiber, &write.target)?;
+        let _ = vm.read_place(fiber, &write.target).map_err(|error| {
+            VmError::ScriptFailure(crate::ExecutionFailure::classified(
+                crate::FaultCategory::HostContract,
+                crate::VmFaultCode::Host,
+                error.to_string(),
+            ))
+        })?;
     }
     Ok(())
 }

@@ -1,5 +1,7 @@
 //! Column identities survive calls and snapshots, but never name-based replacement.
 
+use crate::ExecutionFailure;
+use crate::structured::resource_failure;
 use std::collections::BTreeSet;
 
 use super::{Cell, Column, DataTable, DataType, StructuredState};
@@ -18,18 +20,24 @@ impl StructuredState {
         }
     }
 
-    fn planned_identities(&self, count: usize) -> Result<(std::ops::Range<u64>, u64), String> {
-        let count = u64::try_from(count).map_err(|_| "DataTable column count overflowed")?;
+    fn planned_identities(
+        &self,
+        count: usize,
+    ) -> Result<(std::ops::Range<u64>, u64), ExecutionFailure> {
+        let count = u64::try_from(count)
+            .map_err(|_| resource_failure("DataTable column count overflowed"))?;
         let end = self
             .next_column_identity
             .checked_add(count)
-            .ok_or("DataTable column identity overflowed")?;
+            .ok_or_else(|| resource_failure("DataTable column identity overflowed"))?;
         let revision = self
             .column_identity_revision
             .checked_add(1)
-            .ok_or("DataTable column identity revision overflowed")?;
+            .ok_or_else(|| resource_failure("DataTable column identity revision overflowed"))?;
         if end == u64::MAX || revision == u64::MAX {
-            return Err("DataTable column identity allocator exhausted".into());
+            return Err(resource_failure(
+                "DataTable column identity allocator exhausted",
+            ));
         }
         Ok((self.next_column_identity..end, revision))
     }
@@ -38,7 +46,7 @@ impl StructuredState {
         &mut self,
         key: String,
         mut table: DataTable,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionFailure> {
         validate_table(&table)?;
         let (identities, revision) = self.planned_identities(table.columns.len())?;
         let next_identity = identities.end;
@@ -55,7 +63,7 @@ impl StructuredState {
         &mut self,
         key: &str,
         mut column: Column,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionFailure> {
         validate_default(&column)?;
         let (identities, revision) = self.planned_identities(1)?;
         let table = self
@@ -72,7 +80,7 @@ impl StructuredState {
         Ok(())
     }
 
-    pub(super) fn remove_table(&mut self, key: &str) -> Result<(), String> {
+    pub(super) fn remove_table(&mut self, key: &str) -> Result<(), ExecutionFailure> {
         if self.data_tables.contains_key(key) {
             let (_, revision) = self.planned_identities(0)?;
             self.data_tables.remove(key);
@@ -81,7 +89,11 @@ impl StructuredState {
         Ok(())
     }
 
-    pub(super) fn remove_column(&mut self, key: &str, index: usize) -> Result<(), String> {
+    pub(super) fn remove_column(
+        &mut self,
+        key: &str,
+        index: usize,
+    ) -> Result<(), ExecutionFailure> {
         let (_, revision) = self.planned_identities(0)?;
         let table = self
             .data_tables
@@ -112,7 +124,7 @@ impl StructuredState {
             .find(|column| column.identity == identity)
     }
 
-    pub(super) fn validate_identity_state(&self) -> Result<(), String> {
+    pub(super) fn validate_identity_state(&self) -> Result<(), ExecutionFailure> {
         if self.next_column_identity == 0
             || self.next_column_identity == u64::MAX
             || self.column_identity_revision == u64::MAX
@@ -143,12 +155,20 @@ impl StructuredState {
     }
 }
 
-pub(super) fn validate_default(column: &Column) -> Result<(), String> {
-    validate_cell_type(column.value_type, &column.default_value)
-        .map_err(|error| format!("DataTable column {} default: {error}", column.name))
+pub(super) fn validate_default(column: &Column) -> Result<(), ExecutionFailure> {
+    validate_cell_type(column.value_type, &column.default_value).map_err(|mut failure| {
+        failure.message = format!(
+            "DataTable column {} default: {}",
+            column.name, failure.message
+        );
+        failure
+    })
 }
 
-pub(super) fn validate_cell_type(value_type: DataType, cell: &Cell) -> Result<(), String> {
+pub(super) fn validate_cell_type(
+    value_type: DataType,
+    cell: &Cell,
+) -> Result<(), ExecutionFailure> {
     match (value_type, cell) {
         (_, Cell::Null)
         | (DataType::String, Cell::String(_))
@@ -160,7 +180,10 @@ pub(super) fn validate_cell_type(value_type: DataType, cell: &Cell) -> Result<()
     }
 }
 
-pub(super) fn validate_row_cells(table: &DataTable, cells: &[Cell]) -> Result<(), String> {
+pub(super) fn validate_row_cells(
+    table: &DataTable,
+    cells: &[Cell],
+) -> Result<(), ExecutionFailure> {
     if cells.len() != table.columns.len() {
         return Err("DataTable row width differs from its schema".into());
     }
@@ -168,16 +191,13 @@ pub(super) fn validate_row_cells(table: &DataTable, cells: &[Cell]) -> Result<()
     for (column, cell) in table.columns.iter().zip(cells).skip(1) {
         validate_cell_type(column.value_type, cell)?;
         if !column.nullable && matches!(cell, Cell::Null) {
-            return Err(format!(
-                "DataTable row omits non-null column {}",
-                column.name
-            ));
+            return Err(format!("DataTable row omits non-null column {}", column.name).into());
         }
     }
     Ok(())
 }
 
-pub(super) fn validate_table(table: &DataTable) -> Result<(), String> {
+pub(super) fn validate_table(table: &DataTable) -> Result<(), ExecutionFailure> {
     if !table.columns.first().is_some_and(|column| {
         column.name == "id" && column.value_type == DataType::Int64 && !column.nullable
     }) {

@@ -17,12 +17,12 @@ pub use markup::{
     HtmlLengthImageResolution, HtmlLengthMeasuredValue, HtmlLengthMeasurement, HtmlLengthProbe,
     HtmlLengthProbeKind, HtmlLinesPoll, HtmlMappedDocument, HtmlMappedText, HtmlNode,
     HtmlOutputOrigin, HtmlOutputPiece, HtmlQueryEntityPolicy, HtmlQueryError, HtmlQueryErrorKind,
-    HtmlQueryLimits, HtmlQueryProbe, HtmlQueryProbeKind, HtmlScalarBoundary, HtmlSourceEvent,
-    HtmlSourceEventKind, HtmlSourceRange, HtmlStringLengthPlan, HtmlStringLengthPoll,
-    HtmlStringLengthResult, HtmlStringLengthSettings, HtmlStringLinesPlan, HtmlSubstringPlan,
-    HtmlSubstringPoll, HtmlSubstringResult, HtmlWarning, HtmlWarningKind, decode_query_entities,
-    html_string_length_units, parse_document, parse_document_with_source_map,
-    parse_document_with_warnings, serialize_document,
+    HtmlQueryErrorOrigin, HtmlQueryLimits, HtmlQueryProbe, HtmlQueryProbeKind, HtmlScalarBoundary,
+    HtmlSourceEvent, HtmlSourceEventKind, HtmlSourceRange, HtmlStringLengthPlan,
+    HtmlStringLengthPoll, HtmlStringLengthResult, HtmlStringLengthSettings, HtmlStringLinesPlan,
+    HtmlSubstringPlan, HtmlSubstringPoll, HtmlSubstringResult, HtmlWarning, HtmlWarningKind,
+    decode_query_entities, html_string_length_units, parse_document,
+    parse_document_with_source_map, parse_document_with_warnings, serialize_document,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

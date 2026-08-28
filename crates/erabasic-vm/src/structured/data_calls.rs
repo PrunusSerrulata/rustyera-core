@@ -1,5 +1,7 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use crate::ExecutionFailure;
+use crate::structured::{argument_failure, resource_failure};
 
 impl StructuredState {
     #[allow(clippy::too_many_lines)]
@@ -7,7 +9,7 @@ impl StructuredState {
         &mut self,
         name: &str,
         request: &NativeCallRequest,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
         let key = string_argument(request, 0)?.to_owned();
         match name {
             "dt_create" => {
@@ -73,9 +75,9 @@ impl StructuredState {
                     return ready_integer(0);
                 }
                 if !nullable && !table.rows.is_empty() {
-                    return Err(
-                        "DT_COLUMN_ADD non-null column has no default for existing rows".into(),
-                    );
+                    return Err(argument_failure(
+                        "DT_COLUMN_ADD non-null column has no default for existing rows",
+                    ));
                 }
                 self.append_fresh_column(
                     &key,
@@ -169,7 +171,9 @@ impl StructuredState {
                         Cell::Integer(value) => value,
                         Cell::Null => 0,
                         Cell::String(_) => {
-                            return Err("DT_CELL_GET cannot read a string column".into());
+                            return Err(argument_failure(
+                                "DT_CELL_GET cannot read a string column",
+                            ));
                         }
                     }),
                     "dt_cell_gets" => Ok(NativeReady::value(VmValue::String(match cell {
@@ -184,7 +188,7 @@ impl StructuredState {
             "dt_select" => self.data_table_select(&key, request),
             "dt_toxml" => self.data_table_to_xml(&key, request),
             "dt_fromxml" => self.data_table_from_xml(&key, request),
-            _ => Err(format!("unsupported data-table native {name}")),
+            _ => Err(format!("unsupported data-table native {name}").into()),
         }
     }
 
@@ -192,7 +196,7 @@ impl StructuredState {
         &mut self,
         key: &str,
         request: &NativeCallRequest,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
         let Some(table) = self.data_tables.get(key) else {
             return ready_integer(-1);
         };
@@ -200,7 +204,7 @@ impl StructuredState {
         let next_id = table
             .next_id
             .checked_add(1)
-            .ok_or_else(|| "DT_ROW_ADD deterministic row id overflowed".to_owned())?;
+            .ok_or_else(|| resource_failure("DT_ROW_ADD deterministic row id overflowed"))?;
         let mut row = DataRow {
             id,
             cells: table
@@ -211,16 +215,16 @@ impl StructuredState {
         };
         let pairs = data_table_pairs(request, 1)?;
         for (name, value) in pairs {
-            let column = table
-                .column(&name)
-                .ok_or_else(|| format!("DT_ROW_ADD table {key} has no column {name}"))?;
+            let column = table.column(&name).ok_or_else(|| {
+                argument_failure(format!("DT_ROW_ADD table {key} has no column {name}"))
+            })?;
             if column == 0 {
-                return Err("DT_ROW_ADD cannot edit the id column".into());
+                return Err(argument_failure("DT_ROW_ADD cannot edit the id column"));
             }
             row.cells[column] = cell_for_column(&table.columns[column], &value)?;
         }
         row.cells[0] = Cell::Null;
-        super::column_identity::validate_row_cells(table, &row.cells)?;
+        validate_script_row_cells(table, &row.cells)?;
         let table = self
             .data_tables
             .get_mut(key)
@@ -234,7 +238,7 @@ impl StructuredState {
         &mut self,
         key: &str,
         request: &NativeCallRequest,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
         let Some(table) = self.data_tables.get_mut(key) else {
             return ready_integer(-1);
         };
@@ -245,11 +249,11 @@ impl StructuredState {
         let pairs = data_table_pairs(request, 2)?;
         let mut changes = Vec::with_capacity(pairs.len());
         for (name, value) in pairs {
-            let column = table
-                .column(&name)
-                .ok_or_else(|| format!("DT_ROW_SET table {key} has no column {name}"))?;
+            let column = table.column(&name).ok_or_else(|| {
+                argument_failure(format!("DT_ROW_SET table {key} has no column {name}"))
+            })?;
             if column == 0 {
-                return Err("DT_ROW_SET cannot edit the id column".into());
+                return Err(argument_failure("DT_ROW_SET cannot edit the id column"));
             }
             changes.push((column, cell_for_column(&table.columns[column], &value)?));
         }
@@ -258,7 +262,7 @@ impl StructuredState {
         for (column, value) in changes {
             cells[column] = value;
         }
-        super::column_identity::validate_row_cells(table, &cells)?;
+        validate_script_row_cells(table, &cells)?;
         table.rows[row_index].cells = cells;
         ready_integer(i64::try_from(count).unwrap_or(i64::MAX))
     }
@@ -267,7 +271,7 @@ impl StructuredState {
         &mut self,
         key: &str,
         request: &NativeCallRequest,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
         let Some(table) = self.data_tables.get_mut(key) else {
             return ready_integer(-1);
         };
@@ -302,7 +306,7 @@ impl StructuredState {
         &mut self,
         key: &str,
         request: &NativeCallRequest,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
         let Some(table) = self.data_tables.get_mut(key) else {
             return ready_integer(-1);
         };
@@ -319,8 +323,10 @@ impl StructuredState {
         let value = request.arguments.get(3).map_or(Ok(Cell::Null), |value| {
             cell_for_column(&table.columns[column], value)
         });
-        let Ok(value) = value else {
-            return ready_integer(-2);
+        let value = match value {
+            Ok(value) => value,
+            Err(failure) if failure.is_script() => return ready_integer(-2),
+            Err(failure) => return Err(failure),
         };
         if !table.columns[column].nullable && matches!(value, Cell::Null) {
             return ready_integer(-2);
@@ -333,19 +339,26 @@ impl StructuredState {
         &self,
         key: &str,
         request: &NativeCallRequest,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
         let Some(table) = self.data_tables.get(key) else {
             return ready_integer(-1);
         };
         let filter = optional_string(request, 1);
         let sort = optional_string(request, 2);
-        let mut rows = table
-            .rows
-            .iter()
-            .filter(|row| {
-                filter.is_none_or(|filter| row_matches(table, row, filter).unwrap_or(false))
-            })
-            .collect::<Vec<_>>();
+        let mut rows = Vec::new();
+        for row in &table.rows {
+            let matches = match filter {
+                None => true,
+                Some(filter) => match row_matches(table, row, filter) {
+                    Ok(value) => value,
+                    Err(failure) if failure.is_script() => false,
+                    Err(failure) => return Err(failure),
+                },
+            };
+            if matches {
+                rows.push(row);
+            }
+        }
         if let Some(sort) = sort.filter(|value| !value.trim().is_empty()) {
             sort_rows(table, &mut rows, sort)?;
         }
@@ -381,7 +394,7 @@ impl StructuredState {
         &self,
         key: &str,
         request: &NativeCallRequest,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
         let Some(table) = self.data_tables.get(key) else {
             return Ok(NativeReady::value(VmValue::String(String::new())));
         };
@@ -403,12 +416,16 @@ impl StructuredState {
         &mut self,
         key: &str,
         request: &NativeCallRequest,
-    ) -> Result<NativeReady, String> {
-        let Ok(schema) = parse_data_table_schema(key, string_argument(request, 1)?) else {
-            return ready_integer(0);
+    ) -> Result<NativeReady, ExecutionFailure> {
+        let schema = match parse_data_table_schema(key, string_argument(request, 1)?) {
+            Ok(value) => value,
+            Err(failure) if failure.is_script() => return ready_integer(0),
+            Err(failure) => return Err(failure),
         };
-        let Ok(mut table) = parse_data_table_xml(key, &schema, string_argument(request, 2)?) else {
-            return ready_integer(0);
+        let mut table = match parse_data_table_xml(key, &schema, string_argument(request, 2)?) {
+            Ok(value) => value,
+            Err(failure) if failure.is_script() => return ready_integer(0),
+            Err(failure) => return Err(failure),
         };
         table.next_id = table
             .rows
@@ -417,8 +434,26 @@ impl StructuredState {
             .max()
             .unwrap_or(0)
             .checked_add(1)
-            .ok_or_else(|| "DT_FROMXML row id overflowed".to_owned())?;
+            .ok_or_else(|| resource_failure("DT_FROMXML row id overflowed"))?;
         self.install_fresh_table(key.to_owned(), table)?;
         ready_integer(1)
     }
+}
+
+// Only a row assembled from script operands may report a missing required value.
+// Shared table validation stays a contract check for import and identity state.
+fn validate_script_row_cells(table: &DataTable, cells: &[Cell]) -> Result<(), ExecutionFailure> {
+    if cells.len() != table.columns.len() {
+        return super::column_identity::validate_row_cells(table, cells);
+    }
+    for (column, cell) in table.columns.iter().zip(cells).skip(1) {
+        super::column_identity::validate_cell_type(column.value_type, cell)?;
+        if !column.nullable && matches!(cell, Cell::Null) {
+            return Err(argument_failure(format!(
+                "DataTable row omits non-null column {}",
+                column.name
+            )));
+        }
+    }
+    Ok(())
 }

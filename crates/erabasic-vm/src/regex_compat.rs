@@ -6,12 +6,15 @@ const MAXIMUM_CACHED_PATTERNS: usize = 128;
 
 #[derive(Clone, Default)]
 pub(crate) struct RegexCache {
-    entries: HashMap<String, Result<Regex, String>>,
+    entries: HashMap<String, Result<Regex, crate::ExecutionFailure>>,
     insertion_order: VecDeque<String>,
 }
 
 impl RegexCache {
-    pub(crate) fn get_or_compile(&mut self, pattern: &str) -> Result<Regex, String> {
+    pub(crate) fn get_or_compile(
+        &mut self,
+        pattern: &str,
+    ) -> Result<Regex, crate::ExecutionFailure> {
         if let Some(cached) = self.entries.get(pattern) {
             return cached.clone();
         }
@@ -33,10 +36,26 @@ impl RegexCache {
 /// engine interprets differently would be worse than a stable runtime error, so constructs
 /// with backtracking-dependent semantics are rejected before compilation. Named captures use
 /// the only common spelling that needs a mechanical translation.
-pub(crate) fn compile(pattern: &str) -> Result<Regex, String> {
-    reject_unsupported(pattern)?;
-    let translated = translate_named_captures(pattern)?;
-    Regex::new(&translated).map_err(|error| format!("unsupported or invalid regex: {error}"))
+pub(crate) fn compile(pattern: &str) -> Result<Regex, crate::ExecutionFailure> {
+    reject_unsupported(pattern).map_err(script_regex_error)?;
+    let translated = translate_named_captures(pattern).map_err(script_regex_error)?;
+    Regex::new(&translated).map_err(|error| {
+        let message = format!("unsupported or invalid regex: {error}");
+        match error {
+            regex::Error::CompiledTooBig(_) => {
+                crate::ExecutionFailure::new(crate::VmFaultCode::ResourceLimit, message)
+            }
+            _ => script_regex_error(message),
+        }
+    })
+}
+
+fn script_regex_error(message: String) -> crate::ExecutionFailure {
+    crate::ExecutionFailure::script(
+        crate::ScriptFaultKind::Parse,
+        crate::VmFaultCode::TypeMismatch,
+        message,
+    )
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -54,15 +73,14 @@ pub(crate) struct PositiveBoundaryCaptures {
 pub(crate) fn capture_positive_boundaries(
     pattern: &str,
     input: &str,
-) -> Result<Option<PositiveBoundaryCaptures>, String> {
+) -> Result<Option<PositiveBoundaryCaptures>, crate::ExecutionFailure> {
     let Some((prefix, body, suffix)) = split_positive_boundaries(pattern) else {
         return Ok(None);
     };
     if contains_capturing_group(prefix) || contains_capturing_group(suffix) {
-        return Err(
-            "captures inside REGEXPMATCH positive boundaries are not supported by the portable subset"
-                .into(),
-        );
+        return Err(script_regex_error(
+            "captures inside REGEXPMATCH positive boundaries are not supported by the portable subset".into(),
+        ));
     }
     let prefix = compile(prefix)?;
     let tail = compile(&format!("^({body})(?:{suffix})"))?;
@@ -323,7 +341,11 @@ fn translate_named_captures(pattern: &str) -> Result<String, String> {
     let mut in_class = false;
     while index < bytes.len() {
         if bytes[index] == b'\\' {
-            let end = (index + 2).min(bytes.len());
+            let escaped = pattern[index + 1..]
+                .chars()
+                .next()
+                .map_or(0, char::len_utf8);
+            let end = index + 1 + escaped;
             result.push_str(&pattern[index..end]);
             index = end;
             continue;
@@ -366,6 +388,25 @@ fn translate_named_captures(pattern: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regex_failure_classification_survives_cache_and_unicode_translation() {
+        let mut cache = RegexCache::default();
+        let invalid = cache.get_or_compile("[").unwrap_err();
+        assert_eq!(
+            invalid.category,
+            crate::FaultCategory::Script(crate::ScriptFaultKind::Parse)
+        );
+        assert_eq!(cache.get_or_compile("[").unwrap_err(), invalid);
+        assert_eq!(translate_named_captures(r"\你").unwrap(), r"\你");
+        assert!(compile(r"\你").unwrap_err().is_script());
+        let too_large = cache.get_or_compile("a{1000000000}").unwrap_err();
+        assert_eq!(too_large.category, crate::FaultCategory::ResourceLimit);
+        assert_eq!(
+            cache.get_or_compile("a{1000000000}").unwrap_err(),
+            too_large
+        );
+    }
 
     #[test]
     fn translates_dotnet_named_groups() {

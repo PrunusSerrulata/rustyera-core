@@ -399,3 +399,38 @@ fn public_vm_value_stays_small_enough_for_transient_stacks() {
     assert_eq!(std::mem::size_of::<VmValue>(), 24);
     assert_eq!(std::mem::size_of::<i64>(), 8);
 }
+
+#[test]
+fn execution_index_failures_distinguish_script_bounds_from_bad_storage() {
+    let mut cell = VariableCell::new(&global(BytecodeType::Integer, vec![2]));
+    cell.write(&[1], VmValue::Integer(31)).unwrap();
+    let prior = cell.clone();
+    let failure = cell.write_execution(&[2], VmValue::Integer(9)).unwrap_err();
+    assert_eq!(
+        failure.category,
+        crate::FaultCategory::Script(crate::ScriptFaultKind::Bounds)
+    );
+    assert_eq!(cell, prior);
+    assert!(cell.read_execution(&[0, 0]).unwrap_err().is_script());
+    assert!(
+        !cell
+            .write_execution(&[0], VmValue::String("wrong physical type".into()))
+            .unwrap_err()
+            .is_script()
+    );
+    assert_eq!(cell, prior);
+
+    // A forged declared shape is not a script request to access an absent element.
+    cell.dimensions = vec![3];
+    let broken = cell.read_execution(&[2]).unwrap_err();
+    assert_eq!(broken.category, crate::FaultCategory::InternalInvariant);
+    assert_eq!(broken.code, crate::VmFaultCode::InvalidInstruction);
+    assert_eq!(failure.code, crate::VmFaultCode::Bounds);
+}
+
+#[test]
+fn execution_index_offset_overflow_is_a_resource_failure() {
+    let failure = flatten_execution(&[u64::MAX, u64::MAX], &[2, 1]).unwrap_err();
+    assert_eq!(failure.category, crate::FaultCategory::ResourceLimit);
+    assert!(!failure.is_script());
+}

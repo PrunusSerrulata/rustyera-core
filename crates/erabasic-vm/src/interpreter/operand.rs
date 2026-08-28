@@ -117,7 +117,11 @@ pub(super) fn pop_indices(
             ));
         };
         let value = u64::try_from(value).map_err(|_| {
-            StepError::new(VmFaultCode::Bounds, "variable index cannot be negative")
+            StepError::script(
+                crate::ScriptFaultKind::Bounds,
+                VmFaultCode::Bounds,
+                "variable index cannot be negative",
+            )
         })?;
         if count <= indices.inline.len() {
             indices.inline[index] = value;
@@ -175,7 +179,8 @@ pub(super) fn binary_value(
             let value = match operation {
                 0 => left.wrapping_mul(right),
                 1 => left.checked_div(right).ok_or_else(|| {
-                    StepError::new(
+                    StepError::script(
+                        crate::ScriptFaultKind::Arithmetic,
                         if right == 0 {
                             VmFaultCode::DivideByZero
                         } else {
@@ -185,7 +190,11 @@ pub(super) fn binary_value(
                     )
                 })?,
                 2 => left.checked_rem(right).ok_or_else(|| {
-                    StepError::new(VmFaultCode::DivideByZero, "integer remainder failed")
+                    StepError::script(
+                        crate::ScriptFaultKind::Arithmetic,
+                        VmFaultCode::DivideByZero,
+                        "integer remainder failed",
+                    )
                 })?,
                 3 => left.wrapping_add(right),
                 4 => left.wrapping_sub(right),
@@ -234,7 +243,8 @@ pub(super) fn binary_value(
             if operation == 0 =>
         {
             if !(0..10_000).contains(&count) {
-                return Err(StepError::new(
+                return Err(StepError::script(
+                    crate::ScriptFaultKind::Argument,
                     VmFaultCode::InvalidInstruction,
                     "string repeat count must be between 0 and 9999",
                 ));
@@ -273,6 +283,9 @@ pub(super) fn assign_binary_tag(operation: u8) -> Result<u8, StepError> {
 
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn map_vm_error(error: VmError) -> StepError {
+    if let VmError::ScriptFailure(failure) = error {
+        return failure;
+    }
     let code = match error {
         VmError::InvalidArguments(_) => VmFaultCode::TypeMismatch,
         VmError::ResourceLimit(_) => VmFaultCode::ResourceLimit,

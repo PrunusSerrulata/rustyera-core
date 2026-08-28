@@ -11,7 +11,10 @@ use crate::memory::SymbolKeyHasher;
 use crate::sfmt::Sfmt19937;
 use crate::structured::{ColumnIdentityStamp, StructuredExtension, StructuredScope};
 use crate::structured::{StructuredNative, StructuredState, bundle_key, is_structured_name};
-use crate::{FiberId, HostRequestId, HostWrite, PlaceDescriptor, VmExecutionOrigin, VmValue};
+use crate::{
+    ExecutionFailure, FaultCategory, FiberId, HostRequestId, HostWrite, PlaceDescriptor,
+    ScriptFaultKind, VmExecutionOrigin, VmFaultCode, VmValue,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -72,7 +75,7 @@ pub enum HostCallResult {
         stability: HostWaitStability,
         rebind_payload: Vec<u8>,
     },
-    Error(String),
+    Error(ExecutionFailure),
     /// Runtime-port adapter sentinel. Unlike `Pending`, this only unwinds the
     /// interpreter; the runtime must immediately classify the captured request.
     Deferred,
@@ -161,7 +164,7 @@ pub trait NativeService: Send {
     /// # Errors
     ///
     /// Returns an error when the service rejects the request or cannot produce a result.
-    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String>;
+    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, ExecutionFailure>;
 
     /// Whether the interpreter must snapshot this service before invoking it.
     /// Services may opt out only when calls validate all fallible work before
@@ -370,10 +373,12 @@ impl NativeServiceRegistry {
         &mut self,
         key: SymbolKey,
         request: NativeCallRequest,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
         self.services
             .get_mut(&key)
-            .ok_or_else(|| format!("native service {key:?} is not registered"))?
+            .ok_or_else(|| {
+                native_contract_failure(format!("native service {key:?} is not registered"))
+            })?
             .call(request)
     }
 
@@ -513,13 +518,34 @@ impl NativeServiceRegistry {
     }
 
     pub(crate) fn set_random_values(&mut self, values: &[i64]) -> Result<(), String> {
-        let candidate = Sfmt19937::from_era_values(values)?;
+        self.set_random_values_execution(values)
+            .map_err(|error| error.message)
+    }
+
+    pub(crate) fn set_random_values_execution(
+        &mut self,
+        values: &[i64],
+    ) -> Result<(), crate::ExecutionFailure> {
+        let candidate = Sfmt19937::from_era_values(values).map_err(|message| {
+            crate::ExecutionFailure::script(
+                crate::ScriptFaultKind::Argument,
+                crate::VmFaultCode::Native,
+                message,
+            )
+        })?;
+        let internal = |message: &str| {
+            crate::ExecutionFailure::classified(
+                crate::FaultCategory::InternalInvariant,
+                crate::VmFaultCode::Native,
+                message,
+            )
+        };
         let mut state = self
             .random
             .as_ref()
-            .ok_or_else(|| "random native service is not registered".to_owned())?
+            .ok_or_else(|| internal("random native service is not registered"))?
             .lock()
-            .map_err(|_| "SFMT state lock is poisoned".to_owned())?;
+            .map_err(|_| internal("SFMT state lock is poisoned"))?;
         *state = candidate;
         Ok(())
     }
@@ -632,3 +658,17 @@ use services::apply_width;
 #[cfg(test)]
 pub(crate) use services::apply_width_with_mode;
 use services::{CompilerNative, RandomNative};
+
+// Native execution keeps the historical Native fault code. These source constructors choose
+// catchability explicitly; no caller infers it from a message or the old broad fault code.
+pub(crate) fn native_contract_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::classified(FaultCategory::HostContract, VmFaultCode::Native, message)
+}
+
+fn native_script_failure(kind: ScriptFaultKind, message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::script(kind, VmFaultCode::Native, message)
+}
+
+fn native_resource_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::classified(FaultCategory::ResourceLimit, VmFaultCode::Native, message)
+}

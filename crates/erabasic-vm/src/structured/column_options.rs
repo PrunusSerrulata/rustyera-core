@@ -1,5 +1,7 @@
 //! Private staged DEFAULT calls. Tickets never re-resolve a user-visible name.
 
+use crate::ExecutionFailure;
+use crate::structured::argument_failure;
 use erabasic_bytecode::{BytecodeType, NATIVE_ABI_VERSION};
 
 use super::data_table::{
@@ -34,7 +36,7 @@ impl ColumnTicket {
         )
     }
 
-    fn decode(value: &str, next_identity: u64) -> Result<Self, String> {
+    fn decode(value: &str, next_identity: u64) -> Result<Self, ExecutionFailure> {
         let bytes = value.as_bytes();
         if bytes.len() != 23
             || !bytes.starts_with(b"dtc1:")
@@ -63,7 +65,7 @@ impl StructuredState {
         &mut self,
         name: &str,
         request: &NativeCallRequest,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
         validate_request(name, request)?;
         if name == "dt__column_resolve" {
             return self.resolve_column_option(request);
@@ -71,7 +73,9 @@ impl StructuredState {
         let ticket = ColumnTicket::decode(string_argument(request, 0)?, self.next_column_identity)?;
         let expects_string = name.ends_with("_str");
         if expects_string != (ticket.value_type == DataType::String) {
-            return Err("DT_COLUMN_OPTIONS DEFAULT value type differs from selected column".into());
+            return Err(argument_failure(
+                "DT_COLUMN_OPTIONS DEFAULT value type differs from selected column",
+            ));
         }
         if self
             .find_column_identity(ticket.identity)
@@ -90,7 +94,10 @@ impl StructuredState {
         Ok(NativeReady::default())
     }
 
-    fn resolve_column_option(&self, request: &NativeCallRequest) -> Result<NativeReady, String> {
+    fn resolve_column_option(
+        &self,
+        request: &NativeCallRequest,
+    ) -> Result<NativeReady, ExecutionFailure> {
         let column_name = string_argument(request, 0)?;
         let table_name = string_argument(request, 1)?;
         let result = if let Some(table) = self.data_tables.get(table_name) {
@@ -122,14 +129,14 @@ impl StructuredState {
     }
 }
 
-fn validate_request(name: &str, request: &NativeCallRequest) -> Result<(), String> {
+fn validate_request(name: &str, request: &NativeCallRequest) -> Result<(), ExecutionFailure> {
     use BytecodeType::{Integer, String as Text};
     let (parameters, result): (&[BytecodeType], Option<BytecodeType>) = match name {
         "dt__column_resolve" => (&[Text, Text], Some(Text)),
         "dt__column_check_int" | "dt__column_check_str" => (&[Text], None),
         "dt__column_apply_int" => (&[Text, Integer], None),
         "dt__column_apply_str" => (&[Text, Text], None),
-        _ => return Err(format!("unknown private column native {name}")),
+        _ => return Err(format!("unknown private column native {name}").into()),
     };
     let import = &request.import;
     if import.namespace != "rustyera.vm"
@@ -150,13 +157,13 @@ fn validate_request(name: &str, request: &NativeCallRequest) -> Result<(), Strin
     Ok(())
 }
 
-fn default_value(value_type: DataType, value: &VmValue) -> Result<Cell, String> {
+fn default_value(value_type: DataType, value: &VmValue) -> Result<Cell, ExecutionFailure> {
     match (value_type, value) {
         (DataType::String, VmValue::String(value)) => Ok(Cell::String(value.clone())),
         (DataType::String, _)
-        | (_, VmValue::String(_) | VmValue::IntegerPlace(_) | VmValue::StringPlace(_)) => {
-            Err("DT_COLUMN_OPTIONS DEFAULT value type differs from selected column".into())
-        }
+        | (_, VmValue::String(_) | VmValue::IntegerPlace(_) | VmValue::StringPlace(_)) => Err(
+            argument_failure("DT_COLUMN_OPTIONS DEFAULT value type differs from selected column"),
+        ),
         (_, VmValue::Integer(value)) => Ok(Cell::Integer(match value_type {
             DataType::Int8 => (*value).clamp(i64::from(i8::MIN), i64::from(i8::MAX)),
             DataType::Int16 => (*value).clamp(i64::from(i16::MIN), i64::from(i16::MAX)),

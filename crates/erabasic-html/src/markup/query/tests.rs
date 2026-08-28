@@ -370,3 +370,32 @@ fn limits_bound_depth_outputs_measurements_lines_and_cumulative_redecoding() {
         HtmlQueryErrorKind::ResourceLimit
     );
 }
+
+#[test]
+fn query_resource_limits_and_measurement_contracts_never_gain_input_origin() {
+    let limits = HtmlQueryLimits {
+        maximum_source_bytes: 0,
+        ..HtmlQueryLimits::default()
+    };
+    let resource = HtmlSubstringPlan::new("x", 1, limits).unwrap_err();
+    assert_eq!(resource.kind, HtmlQueryErrorKind::ResourceLimit);
+    assert_eq!(resource.origin(), HtmlQueryErrorOrigin::NonScript);
+    let mut plan = HtmlSubstringPlan::new("x", 1, HtmlQueryLimits::default()).unwrap();
+    let measurement = plan.resume(42, 1).unwrap_err();
+    assert_eq!(measurement.kind, HtmlQueryErrorKind::InvalidMeasurement);
+    assert_eq!(measurement.origin(), HtmlQueryErrorOrigin::NonScript);
+}
+
+#[test]
+fn parser_entity_bridge_preserves_non_script_origin() {
+    let non_script = HtmlQueryError::new(HtmlQueryErrorKind::ResourceLimit, 0, 1, "bounded input");
+    let ordinary = HtmlError {
+        kind: super::super::HtmlErrorKind::InvalidEntity,
+        start: non_script.range.start,
+        end: non_script.range.end,
+        origin: non_script.origin(),
+    };
+    let bridged = HtmlQueryError::markup(&ordinary);
+    assert_eq!(bridged.kind, HtmlQueryErrorKind::InvalidEntity);
+    assert_eq!(bridged.origin(), HtmlQueryErrorOrigin::NonScript);
+}

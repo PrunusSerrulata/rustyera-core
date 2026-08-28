@@ -3,8 +3,8 @@
 pub(super) use erabasic_html::html_string_length_units as reference_length_unit;
 use erabasic_html::{
     HtmlLengthMeasurement, HtmlLengthProbe, HtmlQueryError, HtmlQueryErrorKind, HtmlQueryLimits,
-    HtmlSourceRange, HtmlStringLengthPlan, HtmlStringLengthPoll, HtmlStringLengthSettings,
-    HtmlSubstringPlan, HtmlSubstringPoll, HtmlSubstringResult,
+    HtmlStringLengthPlan, HtmlStringLengthPoll, HtmlStringLengthSettings, HtmlSubstringPlan,
+    HtmlSubstringPoll, HtmlSubstringResult,
 };
 use serde::{Deserialize, Serialize};
 
@@ -58,11 +58,8 @@ pub(super) fn limits() -> HtmlQueryLimits {
 }
 
 pub(super) fn failure(kind: HtmlQueryErrorKind, message: &str) -> HtmlQueryError {
-    HtmlQueryError {
-        kind,
-        range: HtmlSourceRange::default(),
-        message: message.into(),
-    }
+    // Runtime/provider/owned-state failures are never promoted by diagnostic kind.
+    HtmlQueryError::new(kind, 0, 0, message)
 }
 
 impl QueryBudget {

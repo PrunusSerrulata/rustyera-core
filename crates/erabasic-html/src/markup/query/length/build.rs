@@ -3,7 +3,7 @@ use super::super::{HtmlMappedText, HtmlScalarBoundary};
 use super::{
     Button, Entry, HtmlAlignment, HtmlDocument, HtmlLengthCut, HtmlLengthProbe,
     HtmlLengthProbeKind, HtmlMappedDocument, HtmlQueryError, HtmlQueryErrorKind, HtmlQueryLimits,
-    HtmlSourceRange, HtmlStringLengthSettings, Layout, Part, PartKind, error, geometry,
+    HtmlSourceRange, HtmlStringLengthSettings, Layout, Part, PartKind, geometry, input_error,
     invalid_measurement, resource_limit,
 };
 use std::collections::BTreeMap;
@@ -181,7 +181,7 @@ impl<'a> Builder<'a> {
                 && button.position.is_some()
                 && (!state.layout.no_break || state.layout.alignment != HtmlAlignment::Left)
             {
-                return Err(error(
+                return Err(input_error(
                     HtmlQueryErrorKind::InvalidMarkup,
                     "HTML pos requires nobr and left alignment",
                 ));
@@ -300,7 +300,7 @@ impl<'a> Builder<'a> {
             }
             HtmlElementSemantic::NoBreak => {
                 if !state.line_head || state.layout.no_break {
-                    return Err(error(
+                    return Err(input_error(
                         HtmlQueryErrorKind::InvalidMarkup,
                         "nobr is not at the initial line head",
                     ));
@@ -350,7 +350,7 @@ impl<'a> Builder<'a> {
         state: &mut State,
     ) -> Result<(), HtmlQueryError> {
         if !state.line_head || state.layout.no_break || state.paragraph != ParagraphState::Unseen {
-            return Err(error(
+            return Err(input_error(
                 HtmlQueryErrorKind::InvalidMarkup,
                 "p is not at the initial line head",
             ));
@@ -401,7 +401,7 @@ impl<'a> Builder<'a> {
             return Err(invalid_measurement());
         };
         if state.button.is_some() || style.flags != 0 || style.font_depth != 0 {
-            return Err(error(
+            return Err(input_error(
                 HtmlQueryErrorKind::InvalidMarkup,
                 "division begins inside an unclosed button/font/style",
             ));
@@ -568,7 +568,7 @@ impl<'a> Builder<'a> {
             .is_some_and(|source| finish.source_byte == source.len())
             && (state.paragraph == ParagraphState::Closed || state.nobr_closed)
         {
-            return Err(error(
+            return Err(input_error(
                 HtmlQueryErrorKind::InvalidMarkup,
                 "text follows a closed p/nobr scope",
             ));
@@ -687,7 +687,7 @@ fn inline_style<'a>(
                 _ => return Err(invalid_measurement()),
             };
             if style.flags & bit != 0 {
-                return Err(error(
+                return Err(input_error(
                     HtmlQueryErrorKind::InvalidMarkup,
                     "duplicate inline style",
                 ));

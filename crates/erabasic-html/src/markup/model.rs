@@ -291,11 +291,43 @@ pub enum HtmlErrorKind {
     InvalidNesting,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct HtmlError {
     pub kind: HtmlErrorKind,
     pub start: usize,
     pub end: usize,
+    pub(crate) origin: super::query::HtmlQueryErrorOrigin,
+}
+
+// Provenance is routing metadata, not a change to existing debug diagnostics.
+#[allow(clippy::missing_fields_in_debug)] // Preserve existing public diagnostic text.
+impl std::fmt::Debug for HtmlError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HtmlError")
+            .field("kind", &self.kind)
+            .field("start", &self.start)
+            .field("end", &self.end)
+            .finish()
+    }
+}
+
+impl HtmlError {
+    /// Unclassified callers cannot assert trusted source-input provenance.
+    #[must_use]
+    pub const fn new(kind: HtmlErrorKind, start: usize, end: usize) -> Self {
+        Self {
+            kind,
+            start,
+            end,
+            origin: super::query::HtmlQueryErrorOrigin::NonScript,
+        }
+    }
+
+    #[must_use]
+    pub const fn origin(&self) -> super::query::HtmlQueryErrorOrigin {
+        self.origin
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

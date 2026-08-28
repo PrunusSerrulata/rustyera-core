@@ -126,5 +126,10 @@ fn parse_attributes_inner(
 }
 
 pub(super) const fn error(kind: HtmlErrorKind, start: usize, end: usize) -> HtmlError {
-    HtmlError { kind, start, end }
+    HtmlError {
+        kind,
+        start,
+        end,
+        origin: super::query::HtmlQueryErrorOrigin::ScriptInput,
+    }
 }

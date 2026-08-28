@@ -174,16 +174,41 @@ impl VariableCell {
 
     #[inline]
     pub fn read(&self, indices: &[u64]) -> Result<VmValue, String> {
-        let offset = flatten(&self.dimensions, indices)?;
-        self.values
-            .get(offset)
-            .ok_or_else(|| "variable offset is outside its storage".into())
+        self.read_execution(indices).map_err(|error| error.message)
+    }
+
+    /// Script indices are classified at the indexing operation; a mismatch between
+    /// the declared shape and physical storage is still an internal failure.
+    #[inline]
+    pub(crate) fn read_execution(
+        &self,
+        indices: &[u64],
+    ) -> Result<VmValue, crate::ExecutionFailure> {
+        let offset = flatten_execution(&self.dimensions, indices)?;
+        self.values.get(offset).ok_or_else(|| {
+            crate::ExecutionFailure::new(
+                crate::VmFaultCode::InvalidInstruction,
+                "variable offset is outside its storage",
+            )
+        })
     }
 
     #[inline]
     pub fn write(&mut self, indices: &[u64], value: VmValue) -> Result<(), String> {
-        let offset = flatten(&self.dimensions, indices)?;
-        self.values.set(offset, value)?;
+        self.write_execution(indices, value)
+            .map_err(|error| error.message)
+    }
+
+    #[inline]
+    pub(crate) fn write_execution(
+        &mut self,
+        indices: &[u64],
+        value: VmValue,
+    ) -> Result<(), crate::ExecutionFailure> {
+        let offset = flatten_execution(&self.dimensions, indices)?;
+        self.values.set(offset, value).map_err(|message| {
+            crate::ExecutionFailure::new(crate::VmFaultCode::InvalidInstruction, message)
+        })?;
         self.bump_revision();
         Ok(())
     }
@@ -512,8 +537,21 @@ fn element_count(dimensions: &[u64]) -> Option<usize> {
 
 #[inline]
 fn flatten(dimensions: &[u64], indices: &[u64]) -> Result<usize, String> {
+    flatten_execution(dimensions, indices).map_err(|error| error.message)
+}
+
+#[inline]
+fn flatten_execution(
+    dimensions: &[u64],
+    indices: &[u64],
+) -> Result<usize, crate::ExecutionFailure> {
+    use crate::{ExecutionFailure, ScriptFaultKind, VmFaultCode};
     if indices.len() > dimensions.len() {
-        return Err("too many variable indices".into());
+        return Err(ExecutionFailure::script(
+            ScriptFaultKind::Bounds,
+            VmFaultCode::Bounds,
+            "too many variable indices",
+        ));
     }
     if dimensions.is_empty() {
         return Ok(0);
@@ -521,26 +559,42 @@ fn flatten(dimensions: &[u64], indices: &[u64]) -> Result<usize, String> {
     if let [length] = dimensions {
         let index = indices.first().copied().unwrap_or(0);
         if index >= *length {
-            return Err(format!(
-                "index {index} is outside dimension 0 of length {length}"
+            return Err(ExecutionFailure::script(
+                ScriptFaultKind::Bounds,
+                VmFaultCode::Bounds,
+                format!("index {index} is outside dimension 0 of length {length}"),
             ));
         }
-        return usize::try_from(index).map_err(|_| "variable offset exceeds this platform".into());
+        return usize::try_from(index).map_err(|_| {
+            ExecutionFailure::new(
+                VmFaultCode::ResourceLimit,
+                "variable offset exceeds this platform",
+            )
+        });
     }
     let mut offset = 0u64;
     for (dimension, length) in dimensions.iter().enumerate() {
         let index = indices.get(dimension).copied().unwrap_or(0);
         if index >= *length {
-            return Err(format!(
-                "index {index} is outside dimension {dimension} of length {length}"
+            return Err(ExecutionFailure::script(
+                ScriptFaultKind::Bounds,
+                VmFaultCode::Bounds,
+                format!("index {index} is outside dimension {dimension} of length {length}"),
             ));
         }
         offset = offset
             .checked_mul(*length)
             .and_then(|value| value.checked_add(index))
-            .ok_or_else(|| "variable offset overflow".to_owned())?;
+            .ok_or_else(|| {
+                ExecutionFailure::new(VmFaultCode::ResourceLimit, "variable offset overflow")
+            })?;
     }
-    usize::try_from(offset).map_err(|_| "variable offset exceeds this platform".into())
+    usize::try_from(offset).map_err(|_| {
+        ExecutionFailure::new(
+            VmFaultCode::ResourceLimit,
+            "variable offset exceeds this platform",
+        )
+    })
 }
 
 fn unflatten(dimensions: &[u64], mut offset: usize) -> Vec<u64> {

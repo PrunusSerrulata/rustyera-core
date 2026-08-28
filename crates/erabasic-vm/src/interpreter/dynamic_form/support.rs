@@ -19,7 +19,8 @@ impl RuntimeFormContinuation {
         let definition = generation
             .scoped_variable(self.function, name)
             .ok_or_else(|| {
-                StepError::new(
+                StepError::script(
+                    crate::ScriptFaultKind::Resolve,
                     VmFaultCode::MissingSymbol,
                     format!("STRFORM variable {name} is missing"),
                 )
@@ -54,7 +55,11 @@ impl RuntimeFormContinuation {
             .into_iter()
             .map(|value| match value {
                 VmValue::Integer(value) => u64::try_from(value).map_err(|_| {
-                    StepError::new(VmFaultCode::Bounds, "STRFORM variable index is negative")
+                    StepError::script(
+                        crate::ScriptFaultKind::Bounds,
+                        VmFaultCode::Bounds,
+                        "STRFORM variable index is negative",
+                    )
                 }),
                 _ => Err(StepError::new(
                     VmFaultCode::TypeMismatch,
@@ -179,7 +184,19 @@ pub(super) fn owner_frame_mut(
 }
 
 pub(super) fn unsupported(message: impl Into<String>) -> StepError {
-    StepError::new(VmFaultCode::Native, message)
+    StepError::script(
+        crate::ScriptFaultKind::Operation,
+        VmFaultCode::Native,
+        message,
+    )
+}
+
+pub(super) fn permission_denied(message: impl Into<String>) -> StepError {
+    StepError::classified(
+        crate::FaultCategory::Permission,
+        VmFaultCode::Native,
+        message,
+    )
 }
 
 pub(super) fn resource_limit(message: impl Into<String>) -> StepError {

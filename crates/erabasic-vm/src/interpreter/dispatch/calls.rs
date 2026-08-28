@@ -442,8 +442,7 @@ impl Vm {
                                 artifact,
                                 natives,
                                 native_name,
-                            )
-                            .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
+                            )?;
                             NativeReady::default()
                         } else if native_name == "__mutate_integer" {
                             NativeReady::value(
@@ -618,9 +617,19 @@ impl Vm {
                             });
                         if let Err(error) = result {
                             if let Some(state) = rollback {
-                                let _ = natives.rollback(import.key, &state);
+                                natives.rollback(import.key, &state).map_err(|failure| {
+                                    StepError::classified(
+                                        crate::FaultCategory::HostContract,
+                                        VmFaultCode::Native,
+                                        format!("native rollback failed: {failure}"),
+                                    )
+                                })?;
                             }
-                            return Err(map_vm_error(error));
+                            return Err(StepError::classified(
+                                crate::FaultCategory::HostContract,
+                                VmFaultCode::Native,
+                                error.to_string(),
+                            ));
                         }
                     }
                     (Opcode::CallHost, ImportKind::Host) => {
@@ -652,7 +661,13 @@ impl Vm {
                                     }
                                     *host_calls = host_calls.saturating_add(1);
                                     self.apply_host_ready(fiber, target.import.result, ready)
-                                        .map_err(map_vm_error)?;
+                                        .map_err(|error| {
+                                            StepError::classified(
+                                                crate::FaultCategory::HostContract,
+                                                VmFaultCode::Host,
+                                                error.to_string(),
+                                            )
+                                        })?;
                                     return Ok(Some(StepOutcome::Continue));
                                 }
                             }
@@ -671,7 +686,13 @@ impl Vm {
                         }) {
                             HostCallResult::Ready(ready) => self
                                 .apply_host_ready(fiber, target.import.result, ready)
-                                .map_err(map_vm_error)?,
+                                .map_err(|error| {
+                                    StepError::classified(
+                                        crate::FaultCategory::HostContract,
+                                        VmFaultCode::Host,
+                                        error.to_string(),
+                                    )
+                                })?,
                             HostCallResult::Pending {
                                 stability,
                                 rebind_payload,
@@ -703,7 +724,7 @@ impl Vm {
                                 return Ok(Some(StepOutcome::Blocked));
                             }
                             HostCallResult::Error(error) => {
-                                return Err(StepError::new(VmFaultCode::Host, error));
+                                return Err(error);
                             }
                             HostCallResult::Deferred => {
                                 let result = target.import.result;

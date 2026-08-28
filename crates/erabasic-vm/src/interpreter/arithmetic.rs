@@ -27,14 +27,23 @@ impl Vm {
             .integer_policy(generation)
             .evaluate(operation, left, right)
             .map_err(|error| {
-                StepError::new(
-                    if error == IntegerArithmeticError::DivideByZero {
-                        VmFaultCode::DivideByZero
-                    } else {
-                        VmFaultCode::InvalidInstruction
-                    },
-                    format!("integer {operation:?} failed: {error:?}"),
-                )
+                let message = format!("integer {operation:?} failed: {error:?}");
+                match error {
+                    IntegerArithmeticError::InvalidOperands => {
+                        StepError::new(VmFaultCode::InvalidInstruction, message)
+                    }
+                    IntegerArithmeticError::DivideByZero | IntegerArithmeticError::Overflow => {
+                        StepError::script(
+                            crate::ScriptFaultKind::Arithmetic,
+                            if error == IntegerArithmeticError::DivideByZero {
+                                VmFaultCode::DivideByZero
+                            } else {
+                                VmFaultCode::InvalidInstruction
+                            },
+                            message,
+                        )
+                    }
+                }
             })?;
         if let Some(warning) = outcome.warning
             && !self.pending_arithmetic_warnings.contains(&warning)

@@ -237,7 +237,7 @@ impl Vm {
         for generation in obsolete {
             self.generations.remove(&generation);
             self.memory.reclaim_generation(generation);
-            self.arithmetic_warning_sites
+            self.compatibility_warning_sites
                 .retain(|site| site.0 != generation);
             self.path_memo_cache
                 .retain(|head, _| head.generation != generation);
@@ -276,6 +276,24 @@ impl Vm {
         Ok(())
     }
 
+    fn validate_script_character(
+        &self,
+        storage: BytecodeStorage,
+        character: usize,
+    ) -> Result<(), VmError> {
+        if storage == BytecodeStorage::Character && character >= self.memory.characters.len() {
+            return Err(VmError::ScriptFailure(crate::ExecutionFailure::script(
+                crate::ScriptFaultKind::Bounds,
+                crate::VmFaultCode::Bounds,
+                format!(
+                    "character index {character} is outside {} characters",
+                    self.memory.characters.len()
+                ),
+            )));
+        }
+        Ok(())
+    }
+
     pub(crate) fn read_place(
         &self,
         fiber: &Fiber,
@@ -303,7 +321,9 @@ impl Vm {
                 target.indices.extend_from_slice(&place.indices);
                 return self.read_place(fiber, &target);
             }
-            return cell.read(&place.indices).map_err(VmError::InvalidState);
+            return cell
+                .read_execution(&place.indices)
+                .map_err(VmError::ScriptFailure);
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
@@ -317,14 +337,15 @@ impl Vm {
         // a selector equal to the current TARGET as target-dependent. This is conservative for an
         // explicit selector with the same value, but prevents an unsafe memo hit after TARGET
         // changes without altering captured-place semantics.
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(generation);
         let value = self
             .memory
             .cell(generation, definition, character)
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
-            .read(&place.indices)
-            .map_err(VmError::InvalidState)?;
+            .read_execution(&place.indices)
+            .map_err(VmError::ScriptFailure)?;
         self.observe_path_memo_read(
             fiber.id,
             generation,
@@ -357,7 +378,7 @@ impl Vm {
                 target.indices.extend_from_slice(indices);
                 return self.read_place(fiber, &target);
             }
-            return cell.read(indices).map_err(VmError::InvalidState);
+            return cell.read_execution(indices).map_err(VmError::ScriptFailure);
         }
         let character = if definition.storage == BytecodeStorage::Character {
             character.map_or_else(
@@ -367,14 +388,15 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(generation);
         let value = self
             .memory
             .cell(generation, definition, character)
             .ok_or_else(|| VmError::InvalidState("variable storage is unavailable".into()))?
-            .read(indices)
-            .map_err(VmError::InvalidState)?;
+            .read_execution(indices)
+            .map_err(VmError::ScriptFailure)?;
         self.observe_path_memo_read(
             fiber.id,
             generation,
@@ -481,6 +503,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         self.memory
             .cell(generation, definition, character)
             .map(VariableCell::to_values)
@@ -517,6 +540,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         self.memory
             .cell(generation, definition, character)
             .map(VariableCell::len)
@@ -604,6 +628,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(generation);
         let values = self
@@ -670,6 +695,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(definition.generation);
         self.memory
@@ -750,6 +776,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(definition.generation);
         let global = self
@@ -811,8 +838,8 @@ impl Vm {
                 .locals
                 .get_mut(&definition.key)
                 .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?
-                .write(&place.indices, value)
-                .map_err(VmError::InvalidState);
+                .write_execution(&place.indices, value)
+                .map_err(VmError::ScriptFailure);
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
@@ -822,6 +849,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(definition.generation);
         self.memory
@@ -832,8 +860,8 @@ impl Vm {
                 character,
             )
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
-            .write(&place.indices, value.clone())
-            .map_err(VmError::InvalidState)?;
+            .write_execution(&place.indices, value.clone())
+            .map_err(VmError::ScriptFailure)?;
         let global = self
             .generations
             .get(&definition.generation)
@@ -851,7 +879,7 @@ impl Vm {
         Ok(())
     }
 
-    pub(super) fn place_definition<'a>(
+    pub(crate) fn place_definition<'a>(
         &'a self,
         fiber: &Fiber,
         place: &PlaceDescriptor,

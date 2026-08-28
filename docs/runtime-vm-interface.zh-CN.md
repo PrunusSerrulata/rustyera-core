@@ -5,7 +5,7 @@
 
 - `erabasic-vm` 的 crate 根重导出、`runtime_port.rs`、`runtime_vm.rs`；
 - `era-runtime::RuntimeSession` 的 `drive`、Host 分派、状态事务、存档与热重载调用点；
-- 当前 VM snapshot 格式版本 `14`，magic 为 `RERAVMS\0`；Native ABI `18`、VM ABI `17`。
+- 当前 VM snapshot 格式版本 `14`，magic 为 `RERAVMS\0`；Native ABI `19`、Host ABI `14`、VM ABI `18`。
 
 相关源码：
 
@@ -785,3 +785,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+
+## 批次 2B：调用、受控捕获与错误完成
+
+- `ExecutionFailure` 在失败源处区分脚本、资源、取消、内部不变量、Host 契约、协议、权限和
+  基础设施。旧 fault code 与消息不足以取得可捕获权限。Native/Host 返回错误保持分类；
+  无效返回值、写集合与 rollback 失败强制属于不可捕获的契约失败。

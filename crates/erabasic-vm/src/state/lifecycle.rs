@@ -183,7 +183,10 @@ impl Vm {
             .expect("the current generation is always retained")
     }
 
-    pub(crate) fn compile_regex(&mut self, pattern: &str) -> Result<regex::Regex, String> {
+    pub(crate) fn compile_regex(
+        &mut self,
+        pattern: &str,
+    ) -> Result<regex::Regex, crate::ExecutionFailure> {
         self.regex_cache.get_or_compile(pattern)
     }
 
