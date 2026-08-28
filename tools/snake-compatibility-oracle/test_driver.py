@@ -297,6 +297,16 @@ class DriverTests(unittest.TestCase):
                  "save_codec": "rustyera_envelope_v1:emuera1808"}}
         required = {"semantic_version": 2, "policy_version": 2}
         validate_rust_evidence(snake, "snake", fixture, 1, required)
+        for oracle, sample in (("original", evidence), ("snake", snake)):
+            encoded = {**sample, "profile": {**sample["profile"]}}
+            for field in ("semantic_version", "policy_version", "rng_state_version"):
+                encoded["profile"][field] = str(encoded["profile"][field])
+            validate_rust_evidence(encoded, oracle, fixture, 1, required if oracle == "snake" else None)
+            self.assertIsInstance(encoded["profile"]["policy_version"], str)
+            for invalid in (True, 1.0, "01", "+1", "1.0", " 1", "4294967296"):
+                with self.subTest(oracle=oracle, invalid=invalid), self.assertRaises(ValueError):
+                    validate_rust_evidence({**encoded, "profile": {**encoded["profile"], "rng_state_version": invalid}}, oracle, fixture, 1)
+
         historical = {**snake, "profile": {**snake["profile"], "semantic_version": 1, "policy_version": 1}}
         validate_rust_evidence(historical, "snake", fixture, 1)
         with self.assertRaises(ValueError):
@@ -535,6 +545,27 @@ class FrontendCaptureTests(unittest.TestCase):
             evidence = build_evidence(write(), fixture, artifacts, Path(directory) / "frontend-root")
             self.assertEqual(evidence["cases"][0]["steps"][0]["result"]["watches"], {"RESULT:10": 0})
             self.assertEqual(evidence["frontendCapture"]["status"], "validated_observations_not_comparison_verdict")
+
+    def test_frontend_decimal_policy_versions_preserve_the_raw_capture_identity(self):
+        from frontend_capture import build_evidence
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, artifacts, capture, packets, write = self.make_capture(Path(directory))
+            def encode_versions(value):
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        if key in ("semantic_version", "policy_version", "rng_state_version"):
+                            value[key] = str(child)
+                        else:
+                            encode_versions(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        encode_versions(child)
+            encode_versions(capture)
+            encode_versions(packets)
+            evidence = build_evidence(write(), fixture, artifacts, Path(directory) / "frontend-root")
+            self.assertEqual(evidence["profile"]["policy_version"], "1")
+            validate_rust_evidence(evidence, "original", evidence["sourceFixture"], 123456)
+
 
     def test_capture_rejects_hash_identity_order_and_provenance_tampering(self):
         from frontend_capture import build_evidence

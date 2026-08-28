@@ -1,5 +1,18 @@
 """Compare actual observations without turning deferred differences into passes."""
 
+import re
+
+
+def policy_version_integer(value):
+    """Accept exact JSON numbers or the canonical decimal encoding used by Web BigInt."""
+    if isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]{0,9}", value):
+        value = int(value)
+    if type(value) is not int or not 0 <= value <= (1 << 32) - 1:
+        raise ValueError("invalid Rust policy version integer")
+    return value
+
+
+
 PROFILES = {"original": "emuera.em", "snake": "emuera.skia.snake"}
 OPERATION_FIELDS = {
     "eval": ("value",),
@@ -11,7 +24,10 @@ OPERATION_FIELDS = {
 def validate_rust_evidence(evidence, oracle, fixture, seed, required_policy=None):
     if evidence.get("version") != 1:
         raise ValueError("unsupported Rust evidence version")
-    identity = evidence.get("profile", {})
+    # Keep the raw capture identity untouched for correlated protocol/diagnostic checks.
+    identity = dict(evidence.get("profile", {}))
+    for field in ("semantic_version", "policy_version", "rng_state_version"):
+        identity[field] = policy_version_integer(identity.get(field))
     if identity.get("profile") != PROFILES[oracle]:
         raise ValueError("Rust evidence belongs to a different compatibility profile")
     versions = (identity.get("semantic_version"), identity.get("policy_version"))
