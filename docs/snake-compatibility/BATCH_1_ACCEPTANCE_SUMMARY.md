@@ -2,7 +2,7 @@
 
 状态：**批次 1（1A–1D）已完成；以下参考差异与后续阻塞保持明确。**
 
-详细失败历史、修复和命令见[实施记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#batch-1)，
+各子批次最终结果、首次全量与定向复验结论及证据入口见[实施记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#batch-1)，
 范围与门槛见[实施方案](BATCH_1_IMPLEMENTATION_PLAN.md)。本页只汇总当前有效结论，
 不把首次失败改写成通过。
 
