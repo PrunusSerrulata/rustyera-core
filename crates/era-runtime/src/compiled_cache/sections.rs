@@ -167,6 +167,32 @@ pub(super) fn manifest_payload_hash(payload: &FilePayload) -> blake3::Hash {
     }
 }
 
+/// Compact caches retain validated source offsets alongside manifest hashes, but
+/// intentionally omit source payloads. Re-exporting such a cache must compare the
+/// retained identity rather than treating the omitted text as an empty source.
+fn compact_source_matches_manifest(
+    source: &SourceRecord,
+    file: &SubmittedFile,
+) -> Result<bool, String> {
+    let omitted = !matches!(
+        file.category,
+        FileCategory::Configuration | FileCategory::ResourceManifest
+    ) && matches!(&file.payload, FilePayload::Utf8(text) if text.is_empty())
+        && file
+            .content_hash
+            .as_ref()
+            .is_some_and(|hash| hash.as_slice() != blake3::hash(&[]).as_bytes());
+    if omitted {
+        return Ok(file
+            .content_hash
+            .as_ref()
+            .is_some_and(|hash| hash.as_slice() == source.content_hash.0)
+            && validate_relative_path(&file.relative_path).map_err(|error| error.to_string())?
+                == source.relative_path);
+    }
+    Ok(source_record_from_file(file)? == *source)
+}
+
 pub(super) fn encode_compact_source_record_section(
     sources: &[SourceRecord],
     manifest: &ProjectManifest,
@@ -190,7 +216,7 @@ pub(super) fn encode_compact_source_record_section(
                 .get(&source.relative_path)
                 .ok_or_else(|| "bytecode source is missing from the project manifest".to_owned())?;
             let file = &manifest.files[index];
-            if source_record_from_file(file)? != *source {
+            if !compact_source_matches_manifest(source, file)? {
                 return Err("bytecode source differs from the project manifest".into());
             }
             Ok((index, source))

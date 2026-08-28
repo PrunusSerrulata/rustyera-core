@@ -33,6 +33,7 @@ use incremental::{
     materialize_cached_function, materialized_function,
 };
 
+mod call_dependencies;
 mod driver;
 
 pub use driver::{

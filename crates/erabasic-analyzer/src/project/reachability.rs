@@ -74,7 +74,7 @@ pub(super) fn reachable_functions(
         if calls.iter().any(|name| {
             matches!(
                 name.to_ascii_uppercase().as_str(),
-                "GETMETH" | "GETMETHS" | "EXISTMETH" | "STRFORM"
+                "GETMETH" | "GETMETHS" | "EXISTMETH" | "STRFORM" | "STRFORMCHECK" | "EXISTVAR"
             )
         }) {
             reachable.extend(definitions.iter().map(|definition| definition.id));
@@ -242,6 +242,16 @@ fn uses_dynamic_call(statement: &Statement) -> bool {
                     | "GETMETHS"
                     | "EXISTMETH"
                     | "STRFORM"
+                    | "STRFORMCHECK"
+                    | "EXISTVAR"
+                    | "CALLSTR"
+                    | "JUMPSTR"
+                    | "TRYCALLSTR"
+                    | "TRYJUMPSTR"
+                    | "TRYCCALLSTR"
+                    | "TRYCJUMPSTR"
+                    | "TRYCALLLIST"
+                    | "TRYJUMPLIST"
                     | "CALLFORM"
                     | "CALLFORMF"
                     | "JUMPFORM"

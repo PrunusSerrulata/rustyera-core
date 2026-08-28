@@ -1312,3 +1312,184 @@ RETURNF 2
     }
     assert!(!names.contains("html_stringlen") && !names.contains("html_stringlines"));
 }
+
+fn analyze_call_dependency_sources(
+    caller: &str,
+    target: &str,
+) -> erabasic_analyzer::AnalyzedProject {
+    let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+        .data
+        .unwrap();
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: data,
+            sources: [
+                ("caller.erb", caller),
+                ("target.erb", target),
+                ("unrelated.erb", "@UNRELATED\nRETURN\n"),
+            ]
+            .into_iter()
+            .map(|(path, text)| ProjectSource {
+                relative_path: path.into(),
+                payload: SourcePayload::Utf8(text.into()),
+            })
+            .collect(),
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|value| value.reference_level >= 2),
+        "{:?}",
+        report.diagnostics
+    );
+    report.project.unwrap()
+}
+
+#[test]
+fn changed_callee_defaults_and_formals_recompile_only_dependent_callers() {
+    let registry = default_host_registry();
+    let options = CompilerOptions::default();
+    for (caller, before, after) in [
+        (
+            "@SYSTEM_TITLE\nCALL TARGET\nRETURN\n",
+            "@TARGET(ARG:0 = 1)\nRETURN\n",
+            "@TARGET(ARG:0 = 2)\nRETURN\n",
+        ),
+        (
+            "@SYSTEM_TITLE\nCALL TARGET\nRETURN\n",
+            "@TARGET(ARG:0 = 1)\nRETURN\n",
+            "@TARGET(ARG:0 = 1, ARG:1 = 2)\nRETURN\n",
+        ),
+        (
+            "@SYSTEM_TITLE\nRESULT = TARGET()\nRETURN\n",
+            "@TARGET(ARG:0 = 1)\n#FUNCTION\nRETURNF ARG\n",
+            "@TARGET(ARG:0 = 2)\n#FUNCTION\nRETURNF ARG\n",
+        ),
+    ] {
+        let initial = compile_project_with_artifact(
+            &analyze_call_dependency_sources(caller, before),
+            &options,
+            &registry,
+            None,
+            None,
+        );
+        let project = analyze_call_dependency_sources(caller, after);
+        let warm = compile_project_with_artifact(
+            &project,
+            &options,
+            &registry,
+            Some(&initial.incremental_state),
+            initial.artifact.as_ref(),
+        );
+        let cold = compile_project(&project, &options, &registry, None);
+        assert!(warm.artifact.is_some(), "{:?}", warm.diagnostics);
+        assert_eq!(warm.artifact, cold.artifact);
+        assert_eq!(warm.stats.compiled_functions, 2, "{caller}");
+        assert_eq!(warm.stats.reused_functions, 1, "{caller}");
+    }
+}
+
+#[test]
+fn dynamic_callers_depend_on_possible_signatures_but_not_callee_bodies() {
+    let registry = default_host_registry();
+    let options = CompilerOptions::default();
+    let caller = "@SYSTEM_TITLE\nRESULT = GETMETH(LOCALS, 0)\nRETURN\n";
+    let before = "@TARGET(ARG:0 = 1)\n#FUNCTION\nRETURNF 1\n";
+    let initial = compile_project_with_artifact(
+        &analyze_call_dependency_sources(caller, before),
+        &options,
+        &registry,
+        None,
+        None,
+    );
+    for (after, compiled) in [
+        ("@TARGET(ARG:0 = 2)\n#FUNCTION\nRETURNF 1\n", 2),
+        ("@TARGET(ARG:0 = 1)\n#FUNCTION\nRETURNF 2\n", 1),
+    ] {
+        let project = analyze_call_dependency_sources(caller, after);
+        let warm = compile_project_with_artifact(
+            &project,
+            &options,
+            &registry,
+            Some(&initial.incremental_state),
+            initial.artifact.as_ref(),
+        );
+        let cold = compile_project(&project, &options, &registry, None);
+        assert!(warm.artifact.is_some(), "{:?}", warm.diagnostics);
+        assert_eq!(warm.artifact, cold.artifact);
+        assert_eq!(warm.stats.compiled_functions, compiled);
+        assert_eq!(warm.stats.reused_functions, 3 - compiled);
+    }
+}
+
+#[test]
+fn call_compatibility_is_part_of_incremental_semantic_identity() {
+    let registry = default_host_registry();
+    let options = CompilerOptions::default();
+    let original = analyze_call_dependency_sources(
+        "@SYSTEM_TITLE\nCALL TARGET, 1\nRETURN\n",
+        "@TARGET(ARG)\nRETURN\n",
+    );
+    let initial = compile_project(&original, &options, &registry, None);
+    for policy in 0..3 {
+        let mut project = original.clone();
+        match policy {
+            0 => {
+                project.program.call_compatibility.allow_event_as_normal =
+                    !project.program.call_compatibility.allow_event_as_normal;
+            }
+            1 => {
+                project.program.call_compatibility.allow_omitted_arguments =
+                    !project.program.call_compatibility.allow_omitted_arguments;
+            }
+            _ => {
+                project
+                    .program
+                    .call_compatibility
+                    .auto_convert_integer_to_string = !project
+                    .program
+                    .call_compatibility
+                    .auto_convert_integer_to_string;
+            }
+        }
+        let warm = compile_project(
+            &project,
+            &options,
+            &registry,
+            Some(&initial.incremental_state),
+        );
+        let cold = compile_project(&project, &options, &registry, None);
+        assert_eq!(warm.artifact, cold.artifact);
+        assert_eq!(warm.stats.reused_functions, 0);
+    }
+}
+
+#[test]
+fn changing_a_reference_formal_rebuilds_its_call_contract() {
+    let registry = default_host_registry();
+    let options = CompilerOptions::default();
+    let caller = "@SYSTEM_TITLE\nCALL TARGET, FLAG\nRETURN\n";
+    let original =
+        analyze_call_dependency_sources(caller, "@TARGET(ITEMS)\n#DIM REF ITEMS, 0\nRETURN\n");
+    let initial = compile_project_with_artifact(&original, &options, &registry, None, None);
+    assert!(initial.artifact.is_some(), "{:?}", initial.diagnostics);
+    let project =
+        analyze_call_dependency_sources(caller, "@TARGET(ITEMS)\n#DIM ITEMS, 1\nRETURN\n");
+    let warm = compile_project_with_artifact(
+        &project,
+        &options,
+        &registry,
+        Some(&initial.incremental_state),
+        initial.artifact.as_ref(),
+    );
+    let cold = compile_project(&project, &options, &registry, None);
+    assert!(warm.artifact.is_some(), "{:?}", warm.diagnostics);
+    assert_eq!(warm.artifact, cold.artifact);
+    // Existing shared variable dependencies are deliberately unchanged by this task, so the
+    // declaration change can invalidate more than the caller and target.
+    assert!(warm.stats.compiled_functions >= 2);
+}

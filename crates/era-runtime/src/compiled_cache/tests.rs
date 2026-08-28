@@ -744,6 +744,48 @@ fn compact_cache_omits_source_and_binary_payloads_but_remains_loadable() {
         build.snapshot.as_ref().unwrap().project_identity
     );
     assert!(decode_project_file(&compact, 64 * 1024 * 1024).is_err());
+    let reexported = encode_compiled_cache_for_test(
+        &decoded.snapshot.manifest,
+        &[],
+        &decoded.artifact,
+        &decoded.incremental,
+        &decoded.snapshot,
+        &decoded.diagnostics,
+    )
+    .unwrap();
+    let reloaded = decode(&reexported, 64 * 1024 * 1024).unwrap();
+    assert_eq!(
+        reloaded.artifact.artifact().source_map,
+        decoded.artifact.artifact().source_map
+    );
+    assert_eq!(
+        reloaded.artifact.artifact().manifest.artifact_id,
+        decoded.artifact.artifact().manifest.artifact_id
+    );
+    let mut forged_manifest = decoded.snapshot.manifest.as_ref().clone();
+    forged_manifest.files[0].content_hash = Some(ProtocolBytes::new(vec![0; 32]));
+    assert!(
+        encode_compiled_cache_for_test(
+            &forged_manifest,
+            &[],
+            &decoded.artifact,
+            &decoded.incremental,
+            &decoded.snapshot,
+            &decoded.diagnostics,
+        )
+        .is_err()
+    );
+    assert!(
+        encode_full_project_for_test(
+            &decoded.snapshot.manifest,
+            &[],
+            &decoded.artifact,
+            &decoded.incremental,
+            &decoded.snapshot,
+            &decoded.diagnostics,
+        )
+        .is_err()
+    );
 }
 
 #[test]

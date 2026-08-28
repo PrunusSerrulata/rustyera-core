@@ -351,10 +351,16 @@ fn compile_project_inner(
             source_indices: &source_indices,
             host_registry,
         };
+        let call_dependencies = super::call_dependencies::CallDependencies::new(
+            &function_signatures,
+            &function_keys,
+            &project_ref.program.variables,
+        );
         let shared_dependencies = canonical_digest(
-            "rustyera.compiler.shared-dependencies.v3",
+            "rustyera.compiler.shared-dependencies.v4",
             &(
                 &project_ref.program.compatibility,
+                &project_ref.program.call_compatibility,
                 &project_ref.program.variables,
                 host_registry,
                 options.optimization,
@@ -376,10 +382,12 @@ fn compile_project_inner(
                     .expect("validated function IDs have stable keys");
                 let function_digest =
                     canonical_digest("rustyera.compiler.hir-function.v3", function);
+                let signature_dependencies = call_dependencies.for_function(function);
                 let cache_key = Digest::hash(
-                    "rustyera.compiler.function.v3",
+                    "rustyera.compiler.function.v4",
                     &[
                         &function_digest.0,
+                        &signature_dependencies.0,
                         &shared_dependencies.0,
                         &compiler_options.0,
                     ],
