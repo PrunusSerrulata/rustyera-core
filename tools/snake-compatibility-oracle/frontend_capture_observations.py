@@ -82,6 +82,30 @@ def variable_catalog(pairs, stop):
     return complete
 
 
+def canonical_variable_reference(value):
+    """Normalize protocol integers and omitted Option fields, never typed String values."""
+    require(isinstance(value, dict), "invalid debug variable reference")
+    result = dict(value)
+    result["symbol_key"] = [integer(byte, maximum=255) for byte in value["symbol_key"]]
+    result["indices"] = [integer(index) for index in value["indices"]]
+    result["generation"] = integer(value["generation"])
+    for field in ("fiber_id", "frame_id", "character"):
+        item = value.get(field)
+        result[field] = integer(item) if item is not None else None
+    return result
+
+
+def canonical_watch_response(response):
+    """Only omitted optional reference fields equal explicit null in a captured reply."""
+    if not isinstance(response, dict) or response.get("type") != "variable_value":
+        return response
+    value = response["value"]
+    reference = dict(value["reference"])
+    for field in ("fiber_id", "frame_id", "character"):
+        reference.setdefault(field, None)
+    return {**response, "value": {**value, "reference": reference}}
+
+
 def typed_watches(request, inspected, records):
     watches = request.get("watch", [])
     require(isinstance(watches, list) and len(watches) <= 256 and len(set(watches)) == len(watches),
@@ -121,9 +145,10 @@ def typed_watches(request, inspected, records):
                 integer(reference["generation"]) == integer(stop["program_generation"]) and
                 all(reference.get(field) is None for field in ("fiber_id", "frame_id", "character")),
                 "typed watch reference differs from requested variable/index/generation")
+        expected_response = canonical_watch_response(item["response"])
         matches = [(sent, received) for sent, received in pairs
                    if sent["message"]["value"]["command"] == command and
-                   received["message"].get("value") == item["response"]]
+                   canonical_watch_response(received["message"].get("value")) == expected_response]
         require(matches, "typed watch lacks its real correlated debug response")
         sent, received = matches[-1]
         response = item["response"]
@@ -133,7 +158,8 @@ def typed_watches(request, inspected, records):
             missing.append(watch)
             continue
         require(response.get("type") == "variable_value" and
-                response["value"]["reference"] == reference and
+                canonical_variable_reference(response["value"]["reference"]) ==
+                canonical_variable_reference(reference) and
                 response["value"]["value"] == item["value"],
                 "typed watch value differs from actual debug response")
         value = item["value"]

@@ -213,7 +213,6 @@ class DriverTests(unittest.TestCase):
                 recorded_steps({**evidence, "requests": [
                     {**handshake, "response": response}, load, step]}, case)
 
-
     def test_rng_assertions_preserve_the_pinned_snake_state_loss(self):
         case = {"assertions": ["rng_roundtrip"]}
         snake = SimpleNamespace(args=SimpleNamespace(oracle="snake"))
@@ -603,7 +602,6 @@ class FrontendCaptureTests(unittest.TestCase):
             self.assertEqual([item["path"] for item in frontend_files(root, "frontend_source_manifest")], names)
             self.assertEqual([item["path"] for item in fixture_inventory(root)], names)
 
-
     def test_frontend_decimal_policy_versions_preserve_the_raw_capture_identity(self):
         from frontend_capture import build_evidence
         with tempfile.TemporaryDirectory() as directory:
@@ -623,7 +621,6 @@ class FrontendCaptureTests(unittest.TestCase):
             evidence = build_evidence(write(), fixture, artifacts, Path(directory) / "frontend-root")
             self.assertEqual(evidence["profile"]["policy_version"], "1")
             validate_rust_evidence(evidence, "original", evidence["sourceFixture"], 123456)
-
 
     def test_capture_rejects_hash_identity_order_and_provenance_tampering(self):
         from frontend_capture import build_evidence
@@ -661,6 +658,88 @@ class FrontendCaptureTests(unittest.TestCase):
                     artifacts["runtime"].write_bytes(b"changed")
                 with self.assertRaises(ValueError):
                     build_evidence(path, fixture, artifacts, Path(directory) / "frontend-root")
+
+    def test_returned_debug_references_allow_wire_integer_and_omitted_option_encoding_only(self):
+        from frontend_capture import build_evidence
+        for mode in ("same", "index", "generation", "fiber"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture, artifacts, _, packets, write = self.make_capture(root)
+                def encode_response(value):
+                    if isinstance(value, dict):
+                        if value.get("type") == "variable_value":
+                            reference = dict(value["value"]["reference"])
+                            for field in ("fiber_id", "frame_id", "character"):
+                                reference.pop(field, None)
+                            reference["indices"] = ["11" if mode == "index" else "10"]
+                            reference["generation"] = "2" if mode == "generation" else "1"
+                            reference["symbol_key"] = [str(byte) for byte in reference["symbol_key"]]
+                            if mode == "fiber":
+                                reference["fiber_id"] = "1"
+                            value["value"]["reference"] = reference
+                        else:
+                            for child in value.values():
+                                encode_response(child)
+                    elif isinstance(value, list):
+                        for child in value:
+                            encode_response(child)
+                encode_response(packets)
+                path = write()
+                if mode == "same":
+                    evidence = build_evidence(path, fixture, artifacts, root / "frontend-root")
+                    self.assertEqual(evidence["cases"][0]["steps"][0]["result"]["watches"], {"RESULT:10": 0})
+                else:
+                    with self.assertRaisesRegex(ValueError, "typed watch value differs"):
+                        build_evidence(path, fixture, artifacts, root / "frontend-root")
+
+    def test_watch_reply_pair_only_normalizes_omitted_reference_options(self):
+        from copy import deepcopy
+        from frontend_capture import build_evidence
+        modes = ("same", "reverse", "index", "fiber_id", "frame_id", "character",
+                 "value", "value_encoding", "revision", "correlation", "epoch")
+        for mode in modes:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture, artifacts, _, packets, write = self.make_capture(root)
+                item = packets[3]["inspect"]["values"]["RESULT:10"]
+                item["response"] = deepcopy(item["response"])
+                if mode == "reverse":
+                    for field in ("fiber_id", "frame_id", "character"):
+                        item["response"]["value"]["reference"].pop(field)
+                for packet in (packets[3], packets[4]):
+                    for row in packet["snapshot"]["serviceEvidence"]["records"]:
+                        response = row["message"].get("value", {})
+                        if response.get("type") != "variable_value":
+                            continue
+                        value = response["value"]
+                        # make_capture shares the command/response reference in memory;
+                        # real wire JSON has independent objects. Mutate only the reply.
+                        reference = dict(value["reference"])
+                        value["reference"] = reference
+                        if mode != "reverse":
+                            for field in ("fiber_id", "frame_id", "character"):
+                                reference.pop(field)
+                        if mode == "index":
+                            reference["indices"] = [11]
+                        elif mode in ("fiber_id", "frame_id", "character"):
+                            reference[mode] = 1
+                        elif mode == "value":
+                            value["value"] = {"type": "integer", "value": 1}
+                        elif mode == "value_encoding":
+                            value["value"] = {"type": "integer", "value": "0"}
+                        elif mode == "revision":
+                            value["revision"] = 1
+                        elif mode == "correlation":
+                            row["correlationId"] = 99
+                        elif mode == "epoch":
+                            row["epoch"] = 2
+                if mode in ("same", "reverse"):
+                    evidence = build_evidence(write(), fixture, artifacts, root / "frontend-root")
+                    self.assertEqual(evidence["cases"][0]["steps"][0]["result"]["watches"],
+                                     {"RESULT:10": 0})
+                else:
+                    with self.assertRaises(ValueError):
+                        build_evidence(write(), fixture, artifacts, root / "frontend-root")
 
     def test_missing_typed_inspection_stays_blocked(self):
         from frontend_capture import build_evidence
