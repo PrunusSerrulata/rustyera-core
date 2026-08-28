@@ -102,6 +102,10 @@ pub fn evaluate_pure_native_with_compatibility(
             | "strform"
             | "toint"
             | "isnumeric"
+            | "unchecked_add"
+            | "unchecked_sub"
+            | "unchecked_mul"
+            | "unchecked_neg"
             | "unicode"
             | "convert"
             | "color_fromrgb"
@@ -236,6 +240,25 @@ impl NativeService for CoreNative {
             "toint" => VmValue::Integer(parse_era_numeric(string(0)?, false)?.unwrap_or(0)),
             "isnumeric" => {
                 VmValue::Integer(i64::from(parse_era_numeric(string(0)?, true)?.is_some()))
+            }
+            "unchecked_add" | "unchecked_sub" | "unchecked_mul" => {
+                let [VmValue::Integer(left), VmValue::Integer(right)] = args.as_slice() else {
+                    return Err(format!(
+                        "{} requires exactly two integer arguments",
+                        self.name
+                    ));
+                };
+                VmValue::Integer(match self.name.as_str() {
+                    "unchecked_add" => left.wrapping_add(*right),
+                    "unchecked_sub" => left.wrapping_sub(*right),
+                    _ => left.wrapping_mul(*right),
+                })
+            }
+            "unchecked_neg" => {
+                let [VmValue::Integer(value)] = args.as_slice() else {
+                    return Err("unchecked_neg requires exactly one integer argument".into());
+                };
+                VmValue::Integer(value.wrapping_neg())
             }
             "convert" => {
                 let value = integer(0)?;

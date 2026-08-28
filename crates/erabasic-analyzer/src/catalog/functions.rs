@@ -87,6 +87,10 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("UNICODE", StrType, &[Integer], 1, false);
     add("TOINT", IntType, &[String], 1, false);
     add("ISNUMERIC", IntType, &[String], 1, false);
+    for name in ["UNCHECKED_ADD", "UNCHECKED_SUB", "UNCHECKED_MUL"] {
+        add(name, IntType, &[Integer, Integer], 2, false);
+    }
+    add("UNCHECKED_NEG", IntType, &[Integer], 1, false);
     add("VARSIZE", IntType, &[String, Integer], 1, false);
     add("EXISTFUNCTION", IntType, &[String, Integer], 1, false);
     add("EXISTMETH", IntType, &[String], 1, false);

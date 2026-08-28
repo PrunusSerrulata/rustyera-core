@@ -1,6 +1,82 @@
 use super::*;
 
 #[test]
+fn snake_constant_initializers_emit_warnings_without_losing_saturated_values() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![
+                source(
+                    "arithmetic.erh",
+                    "#DIM CONST SATURATED = 9223372036854775807 + 1\n#DIM CONST ZERO_DIV = 9 / 0\n#DIM CONST WRAPPED = UNCHECKED_ADD(9223372036854775807, 1)\n#DIM CONST SKIPPED = 0 && (9 / 0)\n",
+                ),
+                source(
+                    "arithmetic.erb",
+                    "@SYSTEM_TITLE\n#DIM PRIVATE_VALUE = -(-9223372036854775807 - 1)\nRESULT = 9223372036854775807 + 1\nRETURN\n",
+                ),
+            ],
+        },
+        &options,
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let warnings: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            matches!(
+                diagnostic.code,
+                AnalyzerDiagnosticCode::IntegerOverflow
+                    | AnalyzerDiagnosticCode::IntegerDivideByZero
+            )
+        })
+        .collect();
+    assert_eq!(warnings.len(), 3);
+    assert!(warnings.iter().all(|diagnostic| diagnostic.severity
+        == erabasic_analyzer::AnalyzerDiagnosticSeverity::Warning
+        && diagnostic.source.is_some()));
+    let project = report.project.unwrap();
+    for (name, value) in [
+        ("SATURATED", i64::MAX),
+        ("ZERO_DIV", 0),
+        ("WRAPPED", i64::MIN),
+        ("PRIVATE_VALUE", i64::MAX),
+        ("SKIPPED", 0),
+    ] {
+        let variable = project
+            .program
+            .variables
+            .iter()
+            .find(|variable| variable.name == name)
+            .unwrap();
+        assert_eq!(
+            variable.initial_values,
+            vec![erabasic_hir::ConstantValue::Integer(value)],
+            "{name}"
+        );
+    }
+    let statement = &project.program.functions[0].lines[0];
+    let HirStatementKind::Assignment { value, .. } = &statement.kind else {
+        panic!("expected assignment");
+    };
+    assert_eq!(
+        value.constant, None,
+        "runtime warning must not be folded away"
+    );
+}
+
+#[test]
 fn resolves_header_constants_variables_and_typed_expressions() {
     let report = analyze_project(
         AnalysisInput {

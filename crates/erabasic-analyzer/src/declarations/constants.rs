@@ -110,6 +110,14 @@ fn evaluate_constant(
             evaluate_getnum(args, evaluation)
         }
         ExprKind::Call { name, args }
+            if matches!(
+                name.to_ascii_uppercase().as_str(),
+                "UNCHECKED_ADD" | "UNCHECKED_SUB" | "UNCHECKED_MUL" | "UNCHECKED_NEG"
+            ) =>
+        {
+            evaluate_unchecked(name, args, evaluation)
+        }
+        ExprKind::Call { name, args }
             if name.eq_ignore_ascii_case("GETDEFCOLOR") && args.is_empty() =>
         {
             Ok(ConstantValue::Integer(
@@ -171,6 +179,46 @@ fn evaluate_binary_expression(
     }
     let right = evaluate_constant(right, evaluation)?;
     evaluate_binary(operation, left, right, evaluation)
+}
+
+fn evaluate_unchecked(
+    name: &str,
+    arguments: &[Option<Expr>],
+    evaluation: &ConstantEvaluation<'_>,
+) -> Result<ConstantValue, DimError> {
+    let operation = match name.to_ascii_uppercase().as_str() {
+        "UNCHECKED_ADD" => IntegerOperation::Add,
+        "UNCHECKED_SUB" => IntegerOperation::Subtract,
+        "UNCHECKED_MUL" => IntegerOperation::Multiply,
+        _ => IntegerOperation::Negate,
+    };
+    let arity = if operation == IntegerOperation::Negate {
+        1
+    } else {
+        2
+    };
+    if arguments.len() != arity {
+        return Err(DimError::Invalid(format!(
+            "{name} requires {arity} arguments"
+        )));
+    }
+    let integer = |index: usize| -> Result<i64, DimError> {
+        let expression = arguments[index]
+            .as_ref()
+            .ok_or_else(|| DimError::Invalid(format!("{name} arguments cannot be omitted")))?;
+        let ConstantValue::Integer(value) = evaluate_constant(expression, evaluation)? else {
+            return Err(DimError::Invalid(format!(
+                "{name} requires integer arguments"
+            )));
+        };
+        Ok(value)
+    };
+    let left = integer(0)?;
+    let right = if arity == 2 { Some(integer(1)?) } else { None };
+    let result = IntegerArithmeticPolicy::ReferenceWrappingV1
+        .evaluate(operation, left, right)
+        .map_err(|error| DimError::Invalid(error.to_string()))?;
+    Ok(ConstantValue::Integer(result.value))
 }
 
 fn evaluate_string_length(

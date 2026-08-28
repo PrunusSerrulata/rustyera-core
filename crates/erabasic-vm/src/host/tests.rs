@@ -200,6 +200,70 @@ fn era_numeric_parser_keeps_reference_prefix_fraction_and_whitespace_rules() {
 }
 
 #[test]
+fn unchecked_natives_wrap_even_under_the_snake_arithmetic_policy() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    for (name, values, expected) in [
+        ("UNCHECKED_ADD", vec![i64::MAX, 1], i64::MIN),
+        ("UNCHECKED_SUB", vec![i64::MIN, 1], i64::MAX),
+        ("UNCHECKED_MUL", vec![i64::MAX, 2], -2),
+        ("UNCHECKED_NEG", vec![i64::MIN], i64::MIN),
+    ] {
+        assert_eq!(
+            evaluate_pure_native_with_compatibility(
+                name,
+                values.into_iter().map(VmValue::Integer).collect(),
+                &snake,
+            ),
+            Ok(VmValue::Integer(expected)),
+            "{name}",
+        );
+    }
+}
+
+#[test]
+fn unchecked_natives_reject_missing_extra_and_noninteger_arguments_in_both_profiles() {
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let compatibility = erabasic_compat::CompatibilityIdentity::for_profile(profile);
+        for (name, arity) in [
+            ("UNCHECKED_ADD", 2),
+            ("UNCHECKED_SUB", 2),
+            ("UNCHECKED_MUL", 2),
+            ("UNCHECKED_NEG", 1),
+        ] {
+            let valid = vec![VmValue::Integer(1); arity];
+            assert!(
+                evaluate_pure_native_with_compatibility(name, valid.clone(), &compatibility)
+                    .is_ok()
+            );
+            for count in (0..arity).chain(std::iter::once(arity + 1)) {
+                assert!(
+                    evaluate_pure_native_with_compatibility(
+                        name,
+                        vec![VmValue::Integer(1); count],
+                        &compatibility,
+                    )
+                    .is_err(),
+                    "{profile}: {name} accepted {count} arguments",
+                );
+            }
+            for index in 0..arity {
+                let mut invalid = valid.clone();
+                invalid[index] = VmValue::String("1".into());
+                assert!(
+                    evaluate_pure_native_with_compatibility(name, invalid, &compatibility).is_err(),
+                    "{profile}: {name} accepted string at {index}",
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn random_native_implements_one_and_two_argument_ranges() {
     let mut native = RandomNative {
         name: "rand".into(),

@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn unchecked_functions_require_exact_integer_signatures() {
+    for (call, accepted) in [
+        ("UNCHECKED_ADD(1, 2)", true),
+        ("UNCHECKED_SUB(1, 2)", true),
+        ("UNCHECKED_MUL(1, 2)", true),
+        ("UNCHECKED_NEG(1)", true),
+        ("UNCHECKED_ADD(1)", false),
+        ("UNCHECKED_SUB(1, 2, 3)", false),
+        ("UNCHECKED_MUL(\"1\", 2)", false),
+        ("UNCHECKED_NEG()", false),
+        ("UNCHECKED_NEG(1, 2)", false),
+    ] {
+        let report = analyze_project(
+            AnalysisInput {
+                project_data: empty_project(),
+                sources: vec![source(
+                    "unchecked.erb",
+                    &format!("@SYSTEM_TITLE\nRESULT = {call}\nRETURN\n"),
+                )],
+            },
+            &AnalyzerOptions::analysis_mode(),
+            &ExtensionRegistry::default(),
+        );
+        assert_eq!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.reference_level >= 2),
+            accepted,
+            "{call}: {:?}",
+            report.diagnostics,
+        );
+    }
+}
+
+#[test]
 fn column_options_treat_default_as_syntax_and_require_typed_header_and_values() {
     for (tail, accepted) in [
         ("\"t\", \"c\", DEFAULT, 12, DEFAULT, \"value\"", true),

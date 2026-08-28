@@ -319,7 +319,7 @@ fn evaluate_console_method(
         .map_err(|message| ("debug.console.execution_error", message))
 }
 
-const PURE_CONSOLE_METHODS: [&str; 35] = [
+const PURE_CONSOLE_METHODS: [&str; 39] = [
     "ABS",
     "SIGN",
     "SQRT",
@@ -334,6 +334,10 @@ const PURE_CONSOLE_METHODS: [&str; 35] = [
     "STRLENU",
     "TOINT",
     "ISNUMERIC",
+    "UNCHECKED_ADD",
+    "UNCHECKED_SUB",
+    "UNCHECKED_MUL",
+    "UNCHECKED_NEG",
     "UNICODE",
     "CONVERT",
     "COLOR_FROMRGB",
