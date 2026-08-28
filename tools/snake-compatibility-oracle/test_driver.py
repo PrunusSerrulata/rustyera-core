@@ -358,6 +358,21 @@ class DriverTests(unittest.TestCase):
         unknown = {**snake, "profile": {**snake["profile"], "policy_version": 3}}
         with self.assertRaises(ValueError):
             validate_rust_evidence(unknown, "snake", fixture, 1)
+        current = {**snake, "profile": {**snake["profile"], "semantic_version": 3,
+                   "policy_version": 3, "arithmetic": "snake_saturating_i64_v1"}}
+        current_required = {"semantic_version": 3, "policy_version": 3,
+                            "arithmetic": "snake_saturating_i64_v1"}
+        validate_rust_evidence(current, "snake", fixture, 1, current_required)
+        for fields in ({"arithmetic": "wrapping_i64_v1"}, {"rng_algorithm": "mt19937"},
+                       {"rng_state_version": 2}, {"semantic_version": 4, "policy_version": 4}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                validate_rust_evidence({**current, "profile": {**current["profile"], **fields}},
+                                       "snake", fixture, 1)
+        with self.assertRaises(ValueError):
+            validate_rust_evidence(current, "snake", fixture, 1, required)
+        with self.assertRaises(ValueError):
+            validate_rust_evidence({**historical, "profile": {**historical["profile"],
+                                   "arithmetic": "snake_saturating_i64_v1"}}, "snake", fixture, 1)
 
     def test_watchdog_ignores_envelope_ids_but_keeps_script_state(self):
         first = {"request": {"op": "observe", "id": 1}, "lastAvailableResponse": {"id": 1, "result": {"id": 7}}}

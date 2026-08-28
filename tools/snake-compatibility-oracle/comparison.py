@@ -43,14 +43,15 @@ def validate_rust_evidence(evidence, oracle, fixture, seed, required_policy=None
     if identity.get("profile") != PROFILES[oracle]:
         raise ValueError("Rust evidence belongs to a different compatibility profile")
     versions = (identity.get("semantic_version"), identity.get("policy_version"))
-    supported = {(1, 1)} if oracle == "original" else {(1, 1), (2, 2)}
+    supported = {(1, 1)} if oracle == "original" else {(1, 1), (2, 2), (3, 3)}
     if versions not in supported:
         raise ValueError(f"unsupported Rust semantic/policy versions: {versions!r}")
     for key, value in (required_policy or {}).items():
         if identity.get(key) != value:
             raise ValueError(f"fixture requires Rust policy {key}={value!r}")
     expected = {
-        "arithmetic": "wrapping_i64_v1",
+        "arithmetic": ("snake_saturating_i64_v1"
+                       if oracle == "snake" and versions == (3, 3) else "wrapping_i64_v1"),
         "rng_algorithm": "sfmt19937",
         "rng_state_version": 1,
         "layout": "unicode_column_v1",

@@ -1,0 +1,1534 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1,
+      "arithmetic": "wrapping_i64_v1"
+    },
+    "snake": {
+      "semantic_version": 3,
+      "policy_version": 3,
+      "arithmetic": "snake_saturating_i64_v1",
+      "rng_algorithm": "sfmt19937",
+      "rng_state_version": 1
+    }
+  },
+  "evidenceStatus": "prepared_not_executed; source-derived expectations require first live oracle validation",
+  "cases": [
+    {
+      "id": "arithmetic-constant-add",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "9223372036854775807 + 1"
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": -9223372036854775808
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 9223372036854775807
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass."
+    },
+    {
+      "id": "arithmetic-constant-subtract",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "(-9223372036854775807 - 1) - 1"
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": 9223372036854775807
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": -9223372036854775808
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass."
+    },
+    {
+      "id": "arithmetic-constant-multiply",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "9223372036854775807 * 2"
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": -2
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 9223372036854775807
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass."
+    },
+    {
+      "id": "arithmetic-variable",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMPAT_ARITHMETIC",
+            "arguments": "9223372036854775807, 1",
+            "watch": [
+              "RESULT:0",
+              "RESULT:1",
+              "RESULT:2"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "watches": {
+                  "RESULT:0": -9223372036854775808,
+                  "RESULT:1": 9223372036854775806,
+                  "RESULT:2": 9223372036854775807
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "watches": {
+                  "RESULT:0": 9223372036854775807,
+                  "RESULT:1": 9223372036854775806,
+                  "RESULT:2": 9223372036854775807
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass."
+    },
+    {
+      "id": "arithmetic-divide-zero",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMPAT_DIVIDE",
+            "arguments": "7, 0",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {},
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "fixed original integer division/remainder by zero"
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass.",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed"
+    },
+    {
+      "id": "arithmetic-modulo-zero",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMPAT_MODULO",
+            "arguments": "7, 0",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {},
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "fixed original integer division/remainder by zero"
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass.",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed"
+    },
+    {
+      "id": "rng-roundtrip",
+      "group": "RNG",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMPAT_RNG",
+            "watch": [
+              "RESULT:0",
+              "RESULT:1",
+              "RESULT:2",
+              "RESULT:3"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 192905,
+                  "RESULT:1": 520548,
+                  "RESULT:2": 192905,
+                  "RESULT:3": 520548
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 192905,
+                  "RESULT:1": 520548,
+                  "RESULT:2": 0,
+                  "RESULT:3": 0
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "assertions": [
+        "rng_roundtrip"
+      ],
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass.",
+      "knownRustDifference": {
+        "snake": "Approved SFMT replay policy restores 192905,520548 instead of fixed snake zero-state loss; retain raw different verdict."
+      },
+      "rustAcceptance": {
+        "original": {
+          "watches": {
+            "RESULT:0": 192905,
+            "RESULT:1": 520548,
+            "RESULT:2": 192905,
+            "RESULT:3": 520548
+          }
+        },
+        "snake": {
+          "watches": {
+            "RESULT:0": 192905,
+            "RESULT:1": 520548,
+            "RESULT:2": 192905,
+            "RESULT:3": 520548
+          }
+        }
+      }
+    },
+    {
+      "id": "rng-invalid-state",
+      "group": "RNG",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMPAT_BAD_RNG",
+            "watch": [
+              "RANDDATA:624"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RANDDATA:624": -1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RANDDATA:624": -1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass.",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed",
+      "knownRustDifference": {
+        "original": "Existing validated-state rejection is retained; fixed oracle accepts index -1.",
+        "snake": "Approved validated SFMT state rejects index -1; fixed oracle accepts it. Do not treat either rejection as oracle parity."
+      },
+      "rustAcceptance": {
+        "original": {
+          "termination": "faulted"
+        },
+        "snake": {
+          "termination": "faulted"
+        }
+      }
+    },
+    {
+      "id": "toint-integer",
+      "group": "TOINT",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "TOINT(\"42\")"
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": 42
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 42
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass."
+    },
+    {
+      "id": "toint-decimal",
+      "group": "TOINT",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "TOINT(\"12.9\")"
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": 12
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 12
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass."
+    },
+    {
+      "id": "toint-empty",
+      "group": "TOINT",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "TOINT(\"\")"
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": 0
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 0
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass."
+    },
+    {
+      "id": "toint-invalid",
+      "group": "TOINT",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "TOINT(\"abc\")"
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": 0
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 0
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass."
+    },
+    {
+      "id": "toint-overflow",
+      "group": "TOINT",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "TOINT(\"999999999999999999999999999999999999\")"
+          },
+          "expect": {
+            "original": {
+              "ok": false
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 0
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "batch_0_fixed_oracle_evidence; request and entry preserved; new fixture itself not executed",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass."
+    },
+    {
+      "id": "toint-runtime-overflow",
+      "group": "TOINT",
+      "targetBatch": 2,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "observation": "Retain actual typed values, side effects, terminal state and diagnostics; this manifest is not evidence of a pass.",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMPAT_TOINT",
+            "arguments": "\"999999999999999999999999999999999999\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "fixed original TOINT integer reader rejects an out-of-range signed 64-bit literal"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "expectationBasis": "fixed Creator.Method.cs ToIntMethod and integer-reader source; original rejection shape preserved from batch_0_fixed_oracle_evidence; source-derived, not_executed"
+    },
+    {
+      "id": "arithmetic-constant-negate",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "-(-9223372036854775807 - 1)"
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": -9223372036854775808
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 9223372036854775807
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Emuera/Runtime/Script/Statements/Expression/OperatorMethod.cs; snake SafeArithmetic.cs; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences."
+    },
+    {
+      "id": "arithmetic-zero-subtract-minimum",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "0 - (-9223372036854775807 - 1)"
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": -9223372036854775808
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": -9223372036854775808
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Emuera/Runtime/Script/Statements/Expression/OperatorMethod.cs; snake SafeArithmetic.cs; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences."
+    },
+    {
+      "id": "arithmetic-variable-negate",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "POLICY_VARIABLE_NEGATE",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": -9223372036854775808,
+                  "RESULT:11": -9223372036854775808
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 9223372036854775807,
+                  "RESULT:11": -9223372036854775808
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Emuera/Runtime/Script/Statements/Expression/OperatorMethod.cs; snake SafeArithmetic.cs; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences."
+    },
+    {
+      "id": "arithmetic-minimum-divide",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "POLICY_MINIMUM_DIVIDE",
+            "watch": [
+              "FLAG:10",
+              "RESULT:10"
+            ]
+          },
+          "expectedRejection": {
+            "original": "MIN / -1 or MIN % -1 faults in fixed .NET integer arithmetic",
+            "snake": "MIN / -1 or MIN % -1 faults in fixed .NET integer arithmetic"
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Emuera/Runtime/Script/Statements/Expression/OperatorMethod.cs; snake SafeArithmetic.cs; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences.",
+      "rustAcceptance": {
+        "original": {
+          "termination": "faulted",
+          "watchesIfAvailable": {
+            "FLAG:10": 777
+          }
+        },
+        "snake": {
+          "termination": "faulted",
+          "watchesIfAvailable": {
+            "FLAG:10": 777
+          }
+        }
+      }
+    },
+    {
+      "id": "arithmetic-minimum-modulo",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "POLICY_MINIMUM_MODULO",
+            "watch": [
+              "FLAG:10",
+              "RESULT:10"
+            ]
+          },
+          "expectedRejection": {
+            "original": "MIN / -1 or MIN % -1 faults in fixed .NET integer arithmetic",
+            "snake": "MIN / -1 or MIN % -1 faults in fixed .NET integer arithmetic"
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Emuera/Runtime/Script/Statements/Expression/OperatorMethod.cs; snake SafeArithmetic.cs; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences.",
+      "rustAcceptance": {
+        "original": {
+          "termination": "faulted",
+          "watchesIfAvailable": {
+            "FLAG:10": 777
+          }
+        },
+        "snake": {
+          "termination": "faulted",
+          "watchesIfAvailable": {
+            "FLAG:10": 777
+          }
+        }
+      }
+    },
+    {
+      "id": "arithmetic-postfix-boundaries",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "POLICY_POSTFIX",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 9223372036854775807,
+                  "RESULT:11": -9223372036854775808,
+                  "RESULT:12": -9223372036854775808,
+                  "RESULT:13": 9223372036854775807
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 9223372036854775806,
+                  "RESULT:11": 9223372036854775807,
+                  "RESULT:12": -9223372036854775807,
+                  "RESULT:13": -9223372036854775808
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Emuera/Runtime/Script/Statements/Expression/OperatorMethod.cs; snake SafeArithmetic.cs; source-derived, not executed; VariableToken.PlusValue uses SafeAdd before postfix subtract/add",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences."
+    },
+    {
+      "id": "arithmetic-prefix-boundaries",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "POLICY_PREFIX",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": -9223372036854775808,
+                  "RESULT:11": -9223372036854775808,
+                  "RESULT:12": 9223372036854775807,
+                  "RESULT:13": 9223372036854775807
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 9223372036854775807,
+                  "RESULT:11": 9223372036854775807,
+                  "RESULT:12": -9223372036854775808,
+                  "RESULT:13": -9223372036854775808
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Emuera/Runtime/Script/Statements/Expression/OperatorMethod.cs; snake SafeArithmetic.cs; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences."
+    },
+    {
+      "id": "unchecked-add",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "UNCHECKED_ADD(9223372036854775807, 1)"
+          },
+          "expect": {
+            "original": {},
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": -9223372036854775808
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "new UNCHECKED function is absent from fixed original catalog"
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "snake Creator.Method.cs Unchecked methods; original Creator catalog absence; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences.",
+      "knownRustDifference": {
+        "original": "New additive Rust API is available under both profiles; original oracle rejects the name. Preserve different."
+      },
+      "rustAcceptance": {
+        "original": {
+          "value": -9223372036854775808
+        },
+        "snake": {
+          "value": -9223372036854775808
+        }
+      }
+    },
+    {
+      "id": "unchecked-subtract",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "UNCHECKED_SUB(-9223372036854775807 - 1, 1)"
+          },
+          "expect": {
+            "original": {},
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 9223372036854775807
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "new UNCHECKED function is absent from fixed original catalog"
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "snake Creator.Method.cs Unchecked methods; original Creator catalog absence; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences.",
+      "knownRustDifference": {
+        "original": "New additive Rust API is available under both profiles; original oracle rejects the name. Preserve different."
+      },
+      "rustAcceptance": {
+        "original": {
+          "value": 9223372036854775807
+        },
+        "snake": {
+          "value": 9223372036854775807
+        }
+      }
+    },
+    {
+      "id": "unchecked-multiply",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "UNCHECKED_MUL(9223372036854775807, 2)"
+          },
+          "expect": {
+            "original": {},
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": -2
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "new UNCHECKED function is absent from fixed original catalog"
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "snake Creator.Method.cs Unchecked methods; original Creator catalog absence; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences.",
+      "knownRustDifference": {
+        "original": "New additive Rust API is available under both profiles; original oracle rejects the name. Preserve different."
+      },
+      "rustAcceptance": {
+        "original": {
+          "value": -2
+        },
+        "snake": {
+          "value": -2
+        }
+      }
+    },
+    {
+      "id": "unchecked-negate",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "UNCHECKED_NEG(-9223372036854775807 - 1)"
+          },
+          "expect": {
+            "original": {},
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": -9223372036854775808
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "new UNCHECKED function is absent from fixed original catalog"
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "snake Creator.Method.cs Unchecked methods; original Creator catalog absence; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences.",
+      "knownRustDifference": {
+        "original": "New additive Rust API is available under both profiles; original oracle rejects the name. Preserve different."
+      },
+      "rustAcceptance": {
+        "original": {
+          "value": -9223372036854775808
+        },
+        "snake": {
+          "value": -9223372036854775808
+        }
+      }
+    },
+    {
+      "id": "xml-multiple-target-clones",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "POLICY_XML_CLONES",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 2,
+                  "RESULT:11": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 2,
+                  "RESULT:11": 2
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Both Creator.Method.cs XmlAddNodeMethod: original reuses one child, snake GetNewChild deep-clones per target; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences.",
+      "knownRustDifference": {
+        "original": "Rust already clones each target; retain existing reference-profile difference."
+      },
+      "rustAcceptance": {
+        "original": {
+          "watches": {
+            "RESULT:10": 2,
+            "RESULT:11": 2
+          }
+        },
+        "snake": {
+          "watches": {
+            "RESULT:10": 2,
+            "RESULT:11": 2
+          }
+        }
+      }
+    },
+    {
+      "id": "string-ordered-comparison",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "POLICY_STRING_COMPARE",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 0,
+                  "RESULT:12": 1,
+                  "RESULT:13": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 1,
+                  "RESULT:12": 0,
+                  "RESULT:13": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Both OperatorMethod.cs GreaterEqualStrStr/LessEqualStrStr: original both c<0, snake c>=0/c<=0; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences.",
+      "knownRustDifference": {
+        "original": "Rust already uses correct >= and <=; retain existing reference-profile difference."
+      },
+      "rustAcceptance": {
+        "original": {
+          "watches": {
+            "RESULT:10": 1,
+            "RESULT:11": 1,
+            "RESULT:12": 0,
+            "RESULT:13": 1
+          }
+        },
+        "snake": {
+          "watches": {
+            "RESULT:10": 1,
+            "RESULT:11": 1,
+            "RESULT:12": 0,
+            "RESULT:13": 1
+          }
+        }
+      }
+    },
+    {
+      "id": "toint-variable-hex",
+      "group": "TOINT",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMPAT_TOINT",
+            "watch": [
+              "RESULT:0"
+            ],
+            "arguments": "\"0x2a\""
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 42
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 42
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Creator.Method.cs ToIntMethod and LexicalAnalyzer integer grammar; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences."
+    },
+    {
+      "id": "toint-variable-negative",
+      "group": "TOINT",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMPAT_TOINT",
+            "watch": [
+              "RESULT:0"
+            ],
+            "arguments": "\"-42\""
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": -42
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": -42
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Creator.Method.cs ToIntMethod and LexicalAnalyzer integer grammar; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences."
+    },
+    {
+      "id": "toint-variable-fraction",
+      "group": "TOINT",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMPAT_TOINT",
+            "watch": [
+              "RESULT:0"
+            ],
+            "arguments": "\"12.9\""
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 12
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 12
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Creator.Method.cs ToIntMethod and LexicalAnalyzer integer grammar; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences."
+    },
+    {
+      "id": "toint-invalid-binary",
+      "group": "TOINT",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "TOINT(\"0b2\")"
+          },
+          "expect": {
+            "original": {},
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 0
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "integer reader rejects binary digit 2"
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "snake ToIntMethod catches ReadInt64 exceptions; original propagates integer-reader exception; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences."
+    },
+    {
+      "id": "rng-randomize-repeat",
+      "group": "RNG",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "POLICY_RANDOMIZE",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "Fixed VariableEvaluator random reseeding is deterministic; source-derived, not executed",
+      "observation": "Prepared source-derived expectation, not a completed oracle result; preserve diagnostic schema differences."
+    },
+    {
+      "id": "noise-plain-small-scale",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "(((((0 ^ 0x145579EC) >> 13) ^ (0 ^ 0x145579EC)) * ((((0 ^ 0x145579EC) >> 13) ^ (0 ^ 0x145579EC)) * (((0 ^ 0x145579EC) >> 13) ^ (0 ^ 0x145579EC)) * 60493 + 19990303) + 1376312589) & 0x7fffffff) * 100 / 0x80000000"
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": 19
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 99
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "source-derived arithmetic from NOISE operation graph; neither product nor oracle executed",
+      "observation": "Kernel reconstructed from arithmetic operations, not a copied game function; verify live result and diagnostics separately.",
+      "gameSource": {
+        "original": "games/eraTW/ERB/COMMON.ERB:2366,2372-2375",
+        "snake": "games/eratw-sub-modding/ERB/COMMON.ERB:2990,2999-3002"
+      },
+      "inputs": {
+        "seed": 0,
+        "scale": 100
+      }
+    },
+    {
+      "id": "noise-unchecked-small-scale",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "UNCHECKED_MUL(UNCHECKED_ADD(UNCHECKED_MUL((((0 ^ 0x145579EC) >> 13) ^ (0 ^ 0x145579EC)), UNCHECKED_ADD(UNCHECKED_MUL(UNCHECKED_MUL((((0 ^ 0x145579EC) >> 13) ^ (0 ^ 0x145579EC)), (((0 ^ 0x145579EC) >> 13) ^ (0 ^ 0x145579EC))), 60493), 19990303)), 1376312589) & 0x7fffffff, 100) / 0x80000000"
+          },
+          "expect": {
+            "original": {},
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 19
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "fixed original does not register UNCHECKED functions"
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "source-derived arithmetic from NOISE operation graph; neither product nor oracle executed",
+      "observation": "Kernel reconstructed from arithmetic operations, not a copied game function; verify live result and diagnostics separately.",
+      "gameSource": {
+        "original": "games/eraTW/ERB/COMMON.ERB:2366,2372-2375",
+        "snake": "games/eratw-sub-modding/ERB/COMMON.ERB:2990,2999-3002"
+      },
+      "inputs": {
+        "seed": 0,
+        "scale": 100
+      },
+      "knownRustDifference": {
+        "original": "Rust additive UNCHECKED API succeeds while fixed original rejects names; preserve different."
+      },
+      "rustAcceptance": {
+        "original": {
+          "value": 19
+        },
+        "snake": {
+          "value": 19
+        }
+      }
+    },
+    {
+      "id": "noise-plain-wide-scale",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "(((((-5 ^ 0x145579EC) >> 13) ^ (-5 ^ 0x145579EC)) * ((((-5 ^ 0x145579EC) >> 13) ^ (-5 ^ 0x145579EC)) * (((-5 ^ 0x145579EC) >> 13) ^ (-5 ^ 0x145579EC)) * 60493 + 19990303) + 1376312589) & 0x7fffffff) * 8589934592 / 0x80000000"
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": -912908252
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 4294967295
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "source-derived arithmetic from NOISE operation graph; neither product nor oracle executed",
+      "observation": "Kernel reconstructed from arithmetic operations, not a copied game function; verify live result and diagnostics separately.",
+      "gameSource": {
+        "original": "games/eraTW/ERB/COMMON.ERB:2366,2372-2375",
+        "snake": "games/eratw-sub-modding/ERB/COMMON.ERB:2990,2999-3002"
+      },
+      "inputs": {
+        "seed": -5,
+        "scale": 8589934592
+      }
+    },
+    {
+      "id": "noise-unchecked-wide-scale",
+      "group": "arithmetic",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "UNCHECKED_MUL(UNCHECKED_ADD(UNCHECKED_MUL((((-5 ^ 0x145579EC) >> 13) ^ (-5 ^ 0x145579EC)), UNCHECKED_ADD(UNCHECKED_MUL(UNCHECKED_MUL((((-5 ^ 0x145579EC) >> 13) ^ (-5 ^ 0x145579EC)), (((-5 ^ 0x145579EC) >> 13) ^ (-5 ^ 0x145579EC))), 60493), 19990303)), 1376312589) & 0x7fffffff, 8589934592) / 0x80000000"
+          },
+          "expect": {
+            "original": {},
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": -912908252
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "fixed original does not register UNCHECKED functions"
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "identity_bound_batch_2A_integer_and_replayable_sfmt",
+      "snakeTargetStatus": "requires_batch_2A_acceptance",
+      "expectationBasis": "source-derived arithmetic from NOISE operation graph; neither product nor oracle executed",
+      "observation": "Kernel reconstructed from arithmetic operations, not a copied game function; verify live result and diagnostics separately.",
+      "gameSource": {
+        "original": "games/eraTW/ERB/COMMON.ERB:2366,2372-2375",
+        "snake": "games/eratw-sub-modding/ERB/COMMON.ERB:2990,2999-3002"
+      },
+      "inputs": {
+        "seed": -5,
+        "scale": 8589934592
+      },
+      "knownRustDifference": {
+        "original": "Rust additive UNCHECKED API succeeds while fixed original rejects names; preserve different."
+      },
+      "rustAcceptance": {
+        "original": {
+          "value": -912908252
+        },
+        "snake": {
+          "value": -912908252
+        }
+      }
+    }
+  ]
+}

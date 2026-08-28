@@ -551,6 +551,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn faulted_arithmetic_observation_reads_watches_and_stays_faulted() {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixture-snake-batch2-policy");
+        let fixture: super::super::Fixture =
+            serde_json::from_slice(&std::fs::read(root.join("cases.json")).unwrap()).unwrap();
+        for profile in [
+            erabasic_compat::CompatibilityProfileId::EmueraEm,
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ] {
+            let identity = erabasic_compat::CompatibilityIdentity::for_profile(profile);
+            for case in fixture.cases.iter().filter(|case| {
+                matches!(
+                    case.id.as_str(),
+                    "arithmetic-minimum-divide" | "arithmetic-minimum-modulo"
+                )
+            }) {
+                let observed =
+                    super::super::observe_case(&root, &identity, fixture.seed, case).unwrap();
+                let step = &observed["steps"][0];
+                assert_eq!(step["status"], "executed", "{observed}");
+                let result = &step["result"];
+                assert_eq!(result["termination"], "faulted", "{observed}");
+                assert_eq!(result["runtimePhase"], "faulted", "{observed}");
+                assert_eq!(result["ok"], false);
+                assert_eq!(result["watches"]["FLAG:10"], 777);
+                assert_eq!(result["watches"]["RESULT:10"], 0);
+                assert_eq!(result["observationBlocks"], json!([]));
+            }
+        }
+    }
+
+    #[test]
     fn each_step_starts_without_setup_or_previous_script_diagnostics() {
         let request = json!({"op": "run", "entry": "COMPAT_KEYS"});
         let mut session =

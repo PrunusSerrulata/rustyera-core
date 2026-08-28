@@ -235,7 +235,8 @@ fn observe_step(
     };
     let mut watches = serde_json::Map::new();
     let mut value = Value::Null;
-    if matches!(termination, "completed" | "waitingInput") {
+    // Fault stops permit authorized read-only inspection without resuming the script.
+    if matches!(termination, "completed" | "waitingInput" | "faulted") {
         match runtime.pause() {
             Ok((grant, stop)) => {
                 for watch in request["watch"].as_array().into_iter().flatten() {
@@ -250,7 +251,7 @@ fn observe_step(
                         }
                     }
                 }
-                if request["op"] == "eval" {
+                if request["op"] == "eval" && termination != "faulted" {
                     match runtime.read_watch(grant, stop, "RESULT:0") {
                         Ok(result) => value = result,
                         Err(error) => {
