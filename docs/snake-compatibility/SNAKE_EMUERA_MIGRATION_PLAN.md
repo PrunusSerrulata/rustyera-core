@@ -2,7 +2,7 @@
 
 > 来源：从[功能分类文档](SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md)原第 7 章独立抽取，保留已核对的批次 0–7 范围与依赖关系。本文是实施计划，不是完成状态或运行通过证明。
 
-本文维护总体架构、批次范围、前置依赖和验收目标；具体实施方案、实际改动、验收结果和未完成项统一写入[分批次实施与验收记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md)。调整范围或依赖时须同步关联记录，不能仅修改计划就宣称完成。
+本文维护总体架构、批次范围、前置依赖和验收目标；详细方案使用对应批次计划文档，整批最终结束后才将实际改动、验收结果和未完成项统一写入[分批次实施与验收记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md)。过程证据与恢复信息保留在本任务已忽略的工作目录，不写实施日志或批次总览的中间状态。调整范围或依赖时同步方案，不能仅修改计划就宣称完成。
 
 - 背景与证据：[蛇版兼容性详查](SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md)。历史审计不代表当前实现状态。
 - S/D/C/N 编号及第 1–4 类定义：[功能分类与替代契约](SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md)。通用验收原则亦见该文档第 9.2 节。
@@ -24,7 +24,7 @@
 
 ```text
 language = emuera.em | emuera.skia.snake
-arithmetic = reference-wrap-or-current | snake-saturating
+arithmetic = reference-wrap-or-current | snake-operation-specific-safe
 rng = <algorithm-id, state-format-version>
 layout = unicode-column | snake-pixel-intent
 save = <codec-version>
@@ -55,8 +55,9 @@ services = <sql, presentation, audio, extension capability versions>
 不把布局度量等同于 GUI/GPU 或跨客户端像素等价。详细契约、版本、分项与门禁见本批实施记录。
 
 批次 0 实测进一步记录固定蛇版基准的 RNG dump/restore 状态丢失：`DumpRanddata`
-向临时 `ToArray` 副本写入，随后 `INITRAND` 恢复零。批次 2 须明确决定复刻该可观察行为
-还是采用有意修复并升级 policy；算法名称相同不代表状态兼容。原始向量及两引擎逐例结果见
+向临时 `ToArray` 副本写入，随后 `INITRAND` 恢复零。批次 2 已选择统一 SFMT 权威状态，
+正确实现 dump/restore，不复刻缺陷或 `.NET Random` 双状态路径，并升级实际 policy；
+不保证与开启 `UseNewRandom` 的蛇版 TW 同 seed 同结果。算法名称相同不代表状态兼容。原始向量及两引擎逐例结果见
 [实测比较汇总](BATCH_0_ORACLE_RESULTS.md)，不得先改参考实现或以新 golden 隐藏差异。
 
 验收：选择 `emuera.skia.snake` profile 不改变 `emuera.em` profile 的既有 fixture；错误中能显示 profile 和缺失 capability。
@@ -95,11 +96,20 @@ Browser/Tauri 完成真实服务，TUI 本批对像素测量/pointer/canvas 明�
 
 前置：批次 1 的完整符号/数据摄取、动态方法和已有 service 接线。
 
-- 实施 S05-S11、S13：EXISTVAR storage 重载、CSV/数组、bit、MAP、STRFORMCHECK、BGC、unchecked、动画查询；S12 已在批次 1 完成，S14 明确留到批次 4 的 scene 模型之后，S05 的 Float bit 留到批次 6。
-- 实施 D04、D06-D08、D10-D13、D17 的 profile 分支和输入状态机。先统一 D10 的逻辑计时器再接 S13；先定 D13 的输入顺序再验 D12 的键/鼠标 latch。D04/D06 固定动态调用、实参处理和 call-frame 扩展边界，作为批次 6 新 ABI 的基础。
-- 为 C03 提供 capability-based environment；兼容 `GETPLATFORM` 但发 portability diagnostic。
-- D11 同步定义 RNG algorithm/state-format identity 与当前已支持状态的保存/恢复契约，不能等到批次 5 才补；外部蛇版存档导入后置。
-- 对真实 176 MiB 项目先记录摄取、符号分析和编译缺口/内存基线；用已可编译 fixture 验证 compiled cache 与函数缓存。完整项目缓存收益等批次 4 编译闭环就绪后再验收；优化 N01 的替代路径，不接入 lazy 二进制索引。
+2026-08-29 用户批准的[详细实施方案](BATCH_2_IMPLEMENTATION_PLAN.md)固定六个子批次：
+2A 执行策略/RNG；2B 动态调用/表达式；2C 数据 API；2D 错误钩子；2E 展示/计时器；
+2F 输入/环境及最终汇合。2B/2C/2E 依赖 2A；2D 依赖 2B；2F 依赖 2B/2E，
+最终汇合等待全部子批次。各子批次分别且仅一次重构审查、每套全量一次；用户取消批次 2
+各子批次测试总时限，保留静态门禁、看门狗与证据要求。该安排不是完成状态。
+
+- 实施 S05-S11、S13：`EXISTVAR` 非零参数模式执行表达式解析，不读取 storage cell 或额外验证访问越界；`STRFORMCHECK` 实际展开并保留副作用，受捕获的解析/展开错误返回 0，参数求值失败正常传播。S12 已在批次 1 完成，S14 留批次 4，S05 的 Float bit 留批次 6。
+- CSV/数组、bit、MAP 复用既有存储与写回事务。MAP 保留稳定插入顺序与蛇版无转义分隔符格式，FROMSTRING 不清空旧 MAP，只对无分隔符冲突数据承诺 round-trip。BGC 为独立全局整行背景状态，影响符合条件的历史行，不复用 run 背景。
+- 实施 D04、D06-D08、D10-D13、D17。CALLSTR 六变体运行时解析完整调用文本及实参，不是 CALLFORM 名称别名；snake 非 variadic 多余实参不求值，内置 arity 不放宽。集中算术策略覆盖折叠和优化，逐操作保留固定参考边界，不笼统以饱和替代全部算术。错误钩子保留原 fault 且防重入。
+- 算术告警使用独立诊断通道，不向脚本文本历史插入本地化诊断行；明确保留与固定蛇版的输出及历史查询差异，逐例保留原始差分，不能将其仅标为 Schema 不可比或过滤后宣称一致。
+- 先统一 D10/S13 的逻辑计时器，再接查询；获准最小 headless 接线修复必须逐文件审计且不改变正常引擎。先定 D13 输入排序，再验 D12 键/鼠 latch 与真实 AWAIT 0 输入泵；TUI 不新增终端按键扩展，撤销无法提供的完整 GETKEY 能力。
+- C03 提供版本化 `ENV_HAS_CAPABILITY(name[, major])`；`GETPLATFORM` 以保持视口的定时输入能力映射 0/5，按位置发 portability diagnostic，不暴露实际 OS。
+- D11 使用统一 SFMT 与既有 625 项 RANDDATA 事务路径，覆盖当前保存/恢复、snapshot 和 replay；状态拒绝原子化。明确有意 RNG 差异并升级实际 identity，旧 snake cache 重建，不兼容 snapshot/身份容器拒绝，不静默迁移。原版 RNG/裸存档保留，外部蛇版存档导入后置。
+- N01 缓存正确性归 2B，跨端缓存和真实项目规模基线归 2F。用可编译 fixture 验证冷/暖缓存及动态目标失效；真实项目仅在最终输入冻结后采集一次分阶段耗时、峰值内存和缺口，区分旧 `binary=false` 配置诊断。完整项目缓存收益等批次 4，不接 lazy 索引，不另拆集成批次重跑全量。
 
 验收：独立 fixture 中环境分支、NF 输入、计时器、动态调用和 RNG 状态可重复；7 个非蛇版项目的关键语义 fixture 仍按 `emuera.em` profile；可编译 fixture 有可量化缓存结果。真实标题在 NF 输入前已调用 SQL 并使用扩展 HTML，因此必须等批次 3/4，不能在本批提前宣布标题可交互。
 

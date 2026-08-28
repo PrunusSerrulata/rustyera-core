@@ -5,7 +5,7 @@
 
 - `erabasic-vm` 的 crate 根重导出、`runtime_port.rs`、`runtime_vm.rs`；
 - `era-runtime::RuntimeSession` 的 `drive`、Host 分派、状态事务、存档与热重载调用点；
-- 当前 VM snapshot 格式版本 `9`，magic 为 `RERAVMS\0`。
+- 当前 VM snapshot 格式版本 `14`，magic 为 `RERAVMS\0`；Native ABI `18`、VM ABI `17`。
 
 相关源码：
 
@@ -480,10 +480,24 @@ pub fn inspect_snapshot(
 
 `VmSnapshot` 内部字段私有；公开查询只有 `program_version()`、`artifact_id()`、
 `encode()`。容器包含版本、精确 artifact、memory、非回收 fiber、primary fiber、ID
-分配状态和按 key 排序的 Native state。稳定 Host wait 要求 primary 指向等待 fiber；完全
-静止且 fiber 集合为空也可做 snapshot。恢复旧 v9 终止历史后会回收 Completed/Cancelled
-并把 fiber 分配提示规范化为最小空闲 ID。`decode` 校验大小、header、格式版本、压缩长度、
+分配状态、按 key 排序的 Native state，以及算术诊断的 generation/函数/指令/类别去重集合。
+稳定 Host wait 要求 primary 指向等待 fiber；完全静止且 fiber 集合为空也可做 snapshot。
+恢复时回收 Completed/Cancelled 并把 fiber 分配提示规范化为最小空闲 ID。
+`decode` 校验大小、header、格式版本、压缩长度、
 checksum 和序列化数据。
+
+算术策略由 artifact 的 `CompatibilityIdentity` 选择。原版保持已有 wrapping 行为；
+snake semantic/policy `3/3` 使用 `snake_saturating_i64_v1`，包含固定参考的减法、
+postfix 和除法边界，不等同于所有操作统一数学饱和。普通表达式、复合赋值、循环步进及
+动态表达式共用策略；`UNCHECKED_ADD/SUB/MUL/NEG` 始终 wrapping。
+`compat.arithmetic.overflow` 与 `compat.arithmetic.divide_by_zero` 在同 generation
+同执行位置按类别去重；产生诊断的执行不可写入不包含诊断的 memo。恢复 snapshot 保留
+去重状态；不兼容的身份及旧 snapshot 格式明确拒绝，不静默迁移。
+
+两种 profile 的随机状态均为同一 SFMT19937 权威状态，`RANDDATA` 为 625 项。
+`DUMPRAND/INITRAND`、snapshot 与现有保存路径不能引入第二条随机流；非法状态在完整
+校验后才允许替换，拒绝时不得部分修改。snake 不复刻临时副本写入缺陷，也不实现
+`UseNewRandom` 的 .NET Random 双状态，因此不保证该配置下与参考同 seed 同结果。
 
 `inspect_snapshot` 与 `decode` 使用同一套验证逻辑，将容器元数据和全部序列化执行状态
 投影为可序列化的检查结果。不透明 Native state 与稳定 Host wait 的重新绑定 payload

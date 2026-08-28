@@ -325,15 +325,18 @@ Console {
 ```
 
 `Evaluate` 支持整数/字符串字面量、可见的未索引标量变量、括号、一元 `+ - ! ~`、常见
-二元运算、三元表达式和纯方法白名单。整数算术 wrapping；shift count 按 `&63`；
-除零产生诊断；相等要求 `DebugValue` 同型相等。
+二元运算、三元表达式和纯方法白名单。整数算术与 TOINT 使用当前 artifact 的兼容策略；
+原版保留既有 wrapping 与错误行为，snake 使用共享算术策略。算术告警只加入当前
+`ConsoleOutcome`，不修改脚本执行的诊断去重状态。shift count 按 `&63`；
+相等要求 `DebugValue` 同型相等。
 
-当前白名单 35 项：
+当前白名单 39 项：
 
 `ABS, SIGN, SQRT, CBRT, LOG, LOG10, EXPONENT, POWER, GETBIT, BITCOUNT, STRLEN,
 STRLENU, TOINT, ISNUMERIC, UNICODE, CONVERT, COLOR_FROMRGB, MAX, MIN, LIMIT,
 INRANGE, TOSTR, SUBSTRING, SUBSTRINGU, STRFIND, STRFINDU, STRCOUNT, STRLENS,
-STRLENSU, REPLACE, ESCAPE, UNICODETOSTR, ENCODETOUNI, UNICODEBYTE, CHARATU`。
+STRLENSU, REPLACE, ESCAPE, UNICODETOSTR, ENCODETOUNI, UNICODEBYTE, CHARATU,
+UNCHECKED_ADD, UNCHECKED_SUB, UNCHECKED_MUL, UNCHECKED_NEG`。
 
 不支持索引读取、formatted string、省略参数、前/后置增减和不在白名单的方法。
 控制台只查询 `variables(..., limit=1024)` 的第一页，因此超过第一页的变量不可见。
