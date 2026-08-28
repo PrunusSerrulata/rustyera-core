@@ -162,6 +162,67 @@ pub(in super::super) fn commit_array(
     vm.write_place_array(fiber, &array, values)
 }
 
+fn shift_array_values(values: &mut [VmValue], arguments: &[VmValue]) -> Result<bool, VmError> {
+    let shift = integer_argument(arguments, 1)?;
+    if shift == 0 {
+        return Ok(false);
+    }
+    let fill = arguments
+        .get(2)
+        .cloned()
+        .ok_or_else(|| VmError::InvalidArguments("ARRAYSHIFT fill value is missing".into()))?;
+    if matches!(fill, VmValue::IntegerPlace(_) | VmValue::StringPlace(_)) {
+        return Err(VmError::InvalidArguments(
+            "ARRAYSHIFT fill type differs".into(),
+        ));
+    }
+    if values
+        .first()
+        .is_some_and(|value| value.value_type() != fill.value_type())
+    {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
+            "ARRAYSHIFT fill type differs".into(),
+        ));
+    }
+    let start = match optional_integer_argument(arguments, 3, 0)? {
+        i64::MIN => 0,
+        value => usize::try_from(value).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "ARRAYSHIFT start is negative".into(),
+            )
+        })?,
+    };
+    if start > values.len() {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            "ARRAYSHIFT start exceeds array".into(),
+        ));
+    }
+    let count = match optional_integer_argument(arguments, 4, i64::MIN)? {
+        i64::MIN => values.len() - start,
+        value => usize::try_from(value).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "ARRAYSHIFT count is negative".into(),
+            )
+        })?,
+    };
+    let end = start.saturating_add(count).min(values.len());
+    let source = values[start..end].to_vec();
+    for (relative, value) in values[start..end].iter_mut().enumerate() {
+        let source_index = i64::try_from(relative)
+            .ok()
+            .and_then(|index| index.checked_sub(shift));
+        *value = source_index
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|source_index| source.get(source_index).cloned())
+            .unwrap_or_else(|| fill.clone());
+    }
+    Ok(true)
+}
+
 pub(in super::super) fn execute_array_mutation(
     vm: &mut Vm,
     fiber: &mut Fiber,
@@ -195,60 +256,8 @@ pub(in super::super) fn execute_array_mutation(
             }
         }
         "arrayshift" => {
-            let shift = integer_argument(arguments, 1)?;
-            if shift == 0 {
+            if !shift_array_values(&mut values, arguments)? {
                 return Ok(());
-            }
-            let fill = arguments
-                .get(2)
-                .cloned()
-                .ok_or_else(|| VmError::InvalidArguments("ARRAYSHIFT fill value is missing".into()))?;
-            if matches!(fill, VmValue::IntegerPlace(_) | VmValue::StringPlace(_)) {
-                return Err(VmError::InvalidArguments(
-                    "ARRAYSHIFT fill type differs".into(),
-                ));
-            }
-            if values
-                .first()
-                .is_some_and(|value| value.value_type() != fill.value_type())
-            {
-                return Err(script_native_error(
-                    crate::ScriptFaultKind::Argument,
-                    "ARRAYSHIFT fill type differs".into(),
-                ));
-            }
-            let start = match optional_integer_argument(arguments, 3, 0)? {
-                i64::MIN => 0,
-                value => usize::try_from(value).map_err(|_| {
-                    script_native_error(
-                        crate::ScriptFaultKind::Bounds,
-                        "ARRAYSHIFT start is negative".into(),
-                    )
-                })?,
-            };
-            if start > values.len() {
-                return Err(script_native_error(
-                    crate::ScriptFaultKind::Bounds,
-                    "ARRAYSHIFT start exceeds array".into(),
-                ));
-            }
-            let count = match optional_integer_argument(arguments, 4, i64::MIN)? {
-                i64::MIN => values.len() - start,
-                value => usize::try_from(value).map_err(|_| {
-                    script_native_error(
-                        crate::ScriptFaultKind::Bounds,
-                        "ARRAYSHIFT count is negative".into(),
-                    )
-                })?,
-            };
-            let end = start.saturating_add(count).min(values.len());
-            let source = values[start..end].to_vec();
-            for (relative, value) in values[start..end].iter_mut().enumerate() {
-                let source_index = i64::try_from(relative).unwrap_or(i64::MAX) - shift;
-                *value = usize::try_from(source_index)
-                    .ok()
-                    .and_then(|source_index| source.get(source_index).cloned())
-                    .unwrap_or_else(|| fill.clone());
             }
         }
         "arraysort" => {

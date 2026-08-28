@@ -3937,3 +3937,38 @@ RETURN RESULT:0
     assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(0));
     assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(1));
 }
+
+#[test]
+fn arrayshift_extreme_offsets_do_not_panic_inside_a_checked_method() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+FLAG:0 = -9223372036854775807 - 1
+RESULT:0 = STRFORMCHECK("{SHIFT()}")
+RESULT:1 = TFLAG:0
+RETURN RESULT:0
+@SHIFT
+#FUNCTION
+TFLAG:0 = 3
+ARRAYSHIFT TFLAG, FLAG:0, 9, 0, 1
+RETURNF TFLAG:0
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "RESULT", 0, VmValue::Integer(1));
+    assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(9));
+}
