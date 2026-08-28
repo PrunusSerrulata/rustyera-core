@@ -1,9 +1,11 @@
 //! Validator state tracks only an opaque lease and its next syntactic slot.
 //! Captures live in bounded VM pending state, never in this operand stack.
+//! Validator state tracks only an opaque lease and its next syntactic slot.
+//! Captures live in bounded VM pending state, never in this operand stack.
 use std::collections::BTreeMap;
 
 use erabasic_bytecode::{
-    BytecodeFunction, BytecodeGlobal, BytecodeStorage, BytecodeType, Opcode,
+    BytecodeFunction, BytecodeGlobal, BytecodeStorage, BytecodeType, CallTextSpec, Opcode,
     SymbolKey, UserArgumentAdvance, UserArgumentSpec, UserCallSpec,
 };
 
@@ -101,6 +103,22 @@ pub(super) fn apply(
             expect_token(stack, resolve, 0)?;
             stack.pop();
             Ok(vec![index + 1])
+        }
+        Opcode::InvokeCallText => {
+            let spec = CallTextSpec::decode(payload).map_err(operand_error)?;
+            pop_type(stack, BytecodeType::String)?;
+            // CALLSTR is a statement. A jump's blank source still falls through.
+            if !stack.is_empty() {
+                return Err((
+                    ValidationCode::StackMismatch,
+                    "call-text statement leaves an active operand or pending call".into(),
+                ));
+            }
+            if spec.mode.has_catch() {
+                Ok(vec![spec.catch_target as usize, index + 1])
+            } else {
+                Ok(vec![index + 1])
+            }
         }
         _ => unreachable!("only user-call opcodes are dispatched here"),
     }

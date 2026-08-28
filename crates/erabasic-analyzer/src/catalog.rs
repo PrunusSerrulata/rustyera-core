@@ -153,6 +153,19 @@ pub fn builtin_function_names() -> Vec<String> {
     builtin_functions().into_keys().collect()
 }
 
+
+pub(crate) fn builtin_available(
+    name: &str,
+    identity: &erabasic_compat::CompatibilityIdentity,
+) -> bool {
+    match name.to_ascii_uppercase().as_str() {
+        "CALLSTR" | "JUMPSTR" | "TRYCALLSTR" | "TRYJUMPSTR" | "TRYCCALLSTR" | "TRYCJUMPSTR" => {
+            identity.supports_call_text()
+        }
+        _ => true,
+    }
+}
+
 impl Catalog {
     pub fn build(extensions: &ExtensionRegistry) -> Self {
         let mut catalog = Self {

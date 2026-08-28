@@ -20,5 +20,71 @@
       "unknown": "Exact load-vs-runtime error phase and normalized diagnostic for original CALLFORM must be captured.",
       "sourceFile": "probe-sources/common-extra.erb.txt"
     }
+  ],
+  "snakeTryStages": [
+    {
+      "source": "TAKE(1 +)",
+      "sourceStage": "ReduceArguments",
+      "expectedProtection": "TRY protected",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_0",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "TAKE(\"unterminated)",
+      "sourceStage": "LexicalAnalyzer.Analyse",
+      "expectedProtection": "outside TRY",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_1",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "MISSING(7)",
+      "sourceStage": "CallFunction null",
+      "expectedProtection": "TRY protected",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_2",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "TAKE(UNKNOWN_VARIABLE)",
+      "sourceStage": "Restructure",
+      "expectedProtection": "outside TRY",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_3",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "TAKE(\"bad\")",
+      "sourceStage": "ConvertArg",
+      "expectedProtection": "TRY protected",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_4",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "METHOD()",
+      "sourceStage": "CallFunction kind",
+      "expectedProtection": "outside TRY",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_5",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "TAKE(FLAG:9999999)",
+      "sourceStage": "SetTransporter",
+      "expectedProtection": "outside TRY",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_6",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "BROKEN()",
+      "sourceStage": "callee body",
+      "expectedProtection": "outside TRY",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_7",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    }
   ]
 }

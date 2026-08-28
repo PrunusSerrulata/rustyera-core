@@ -250,6 +250,9 @@ pub(super) fn parse_arguments(
     style: ArgumentStyle,
     context: &dyn ParserContext,
 ) -> ParseOutput<Vec<Argument>> {
+    if style == ArgumentStyle::SingleExpression {
+        return parse_single_expression_argument(source, base, context);
+    }
     if source.is_empty() || style == ArgumentStyle::None {
         return ParseOutput::success(Vec::new());
     }
@@ -328,6 +331,36 @@ pub(super) fn parse_arguments(
     }
     ParseOutput {
         value: Some(arguments),
+        diagnostics,
+    }
+}
+
+fn parse_single_expression_argument(
+    source: &str,
+    base: usize,
+    context: &dyn ParserContext,
+) -> ParseOutput<Vec<Argument>> {
+    let lexed = lex_with(
+        source,
+        context.lexer_config(),
+        LexEnd::EndOfLine,
+        LexFlags::NONE,
+        context.macros(),
+    );
+    let mut diagnostics = shift_diagnostics(lexed.diagnostics, base);
+    let tokens = shift_tokens(lexed.tokens, base);
+    let mut parser = ExpressionParser::new(&tokens);
+    let expression = parser.parse();
+    diagnostics.append(&mut parser.diagnostics);
+    if expression.is_none() && diagnostics.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            DiagnosticCode::MissingExpression,
+            Span::empty(base + source.len()),
+            "one expression is required",
+        ));
+    }
+    ParseOutput {
+        value: expression.map(|value| vec![Argument::Expression(value)]),
         diagnostics,
     }
 }

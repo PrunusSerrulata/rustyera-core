@@ -1,4 +1,5 @@
 pub(super) use super::typing::{argument_spec, expression_type};
+pub(super) use super::typing::{argument_spec, expression_type};
 #[allow(clippy::wildcard_imports)]
 use super::*;
 use crate::state::user_calls::{
@@ -279,7 +280,9 @@ impl RuntimeFormContinuation {
         };
         let permitted_mode = match wait.call.call.mode {
             UserCallMode::MethodInteger | UserCallMode::MethodString => true,
-            UserCallMode::Procedure | UserCallMode::JumpProcedure | UserCallMode::MethodDiscard => false,
+            UserCallMode::Procedure | UserCallMode::JumpProcedure => matches!(self.completion,
+                RuntimeFormRoot::Call { spec, .. } if spec.mode.user_call_mode() == wait.call.call.mode),
+            UserCallMode::MethodDiscard => false,
         };
         permitted_mode
             && callee.id == wait.callee
@@ -434,6 +437,9 @@ impl RuntimeFormContinuation {
                     .iter()
                     .all(|value| argument_spec(program, self.function, value.as_ref()).is_ok())
             }
+            RuntimeFormTask::ParseCallText { spec, .. } => {
+                matches!(self.completion, RuntimeFormRoot::Call { spec: root, .. } if root == *spec)
+            }
             _ => true,
         }) && self.check_resources(vm).is_ok()
     }
@@ -498,6 +504,12 @@ impl RuntimeFormContinuation {
                 {
                     bytes = bytes.checked_add(value.len())?;
                 }
+            }
+        }
+        for task in &self.work {
+            if let RuntimeFormTask::ParseCallText { source, .. } = task
+            {
+                bytes = bytes.checked_add(source.len())?;
             }
         }
         let (nodes, text_bytes) = retained_expression_resources(expressions)?;

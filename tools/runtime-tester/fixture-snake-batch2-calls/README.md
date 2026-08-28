@@ -21,3 +21,14 @@ arithmetic/RNG/layout/save/service identity checks. It does not normalize a C#
 load-success/run-error result into Rust compileError. A genuine C# load rejection
 stops before run and retains the raw response; stopped capture is not parity.
 No reference source or pre-existing fixed fixture is modified.
+
+## CALLSTR source-derived candidates
+
+`snake/` adds six modes with comma/parenthesized actuals and three blank JUMP cases.
+Only select this root for the snake oracle. `pending/` isolates TRY-stage, recursive
+LOCAL/REF JUMP and original profile-gate candidates. Their original raw error phase
+must be observed and adjudicated; no shared load/run rejection stage is fabricated.
+The parser distinguishes lexical errors from ReduceArguments errors. Missing target
+and argument binding use the instruction-local TRY policy; name/type restructuring,
+argument execution, service faults and callee faults remain outside that boundary.
+The general checked-form service catcher is not part of this stage.

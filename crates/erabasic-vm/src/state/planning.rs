@@ -514,6 +514,7 @@ fn analyze_function_memo(
             | Opcode::GuardUserArgument
             | Opcode::AdvanceUserArgument
             | Opcode::AbandonUserCall
+            | Opcode::InvokeCallText
             | Opcode::JumpDynamicLabel
             | Opcode::InvokeEvent
             | Opcode::Yield

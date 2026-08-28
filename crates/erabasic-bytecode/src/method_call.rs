@@ -98,6 +98,83 @@ impl UserArgumentAdvance {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum CallTextMode {
+    Call = 0,
+    Jump = 1,
+    TryCall = 2,
+    TryJump = 3,
+    CatchCall = 4,
+    CatchJump = 5,
+}
+
+impl CallTextMode {
+    #[must_use]
+    pub fn has_catch(self) -> bool {
+        matches!(self, Self::CatchCall | Self::CatchJump)
+    }
+
+    #[must_use]
+    pub fn user_call_mode(self) -> UserCallMode {
+        match self {
+            Self::Jump | Self::TryJump | Self::CatchJump => UserCallMode::JumpProcedure,
+            Self::Call | Self::TryCall | Self::CatchCall => UserCallMode::Procedure,
+        }
+    }
+
+    #[must_use]
+    pub fn allows_missing(self) -> bool {
+        !matches!(self, Self::Call | Self::Jump)
+    }
+
+    /// # Errors
+    /// Returns an operand error when the tag is not defined by this ISA.
+    pub fn decode(tag: u8) -> Result<Self, String> {
+        match tag {
+            0 => Ok(Self::Call),
+            1 => Ok(Self::Jump),
+            2 => Ok(Self::TryCall),
+            3 => Ok(Self::TryJump),
+            4 => Ok(Self::CatchCall),
+            5 => Ok(Self::CatchJump),
+            _ => Err("invalid call-text mode".into()),
+        }
+    }
+}
+
+/// Complete invocation source is one String operand. Neither successor pushes a value.
+/// The VM owns lexical/argument/call failure stages; lexical failures never use this catch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CallTextSpec {
+    pub mode: CallTextMode,
+    pub catch_target: u32,
+}
+
+impl CallTextSpec {
+    #[must_use]
+    pub fn encode(self) -> [u8; 5] {
+        let mut payload = [0; 5];
+        payload[0] = self.mode as u8;
+        payload[1..].copy_from_slice(&self.catch_target.to_le_bytes());
+        payload
+    }
+
+    /// # Errors
+    /// Rejects invalid modes, lengths and catch targets on non-catch modes.
+    pub fn decode(payload: &[u8]) -> Result<Self, String> {
+        if payload.len() != 5 {
+            return Err("invalid call-text operand length".into());
+        }
+        let mode = CallTextMode::decode(payload[0])?;
+        let catch_target = u32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
+        if !mode.has_catch() && catch_target != 0 {
+            return Err("call-text without catch has a catch target".into());
+        }
+        Ok(Self { mode, catch_target })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum UserArgumentSpec {
     Omitted,
@@ -273,4 +350,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn call_text_wire_is_exact_and_non_catch_modes_forbid_targets() {
+        for mode in [
+            CallTextMode::Call,
+            CallTextMode::Jump,
+            CallTextMode::TryCall,
+            CallTextMode::TryJump,
+            CallTextMode::CatchCall,
+            CallTextMode::CatchJump,
+        ] {
+            let spec = CallTextSpec {
+                mode,
+                catch_target: if mode.has_catch() { 123 } else { 0 },
+            };
+            let payload = spec.encode();
+            assert_eq!(payload[0], mode as u8);
+            assert_eq!(CallTextSpec::decode(&payload), Ok(spec));
+            for length in 0..payload.len() {
+                assert!(CallTextSpec::decode(&payload[..length]).is_err());
+            }
+            let mut trailing = payload.to_vec();
+            trailing.push(0);
+            assert!(CallTextSpec::decode(&trailing).is_err());
+        }
+        assert!(CallTextSpec::decode(&[6, 0, 0, 0, 0]).is_err());
+        for mode in [
+            CallTextMode::Call,
+            CallTextMode::Jump,
+            CallTextMode::TryCall,
+            CallTextMode::TryJump,
+        ] {
+            assert!(
+                CallTextSpec::decode(
+                    &CallTextSpec {
+                        mode,
+                        catch_target: 1
+                    }
+                    .encode()
+                )
+                .is_err()
+            );
+        }
+    }
 }

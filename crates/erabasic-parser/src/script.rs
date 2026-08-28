@@ -387,8 +387,8 @@ fn check_structure(
         "WHILE" => Some("WHILE"),
         "DO" => Some("DO"),
         "SELECTCASE" => Some("SELECTCASE"),
-        "TRYC" | "TRYCCALL" | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" | "TRYCGOTO"
-        | "TRYCGOTOFORM" => Some("TRYC"),
+        "TRYC" | "TRYCCALL" | "TRYCCALLFORM" | "TRYCCALLSTR" | "TRYCJUMP" | "TRYCJUMPFORM"
+        | "TRYCJUMPSTR" | "TRYCGOTO" | "TRYCGOTOFORM" => Some("TRYC"),
         "PRINTDATA" | "PRINTDATAL" | "PRINTDATAW" | "PRINTDATAK" | "PRINTDATAKL"
         | "PRINTDATAKW" | "PRINTDATAD" | "PRINTDATADL" | "PRINTDATADW" | "STRDATA" => {
             Some("PRINTDATA")

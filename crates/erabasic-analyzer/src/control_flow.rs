@@ -66,8 +66,9 @@ pub(crate) fn build_control_flow(
                 });
             }
             "IF" | "SELECTCASE" | "REPEAT" | "FOR" | "WHILE" | "DO" | "TRYC" | "TRYCCALL"
-            | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" | "TRYCGOTO" | "TRYCGOTOFORM"
-            | "NOSKIP" | "TRYCALLLIST" | "TRYJUMPLIST" | "TRYGOTOLIST" => {
+            | "TRYCCALLFORM" | "TRYCCALLSTR" | "TRYCJUMP" | "TRYCJUMPFORM" | "TRYCJUMPSTR"
+            | "TRYCGOTO" | "TRYCGOTOFORM" | "NOSKIP" | "TRYCALLLIST" | "TRYJUMPLIST"
+            | "TRYGOTOLIST" => {
                 blocks.push(OpenBlock {
                     name: name.to_owned(),
                     line: line.id,
@@ -181,8 +182,10 @@ pub(crate) fn build_control_flow(
                     "TRYC"
                         | "TRYCCALL"
                         | "TRYCCALLFORM"
+                        | "TRYCCALLSTR"
                         | "TRYCJUMP"
                         | "TRYCJUMPFORM"
+                        | "TRYCJUMPSTR"
                         | "TRYCGOTO"
                         | "TRYCGOTOFORM"
                 ) {

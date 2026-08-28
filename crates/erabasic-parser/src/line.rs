@@ -289,7 +289,8 @@ pub(crate) fn parse_line_at(
     if uses_mixed_arguments
         || matches!(
             spec.argument_style,
-            ArgumentStyle::Formatted
+            ArgumentStyle::SingleExpression
+                | ArgumentStyle::Formatted
                 | ArgumentStyle::Raw
                 | ArgumentStyle::PrintV
                 | ArgumentStyle::Times

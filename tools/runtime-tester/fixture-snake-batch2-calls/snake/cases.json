@@ -1,0 +1,608 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1
+    },
+    "snake": {
+      "semantic_version": 4,
+      "policy_version": 4
+    }
+  },
+  "evidenceStatus": "source_derived_candidates_not_executed; pending probes are not golden",
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "allowedOracles": [
+    "snake"
+  ],
+  "cases": [
+    {
+      "id": "callstr-paren",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_CALLSTR_PAREN",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 1,
+                  "FLAG:2": 0,
+                  "FLAG:3": 1,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "callstr-comma",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_CALLSTR_COMMA",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 1,
+                  "FLAG:2": 0,
+                  "FLAG:3": 1,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "jumpstr-paren",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_JUMPSTR_PAREN",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 0,
+                  "FLAG:2": 0,
+                  "FLAG:3": 0,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "jumpstr-comma",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_JUMPSTR_COMMA",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 0,
+                  "FLAG:2": 0,
+                  "FLAG:3": 0,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "trycallstr-paren",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_TRYCALLSTR_PAREN",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 1,
+                  "FLAG:2": 0,
+                  "FLAG:3": 1,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "trycallstr-comma",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_TRYCALLSTR_COMMA",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 1,
+                  "FLAG:2": 0,
+                  "FLAG:3": 1,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "tryjumpstr-paren",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_TRYJUMPSTR_PAREN",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 0,
+                  "FLAG:2": 0,
+                  "FLAG:3": 0,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "tryjumpstr-comma",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_TRYJUMPSTR_COMMA",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 0,
+                  "FLAG:2": 0,
+                  "FLAG:3": 0,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "tryccallstr-paren",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_TRYCCALLSTR_PAREN",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 1,
+                  "FLAG:2": 0,
+                  "FLAG:3": 1,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "tryccallstr-comma",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_TRYCCALLSTR_COMMA",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 1,
+                  "FLAG:2": 0,
+                  "FLAG:3": 1,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "trycjumpstr-paren",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_TRYCJUMPSTR_PAREN",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 0,
+                  "FLAG:2": 0,
+                  "FLAG:3": 0,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "trycjumpstr-comma",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake FunctionIdentifier.cs:364-369; Instraction.Child.cs:3950-4064 normal successful call and Jump delegation; source-derived, execute before acceptance",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "SNAKE_TRYCJUMPSTR_COMMA",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:3",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 7,
+                  "FLAG:1": 0,
+                  "FLAG:2": 0,
+                  "FLAG:3": 0,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "jumpstr-blank",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake CALLS_Instruction.DoInstruction string.IsNullOrWhiteSpace early return; before IsJump assignment",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "BLANK_JUMPSTR",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 1,
+                  "FLAG:1": 0,
+                  "FLAG:2": 2
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "tryjumpstr-blank",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake CALLS_Instruction.DoInstruction string.IsNullOrWhiteSpace early return; before IsJump assignment",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "BLANK_TRYJUMPSTR",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 1,
+                  "FLAG:1": 0,
+                  "FLAG:2": 2
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "trycjumpstr-blank",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake CALLS_Instruction.DoInstruction string.IsNullOrWhiteSpace early return; before IsJump assignment",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "BLANK_TRYCJUMPSTR",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 1,
+                  "FLAG:1": 0,
+                  "FLAG:2": 2
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

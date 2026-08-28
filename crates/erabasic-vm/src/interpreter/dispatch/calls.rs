@@ -18,6 +18,28 @@ impl Vm {
             .last()
             .ok_or_else(|| StepError::new(VmFaultCode::InvalidInstruction, "missing frame"))?;
         match opcode {
+            Opcode::InvokeCallText => {
+                let spec = erabasic_bytecode::CallTextSpec::decode(position.encoded.payload)
+                    .map_err(|message| StepError::new(VmFaultCode::InvalidInstruction, message))?;
+                let value = pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?;
+                let VmValue::String(source) = value else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "CALLSTR expects one string",
+                    ));
+                };
+                self.invalidate_path_memo(fiber.id);
+                begin_runtime_call_text(
+                    self,
+                    fiber,
+                    position.generation,
+                    position.function,
+                    position.instruction,
+                    source,
+                    spec,
+                )?;
+                return Ok(Some(StepOutcome::DeferredNative));
+            }
             Opcode::Call | Opcode::CallNative | Opcode::CallHost => {
                 let import_index = read_u32(position.encoded.payload, 0)? as usize;
                 let argument_count = read_u16(position.encoded.payload, 4)? as usize;

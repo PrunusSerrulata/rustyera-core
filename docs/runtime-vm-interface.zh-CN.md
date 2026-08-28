@@ -810,3 +810,13 @@ Runtime 协议 `37.1` 为兼容诊断 context 增加可选 CBOR 字段 4–7：a
 runtime_epoch、generation。静态多余实参警告在成功加载/重载发布时绑定当前作用域；冷加载
 尚无 VM 时 generation 为空，重载使用实际 VM generation。只保留当前作用域的已发布位置，
 失败发布不消费去重记录。可复用缓存中的诊断不包含这些会话身份，快照和 undo 不回退发布身份。
+
+### CALLSTR 完整文本调用
+
+snake policy/semantic `4/4` 增加 CALLSTR、JUMPSTR、TRYCALLSTR、TRYJUMPSTR、
+TRYCCALLSTR、TRYCJUMPSTR 与 `InvokeCallText`。解析器接受括号和逗号两种实参语法；
+空白 JUMP 文本正常继续。调用复用普通惰性实参与 REF 生命周期。
+
+CALLSTR 的局部 TRY 只处理指定的实参归约、目标缺失和绑定阶段；词法、名字/类型重构、
+实参执行以及 callee/Host/Native 失败继续传播。RuntimeForm Call 根与原 String 根分离，
+恢复快照须验证真实 InvokeCallText 来源与子调用身份。此阶段没有通用 FORM 服务捕获。

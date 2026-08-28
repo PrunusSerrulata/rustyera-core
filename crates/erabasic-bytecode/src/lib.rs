@@ -30,7 +30,7 @@ pub use host::{
 pub use ids::{Digest, SymbolKey};
 pub use isa::{BytecodeType, EncodedInstruction, InstructionPayload, Opcode, opcode};
 pub use method_call::{
-    MethodResult, UserArgumentAdvance, UserArgumentSpec, UserCallMode,
+    CallTextMode, CallTextSpec, MethodResult, UserArgumentAdvance, UserArgumentSpec, UserCallMode,
     UserCallSpec,
 };
 pub use patch::{BytecodePatch, PatchError, apply_patch, create_patch};

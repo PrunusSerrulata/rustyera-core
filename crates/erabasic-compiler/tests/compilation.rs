@@ -1487,6 +1487,66 @@ fn dynamic_form_and_list_calls_share_lazy_slots_and_explicit_method_discard() {
     assert!(validation.is_valid(), "{:?}", validation.diagnostics);
 }
 
+#[test]
+fn complete_call_text_six_modes_lower_one_string_with_local_catch_status() {
+    use erabasic_bytecode::{CallTextMode, CallTextSpec};
+    // Requires the separately owned CALLSTR parser/catalog/analyzer hunks before execution.
+    let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+        .data
+        .unwrap();
+    let analysis = analyze_project(AnalysisInput { project_data: data, sources: vec![ProjectSource {
+        relative_path: "call-text.erb".into(), payload: SourcePayload::Utf8(
+            "@SYSTEM_TITLE\nCALLSTR \"TARGET(1)\"\nJUMPSTR \" \"\nTRYCALLSTR \"MISSING, 2\"\nTRYJUMPSTR \" \"\nTRYCCALLSTR \"TARGET(3)\"\nCATCH\nRESULT = 4\nENDCATCH\nTRYCJUMPSTR \" \"\nCATCH\nRESULT = 5\nENDCATCH\nRETURN\n@TARGET(ARG)\nRETURN\n".into()),
+    }] }, &AnalyzerOptions { compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake), ..AnalyzerOptions::analysis_mode() }, &ExtensionRegistry::default());
+    let project = analysis
+        .project
+        .expect("snake call-text parses and analyzes");
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = report.artifact.expect("complete call-text lowers");
+    let code = &artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .code;
+    let specs = code
+        .iter()
+        .filter(|instruction| instruction.opcode == Opcode::InvokeCallText as u16)
+        .map(|instruction| CallTextSpec::decode(&instruction.payload).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        specs.iter().map(|spec| spec.mode).collect::<Vec<_>>(),
+        vec![
+            CallTextMode::Call,
+            CallTextMode::Jump,
+            CallTextMode::TryCall,
+            CallTextMode::TryJump,
+            CallTextMode::CatchCall,
+            CallTextMode::CatchJump
+        ]
+    );
+    for spec in specs {
+        if spec.mode.has_catch() {
+            assert_eq!(
+                code[spec.catch_target as usize],
+                erabasic_bytecode::opcode::push_integer(0)
+            );
+        } else {
+            assert_eq!(spec.catch_target, 0);
+        }
+    }
+    let validation = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &ValidationContext::for_artifact(&artifact),
+    );
+    assert!(validation.is_valid(), "{:?}", validation.diagnostics);
+}
 
 fn analyze_call_dependency_sources(
     caller: &str,

@@ -153,6 +153,7 @@ impl Vm {
                     self.invalidate_path_memo(fiber.id);
                     resume_runtime_form(self, &mut fiber, natives).and_then(|step| match step {
                         RuntimeFormStep::Pending => Ok(StepOutcome::DeferredNative),
+                        RuntimeFormStep::CompleteCall => Ok(StepOutcome::Continue),
                         RuntimeFormStep::Complete(value) => {
                             let frame = fiber.frames.last_mut().ok_or_else(|| {
                                 StepError::new(
@@ -160,7 +161,7 @@ impl Vm {
                                     "STRFORM owner frame disappeared before completion",
                                 )
                             })?;
-                            frame.stack.push(VmValue::String(value));
+                            frame.stack.push(value);
                             Ok(StepOutcome::Continue)
                         }
                     })

@@ -484,6 +484,13 @@ impl Builder<'_> {
         }
         if matches!(
             name,
+            "CALLSTR" | "JUMPSTR" | "TRYCALLSTR" | "TRYJUMPSTR" | "TRYCCALLSTR" | "TRYCJUMPSTR"
+        ) {
+            self.lower_call_text(arguments, name, location);
+            return;
+        }
+        if matches!(
+            name,
             "CALLFORM"
                 | "CALLFORMF"
                 | "JUMPFORM"

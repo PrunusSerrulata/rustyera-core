@@ -121,7 +121,8 @@ pub(crate) fn validate_user_call_target_kind(
     Ok(())
 }
 
-/// Bind a resolved user target against its typed actual slots without evaluating them.
+/// CALLSTR checks target kind outside TRY before restructuring and `ConvertArg`.
+/// This shared binder keeps that argument-only capture boundary explicit.
 pub(crate) fn bind_user_call_signature(
     program: &ProgramGeneration,
     generation: GenerationId,

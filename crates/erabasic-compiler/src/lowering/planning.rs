@@ -294,8 +294,8 @@ pub(super) fn structured_if_flow(function: &Function) -> StructuredFlow {
                     result.set_false_target(*last, line.id);
                 }
             }
-            "IF" | "TRYCCALL" | "TRYCCALLFORM" | "TRYCJUMP" | "TRYCJUMPFORM" | "TRYCGOTO"
-            | "TRYCGOTOFORM" => open.push(OpenIf {
+            "IF" | "TRYCCALL" | "TRYCCALLFORM" | "TRYCCALLSTR" | "TRYCJUMP" | "TRYCJUMPFORM"
+            | "TRYCJUMPSTR" | "TRYCGOTO" | "TRYCGOTOFORM" => open.push(OpenIf {
                 opener: line.id,
                 alternatives: Vec::new(),
             }),

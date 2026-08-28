@@ -491,11 +491,18 @@ fn analyze_instruction(
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) -> HirStatementKind {
     let key = key(name, options.ignore_case);
-    let signature = catalog.instructions.get(&key);
+    let signature = catalog.instructions.get(&key).filter(|_| {
+        catalog.extension_instructions.contains(&key)
+            || crate::catalog::builtin_available(&key, &options.compatibility)
+    });
     let method_signature = signature
         .is_none()
         .then(|| catalog.functions.get(&key))
-        .flatten();
+        .flatten()
+        .filter(|_| {
+            catalog.extension_functions.contains(&key)
+                || crate::catalog::builtin_available(&key, &options.compatibility)
+        });
     if matches!(key.as_str(), "VARI" | "VARS") {
         return analyze_scoped_declaration_statement(
             function,

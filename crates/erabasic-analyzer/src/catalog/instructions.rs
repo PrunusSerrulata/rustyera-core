@@ -311,6 +311,24 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
             true,
         );
     }
+    // CALLSTR receives one evaluated string containing both target and arguments.
+    for name in [
+        "CALLSTR",
+        "JUMPSTR",
+        "TRYCALLSTR",
+        "TRYJUMPSTR",
+        "TRYCCALLSTR",
+        "TRYCJUMPSTR",
+    ] {
+        add(
+            name,
+            ArgumentStyle::SingleExpression,
+            &[String],
+            1,
+            false,
+            false,
+        );
+    }
     add("RETURNF", Expressions, &[Any], 0, true, true);
     add("AWAIT", Expressions, &[Integer], 0, true, true);
     for name in ["INPUT", "ONEINPUT", "BINPUT", "ONEBINPUT"] {

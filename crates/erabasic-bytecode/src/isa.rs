@@ -52,6 +52,7 @@ pub enum Opcode {
     GuardUserArgument = 44,
     AdvanceUserArgument = 45,
     AbandonUserCall = 46,
+    InvokeCallText = 47,
     Yield = 48,
     AwaitResume = 49,
     Trap = 255,
@@ -96,6 +97,7 @@ impl TryFrom<u16> for Opcode {
             44 => Self::GuardUserArgument,
             45 => Self::AdvanceUserArgument,
             46 => Self::AbandonUserCall,
+            47 => Self::InvokeCallText,
             48 => Self::Yield,
             49 => Self::AwaitResume,
             255 => Self::Trap,
@@ -448,6 +450,10 @@ pub mod opcode {
         EncodedInstruction::from_payload_slice(Opcode::AbandonUserCall, &resolve.to_le_bytes())
     }
 
+    #[must_use]
+    pub fn invoke_call_text(spec: crate::CallTextSpec) -> EncodedInstruction {
+        EncodedInstruction::from_payload_slice(Opcode::InvokeCallText, &spec.encode())
+    }
 
     #[must_use]
     pub fn concat(parts: u16) -> EncodedInstruction {

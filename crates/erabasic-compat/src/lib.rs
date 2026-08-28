@@ -164,6 +164,11 @@ impl CompatibilityIdentity {
         matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 3
     }
 
+    /// Complete call text and checked forms share the v4 execution contract.
+    #[must_use]
+    pub const fn supports_call_text(&self) -> bool {
+        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 4
+    }
 
 
 

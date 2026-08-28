@@ -3,7 +3,7 @@
 use crate::interpreter::dynamic_form::RuntimeFormContinuation;
 use crate::state::Frame;
 use erabasic_bytecode::{
-    BytecodeArtifact, BytecodeFunction, BytecodeType, ImportKind, Opcode,
+    BytecodeArtifact, BytecodeFunction, BytecodeType, CallTextSpec, ImportKind, Opcode,
 };
 
 pub(super) fn valid_origin(
@@ -22,6 +22,11 @@ pub(super) fn valid_origin(
     let Some(instruction) = function.code.get(origin) else {
         return false;
     };
+    if let Some(spec) = continuation.call_text_spec() {
+        return artifact.manifest.compatibility.supports_call_text()
+            && Opcode::try_from(instruction.opcode) == Ok(Opcode::InvokeCallText)
+            && CallTextSpec::decode(&instruction.payload).is_ok_and(|actual| actual == spec);
+    }
     if Opcode::try_from(instruction.opcode) != Ok(Opcode::CallNative) {
         return false;
     }
@@ -37,10 +42,16 @@ pub(super) fn valid_origin(
     else {
         return false;
     };
+    let Some(result) = continuation.root_result_type() else {
+        return false;
+    };
+    if result != BytecodeType::String {
+        return false;
+    }
     artifact.native_imports.iter().any(|native| {
         native.import.key == import.key
             && native.import.name.eq_ignore_ascii_case("STRFORM")
             && native.import.parameters == [BytecodeType::String]
-            && native.import.result == Some(BytecodeType::String)
+            && native.import.result == Some(result)
     })
 }

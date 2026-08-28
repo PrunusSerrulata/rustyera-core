@@ -1079,3 +1079,48 @@ fn rejects_guard_and_advance_invalid_slot_shape_flags_and_payload_lengths() {
         assert!(codes.contains(&ValidationCode::InvalidOperand), "{codes:?}");
     }
 }
+
+#[test]
+fn call_text_has_equal_empty_successor_stacks_and_rejects_bad_wire_targets() {
+    use erabasic_bytecode::{CallTextMode, CallTextSpec};
+    let spec = CallTextSpec {
+        mode: CallTextMode::CatchCall,
+        catch_target: 4,
+    };
+    let codes = method_validation_codes(vec![
+        opcode::push_string("TARGET(1)"),
+        opcode::invoke_call_text(spec),
+        opcode::push_integer(1),
+        opcode::jump(Opcode::Jump, 5),
+        opcode::push_integer(0),
+        opcode::return_value(true),
+    ]);
+    assert!(codes.is_empty(), "{codes:?}");
+    for payload in [
+        vec![6, 0, 0, 0, 0],
+        vec![0, 1, 0, 0, 0],
+        vec![0; 4],
+        vec![0; 6],
+    ] {
+        let codes = method_validation_codes(vec![
+            opcode::push_string(""),
+            erabasic_bytecode::EncodedInstruction::new(Opcode::InvokeCallText, payload),
+            opcode::push_integer(0),
+            opcode::return_value(true),
+        ]);
+        assert!(codes.contains(&ValidationCode::InvalidOperand), "{codes:?}");
+    }
+    let codes = method_validation_codes(vec![
+        opcode::push_string(""),
+        opcode::invoke_call_text(CallTextSpec {
+            mode: CallTextMode::CatchJump,
+            catch_target: u32::MAX,
+        }),
+        opcode::push_integer(0),
+        opcode::return_value(true),
+    ]);
+    assert!(
+        codes.contains(&ValidationCode::InvalidControlFlow),
+        "{codes:?}"
+    );
+}

@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 pub enum ArgumentStyle {
     None,
     Expressions,
+    /// Exactly one expression; its expected value type belongs to semantic analysis.
+    SingleExpression,
     Formatted,
     Raw,
     /// PRINTV family: apostrophe starts a raw string operand ending at comma.
@@ -142,7 +144,9 @@ impl ParserContext for DefaultParserContext {
 
     fn instruction(&self, name: &str) -> Option<InstructionSpec> {
         let upper = uppercase_name(name);
-        let style = if DYNAMIC_CALL_INSTRUCTIONS.contains(&upper.as_ref()) {
+        let style = if CALL_TEXT_INSTRUCTIONS.contains(&upper.as_ref()) {
+            ArgumentStyle::SingleExpression
+        } else if DYNAMIC_CALL_INSTRUCTIONS.contains(&upper.as_ref()) {
             ArgumentStyle::DynamicCall
         } else if NO_ARG_INSTRUCTIONS.contains(&upper.as_ref()) {
             ArgumentStyle::None
@@ -210,6 +214,15 @@ fn is_raw_print_instruction(name: &str) -> bool {
             "PRINTSINGLE" | "PRINTSINGLEK" | "PRINTSINGLED" | "DATA"
         )
 }
+
+const CALL_TEXT_INSTRUCTIONS: &[&str] = &[
+    "CALLSTR",
+    "JUMPSTR",
+    "TRYCALLSTR",
+    "TRYJUMPSTR",
+    "TRYCCALLSTR",
+    "TRYCJUMPSTR",
+];
 
 const DYNAMIC_CALL_INSTRUCTIONS: &[&str] = &[
     "CALL",

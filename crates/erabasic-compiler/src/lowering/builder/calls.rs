@@ -264,4 +264,47 @@ impl Builder<'_> {
         }
     }
 
+    pub(in super::super) fn lower_call_text(
+        &mut self,
+        arguments: &[HirArgument],
+        name: &str,
+        location: SourceLocation,
+    ) {
+        use erabasic_bytecode::{CallTextMode, CallTextSpec};
+        let mode = match name {
+            "CALLSTR" => CallTextMode::Call,
+            "JUMPSTR" => CallTextMode::Jump,
+            "TRYCALLSTR" => CallTextMode::TryCall,
+            "TRYJUMPSTR" => CallTextMode::TryJump,
+            "TRYCCALLSTR" => CallTextMode::CatchCall,
+            "TRYCJUMPSTR" => CallTextMode::CatchJump,
+            _ => unreachable!("only complete call-text instructions are dispatched here"),
+        };
+        let [HirArgument::Expression(expression)] = arguments else {
+            self.invalid_user_call("call-text requires exactly one string expression", location);
+            return;
+        };
+        if self.lower_expression(expression, location) != BytecodeType::String {
+            self.invalid_user_call("call-text source is not a string", location);
+            return;
+        }
+        let invoke = self.code.len();
+        let mut spec = CallTextSpec {
+            mode,
+            catch_target: 0,
+        };
+        self.emit(opcode::invoke_call_text(spec), location);
+        if mode.has_catch() {
+            // Both VM successors leave the same stack; the ordinary TRY planner
+            // consumes this locally materialized status. Blank text takes success.
+            self.emit(opcode::push_integer(1), location);
+            let success = self.code.len();
+            self.emit(opcode::jump(Opcode::Jump, 0), location);
+            spec.catch_target = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+            self.code[invoke] = opcode::invoke_call_text(spec);
+            self.emit(opcode::push_integer(0), location);
+            self.patch_jump(success, self.code.len());
+        }
+    }
+
 }

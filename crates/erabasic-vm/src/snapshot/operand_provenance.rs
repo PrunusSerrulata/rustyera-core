@@ -81,9 +81,9 @@ fn unreturned_result(
     frame: &Frame,
     child: Option<&Frame>,
 ) -> Option<bool> {
-    if frame.runtime_form.is_some() {
-        // valid_origin separately binds this root to a String-returning STRFORM.
-        return Some(true);
+    if let Some(form) = &frame.runtime_form {
+        // valid_origin separately binds this root to STRFORM or InvokeCallText.
+        return Some(form.root_result_type().is_some());
     }
     if child.is_none()
         && !matches!(

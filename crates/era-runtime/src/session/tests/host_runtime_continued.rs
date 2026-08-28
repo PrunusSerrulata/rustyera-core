@@ -246,7 +246,7 @@ fn runtime_metadata_queries_use_the_active_artifact_and_fiber() {
             .history
             .logical_lines
             .iter()
-            .any(|line| { projected_line_text(line).contains("meta=3,1,0,SYSTEM_TITLE,5,bound") }),
+            .any(|line| { projected_line_text(line).contains("meta=3,1,10,SYSTEM_TITLE,5,bound") }),
         "{output:#?}"
     );
     let rendered = snapshot

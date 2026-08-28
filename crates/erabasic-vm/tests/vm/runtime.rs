@@ -1330,3 +1330,117 @@ fn isolated_candidate_can_create_columns_when_its_base_identity_is_still_current
     run_identity_entry(&mut live, &artifact, "REPLACE");
     live.encode_unrestricted_snapshot().unwrap();
 }
+
+#[test]
+#[allow(clippy::too_many_lines)] // One shared host exercises all return continuation modes.
+fn host_return_current_preserves_dynamic_jump_and_event_continuations() {
+    for (entry_call, expected_after, expected_later) in [
+        ("CALLSTR \"OWNER\"", 1, 0),
+        ("JUMPSTR \"OWNER\"", 0, 0),
+        ("CALLEVENT EVENTFIRST", 1, 1),
+    ] {
+        let source = format!(
+            r#"@SYSTEM_TITLE
+{entry_call}
+FLAG:9 = 1
+RETURN
+@OWNER
+JUMPSTR "NEXT"
+FLAG:8 = 99
+RETURN
+@NEXT
+FLAG:1 = 7
+INPUT
+FLAG:2 = 99
+RETURN
+@EVENTFIRST
+#PRI
+JUMPSTR "NEXT"
+FLAG:8 = 99
+RETURN
+@EVENTFIRST
+#LATER
+FLAG:3 += 1
+RETURN
+"#
+        );
+        let artifact = compile_source_with_options(
+            &source,
+            &AnalyzerOptions {
+                compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                    erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+                ),
+                ..AnalyzerOptions::default()
+            },
+        );
+        let entry = artifact
+            .functions
+            .iter()
+            .find(|function| function.name == "SYSTEM_TITLE")
+            .unwrap()
+            .key;
+        let flag = artifact
+            .globals
+            .iter()
+            .find(|variable| variable.name == "FLAG")
+            .unwrap()
+            .key;
+        let mut runtime = RuntimeVm::new(validated(&artifact), VmConfig::default());
+        let fiber = runtime.spawn_entry(entry, Vec::new()).unwrap();
+        let before = runtime.drive(RunBudget::default(), VmDriveMode::Normal);
+        let request = before
+            .events
+            .into_iter()
+            .find_map(|event| match event {
+                VmPortEvent::HostCall(request) => Some(request),
+                _ => None,
+            })
+            .expect("dynamic child must reach INPUT");
+        assert!(request.import.import.name.eq_ignore_ascii_case("INPUT"));
+        let completion = runtime
+            .validate_host_completion(request.id, VmHostCompletion::ReturnCurrent(None))
+            .unwrap();
+        runtime.commit_host_completion(completion).unwrap();
+        assert!(
+            runtime
+                .validate_host_completion(request.id, VmHostCompletion::ReturnCurrent(None))
+                .is_err()
+        );
+        let after = runtime.drive(RunBudget::default(), VmDriveMode::Normal);
+        assert_eq!(
+            after
+                .events
+                .iter()
+                .filter(|event| matches!(event,
+            VmPortEvent::FiberCompleted(id, _) if *id == fiber))
+                .count(),
+            1,
+            "{entry_call}: {after:?}"
+        );
+        assert!(
+            !after
+                .events
+                .iter()
+                .any(|event| matches!(event, VmPortEvent::FiberFaulted(_, _)))
+        );
+        for (index, expected) in [
+            (1, 7),
+            (2, 0),
+            (3, expected_later),
+            (8, 0),
+            (9, expected_after),
+        ] {
+            assert_eq!(
+                runtime.vm().read_variable(flag, &[index], None),
+                Ok(VmValue::Integer(expected)),
+                "{entry_call} FLAG:{index}"
+            );
+        }
+        assert!(
+            runtime
+                .drive(RunBudget::default(), VmDriveMode::Normal)
+                .events
+                .is_empty()
+        );
+    }
+}

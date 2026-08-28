@@ -8,6 +8,7 @@ use crate::{
     Fiber, FrameId, GenerationId, HostReady, NativeServiceRegistry, Vm, VmFaultCode, VmValue,
 };
 
+mod call_text;
 mod frontend;
 mod methods;
 mod support;
@@ -28,6 +29,7 @@ pub(crate) struct RuntimeFormContinuation {
     values: Vec<VmValue>,
     outputs: Vec<String>,
     awaiting_user_call: Option<methods::RuntimeUserWait>,
+    completion: RuntimeFormRoot,
     remaining_nodes: usize,
     remaining_source_bytes: usize,
 }
@@ -39,6 +41,10 @@ enum RuntimeFormTask {
     RenderPart(FormPart),
     FinishFormValue,
     CompleteRoot,
+    ParseCallText {
+        source: String,
+        spec: erabasic_bytecode::CallTextSpec,
+    },
     Evaluate(Expr),
     ReadVariable {
         name: String,
@@ -78,9 +84,19 @@ enum RuntimeFormTask {
     ExistsMethod,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+enum RuntimeFormRoot {
+    Value(BytecodeType),
+    Call {
+        spec: erabasic_bytecode::CallTextSpec,
+        failed: bool,
+    },
+}
+
 pub(super) enum RuntimeFormStep {
     Pending,
-    Complete(String),
+    Complete(VmValue),
+    CompleteCall,
 }
 
 pub(crate) fn requires_runtime_form_context(source: &str) -> bool {
@@ -126,6 +142,7 @@ pub(super) fn begin_runtime_form(
         values: Vec::new(),
         outputs: Vec::new(),
         awaiting_user_call: None,
+        completion: RuntimeFormRoot::Value(BytecodeType::String),
         remaining_nodes: node_limit.saturating_sub(nodes),
         remaining_source_bytes: MAX_RUNTIME_FORM_BYTES.saturating_sub(source.len()),
     };
@@ -139,6 +156,76 @@ pub(super) fn begin_runtime_form(
             )
         })?
         .runtime_form = Some(continuation);
+    Ok(())
+}
+
+
+pub(super) fn begin_runtime_call_text(
+    vm: &Vm,
+    fiber: &mut Fiber,
+    generation: GenerationId,
+    function: SymbolKey,
+    instruction: usize,
+    source: String,
+    spec: erabasic_bytecode::CallTextSpec,
+) -> Result<(), StepError> {
+    let program = vm.generations.get(&generation).ok_or_else(|| {
+        StepError::new(VmFaultCode::MissingSymbol, "CALLSTR generation is missing")
+    })?;
+    if !program.artifact.manifest.compatibility.supports_call_text() {
+        return Err(support::permission_denied(
+            "CALLSTR is unavailable in this compatibility identity",
+        ));
+    }
+    begin_work(
+        vm,
+        fiber,
+        generation,
+        function,
+        instruction,
+        RuntimeFormRoot::Call {
+            spec,
+            failed: false,
+        },
+        RuntimeFormTask::ParseCallText { source, spec },
+    )
+}
+
+fn begin_work(
+    vm: &Vm,
+    fiber: &mut Fiber,
+    generation: GenerationId,
+    function: SymbolKey,
+    instruction: usize,
+    completion: RuntimeFormRoot,
+    task: RuntimeFormTask,
+) -> Result<(), StepError> {
+    let owner = fiber.frames.last_mut().ok_or_else(|| {
+        StepError::new(
+            VmFaultCode::InvalidInstruction,
+            "runtime-form caller frame is missing",
+        )
+    })?;
+    if owner.runtime_form.is_some() || owner.generation != generation || owner.function != function
+    {
+        return Err(StepError::new(
+            VmFaultCode::InvalidInstruction,
+            "runtime-form caller identity or continuation differs",
+        ));
+    }
+    owner.runtime_form = Some(RuntimeFormContinuation {
+        generation,
+        function,
+        frame: owner.id,
+        instruction,
+        work: vec![RuntimeFormTask::CompleteRoot, task],
+        values: Vec::new(),
+        outputs: Vec::new(),
+        awaiting_user_call: None,
+        completion,
+        remaining_nodes: vm.config.maximum_operand_stack.max(1),
+        remaining_source_bytes: MAX_RUNTIME_FORM_BYTES,
+    });
     Ok(())
 }
 
@@ -169,6 +256,7 @@ pub(super) fn resume_runtime_form(
     let result = continuation.step(vm, fiber, natives);
     match result {
         Ok(RuntimeFormStep::Complete(value)) => Ok(RuntimeFormStep::Complete(value)),
+        Ok(RuntimeFormStep::CompleteCall) => Ok(RuntimeFormStep::CompleteCall),
         Ok(RuntimeFormStep::Pending) => {
             let frame = fiber
                 .frames
@@ -195,6 +283,20 @@ pub(super) fn resume_runtime_form(
 impl RuntimeFormContinuation {
     pub(crate) const fn origin(&self) -> (GenerationId, SymbolKey, usize) {
         (self.generation, self.function, self.instruction)
+    }
+
+    pub(crate) fn call_text_spec(&self) -> Option<erabasic_bytecode::CallTextSpec> {
+        match self.completion {
+            RuntimeFormRoot::Call { spec, .. } => Some(spec),
+            RuntimeFormRoot::Value(_) => None,
+        }
+    }
+
+    pub(crate) fn root_result_type(&self) -> Option<BytecodeType> {
+        match self.completion {
+            RuntimeFormRoot::Value(value_type) => Some(value_type),
+            RuntimeFormRoot::Call { .. } => None,
+        }
     }
 
     pub(crate) fn valid_for_frame(
@@ -263,19 +365,42 @@ impl RuntimeFormContinuation {
                 self.values.push(VmValue::String(value));
             }
             RuntimeFormTask::CompleteRoot => {
-                if !self.outputs.is_empty() || self.values.len() != 1 {
+                if !self.outputs.is_empty() || !self.work.is_empty()
+                {
                     return Err(StepError::new(
                         VmFaultCode::InvalidInstruction,
-                        "STRFORM root produced an invalid value stack",
+                        "runtime form root has unfinished temporary state",
                     ));
                 }
-                let Some(VmValue::String(value)) = self.values.pop() else {
-                    return Err(StepError::new(
-                        VmFaultCode::TypeMismatch,
-                        "STRFORM root did not produce a string",
-                    ));
-                };
-                return Ok(RuntimeFormStep::Complete(value));
+                match self.completion {
+                    RuntimeFormRoot::Value(expected) => {
+                        if self.values.len() != 1 || self.values[0].value_type() != expected {
+                            return Err(StepError::new(
+                                VmFaultCode::InvalidInstruction,
+                                "runtime form root result type or count differs",
+                            ));
+                        }
+                        return Ok(RuntimeFormStep::Complete(
+                            self.values.pop().expect("one value checked"),
+                        ));
+                    }
+                    RuntimeFormRoot::Call { spec, failed } => {
+                        if !self.values.is_empty() {
+                            return Err(StepError::new(
+                                VmFaultCode::InvalidInstruction,
+                                "call text root has an unexpected value",
+                            ));
+                        }
+                        if failed && spec.mode.has_catch() {
+                            owner_frame_mut(fiber, self.frame)?.instruction =
+                                spec.catch_target as usize;
+                        }
+                        return Ok(RuntimeFormStep::CompleteCall);
+                    }
+                }
+            }
+            RuntimeFormTask::ParseCallText { source, spec } => {
+                self.parse_call_text(vm, fiber, natives, &source, spec)?;
             }
             RuntimeFormTask::Evaluate(expression) => {
                 self.evaluate_expression(vm, expression)?;

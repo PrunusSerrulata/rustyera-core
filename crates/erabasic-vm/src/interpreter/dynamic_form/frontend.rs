@@ -18,14 +18,7 @@ pub(super) fn parse_runtime_form(
     let program = vm.generations.get(&generation).ok_or_else(|| {
         StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
     })?;
-    let compatibility = program.artifact.call_compatibility;
-    let mut context = DefaultParserContext::default();
-    context.set_compatibility(program.artifact.manifest.compatibility.clone());
-    context.set_lexer_compatibility(
-        compatibility.allow_full_width_space,
-        compatibility.debug_semicolon,
-        compatibility.ignore_triple_symbols,
-    );
+    let context = parser_context(program);
     let parsed = parse_formatted_at(source, 0, &context);
     if parsed.has_errors() {
         let message = parsed
@@ -93,7 +86,7 @@ fn resolve_named_indices(
     Ok(())
 }
 
-fn resolve_expression_named_indices(
+pub(super) fn resolve_expression_named_indices(
     program: &crate::ProgramGeneration,
     function: SymbolKey,
     expression: &mut Expr,
@@ -198,8 +191,35 @@ fn validate_form(
     Ok(analysis.nodes())
 }
 
+pub(super) fn validate_runtime_expression(
+    vm: &Vm,
+    natives: &NativeServiceRegistry,
+    generation: GenerationId,
+    function: SymbolKey,
+    expression: &Expr,
+    node_limit: usize,
+) -> Result<(usize, erabasic_bytecode::UserArgumentSpec), StepError> {
+    let program = vm.generations.get(&generation).ok_or_else(|| {
+        StepError::new(
+            VmFaultCode::MissingSymbol,
+            "runtime expression generation is missing",
+        )
+    })?;
+    let mut analysis = super::typing::TypeAnalysis::new(
+        program,
+        function,
+        generation,
+        node_limit,
+        Some(natives),
+    );
+    let kind = analysis.expression(expression, 0)?;
+    Ok((
+        analysis.nodes(),
+        super::typing::shape_spec(program, function, expression, kind),
+    ))
+}
 
-fn preflight_nesting(source: &str) -> Result<(), StepError> {
+pub(super) fn preflight_nesting(source: &str) -> Result<(), StepError> {
     let mut braces = 0usize;
     let mut parentheses = 0usize;
     let mut percent_expression = false;
@@ -254,4 +274,17 @@ fn preflight_nesting(source: &str) -> Result<(), StepError> {
         }
     }
     Ok(())
+}
+
+
+pub(super) fn parser_context(program: &crate::ProgramGeneration) -> DefaultParserContext {
+    let compatibility = program.artifact.call_compatibility;
+    let mut context = DefaultParserContext::default();
+    context.set_compatibility(program.artifact.manifest.compatibility.clone());
+    context.set_lexer_compatibility(
+        compatibility.allow_full_width_space,
+        compatibility.debug_semicolon,
+        compatibility.ignore_triple_symbols,
+    );
+    context
 }

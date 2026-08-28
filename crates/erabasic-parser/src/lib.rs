@@ -4,6 +4,7 @@
 //! follow the data flow from context and tokens through expressions and lines
 //! to complete ERH/ERB scripts.
 
+mod call_text;
 mod context;
 mod continuation;
 mod expression;
@@ -13,6 +14,9 @@ mod preprocessor;
 mod script;
 mod util;
 
+pub use call_text::{
+    CallTextParseError, CallTextParseOutput, CallTextParseStage, ParsedCallText, parse_call_text_at,
+};
 pub use context::{ArgumentStyle, DefaultParserContext, InstructionSpec, ParserContext};
 pub use expression::parse_expression;
 pub use formatted::{parse_assignment_formatted_at, parse_formatted_at};

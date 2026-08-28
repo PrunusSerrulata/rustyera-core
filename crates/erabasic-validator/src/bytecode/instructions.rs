@@ -278,7 +278,7 @@ pub(super) fn apply_instruction(
         | Opcode::GuardUserArgument
         | Opcode::AdvanceUserArgument
         | Opcode::AbandonUserCall
-        => {
+        | Opcode::InvokeCallText => {
             return methods::apply(function, index, opcode_value, stack, globals);
         }
         Opcode::JumpDynamicLabel => {
