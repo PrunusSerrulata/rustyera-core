@@ -40,15 +40,51 @@ pub(super) fn publish_or_exit(state: Value) {
 #[derive(Default)]
 struct Comparison {
     previous: Option<Value>,
+    identical_samples: usize,
 }
 
 impl Comparison {
     fn sample(&mut self, state: &Value) -> bool {
         let state = comparison_state(state);
         let unchanged = self.previous.as_ref() == Some(&state);
+        self.identical_samples = if unchanged {
+            self.identical_samples.saturating_add(1)
+        } else {
+            1
+        };
+        let stalled = self.identical_samples >= required_identical_samples(&state);
         self.previous = Some(state);
-        unchanged
+        stalled
     }
+}
+
+fn required_identical_samples(state: &Value) -> usize {
+    let observed = state.get("observed").unwrap_or(state);
+    let phase = &observed["phase"];
+    // Only explicit project-loading stages receive the user-authorized grace.
+    // Report assembly/writes, execution and input waits retain the strict rule.
+    let loading = matches!(
+        phase.as_str(),
+        Some(
+            "inventory_directory"
+                | "hash_file"
+                | "coverage_read_input"
+                | "coverage_hash_input"
+                | "appearance_parse"
+                | "appearance_sort"
+                | "appearance_sort_complete"
+                | "csv_load"
+                | "analysis"
+                | "analysis_returned"
+                | "coverage_symbol_projection"
+                | "compile"
+                | "loading_project"
+                | "reloading"
+        )
+    ) || phase.get("projectStage").is_some_and(|stage| {
+        serde_json::from_value::<era_runtime::ProjectProgressStage>(stage.clone()).is_ok()
+    });
+    if loading { 4 } else { 2 }
 }
 
 fn comparison_state(state: &Value) -> Value {
@@ -230,10 +266,17 @@ pub(super) fn supervise(
         }
         if now >= next_sample {
             let state = observed(&snapshot, command, child.0.id())?;
-            eprintln!("{}", json!({"auditWatchdog": state}));
-            if comparison.sample(&state) {
+            let stalled = comparison.sample(&state);
+            let required = required_identical_samples(&state);
+            // Policy counters are report metadata, never observed progress.
+            eprintln!(
+                "{}",
+                json!({"auditWatchdog": state, "watchdogPolicy": {
+                "identicalSamples": comparison.identical_samples, "requiredIdenticalSamples": required}})
+            );
+            if stalled {
                 child.stop();
-                return Err(format!("{command}: unchanged complete observations at consecutive 5s samples; retained {}", snapshot.display()).into());
+                return Err(format!("{command}: unchanged complete observations at {required} consecutive 5s samples; retained {}", snapshot.display()).into());
             }
             next_sample += INTERVAL;
         }
@@ -249,12 +292,89 @@ mod tests {
     fn repeat_state_fails_without_counting_samples_as_progress() {
         let mut comparison = Comparison::default();
         let state =
-            json!({"phase": "compile", "pending": "source.erb", "completed": 4, "diagnostics": []});
+            json!({"phase": "running", "pending": "source.erb", "completed": 4, "diagnostics": []});
         assert!(!comparison.sample(&state));
         assert!(comparison.sample(&state));
         let changed =
-            json!({"phase": "compile", "pending": "source.erb", "completed": 5, "diagnostics": []});
+            json!({"phase": "running", "pending": "source.erb", "completed": 5, "diagnostics": []});
         assert!(!comparison.sample(&changed));
+    }
+
+    #[test]
+    fn loading_requires_four_identical_samples_and_real_progress_resets_the_run() {
+        for phase in [
+            json!("inventory_directory"),
+            json!("hash_file"),
+            json!("coverage_read_input"),
+            json!("coverage_hash_input"),
+            json!("appearance_parse"),
+            json!("appearance_sort"),
+            json!("appearance_sort_complete"),
+            json!("csv_load"),
+            json!("analysis"),
+            json!("analysis_returned"),
+            json!("coverage_symbol_projection"),
+            json!("compile"),
+            json!("loading_project"),
+            json!("reloading"),
+            json!({"projectStage": "finalizing"}),
+            json!({"projectStage": "initializing_memory"}),
+        ] {
+            let mut comparison = Comparison::default();
+            let mut state = json!({"observed": {"phase": phase, "completed": 42,
+                "pending": {"request_id": 1}}});
+            assert!(!comparison.sample(&state));
+            state["observed"]["pending"]["request_id"] = json!(2);
+            assert!(!comparison.sample(&state));
+            assert!(!comparison.sample(&state));
+            state["observed"]["completed"] = json!(43);
+            assert!(!comparison.sample(&state));
+            assert!(!comparison.sample(&state));
+            assert!(!comparison.sample(&state));
+            assert!(comparison.sample(&state), "phase={phase}");
+        }
+    }
+
+    #[test]
+    fn leaving_loading_restores_two_samples_and_unknown_stages_are_not_exempt() {
+        for phase in [
+            json!("coverage_prepare_report"),
+            json!("coverage_reference_graph"),
+            json!("coverage_rows"),
+            json!("coverage_write_report"),
+            json!("running"),
+            json!("waiting_input"),
+            json!("waiting_external"),
+            json!("starting"),
+            json!("unknown"),
+            json!({"projectStage": "unknown"}),
+        ] {
+            let mut comparison = Comparison::default();
+            let loading = json!({"phase": "analysis", "completed": 42});
+            for _ in 0..3 {
+                assert!(!comparison.sample(&loading));
+            }
+            let state = json!({"phase": phase, "completed": 42});
+            assert!(!comparison.sample(&state));
+            assert!(comparison.sample(&state), "phase={phase}");
+        }
+    }
+
+    #[test]
+    #[ignore = "real 20-second parent/child watchdog termination check"]
+    fn frozen_loading_process_is_stopped_on_the_fourth_sample() {
+        fn frozen_loading() -> Result<(), Box<dyn Error>> {
+            publish(
+                json!({"phase": "coverage_symbol_projection", "pending": "functions",
+                "symbols_completed": 112727, "symbols_total": 112727}),
+            )?;
+            loop {
+                thread::park();
+            }
+        }
+        let error = supervise("watchdog_loading_stall", frozen_loading).unwrap_err();
+        assert!(error.to_string().contains("at 4 consecutive 5s samples"));
+        eprintln!("expected watchdog termination: {error}");
     }
 
     #[test]
