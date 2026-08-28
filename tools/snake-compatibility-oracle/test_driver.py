@@ -546,6 +546,19 @@ class FrontendCaptureTests(unittest.TestCase):
             self.assertEqual(evidence["cases"][0]["steps"][0]["result"]["watches"], {"RESULT:10": 0})
             self.assertEqual(evidence["frontendCapture"]["status"], "validated_observations_not_comparison_verdict")
 
+    def test_source_and_fixture_inventory_match_full_js_path_order(self):
+        from frontend_capture_io import frontend_files, fixture_inventory
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            names = ["package.json", "src/audio.ts", "src/audio/item.ts", "src/\U00010000.ts", "src/\ue000.ts"]
+            for name in reversed(names):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}")
+            self.assertEqual([item["path"] for item in frontend_files(root, "frontend_source_manifest")], names)
+            self.assertEqual([item["path"] for item in fixture_inventory(root)], names)
+
+
     def test_frontend_decimal_policy_versions_preserve_the_raw_capture_identity(self):
         from frontend_capture import build_evidence
         with tempfile.TemporaryDirectory() as directory:

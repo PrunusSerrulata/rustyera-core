@@ -144,6 +144,11 @@ def bounded_paths(root):
     return entries
 
 
+def capture_path_order(root, path):
+    # The JS producer sorts full relative paths by UTF-16 code units, not Path components.
+    return path.relative_to(root).as_posix().encode("utf-16-be")
+
+
 def fixture_inventory(root):
     """Inventory every source byte and separately hash UTF-8 after BOM removal.
 
@@ -155,7 +160,7 @@ def fixture_inventory(root):
     entries = []
     names = set()
     total = 0
-    for path in sorted(bounded_paths(root)):
+    for path in sorted(bounded_paths(root), key=lambda path: capture_path_order(root, path)):
         require(not path.is_symlink(), "fixture symlink is forbidden")
         if path.is_dir():
             continue
@@ -288,7 +293,7 @@ def frontend_files(root, kind):
         require(kind == "frontend_file_manifest", "unknown frontend manifest kind")
         files = bounded_paths(root)
     result = []
-    for path in sorted(set(files)):
+    for path in sorted(set(files), key=lambda path: capture_path_order(root, path)):
         require(not path.is_symlink(), "frontend source/bundle symlink")
         if path.is_dir():
             continue
