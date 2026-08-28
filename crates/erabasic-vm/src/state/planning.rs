@@ -507,12 +507,13 @@ fn analyze_function_memo(
             }
             Opcode::StorePlace
             | Opcode::Call
-            | Opcode::ResolveFunction
-            | Opcode::InvokeDynamic
-            | Opcode::ResolveMethod
-            | Opcode::SelectMethodArgument
-            | Opcode::CaptureMethodArgument
-            | Opcode::InvokeMethod
+            | Opcode::ResolveUserCall
+            | Opcode::SelectUserArgument
+            | Opcode::CaptureUserArgument
+            | Opcode::InvokeUserCall
+            | Opcode::GuardUserArgument
+            | Opcode::AdvanceUserArgument
+            | Opcode::AbandonUserCall
             | Opcode::JumpDynamicLabel
             | Opcode::InvokeEvent
             | Opcode::Yield

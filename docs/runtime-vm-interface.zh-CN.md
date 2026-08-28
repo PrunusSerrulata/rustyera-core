@@ -5,7 +5,7 @@
 
 - `erabasic-vm` 的 crate 根重导出、`runtime_port.rs`、`runtime_vm.rs`；
 - `era-runtime::RuntimeSession` 的 `drive`、Host 分派、状态事务、存档与热重载调用点；
-- 当前 VM snapshot 格式版本 `14`，magic 为 `RERAVMS\0`；Native ABI `19`、Host ABI `14`、VM ABI `18`。
+- 当前 VM snapshot 格式版本 `15`，magic 为 `RERAVMS\0`；容器版本 `18`、ISA `9`、compiler ABI `43`、Native ABI `19`、Host ABI `14`、VM ABI `18`。
 
 相关源码：
 
@@ -787,8 +787,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 
-## 批次 2B：调用、受控捕获与错误完成
+## 批次 2B：普通用户调用与诊断发布
 
+- snake policy/semantic identity `4/4` 启用非 variadic 用户函数多余实参策略。旧 snake identity、旧字节码与旧 VM snapshot 明确拒绝，没有静默迁移。
+- 用户调用解析、逐实参保留/省略/丢弃、REF 捕获和调用由统一指令与 continuation 处理。
+  动态 JUMP 保留 caller LOCAL/REF 至 callee 成功返回，再展开 caller；不能提前释放引用。
 - `ExecutionFailure` 在失败源处区分脚本、资源、取消、内部不变量、Host 契约、协议、权限和
   基础设施。旧 fault code 与消息不足以取得可捕获权限。Native/Host 返回错误保持分类；
   无效返回值、写集合与 rollback 失败强制属于不可捕获的契约失败。
+- 静态诊断缓存保存无活动 generation 的模板；发布时绑定实际作用域。动态诊断继续按位置、
+  generation 和稳定 code 去重，并阻止 memo 隐藏其副作用。诊断不进入游戏历史文本。
+- 该版本不包含 BEFORE_* 故障钩子；钩子由后续 2D 接入最终故障生命周期。
+
+### 批次 2B 的缓存与诊断身份
+
+HIR 格式为 `15`，编译缓存/项目容器执行版本为 `11`。旧项目容器仍可提取源码，
+但旧字节码必须重建。RuntimeExpressionShape 仅为运行期表达式类型分析的非序列化 carrier。
+`ReturnCurrent` 的完成事件先由 `drive` 交付，再允许 snapshot、reload、isolated fork
+或候选状态提交；`into_candidate_state` 返回 `Result`，不丢弃尚未观测的终态。
+
+Runtime 协议 `37.1` 为兼容诊断 context 增加可选 CBOR 字段 4–7：artifact、project_load_id、
+runtime_epoch、generation。静态多余实参警告在成功加载/重载发布时绑定当前作用域；冷加载
+尚无 VM 时 generation 为空，重载使用实际 VM generation。只保留当前作用域的已发布位置，
+失败发布不消费去重记录。可复用缓存中的诊断不包含这些会话身份，快照和 undo 不回退发布身份。

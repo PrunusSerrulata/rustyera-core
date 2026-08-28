@@ -13,13 +13,15 @@ use crate::{
 };
 
 mod model;
+mod operand_provenance;
+mod runtime_forms;
 
 pub use self::model::{
     SnapshotBlocker, SnapshotContainerInspection, SnapshotEligibility, SnapshotInspection,
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 14;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 15;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 
@@ -40,7 +42,7 @@ pub struct VmSnapshot {
     // A sorted pair list keeps native state deterministic and independent from
     // a serializer's map-key representation.
     native_states: Vec<(erabasic_bytecode::SymbolKey, Vec<u8>)>,
-    arithmetic_warning_sites:
+    compatibility_warning_sites:
         std::collections::BTreeSet<(GenerationId, erabasic_bytecode::SymbolKey, usize, u8)>,
 }
 
@@ -59,7 +61,7 @@ struct VmSnapshotRef<'a> {
     next_request: u64,
     next_generation: u64,
     native_states: &'a [(erabasic_bytecode::SymbolKey, Vec<u8>)],
-    arithmetic_warning_sites:
+    compatibility_warning_sites:
         &'a std::collections::BTreeSet<(GenerationId, erabasic_bytecode::SymbolKey, usize, u8)>,
 }
 
@@ -422,7 +424,7 @@ impl Vm {
             next_frame: self.next_frame,
             next_request: self.next_request,
             next_generation: self.next_generation,
-            arithmetic_warning_sites: self.arithmetic_warning_sites.clone(),
+            compatibility_warning_sites: self.compatibility_warning_sites.clone(),
             native_states: natives
                 .snapshots()
                 .map_err(VmError::Snapshot)?
@@ -477,7 +479,7 @@ impl Vm {
             next_request: self.next_request,
             next_generation: self.next_generation,
             native_states: &native_states,
-            arithmetic_warning_sites: &self.arithmetic_warning_sites,
+            compatibility_warning_sites: &self.compatibility_warning_sites,
         })
     }
 
@@ -511,6 +513,15 @@ impl Vm {
             ));
         }
         validate_snapshot(&snapshot, expected, config)?;
+        for fiber in snapshot.fibers.values() {
+            for index in 0..fiber.frames.len() {
+                if !operand_provenance::valid_frame(&artifact, fiber, index) {
+                    return Err(VmError::Snapshot(
+                        "snapshot operand lease provenance is invalid".into(),
+                    ));
+                }
+            }
+        }
         snapshot
             .memory
             .materialize_snapshot()
@@ -552,8 +563,8 @@ impl Vm {
             next_request: snapshot.next_request,
             next_generation: snapshot.next_generation,
             pending_reload: None,
-            arithmetic_warning_sites: snapshot.arithmetic_warning_sites,
-            pending_arithmetic_warnings: Vec::new(),
+            compatibility_warning_sites: snapshot.compatibility_warning_sites,
+            pending_compatibility_warnings: Vec::new(),
             debug: crate::debug::DebugState::default(),
             regex_cache: crate::regex_compat::RegexCache::default(),
             find_element_cache: HashMap::new(),
@@ -569,23 +580,7 @@ impl Vm {
             #[cfg(test)]
             path_memo_replays: 0,
         };
-        for fiber in vm.fibers.values() {
-            for frame in &fiber.frames {
-                if !vm.valid_frame_references(fiber, frame) || !vm.valid_frame_methods(fiber, frame)
-                {
-                    return Err(VmError::Snapshot(
-                        "snapshot method resolution state is invalid".into(),
-                    ));
-                }
-                if let Some(continuation) = &frame.runtime_form
-                    && !continuation.valid_method_state(&vm, fiber)
-                {
-                    return Err(VmError::Snapshot(
-                        "snapshot STRFORM method state is invalid".into(),
-                    ));
-                }
-            }
-        }
+        validate_restored_continuations(&vm)?;
         let previous_native = natives.snapshots().map_err(VmError::Snapshot)?;
         natives
             .restore_snapshots(&native_states)
@@ -599,11 +594,34 @@ impl Vm {
     }
 }
 
-fn validate_arithmetic_warning_sites(
+fn validate_restored_continuations(vm: &Vm) -> Result<(), VmError> {
+    for fiber in vm.fibers.values() {
+        for frame in &fiber.frames {
+            if !vm.valid_frame_references(fiber, frame)
+                || !vm.valid_frame_user_calls(fiber, frame)
+                || !vm.valid_frame_user_call_origin(fiber, frame)
+            {
+                return Err(VmError::Snapshot(
+                    "snapshot method resolution state is invalid".into(),
+                ));
+            }
+            if let Some(continuation) = &frame.runtime_form
+                && !continuation.valid_method_state(vm, fiber)
+            {
+                return Err(VmError::Snapshot(
+                    "snapshot STRFORM method state is invalid".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_compatibility_warning_sites(
     snapshot: &VmSnapshot,
     artifact: &erabasic_bytecode::BytecodeArtifact,
 ) -> Result<(), VmError> {
-    if snapshot.arithmetic_warning_sites.is_empty() {
+    if snapshot.compatibility_warning_sites.is_empty() {
         return Ok(());
     }
     let code_lengths: HashMap<_, _> = artifact
@@ -611,15 +629,15 @@ fn validate_arithmetic_warning_sites(
         .iter()
         .map(|function| (function.key, function.code.len()))
         .collect();
-    for (generation, function, instruction, warning) in &snapshot.arithmetic_warning_sites {
+    for (generation, function, instruction, warning) in &snapshot.compatibility_warning_sites {
         if *generation != snapshot.current_generation
-            || *warning > 1
+            || *warning > 2
             || code_lengths
                 .get(function)
                 .is_none_or(|length| instruction >= length)
         {
             return Err(VmError::Snapshot(
-                "snapshot arithmetic diagnostic identity is invalid".into(),
+                "snapshot compatibility diagnostic identity is invalid".into(),
             ));
         }
     }
@@ -632,7 +650,7 @@ fn validate_snapshot(
     artifact: &erabasic_bytecode::BytecodeArtifact,
     config: VmConfig,
 ) -> Result<(), VmError> {
-    validate_arithmetic_warning_sites(snapshot, artifact)?;
+    validate_compatibility_warning_sites(snapshot, artifact)?;
     if !snapshot.memory.legacy.is_empty() {
         return Err(VmError::Snapshot(
             "stable snapshots cannot contain legacy-generation storage".into(),
@@ -722,42 +740,8 @@ fn validate_snapshot(
                 ));
             }
             if let Some(continuation) = &frame.runtime_form {
-                let (_, _, origin_instruction) = continuation.origin();
-                let valid_call = frame.instruction == origin_instruction.saturating_add(1)
-                    && function
-                        .code
-                        .get(origin_instruction)
-                        .is_some_and(|instruction| {
-                            if erabasic_bytecode::Opcode::try_from(instruction.opcode)
-                                != Ok(erabasic_bytecode::Opcode::CallNative)
-                            {
-                                return false;
-                            }
-                            let Some(encoded_index) = instruction.payload.get(..4) else {
-                                return false;
-                            };
-                            let mut bytes = [0; 4];
-                            bytes.copy_from_slice(encoded_index);
-                            let Some(import) = function
-                                .imports
-                                .get(u32::from_le_bytes(bytes) as usize)
-                                .filter(|import| {
-                                    import.kind == erabasic_bytecode::ImportKind::Native
-                                })
-                            else {
-                                return false;
-                            };
-                            artifact.native_imports.iter().any(|native| {
-                                native.import.key == import.key
-                                    && native.import.name.eq_ignore_ascii_case("STRFORM")
-                                    && matches!(
-                                        native.import.parameters.as_slice(),
-                                        [erabasic_bytecode::BytecodeType::String]
-                                    )
-                                    && native.import.result
-                                        == Some(erabasic_bytecode::BytecodeType::String)
-                            })
-                        });
+                let valid_call =
+                    runtime_forms::valid_origin(frame, function, artifact, continuation);
                 if !valid_call
                     || !continuation.valid_for_frame(
                         frame.generation,
@@ -767,7 +751,7 @@ fn validate_snapshot(
                     )
                 {
                     return Err(VmError::Snapshot(
-                        "snapshot STRFORM continuation is invalid".into(),
+                        "snapshot runtime-form continuation is invalid".into(),
                     ));
                 }
             }

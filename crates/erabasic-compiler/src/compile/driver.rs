@@ -544,6 +544,7 @@ fn compile_project_inner(
     // project so its function/variable graphs are released before source-map
     // interning and artifact hashing reach their peak.
     let call_compatibility = erabasic_bytecode::BytecodeCallCompatibility {
+        user_argument_policy: project_ref.program.call_compatibility.user_argument_policy,
         allow_event_as_normal: project_ref.program.call_compatibility.allow_event_as_normal,
         allow_omitted_arguments: project_ref
             .program

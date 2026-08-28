@@ -4,10 +4,77 @@ use era_runtime_protocol::{
     ExtensionValueType, ExternalResource, FileCategory, FileChange, FilePayload,
     ImageMetadataResponse, ProjectAnalysisRequest, ReloadProject, RuntimeLogLevel, SubmittedFile,
 };
+use std::fmt::Write as _;
 
 use super::*;
 use era_runtime_protocol::ConfigurationApplication;
 use erabasic_data::LegacyEncoding;
+
+#[test]
+fn static_user_argument_diagnostics_use_compat_code_and_profile_context() {
+    for strict in [false, true] {
+        let mut manifest = index_manifest("ERB/");
+        let script = manifest
+            .files
+            .iter_mut()
+            .find(|file| file.category == FileCategory::Erb)
+            .unwrap();
+        script.payload = FilePayload::Utf8(
+            "@SYSTEM_TITLE\nCALL TAKE, 1, 2\nRETURN\n@TAKE(ARG)\nRETURN\n".into(),
+        );
+        let configuration = manifest
+            .files
+            .iter_mut()
+            .find(|file| file.category == FileCategory::Configuration)
+            .unwrap();
+        let FilePayload::Utf8(text) = &mut configuration.payload else {
+            unreachable!()
+        };
+        write!(
+            text,
+            "[diagnostics]\nstrict_user_call_arguments = {strict}\n"
+        )
+        .unwrap();
+        let build = build_project(&manifest, None);
+        assert_eq!(
+            build.report.success, !strict,
+            "{:?}",
+            build.report.diagnostics
+        );
+        let matching = build
+            .report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "compat.call.excess_arguments")
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1);
+        let diagnostic = matching[0];
+        assert_eq!(
+            diagnostic.level,
+            if strict {
+                RuntimeLogLevel::Error
+            } else {
+                RuntimeLogLevel::Warning
+            }
+        );
+        let context = diagnostic.context.as_ref().unwrap();
+        assert_eq!(context.stage, "compat");
+        assert_eq!(context.identity.as_ref(), Some(&manifest.compatibility));
+        let source = diagnostic.source.as_ref().unwrap();
+        assert_eq!(source.relative_path, "ERB/main.erb");
+        assert!(source.byte_end > source.byte_start);
+        if !strict {
+            let warm = build_project(&manifest, Some(&build.incremental));
+            let matching = warm
+                .report
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "compat.call.excess_arguments")
+                .collect::<Vec<_>>();
+            assert_eq!(matching, vec![diagnostic]);
+        }
+    }
+}
 
 #[test]
 fn als_and_erd_are_data_inputs_with_profile_consistent_resolution() {
@@ -328,7 +395,7 @@ fn semantic_configuration_is_applied_and_retired_settings_are_reported_once() {
     let config = parse_configuration(
         &[
             configuration(
-                "\u{feff}Sort filenames:YES\nIgnore case:NO\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nImitate ERD to VARSIZE dimension specification:YES\nText color:1,2,3\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nTreat snake excess user arguments as errors:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nImitate behavior for RAND:YES\nDo not auto-complete arguments for character variables:YES\nImitate ERD to VARSIZE dimension specification:YES\nText color:1,2,3\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
             ),
             SubmittedFile {
                 relative_path: "setting.json".into(),
@@ -356,8 +423,11 @@ fn semantic_configuration_is_applied_and_retired_settings_are_reported_once() {
     assert_eq!(config.line_height, 22);
     assert!(config.analyzer.compatible_call_event);
     assert!(config.analyzer.compatible_function_argument_optional);
+    assert!(config.analyzer.strict_user_call_arguments);
     assert!(config.analyzer.compatible_function_argument_auto_convert);
     assert!(config.analyzer.ignore_triple_symbols);
+    assert!(config.analyzer.compatible_rand);
+    assert!(config.analyzer.system_no_target);
     assert!(config.analyzer.varsize_dimension_is_one_based);
     assert_eq!(config.analyzer.default_foreground_color, 0x0001_0203);
     assert_eq!(config.legacy_encoding, LegacyEncoding::Korean);

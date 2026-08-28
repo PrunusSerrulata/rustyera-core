@@ -158,8 +158,8 @@ impl Vm {
             next_request: 1,
             next_generation: 2,
             pending_reload: None,
-            arithmetic_warning_sites: BTreeSet::new(),
-            pending_arithmetic_warnings: Vec::new(),
+            compatibility_warning_sites: BTreeSet::new(),
+            pending_compatibility_warnings: Vec::new(),
             debug: DebugState::default(),
             regex_cache: RegexCache::default(),
             find_element_cache: HashMap::new(),
@@ -447,58 +447,20 @@ impl Vm {
                 "cannot return the root frame through a host completion".into(),
             ));
         }
-        let returned = fiber.frames.pop().expect("checked frame count");
-        let caller = fiber.frames.last_mut().expect("checked caller frame");
-        if returned.return_value_to_caller
-            && let Some(value) = value
-        {
-            caller.stack.push(value.clone());
-        }
-        let next_event = caller.event_dispatch.as_mut().and_then(|dispatch| {
-            if dispatch.active.single && value == Some(&VmValue::Integer(1)) {
-                while dispatch
-                    .pending
-                    .front()
-                    .is_some_and(|entry| entry.group == dispatch.active.group)
-                {
-                    dispatch.pending.pop_front();
-                }
+        let outcome = self.return_frame(&mut fiber, value.cloned(), None, false);
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.fibers.insert(fiber_id, fiber);
+                return Err(error);
             }
-            dispatch.pending.pop_front().inspect(|next| {
-                dispatch.active = next.clone();
-            })
-        });
-        if let Some(next) = next_event {
-            let generation = caller.generation;
-            let frame_id = self.allocate_frame_id();
-            let program = self
-                .generations
-                .get(&generation)
-                .ok_or_else(|| VmError::InvalidState("event generation is missing".into()))?;
-            let target = program
-                .function(next.function)
-                .ok_or_else(|| VmError::InvalidState("event function is missing".into()))?;
-            self.memory.ensure_function_statics(
-                generation,
-                target.key,
-                program.function_statics(target.key),
-            );
-            fiber.frames.push(make_frame(
-                frame_id,
-                generation,
-                target,
-                program.function_locals(target.key),
-                Vec::new(),
-                false,
-                true,
-            ));
-        } else if caller.event_dispatch.is_some() {
-            caller.event_dispatch = None;
-        }
+        };
         fiber.mark_progress();
-        fiber.state = FiberState::Runnable;
+        if matches!(outcome, super::FrameReturn::Continue) {
+            fiber.state = FiberState::Runnable;
+            self.runnable.push_back(fiber_id);
+        }
         self.fibers.insert(fiber_id, fiber);
-        self.runnable.push_back(fiber_id);
         Ok(fiber_id)
     }
 

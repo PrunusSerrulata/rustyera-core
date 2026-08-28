@@ -136,92 +136,19 @@ impl Vm {
                 let value = has_value
                     .then(|| pop(&mut fiber.frames.last_mut().expect("frame exists").stack))
                     .transpose()?;
-                let target = self
-                    .generations
-                    .get(&position.generation)
-                    .and_then(|generation| generation.function(position.function))
-                    .ok_or_else(|| {
-                        StepError::new(VmFaultCode::MissingSymbol, "returning function is missing")
-                    })?;
-                if target.kind == BytecodeFunctionKind::Method
-                    && value.as_ref().map(VmValue::value_type) != target.result
+                match self
+                    .return_frame(
+                        fiber,
+                        value,
+                        Some(position.instruction),
+                        policy.allow_function_memo,
+                    )
+                    .map_err(map_vm_error)?
                 {
-                    return Err(StepError::new(
-                        VmFaultCode::TypeMismatch,
-                        "method returned an incompatible scalar type",
-                    ));
-                }
-                let returned_frame = fiber.frames.pop().expect("returning frame exists");
-                self.confirm_path_memo_result_read(
-                    fiber.id,
-                    returned_frame.id,
-                    position.instruction,
-                );
-                if !fiber.frames.is_empty() {
-                    // Completing a function call is finite forward progress even when the
-                    // enclosing calculation needs more than one caller-visible run budget.
-                    // Keep the backward-branch counter intact so a loop that repeatedly calls
-                    // a helper is still covered by the dedicated control-flow watchdog.
-                    fiber.consecutive_budget_exhaustions = 0;
-                }
-                if let Some(key) = self.active_function_memos.remove(&returned_frame.id)
-                    && policy.allow_function_memo
-                    && let Some(value) = value.as_ref()
-                    && let Some(entry) = self.capture_function_memo_entry(&key, value.clone())
-                {
-                    self.cache_function_memo(key, entry);
-                }
-                self.complete_path_memo(fiber, returned_frame.id, value.as_ref());
-                if let Some(caller) = fiber.frames.last_mut() {
-                    if returned_frame.return_value_to_caller
-                        && let Some(value) = value.clone()
-                    {
-                        caller.stack.push(value);
+                    crate::state::FrameReturn::Continue => {}
+                    crate::state::FrameReturn::Completed(value) => {
+                        return Ok(Some(StepOutcome::Completed(value)));
                     }
-                    let next_event = caller.event_dispatch.as_mut().and_then(|dispatch| {
-                        if dispatch.active.single && value == Some(VmValue::Integer(1)) {
-                            while dispatch
-                                .pending
-                                .front()
-                                .is_some_and(|entry| entry.group == dispatch.active.group)
-                            {
-                                dispatch.pending.pop_front();
-                            }
-                        }
-                        dispatch.pending.pop_front().inspect(|next| {
-                            dispatch.active = next.clone();
-                        })
-                    });
-                    if let Some(next) = next_event {
-                        let generation = caller.generation;
-                        let frame_id = self.allocate_frame_id();
-                        let program = self
-                            .generations
-                            .get(&generation)
-                            .expect("validated frame generation exists");
-                        let target = program.function(next.function).ok_or_else(|| {
-                            StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
-                        })?;
-                        self.memory.ensure_function_statics(
-                            generation,
-                            target.key,
-                            program.function_statics(target.key),
-                        );
-                        fiber.frames.push(make_frame(
-                            frame_id,
-                            generation,
-                            target,
-                            program.function_locals(target.key),
-                            Vec::new(),
-                            false,
-                            true,
-                        ));
-                    } else if caller.event_dispatch.is_some() {
-                        caller.event_dispatch = None;
-                    }
-                } else {
-                    fiber.state = FiberState::Completed(value.clone());
-                    return Ok(Some(StepOutcome::Completed(value)));
                 }
             }
             Opcode::Yield => return Ok(Some(StepOutcome::Yielded)),

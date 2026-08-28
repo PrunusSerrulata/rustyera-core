@@ -49,6 +49,7 @@ impl RuntimeSession {
         self.inbound_transfer = None;
         self.outbound_transfer = None;
         self.vm = None;
+        self.project_diagnostic_publication = None;
         self.retained_title_program = None;
         self.set_phase(RuntimePhase::Stopped)?;
         self.emit(
@@ -382,6 +383,10 @@ impl RuntimeSession {
             RuntimeMessage::Fault(fault) => {
                 let context = fault.context.get_or_insert_with(|| {
                     Box::new(era_runtime_protocol::CompatibilityDiagnosticContext {
+                        artifact: None,
+                        project_load_id: None,
+                        runtime_epoch: None,
+                        generation: None,
                         identity: None,
                         stage: "runtime".into(),
                         api: fault.origin.as_ref().map(|origin| origin.command.clone()),
@@ -395,6 +400,10 @@ impl RuntimeSession {
             RuntimeMessage::CommandRejected(rejection) => {
                 let context = rejection.context.get_or_insert_with(|| {
                     Box::new(era_runtime_protocol::CompatibilityDiagnosticContext {
+                        artifact: None,
+                        project_load_id: None,
+                        runtime_epoch: None,
+                        generation: None,
                         identity: None,
                         stage: "protocol".into(),
                         api: None,

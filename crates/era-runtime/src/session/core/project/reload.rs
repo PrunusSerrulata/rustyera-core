@@ -119,6 +119,10 @@ impl RuntimeSession {
                 build.report.diagnostics.push(ProtocolDiagnostic {
                     context: Some(Box::new(
                         era_runtime_protocol::CompatibilityDiagnosticContext {
+                            artifact: None,
+                            project_load_id: None,
+                            runtime_epoch: None,
+                            generation: None,
                             identity: build.report.compatibility.clone(),
                             stage: "service".into(),
                             api: None,
@@ -213,6 +217,10 @@ impl RuntimeSession {
             .iter()
             .filter(|diagnostic| !diagnostic.code.starts_with("runtime.compiled_cache_"))
             .cloned()
+            .map(|mut diagnostic| {
+                crate::compatibility::clear_diagnostic_scope(&mut diagnostic);
+                diagnostic
+            })
             .collect();
         self.compiled_project_cache = None;
         self.compiled_cache_task = None;
@@ -250,10 +258,8 @@ impl RuntimeSession {
         if let Some(origin) = replay_origin {
             self.install_input_replay(origin);
         }
-        self.emit(
-            RuntimeMessage::ProjectLoadReport(build.report),
-            Some(message_id),
-        )?;
+        let generation = self.vm.as_ref().map(|vm| vm.current_generation().0);
+        self.emit_committed_project_report(message_id, build.report, generation)?;
         self.set_phase(previous_phase)?;
         self.renew_debug_grant()?;
         self.emit_presentation()
@@ -532,8 +538,8 @@ fn exact_cached_project(
     Arc::make_mut(&mut exact.snapshot.manifest).project_revision = project_revision;
     exact.snapshot.configuration_profile = configuration_profile;
     for diagnostic in &mut exact.diagnostics {
+        crate::compatibility::clear_diagnostic_scope(diagnostic);
         diagnostic.notification = crate::project::project_diagnostic_notification(diagnostic.level);
-        diagnostic.message = format!("[cached] {}", diagnostic.message);
     }
     exact.diagnostics.push(ProtocolDiagnostic {
         context: None,

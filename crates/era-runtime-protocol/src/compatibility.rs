@@ -53,4 +53,20 @@ pub struct CompatibilityDiagnosticContext {
     pub api: Option<String>,
     #[n(3)]
     pub required_capability: Option<RequiredCapability>,
+    /// Committed artifact identity; absent in reusable compile/cache diagnostics.
+    #[serde(default)]
+    #[n(4)]
+    pub artifact: Option<ProtocolBytes>,
+    /// RuntimeSession-local successful cold-load instance, not project revision.
+    #[serde(default)]
+    #[n(5)]
+    pub project_load_id: Option<u64>,
+    /// Current runtime ownership epoch, never restored backwards from game snapshots.
+    #[serde(default)]
+    #[n(6)]
+    pub runtime_epoch: Option<u64>,
+    /// Actual committed VM generation; cold Ready publication has no VM generation.
+    #[serde(default)]
+    #[n(7)]
+    pub generation: Option<u64>,
 }

@@ -1,8 +1,10 @@
+//! Validator state tracks only an opaque lease and its next syntactic slot.
+//! Captures live in bounded VM pending state, never in this operand stack.
 use std::collections::BTreeMap;
 
 use erabasic_bytecode::{
-    BytecodeFunction, BytecodeGlobal, BytecodeStorage, BytecodeType, MethodArgumentSpec,
-    MethodCallSpec, Opcode, SymbolKey,
+    BytecodeFunction, BytecodeGlobal, BytecodeStorage, BytecodeType, Opcode,
+    SymbolKey, UserArgumentAdvance, UserArgumentSpec, UserCallSpec,
 };
 
 use super::{StackValue, expect_payload, pop_type, read_u16, read_u32};
@@ -19,54 +21,117 @@ pub(super) fn apply(
 ) -> Result<Vec<usize>, InstructionError> {
     let payload = &function.code[index].payload;
     match operation {
-        Opcode::ResolveMethod => {
-            let spec = decode_spec(function, payload, globals)?;
+        Opcode::ResolveUserCall => {
+            let resolve =
+                u32::try_from(index).map_err(|_| invalid("user-call origin exceeds u32"))?;
+            let spec = decode_spec(function, resolve, payload, globals)?;
             pop_type(stack, BytecodeType::String)?;
-            let resolve = u32::try_from(index).map_err(|_| {
-                (
-                    ValidationCode::InvalidOperand,
-                    "method origin exceeds u32".into(),
-                )
-            })?;
-            stack.push(StackValue::MethodToken { resolve });
+            stack.push(StackValue::UserCallToken {
+                resolve,
+                next_slot: 0,
+            });
             if spec.allow_missing {
                 Ok(vec![spec.missing_target as usize, index + 1])
             } else {
                 Ok(vec![index + 1])
             }
         }
-        Opcode::SelectMethodArgument => {
+        Opcode::GuardUserArgument | Opcode::SelectUserArgument => {
             expect_payload(payload, 10)?;
             let resolve = read_u32(payload, 0)?;
             let slot = read_u16(payload, 4)?;
             let spec = referenced_spec(function, index, resolve, globals)?;
-            if !matches!(
-                spec.arguments.get(usize::from(slot)),
-                Some(MethodArgumentSpec::Variable(_))
-            ) {
-                return Err((
-                    ValidationCode::InvalidOperand,
-                    "method argument selection requires a variable slot".into(),
+            let argument = spec.arguments.get(usize::from(slot));
+            let valid = if operation == Opcode::SelectUserArgument {
+                matches!(argument, Some(UserArgumentSpec::Variable(_)))
+            } else {
+                matches!(
+                    argument,
+                    Some(UserArgumentSpec::Variable(_) | UserArgumentSpec::Value(_))
+                )
+            };
+            if !valid {
+                return Err(invalid(
+                    "user-call guard/selection has an incompatible slot",
                 ));
             }
-            expect_capture_prefix(stack, resolve, &spec, usize::from(slot))?;
+            expect_token(stack, resolve, slot)?;
             Ok(vec![read_u32(payload, 6)? as usize, index + 1])
         }
-        Opcode::CaptureMethodArgument => {
+        Opcode::CaptureUserArgument => {
             capture_argument(function, index, payload, stack, globals)?;
             Ok(vec![index + 1])
         }
-        Opcode::InvokeMethod => {
+        Opcode::AdvanceUserArgument => {
+            advance_argument(function, index, payload, stack, globals)?;
+            Ok(vec![index + 1])
+        }
+        Opcode::InvokeUserCall => {
             expect_payload(payload, 4)?;
             let resolve = read_u32(payload, 0)?;
             let spec = referenced_spec(function, index, resolve, globals)?;
-            let base = expect_capture_prefix(stack, resolve, &spec, spec.arguments.len())?;
-            stack.truncate(base);
-            stack.push(StackValue::Value(spec.result.bytecode_type()));
+            let count = u16::try_from(spec.arguments.len()).expect("decoded count is u16");
+            expect_token(stack, resolve, count)?;
+            stack.pop();
+            if let Some(result) = spec.mode.expected_result() {
+                stack.push(StackValue::Value(result));
+            }
+            if spec.mode.unwinds_caller() {
+                if !stack.is_empty() {
+                    return Err((
+                        ValidationCode::StackMismatch,
+                        "jump user-call leaves an active operand or pending call".into(),
+                    ));
+                }
+                // The caller frame is kept by the VM until successful callee return.
+                Ok(Vec::new())
+            } else {
+                Ok(vec![index + 1])
+            }
+        }
+        Opcode::AbandonUserCall => {
+            expect_payload(payload, 4)?;
+            let resolve = read_u32(payload, 0)?;
+            let spec = referenced_spec(function, index, resolve, globals)?;
+            if !spec.allow_missing || spec.missing_target as usize != index {
+                return Err(invalid(
+                    "user-call abandon is not its declared missing branch",
+                ));
+            }
+            expect_token(stack, resolve, 0)?;
+            stack.pop();
             Ok(vec![index + 1])
         }
-        _ => unreachable!("only method opcodes are dispatched here"),
+        _ => unreachable!("only user-call opcodes are dispatched here"),
     }
+}
+
+fn advance_argument(
+    function: &BytecodeFunction,
+    index: usize,
+    payload: &[u8],
+    stack: &mut [StackValue],
+    globals: &BTreeMap<SymbolKey, &BytecodeGlobal>,
+) -> Result<(), InstructionError> {
+    expect_payload(payload, 7)?;
+    let resolve = read_u32(payload, 0)?;
+    let slot = read_u16(payload, 4)?;
+    let spec = referenced_spec(function, index, resolve, globals)?;
+    let reason = UserArgumentAdvance::decode(payload[6]).map_err(operand_error)?;
+    let argument = spec.arguments.get(usize::from(slot));
+    let valid = match reason {
+        UserArgumentAdvance::Omitted => matches!(argument, Some(UserArgumentSpec::Omitted)),
+        UserArgumentAdvance::Discarded => matches!(
+            argument,
+            Some(UserArgumentSpec::Value(_) | UserArgumentSpec::Variable(_))
+        ),
+    };
+    if !valid {
+        return Err(invalid("user-call advance reason does not match its slot"));
+    }
+    advance_token(stack, resolve, slot)?;
+    // The VM additionally verifies default/retained-prefix membership.
+    Ok(())
 }
 
 fn capture_argument(
@@ -83,88 +148,63 @@ fn capture_argument(
     let reference = match payload[6] {
         0 => false,
         1 => true,
-        _ => {
-            return Err((
-                ValidationCode::InvalidOperand,
-                "method capture reference flag is invalid".into(),
-            ));
-        }
+        _ => return Err(invalid("user-call capture reference flag is invalid")),
     };
     let value_type = match spec.arguments.get(usize::from(slot)) {
-        Some(MethodArgumentSpec::Value(value_type)) if !reference => *value_type,
-        Some(MethodArgumentSpec::Variable(key)) => {
-            let scalar = globals[key].value_type;
-            match (scalar, reference) {
-                (BytecodeType::Integer, true) => BytecodeType::IntegerPlace,
-                (BytecodeType::String, true) => BytecodeType::StringPlace,
-                (_, false) => scalar,
-                _ => {
-                    return Err((
-                        ValidationCode::InvalidOperand,
-                        "method variable has a non-scalar schema".into(),
-                    ));
-                }
-            }
-        }
-        _ => {
-            return Err((
-                ValidationCode::InvalidOperand,
-                "method capture does not match an actual argument slot".into(),
-            ));
-        }
+        Some(UserArgumentSpec::Value(value_type)) if !reference => *value_type,
+        Some(UserArgumentSpec::Variable(key)) => match (globals[key].value_type, reference) {
+            (BytecodeType::Integer, true) => BytecodeType::IntegerPlace,
+            (BytecodeType::String, true) => BytecodeType::StringPlace,
+            (scalar, false) => scalar,
+            _ => return Err(invalid("user-call variable has a non-scalar schema")),
+        },
+        _ => return Err(invalid("user-call capture does not match its slot")),
     };
     pop_type(stack, value_type)?;
-    expect_capture_prefix(stack, resolve, &spec, usize::from(slot))?;
-    // Both value and REF branches converge on the same opaque slot.
-    // The VM additionally checks the resolved formal mode and the
-    // place's binding identity against the declared variable symbol.
-    stack.push(StackValue::MethodArgument { resolve, slot });
-    Ok(())
+    // Value and REF captures and the discard branch advance identically at joins.
+    // VM validates REF backing identity and whether this actual was retained.
+    advance_token(stack, resolve, slot)
 }
 
 fn decode_spec(
     function: &BytecodeFunction,
+    resolve: u32,
     payload: &[u8],
     globals: &BTreeMap<SymbolKey, &BytecodeGlobal>,
-) -> Result<MethodCallSpec, InstructionError> {
-    let spec = MethodCallSpec::decode(payload)
-        .map_err(|message| (ValidationCode::InvalidOperand, message))?;
+) -> Result<UserCallSpec, InstructionError> {
+    let spec = UserCallSpec::decode(payload).map_err(operand_error)?;
     if spec.allow_missing
         && !function
             .code
             .get(spec.missing_target as usize)
             .is_some_and(|instruction| {
-                instruction.opcode == Opcode::Pop as u16 && instruction.payload.is_empty()
+                instruction.opcode == Opcode::AbandonUserCall as u16
+                    && &instruction.payload[..] == resolve.to_le_bytes().as_slice()
             })
     {
         return Err((
             ValidationCode::InvalidControlFlow,
-            "method missing branch must begin with an operand-free Pop".into(),
+            "user-call missing branch must abandon its own resolve token".into(),
         ));
     }
     for argument in &spec.arguments {
-        if let MethodArgumentSpec::Variable(key) = argument {
+        if let UserArgumentSpec::Variable(key) = argument {
             let variable = globals.get(key).ok_or((
                 ValidationCode::MissingReference,
-                "dynamic method variable does not resolve".into(),
+                "dynamic user-call variable does not resolve".into(),
             ))?;
             if !matches!(
                 variable.value_type,
                 BytecodeType::Integer | BytecodeType::String
             ) {
-                return Err((
-                    ValidationCode::InvalidOperand,
-                    "method variable has a non-scalar schema".into(),
-                ));
+                return Err(invalid("user-call variable has a non-scalar schema"));
             }
-            // Function statics retain their existing access rules. Only frame-local
-            // storage requires this caller's owner identity before evaluating actuals.
             if variable.storage == BytecodeStorage::FunctionLocal
                 && variable.owner != Some(function.key)
             {
                 return Err((
                     ValidationCode::MissingReference,
-                    "method argument references another function's local variable".into(),
+                    "user-call argument references another function's local variable".into(),
                 ));
             }
         }
@@ -177,65 +217,54 @@ fn referenced_spec(
     index: usize,
     resolve: u32,
     globals: &BTreeMap<SymbolKey, &BytecodeGlobal>,
-) -> Result<MethodCallSpec, InstructionError> {
+) -> Result<UserCallSpec, InstructionError> {
     if resolve as usize >= index {
-        return Err((
-            ValidationCode::InvalidOperand,
-            "method resolve origin must precede its consumer".into(),
+        return Err(invalid(
+            "user-call resolve origin must precede its consumer",
         ));
     }
-    let instruction = function.code.get(resolve as usize).ok_or((
-        ValidationCode::InvalidOperand,
-        "method resolve origin is outside the function".into(),
-    ))?;
-    if instruction.opcode != Opcode::ResolveMethod as u16 {
-        return Err((
-            ValidationCode::InvalidOperand,
-            "method resolve origin is not ResolveMethod".into(),
-        ));
+    let instruction = function
+        .code
+        .get(resolve as usize)
+        .ok_or_else(|| invalid("user-call resolve origin is outside the function"))?;
+    if instruction.opcode != Opcode::ResolveUserCall as u16 {
+        return Err(invalid("user-call resolve origin is not ResolveUserCall"));
     }
-    decode_spec(function, &instruction.payload, globals)
+    decode_spec(function, resolve, &instruction.payload, globals)
 }
 
-/// Returns the base of this call's opaque suffix. A nested call may have its
-/// caller's captures below it, but cannot consume, duplicate, or reorder them.
-fn expect_capture_prefix(
+fn expect_token(
     stack: &[StackValue],
     resolve: u32,
-    spec: &MethodCallSpec,
-    before_slot: usize,
-) -> Result<usize, InstructionError> {
-    let captured = spec.arguments[..before_slot]
-        .iter()
-        .filter(|argument| !matches!(argument, MethodArgumentSpec::Omitted))
-        .count();
-    let base = stack.len().checked_sub(captured + 1).ok_or((
-        ValidationCode::StackMismatch,
-        "method argument sequence underflows its resolve token".into(),
-    ))?;
-    if stack[base] != (StackValue::MethodToken { resolve }) {
+    next_slot: u16,
+) -> Result<(), InstructionError> {
+    if stack.last() != Some(&StackValue::UserCallToken { resolve, next_slot }) {
         return Err((
             ValidationCode::StackMismatch,
-            "method resolve token origin does not match".into(),
+            "user-call token origin or next syntactic slot does not match".into(),
         ));
     }
-    let expected = spec.arguments[..before_slot]
-        .iter()
-        .enumerate()
-        .filter(|(_, argument)| !matches!(argument, MethodArgumentSpec::Omitted));
-    for (actual, (slot, _)) in stack[base + 1..].iter().zip(expected) {
-        let slot = u16::try_from(slot).map_err(|_| {
-            (
-                ValidationCode::InvalidOperand,
-                "method argument slot exceeds u16".into(),
-            )
-        })?;
-        if *actual != (StackValue::MethodArgument { resolve, slot }) {
-            return Err((
-                ValidationCode::StackMismatch,
-                "method arguments are missing, reordered, or from another resolve".into(),
-            ));
-        }
-    }
-    Ok(base)
+    Ok(())
+}
+
+fn advance_token(
+    stack: &mut [StackValue],
+    resolve: u32,
+    slot: u16,
+) -> Result<(), InstructionError> {
+    expect_token(stack, resolve, slot)?;
+    let next_slot = slot
+        .checked_add(1)
+        .ok_or_else(|| invalid("user-call slot exceeds u16"))?;
+    *stack.last_mut().expect("token was checked") =
+        StackValue::UserCallToken { resolve, next_slot };
+    Ok(())
+}
+
+fn operand_error(message: String) -> InstructionError {
+    (ValidationCode::InvalidOperand, message)
+}
+
+fn invalid(message: &str) -> InstructionError {
+    operand_error(message.into())
 }

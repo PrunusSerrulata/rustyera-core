@@ -26,6 +26,8 @@ pub(crate) struct Frame {
     pub locals: VariableMap,
     /// Dynamic statement calls discard method results without exposing them to Host code.
     pub return_value_to_caller: bool,
+    /// Origin-checked return policy for a dynamically bound user call.
+    pub user_call: Option<super::user_calls::UserCallFrame>,
     /// True for an event handler and every ordinary function called beneath it.
     pub event_context: bool,
     /// Nested CALLEVENT handlers are sequenced in the initiating caller frame.
@@ -33,18 +35,15 @@ pub(crate) struct Frame {
     /// Late-bound STRFORM work owned by this frame and resumed by the scheduler.
     pub runtime_form: Option<crate::interpreter::dynamic_form::RuntimeFormContinuation>,
     /// Opaque method resolution identities are separate from the scalar operand stack.
-    pub method_calls: Vec<super::methods::PendingMethodCall>,
+    pub user_calls: Vec<super::user_calls::PendingUserCall>,
 }
 
 impl Frame {
     pub(crate) fn operand_slots(&self) -> Option<usize> {
-        self.method_calls
-            .iter()
-            .try_fold(self.stack.len(), |slots, call| {
-                slots
-                    .checked_add(1)?
-                    .checked_add(call.method.bindings.len())
-            })
+        self.user_calls.iter().try_fold(
+            self.stack.len(),
+            |slots, call| slots.checked_add(1)?.checked_add(call.call.bindings.len()),
+        )
     }
 }
 
@@ -133,7 +132,7 @@ impl Fiber {
     pub(crate) fn clear_runtime_forms(&mut self) {
         for frame in &mut self.frames {
             frame.runtime_form = None;
-            frame.method_calls.clear();
+            frame.user_calls.clear();
         }
     }
 }
@@ -152,8 +151,9 @@ pub struct Vm {
     pub(crate) next_request: u64,
     pub(crate) next_generation: u64,
     pub(crate) pending_reload: Option<HotReloadPlan>,
-    pub(crate) arithmetic_warning_sites: BTreeSet<(GenerationId, SymbolKey, usize, u8)>,
-    pub(crate) pending_arithmetic_warnings: Vec<erabasic_compat::IntegerArithmeticWarning>,
+    pub(crate) compatibility_warning_sites: BTreeSet<(GenerationId, SymbolKey, usize, u8)>,
+    pub(crate) pending_compatibility_warnings:
+        Vec<crate::interpreter::compatibility_diagnostics::CompatibilityWarning>,
     pub(crate) debug: DebugState,
     pub(crate) regex_cache: RegexCache,
     pub(crate) find_element_cache: HashMap<FindElementCacheKey, i64>,

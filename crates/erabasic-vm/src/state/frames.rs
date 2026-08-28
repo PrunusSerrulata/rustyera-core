@@ -40,10 +40,11 @@ pub(crate) fn make_frame<'a>(
         select_values: Vec::new(),
         locals,
         return_value_to_caller,
+        user_call: None,
         event_context,
         event_dispatch: None,
         runtime_form: None,
-        method_calls: Vec::new(),
+        user_calls: Vec::new(),
     }
 }
 
@@ -141,66 +142,6 @@ pub(crate) fn persistent_argument_destination<'a>(
         implicit_target: false,
         indices: &parameter.indices,
     }))
-}
-
-pub(crate) fn prepare_dynamic_arguments(
-    function: &BytecodeFunction,
-    mut arguments: Vec<VmValue>,
-    compatibility: erabasic_bytecode::BytecodeCallCompatibility,
-) -> Result<Vec<VmValue>, VmError> {
-    if arguments.len() > function.parameters.len() {
-        return Err(VmError::InvalidArguments(format!(
-            "function {} expects at most {} arguments, found {}",
-            function.name,
-            function.parameters.len(),
-            arguments.len()
-        )));
-    }
-    while arguments.len() < function.parameters.len() {
-        arguments.push(VmValue::Integer(i64::MIN));
-    }
-    for (parameter, argument) in function.parameters.iter().zip(&mut arguments) {
-        if matches!(argument, VmValue::Integer(value) if *value == i64::MIN) {
-            if parameter.by_reference {
-                return Err(VmError::InvalidArguments(format!(
-                    "function {} omits a reference argument",
-                    function.name
-                )));
-            }
-            *argument = match &parameter.default {
-                Some(BytecodeConstant::Integer(value)) => VmValue::Integer(*value),
-                Some(BytecodeConstant::String(value)) => VmValue::String(value.clone()),
-                None if compatibility.allow_omitted_arguments => match parameter.value_type {
-                    BytecodeType::Integer => VmValue::Integer(0),
-                    BytecodeType::String => VmValue::String(String::new()),
-                    BytecodeType::IntegerPlace | BytecodeType::StringPlace => {
-                        return Err(VmError::InvalidArguments(format!(
-                            "function {} omits a reference argument",
-                            function.name
-                        )));
-                    }
-                },
-                None => {
-                    return Err(VmError::InvalidArguments(format!(
-                        "function {} omits a required argument",
-                        function.name
-                    )));
-                }
-            };
-        }
-        if compatibility.auto_convert_integer_to_string
-            && parameter.value_type == BytecodeType::String
-            && matches!(argument, VmValue::Integer(_))
-            && !parameter.by_reference
-        {
-            let VmValue::Integer(value) = argument else {
-                unreachable!("checked integer argument")
-            };
-            *argument = VmValue::String(value.to_string());
-        }
-    }
-    validate_arguments(function, &arguments)?;
-    Ok(arguments)
 }
 
 pub(crate) fn find_global(

@@ -15,13 +15,13 @@ fn corrupt_arithmetic_warning_site(
             .unwrap();
         }
         "instruction" => site[2] = serde_json::json!(instruction_count),
-        "tag" => site[3] = serde_json::json!(2),
+        "tag" => site[3] = serde_json::json!(3),
         _ => unreachable!(),
     }
 }
 
 #[test]
-fn invalid_arithmetic_warning_sites_reject_before_restoring_native_random_state() {
+fn invalid_compatibility_warning_sites_reject_before_restoring_native_random_state() {
     let artifact = compile_source_with_options(
         concat!(
             "@SYSTEM_TITLE\nRESULT:10 = RAND:1000000\n",
@@ -56,7 +56,7 @@ fn invalid_arithmetic_warning_sites_reject_before_restoring_native_random_state(
     );
     let snapshot = vm.snapshot(&natives).unwrap();
     let json = serde_json::to_value(&snapshot).unwrap();
-    let sites = json["arithmetic_warning_sites"].as_array().unwrap();
+    let sites = json["compatibility_warning_sites"].as_array().unwrap();
     assert_eq!(sites.len(), 2, "overflow and division-by-zero sites");
     assert_eq!(sites[0][3], 0);
     assert_eq!(sites[1][3], 1);
@@ -65,7 +65,7 @@ fn invalid_arithmetic_warning_sites_reject_before_restoring_native_random_state(
     for corruption in ["generation", "function", "instruction", "tag"] {
         let mut corrupted = json.clone();
         corrupt_arithmetic_warning_site(
-            &mut corrupted["arithmetic_warning_sites"][0],
+            &mut corrupted["compatibility_warning_sites"][0],
             corruption,
             entry.code.len(),
         );
@@ -86,8 +86,9 @@ fn invalid_arithmetic_warning_sites_reject_before_restoring_native_random_state(
             &mut restored_natives,
         );
         assert!(
-            matches!(rejected, Err(VmError::Snapshot(message)) if message.contains("arithmetic diagnostic identity")),
-            "{corruption}"
+            matches!(&rejected, Err(VmError::Snapshot(message)) if message.contains("compatibility diagnostic identity")),
+            "{corruption}: {:?}",
+            rejected.as_ref().err()
         );
         assert!(rejected_host.rebound.is_empty(), "{corruption}");
         let after = serde_json::to_value(vm.snapshot(&restored_natives).unwrap()).unwrap();
@@ -115,8 +116,8 @@ fn invalid_arithmetic_warning_sites_reject_before_restoring_native_random_state(
     assert_eq!(restored_host.rebound.len(), 1);
     let restored = serde_json::to_value(restored.snapshot(&restored_natives).unwrap()).unwrap();
     assert_eq!(
-        restored["arithmetic_warning_sites"],
-        json["arithmetic_warning_sites"]
+        restored["compatibility_warning_sites"],
+        json["compatibility_warning_sites"]
     );
     assert_eq!(restored["native_states"], json["native_states"]);
 }

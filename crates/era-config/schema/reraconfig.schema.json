@@ -395,6 +395,20 @@
           "x-rustyera-legacy-code": "FunctionNotFoundWarning",
           "x-rustyera-setting-id": 36
         },
+        "strict_user_call_arguments": {
+          "default": false,
+          "description": "用途：将蛇版用户函数多余实参警告提升为错误；不改变内置函数参数规则；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "StrictUserCallArguments",
+          "x-rustyera-setting-id": 128
+        },
         "system_function_override": {
           "default": true,
           "description": "用途：系统函数被覆盖时显示警告；类型：布尔",
@@ -591,6 +605,7 @@
               "output.scroll_lines",
               "runtime.infinite_loop_warning_ms",
               "diagnostics.minimum_warning_level",
+              "diagnostics.strict_user_call_arguments",
               "diagnostics.ignore_uncalled_functions",
               "diagnostics.missing_function",
               "diagnostics.uncalled_function",

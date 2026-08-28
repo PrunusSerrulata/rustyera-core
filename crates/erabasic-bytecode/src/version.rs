@@ -9,11 +9,11 @@ pub struct FormatVersion {
 }
 
 pub const CONTAINER_VERSION: FormatVersion = FormatVersion {
-    major: 17,
+    major: 18,
     minor: 0,
 };
-pub const ISA_VERSION: FormatVersion = FormatVersion { major: 8, minor: 0 };
-pub const COMPILER_ABI_VERSION: u32 = 42;
+pub const ISA_VERSION: FormatVersion = FormatVersion { major: 9, minor: 0 };
+pub const COMPILER_ABI_VERSION: u32 = 43;
 pub const NATIVE_ABI_VERSION: u32 = 19;
 pub const HOST_ABI_VERSION: u32 = 14;
 pub const VM_ABI_VERSION: u32 = 18;

@@ -1171,6 +1171,13 @@ mod tests {
     }
 
     fn compile_vm(source: &str) -> (Vm, Arc<BytecodeArtifact>) {
+        compile_vm_with_profile(source, erabasic_compat::CompatibilityProfileId::EmueraEm)
+    }
+
+    fn compile_vm_with_profile(
+        source: &str,
+        profile: erabasic_compat::CompatibilityProfileId,
+    ) -> (Vm, Arc<BytecodeArtifact>) {
         let project_data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
             .data
             .expect("default project data");
@@ -1182,7 +1189,10 @@ mod tests {
                     payload: SourcePayload::Utf8(source.into()),
                 }],
             },
-            &AnalyzerOptions::analysis_mode(),
+            &AnalyzerOptions {
+                compatibility: erabasic_compat::CompatibilityIdentity::for_profile(profile),
+                ..AnalyzerOptions::analysis_mode()
+            },
             &ExtensionRegistry::default(),
         );
         let compilation = compile_project(
@@ -1623,6 +1633,46 @@ mod tests {
             group.mutations.is_empty(),
             "the final snapshot replaces the redundant mutation log"
         );
+    }
+
+    #[test]
+    fn dynamic_call_warnings_remain_path_memo_boundaries_after_site_deduplication() {
+        let (mut vm, artifact) = compile_vm_with_profile(
+            "@SYSTEM_TITLE\nRESULT:10 = WRAPPER()\nRESULT:11 = WRAPPER()\nRESULT:12 = WRAPPER()\nRETURN\n\
+             @WRAPPER\n#FUNCTION\nCALLFORMF TARGET_0, 1, EXTRA()\nRETURNF RESULT\n\
+             @TARGET_0(ARG)\n#FUNCTION\nFLAG:1 = 7\nRETURNF ARG\n\
+             @EXTRA\n#FUNCTION\nFLAG:0 += 1\nRETURNF 99\n",
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        );
+        let entry = artifact
+            .functions
+            .iter()
+            .find(|function| function.name == "SYSTEM_TITLE")
+            .unwrap()
+            .key;
+        let flag = artifact
+            .globals
+            .iter()
+            .find(|variable| variable.name == "FLAG")
+            .unwrap()
+            .key;
+        let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+        vm.spawn_entry(entry, Vec::new()).unwrap();
+        let report = vm.run_slice(&mut RejectHost, &mut natives, RunBudget::default());
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{report:?}"
+        );
+        assert_eq!(report.events.iter().filter(|event| matches!(event,
+            VmEvent::Diagnostic { code, origin, .. } if code == "compat.call.excess_arguments" && origin.function_name == "WRAPPER"
+        )).count(), 1, "{report:?}");
+        assert_eq!(vm.path_memo_replays, 0);
+        assert!(vm.path_memo_cache.is_empty());
+        assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(0)));
+        assert_eq!(vm.read_variable(flag, &[1], None), Ok(VmValue::Integer(7)));
     }
 
     #[test]

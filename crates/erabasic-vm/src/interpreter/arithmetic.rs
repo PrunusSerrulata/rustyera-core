@@ -1,11 +1,10 @@
 //! Profile-aware integer execution. Diagnostics are drained at the instruction boundary.
 
-use erabasic_compat::{
-    IntegerArithmeticError, IntegerArithmeticPolicy, IntegerArithmeticWarning, IntegerOperation,
-};
+use erabasic_compat::{IntegerArithmeticError, IntegerArithmeticPolicy, IntegerOperation};
 
-use super::{InstructionPosition, StepError, Vm, VmEvent, VmFaultCode, VmValue, operand};
-use crate::{FiberId, GenerationId, VmDiagnosticNotification};
+use super::compatibility_diagnostics::CompatibilityWarning;
+use super::{StepError, Vm, VmFaultCode, VmValue, operand};
+use crate::GenerationId;
 
 impl Vm {
     pub(super) fn integer_policy(&self, generation: GenerationId) -> IntegerArithmeticPolicy {
@@ -45,11 +44,8 @@ impl Vm {
                     }
                 }
             })?;
-        if let Some(warning) = outcome.warning
-            && !self.pending_arithmetic_warnings.contains(&warning)
-        {
-            // There are only two warning kinds; this queue cannot grow with expression size.
-            self.pending_arithmetic_warnings.push(warning);
+        if let Some(warning) = outcome.warning {
+            self.queue_compatibility_warning(CompatibilityWarning::Arithmetic(warning));
         }
         Ok(outcome.value)
     }
@@ -99,52 +95,6 @@ impl Vm {
                 .integer_arithmetic(generation, arithmetic, left, Some(right))
                 .map(VmValue::Integer),
             (left, right) => operand::binary_value(operation, left, right),
-        }
-    }
-
-    pub(super) fn drain_arithmetic_diagnostics(
-        &mut self,
-        fiber: FiberId,
-        position: &InstructionPosition<'_>,
-        events: &mut Vec<VmEvent>,
-    ) {
-        if self.pending_arithmetic_warnings.is_empty() {
-            return;
-        }
-        // Memo entries do not store diagnostics. Never publish a trace that observed one,
-        // including a duplicate already reported at this source position.
-        self.invalidate_path_memo(fiber);
-        self.active_function_memos.clear();
-        let command = self.command_for_position(position);
-        let origin = self.execution_origin(position, &command);
-        for warning in self.pending_arithmetic_warnings.drain(..) {
-            let (tag, code, message) = match warning {
-                IntegerArithmeticWarning::Overflow => (
-                    0,
-                    "compat.arithmetic.overflow",
-                    "integer arithmetic overflowed; snake saturation policy applied",
-                ),
-                IntegerArithmeticWarning::DivideByZero => (
-                    1,
-                    "compat.arithmetic.divide_by_zero",
-                    "integer division or remainder by zero returned zero under snake policy",
-                ),
-            };
-            let site = (
-                position.generation,
-                position.function,
-                position.instruction,
-                tag,
-            );
-            if self.arithmetic_warning_sites.insert(site) {
-                events.push(VmEvent::Diagnostic {
-                    fiber,
-                    code: code.into(),
-                    message: message.into(),
-                    origin: origin.clone(),
-                    notification: VmDiagnosticNotification::LogOnly,
-                });
-            }
         }
     }
 }

@@ -15,6 +15,7 @@ pub(crate) struct FunctionSymbol {
     pub id: FunctionId,
     pub kind: FunctionKind,
     pub return_type: SemanticType,
+    pub parameter_count: usize,
 }
 
 pub(crate) struct Symbols {
@@ -93,6 +94,7 @@ impl Symbols {
         name: &str,
         kind: FunctionKind,
         return_type: SemanticType,
+        parameter_count: usize,
     ) -> Result<FunctionId, FunctionId> {
         let key = self.key(name);
         if let Some(existing) = self
@@ -112,6 +114,7 @@ impl Symbols {
                     id,
                     kind,
                     return_type,
+                    parameter_count,
                 });
                 return Ok(id);
             }
@@ -123,6 +126,7 @@ impl Symbols {
             id,
             kind,
             return_type,
+            parameter_count,
         });
         Ok(id)
     }

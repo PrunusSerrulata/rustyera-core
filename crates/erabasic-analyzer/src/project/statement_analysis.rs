@@ -710,6 +710,19 @@ fn analyze_instruction(
         // of its argument list, not as an extra omitted user-function argument.
         lowered.pop();
     }
+    if matches!(
+        key.as_str(),
+        "CALL" | "CALLF" | "JUMP" | "BEGIN" | "TRYCALL" | "TRYJUMP"
+    ) && let Some(HirArgument::Raw(target)) = lowered.first()
+        && let Some(callee) = symbols.function(target)
+    {
+        analyzer.diagnose_user_call_arity(
+            target,
+            lowered.len().saturating_sub(1),
+            callee.parameter_count,
+            SourceLocation::new(source.source.id, statement.span),
+        );
+    }
     if matches!(key.as_str(), "IF" | "ELSEIF" | "SIF" | "WHILE" | "REPEAT")
         && matches!(lowered.last(), Some(HirArgument::Omitted))
     {

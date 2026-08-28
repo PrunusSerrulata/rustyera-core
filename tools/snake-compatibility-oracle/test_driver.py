@@ -133,6 +133,37 @@ class DriverTests(unittest.TestCase):
                 self.assertEqual(changed["status"], "different")
                 self.assertEqual(changed["steps"][0]["rejectionComparison"]["status"], "not_established")
 
+    def test_rust_compile_error_and_oracle_run_error_preserve_the_rejection_stage_difference(self):
+        request = {"op": "run", "entry": "PROFILE_GATE", "watch": ["FLAG:9"]}
+        case = {"id": "gate", "group": "METHODS", "targetBatch": 2,
+                "requireSuccessfulLoad": False, "snakeTargetStatus": "pending_actual_capture",
+                "requests": [{"request": request}]}
+        # Synthetic comparator inputs only. They do not declare the C# fixture's
+        # unobserved load/run outcome or create a golden for either engine.
+        diagnostic = {"code": "analyzer.unknowninstruction", "level": "error",
+                      "source": {"relative_path": "methods.erb", "byte_start": 0, "byte_end": 20}}
+        rust = {"load": {"success": False, "diagnostics": [diagnostic]}, "steps": [{
+            "request": request, "status": "executed", "result": {"ok": False,
+            "termination": "compileError", "output": [], "watches": {}, "diagnostics": [diagnostic]}}]}
+        load = {"ok": True, "diagnostics": [{"level": 2,
+                "position": {"file": "methods.erb", "line": 2}, "message": "localized load warning"}],
+                "result": {"termination": "waitingInput", "output": ["ready"]}}
+        response = {"ok": True, "diagnostics": [], "result": {
+            "termination": "error", "output": ["ready", "localized execution error"], "watches": {"FLAG:9": 0}}}
+        driver.validate_load(load)
+        result = compare_case(case, [{"request": request, "response": response}], rust, load)
+        self.assertEqual(result["status"], "different")
+        self.assertEqual(result["oracleLoad"], load)
+        step = result["steps"][0]
+        outcome = next(item for item in step["differences"] if item["field"] == "executionOutcome")
+        self.assertEqual((outcome["rust"], outcome["oracle"]), ("compileError", "script_error"))
+        self.assertEqual(step["rejectionComparison"]["status"], "not_established")
+        self.assertFalse(step["rejectionComparison"]["diagnosticEquivalence"])
+        self.assertEqual(step["diagnosticComparison"]["status"], "incomparable_schema")
+        self.assertEqual(step["diagnosticComparison"]["rust"], [diagnostic])
+        self.assertEqual(step["rust"]["result"]["termination"], "compileError")
+        self.assertEqual(step["oracle"]["result"]["termination"], "error")
+
     def test_output_removes_only_the_exact_load_prefix_and_preserves_script_lines(self):
         load = {"result": {"output": ["Now Loading...", "Elapsed time:3ms", "COMPAT_READY"]}}
         raw = load["result"]["output"] + ["Now Loading...", "COMPAT_READY", "script"]
@@ -364,10 +395,14 @@ class DriverTests(unittest.TestCase):
                             "arithmetic": "snake_saturating_i64_v1"}
         validate_rust_evidence(current, "snake", fixture, 1, current_required)
         for fields in ({"arithmetic": "wrapping_i64_v1"}, {"rng_algorithm": "mt19937"},
-                       {"rng_state_version": 2}, {"semantic_version": 4, "policy_version": 4}):
+                       {"rng_state_version": 2}, {"semantic_version": 5, "policy_version": 5}):
             with self.subTest(fields=fields), self.assertRaises(ValueError):
                 validate_rust_evidence({**current, "profile": {**current["profile"], **fields}},
                                        "snake", fixture, 1)
+        call_policy = {**current, "profile": {**current["profile"], "semantic_version": 4, "policy_version": 4}}
+        validate_rust_evidence(call_policy, "snake", fixture, 1, {"semantic_version": 4, "policy_version": 4})
+        with self.assertRaises(ValueError):
+            validate_rust_evidence(call_policy, "snake", fixture, 1, current_required)
         with self.assertRaises(ValueError):
             validate_rust_evidence(current, "snake", fixture, 1, required)
         with self.assertRaises(ValueError):

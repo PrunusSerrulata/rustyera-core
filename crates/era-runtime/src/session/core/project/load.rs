@@ -129,6 +129,10 @@ impl RuntimeSession {
             report.diagnostics.push(ProtocolDiagnostic {
                 context: Some(Box::new(
                     era_runtime_protocol::CompatibilityDiagnosticContext {
+                        artifact: None,
+                        project_load_id: None,
+                        runtime_epoch: None,
+                        generation: None,
                         identity: report.compatibility.clone(),
                         stage: "service".into(),
                         api: None,
@@ -346,7 +350,14 @@ impl RuntimeSession {
         message_id: u64,
         candidate: PendingColdProjectLoad,
     ) -> Result<(), RuntimeError> {
+        let load_id = self
+            .project_load_id
+            .checked_add(1)
+            .ok_or(RuntimeError::ResourceLimit(
+                "project load identity exhausted",
+            ))?;
         let mut report = candidate.build.report;
+        self.project_load_id = load_id;
         self.compiled_project_cache = candidate.compiled_project_cache;
         self.compiled_cache_task = None;
         self.compiled_cache_failure = None;
@@ -360,6 +371,10 @@ impl RuntimeSession {
             .iter()
             .filter(|diagnostic| !diagnostic.code.starts_with("runtime.compiled_cache_"))
             .cloned()
+            .map(|mut diagnostic| {
+                crate::compatibility::clear_diagnostic_scope(&mut diagnostic);
+                diagnostic
+            })
             .collect();
         self.incremental = Arc::new(candidate.build.incremental);
         self.retained_title_program = None;
@@ -391,7 +406,8 @@ impl RuntimeSession {
             );
         }
         self.sync_resource_replay();
-        self.emit(RuntimeMessage::ProjectLoadReport(report), Some(message_id))?;
+        // A cold load has no generation, even if a faulted previous VM is still retained.
+        self.emit_committed_project_report(message_id, report, None)?;
         self.set_phase(RuntimePhase::Ready)
     }
 }

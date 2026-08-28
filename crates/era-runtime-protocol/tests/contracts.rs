@@ -162,7 +162,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
 }
 
 #[test]
@@ -187,7 +187,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
     assert!(include_str!("../schema/runtime.cddl").contains(
         "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
     ));
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
 }
 
 #[test]
@@ -356,7 +356,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
 }
 
 #[test]
@@ -365,7 +365,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -531,7 +531,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -570,7 +570,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 
@@ -841,4 +841,42 @@ fn protocol_37_round_trips_index_inputs_without_reclassifying_them_as_scripts() 
     );
     assert_eq!(encode_canonical(&FileCategory::Als).unwrap(), [6]);
     assert_eq!(encode_canonical(&FileCategory::Erd).unwrap(), [7]);
+}
+
+#[test]
+fn project_diagnostic_scope_round_trips_without_requiring_a_vm_generation() {
+    for generation in [None, Some(2)] {
+        let context = era_runtime_protocol::CompatibilityDiagnosticContext {
+            identity: None,
+            stage: "compat".into(),
+            api: Some("user_call".into()),
+            required_capability: None,
+            artifact: Some(ProtocolBytes::new(vec![7; 32])),
+            project_load_id: Some(3),
+            runtime_epoch: Some(5),
+            generation,
+        };
+        let bytes = encode_canonical(&context).unwrap();
+        assert_eq!(
+            decode_canonical::<era_runtime_protocol::CompatibilityDiagnosticContext>(&bytes)
+                .unwrap(),
+            context
+        );
+    }
+    // Existing four-field CBOR context remains a valid unbound template.
+    let bytes = [
+        0xa4, 0x00, 0xf6, 0x01, 0x66, b'c', b'o', b'm', b'p', b'a', b't', 0x02, 0xf6, 0x03, 0xf6,
+    ];
+    let context: era_runtime_protocol::CompatibilityDiagnosticContext =
+        decode_canonical(&bytes).unwrap();
+    assert_eq!(context.stage, "compat");
+    assert!(context.artifact.is_none());
+    assert_eq!(
+        (
+            context.project_load_id,
+            context.runtime_epoch,
+            context.generation
+        ),
+        (None, None, None)
+    );
 }

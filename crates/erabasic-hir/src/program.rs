@@ -50,6 +50,7 @@ pub enum FunctionKind {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct CallCompatibility {
+    pub user_argument_policy: erabasic_compat::UserCallArgumentPolicy,
     pub allow_event_as_normal: bool,
     pub allow_omitted_arguments: bool,
     pub auto_convert_integer_to_string: bool,

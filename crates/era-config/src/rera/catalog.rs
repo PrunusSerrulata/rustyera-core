@@ -348,6 +348,12 @@ fn metadata(code: &str) -> (u16, &'static str, &'static str, bool) {
             "过滤低于阈值的加载诊断",
             false,
         ),
+        "StrictUserCallArguments" => (
+            128,
+            "diagnostics.strict_user_call_arguments",
+            "将蛇版用户函数多余实参警告提升为错误；不改变内置函数参数规则",
+            false,
+        ),
         "IgnoreUncalledFunction" => (
             35,
             "diagnostics.ignore_uncalled_functions",

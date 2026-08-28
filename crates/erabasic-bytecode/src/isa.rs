@@ -42,14 +42,16 @@ pub enum Opcode {
     Return = 33,
     CallNative = 34,
     CallHost = 35,
-    ResolveFunction = 36,
-    InvokeDynamic = 37,
+    // 36/37 are retired eager-call opcodes and are rejected by this ISA.
     JumpDynamicLabel = 38,
     InvokeEvent = 39,
-    ResolveMethod = 40,
-    SelectMethodArgument = 41,
-    CaptureMethodArgument = 42,
-    InvokeMethod = 43,
+    ResolveUserCall = 40,
+    SelectUserArgument = 41,
+    CaptureUserArgument = 42,
+    InvokeUserCall = 43,
+    GuardUserArgument = 44,
+    AdvanceUserArgument = 45,
+    AbandonUserCall = 46,
     Yield = 48,
     AwaitResume = 49,
     Trap = 255,
@@ -85,14 +87,15 @@ impl TryFrom<u16> for Opcode {
             33 => Self::Return,
             34 => Self::CallNative,
             35 => Self::CallHost,
-            36 => Self::ResolveFunction,
-            37 => Self::InvokeDynamic,
             38 => Self::JumpDynamicLabel,
             39 => Self::InvokeEvent,
-            40 => Self::ResolveMethod,
-            41 => Self::SelectMethodArgument,
-            42 => Self::CaptureMethodArgument,
-            43 => Self::InvokeMethod,
+            40 => Self::ResolveUserCall,
+            41 => Self::SelectUserArgument,
+            42 => Self::CaptureUserArgument,
+            43 => Self::InvokeUserCall,
+            44 => Self::GuardUserArgument,
+            45 => Self::AdvanceUserArgument,
+            46 => Self::AbandonUserCall,
             48 => Self::Yield,
             49 => Self::AwaitResume,
             255 => Self::Trap,
@@ -299,7 +302,7 @@ impl EncodedInstruction {
 
 /// Canonical payload constructors shared by the compiler and tests.
 pub mod opcode {
-    use crate::{BytecodeType, EncodedInstruction, MethodCallSpec, Opcode, SymbolKey};
+    use crate::{BytecodeType, EncodedInstruction, Opcode, SymbolKey, UserCallSpec};
 
     #[must_use]
     pub fn push_integer(value: i64) -> EncodedInstruction {
@@ -374,27 +377,6 @@ pub mod opcode {
     }
 
     #[must_use]
-    pub fn resolve_function(
-        missing_target: u32,
-        allow_missing: bool,
-        method: bool,
-    ) -> EncodedInstruction {
-        let mut payload = [0; 6];
-        payload[..4].copy_from_slice(&missing_target.to_le_bytes());
-        payload[4] = u8::from(allow_missing);
-        payload[5] = u8::from(method);
-        EncodedInstruction::from_payload_slice(Opcode::ResolveFunction, &payload)
-    }
-
-    #[must_use]
-    pub fn invoke_dynamic(arguments: u16, tail: bool) -> EncodedInstruction {
-        let mut payload = [0; 3];
-        payload[..2].copy_from_slice(&arguments.to_le_bytes());
-        payload[2] = u8::from(tail);
-        EncodedInstruction::from_payload_slice(Opcode::InvokeDynamic, &payload)
-    }
-
-    #[must_use]
     pub fn jump_dynamic_label(missing_target: u32) -> EncodedInstruction {
         EncodedInstruction::from_payload_slice(
             Opcode::JumpDynamicLabel,
@@ -410,12 +392,12 @@ pub mod opcode {
     /// # Panics
     /// Panics when `spec` contains more than `u16::MAX` argument slots.
     #[must_use]
-    pub fn resolve_method(spec: &MethodCallSpec) -> EncodedInstruction {
-        EncodedInstruction::new(Opcode::ResolveMethod, spec.encode())
+    pub fn resolve_user_call(spec: &UserCallSpec) -> EncodedInstruction {
+        EncodedInstruction::new(Opcode::ResolveUserCall, spec.encode())
     }
 
     #[must_use]
-    pub fn select_method_argument(
+    pub fn select_user_argument(
         resolve: u32,
         slot: u16,
         reference_target: u32,
@@ -424,22 +406,48 @@ pub mod opcode {
         payload[..4].copy_from_slice(&resolve.to_le_bytes());
         payload[4..6].copy_from_slice(&slot.to_le_bytes());
         payload[6..].copy_from_slice(&reference_target.to_le_bytes());
-        EncodedInstruction::from_payload_slice(Opcode::SelectMethodArgument, &payload)
+        EncodedInstruction::from_payload_slice(Opcode::SelectUserArgument, &payload)
     }
 
     #[must_use]
-    pub fn capture_method_argument(resolve: u32, slot: u16, reference: bool) -> EncodedInstruction {
+    pub fn capture_user_argument(resolve: u32, slot: u16, reference: bool) -> EncodedInstruction {
         let mut payload = [0; 7];
         payload[..4].copy_from_slice(&resolve.to_le_bytes());
         payload[4..6].copy_from_slice(&slot.to_le_bytes());
         payload[6] = u8::from(reference);
-        EncodedInstruction::from_payload_slice(Opcode::CaptureMethodArgument, &payload)
+        EncodedInstruction::from_payload_slice(Opcode::CaptureUserArgument, &payload)
     }
 
     #[must_use]
-    pub fn invoke_method(resolve: u32) -> EncodedInstruction {
-        EncodedInstruction::from_payload_slice(Opcode::InvokeMethod, &resolve.to_le_bytes())
+    pub fn invoke_user_call(resolve: u32) -> EncodedInstruction {
+        EncodedInstruction::from_payload_slice(Opcode::InvokeUserCall, &resolve.to_le_bytes())
     }
+
+    #[must_use]
+    pub fn guard_user_argument(resolve: u32, slot: u16, discard_target: u32) -> EncodedInstruction {
+        let mut instruction = select_user_argument(resolve, slot, discard_target);
+        instruction.opcode = Opcode::GuardUserArgument as u16;
+        instruction
+    }
+
+    #[must_use]
+    pub fn advance_user_argument(
+        resolve: u32,
+        slot: u16,
+        reason: crate::UserArgumentAdvance,
+    ) -> EncodedInstruction {
+        let mut payload = [0; 7];
+        payload[..4].copy_from_slice(&resolve.to_le_bytes());
+        payload[4..6].copy_from_slice(&slot.to_le_bytes());
+        payload[6] = reason as u8;
+        EncodedInstruction::from_payload_slice(Opcode::AdvanceUserArgument, &payload)
+    }
+
+    #[must_use]
+    pub fn abandon_user_call(resolve: u32) -> EncodedInstruction {
+        EncodedInstruction::from_payload_slice(Opcode::AbandonUserCall, &resolve.to_le_bytes())
+    }
+
 
     #[must_use]
     pub fn concat(parts: u16) -> EncodedInstruction {
@@ -545,17 +553,11 @@ mod tests {
             opcode::return_value(true),
             EncodedInstruction::new(Opcode::Return, vec![1])
         );
-        let mut resolve = 31_u32.to_le_bytes().to_vec();
-        resolve.extend_from_slice(&[1, 0]);
+        assert_eq!(Opcode::try_from(36), Err(36));
+        assert_eq!(Opcode::try_from(37), Err(37));
         assert_eq!(
-            opcode::resolve_function(31, true, false),
-            EncodedInstruction::new(Opcode::ResolveFunction, resolve)
-        );
-        let mut invoke = 5_u16.to_le_bytes().to_vec();
-        invoke.push(1);
-        assert_eq!(
-            opcode::invoke_dynamic(5, true),
-            EncodedInstruction::new(Opcode::InvokeDynamic, invoke)
+            opcode::abandon_user_call(31),
+            EncodedInstruction::new(Opcode::AbandonUserCall, 31_u32.to_le_bytes().to_vec())
         );
         assert_eq!(
             opcode::jump_dynamic_label(23),

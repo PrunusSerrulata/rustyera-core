@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.8`、公共信封 `2.0`、Runtime 协议 `34.0`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `37.1`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -18,9 +18,9 @@
 
 | 层 | 当前稳定性 | 用途 |
 | --- | --- | --- |
-| C ABI 3.8 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
+| C ABI 3.9 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 34.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 37.1 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -87,7 +87,7 @@ get_api → create → ClientHello → ServerHello
                                                 destroy
 ```
 
-## 3. C ABI 3.8
+## 3. C ABI 3.9
 
 ### 3.1 数据结构
 
@@ -1104,3 +1104,11 @@ ShutdownRequest}` 的 `.envelope(...)` 和 `encode_envelope` 生成同样消息�
 - 错误和恢复：第 10 节
 - 源码不一致：第 11 节
 - Python/Rust 端到端用法：第 12 节
+
+### 兼容诊断的发布作用域（Runtime 37.1）
+
+`CompatibilityDiagnosticContext` 的 CBOR 可选字段 4–7 依次为 artifact（32 字节摘要）、
+project_load_id、runtime_epoch、generation。缺席表示该阶段尚未绑定或无法证明相应身份；
+冷加载报告的 generation 为空。旧代存活 frame 发出的警告保留真实 generation，不借用新
+artifact 摘要。前端不得用显示文本替代 code、源码位置及这些身份字段进行诊断比较。
+这些字段不改变现有 C 结构布局，C ABI 保持 3.9。

@@ -744,9 +744,26 @@ fn build_project_with_resolved_compatibility(
                 RuntimeLogLevel::Error
             }
         };
+        let excess_arguments =
+            diagnostic.code == erabasic_analyzer::AnalyzerDiagnosticCode::ExcessUserArguments;
         ProtocolDiagnostic {
-            context: None,
-            code: format!("analyzer.{:?}", diagnostic.code).to_ascii_lowercase(),
+            context: excess_arguments.then(|| {
+                Box::new(era_runtime_protocol::CompatibilityDiagnosticContext {
+                    artifact: None,
+                    project_load_id: None,
+                    runtime_epoch: None,
+                    generation: None,
+                    identity: Some(analyzer_options.compatibility.clone()),
+                    stage: "compat".into(),
+                    api: Some("user_call".into()),
+                    required_capability: None,
+                })
+            }),
+            code: if excess_arguments {
+                "compat.call.excess_arguments".into()
+            } else {
+                format!("analyzer.{:?}", diagnostic.code).to_ascii_lowercase()
+            },
             level,
             message: diagnostic.message,
             source,

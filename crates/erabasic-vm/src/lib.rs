@@ -71,5 +71,5 @@ pub(crate) use memory::{
 };
 pub(crate) use state::{
     Fiber, FiberState, FindElementCacheKey, FindElementNeedle, ProgramGeneration, WaitingHost,
-    bind_persistent_arguments, make_frame, prepare_dynamic_arguments, validate_arguments,
+    bind_persistent_arguments, make_frame, validate_arguments,
 };

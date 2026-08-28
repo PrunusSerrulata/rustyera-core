@@ -329,7 +329,8 @@ impl ExpressionAnalyzer<'_> {
             .iter()
             .map(|argument| argument.as_ref().map(|argument| self.analyze(argument)))
             .collect();
-        if let Some(function) = self.symbols.function(name) {
+        if let Some(function) = self.symbols.function(name).cloned() {
+            self.diagnose_user_call_arity(name, values.len(), function.parameter_count, location);
             let arguments = values.into_iter().map(value_call_argument).collect();
             return HirExpr {
                 kind: HirExprKind::Call {
@@ -378,30 +379,14 @@ impl ExpressionAnalyzer<'_> {
         if let Some(expression) = self.fold_builtin_call(&signature.name, &key, &values, location) {
             return expression;
         }
-        let argument_count = values.len();
-        let arguments = values
-            .into_iter()
-            .enumerate()
-            .map(|(index, value)| match value {
-                None => HirCallArgument::Omitted,
-                Some(expression)
-                    if dynamic_method && index >= 2
-                        || constraints
-                            .get(index)
-                            .or_else(|| signature.variadic.then(|| constraints.last()).flatten())
-                            .is_some_and(|constraint| {
-                                argument_keeps_place(*constraint, expression.value_type)
-                                    || key == "REGEXPMATCH" && argument_count == 4 && index == 2
-                            }) =>
-                {
-                    match expression.kind {
-                        HirExprKind::Variable { place } => HirCallArgument::Place(place),
-                        _ => HirCallArgument::Value(expression),
-                    }
-                }
-                Some(expression) => HirCallArgument::Value(expression),
-            })
-            .collect();
+        let regex_output = key == "REGEXPMATCH" && values.len() == 4;
+        let arguments = builtin_call_arguments(
+            values,
+            constraints,
+            signature.variadic,
+            dynamic_method,
+            regex_output,
+        );
         let target = if self.catalog.extension_functions.contains(&key) {
             CallTarget::Extension { name: key }
         } else {
@@ -827,6 +812,48 @@ impl ExpressionAnalyzer<'_> {
         }
     }
 
+    pub(crate) fn diagnose_user_call_arity(
+        &mut self,
+        name: &str,
+        supplied: usize,
+        formal: usize,
+        location: SourceLocation,
+    ) {
+        use erabasic_compat::{UserCallArgumentPolicy, UserCallArityDiagnostic};
+        // Preserve reference rejection in the existing compiler path. Snake load
+        // diagnostics are produced on every analysis, independent of function-cache hits.
+        if self.options.compatibility.user_call_argument_policy(false)
+            == UserCallArgumentPolicy::RejectExcess
+        {
+            return;
+        }
+        let decision = self
+            .options
+            .compatibility
+            .user_call_argument_policy(self.options.strict_user_call_arguments)
+            .decide(supplied, formal);
+        let Some(level) = decision.diagnostic else {
+            return;
+        };
+        let (severity, reference_level) = match level {
+            UserCallArityDiagnostic::Warning => (AnalyzerDiagnosticSeverity::Warning, 1),
+            UserCallArityDiagnostic::Error => (AnalyzerDiagnosticSeverity::Error, 2),
+        };
+        self.diagnostics.push(AnalyzerDiagnostic::at(
+            AnalyzerDiagnosticCode::ExcessUserArguments,
+            severity,
+            reference_level,
+            location.source,
+            self.path,
+            self.text,
+            location.span,
+            format!(
+                "user function {name} supplies {supplied} arguments for {formal} parameters; {} excess arguments are not evaluated",
+                decision.excess,
+            ),
+        ));
+    }
+
     fn diagnostic(
         &mut self,
         code: AnalyzerDiagnosticCode,
@@ -875,4 +902,37 @@ fn argument_keeps_place(constraint: ArgumentConstraint, value_type: SemanticType
             | ArgumentConstraint::MutableReferenceOrString
     ) || constraint == ArgumentConstraint::IntegerOrMutableString
         && value_type == SemanticType::String
+}
+
+// Preserve variable tokens for APIs whose contracts capture a place before evaluation.
+fn builtin_call_arguments(
+    values: Vec<Option<HirExpr>>,
+    constraints: &[ArgumentConstraint],
+    variadic: bool,
+    dynamic_method: bool,
+    regex_output: bool,
+) -> Vec<HirCallArgument> {
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| match value {
+            None => HirCallArgument::Omitted,
+            Some(expression)
+                if dynamic_method && index >= 2
+                    || constraints
+                        .get(index)
+                        .or_else(|| variadic.then(|| constraints.last()).flatten())
+                        .is_some_and(|constraint| {
+                            argument_keeps_place(*constraint, expression.value_type)
+                                || regex_output && index == 2
+                        }) =>
+            {
+                match expression.kind {
+                    HirExprKind::Variable { place } => HirCallArgument::Place(place),
+                    _ => HirCallArgument::Value(expression),
+                }
+            }
+            Some(expression) => HirCallArgument::Value(expression),
+        })
+        .collect()
 }

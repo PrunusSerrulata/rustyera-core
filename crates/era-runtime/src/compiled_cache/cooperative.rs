@@ -226,7 +226,11 @@ impl CooperativeCompiledCacheEncoder {
                 section
             }
             7 => encode_section(&self.snapshot, self.kind, cancelled)?,
-            8 => encode_section(&self.diagnostics, self.kind, cancelled)?,
+            8 => super::sections::encode_diagnostic_templates(
+                &self.diagnostics,
+                self.kind,
+                cancelled,
+            )?,
             index if index < source_start => {
                 let range = plan.function_ranges[index - function_start].clone();
                 encode_section(

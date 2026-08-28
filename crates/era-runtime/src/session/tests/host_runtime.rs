@@ -108,6 +108,8 @@ fn run_immediate_query_project(
     (session, report, messages)
 }
 
+
+
 #[test]
 fn immediate_queries_observe_latest_runtime_state_without_host_boundaries() {
     let source = "@SYSTEM_TITLE\n\
@@ -1268,6 +1270,9 @@ fn linecount_drives_clearline_and_bounded_padding_loops() {
 }
 
 include!("host_runtime_continued.rs");
+
+
+
 
 #[test]
 fn html_error_wire_data_cannot_claim_script_provenance() {

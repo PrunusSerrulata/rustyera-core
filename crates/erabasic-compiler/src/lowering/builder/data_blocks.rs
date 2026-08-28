@@ -216,38 +216,40 @@ impl Builder<'_> {
             let Some(target) = arguments.first() else {
                 continue;
             };
-            self.lower_argument(target, candidate.location);
+            if self.lower_argument(target, candidate.location) != BytecodeType::String {
+                self.invalid_user_call("list candidate target is not a string", candidate.location);
+                continue;
+            }
             if opener == "TRYGOTOLIST" {
                 let instruction = self.code.len();
                 self.emit(opcode::jump_dynamic_label(0), candidate.location);
                 self.patch_jump(instruction, self.code.len());
                 continue;
             }
-            let resolve = self.code.len();
-            self.emit(opcode::resolve_function(0, true, false), candidate.location);
-            let parameter_types = arguments
-                .iter()
-                .skip(1)
-                .map(|argument| self.lower_argument(argument, candidate.location))
-                .collect::<Vec<_>>();
-            self.emit(
-                opcode::invoke_dynamic(
-                    u16::try_from(parameter_types.len()).unwrap_or(u16::MAX),
-                    opener == "TRYJUMPLIST",
-                ),
-                candidate.location,
-            );
-            if opener != "TRYJUMPLIST" {
+            let mode = if opener == "TRYJUMPLIST" {
+                erabasic_bytecode::UserCallMode::JumpProcedure
+            } else {
+                erabasic_bytecode::UserCallMode::Procedure
+            };
+            let actuals = Self::method_statement_arguments(&arguments[1..], candidate.location);
+            let Some((resolve, mut spec)) =
+                self.lower_user_call_actuals(&actuals, mode, true, candidate.location)
+            else {
+                continue;
+            };
+            if !mode.unwinds_caller() {
                 let end = self.code.len();
                 self.emit(opcode::jump(Opcode::Jump, 0), candidate.location);
                 end_jumps.push(end);
             }
-            let missing = self.code.len();
+            // Successful jump never returns to this instruction. A missing candidate
+            // releases its pending lease before the next candidate target is evaluated.
+            spec.missing_target = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+            self.code[resolve] = opcode::resolve_user_call(&spec);
             self.emit(
-                EncodedInstruction::new(Opcode::Pop, Vec::new()),
+                opcode::abandon_user_call(u32::try_from(resolve).unwrap_or(u32::MAX)),
                 candidate.location,
             );
-            self.patch_resolve_function(resolve, missing, true, false);
         }
         let end = self.code.len();
         for jump in end_jumps {

@@ -1,12 +1,15 @@
+pub(super) use super::typing::{argument_spec, expression_type};
 #[allow(clippy::wildcard_imports)]
 use super::*;
-use crate::state::methods::{MethodBinding, ResolvedMethod, resolve_method_call};
-use erabasic_bytecode::{MethodArgumentSpec, MethodResult};
+use crate::state::user_calls::{
+    ResolvedUserCall, UserArgumentBinding, UserCallOrigin, resolve_user_call,
+};
+use erabasic_bytecode::{MethodResult, UserArgumentSpec, UserCallMode, UserCallSpec};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(super) struct RuntimeMethodCall {
-    pub method: ResolvedMethod,
-    pub specs: Vec<MethodArgumentSpec>,
+pub(super) struct RuntimeUserCall {
+    pub call: ResolvedUserCall,
+    pub specs: Vec<UserArgumentSpec>,
     pub arguments: Vec<Option<Expr>>,
     pub captured: Vec<Option<VmValue>>,
     pub next_slot: usize,
@@ -23,223 +26,22 @@ pub(super) fn method_result(name: &str) -> Option<MethodResult> {
 }
 
 fn bad_type(message: impl Into<String>) -> StepError {
-    StepError::new(VmFaultCode::TypeMismatch, message)
+    StepError::script(
+        crate::ScriptFaultKind::Argument,
+        VmFaultCode::TypeMismatch,
+        message,
+    )
 }
 
-pub(super) fn argument_spec(
-    program: &crate::ProgramGeneration,
-    function: SymbolKey,
-    expression: Option<&Expr>,
-) -> Result<MethodArgumentSpec, StepError> {
-    let Some(expression) = expression else {
-        return Ok(MethodArgumentSpec::Omitted);
-    };
-    let mut expression = expression;
-    while let ExprKind::Group(inner) = &expression.kind {
-        expression = inner;
-    }
-    if let ExprKind::Identifier(name) | ExprKind::Variable { name, .. } = &expression.kind {
-        let variable = program
-            .scoped_variable(function, name)
-            .ok_or_else(|| bad_type(format!("STRFORM method variable {name} is missing")))?;
-        expression_type(program, function, expression, 0)?;
-        return Ok(MethodArgumentSpec::Variable(variable.key));
-    }
-    Ok(MethodArgumentSpec::Value(expression_type(
-        program, function, expression, 0,
-    )?))
+fn invalid_state(message: impl Into<String>) -> StepError {
+    StepError::new(VmFaultCode::InvalidInstruction, message)
 }
 
-pub(super) fn expression_type(
-    program: &crate::ProgramGeneration,
-    function: SymbolKey,
-    expression: &Expr,
-    depth: usize,
-) -> Result<BytecodeType, StepError> {
-    if depth > MAX_RUNTIME_FORM_NESTING {
-        return Err(resource_limit("STRFORM method type nesting exceeds limit"));
-    }
-    let nested = |expression| expression_type(program, function, expression, depth + 1);
-    match &expression.kind {
-        ExprKind::Integer(_) => Ok(BytecodeType::Integer),
-        ExprKind::String(_) => Ok(BytecodeType::String),
-        ExprKind::Formatted(formatted) => {
-            validate_form_types(program, function, formatted, depth + 1)?;
-            Ok(BytecodeType::String)
-        }
-        ExprKind::Identifier(name) | ExprKind::Variable { name, .. } => {
-            if let ExprKind::Variable { indices, .. } = &expression.kind {
-                for index in indices {
-                    if nested(index)? != BytecodeType::Integer {
-                        return Err(bad_type("STRFORM variable index must be an integer"));
-                    }
-                }
-            }
-            program
-                .scoped_variable(function, name)
-                .map(|definition| definition.value_type)
-                .ok_or_else(|| bad_type(format!("STRFORM variable {name} is missing")))
-        }
-        ExprKind::Group(inner) => nested(inner),
-        ExprKind::Unary { op, operand } => {
-            if matches!(op, UnaryOp::PreIncrement | UnaryOp::PreDecrement) {
-                return Err(unsupported(
-                    "STRFORM increment and decrement are not supported",
-                ));
-            }
-            if nested(operand)? != BytecodeType::Integer {
-                return Err(bad_type("STRFORM unary operand must be an integer"));
-            }
-            Ok(BytecodeType::Integer)
-        }
-        ExprKind::Postfix { .. } => Err(unsupported(
-            "STRFORM increment and decrement are not supported",
-        )),
-        ExprKind::Call { name, args } => {
-            for argument in args.iter().flatten() {
-                nested(argument)?;
-            }
-            if let Some(target) = program.function_by_name(name) {
-                return target
-                    .result
-                    .filter(|result| matches!(result, BytecodeType::Integer | BytecodeType::String))
-                    .ok_or_else(|| bad_type(format!("STRFORM call {name} has no scalar result")));
-            }
-            if let Some(result) = method_result(name) {
-                return Ok(result.bytecode_type());
-            }
-            if name.eq_ignore_ascii_case("EXISTMETH") {
-                return Ok(BytecodeType::Integer);
-            }
-            if name.eq_ignore_ascii_case("STRFORM") {
-                return Ok(BytecodeType::String);
-            }
-            program
-                .artifact
-                .native_imports
-                .iter()
-                .find(|import| import.import.name.eq_ignore_ascii_case(name))
-                .and_then(|import| import.import.result)
-                .ok_or_else(|| {
-                    bad_type(format!("STRFORM callable {name} has no known result type"))
-                })
-        }
-        ExprKind::Binary { op, left, right } => {
-            let left = nested(left)?;
-            let right = nested(right)?;
-            binary_result_type(*op, left, right)
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            if nested(condition)? != BytecodeType::Integer {
-                return Err(bad_type("STRFORM ternary condition must be an integer"));
-            }
-            let result = nested(then_expr)?;
-            if !matches!(result, BytecodeType::Integer | BytecodeType::String)
-                || result != nested(else_expr)?
-            {
-                return Err(bad_type("STRFORM ternary branches differ in type"));
-            }
-            Ok(result)
-        }
-        ExprKind::Error => Err(bad_type(
-            "STRFORM method argument contains an invalid expression",
-        )),
-    }
-}
-
-fn validate_form_types(
-    program: &crate::ProgramGeneration,
-    function: SymbolKey,
-    formatted: &FormattedString,
-    depth: usize,
-) -> Result<(), StepError> {
-    if depth > MAX_RUNTIME_FORM_NESTING {
-        return Err(resource_limit("STRFORM method type nesting exceeds limit"));
-    }
-    for part in &formatted.parts {
-        match part {
-            FormPart::Text(_) | FormPart::Triple { .. } => {}
-            FormPart::StringInterpolation {
-                expression, width, ..
-            }
-            | FormPart::IntegerInterpolation {
-                expression, width, ..
-            } => {
-                let expected = if matches!(part, FormPart::StringInterpolation { .. }) {
-                    BytecodeType::String
-                } else {
-                    BytecodeType::Integer
-                };
-                if expression_type(program, function, expression, depth + 1)? != expected {
-                    return Err(bad_type("STRFORM interpolation has an incompatible type"));
-                }
-                if let Some(width) = width
-                    && expression_type(program, function, width, depth + 1)?
-                        != BytecodeType::Integer
-                {
-                    return Err(bad_type("STRFORM interpolation width must be an integer"));
-                }
-            }
-            FormPart::Conditional {
-                condition,
-                then_value,
-                else_value,
-                ..
-            } => {
-                if expression_type(program, function, condition, depth + 1)?
-                    != BytecodeType::Integer
-                {
-                    return Err(bad_type("STRFORM conditional must be an integer"));
-                }
-                validate_form_types(program, function, then_value, depth + 1)?;
-                if let Some(else_value) = else_value {
-                    validate_form_types(program, function, else_value, depth + 1)?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn binary_result_type(
-    op: BinaryOp,
-    left: BytecodeType,
-    right: BytecodeType,
-) -> Result<BytecodeType, StepError> {
-    if matches!(
-        op,
-        BinaryOp::Less
-            | BinaryOp::LessEqual
-            | BinaryOp::Greater
-            | BinaryOp::GreaterEqual
-            | BinaryOp::Equal
-            | BinaryOp::NotEqual
-    ) {
-        if left == right && matches!(left, BytecodeType::Integer | BytecodeType::String) {
-            return Ok(BytecodeType::Integer);
-        }
-        return Err(bad_type(
-            "STRFORM comparison operands must have the same scalar type",
-        ));
-    }
-    if (op == BinaryOp::Add && left == BytecodeType::String && right == BytecodeType::String)
-        || (op == BinaryOp::Multiply
-            && matches!(
-                (left, right),
-                (BytecodeType::String, BytecodeType::Integer)
-                    | (BytecodeType::Integer, BytecodeType::String)
-            ))
-    {
-        return Ok(BytecodeType::String);
-    }
-    if left == BytecodeType::Integer && right == BytecodeType::Integer {
-        return Ok(BytecodeType::Integer);
-    }
-    Err(bad_type("STRFORM binary operands must be integers"))
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(super) struct RuntimeUserWait {
+    pub call: RuntimeUserCall,
+    pub callee: FrameId,
+    pub owner_stack_depth: usize,
 }
 
 impl RuntimeFormContinuation {
@@ -273,46 +75,76 @@ impl RuntimeFormContinuation {
         Ok(true)
     }
 
-    pub(super) fn resolve_method(
+    pub(super) fn schedule_direct_user_call(
         &mut self,
         vm: &Vm,
+        name: &str,
+        arguments: Vec<Option<Expr>>,
+    ) -> Result<(), StepError> {
+        let program = vm
+            .generations
+            .get(&self.generation)
+            .ok_or_else(|| invalid_state("form generation is missing"))?;
+        let target = program
+            .function_by_name(name)
+            .ok_or_else(|| invalid_state("known direct form method disappeared"))?;
+        let result = match target.result {
+            Some(BytecodeType::Integer) => MethodResult::Integer,
+            Some(BytecodeType::String) => MethodResult::String,
+            _ => return Err(bad_type("direct form method has no scalar result")),
+        };
+        self.values.push(VmValue::String(name.into()));
+        self.work.push(RuntimeFormTask::ResolveMethod {
+            result,
+            fallback: None,
+            arguments,
+        });
+        Ok(())
+    }
+
+    pub(super) fn resolve_method(
+        &mut self,
+        vm: &mut Vm,
         result: MethodResult,
         fallback: Option<Expr>,
         arguments: Vec<Option<Expr>>,
     ) -> Result<(), StepError> {
-        let VmValue::String(name) = self.pop_value("STRFORM method name is missing")? else {
-            return Err(bad_type("STRFORM method name must be a string"));
+        let VmValue::String(name) = self.pop_value("form method name is missing")? else {
+            return Err(bad_type("form method name must be a string"));
         };
-        let program = vm.generations.get(&self.generation).ok_or_else(|| {
-            StepError::new(
-                VmFaultCode::MissingSymbol,
-                "STRFORM method generation is missing",
-            )
-        })?;
+        let program = vm
+            .generations
+            .get(&self.generation)
+            .ok_or_else(|| invalid_state("form generation is missing"))?;
         if let Some(fallback) = &fallback
             && expression_type(program, self.function, fallback, 0)? != result.bytecode_type()
         {
             return Err(bad_type("dynamic method fallback has an incompatible type"));
         }
+        // Parse/type/name checks cover the full syntactic list before selecting the retained prefix.
         let specs = arguments
             .iter()
             .map(|argument| argument_spec(program, self.function, argument.as_ref()))
             .collect::<Result<Vec<_>, _>>()?;
-        let method = resolve_method_call(program, self.generation, &name, &specs, Some(result))
-            .map_err(map_vm_error)?;
-        if let Some(method) = method {
-            self.work
-                .push(RuntimeFormTask::MethodArgument(RuntimeMethodCall {
-                    method,
-                    captured: vec![None; specs.len()],
-                    specs,
-                    arguments,
-                    next_slot: 0,
-                }));
+        let call = resolve_user_call(
+            program,
+            self.generation,
+            &name,
+            &UserCallSpec {
+                mode: result.into(),
+                allow_missing: fallback.is_some(),
+                missing_target: 0,
+                arguments: specs.clone(),
+            },
+        )
+        .map_err(map_vm_error)?;
+        if let Some(call) = call {
+            self.queue_resolved_call(vm, call, specs, arguments);
         } else if let Some(fallback) = fallback {
             self.work.push(RuntimeFormTask::Evaluate(fallback));
         } else {
-            return Err(StepError::new(
+            return Err(StepError::script(
+                crate::ScriptFaultKind::Resolve,
                 VmFaultCode::MissingSymbol,
                 format!("dynamic method {name} is missing"),
             ));
@@ -320,38 +152,55 @@ impl RuntimeFormContinuation {
         Ok(())
     }
 
+    pub(super) fn queue_resolved_call(
+        &mut self,
+        vm: &mut Vm,
+        call: ResolvedUserCall,
+        specs: Vec<UserArgumentSpec>,
+        arguments: Vec<Option<Expr>>,
+    ) {
+        vm.queue_user_call_diagnostic(&call, specs.len());
+        let retained = specs.len().min(call.bindings.len());
+        self.work
+            .push(RuntimeFormTask::MethodArgument(RuntimeUserCall {
+                call,
+                captured: vec![None; retained],
+                specs,
+                arguments,
+                next_slot: 0,
+            }));
+    }
+
     pub(super) fn advance_method_arguments(
         &mut self,
         vm: &mut Vm,
         fiber: &mut Fiber,
-        mut call: RuntimeMethodCall,
+        mut call: RuntimeUserCall,
     ) -> Result<(), StepError> {
         self.validate_method_call(vm, fiber, &call, false)?;
-        if call.next_slot == 0 {
-            vm.validate_method_references(fiber, self.frame, &call.method, &call.specs)
-                .map_err(map_vm_error)?;
-        }
         while call.next_slot < call.specs.len() {
             let slot = call.next_slot;
-            if matches!(call.specs[slot], MethodArgumentSpec::Omitted) {
+            if slot >= call.captured.len() || matches!(call.specs[slot], UserArgumentSpec::Omitted)
+            {
+                call.arguments[slot] = None;
                 call.next_slot += 1;
                 continue;
             }
             if matches!(
-                call.method.bindings.get(slot),
-                Some(MethodBinding::ArrayReference)
+                call.call.bindings.get(slot),
+                Some(UserArgumentBinding::ArrayReference)
             ) {
-                let MethodArgumentSpec::Variable(variable) = call.specs[slot] else {
+                let UserArgumentSpec::Variable(variable) = call.specs[slot] else {
                     return Err(bad_type("REF argument has no variable identity"));
                 };
                 let place = vm
-                    .method_variable_place(fiber, self.generation, self.frame, variable)
+                    .user_call_variable_place(fiber, self.generation, self.frame, variable)
                     .map_err(map_vm_error)?;
                 call.captured[slot] = Some(
-                    vm.capture_method_argument(
+                    vm.capture_user_argument(
                         fiber,
                         self.frame,
-                        &call.method,
+                        &call.call,
                         &call.specs,
                         slot,
                         place,
@@ -369,90 +218,165 @@ impl RuntimeFormContinuation {
                 return Ok(());
             }
         }
-        vm.invoke_method(fiber, self.frame, &call.method, &call.specs, &call.captured)
-            .map_err(map_vm_error)?;
-        self.awaiting_user_result = Some(call.method.result.bytecode_type());
+        let owner_stack_depth = owner_frame(fiber, self.frame)?.stack.len();
+        vm.invoke_user_call(
+            fiber,
+            self.frame,
+            &call.call,
+            &call.specs,
+            &call.captured,
+            UserCallOrigin::RuntimeForm,
+        )
+        .map_err(map_vm_error)?;
+        let callee = fiber
+            .frames
+            .last()
+            .ok_or_else(|| invalid_state("user-call did not create a callee"))?
+            .id;
+        self.awaiting_user_call = Some(RuntimeUserWait {
+            call,
+            callee,
+            owner_stack_depth,
+        });
         Ok(())
+    }
+
+    pub(super) fn finish_user_wait(&mut self, vm: &Vm, fiber: &mut Fiber) -> Result<(), StepError> {
+        let wait = self
+            .awaiting_user_call
+            .as_ref()
+            .ok_or_else(|| invalid_state("form user wait is missing"))?;
+        if fiber.frames.iter().any(|frame| frame.id == wait.callee) {
+            return Err(invalid_state("form resumed before its callee returned"));
+        }
+        self.validate_method_call(vm, fiber, &wait.call, false)?;
+        let owner = owner_frame_mut(fiber, self.frame)?;
+        let expected = wait.call.call.mode.expected_result();
+        if owner.stack.len() != wait.owner_stack_depth + usize::from(expected.is_some()) {
+            return Err(invalid_state("form callee result boundary differs"));
+        }
+        if let Some(expected) = expected {
+            let value = owner
+                .stack
+                .pop()
+                .ok_or_else(|| invalid_state("form callee result is missing"))?;
+            if value.value_type() != expected {
+                return Err(invalid_state("form callee result type differs"));
+            }
+            self.values.push(value);
+        }
+        self.awaiting_user_call = None;
+        Ok(())
+    }
+
+    pub(crate) fn expected_child(&self) -> Option<FrameId> {
+        self.awaiting_user_call.as_ref().map(|wait| wait.callee)
+    }
+
+    pub(crate) fn valid_child_call(&self, callee: &crate::state::Frame) -> bool {
+        let Some(wait) = &self.awaiting_user_call else {
+            return false;
+        };
+        let permitted_mode = match wait.call.call.mode {
+            UserCallMode::MethodInteger | UserCallMode::MethodString => true,
+            UserCallMode::Procedure | UserCallMode::JumpProcedure | UserCallMode::MethodDiscard => false,
+        };
+        permitted_mode
+            && callee.id == wait.callee
+            && callee.generation == wait.call.call.generation
+            && callee.function == wait.call.call.function
+            && callee.user_call.as_ref().is_some_and(|origin| {
+                origin.caller == self.frame
+                    && origin.mode == wait.call.call.mode
+                    && origin.origin == UserCallOrigin::RuntimeForm
+            })
     }
 
     pub(super) fn validate_method_call(
         &self,
         vm: &Vm,
         fiber: &Fiber,
-        call: &RuntimeMethodCall,
+        call: &RuntimeUserCall,
         awaiting_argument: bool,
     ) -> Result<(), StepError> {
         let program = vm
             .generations
             .get(&self.generation)
-            .ok_or_else(|| bad_type("STRFORM generation is missing"))?;
+            .ok_or_else(|| invalid_state("stored form generation is missing"))?;
         let target = program
-            .function(call.method.function)
-            .ok_or_else(|| bad_type("stored STRFORM method is missing"))?;
-        if call.method.generation != self.generation
+            .function(call.call.function)
+            .ok_or_else(|| invalid_state("stored form target is missing"))?;
+        let retained = call.specs.len().min(call.call.bindings.len());
+        let resolved = resolve_user_call(
+            program,
+            self.generation,
+            &target.name,
+            &UserCallSpec {
+                mode: call.call.mode,
+                allow_missing: false,
+                missing_target: 0,
+                arguments: call.specs.clone(),
+            },
+        )
+        .map_err(|_| invalid_state("stored form user signature cannot resolve"))?;
+        if call.call.generation != self.generation
             || call.specs.len() != call.arguments.len()
-            || call.specs.len() != call.captured.len()
+            || call.captured.len() != retained
             || call.next_slot > call.specs.len()
-            || (awaiting_argument && call.next_slot == call.specs.len())
-            || resolve_method_call(
-                program,
-                self.generation,
-                &target.name,
-                &call.specs,
-                Some(call.method.result),
-            )
-            .map_err(map_vm_error)?
-            .as_ref()
-                != Some(&call.method)
+            || (awaiting_argument && call.next_slot >= retained)
+            || resolved.as_ref() != Some(&call.call)
         {
-            return Err(bad_type(
-                "stored STRFORM method signature or slot state is invalid",
+            return Err(invalid_state(
+                "stored form user signature/slot state differs",
             ));
         }
         for (slot, spec) in call.specs.iter().enumerate() {
-            let omitted = matches!(spec, MethodArgumentSpec::Omitted);
-            let captured = call.captured[slot].as_ref();
+            let retained = slot < call.captured.len();
+            let omitted = matches!(spec, UserArgumentSpec::Omitted);
+            let captured = call.captured.get(slot).and_then(Option::as_ref);
             let argument = call.arguments[slot].as_ref();
-            if (captured.is_some() != (slot < call.next_slot && !omitted))
+            if captured.is_some() != (slot < call.next_slot && retained && !omitted)
                 || (slot < call.next_slot && argument.is_some())
                 || (slot == call.next_slot && awaiting_argument && argument.is_some())
             {
-                return Err(bad_type("stored STRFORM method has misplaced captures"));
+                return Err(invalid_state(
+                    "stored form user actual/capture position differs",
+                ));
             }
-            if let MethodArgumentSpec::Variable(key) = spec {
+            if let UserArgumentSpec::Variable(key) = spec {
                 let definition = program
                     .global(*key)
-                    .ok_or_else(|| bad_type("stored method variable is missing"))?;
+                    .ok_or_else(|| invalid_state("stored form variable is missing"))?;
                 if program
                     .scoped_variable(self.function, &definition.name)
-                    .map(|value| value.key)
+                    .map(|definition| definition.key)
                     != Some(*key)
                 {
-                    return Err(bad_type("stored method variable is outside caller scope"));
+                    return Err(invalid_state(
+                        "stored form variable escaped its caller scope",
+                    ));
                 }
             }
             if slot >= call.next_slot
                 && !(slot == call.next_slot && awaiting_argument)
-                && argument_spec(program, self.function, argument)? != *spec
+                && argument_spec(program, self.function, argument)
+                    .map_err(|_| invalid_state("stored actual cannot be typed"))?
+                    != *spec
             {
-                return Err(bad_type(
-                    "stored method expression differs from its argument shape",
-                ));
+                return Err(invalid_state("stored form argument shape differs"));
             }
             if let Some(value) = captured {
                 if value.value_type() != target.parameters[slot].value_type {
-                    return Err(bad_type("stored method capture type differs"));
+                    return Err(invalid_state("stored form captured type differs"));
                 }
-                if matches!(call.method.bindings[slot], MethodBinding::ArrayReference) {
-                    vm.capture_method_argument(
-                        fiber,
-                        self.frame,
-                        &call.method,
-                        &call.specs,
-                        slot,
-                        value.clone(),
-                    )
-                    .map_err(map_vm_error)?;
+                if matches!(
+                    call.call.bindings[slot],
+                    UserArgumentBinding::ArrayReference
+                ) {
+                    vm.validate_captured_user_reference(fiber, &call.call, slot, value)
+                        .map_err(|_| {
+                            invalid_state("stored form captured REF backing is invalid")
+                        })?;
                 }
             }
         }
@@ -463,25 +387,32 @@ impl RuntimeFormContinuation {
         let Some(program) = vm.generations.get(&self.generation) else {
             return false;
         };
-        if let Some(result) = self.awaiting_user_result {
-            if !matches!(result, BytecodeType::Integer | BytecodeType::String) {
+        let Some(owner) = fiber.frames.iter().position(|frame| frame.id == self.frame) else {
+            return false;
+        };
+        if let Some(wait) = &self.awaiting_user_call {
+            if self
+                .validate_method_call(vm, fiber, &wait.call, false)
+                .is_err()
+            {
                 return false;
             }
-            let Some(owner) = fiber.frames.iter().position(|frame| frame.id == self.frame) else {
-                return false;
-            };
             if let Some(callee) = fiber.frames.get(owner + 1) {
-                if callee.generation != self.generation
-                    || program
-                        .function(callee.function)
-                        .and_then(|function| function.result)
-                        != Some(result)
-                    || !callee.return_value_to_caller
+                if !self.valid_child_call(callee)
+                    || fiber.frames[owner].stack.len() != wait.owner_stack_depth
                 {
                     return false;
                 }
-            } else if fiber.frames[owner].stack.last().map(VmValue::value_type) != Some(result) {
-                return false;
+            } else {
+                let expected = wait.call.call.mode.expected_result();
+                if fiber.frames[owner].stack.len()
+                    != wait.owner_stack_depth + usize::from(expected.is_some())
+                    || expected.is_some_and(|expected| {
+                        fiber.frames[owner].stack.last().map(VmValue::value_type) != Some(expected)
+                    })
+                {
+                    return false;
+                }
             }
         }
         self.work.iter().all(|task| match task {
@@ -519,15 +450,15 @@ impl RuntimeFormContinuation {
                         .checked_add(call.specs.len())?
                         .checked_add(call.captured.len())?
                         .checked_add(call.arguments.len())?
-                        .checked_add(call.method.bindings.len())?;
+                        .checked_add(call.call.bindings.len())?;
                     expressions.extend(call.arguments.iter().flatten());
                     for value in call.captured.iter().flatten() {
                         if let VmValue::String(value) = value {
                             bytes = bytes.checked_add(value.len())?;
                         }
                     }
-                    for binding in &call.method.bindings {
-                        if let MethodBinding::Default(
+                    for binding in &call.call.bindings {
+                        if let UserArgumentBinding::Default(
                             erabasic_bytecode::BytecodeConstant::String(value),
                         ) = binding
                         {
@@ -545,6 +476,28 @@ impl RuntimeFormContinuation {
                     expressions.extend(fallback.iter());
                 }
                 _ => {}
+            }
+        }
+        if let Some(wait) = &self.awaiting_user_call {
+            let call = &wait.call;
+            slots = slots
+                .checked_add(call.specs.len())?
+                .checked_add(call.arguments.len())?
+                .checked_add(call.captured.len())?
+                .checked_add(call.call.bindings.len())?;
+            expressions.extend(call.arguments.iter().flatten());
+            for value in call.captured.iter().flatten() {
+                if let VmValue::String(value) = value {
+                    bytes = bytes.checked_add(value.len())?;
+                }
+            }
+            for binding in &call.call.bindings {
+                if let UserArgumentBinding::Default(erabasic_bytecode::BytecodeConstant::String(
+                    value,
+                )) = binding
+                {
+                    bytes = bytes.checked_add(value.len())?;
+                }
             }
         }
         let (nodes, text_bytes) = retained_expression_resources(expressions)?;

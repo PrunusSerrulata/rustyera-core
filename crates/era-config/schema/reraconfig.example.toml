@@ -55,6 +55,8 @@ rename_master = true
 [diagnostics]
 # 用途：过滤低于阈值的加载诊断；类型：整数；范围：0..=255
 minimum_warning_level = 1
+# 用途：将蛇版用户函数多余实参警告提升为错误；不改变内置函数参数规则；类型：布尔
+strict_user_call_arguments = false
 # 用途：忽略未调用函数的处理和警告；类型：布尔
 ignore_uncalled_functions = true
 # 用途：设置找不到函数时的警告策略；类型：字符串枚举；可选值："ignore"、"later"、"once"、"display"

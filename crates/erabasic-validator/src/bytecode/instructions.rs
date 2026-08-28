@@ -11,8 +11,7 @@ mod methods;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StackValue {
     Value(BytecodeType),
-    MethodToken { resolve: u32 },
-    MethodArgument { resolve: u32, slot: u16 },
+    UserCallToken { resolve: u32, next_slot: u16 },
 }
 
 impl From<BytecodeType> for StackValue {
@@ -193,11 +192,11 @@ pub(super) fn apply_instruction(
         Opcode::Pop => {
             expect_payload(&instruction.payload, 0)?;
             match stack.pop() {
-                Some(StackValue::Value(_) | StackValue::MethodToken { .. }) => {}
-                Some(StackValue::MethodArgument { .. }) => {
+                Some(StackValue::Value(_)) => {}
+                Some(StackValue::UserCallToken { .. }) => {
                     return Err((
                         ValidationCode::TypeMismatch,
-                        "pop cannot discard a captured method argument".into(),
+                        "pop cannot discard a pending user-call token; use AbandonUserCall".into(),
                     ));
                 }
                 None => {
@@ -272,44 +271,15 @@ pub(super) fn apply_instruction(
             }
             stack.push(BytecodeType::Integer.into());
         }
-        Opcode::ResolveMethod
-        | Opcode::SelectMethodArgument
-        | Opcode::CaptureMethodArgument
-        | Opcode::InvokeMethod => {
+        Opcode::ResolveUserCall
+        | Opcode::SelectUserArgument
+        | Opcode::CaptureUserArgument
+        | Opcode::InvokeUserCall
+        | Opcode::GuardUserArgument
+        | Opcode::AdvanceUserArgument
+        | Opcode::AbandonUserCall
+        => {
             return methods::apply(function, index, opcode_value, stack, globals);
-        }
-        Opcode::ResolveFunction => {
-            expect_payload(&instruction.payload, 6)?;
-            pop_type(stack, BytecodeType::String)?;
-            stack.push(BytecodeType::String.into());
-            if instruction.payload[4] > 1 {
-                return Err((
-                    ValidationCode::InvalidOperand,
-                    "resolve-function allow-missing flag is invalid".into(),
-                ));
-            }
-            if instruction.payload[5] > 1 {
-                return Err((
-                    ValidationCode::InvalidOperand,
-                    "resolve-function method flag is invalid".into(),
-                ));
-            }
-            if instruction.payload[4] == 1 {
-                return Ok(vec![read_u32(&instruction.payload, 0)? as usize, index + 1]);
-            }
-        }
-        Opcode::InvokeDynamic => {
-            expect_payload(&instruction.payload, 3)?;
-            if instruction.payload[2] > 1 {
-                return Err((
-                    ValidationCode::InvalidOperand,
-                    "dynamic-invoke tail flag is invalid".into(),
-                ));
-            }
-            for _ in 0..read_u16(&instruction.payload, 0)? {
-                pop_value(stack, "dynamic call argument")?;
-            }
-            pop_type(stack, BytecodeType::String)?;
         }
         Opcode::JumpDynamicLabel => {
             expect_payload(&instruction.payload, 4)?;

@@ -210,16 +210,15 @@ impl Vm {
             }
             Opcode::Pop => {
                 let frame = fiber.frames.last_mut().expect("frame exists");
-                if let Some(call) = frame.method_calls.last()
-                    && call.stack_index + 1 == frame.stack.len()
+                if frame
+                    .user_calls
+                    .last()
+                    .is_some_and(|call| call.stack_index + 1 == frame.stack.len())
                 {
-                    if call.captured != 0 {
-                        return Err(StepError::new(
-                            VmFaultCode::InvalidInstruction,
-                            "cannot discard a captured method token",
-                        ));
-                    }
-                    frame.method_calls.pop();
+                    return Err(StepError::new(
+                        VmFaultCode::InvalidInstruction,
+                        "user-call tokens must be consumed by Invoke or Abandon",
+                    ));
                 }
                 pop(&mut frame.stack)?;
             }

@@ -1242,7 +1242,11 @@ fn candidate_state_rejects_stale_column_identities_without_mutating_live_frames(
     for change in ["ADD", "REMOVE", "REPLACE", "RELEASE"] {
         let mut live = RuntimeVm::new(validated(&artifact), VmConfig::default());
         let waiting = run_identity_entry(&mut live, &artifact, "WAITING");
-        let candidate = live.fork_isolated().unwrap().into_candidate_state();
+        let candidate = live
+            .fork_isolated()
+            .unwrap()
+            .into_candidate_state()
+            .unwrap();
         run_identity_entry(&mut live, &artifact, change);
         assert!(live.fiber_frame_count(waiting).unwrap() > 0);
         let before = live.encode_unrestricted_snapshot().unwrap();
@@ -1319,7 +1323,7 @@ fn isolated_candidate_can_create_columns_when_its_base_identity_is_still_current
     let waiting = run_identity_entry(&mut live, &artifact, "WAITING");
     let mut candidate = live.fork_isolated().unwrap();
     run_identity_entry(&mut candidate, &artifact, "ADD");
-    live.commit_candidate_state(candidate.into_candidate_state())
+    live.commit_candidate_state(candidate.into_candidate_state().unwrap())
         .unwrap();
     assert!(live.fiber_frame_count(waiting).unwrap() > 0);
     // A subsequent mutation and snapshot both observe one valid allocator timeline.

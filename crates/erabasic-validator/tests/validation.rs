@@ -397,10 +397,10 @@ fn method_artifact(
 }
 
 fn method_spec(
-    arguments: Vec<erabasic_bytecode::MethodArgumentSpec>,
-) -> erabasic_bytecode::MethodCallSpec {
-    erabasic_bytecode::MethodCallSpec {
-        result: erabasic_bytecode::MethodResult::Integer,
+    arguments: Vec<erabasic_bytecode::UserArgumentSpec>,
+) -> erabasic_bytecode::UserCallSpec {
+    erabasic_bytecode::UserCallSpec {
+        mode: erabasic_bytecode::UserCallMode::MethodInteger,
         allow_missing: false,
         missing_target: 0,
         arguments,
@@ -424,7 +424,7 @@ fn method_validation_codes(
 
 #[test]
 fn accepts_method_omission_minimum_integer_and_nested_call_captures() {
-    use erabasic_bytecode::MethodArgumentSpec::{Omitted, Value};
+    use erabasic_bytecode::UserArgumentSpec::{Omitted, Value};
     let outer = method_spec(vec![
         Omitted,
         Value(BytecodeType::Integer),
@@ -433,14 +433,15 @@ fn accepts_method_omission_minimum_integer_and_nested_call_captures() {
     let inner = method_spec(Vec::new());
     let codes = method_validation_codes(vec![
         opcode::push_string("OUTER"),
-        opcode::resolve_method(&outer),
+        opcode::resolve_user_call(&outer),
+        opcode::advance_user_argument(1, 0, erabasic_bytecode::UserArgumentAdvance::Omitted),
         opcode::push_integer(i64::MIN),
-        opcode::capture_method_argument(1, 1, false),
+        opcode::capture_user_argument(1, 1, false),
         opcode::push_string("INNER"),
-        opcode::resolve_method(&inner),
-        opcode::invoke_method(5),
-        opcode::capture_method_argument(1, 2, false),
-        opcode::invoke_method(1),
+        opcode::resolve_user_call(&inner),
+        opcode::invoke_user_call(6),
+        opcode::capture_user_argument(1, 2, false),
+        opcode::invoke_user_call(1),
         opcode::return_value(true),
     ]);
     assert!(codes.is_empty(), "{codes:?}");
@@ -452,8 +453,8 @@ fn accepts_method_fallback_branch_with_the_declared_result_type() {
         erabasic_bytecode::MethodResult::Integer,
         erabasic_bytecode::MethodResult::String,
     ] {
-        let spec = erabasic_bytecode::MethodCallSpec {
-            result,
+        let spec = erabasic_bytecode::UserCallSpec {
+            mode: result.into(),
             allow_missing: true,
             missing_target: 4,
             arguments: Vec::new(),
@@ -465,10 +466,10 @@ fn accepts_method_fallback_branch_with_the_declared_result_type() {
         let artifact = method_artifact(
             vec![
                 opcode::push_string("OPTIONAL"),
-                opcode::resolve_method(&spec),
-                opcode::invoke_method(1),
+                opcode::resolve_user_call(&spec),
+                opcode::invoke_user_call(1),
                 opcode::jump(Opcode::Jump, 6),
-                erabasic_bytecode::EncodedInstruction::new(Opcode::Pop, Vec::new()),
+                opcode::abandon_user_call(1),
                 fallback,
                 opcode::return_value(true),
             ],
@@ -486,18 +487,21 @@ fn accepts_method_fallback_branch_with_the_declared_result_type() {
 #[test]
 fn accepts_variable_value_and_reference_branches_joining_as_one_method_slot() {
     let key = SymbolKey::derive("test.variable", b"A");
-    let spec = method_spec(vec![erabasic_bytecode::MethodArgumentSpec::Variable(key)]);
+    let spec = method_spec(vec![erabasic_bytecode::UserArgumentSpec::Variable(key)]);
     let artifact = method_artifact(
         vec![
             opcode::push_string("CHOOSE_FORMAL"),
-            opcode::resolve_method(&spec),
-            opcode::select_method_argument(1, 0, 6),
+            opcode::resolve_user_call(&spec),
+            opcode::guard_user_argument(1, 0, 10),
+            opcode::select_user_argument(1, 0, 7),
             opcode::variable(Opcode::LoadVariable, key, 0, 0),
-            opcode::capture_method_argument(1, 0, false),
-            opcode::jump(Opcode::Jump, 8),
+            opcode::capture_user_argument(1, 0, false),
+            opcode::jump(Opcode::Jump, 9),
             opcode::variable(Opcode::MakePlace, key, 0, 0),
-            opcode::capture_method_argument(1, 0, true),
-            opcode::invoke_method(1),
+            opcode::capture_user_argument(1, 0, true),
+            opcode::jump(Opcode::Jump, 11),
+            opcode::advance_user_argument(1, 0, erabasic_bytecode::UserArgumentAdvance::Discarded),
+            opcode::invoke_user_call(1),
             opcode::return_value(true),
         ],
         BytecodeType::Integer,
@@ -527,11 +531,11 @@ fn rejects_opaque_method_tokens_consumed_by_ordinary_instructions() {
         erabasic_bytecode::EncodedInstruction::new(Opcode::ToString, Vec::new()),
         erabasic_bytecode::EncodedInstruction::new(Opcode::SelectStart, Vec::new()),
         opcode::unary(1),
-        opcode::invoke_dynamic(1, false),
+        erabasic_bytecode::EncodedInstruction::new(Opcode::Pop, Vec::new()),
     ] {
         let codes = method_validation_codes(vec![
             opcode::push_string("METHOD"),
-            opcode::resolve_method(&method_spec(Vec::new())),
+            opcode::resolve_user_call(&method_spec(Vec::new())),
             instruction,
             opcode::return_value(true),
         ]);
@@ -541,21 +545,21 @@ fn rejects_opaque_method_tokens_consumed_by_ordinary_instructions() {
 
 #[test]
 fn rejects_opaque_captures_being_discarded_or_recaptured() {
-    let spec = method_spec(vec![erabasic_bytecode::MethodArgumentSpec::Value(
+    let spec = method_spec(vec![erabasic_bytecode::UserArgumentSpec::Value(
         BytecodeType::Integer,
     )]);
     for instruction in [
         erabasic_bytecode::EncodedInstruction::new(Opcode::Pop, Vec::new()),
         erabasic_bytecode::EncodedInstruction::new(Opcode::Dup, Vec::new()),
-        opcode::capture_method_argument(1, 0, false),
+        opcode::capture_user_argument(1, 0, false),
     ] {
         let codes = method_validation_codes(vec![
             opcode::push_string("METHOD"),
-            opcode::resolve_method(&spec),
+            opcode::resolve_user_call(&spec),
             opcode::push_integer(1),
-            opcode::capture_method_argument(1, 0, false),
+            opcode::capture_user_argument(1, 0, false),
             instruction,
-            opcode::invoke_method(1),
+            opcode::invoke_user_call(1),
             opcode::return_value(true),
         ]);
         assert!(codes.contains(&ValidationCode::TypeMismatch), "{codes:?}");
@@ -564,7 +568,7 @@ fn rejects_opaque_captures_being_discarded_or_recaptured() {
 
 #[test]
 fn rejects_method_capture_wrong_type_omitted_slot_and_out_of_order_slot() {
-    use erabasic_bytecode::MethodArgumentSpec::{Omitted, Value};
+    use erabasic_bytecode::UserArgumentSpec::{Omitted, Value};
     for (spec, value, slot, expected) in [
         (
             method_spec(vec![Value(BytecodeType::Integer)]),
@@ -596,10 +600,10 @@ fn rejects_method_capture_wrong_type_omitted_slot_and_out_of_order_slot() {
     ] {
         let codes = method_validation_codes(vec![
             opcode::push_string("METHOD"),
-            opcode::resolve_method(&spec),
+            opcode::resolve_user_call(&spec),
             value,
-            opcode::capture_method_argument(1, slot, false),
-            opcode::invoke_method(1),
+            opcode::capture_user_argument(1, slot, false),
+            opcode::invoke_user_call(1),
             opcode::return_value(true),
         ]);
         assert!(codes.contains(&expected), "{codes:?}");
@@ -608,7 +612,7 @@ fn rejects_method_capture_wrong_type_omitted_slot_and_out_of_order_slot() {
 
 #[test]
 fn rejects_method_invocation_with_incomplete_arguments_or_forged_origin() {
-    use erabasic_bytecode::MethodArgumentSpec::Value;
+    use erabasic_bytecode::UserArgumentSpec::Value;
     for (spec, resolve, expected) in [
         (
             method_spec(vec![Value(BytecodeType::Integer)]),
@@ -624,8 +628,8 @@ fn rejects_method_invocation_with_incomplete_arguments_or_forged_origin() {
     ] {
         let codes = method_validation_codes(vec![
             opcode::push_string("METHOD"),
-            opcode::resolve_method(&spec),
-            opcode::invoke_method(resolve),
+            opcode::resolve_user_call(&spec),
+            opcode::invoke_user_call(resolve),
             opcode::return_value(true),
         ]);
         assert!(codes.contains(&expected), "{codes:?}");
@@ -634,39 +638,39 @@ fn rejects_method_invocation_with_incomplete_arguments_or_forged_origin() {
 
 #[test]
 fn rejects_method_consumers_before_their_resolve_even_when_control_flow_reaches_it_first() {
-    use erabasic_bytecode::MethodArgumentSpec::{Value, Variable};
+    use erabasic_bytecode::UserArgumentSpec::{Value, Variable};
     let key = SymbolKey::derive("test.variable", b"A");
     for code in [
         vec![
             opcode::jump(Opcode::Jump, 3),
-            opcode::invoke_method(4),
+            opcode::invoke_user_call(4),
             opcode::return_value(true),
             opcode::push_string("METHOD"),
-            opcode::resolve_method(&method_spec(Vec::new())),
+            opcode::resolve_user_call(&method_spec(Vec::new())),
             opcode::jump(Opcode::Jump, 1),
         ],
         vec![
             opcode::jump(Opcode::Jump, 5),
             opcode::push_integer(1),
-            opcode::capture_method_argument(6, 0, false),
-            opcode::invoke_method(6),
+            opcode::capture_user_argument(6, 0, false),
+            opcode::invoke_user_call(6),
             opcode::return_value(true),
             opcode::push_string("METHOD"),
-            opcode::resolve_method(&method_spec(vec![Value(BytecodeType::Integer)])),
+            opcode::resolve_user_call(&method_spec(vec![Value(BytecodeType::Integer)])),
             opcode::jump(Opcode::Jump, 1),
         ],
         vec![
             opcode::jump(Opcode::Jump, 9),
-            opcode::select_method_argument(10, 0, 5),
+            opcode::select_user_argument(10, 0, 5),
             opcode::variable(Opcode::LoadVariable, key, 0, 0),
-            opcode::capture_method_argument(10, 0, false),
+            opcode::capture_user_argument(10, 0, false),
             opcode::jump(Opcode::Jump, 7),
             opcode::variable(Opcode::MakePlace, key, 0, 0),
-            opcode::capture_method_argument(10, 0, true),
-            opcode::invoke_method(10),
+            opcode::capture_user_argument(10, 0, true),
+            opcode::invoke_user_call(10),
             opcode::return_value(true),
             opcode::push_string("METHOD"),
-            opcode::resolve_method(&method_spec(vec![Variable(key)])),
+            opcode::resolve_user_call(&method_spec(vec![Variable(key)])),
             opcode::jump(Opcode::Jump, 1),
         ],
     ] {
@@ -702,19 +706,19 @@ fn rejects_method_consumers_before_their_resolve_even_when_control_flow_reaches_
 
 #[test]
 fn rejects_method_missing_branch_that_does_not_discard_its_token_first() {
-    let spec = erabasic_bytecode::MethodCallSpec {
+    let spec = erabasic_bytecode::UserCallSpec {
         allow_missing: true,
         missing_target: 2,
         ..method_spec(Vec::new())
     };
     for first in [
-        opcode::invoke_method(1),
+        opcode::invoke_user_call(1),
         opcode::push_integer(0),
         erabasic_bytecode::EncodedInstruction::new(Opcode::Pop, vec![0]),
     ] {
         let codes = method_validation_codes(vec![
             opcode::push_string("OPTIONAL"),
-            opcode::resolve_method(&spec),
+            opcode::resolve_user_call(&spec),
             first,
             opcode::return_value(true),
         ]);
@@ -735,14 +739,14 @@ fn method_variable_specs_require_the_callers_frame_local_owner() {
         (BytecodeStorage::FunctionLocal, other, false),
         (BytecodeStorage::FunctionStatic, other, true),
     ] {
-        let spec = method_spec(vec![erabasic_bytecode::MethodArgumentSpec::Variable(key)]);
+        let spec = method_spec(vec![erabasic_bytecode::UserArgumentSpec::Variable(key)]);
         let mut artifact = method_artifact(
             vec![
                 opcode::push_string("METHOD"),
-                opcode::resolve_method(&spec),
+                opcode::resolve_user_call(&spec),
                 opcode::push_integer(1),
-                opcode::capture_method_argument(1, 0, false),
-                opcode::invoke_method(1),
+                opcode::capture_user_argument(1, 0, false),
+                opcode::invoke_user_call(1),
                 opcode::return_value(true),
             ],
             BytecodeType::Integer,
@@ -790,10 +794,10 @@ fn rejects_control_flow_join_of_tokens_from_distinct_resolves() {
         opcode::push_integer(1),
         opcode::jump(Opcode::JumpIfFalse, 5),
         opcode::push_string("FIRST"),
-        opcode::resolve_method(&spec),
+        opcode::resolve_user_call(&spec),
         opcode::jump(Opcode::Jump, 7),
         opcode::push_string("SECOND"),
-        opcode::resolve_method(&spec),
+        opcode::resolve_user_call(&spec),
         erabasic_bytecode::EncodedInstruction::new(Opcode::Pop, Vec::new()),
         opcode::push_integer(0),
         opcode::return_value(true),
@@ -803,29 +807,29 @@ fn rejects_control_flow_join_of_tokens_from_distinct_resolves() {
 
 #[test]
 fn rejects_method_fallback_and_invoke_result_type_mismatches() {
-    let spec = erabasic_bytecode::MethodCallSpec {
+    let spec = erabasic_bytecode::UserCallSpec {
         allow_missing: true,
         missing_target: 4,
         ..method_spec(Vec::new())
     };
     let codes = method_validation_codes(vec![
         opcode::push_string("OPTIONAL"),
-        opcode::resolve_method(&spec),
-        opcode::invoke_method(1),
+        opcode::resolve_user_call(&spec),
+        opcode::invoke_user_call(1),
         opcode::jump(Opcode::Jump, 6),
-        erabasic_bytecode::EncodedInstruction::new(Opcode::Pop, Vec::new()),
+        opcode::abandon_user_call(1),
         opcode::push_string("wrong result"),
         opcode::return_value(true),
     ]);
     assert!(codes.contains(&ValidationCode::StackMismatch), "{codes:?}");
-    let string_spec = erabasic_bytecode::MethodCallSpec {
-        result: erabasic_bytecode::MethodResult::String,
+    let string_spec = erabasic_bytecode::UserCallSpec {
+        mode: erabasic_bytecode::UserCallMode::MethodString,
         ..method_spec(Vec::new())
     };
     let codes = method_validation_codes(vec![
         opcode::push_string("STRING_METHOD"),
-        opcode::resolve_method(&string_spec),
-        opcode::invoke_method(1),
+        opcode::resolve_user_call(&string_spec),
+        opcode::invoke_user_call(1),
         opcode::return_value(true),
     ]);
     assert!(codes.contains(&ValidationCode::TypeMismatch), "{codes:?}");
@@ -838,7 +842,7 @@ fn rejects_malformed_method_payloads_and_unresolved_variable_shapes() {
     let mut trailing = encoded.clone();
     trailing.push(0);
     payloads.push(trailing);
-    for (offset, tag) in [(0, 2), (1, 2)] {
+    for (offset, tag) in [(0, 5), (1, 2)] {
         let mut payload = encoded.clone();
         payload[offset] = tag;
         payloads.push(payload);
@@ -846,18 +850,18 @@ fn rejects_malformed_method_payloads_and_unresolved_variable_shapes() {
     for payload in payloads {
         let codes = method_validation_codes(vec![
             opcode::push_string("METHOD"),
-            erabasic_bytecode::EncodedInstruction::new(Opcode::ResolveMethod, payload),
-            opcode::invoke_method(1),
+            erabasic_bytecode::EncodedInstruction::new(Opcode::ResolveUserCall, payload),
+            opcode::invoke_user_call(1),
             opcode::return_value(true),
         ]);
         assert!(codes.contains(&ValidationCode::InvalidOperand), "{codes:?}");
     }
-    let missing = method_spec(vec![erabasic_bytecode::MethodArgumentSpec::Variable(
+    let missing = method_spec(vec![erabasic_bytecode::UserArgumentSpec::Variable(
         SymbolKey([42; 16]),
     )]);
     let codes = method_validation_codes(vec![
         opcode::push_string("METHOD"),
-        opcode::resolve_method(&missing),
+        opcode::resolve_user_call(&missing),
         opcode::return_value(true),
     ]);
     assert!(
@@ -868,42 +872,210 @@ fn rejects_malformed_method_payloads_and_unresolved_variable_shapes() {
 
 #[test]
 fn rejects_invalid_method_capture_flags_and_selection_operands() {
-    let spec = method_spec(vec![erabasic_bytecode::MethodArgumentSpec::Value(
+    let spec = method_spec(vec![erabasic_bytecode::UserArgumentSpec::Value(
         BytecodeType::Integer,
     )]);
-    let mut bad_capture = opcode::capture_method_argument(1, 0, false)
-        .payload
-        .to_vec();
+    let mut bad_capture = opcode::capture_user_argument(1, 0, false).payload.to_vec();
     bad_capture[6] = 2;
     for instruction in [
-        opcode::select_method_argument(1, 0, 4),
-        opcode::capture_method_argument(1, 0, true),
-        erabasic_bytecode::EncodedInstruction::new(Opcode::CaptureMethodArgument, bad_capture),
-        erabasic_bytecode::EncodedInstruction::new(Opcode::SelectMethodArgument, vec![0; 9]),
-        erabasic_bytecode::EncodedInstruction::new(Opcode::InvokeMethod, vec![1; 3]),
+        opcode::select_user_argument(1, 0, 4),
+        opcode::capture_user_argument(1, 0, true),
+        erabasic_bytecode::EncodedInstruction::new(Opcode::CaptureUserArgument, bad_capture),
+        erabasic_bytecode::EncodedInstruction::new(Opcode::SelectUserArgument, vec![0; 9]),
+        erabasic_bytecode::EncodedInstruction::new(Opcode::InvokeUserCall, vec![1; 3]),
     ] {
         let codes = method_validation_codes(vec![
             opcode::push_string("METHOD"),
-            opcode::resolve_method(&spec),
+            opcode::resolve_user_call(&spec),
             opcode::push_integer(1),
             instruction,
             opcode::return_value(true),
         ]);
         assert!(codes.contains(&ValidationCode::InvalidOperand), "{codes:?}");
     }
-    let spec = erabasic_bytecode::MethodCallSpec {
+    let spec = erabasic_bytecode::UserCallSpec {
         allow_missing: true,
         missing_target: u32::MAX,
         ..method_spec(Vec::new())
     };
     let codes = method_validation_codes(vec![
         opcode::push_string("METHOD"),
-        opcode::resolve_method(&spec),
-        opcode::invoke_method(1),
+        opcode::resolve_user_call(&spec),
+        opcode::invoke_user_call(1),
         opcode::return_value(true),
     ]);
     assert!(
         codes.contains(&ValidationCode::InvalidControlFlow),
         "{codes:?}"
     );
+}
+
+#[test]
+fn user_argument_guard_capture_discard_and_omission_join_one_token() {
+    use erabasic_bytecode::{UserArgumentAdvance, UserArgumentSpec};
+    let spec = method_spec(vec![
+        UserArgumentSpec::Value(BytecodeType::Integer),
+        UserArgumentSpec::Omitted,
+    ]);
+    let codes = method_validation_codes(vec![
+        opcode::push_string("TARGET"),
+        opcode::resolve_user_call(&spec),
+        opcode::guard_user_argument(1, 0, 6),
+        opcode::push_integer(9),
+        opcode::capture_user_argument(1, 0, false),
+        opcode::jump(Opcode::Jump, 7),
+        opcode::advance_user_argument(1, 0, UserArgumentAdvance::Discarded),
+        opcode::advance_user_argument(1, 1, UserArgumentAdvance::Omitted),
+        opcode::invoke_user_call(1),
+        opcode::return_value(true),
+    ]);
+    assert!(codes.is_empty(), "{codes:?}");
+}
+
+#[test]
+fn user_argument_slots_cannot_skip_repeat_or_merge_different_progress() {
+    use erabasic_bytecode::{UserArgumentAdvance, UserArgumentSpec};
+    let spec = method_spec(vec![UserArgumentSpec::Omitted, UserArgumentSpec::Omitted]);
+    for advances in [vec![1], vec![0, 0], vec![0]] {
+        let mut code = vec![
+            opcode::push_string("TARGET"),
+            opcode::resolve_user_call(&spec),
+        ];
+        code.extend(
+            advances
+                .into_iter()
+                .map(|slot| opcode::advance_user_argument(1, slot, UserArgumentAdvance::Omitted)),
+        );
+        code.extend([opcode::invoke_user_call(1), opcode::return_value(true)]);
+        let codes = method_validation_codes(code);
+        assert!(codes.contains(&ValidationCode::StackMismatch), "{codes:?}");
+    }
+    let spec = method_spec(vec![UserArgumentSpec::Value(BytecodeType::Integer)]);
+    let codes = method_validation_codes(vec![
+        opcode::push_string("TARGET"),
+        opcode::resolve_user_call(&spec),
+        opcode::guard_user_argument(1, 0, 6),
+        opcode::push_integer(9),
+        opcode::capture_user_argument(1, 0, false),
+        opcode::jump(Opcode::Jump, 7),
+        erabasic_bytecode::EncodedInstruction::new(Opcode::Nop, Vec::new()),
+        opcode::invoke_user_call(1),
+        opcode::return_value(true),
+    ]);
+    assert!(codes.contains(&ValidationCode::StackMismatch), "{codes:?}");
+}
+
+#[test]
+fn user_call_missing_branch_requires_matching_abandon_not_pop_or_other_origin() {
+    let spec = erabasic_bytecode::UserCallSpec {
+        allow_missing: true,
+        missing_target: 4,
+        ..method_spec(Vec::new())
+    };
+    for abandon in [
+        opcode::abandon_user_call(0),
+        opcode::abandon_user_call(2),
+        erabasic_bytecode::EncodedInstruction::new(Opcode::Pop, Vec::new()),
+    ] {
+        let codes = method_validation_codes(vec![
+            opcode::push_string("TARGET"),
+            opcode::resolve_user_call(&spec),
+            opcode::invoke_user_call(1),
+            opcode::jump(Opcode::Jump, 6),
+            abandon,
+            opcode::push_integer(0),
+            opcode::return_value(true),
+        ]);
+        assert!(
+            codes.contains(&ValidationCode::InvalidControlFlow),
+            "{codes:?}"
+        );
+    }
+}
+
+#[test]
+fn user_call_procedure_discard_and_jump_modes_have_explicit_result_effects() {
+    use erabasic_bytecode::UserCallMode;
+    for mode in [
+        UserCallMode::Procedure,
+        UserCallMode::MethodDiscard,
+        UserCallMode::JumpProcedure,
+    ] {
+        let spec = erabasic_bytecode::UserCallSpec {
+            mode,
+            ..method_spec(Vec::new())
+        };
+        let mut code = vec![
+            opcode::push_string("TARGET"),
+            opcode::resolve_user_call(&spec),
+            opcode::invoke_user_call(1),
+        ];
+        if !mode.unwinds_caller() {
+            code.extend([opcode::push_integer(0), opcode::return_value(true)]);
+        }
+        let mut artifact = method_artifact(code, BytecodeType::Integer, Vec::new());
+        if mode.unwinds_caller() {
+            artifact.functions[0].kind = erabasic_bytecode::BytecodeFunctionKind::Normal;
+            artifact.functions[0].result = None;
+            artifact.refresh_ids().unwrap();
+        }
+        let report = validate_bytecode(
+            artifact.clone().into_unvalidated(),
+            &ValidationContext::for_artifact(&artifact),
+        );
+        assert!(report.is_valid(), "{mode:?}: {:?}", report.diagnostics);
+    }
+}
+
+
+#[test]
+fn retired_eager_user_call_wire_is_unknown() {
+    for old_opcode in [36, 37] {
+        let mut instruction = opcode::push_integer(0);
+        instruction.opcode = old_opcode;
+        let codes = method_validation_codes(vec![instruction, opcode::return_value(true)]);
+        assert!(codes.contains(&ValidationCode::UnknownOpcode), "{codes:?}");
+    }
+}
+
+#[test]
+fn rejects_guard_and_advance_invalid_slot_shape_flags_and_payload_lengths() {
+    use erabasic_bytecode::{EncodedInstruction, UserArgumentAdvance, UserArgumentSpec};
+    let omitted = method_spec(vec![UserArgumentSpec::Omitted]);
+    let value = method_spec(vec![UserArgumentSpec::Value(BytecodeType::Integer)]);
+    let mut invalid_reason =
+        erabasic_bytecode::opcode::advance_user_argument(1, 0, UserArgumentAdvance::Omitted);
+    let mut payload = invalid_reason.payload.to_vec();
+    payload[6] = 2;
+    invalid_reason.payload = payload.into();
+    for (spec, instruction) in [
+        (omitted.clone(), opcode::guard_user_argument(1, 0, 3)),
+        (
+            omitted.clone(),
+            opcode::advance_user_argument(1, 0, UserArgumentAdvance::Discarded),
+        ),
+        (
+            value.clone(),
+            opcode::advance_user_argument(1, 0, UserArgumentAdvance::Omitted),
+        ),
+        (value, opcode::guard_user_argument(1, 1, 3)),
+        (omitted.clone(), invalid_reason),
+        (
+            omitted.clone(),
+            EncodedInstruction::new(Opcode::AdvanceUserArgument, vec![0; 8]),
+        ),
+        (
+            omitted,
+            EncodedInstruction::new(Opcode::GuardUserArgument, vec![0; 9]),
+        ),
+    ] {
+        let codes = method_validation_codes(vec![
+            opcode::push_string("TARGET"),
+            opcode::resolve_user_call(&spec),
+            instruction,
+            opcode::invoke_user_call(1),
+            opcode::return_value(true),
+        ]);
+        assert!(codes.contains(&ValidationCode::InvalidOperand), "{codes:?}");
+    }
 }

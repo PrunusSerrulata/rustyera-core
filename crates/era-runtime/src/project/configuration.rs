@@ -229,6 +229,12 @@ fn apply_catalog_semantics(config: &mut SemanticConfig) {
         config.csv.allow_full_width_space = value;
         config.analyzer.allow_full_width_space = value;
     }
+    if let Some(value) = boolean("CompatiRAND") {
+        config.analyzer.compatible_rand = value;
+    }
+    if let Some(value) = boolean("SystemNoTarget") {
+        config.analyzer.system_no_target = value;
+    }
     if let Some(value) = boolean("SystemIgnoreTripleSymbol") {
         config.analyzer.ignore_triple_symbols = value;
     }

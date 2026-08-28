@@ -6,7 +6,10 @@
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
+mod calls;
 mod integer;
+
+pub use calls::{UserCallArgumentPolicy, UserCallArityDecision, UserCallArityDiagnostic};
 
 pub use integer::{
     IntegerArithmeticError, IntegerArithmeticOutcome, IntegerArithmeticPolicy,
@@ -118,7 +121,7 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 1,
-            CompatibilityProfileId::EmueraSkiaSnake => 3,
+            CompatibilityProfileId::EmueraSkiaSnake => 4,
         };
         Self {
             profile,
@@ -159,6 +162,20 @@ impl CompatibilityIdentity {
     #[must_use]
     pub const fn uses_snake_numeric_read_fallback(&self) -> bool {
         matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 3
+    }
+
+
+
+
+    /// Policy for non-variadic user calls; builtin signatures remain exact.
+    #[must_use]
+    pub const fn user_call_argument_policy(&self, strict: bool) -> UserCallArgumentPolicy {
+        match self.profile {
+            CompatibilityProfileId::EmueraSkiaSnake if self.policy_version >= 4 && !strict => {
+                UserCallArgumentPolicy::WarnAndIgnoreExcess
+            }
+            _ => UserCallArgumentPolicy::RejectExcess,
+        }
     }
 
     /// User ERD aliases and the snake built-in alias recovery rules arrived in policy v2.
@@ -220,8 +237,8 @@ mod tests {
         assert!(snake.uses_snake_alias_rules());
         assert!(!reference.uses_snake_alias_rules());
         let mut previous_snake = snake.clone();
-        previous_snake.semantic_version = 2;
-        previous_snake.policy_version = 2;
+        previous_snake.semantic_version = 3;
+        previous_snake.policy_version = 3;
         assert!(previous_snake.validate().is_err());
         assert!(reference.validate().is_ok());
         assert!(snake.validate().is_ok());

@@ -52,6 +52,18 @@ fn capabilities() -> ClientCapabilities {
     }
 }
 
+fn profile_configuration_file(profile: erabasic_compat::CompatibilityProfileId) -> SubmittedFile {
+    SubmittedFile {
+        relative_path: "reraconfig.toml".into(),
+        category: FileCategory::Configuration,
+        payload: FilePayload::Utf8(format!(
+            "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"{}\"\n",
+            profile.as_str()
+        )),
+        content_hash: None,
+    }
+}
+
 #[allow(clippy::needless_pass_by_value)]
 fn submit(session: &mut RuntimeSession, sequence: u64, message: RuntimeMessage) {
     let mut envelope = Envelope::new(

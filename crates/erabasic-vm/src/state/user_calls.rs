@@ -1,72 +1,152 @@
 use erabasic_bytecode::{
-    BytecodeConstant, BytecodeFunctionKind, BytecodeStorage, BytecodeType, MethodArgumentSpec,
-    MethodResult, SymbolKey,
+    BytecodeConstant, BytecodeFunctionKind, BytecodeStorage, BytecodeType, SymbolKey,
+    UserArgumentSpec, UserCallMode, UserCallSpec,
 };
 use serde::{Deserialize, Serialize};
+
+mod validation;
 
 use super::{Fiber, ProgramGeneration};
 use crate::{
     GenerationId, PlaceDescriptor, Vm, VmError, VmValue, bind_persistent_arguments, make_frame,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct ResolvedMethod {
-    pub generation: GenerationId,
-    pub function: SymbolKey,
-    pub result: MethodResult,
-    pub bindings: Vec<MethodBinding>,
+/// A saved return policy must be justified by the suspended caller's actual operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) enum UserCallOrigin {
+    Bytecode { resolve: usize, invoke: usize },
+    RuntimeForm,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) enum MethodBinding {
+pub(crate) struct UserCallFrame {
+    pub caller: crate::FrameId,
+    pub mode: UserCallMode,
+    pub origin: UserCallOrigin,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ResolvedUserCall {
+    pub generation: GenerationId,
+    pub function: SymbolKey,
+    pub mode: UserCallMode,
+    pub bindings: Vec<UserArgumentBinding>,
+}
+
+impl ResolvedUserCall {
+    pub(crate) fn allows_path_memo_observation(&self) -> bool {
+        matches!(
+            self.mode,
+            UserCallMode::Procedure | UserCallMode::MethodDiscard
+        ) && !self
+            .bindings
+            .iter()
+            .any(|binding| matches!(binding, UserArgumentBinding::ArrayReference))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) enum UserArgumentBinding {
     Default(BytecodeConstant),
     Value { convert_integer_to_string: bool },
     ArrayReference,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct PendingMethodCall {
+pub(crate) struct PendingUserCall {
     pub resolve: usize,
     pub stack_index: usize,
-    pub captured: usize,
-    pub method: ResolvedMethod,
+    pub next_slot: usize,
+    pub captured: Vec<Option<VmValue>>,
+    pub call: ResolvedUserCall,
 }
 
 fn invalid(message: impl Into<String>) -> VmError {
     VmError::InvalidArguments(message.into())
 }
 
+fn script_argument(message: impl Into<String>) -> VmError {
+    VmError::ScriptFailure(crate::ExecutionFailure::script(
+        crate::ScriptFaultKind::Argument,
+        crate::VmFaultCode::TypeMismatch,
+        message,
+    ))
+}
+
 /// Resolve the complete signature without evaluating any actual or fallback expression.
-pub(crate) fn resolve_method_call(
+pub(crate) fn resolve_user_call(
     program: &ProgramGeneration,
     generation: GenerationId,
     name: &str,
-    arguments: &[MethodArgumentSpec],
-    result: Option<MethodResult>,
-) -> Result<Option<ResolvedMethod>, VmError> {
+    spec: &UserCallSpec,
+) -> Result<Option<ResolvedUserCall>, VmError> {
     let Some(target) = program.function_by_name(name) else {
         return Ok(None);
     };
-    let policy = program.artifact.call_compatibility;
-    if target.kind == BytecodeFunctionKind::Event && !policy.allow_event_as_normal {
+    // Events hidden from ordinary calls are absent from dynamic method lookup too.
+    if spec.mode.is_method()
+        && target.kind == BytecodeFunctionKind::Event
+        && !program.artifact.call_compatibility.allow_event_as_normal
+    {
         return Ok(None);
     }
-    if target.kind != BytecodeFunctionKind::Method {
-        return Err(invalid(format!("dynamic target {name} is not a method")));
+    if spec.allow_missing
+        && spec.mode == UserCallMode::MethodDiscard
+        && target.kind != BytecodeFunctionKind::Method
+    {
+        return Ok(None);
     }
-    if arguments.len() > target.parameters.len() {
-        return Err(invalid(format!(
-            "method {name} expects at most {} arguments, found {}",
+    validate_user_call_target_kind(program, target, spec.mode)?;
+    bind_user_call_signature(program, generation, target, spec).map(Some)
+}
+
+pub(crate) fn validate_user_call_target_kind(
+    program: &ProgramGeneration,
+    target: &erabasic_bytecode::BytecodeFunction,
+    mode: UserCallMode,
+) -> Result<(), VmError> {
+    let valid = if mode.is_method() {
+        target.kind == BytecodeFunctionKind::Method
+    } else {
+        target.kind != BytecodeFunctionKind::Method
+            && (target.kind != BytecodeFunctionKind::Event
+                || program.artifact.call_compatibility.allow_event_as_normal)
+    };
+    if !valid {
+        return Err(script_argument(format!(
+            "dynamic target {} has an incompatible kind",
+            target.name
+        )));
+    }
+    Ok(())
+}
+
+/// Bind a resolved user target against its typed actual slots without evaluating them.
+pub(crate) fn bind_user_call_signature(
+    program: &ProgramGeneration,
+    generation: GenerationId,
+    target: &erabasic_bytecode::BytecodeFunction,
+    spec: &UserCallSpec,
+) -> Result<ResolvedUserCall, VmError> {
+    let name = &target.name;
+    let policy = program.artifact.call_compatibility;
+    let arguments = &spec.arguments;
+    let arity = policy
+        .user_argument_policy
+        .decide(arguments.len(), target.parameters.len());
+    if arity.is_rejected() {
+        return Err(script_argument(format!(
+            "function {name} expects at most {} arguments, found {}",
             target.parameters.len(),
             arguments.len()
         )));
     }
     let mut bindings = Vec::with_capacity(target.parameters.len());
     for (slot, parameter) in target.parameters.iter().enumerate() {
-        let argument = arguments.get(slot).unwrap_or(&MethodArgumentSpec::Omitted);
-        if matches!(argument, MethodArgumentSpec::Omitted) {
+        let argument = arguments.get(slot).unwrap_or(&UserArgumentSpec::Omitted);
+        if matches!(argument, UserArgumentSpec::Omitted) {
             if parameter.by_reference {
-                return Err(invalid(format!(
+                return Err(script_argument(format!(
                     "method {name} omits reference argument {}",
                     slot + 1
                 )));
@@ -83,38 +163,43 @@ pub(crate) fn resolve_method_call(
                         })
                 })
                 .ok_or_else(|| {
-                    invalid(format!(
+                    script_argument(format!(
                         "method {name} omits required argument {}",
                         slot + 1
                     ))
                 })?;
-            bindings.push(MethodBinding::Default(default));
+            bindings.push(UserArgumentBinding::Default(default));
             continue;
         }
         bindings.push(resolve_supplied_method_argument(
             program, name, slot, parameter, argument,
         )?);
     }
-    let actual_result = match target.result {
-        Some(BytecodeType::Integer) => MethodResult::Integer,
-        Some(BytecodeType::String) => MethodResult::String,
-        _ => {
-            return Err(invalid(format!(
-                "method {name} does not return an integer or string"
-            )));
-        }
-    };
-    if result.is_some_and(|expected| expected != actual_result) {
-        return Err(invalid(format!(
+    if spec.mode.is_method()
+        && !matches!(
+            target.result,
+            Some(BytecodeType::Integer | BytecodeType::String)
+        )
+    {
+        return Err(script_argument(format!(
+            "method {name} has no scalar return type"
+        )));
+    }
+    if spec
+        .mode
+        .expected_result()
+        .is_some_and(|expected| target.result != Some(expected))
+    {
+        return Err(script_argument(format!(
             "method {name} has an incompatible return type"
         )));
     }
-    Ok(Some(ResolvedMethod {
+    Ok(ResolvedUserCall {
         generation,
         function: target.key,
-        result: actual_result,
+        mode: spec.mode,
         bindings,
-    }))
+    })
 }
 
 fn resolve_supplied_method_argument(
@@ -122,21 +207,21 @@ fn resolve_supplied_method_argument(
     name: &str,
     slot: usize,
     parameter: &erabasic_bytecode::BytecodeParameter,
-    argument: &MethodArgumentSpec,
-) -> Result<MethodBinding, VmError> {
+    argument: &UserArgumentSpec,
+) -> Result<UserArgumentBinding, VmError> {
     let actual_type = match argument {
-        MethodArgumentSpec::Value(value_type) => *value_type,
-        MethodArgumentSpec::Variable(key) => {
+        UserArgumentSpec::Value(value_type) => *value_type,
+        UserArgumentSpec::Variable(key) => {
             program
                 .global(*key)
                 .ok_or_else(|| invalid("method argument variable is missing"))?
                 .value_type
         }
-        MethodArgumentSpec::Omitted => unreachable!("omission was handled above"),
+        UserArgumentSpec::Omitted => unreachable!("omission was handled above"),
     };
     if parameter.by_reference {
-        let MethodArgumentSpec::Variable(key) = argument else {
-            return Err(invalid(format!(
+        let UserArgumentSpec::Variable(key) = argument else {
+            return Err(script_argument(format!(
                 "method {name} argument {} requires an array",
                 slot + 1
             )));
@@ -161,12 +246,12 @@ fn resolve_supplied_method_argument(
             || source.dimensions.len() != destination.dimensions.len()
             || parameter.value_type != expected
         {
-            return Err(invalid(format!(
+            return Err(script_argument(format!(
                 "method {name} argument {} has an incompatible array reference",
                 slot + 1
             )));
         }
-        Ok(MethodBinding::ArrayReference)
+        Ok(UserArgumentBinding::ArrayReference)
     } else {
         let convert_integer_to_string = actual_type == BytecodeType::Integer
             && parameter.value_type == BytecodeType::String
@@ -177,12 +262,12 @@ fn resolve_supplied_method_argument(
         if !matches!(actual_type, BytecodeType::Integer | BytecodeType::String)
             || (actual_type != parameter.value_type && !convert_integer_to_string)
         {
-            return Err(invalid(format!(
+            return Err(script_argument(format!(
                 "method {name} argument {} has an incompatible value type",
                 slot + 1
             )));
         }
-        Ok(MethodBinding::Value {
+        Ok(UserArgumentBinding::Value {
             convert_integer_to_string,
         })
     }
@@ -193,10 +278,20 @@ pub(crate) fn exists_method(
     generation: GenerationId,
     name: &str,
 ) -> i64 {
-    match resolve_method_call(program, generation, name, &[], None) {
-        Ok(Some(method)) => match method.result {
-            MethodResult::Integer => 1,
-            MethodResult::String => 2,
+    let spec = UserCallSpec {
+        mode: UserCallMode::MethodDiscard,
+        allow_missing: true,
+        missing_target: 0,
+        arguments: Vec::new(),
+    };
+    match resolve_user_call(program, generation, name, &spec) {
+        Ok(Some(call)) => match program
+            .function(call.function)
+            .and_then(|target| target.result)
+        {
+            Some(BytecodeType::Integer) => 1,
+            Some(BytecodeType::String) => 2,
+            _ => 0,
         },
         Ok(None) | Err(_) => 0,
     }
@@ -204,7 +299,7 @@ pub(crate) fn exists_method(
 
 impl Vm {
     /// Follow only existing whole-array REF bindings; reject stale owners, cycles and slices.
-    pub(crate) fn method_array_place(
+    pub(crate) fn user_call_array_place(
         &self,
         fiber: &Fiber,
         generation: GenerationId,
@@ -319,16 +414,16 @@ impl Vm {
                     return false;
                 }
                 let Ok(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) =
-                    self.method_variable_place(fiber, frame.generation, frame.id, parameter.key)
+                    self.user_call_variable_place(fiber, frame.generation, frame.id, parameter.key)
                 else {
                     return false;
                 };
-                self.method_array_place(fiber, frame.generation, &place)
+                self.user_call_array_place(fiber, frame.generation, &place)
                     .is_ok()
             })
     }
 
-    pub(crate) fn method_variable_place(
+    pub(crate) fn user_call_variable_place(
         &self,
         fiber: &Fiber,
         generation: GenerationId,
@@ -356,12 +451,12 @@ impl Vm {
         })
     }
 
-    pub(crate) fn capture_method_argument(
+    pub(crate) fn capture_user_argument(
         &self,
         fiber: &Fiber,
         owner: crate::FrameId,
-        method: &ResolvedMethod,
-        specs: &[MethodArgumentSpec],
+        method: &ResolvedUserCall,
+        specs: &[UserArgumentSpec],
         slot: usize,
         actual: VmValue,
     ) -> Result<VmValue, VmError> {
@@ -377,19 +472,21 @@ impl Vm {
             .get(slot)
             .ok_or_else(|| invalid("method argument binding is missing"))?
         {
-            MethodBinding::Default(_) => Err(invalid("omitted method argument was evaluated")),
-            MethodBinding::Value {
+            UserArgumentBinding::Default(_) => {
+                Err(invalid("omitted method argument was evaluated"))
+            }
+            UserArgumentBinding::Value {
                 convert_integer_to_string,
             } => {
                 let expected = match spec {
-                    MethodArgumentSpec::Value(value_type) => *value_type,
-                    MethodArgumentSpec::Variable(key) => {
+                    UserArgumentSpec::Value(value_type) => *value_type,
+                    UserArgumentSpec::Variable(key) => {
                         program
                             .global(*key)
                             .ok_or_else(|| invalid("method argument variable is missing"))?
                             .value_type
                     }
-                    MethodArgumentSpec::Omitted => {
+                    UserArgumentSpec::Omitted => {
                         return Err(invalid("omitted method argument was captured"));
                     }
                 };
@@ -405,12 +502,12 @@ impl Vm {
                     Ok(actual)
                 }
             }
-            MethodBinding::ArrayReference => {
-                let MethodArgumentSpec::Variable(variable) = spec else {
+            UserArgumentBinding::ArrayReference => {
+                let UserArgumentSpec::Variable(variable) = spec else {
                     return Err(invalid("reference argument has no variable identity"));
                 };
                 let expected =
-                    self.method_variable_place(fiber, method.generation, owner, *variable)?;
+                    self.user_call_variable_place(fiber, method.generation, owner, *variable)?;
                 let expected_type = expected.value_type();
                 if actual.value_type() != expected_type {
                     return Err(invalid(
@@ -424,8 +521,8 @@ impl Vm {
                 let (VmValue::IntegerPlace(actual) | VmValue::StringPlace(actual)) = actual else {
                     return Err(invalid("captured method reference is not a place"));
                 };
-                let expected = self.method_array_place(fiber, method.generation, &expected)?;
-                let actual = self.method_array_place(fiber, method.generation, &actual)?;
+                let expected = self.user_call_array_place(fiber, method.generation, &expected)?;
+                let actual = self.user_call_array_place(fiber, method.generation, &actual)?;
                 if actual != expected {
                     return Err(invalid(
                         "captured reference does not match the argument variable",
@@ -455,13 +552,64 @@ impl Vm {
         }
     }
 
-    pub(crate) fn invoke_method(
+    /// Later actuals may rebind the original REF. Captures keep the backing selected
+    /// at their own evaluation point, not whichever alias is live at invocation.
+    pub(crate) fn validate_captured_user_reference(
+        &self,
+        fiber: &Fiber,
+        call: &ResolvedUserCall,
+        slot: usize,
+        value: &VmValue,
+    ) -> Result<(), VmError> {
+        let program = self
+            .generations
+            .get(&call.generation)
+            .ok_or_else(|| invalid("captured user call generation is missing"))?;
+        let target = program
+            .function(call.function)
+            .ok_or(VmError::MissingFunction(call.function))?;
+        let formal = target
+            .parameters
+            .get(slot)
+            .filter(|parameter| parameter.by_reference)
+            .and_then(|parameter| program.global(parameter.key))
+            .ok_or_else(|| invalid("captured reference formal is missing"))?;
+        let (VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = value else {
+            return Err(invalid("captured reference is not a place"));
+        };
+        let backing = self.user_call_array_place(fiber, call.generation, place)?;
+        if backing != **place {
+            return Err(invalid(
+                "captured reference is an alias instead of a fixed backing",
+            ));
+        }
+        let definition = program
+            .global(backing.variable)
+            .ok_or_else(|| invalid("captured reference backing is missing"))?;
+        let expected = match definition.value_type {
+            BytecodeType::Integer => BytecodeType::IntegerPlace,
+            BytecodeType::String => BytecodeType::StringPlace,
+            _ => return Err(invalid("captured reference backing is not scalar")),
+        };
+        if value.value_type() != expected
+            || definition.value_type != formal.value_type
+            || definition.dimensions.len() != formal.dimensions.len()
+        {
+            return Err(invalid(
+                "captured reference backing has an incompatible rank or type",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn invoke_user_call(
         &mut self,
         fiber: &mut Fiber,
         owner: crate::FrameId,
-        method: &ResolvedMethod,
-        specs: &[MethodArgumentSpec],
+        method: &ResolvedUserCall,
+        specs: &[UserArgumentSpec],
         captured: &[Option<VmValue>],
+        origin: UserCallOrigin,
     ) -> Result<(), VmError> {
         if fiber.frames.len() >= self.config.maximum_call_depth {
             return Err(VmError::ResourceLimit("maximum method call depth"));
@@ -474,16 +622,20 @@ impl Vm {
         let target = program
             .function(method.function)
             .ok_or(VmError::MissingFunction(method.function))?;
-        if resolve_method_call(
+        if resolve_user_call(
             &program,
             method.generation,
             &target.name,
-            specs,
-            Some(method.result),
+            &UserCallSpec {
+                mode: method.mode,
+                allow_missing: false,
+                missing_target: 0,
+                arguments: specs.to_vec(),
+            },
         )?
         .as_ref()
             != Some(method)
-            || captured.len() != specs.len()
+            || captured.len() != specs.len().min(method.bindings.len())
         {
             return Err(invalid(
                 "resolved method state no longer matches its signature",
@@ -494,19 +646,20 @@ impl Vm {
             .last()
             .filter(|frame| frame.id == owner && frame.generation == method.generation)
             .ok_or_else(|| invalid("method caller generation or frame differs"))?;
-        let event_context = caller.event_context;
+        let event_context = caller.event_context || target.kind == BytecodeFunctionKind::Event;
         let mut arguments = Vec::with_capacity(method.bindings.len());
         for (slot, binding) in method.bindings.iter().enumerate() {
             let value = captured.get(slot).and_then(Option::as_ref);
             let value = match (binding, value) {
-                (MethodBinding::Default(value), None) => match value {
+                (UserArgumentBinding::Default(value), None) => match value {
                     BytecodeConstant::Integer(value) => VmValue::Integer(*value),
                     BytecodeConstant::String(value) => VmValue::String(value.clone()),
                 },
-                (MethodBinding::ArrayReference, Some(value)) => {
-                    self.capture_method_argument(fiber, owner, method, specs, slot, value.clone())?
+                (UserArgumentBinding::ArrayReference, Some(value)) => {
+                    self.validate_captured_user_reference(fiber, method, slot, value)?;
+                    value.clone()
                 }
-                (MethodBinding::Value { .. }, Some(value))
+                (UserArgumentBinding::Value { .. }, Some(value))
                     if value.value_type() == target.parameters[slot].value_type =>
                 {
                     value.clone()
@@ -520,7 +673,9 @@ impl Vm {
             arguments.push(value);
         }
         super::validate_arguments(target, &arguments)?;
-        self.invalidate_path_memo(fiber.id);
+        if matches!(origin, UserCallOrigin::RuntimeForm) || !method.allows_path_memo_observation() {
+            self.invalidate_path_memo(fiber.id);
+        }
         self.memory.ensure_function_statics(
             method.generation,
             target.key,
@@ -533,116 +688,22 @@ impl Vm {
             &program,
             &arguments,
         )?;
-        let frame = make_frame(
+        self.observe_path_memo_arguments(fiber.id, method.generation, target, &program, &arguments);
+        let mut frame = make_frame(
             self.allocate_frame_id(),
             method.generation,
             target,
             program.function_locals(target.key),
             arguments,
-            true,
+            method.mode.expected_result().is_some(),
             event_context,
         );
+        frame.user_call = Some(UserCallFrame {
+            caller: owner,
+            mode: method.mode,
+            origin,
+        });
         fiber.frames.push(frame);
         Ok(())
-    }
-
-    pub(crate) fn validate_method_references(
-        &self,
-        fiber: &Fiber,
-        owner: crate::FrameId,
-        method: &ResolvedMethod,
-        specs: &[MethodArgumentSpec],
-    ) -> Result<(), VmError> {
-        for (slot, binding) in method.bindings.iter().enumerate() {
-            if !matches!(binding, MethodBinding::ArrayReference) {
-                continue;
-            }
-            let Some(MethodArgumentSpec::Variable(variable)) = specs.get(slot) else {
-                return Err(invalid("method reference has no variable identity"));
-            };
-            let place = self.method_variable_place(fiber, method.generation, owner, *variable)?;
-            self.capture_method_argument(fiber, owner, method, specs, slot, place)?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn valid_frame_methods(&self, fiber: &Fiber, frame: &super::Frame) -> bool {
-        let Some(program) = self.generations.get(&frame.generation) else {
-            return false;
-        };
-        let Some(function) = program.function(frame.function) else {
-            return false;
-        };
-        let mut previous_end = None;
-        for pending in &frame.method_calls {
-            let Some(instruction) = function.code.get(pending.resolve) else {
-                return false;
-            };
-            if instruction.opcode != erabasic_bytecode::Opcode::ResolveMethod as u16
-                || pending.resolve >= frame.instruction
-                || pending.method.generation != frame.generation
-                || previous_end.is_some_and(|end| pending.stack_index <= end)
-            {
-                return false;
-            }
-            let Ok(spec) = erabasic_bytecode::MethodCallSpec::decode(&instruction.payload) else {
-                return false;
-            };
-            let Some(target) = program.function(pending.method.function) else {
-                return false;
-            };
-            if frame.stack.get(pending.stack_index) != Some(&VmValue::String(target.name.clone()))
-                || resolve_method_call(
-                    program,
-                    frame.generation,
-                    &target.name,
-                    &spec.arguments,
-                    Some(spec.result),
-                )
-                .ok()
-                .flatten()
-                .as_ref()
-                    != Some(&pending.method)
-            {
-                return false;
-            }
-            let slots = spec
-                .arguments
-                .iter()
-                .enumerate()
-                .filter(|(_, spec)| !matches!(spec, MethodArgumentSpec::Omitted))
-                .map(|(slot, _)| slot)
-                .collect::<Vec<_>>();
-            if pending.captured > slots.len() {
-                return false;
-            }
-            for (offset, slot) in slots.into_iter().take(pending.captured).enumerate() {
-                let Some(value) = frame.stack.get(pending.stack_index + offset + 1) else {
-                    return false;
-                };
-                if value.value_type() != target.parameters[slot].value_type {
-                    return false;
-                }
-                if matches!(pending.method.bindings[slot], MethodBinding::ArrayReference)
-                    && self
-                        .capture_method_argument(
-                            fiber,
-                            frame.id,
-                            &pending.method,
-                            &spec.arguments,
-                            slot,
-                            value.clone(),
-                        )
-                        .is_err()
-                {
-                    return false;
-                }
-            }
-            previous_end = pending.stack_index.checked_add(pending.captured);
-            if previous_end.is_none() {
-                return false;
-            }
-        }
-        true
     }
 }

@@ -70,21 +70,6 @@ impl<'a> Builder<'a> {
             opcode::jump(Opcode::Jump, u32::try_from(target).unwrap_or(u32::MAX)).payload;
     }
 
-    pub(super) fn patch_resolve_function(
-        &mut self,
-        instruction: usize,
-        target: usize,
-        allow_missing: bool,
-        method: bool,
-    ) {
-        self.code[instruction].payload = opcode::resolve_function(
-            u32::try_from(target).unwrap_or(u32::MAX),
-            allow_missing,
-            method,
-        )
-        .payload;
-    }
-
     pub(super) fn take_control_flow(
         &mut self,
         line: LineId,

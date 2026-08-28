@@ -36,8 +36,9 @@
 `"emuera.skia.snake"`。未知 profile 或不支持的格式版本会阻止加载，不静默回退。
 该字段是项目执行身份，不属于客户端偏好，也不允许通过热重载或设置事务切换；修改后必须完整重开项目。
 
-snake profile 在适配批次 0 为实验状态。当前身份明确记录 wrapping i64 算术、SFMT19937
-以及 Unicode 逻辑列宽布局；尚不代表后续批次的蛇版算术、RNG、按键或像素布局兼容。
+snake profile 仍为实验状态。当前身份选择逐操作蛇版整数策略、可保存重放的 SFMT19937
+和 Unicode 逻辑列宽布局；不保证蛇版 `UseNewRandom` 双状态路径的同 seed 结果，也不表示
+按键、像素布局或完整游戏已兼容。
 缓存、字节码、snapshot 和 snake 自身存档携带完整身份，不能跨 profile 复用；
 原版 profile 保留现有裸 1808 存档读写。三个客户端先调用 core 解析配置，再绑定对应存储，
 不各自解释该字段。
@@ -49,6 +50,14 @@ schema_version = 4
 [compatibility]
 profile = "emuera.skia.snake"
 ```
+
+### 用户函数多余实参诊断
+
+`diagnostics.strict_user_call_arguments`（设置 ID `128`）默认 `false`，仅影响 snake
+非 variadic 用户函数：默认告警并且不求值多余实参；设为 `true` 时提升为错误。内置函数
+始终按原有 arity 校验，原版 profile 始终拒绝用户函数多余实参。修改此项需要重新加载项目，
+会改变编译身份并使不兼容缓存失效。该项不改变 TOML 格式结构，schema 版本仍为 `4`；
+Schema、锁定路径和客户端设置目录同步包含该可选字段。
 
 ### 展示设置
 

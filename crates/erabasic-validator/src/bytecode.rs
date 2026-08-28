@@ -1,5 +1,8 @@
 mod instructions;
+mod provenance;
 mod source_map;
+
+pub use provenance::{ValidatedOperandStacks, ValidatedStackState, ValidatedStackToken};
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -81,9 +84,16 @@ impl ValidationContext {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ValidatedArtifact(Arc<BytecodeArtifact>);
+pub struct ValidatedArtifact(Arc<BytecodeArtifact>, Arc<ValidatedOperandStacks>);
 
 impl ValidatedArtifact {
+    /// Control-flow stack provenance produced by the same successful validation pass.
+    /// This data is never read from the artifact or snapshot payload.
+    #[must_use]
+    pub fn operand_stacks(&self) -> &ValidatedOperandStacks {
+        &self.1
+    }
+
     /// Refresh identities on a compiler artifact without losing its validation provenance.
     ///
     /// Identity refresh canonicalizes ordering and changes only manifest identities,
@@ -158,11 +168,12 @@ fn validate_artifact(
     }
     validate_symbols(&artifact, context, &mut diagnostics);
     validate_source_map(&artifact, &mut diagnostics);
-    validate_functions(&artifact, context, &mut diagnostics);
+    let operand_stacks = validate_functions(&artifact, context, &mut diagnostics);
     ValidationReport {
-        value: diagnostics
-            .is_empty()
-            .then_some(ValidatedArtifact(Arc::new(artifact))),
+        value: diagnostics.is_empty().then_some(ValidatedArtifact(
+            Arc::new(artifact),
+            Arc::new(operand_stacks),
+        )),
         diagnostics,
     }
 }
@@ -584,7 +595,7 @@ fn validate_functions(
     artifact: &BytecodeArtifact,
     context: &ValidationContext,
     diagnostics: &mut Vec<ValidationDiagnostic>,
-) {
+) -> ValidatedOperandStacks {
     let globals: BTreeMap<_, _> = artifact
         .globals
         .iter()
@@ -610,7 +621,7 @@ fn validate_functions(
         .par_iter()
         .map(|function| {
             let mut diagnostics = Vec::new();
-            validate_function(
+            let stacks = validate_function(
                 function,
                 &globals,
                 &functions,
@@ -619,12 +630,15 @@ fn validate_functions(
                 context,
                 &mut diagnostics,
             );
-            diagnostics
+            (function.key, stacks, diagnostics)
         })
         .collect::<Vec<_>>();
-    for mut function in function_diagnostics {
-        diagnostics.append(&mut function);
+    let mut stacks = BTreeMap::new();
+    for (function, provenance, mut function_diagnostics) in function_diagnostics {
+        diagnostics.append(&mut function_diagnostics);
+        stacks.insert(function, provenance);
     }
+    ValidatedOperandStacks::new(stacks)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -636,13 +650,13 @@ fn validate_function(
     host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
     _context: &ValidationContext,
     diagnostics: &mut Vec<ValidationDiagnostic>,
-) {
+) -> provenance::FunctionStackProvenance {
     if function.code.is_empty() {
         diagnostics.push(ValidationDiagnostic::project(
             ValidationCode::InvalidControlFlow,
             format!("function {} has no instructions", function.name),
         ));
-        return;
+        return provenance::FunctionStackProvenance::default();
     }
     let mut label_names = BTreeSet::new();
     if function.labels.iter().any(|label| {
@@ -657,12 +671,13 @@ fn validate_function(
                 function.name
             ),
         ));
-        return;
+        return provenance::FunctionStackProvenance::default();
     }
     let mut states = vec![None; function.code.len()];
     states[0] = Some(Vec::<instructions::StackValue>::new());
     let mut work = VecDeque::from([0usize]);
     let mut observed_max = 0usize;
+    let mut terminal_user_calls = BTreeMap::new();
     while let Some(index) = work.pop_front() {
         let Some(mut stack) = states[index].clone() else {
             continue;
@@ -682,6 +697,11 @@ fn validate_function(
             }
         };
         observed_max = observed_max.max(stack.len());
+        if successors.is_empty()
+            && function.code[index].opcode == erabasic_bytecode::Opcode::InvokeUserCall as u16
+        {
+            terminal_user_calls.insert(index, ValidatedStackState::from_stack(&stack));
+        }
         for successor in successors {
             if successor >= function.code.len() {
                 diagnostics.push(ValidationDiagnostic::instruction(
@@ -715,6 +735,7 @@ fn validate_function(
             format!("function {} understates its maximum stack", function.name),
         ));
     }
+    provenance::FunctionStackProvenance::new(states, terminal_user_calls)
 }
 
 use instructions::apply_instruction;

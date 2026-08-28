@@ -210,7 +210,7 @@ fn encode_native_section(index: usize, plan: &NativeSectionPlan<'_>) -> Result<V
         ),
         MANIFEST_SECTION_INDEX => encode_manifest_section(plan.manifest, plan.kind, cancelled),
         7 => encode_section(plan.snapshot, plan.kind, cancelled),
-        8 => encode_section(plan.diagnostics, plan.kind, cancelled),
+        8 => super::sections::encode_diagnostic_templates(plan.diagnostics, plan.kind, cancelled),
         value if value < source_start => encode_section(
             &plan.bytecode.functions[plan.function_ranges[value - function_start].clone()],
             plan.kind,

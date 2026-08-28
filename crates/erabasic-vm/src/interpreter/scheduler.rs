@@ -179,7 +179,7 @@ impl Vm {
                         policy,
                     )
                 };
-                self.drain_arithmetic_diagnostics(fiber.id, &position, &mut report.events);
+                self.drain_compatibility_diagnostics(fiber.id, &position, &mut report.events);
                 let additional_instructions = match &outcome {
                     Ok(StepOutcome::BulkProgress(instructions)) => *instructions,
                     _ => 0,

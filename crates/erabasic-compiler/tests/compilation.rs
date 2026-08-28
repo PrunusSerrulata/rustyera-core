@@ -210,7 +210,7 @@ fn folded_getnum_does_not_emit_a_native_call() {
 
 #[test]
 fn expression_methods_use_typed_lazy_bytecode_in_expressions_and_statements() {
-    use erabasic_bytecode::{MethodArgumentSpec, MethodCallSpec, MethodResult};
+    use erabasic_bytecode::{UserArgumentSpec, UserCallMode, UserCallSpec};
 
     let project = analyze(
         "@SYSTEM_TITLE\nRESULT = GETMETH(\"TARGET\", 7, FLAG:1,, -9223372036854775807 - 1)\nGETMETHS \"TEXT\", \"fallback\", STR:2\nRETURN\n",
@@ -235,24 +235,27 @@ fn expression_methods_use_typed_lazy_bytecode_in_expressions_and_statements() {
         .code;
     let specs = code
         .iter()
-        .filter(|instruction| instruction.opcode == Opcode::ResolveMethod as u16)
-        .map(|instruction| MethodCallSpec::decode(&instruction.payload).unwrap())
+        .filter(|instruction| instruction.opcode == Opcode::ResolveUserCall as u16)
+        .map(|instruction| UserCallSpec::decode(&instruction.payload).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(specs.len(), 2);
-    assert_eq!(specs[0].result, MethodResult::Integer);
+    assert_eq!(specs[0].mode, UserCallMode::MethodInteger);
     assert!(matches!(
         specs[0].arguments.as_slice(),
         [
-            MethodArgumentSpec::Variable(_),
-            MethodArgumentSpec::Omitted,
-            MethodArgumentSpec::Value(BytecodeType::Integer)
+            UserArgumentSpec::Variable(_),
+            UserArgumentSpec::Omitted,
+            UserArgumentSpec::Value(BytecodeType::Integer)
         ]
     ));
-    assert_eq!(specs[1].result, MethodResult::String);
+    assert_eq!(specs[1].mode, UserCallMode::MethodString);
     for opcode in [
-        Opcode::SelectMethodArgument,
-        Opcode::CaptureMethodArgument,
-        Opcode::InvokeMethod,
+        Opcode::GuardUserArgument,
+        Opcode::AdvanceUserArgument,
+        Opcode::AbandonUserCall,
+        Opcode::SelectUserArgument,
+        Opcode::CaptureUserArgument,
+        Opcode::InvokeUserCall,
     ] {
         assert!(
             code.iter()
@@ -338,6 +341,121 @@ fn gdrawsprite_preserves_the_color_matrix_array_place() {
             BytecodeType::IntegerPlace,
         ]
     );
+}
+
+#[test]
+fn static_user_argument_policy_preserves_lazy_lowering_and_warm_analysis_warnings() {
+    let text = "@SYSTEM_TITLE\nCALL TAKE, 1, SIDE(), 1 / 0\nRESULT = METH(2, SIDE(), 9223372036854775807 + 1)\nRETURN\n@TAKE(ARG)\nRETURN\n@METH(ARG)\n#FUNCTION\nRETURNF ARG\n@SIDE\n#FUNCTION\nFLAG:0 += 1\nRETURNF 9\n";
+    let analyze_snake = || {
+        analyze_project(
+            AnalysisInput {
+                project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+                    .data
+                    .unwrap(),
+                sources: vec![ProjectSource {
+                    relative_path: "user-arity.erb".into(),
+                    payload: SourcePayload::Utf8(text.into()),
+                }],
+            },
+            &AnalyzerOptions {
+                compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                    erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+                ),
+                ..AnalyzerOptions::analysis_mode()
+            },
+            &ExtensionRegistry::default(),
+        )
+    };
+    let first_analysis = analyze_snake();
+    let first_diagnostics = first_analysis.diagnostics.clone();
+    assert_eq!(
+        first_diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == erabasic_analyzer::AnalyzerDiagnosticCode::ExcessUserArguments
+            })
+            .count(),
+        2
+    );
+    let first = compile_project(
+        &first_analysis.project.unwrap(),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(first.diagnostics.is_empty(), "{:?}", first.diagnostics);
+    let artifact = first
+        .artifact
+        .as_ref()
+        .expect("snake extra arguments should compile");
+    let title = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap();
+    let side = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SIDE")
+        .unwrap();
+    assert!(title.imports.iter().all(|import| import.key != side.key));
+    assert_eq!(
+        title
+            .code
+            .iter()
+            .filter(|instruction| { instruction.opcode == Opcode::Call as u16 })
+            .count(),
+        2,
+        "only the two retained user calls may be emitted"
+    );
+    let warm_analysis = analyze_snake();
+    assert_eq!(
+        warm_analysis.diagnostics, first_diagnostics,
+        "load warnings must not depend on whether function bytecode will be reused"
+    );
+    let mut warm_project = warm_analysis.project.unwrap();
+    let warm = compile_project(
+        &warm_project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        Some(&first.incremental_state),
+    );
+    assert!(warm.artifact.is_some(), "{:?}", warm.diagnostics);
+    assert_eq!(warm.stats.compiled_functions, 0);
+    assert_eq!(warm.stats.reused_functions, artifact.functions.len());
+    // A policy change must not hit a warm function compiled under the warning mode.
+    warm_project.program.call_compatibility.user_argument_policy =
+        erabasic_compat::UserCallArgumentPolicy::RejectExcess;
+    let strict = compile_project(
+        &warm_project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        Some(&warm.incremental_state),
+    );
+    assert!(strict.artifact.is_none());
+    assert!(strict.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == CompilerDiagnosticCode::InvalidHir
+            && diagnostic.severity == CompilerDiagnosticSeverity::Error
+    }));
+}
+
+#[test]
+fn reference_static_calls_and_direct_methods_keep_excess_argument_errors() {
+    for statement in ["CALL TAKE, 1, 2", "RESULT = METH(1, 2)"] {
+        let report = compile_project(
+            &analyze(&format!(
+                "@SYSTEM_TITLE\n{statement}\nRETURN\n@TAKE(ARG)\nRETURN\n@METH(ARG)\n#FUNCTION\nRETURNF ARG\n"
+            )),
+            &CompilerOptions::default(),
+            &default_host_registry(),
+            None,
+        );
+        assert!(report.artifact.is_none());
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == CompilerDiagnosticCode::InvalidHir
+                && diagnostic.severity == CompilerDiagnosticSeverity::Error
+        }));
+    }
 }
 
 #[test]
@@ -469,11 +587,11 @@ fn dynamic_call_uses_vm_resolution_before_argument_evaluation() {
         .as_slice();
     assert!(
         code.iter()
-            .any(|instruction| instruction.opcode == Opcode::ResolveFunction as u16)
+            .any(|instruction| instruction.opcode == Opcode::ResolveUserCall as u16)
     );
     assert!(
         code.iter()
-            .any(|instruction| instruction.opcode == Opcode::InvokeDynamic as u16)
+            .any(|instruction| instruction.opcode == Opcode::InvokeUserCall as u16)
     );
 }
 
@@ -1312,6 +1430,63 @@ RETURNF 2
     }
     assert!(!names.contains("html_stringlen") && !names.contains("html_stringlines"));
 }
+
+#[test]
+fn dynamic_form_and_list_calls_share_lazy_slots_and_explicit_method_discard() {
+    use erabasic_bytecode::{UserCallMode, UserCallSpec};
+    let project = analyze(
+        "@SYSTEM_TITLE\nCALLFORMF METHOD_TARGET(3)\nTRYCALLFORM MISSING(1 / LOCAL:1)\nTRYCALLLIST\nFUNC MISSING, 1 / LOCAL\nFUNC LIST_TARGET, 7\nENDFUNC\nRETURN\n@METHOD_TARGET(ARG)\n#FUNCTION\nRETURNF ARG + 1\n@LIST_TARGET(ARG)\nRETURN\n",
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = report.artifact.expect("dynamic form/list calls compile");
+    let code = &artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .code;
+    assert!(
+        code.iter()
+            .all(|instruction| !matches!(instruction.opcode, 36 | 37))
+    );
+    let specs = code
+        .iter()
+        .filter(|instruction| instruction.opcode == Opcode::ResolveUserCall as u16)
+        .map(|instruction| UserCallSpec::decode(&instruction.payload).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(specs.len(), 4);
+    assert_eq!(specs[0].mode, UserCallMode::MethodDiscard);
+    assert!(
+        specs[1..]
+            .iter()
+            .all(|spec| spec.mode == UserCallMode::Procedure && spec.allow_missing)
+    );
+    for (resolve, instruction) in code
+        .iter()
+        .enumerate()
+        .filter(|(_, instruction)| instruction.opcode == Opcode::ResolveUserCall as u16)
+    {
+        let spec = UserCallSpec::decode(&instruction.payload).unwrap();
+        if spec.allow_missing {
+            assert_eq!(
+                code[spec.missing_target as usize],
+                erabasic_bytecode::opcode::abandon_user_call(u32::try_from(resolve).unwrap())
+            );
+        }
+        assert_eq!(code[resolve + 1].opcode, Opcode::GuardUserArgument as u16);
+    }
+    let validation = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &ValidationContext::for_artifact(&artifact),
+    );
+    assert!(validation.is_valid(), "{:?}", validation.diagnostics);
+}
+
 
 fn analyze_call_dependency_sources(
     caller: &str,

@@ -23,6 +23,7 @@ pub struct RuntimeVm {
     pending_natives: Option<(NativeServiceRegistry, Option<ColumnIdentityStamp>)>,
     candidate_base_column_stamp: CandidateColumnBase,
     line_columns: u32,
+    pending_completion_events: Vec<VmPortEvent>,
 }
 
 /// Distinguish an unforked runtime from a fork whose artifact has no structured services.
@@ -71,6 +72,7 @@ impl RuntimeVm {
             pending_natives,
             candidate_base_column_stamp: _,
             line_columns: _,
+            pending_completion_events: _,
         } = self;
         drop(natives);
         drop(pending_natives);
@@ -103,6 +105,11 @@ impl RuntimeVm {
     ///
     /// Returns an error when a registered Native service cannot be snapshotted.
     pub fn fork_isolated(&self) -> Result<Self, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::InvalidState(
+                "pending Host completion events must be delivered before forking".into(),
+            ));
+        }
         let mut vm = self.vm.clone();
         vm.fibers.clear();
         vm.runnable.clear();
@@ -127,17 +134,26 @@ impl RuntimeVm {
                     .map_err(VmError::Snapshot)?,
             ),
             line_columns: self.line_columns,
+            pending_completion_events: Vec::new(),
         })
     }
 
-    #[must_use]
-    pub fn into_candidate_state(self) -> PreparedCandidateState {
-        PreparedCandidateState {
+    /// Consume a completed candidate after all terminal completion events were delivered.
+    ///
+    /// # Errors
+    /// Rejects a candidate whose Host outcome has not yet been observed by its caller.
+    pub fn into_candidate_state(self) -> Result<PreparedCandidateState, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::InvalidState(
+                "candidate has undelivered Host completion events".into(),
+            ));
+        }
+        Ok(PreparedCandidateState {
             artifact_id: self.vm.artifact_id(),
             base_column_stamp: self.candidate_base_column_stamp,
             memory: self.vm.memory,
             natives: self.natives,
-        }
+        })
     }
 
     /// Atomically install candidate memory and Native services without replacing
@@ -150,6 +166,11 @@ impl RuntimeVm {
         &mut self,
         candidate: PreparedCandidateState,
     ) -> Result<(), VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::InvalidState(
+                "pending Host completion events must be delivered before candidate commit".into(),
+            ));
+        }
         if candidate.artifact_id != self.vm.artifact_id() {
             return Err(VmError::InvalidState(
                 "candidate state belongs to another artifact".into(),
@@ -178,6 +199,7 @@ impl RuntimeVm {
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         runtime.refresh_draw_line_string();
         runtime
@@ -192,6 +214,7 @@ impl RuntimeVm {
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         runtime.refresh_draw_line_string();
         runtime
@@ -215,6 +238,7 @@ impl RuntimeVm {
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         runtime.refresh_draw_line_string();
         runtime
@@ -234,6 +258,7 @@ impl RuntimeVm {
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         runtime.refresh_draw_line_string();
         runtime
@@ -255,6 +280,7 @@ impl RuntimeVm {
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         runtime.refresh_draw_line_string();
         runtime
@@ -373,6 +399,18 @@ impl RuntimeVm {
             .fibers
             .values()
             .any(|fiber| matches!(fiber.state, FiberState::Runnable))
+    }
+
+    /// Whether a committed Host outcome still needs delivery to the runtime.
+    #[must_use]
+    pub fn has_pending_events(&self) -> bool {
+        !self.pending_completion_events.is_empty()
+    }
+
+    /// Whether driving can deliver an event or execute a runnable fiber.
+    #[must_use]
+    pub fn has_work(&self) -> bool {
+        self.has_pending_events() || self.has_runnable_fibers()
     }
 
     /// Export the exact SFMT stream position used by RAND natives.
@@ -541,6 +579,13 @@ impl RuntimeVm {
         mode: VmDriveMode,
         immediate: &mut impl VmHost,
     ) -> VmPortDriveReport {
+        if !self.pending_completion_events.is_empty() {
+            return VmPortDriveReport {
+                stop: VmPortStop::Idle,
+                instructions: 0,
+                events: std::mem::take(&mut self.pending_completion_events),
+            };
+        }
         self.vm.retire_terminal_fibers();
         if matches!(mode, VmDriveMode::SelectedFiber(_)) {
             return VmPortDriveReport {
@@ -664,7 +709,13 @@ impl VmRuntimePort for RuntimeVm {
     }
 
     fn retire_terminal_fibers(&mut self) -> usize {
-        self.vm.retire_terminal_fibers()
+        if self.has_pending_events() {
+            // The caller has not observed the terminal state yet. Retiring it can
+            // otherwise discard the primary identity before event dispatch.
+            0
+        } else {
+            self.vm.retire_terminal_fibers()
+        }
     }
 
     fn validate_host_completion(
@@ -734,9 +785,16 @@ impl VmRuntimePort for RuntimeVm {
         }
         match completion.completion {
             VmHostCompletion::Ready(ready) => self.vm.resume_host(completion.request, ready),
-            VmHostCompletion::ReturnCurrent(value) => self
-                .vm
-                .return_current_from_host(completion.request, value.as_ref()),
+            VmHostCompletion::ReturnCurrent(value) => {
+                let fiber = self
+                    .vm
+                    .return_current_from_host(completion.request, value.as_ref())?;
+                if let Some(FiberStatus::Completed(value)) = self.vm.fiber_status(fiber) {
+                    self.pending_completion_events
+                        .push(VmPortEvent::FiberCompleted(fiber, value));
+                }
+                Ok(fiber)
+            }
             VmHostCompletion::Pending {
                 stability,
                 rebind_payload,
@@ -778,22 +836,47 @@ impl VmRuntimePort for RuntimeVm {
     }
 
     fn snapshot_eligibility(&self) -> SnapshotEligibility {
+        if !self.pending_completion_events.is_empty() {
+            return SnapshotEligibility::Ineligible(vec![
+                crate::SnapshotBlocker::PendingCompletionEvents,
+            ]);
+        }
         self.vm.snapshot_eligibility(&self.natives)
     }
 
     fn snapshot(&self) -> Result<VmSnapshot, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::Snapshot(
+                "host completion events have not been delivered".into(),
+            ));
+        }
         self.vm.snapshot(&self.natives)
     }
 
     fn encode_snapshot(&self) -> Result<Vec<u8>, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::Snapshot(
+                "host completion events have not been delivered".into(),
+            ));
+        }
         self.vm.encode_snapshot(&self.natives)
     }
 
     fn encode_unrestricted_snapshot(&self) -> Result<Vec<u8>, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::Snapshot(
+                "host completion events have not been delivered".into(),
+            ));
+        }
         self.vm.encode_unrestricted_snapshot(&self.natives)
     }
 
     fn prepare_hot_reload(&mut self, target: ValidatedArtifact) -> Result<(), VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::HotReload(
+                "host completion events have not been delivered".into(),
+            ));
+        }
         let base_column_stamp = self
             .natives
             .column_identity_stamp()
@@ -960,6 +1043,7 @@ impl VmRestorePort for RuntimeVm {
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         Ok(PreparedVmRestore {
             runtime,

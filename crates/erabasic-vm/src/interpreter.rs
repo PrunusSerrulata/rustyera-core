@@ -13,11 +13,12 @@ use crate::{
     ImmediateHostCall, ImmediateHostCallResult, NativeCallRequest, NativePlaceView, NativeReady,
     NativeServiceRegistry, PlaceDescriptor, RunBudget, Vm, VmError, VmEvent, VmFault, VmFaultCode,
     VmHost, VmRunReport, VmRunStop, VmValue, WaitingHost, bind_persistent_arguments, make_frame,
-    prepare_dynamic_arguments, validate_arguments,
+    validate_arguments,
 };
 
 mod arithmetic;
 mod character_ops;
+pub(crate) mod compatibility_diagnostics;
 mod dispatch;
 pub(crate) mod dynamic_form;
 mod extended_ops;
@@ -28,7 +29,10 @@ mod operand;
 mod scheduler;
 
 use character_ops::{character_series, execute_character_mutation, execute_character_query};
-use dynamic_form::{RuntimeFormStep, begin_runtime_form, resume_runtime_form};
+use dynamic_form::{
+    RuntimeFormStep, begin_runtime_form,
+    resume_runtime_form,
+};
 use extended_ops::{
     array_snapshot_any_rank, execute_array_copy, execute_array_multi_sort,
     execute_array_multi_sort_ex, execute_random_place_transaction, execute_regex_match,

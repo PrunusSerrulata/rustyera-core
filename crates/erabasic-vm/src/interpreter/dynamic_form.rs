@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use erabasic_ast::{Alignment, BinaryOp, Expr, ExprKind, FormPart, FormattedString, UnaryOp};
 use erabasic_bytecode::{BytecodeFunctionKind, BytecodeType, SymbolKey};
 use erabasic_parser::{DefaultParserContext, parse_formatted_at};
@@ -8,12 +6,12 @@ use serde::{Deserialize, Serialize};
 use super::{StepError, map_vm_error};
 use crate::{
     Fiber, FrameId, GenerationId, HostReady, NativeServiceRegistry, Vm, VmFaultCode, VmValue,
-    bind_persistent_arguments, make_frame, prepare_dynamic_arguments,
 };
 
 mod frontend;
 mod methods;
 mod support;
+mod typing;
 
 use frontend::parse_runtime_form;
 use support::{binary_tag, owner_frame, owner_frame_mut, resource_limit, unary_tag, unsupported};
@@ -29,7 +27,7 @@ pub(crate) struct RuntimeFormContinuation {
     work: Vec<RuntimeFormTask>,
     values: Vec<VmValue>,
     outputs: Vec<String>,
-    awaiting_user_result: Option<BytecodeType>,
+    awaiting_user_call: Option<methods::RuntimeUserWait>,
     remaining_nodes: usize,
     remaining_source_bytes: usize,
 }
@@ -75,8 +73,8 @@ enum RuntimeFormTask {
         fallback: Option<Expr>,
         arguments: Vec<Option<Expr>>,
     },
-    MethodArgument(methods::RuntimeMethodCall),
-    CaptureMethodArgument(methods::RuntimeMethodCall),
+    MethodArgument(methods::RuntimeUserCall),
+    CaptureMethodArgument(methods::RuntimeUserCall),
     ExistsMethod,
 }
 
@@ -127,7 +125,7 @@ pub(super) fn begin_runtime_form(
         ],
         values: Vec::new(),
         outputs: Vec::new(),
-        awaiting_user_result: None,
+        awaiting_user_call: None,
         remaining_nodes: node_limit.saturating_sub(nodes),
         remaining_source_bytes: MAX_RUNTIME_FORM_BYTES.saturating_sub(source.len()),
     };
@@ -224,22 +222,8 @@ impl RuntimeFormContinuation {
         fiber: &mut Fiber,
         natives: &mut NativeServiceRegistry,
     ) -> Result<RuntimeFormStep, StepError> {
-        if let Some(expected) = self.awaiting_user_result {
-            let owner = owner_frame_mut(fiber, self.frame)?;
-            let value = owner.stack.pop().ok_or_else(|| {
-                StepError::new(
-                    VmFaultCode::InvalidInstruction,
-                    "STRFORM user function result is missing",
-                )
-            })?;
-            if value.value_type() != expected {
-                return Err(StepError::new(
-                    VmFaultCode::TypeMismatch,
-                    "STRFORM method returned an incompatible type",
-                ));
-            }
-            self.values.push(value);
-            self.awaiting_user_result = None;
+        if self.awaiting_user_call.is_some() {
+            self.finish_user_wait(vm, fiber)?;
             self.check_resources(vm)?;
             return Ok(RuntimeFormStep::Pending);
         }
@@ -428,10 +412,10 @@ impl RuntimeFormContinuation {
                 let actual = self.pop_value("STRFORM method argument is missing")?;
                 let slot = call.next_slot;
                 call.captured[slot] = Some(
-                    vm.capture_method_argument(
+                    vm.capture_user_argument(
                         fiber,
                         self.frame,
-                        &call.method,
+                        &call.call,
                         &call.specs,
                         slot,
                         actual,
@@ -452,7 +436,7 @@ impl RuntimeFormContinuation {
                     StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
                 })?;
                 self.values
-                    .push(VmValue::Integer(crate::state::methods::exists_method(
+                    .push(VmValue::Integer(crate::state::user_calls::exists_method(
                         program,
                         self.generation,
                         &name,
@@ -603,7 +587,11 @@ impl RuntimeFormContinuation {
                     .generations
                     .get(&self.generation)
                     .is_some_and(|program| program.function_by_name(&name).is_some());
-                if !user_defined && self.schedule_method(&name, &args)? {
+                if user_defined {
+                    self.schedule_direct_user_call(vm, &name, args)?;
+                    return Ok(());
+                }
+                if self.schedule_method(&name, &args)? {
                     return Ok(());
                 }
                 let count = args.len();
@@ -635,64 +623,16 @@ impl RuntimeFormContinuation {
         name: &str,
         arguments: Vec<VmValue>,
     ) -> Result<(), StepError> {
-        let generation = Arc::clone(vm.generations.get(&self.generation).ok_or_else(|| {
-            StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
-        })?);
-        if let Some(target) = generation.function_by_name(name).cloned() {
-            if target.kind != BytecodeFunctionKind::Method || target.result.is_none() {
-                return Err(StepError::new(
-                    VmFaultCode::TypeMismatch,
-                    format!("STRFORM target {name} is not a value-returning function"),
-                ));
-            }
-            if target
-                .parameters
-                .iter()
-                .any(|parameter| parameter.by_reference)
-            {
-                return Err(unsupported(format!(
-                    "STRFORM target {name} requires a reference argument"
-                )));
-            }
-            if fiber.frames.len() >= vm.config.maximum_call_depth {
-                return Err(resource_limit(
-                    "maximum call depth exceeded during STRFORM expansion",
-                ));
-            }
-            let arguments = prepare_dynamic_arguments(
-                &target,
-                arguments,
-                generation.artifact.call_compatibility,
-            )
-            .map_err(map_vm_error)?;
-            vm.memory.ensure_function_statics(
-                self.generation,
-                target.key,
-                generation.function_statics(target.key),
-            );
-            bind_persistent_arguments(
-                &mut vm.memory,
-                self.generation,
-                &target,
-                &generation,
-                &arguments,
-            )
-            .map_err(map_vm_error)?;
-            let event_context = owner_frame(fiber, self.frame)?.event_context;
-            let frame_id = vm.allocate_frame_id();
-            fiber.frames.push(make_frame(
-                frame_id,
-                self.generation,
-                &target,
-                generation.function_locals(target.key),
-                arguments,
-                true,
-                event_context,
+        let generation =
+            std::sync::Arc::clone(vm.generations.get(&self.generation).ok_or_else(|| {
+                StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
+            })?);
+        if generation.function_by_name(name).is_some() {
+            return Err(StepError::new(
+                VmFaultCode::InvalidInstruction,
+                "user call bypassed lazy runtime-form resolver",
             ));
-            self.awaiting_user_result = target.result;
-            return Ok(());
         }
-
         if name.eq_ignore_ascii_case("STRFORM") {
             let [VmValue::String(source)] = arguments.as_slice() else {
                 return Err(StepError::new(
@@ -738,7 +678,6 @@ impl RuntimeFormContinuation {
                         .iter()
                         .zip(&arguments)
                         .all(|(expected, value)| *expected == value.value_type())
-                    && natives.contains(native.key)
             })
             .cloned()
             .ok_or_else(|| {
@@ -747,6 +686,7 @@ impl RuntimeFormContinuation {
                     format!("STRFORM callable {name} has no compatible runtime import"),
                 )
             })?;
+        typing::require_native_provider(natives, &native)?;
         if matches!(
             native.result,
             Some(BytecodeType::IntegerPlace | BytecodeType::StringPlace)

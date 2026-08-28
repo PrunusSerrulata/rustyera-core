@@ -29,7 +29,10 @@ pub use host::{
 };
 pub use ids::{Digest, SymbolKey};
 pub use isa::{BytecodeType, EncodedInstruction, InstructionPayload, Opcode, opcode};
-pub use method_call::{MethodArgumentSpec, MethodCallSpec, MethodResult};
+pub use method_call::{
+    MethodResult, UserArgumentAdvance, UserArgumentSpec, UserCallMode,
+    UserCallSpec,
+};
 pub use patch::{BytecodePatch, PatchError, apply_patch, create_patch};
 pub use source_map::{ResolvedSourceLocation, SourceMap, SourceMapEntry, SourceRecord};
 pub use version::{
@@ -39,3 +42,6 @@ pub use version::{
 
 /// Eight-byte marker at the beginning of every `.erbc` file.
 pub const BYTECODE_MAGIC: [u8; 8] = *b"RERABC\0\0";
+
+mod runtime_symbols;
+pub use runtime_symbols::RuntimeExpressionShape;

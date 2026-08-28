@@ -4,6 +4,7 @@ use super::super::*;
 
 mod client;
 mod configuration;
+mod diagnostics;
 mod load;
 mod reload;
 

@@ -120,16 +120,17 @@ impl Builder<'_> {
                                     ),
                                 ));
                             }
-                            if arguments.len() > target_function.parameters.len() {
-                                self.diagnostics.push(CompilerDiagnostic::at(
-                                    CompilerDiagnosticCode::InvalidHir,
-                                    location,
+                            self.reject_excess_user_arguments(
+                                arguments.len(),
+                                target_function.parameters.len(),
+                                location,
+                                || {
                                     format!(
                                         "method {} receives too many arguments",
                                         target_function.name
-                                    ),
-                                ));
-                            }
+                                    )
+                                },
+                            );
                             let mut user_parameter_types = Vec::new();
                             for (index, parameter) in target_function.parameters.iter().enumerate()
                             {

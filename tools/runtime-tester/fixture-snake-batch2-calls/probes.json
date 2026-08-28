@@ -1,0 +1,24 @@
+{
+  "status": "must_probe_no_golden",
+  "instructions": "Do not send this file to the comparison driver as cases.json. First execute source/requests after authorized gates, record actual load/runtime stage, category and side effects; then promote verified expectations.",
+  "common": [
+    {
+      "entry": "COMMON_EXTRA",
+      "oracles": [
+        "original",
+        "snake"
+      ],
+      "watch": [
+        "FLAG:0",
+        "FLAG:1",
+        "FLAG:9"
+      ],
+      "sourceFacts": {
+        "snake": "ConvertArg loops only fixed formal count, no excess rejection; subsequent SetTransporter reads converted prefix",
+        "original": "Process.CalledFunction.cs:164 rejects excess count before transport"
+      },
+      "unknown": "Exact load-vs-runtime error phase and normalized diagnostic for original CALLFORM must be captured.",
+      "sourceFile": "probe-sources/common-extra.erb.txt"
+    }
+  ]
+}

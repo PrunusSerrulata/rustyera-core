@@ -30,14 +30,12 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
             },
         );
     };
+    for name in ["ABS", "SIGN", "SQRT", "CBRT", "LOG", "LOG10", "EXPONENT"] {
+        // Fixed arity is checked even in a discarded user-call tail. Keep the
+        // existing operand constraint; snake's lazy user arity never applies here.
+        add(name, IntType, &[Any], 1, false);
+    }
     for name in [
-        "ABS",
-        "SIGN",
-        "SQRT",
-        "CBRT",
-        "LOG",
-        "LOG10",
-        "EXPONENT",
         "GETBIT",
         "BITCOUNT",
         "CHARANUM",

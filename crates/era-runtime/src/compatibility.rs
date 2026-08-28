@@ -182,6 +182,10 @@ pub(crate) fn configuration_error(
         }),
         notification: era_runtime_protocol::DiagnosticNotification::default(),
         context: Some(Box::new(CompatibilityDiagnosticContext {
+            artifact: None,
+            project_load_id: None,
+            runtime_epoch: None,
+            generation: None,
             identity: None,
             stage: "configuration".into(),
             api: None,
@@ -203,6 +207,10 @@ pub(crate) fn attach_diagnostic_identity(
         .to_owned();
     let context = diagnostic.context.get_or_insert_with(|| {
         Box::new(CompatibilityDiagnosticContext {
+            artifact: None,
+            project_load_id: None,
+            runtime_epoch: None,
+            generation: None,
             identity: None,
             stage,
             api: None,
@@ -211,6 +219,16 @@ pub(crate) fn attach_diagnostic_identity(
     });
     if context.identity.is_none() {
         context.identity = Some(identity.clone());
+    }
+}
+
+/// Reusable diagnostic templates cannot retain a previous runtime publication scope.
+pub(crate) fn clear_diagnostic_scope(diagnostic: &mut ProtocolDiagnostic) {
+    if let Some(context) = &mut diagnostic.context {
+        context.artifact = None;
+        context.project_load_id = None;
+        context.runtime_epoch = None;
+        context.generation = None;
     }
 }
 

@@ -8,7 +8,7 @@ use super::*;
 fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
     catalog::validate_catalog();
     let specs = rera_catalog();
-    assert_eq!(specs.len(), 87);
+    assert_eq!(specs.len(), 88);
     let mappings = specs
         .iter()
         .map(|spec| (spec.code, spec.id, spec.path))
@@ -23,6 +23,11 @@ fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
             "text.replace_full_width_spaces",
         ),
         ("CharacterWidthMode", 127, "text.character_width_mode"),
+        (
+            "StrictUserCallArguments",
+            128,
+            "diagnostics.strict_user_call_arguments",
+        ),
     ] {
         assert!(
             mappings.contains(&expected),

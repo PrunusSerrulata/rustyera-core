@@ -1,6 +1,22 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+pub(super) fn encode_diagnostic_templates(
+    diagnostics: &[ProtocolDiagnostic],
+    kind: ProjectContainerKind,
+    cancelled: Option<&AtomicBool>,
+) -> Result<Vec<u8>, String> {
+    let templates = diagnostics
+        .iter()
+        .cloned()
+        .map(|mut diagnostic| {
+            crate::compatibility::clear_diagnostic_scope(&mut diagnostic);
+            diagnostic
+        })
+        .collect::<Vec<_>>();
+    encode_section(&templates, kind, cancelled)
+}
+
 pub(super) fn encode_section<T: Serialize + ?Sized>(
     value: &T,
     kind: ProjectContainerKind,

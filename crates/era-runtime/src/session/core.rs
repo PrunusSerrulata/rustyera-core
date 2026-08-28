@@ -170,6 +170,8 @@ impl RuntimeSession {
             candidate_clock: None,
             compiled_project_cache: None,
             compiled_cache_diagnostics: Vec::new(),
+            project_load_id: 0,
+            project_diagnostic_publication: None,
             compiled_cache_task: None,
             compiled_cache_failure: None,
             full_project_file: None,
@@ -310,7 +312,9 @@ impl RuntimeSession {
             if self.phase == RuntimePhase::WaitingInput && !self.queued_input.is_empty() {
                 break;
             }
-            if self.phase == RuntimePhase::Running && instructions < budget.maximum_vm_instructions
+            if self.phase == RuntimePhase::Running
+                && (instructions < budget.maximum_vm_instructions
+                    || self.vm.as_ref().is_some_and(RuntimeVm::has_pending_events))
             {
                 let remaining = budget.maximum_vm_instructions - instructions;
                 let Some(mut vm) = self.vm.take() else {
@@ -336,32 +340,31 @@ impl RuntimeSession {
                     vm.retire_terminal_fibers();
                     self.operations.html_lines.retain_live(&vm);
                     if self.operations.active_input().is_some()
-                        && !vm.has_runnable_fibers()
+                        && !vm.has_work()
                         && self.phase == RuntimePhase::Running
                         && self.deferred_input_completion.is_none()
                     {
                         self.set_phase(RuntimePhase::WaitingInput)?;
                     }
-                    Ok::<_, RuntimeError>((executed, stop, made_progress, vm.has_runnable_fibers()))
+                    Ok::<_, RuntimeError>((executed, stop, made_progress, vm.has_work()))
                 })();
                 // Quantum processing can fail after the VM has been removed from the session.
                 // Reinstall it before propagating that error so a later drive cannot report
                 // the unrelated and misleading "running phase has no VM" fault.
                 self.vm = Some(vm);
-                let (executed, stop, made_progress, has_runnable_fibers) = quantum?;
+                let (executed, stop, made_progress, has_work) = quantum?;
                 instructions = instructions.saturating_add(executed);
                 if let Some(submission) = self.deferred_input_completion.take() {
                     self.finish_input(submission, false)?;
                 }
                 transitions += 1;
-                // A synchronous host-call event immediately makes its idle fiber runnable again.
-                // Keep servicing such calls in this drive so PRINT-heavy scripts need no FFI
-                // trip per display fragment. External waits, input, faults, and debug stops still
-                // leave no runnable fiber or change phase and therefore cross the caller boundary.
+                // Synchronous calls either resume a fiber or queue its terminal event.
+                // Deliver both in this drive, within the transition budget. External
+                // waits and debug stops still cross the caller boundary.
                 if self.phase != RuntimePhase::Running
                     || stop == VmPortStop::DebugStopped
                     || !made_progress
-                    || !has_runnable_fibers
+                    || !has_work
                 {
                     break;
                 }
@@ -433,7 +436,7 @@ impl RuntimeSession {
             RuntimeDriveState::OutputReady
         } else if !self.inbound.is_empty()
             || (self.phase == RuntimePhase::Running
-                && self.vm.as_ref().is_some_and(RuntimeVm::has_runnable_fibers))
+                && self.vm.as_ref().is_some_and(RuntimeVm::has_work))
         {
             RuntimeDriveState::MoreWork
         } else {

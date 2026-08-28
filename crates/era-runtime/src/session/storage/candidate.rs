@@ -167,7 +167,7 @@ impl RuntimeSession {
                 synchronize_line_count(&mut self.presentation, &mut candidate)?;
                 let report = candidate.drive(
                     RunBudget {
-                        maximum_instructions: maximum.saturating_sub(executed).max(1),
+                        maximum_instructions: maximum.saturating_sub(executed),
                         maximum_host_calls: self.options.limits.maximum_pending_requests,
                         fiber_quantum: RunBudget::default().fiber_quantum,
                     },
@@ -184,7 +184,7 @@ impl RuntimeSession {
                             notification,
                             ..
                         } => candidate_diagnostics.push(ProtocolDiagnostic {
-                            context: None,
+                            context: self.vm_diagnostic_context(&candidate, &origin, &code),
                             code,
                             level: RuntimeLogLevel::Warning,
                             message,
@@ -211,12 +211,12 @@ impl RuntimeSession {
                 if completed {
                     return Ok(());
                 }
-                if executed >= maximum {
+                if executed >= maximum && !candidate.has_pending_events() {
                     return Err(RuntimeError::ResourceLimit(
                         "candidate SAVEINFO exceeded its instruction budget",
                     ));
                 }
-                if !candidate.has_runnable_fibers() {
+                if !candidate.has_work() {
                     return Err(RuntimeError::Internal(
                         "candidate SAVEINFO attempted to suspend".into(),
                     ));
@@ -289,7 +289,9 @@ impl RuntimeSession {
         .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         Ok((
             PendingCandidateCommit {
-                state: candidate.into_candidate_state(),
+                state: candidate
+                    .into_candidate_state()
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?,
                 presentation: candidate_presentation,
                 project_snapshot: candidate_project,
                 message_skip: candidate_flags.0,

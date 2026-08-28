@@ -636,6 +636,26 @@ struct ActiveDebugGrant {
     scopes: BTreeSet<DebugScope>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProjectDiagnosticScope {
+    artifact: [u8; 32],
+    project_load_id: u64,
+    runtime_epoch: u64,
+    generation: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ProjectDiagnosticSite {
+    code: String,
+    source: Option<(String, u64, u64)>,
+}
+
+#[derive(Clone, Debug)]
+struct ProjectDiagnosticPublication {
+    scope: ProjectDiagnosticScope,
+    sites: BTreeSet<ProjectDiagnosticSite>,
+}
+
 /// Single-owner runtime actor. Methods only enqueue, drive, and dequeue messages;
 /// no frontend code can run inside a VM instruction dispatch.
 #[allow(clippy::struct_excessive_bools)]
@@ -745,6 +765,9 @@ pub struct RuntimeSession {
     candidate_clock: Option<LocalDateTimeResponse>,
     compiled_project_cache: Option<Arc<Vec<u8>>>,
     compiled_cache_diagnostics: Vec<ProtocolDiagnostic>,
+    // Publication state is session-owned, never part of game snapshots or project caches.
+    project_load_id: u64,
+    project_diagnostic_publication: Option<ProjectDiagnosticPublication>,
     compiled_cache_task: Option<ProjectContainerTask>,
     compiled_cache_failure: Option<String>,
     full_project_file: Option<Arc<Vec<u8>>>,

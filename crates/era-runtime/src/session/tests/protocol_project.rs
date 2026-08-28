@@ -199,7 +199,7 @@ fn tui_configuration_profile_applies_defaults_and_commits_atomically() {
             .iter()
             .filter(|entry| entry.applicability & CONFIG_TUI != 0)
             .count(),
-        39
+        40
     );
     for (code, expected) in [
         ("MaxLog", "1000"),
@@ -437,7 +437,7 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
             .iter()
             .filter(|entry| entry.applicability & CONFIG_BROWSER != 0)
             .count(),
-        45
+        46
     );
     assert_eq!(
         initial

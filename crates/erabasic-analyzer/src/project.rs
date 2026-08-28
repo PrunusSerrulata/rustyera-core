@@ -490,7 +490,12 @@ fn analyze_with_context(
                 ));
             }
             let previous = symbols.function(&function.name).cloned();
-            match symbols.register_function(&function.name, kind, return_type) {
+            match symbols.register_function(
+                &function.name,
+                kind,
+                return_type,
+                function.parameters.len(),
+            ) {
                 Ok(id) => {
                     if previous.is_some()
                         && kind != FunctionKind::Event
@@ -681,6 +686,9 @@ fn analyze_with_context(
     let mut program = Program::new(sources.iter().map(|source| source.source.clone()).collect());
     program.compatibility = options.compatibility.clone();
     program.call_compatibility = erabasic_hir::CallCompatibility {
+        user_argument_policy: options
+            .compatibility
+            .user_call_argument_policy(options.strict_user_call_arguments),
         allow_event_as_normal: options.compatible_call_event,
         allow_omitted_arguments: options.compatible_function_argument_optional,
         auto_convert_integer_to_string: options.compatible_function_argument_auto_convert,

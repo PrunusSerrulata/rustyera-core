@@ -14,12 +14,14 @@ use crate::{
     VmRuntimeStateTransaction,
 };
 use erabasic_bytecode::{
-    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeFunctionKind, BytecodeGlobal,
-    BytecodeStorage, BytecodeType, Digest, ImportKind, Opcode, SourceMapEntry, SymbolKey,
+    BytecodeArtifact, BytecodeFunction, BytecodeFunctionKind, BytecodeGlobal, BytecodeStorage,
+    BytecodeType, Digest, ImportKind, Opcode, SourceMapEntry, SymbolKey,
 };
 use erabasic_validator::ValidatedArtifact;
 
 mod derived_cache;
+mod returns;
+pub(crate) use returns::FrameReturn;
 mod path_memo;
 mod planning;
 
@@ -837,10 +839,10 @@ mod compact_generation_index_tests {
 
 mod frames;
 mod lifecycle;
-pub(crate) mod methods;
 mod places;
 mod runtime;
 mod runtime_types;
+pub(crate) mod user_calls;
 
 pub use runtime_types::Vm;
 pub(crate) use runtime_types::{
@@ -853,7 +855,7 @@ pub(crate) use runtime_types::{
 
 pub(crate) use frames::{
     PersistentArgumentDestination, bind_persistent_arguments, make_frame,
-    persistent_argument_destination, prepare_dynamic_arguments, validate_arguments,
+    persistent_argument_destination, validate_arguments,
 };
 use frames::{find_frame, find_frame_mut, find_global};
 use runtime::replace_cell_values;
