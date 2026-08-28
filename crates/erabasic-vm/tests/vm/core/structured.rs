@@ -1,4 +1,34 @@
 use super::*;
+
+#[test]
+fn xml_addnode_clones_nested_content_for_every_matching_parent() {
+    let source = r#"@SYSTEM_TITLE
+#DIMS DOCUMENT
+DOCUMENT '= "<root><group id='a'/><group id='b'/></root>"
+XML_ADDNODE DOCUMENT, "//group", "<child><leaf>initial</leaf></child>", 0, 1
+XML_SET DOCUMENT, "//group[@id='a']/child/leaf", "changed", 0, 1
+RESULTS '= DOCUMENT
+RETURN
+"#;
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let artifact = compile_source_with_options(
+            source,
+            &AnalyzerOptions {
+                compatibility: erabasic_compat::CompatibilityIdentity::for_profile(profile),
+                ..AnalyzerOptions::default()
+            },
+        );
+        assert_eq!(
+            run_compiled_string_result(&artifact),
+            VmValue::String("<root><group id=\"a\"><child><leaf>changed</leaf></child></group><group id=\"b\"><child><leaf>initial</leaf></child></group></root>".into()),
+            "{profile}",
+        );
+    }
+}
+
 #[test]
 fn structured_map_native_preserves_order_and_commits_array_outputs() {
     let artifact = compile_source(
