@@ -12,13 +12,25 @@ def policy_version_integer(value):
     return value
 
 
-
 PROFILES = {"original": "emuera.em", "snake": "emuera.skia.snake"}
 OPERATION_FIELDS = {
     "eval": ("value",),
     "run": ("termination", "output", "watches"),
     "execute": ("termination", "output", "watches"),
 }
+
+
+def same_json_value(actual, expected):
+    """Preserve scalar types: Python otherwise equates 777 and 777.0 (or 1 and True)."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(actual, dict):
+        return actual.keys() == expected.keys() and all(
+            same_json_value(actual[key], expected[key]) for key in actual)
+    if isinstance(actual, list):
+        return len(actual) == len(expected) and all(
+            same_json_value(left, right) for left, right in zip(actual, expected))
+    return actual == expected
 
 
 def validate_rust_evidence(evidence, oracle, fixture, seed, required_policy=None):
@@ -162,6 +174,17 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
         fields = ["ok"]
         if actual.get("ok") and expected.get("ok"):
             fields.extend(OPERATION_FIELDS[operation])
+        elif operation in ("run", "execute"):
+            # Error presentation has no shared schema, but a fault must not hide
+            # observable state mutations. Normalize only actual script-error
+            # terminations; timeout/limit/quit/missing outcomes stay distinct.
+            for observation in (actual, expected):
+                termination = observation.get("termination")
+                observation["executionOutcome"] = (
+                    "script_error" if termination in ("error", "faulted") else termination)
+            fields.append("executionOutcome")
+            if request.get("watch"):
+                fields.append("watches")
         output_comparison = None
         output_incomparable = False
         if "output" in fields:
@@ -176,7 +199,9 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
                 for value in (actual.get(field), expected.get(field)):
                     if not isinstance(value, list) or not all(isinstance(line, str) for line in value):
                         raise ValueError("output observations must be arrays of logical lines")
-            if field not in actual or field not in expected or actual[field] != expected[field]:
+            equal = (same_json_value(actual.get(field), expected.get(field)) if field == "watches"
+                     else actual.get(field) == expected.get(field))
+            if field not in actual or field not in expected or not equal:
                 differences.append(
                     {
                         "field": field,
@@ -212,6 +237,16 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
                 "status": "incomparable_schema" if diagnostic_incomparable else "matched_empty",
                 **diagnostics,
             },
+            "rejectionComparison": {
+                "status": "matched_observed_rejection" if (
+                    actual.get("executionOutcome") == "script_error"
+                    and expected.get("executionOutcome") == "script_error"
+                    and not differences) else "not_established",
+                "watchesCompared": "watches" in compared,
+                "rustTermination": actual.get("termination"),
+                "oracleTermination": expected.get("termination"),
+                "diagnosticEquivalence": False,
+            } if "executionOutcome" in compared else None,
             "rust": rust,
             "oracle": response,
         }

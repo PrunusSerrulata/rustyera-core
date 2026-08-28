@@ -159,6 +159,12 @@ configuration source/context and validated identity match the experimental-profi
 Raw load, step output and diagnostics remain attached. The NDJSON `ok` flag means a request
 was accepted; a console `termination=error` still means execution failed. Two engine failures
 remain incomparable until diagnostic schemas can be compared; they are not compatibility passes.
+For failed run/execute requests, the comparator still compares the requested watches with exact
+JSON scalar types and the actual termination outcome. Only `error` and `faulted` map to script
+rejection; timeout, instruction limits, quit and missing outcomes are never accepted as rejection.
+`rejectionComparison=matched_observed_rejection` records this limited agreement while the overall
+result remains `incomparable` for error presentation. Raw diagnostics and output remain unchanged;
+an `expectedRejection` description does not waive either state differences or diagnostic parity.
 
 For an existing completed observation captured from the current fixture, use:
 

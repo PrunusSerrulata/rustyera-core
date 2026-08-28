@@ -100,17 +100,38 @@ class DriverTests(unittest.TestCase):
             driver.step_expectations(step, {"ok": True, "result": {"termination": "completed"}}, "original")
 
     def test_handled_oracle_request_is_not_successful_script_execution(self):
-        request = {"op": "run", "entry": "DIVIDE_ZERO"}
+        request = {"op": "run", "entry": "DIVIDE_ZERO", "watch": ["RESULT:10"]}
         case = {"id": "divide", "group": "arithmetic", "targetBatch": 2,
                 "snakeTargetStatus": "deferred_semantics", "requests": [{"request": request}]}
         rust = {"steps": [{"request": request, "status": "executed", "result": {
-            "ok": False, "termination": "faulted", "diagnostics": [{"code": "vm_fault"}]}}]}
-        response = {"ok": True, "diagnostics": [], "result": {"termination": "error"}}
+            "ok": False, "termination": "faulted", "watches": {"RESULT:10": 777},
+            "diagnostics": [{"code": "vm_fault"}]}}]}
+        response = {"ok": True, "diagnostics": [], "result": {
+            "termination": "error", "watches": {"RESULT:10": 777}}}
         result = compare_case(case, [{"request": request, "response": response}], rust)
         self.assertEqual(result["status"], "incomparable")
         self.assertEqual(result["steps"][0]["differences"], [])
         self.assertTrue(result["steps"][0]["oracleRequestAccepted"])
         self.assertEqual(result["steps"][0]["oracle"]["result"]["termination"], "error")
+        self.assertEqual(result["steps"][0]["compared"], ["ok", "executionOutcome", "watches"])
+        self.assertEqual(result["steps"][0]["rejectionComparison"]["status"], "matched_observed_rejection")
+        self.assertEqual(result["steps"][0]["diagnosticComparison"]["status"], "incomparable_schema")
+        actual = rust["steps"][0]["result"]
+        for watches in ({"RESULT:10": 0}, {"RESULT:10": "777"}, {"RESULT:10": 777.0}, {}):
+            with self.subTest(watches=watches):
+                actual["watches"] = watches
+                changed = compare_case(case, [{"request": request, "response": response}], rust)
+                self.assertEqual(changed["status"], "different")
+                self.assertEqual(changed["steps"][0]["differences"][0]["field"], "watches")
+        actual.pop("watches")
+        self.assertEqual(compare_case(case, [{"request": request, "response": response}], rust)["status"], "different")
+        actual["watches"] = {"RESULT:10": 777}
+        for termination in ("timeout", "instructionLimit", "quit", None):
+            with self.subTest(termination=termination):
+                actual["termination"] = termination
+                changed = compare_case(case, [{"request": request, "response": response}], rust)
+                self.assertEqual(changed["status"], "different")
+                self.assertEqual(changed["steps"][0]["rejectionComparison"]["status"], "not_established")
 
     def test_output_removes_only_the_exact_load_prefix_and_preserves_script_lines(self):
         load = {"result": {"output": ["Now Loading...", "Elapsed time:3ms", "COMPAT_READY"]}}
