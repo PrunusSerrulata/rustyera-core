@@ -63,6 +63,27 @@ impl CoreNative {
 /// Returns an error when the native is not in the pure whitelist, its arguments do not match the
 /// reference signature, or its ordinary evaluation reports a domain or format error.
 pub fn evaluate_pure_native(name: &str, arguments: Vec<VmValue>) -> Result<VmValue, String> {
+    evaluate_pure_native_with_compatibility(
+        name,
+        arguments,
+        &erabasic_compat::CompatibilityIdentity::reference(),
+    )
+}
+
+/// Evaluate a pure native using the active project's validated compatibility policies.
+///
+/// # Errors
+///
+/// Returns an error for an unsupported identity, unavailable native, invalid arguments, or
+/// a domain error that the selected policy does not turn into an ordinary return value.
+pub fn evaluate_pure_native_with_compatibility(
+    name: &str,
+    arguments: Vec<VmValue>,
+    compatibility: &erabasic_compat::CompatibilityIdentity,
+) -> Result<VmValue, String> {
+    compatibility
+        .validate()
+        .map_err(|error| error.to_string())?;
     let name = name.to_ascii_lowercase();
     if !matches!(
         name.as_str(),

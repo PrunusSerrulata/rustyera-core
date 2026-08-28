@@ -1,10 +1,17 @@
 //! Versioned language identity shared by every stage of the runtime pipeline.
 //!
-//! A requested dialect is separate from the policies actually implemented. The initial snake
-//! profile is experimental and intentionally retains the current reference execution policies.
+//! A requested dialect is separate from the policies actually implemented. The snake profile
+//! remains experimental while its arithmetic policy is shared by analysis and execution.
 
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+
+mod integer;
+
+pub use integer::{
+    IntegerArithmeticError, IntegerArithmeticOutcome, IntegerArithmeticPolicy,
+    IntegerArithmeticWarning, IntegerOperation,
+};
 
 #[derive(
     Clone,
@@ -111,13 +118,17 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 1,
-            CompatibilityProfileId::EmueraSkiaSnake => 2,
+            CompatibilityProfileId::EmueraSkiaSnake => 3,
         };
         Self {
             profile,
             semantic_version: version,
             policy_version: version,
-            arithmetic: "wrapping_i64_v1".into(),
+            arithmetic: match profile {
+                CompatibilityProfileId::EmueraEm => "wrapping_i64_v1",
+                CompatibilityProfileId::EmueraSkiaSnake => "snake_saturating_i64_v1",
+            }
+            .into(),
             rng_algorithm: "sfmt19937".into(),
             rng_state_version: 1,
             layout: "unicode_column_v1".into(),
@@ -133,6 +144,21 @@ impl CompatibilityIdentity {
     #[must_use]
     pub const fn is_experimental(&self) -> bool {
         matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake)
+    }
+
+    /// Arithmetic selected by this identity; callers validate identities before use.
+    #[must_use]
+    pub const fn integer_arithmetic_policy(&self) -> IntegerArithmeticPolicy {
+        match self.profile {
+            CompatibilityProfileId::EmueraEm => IntegerArithmeticPolicy::ReferenceWrappingV1,
+            CompatibilityProfileId::EmueraSkiaSnake => IntegerArithmeticPolicy::SnakeSaturatingV1,
+        }
+    }
+
+    /// Snake policy v3 returns zero when TOINT's integer reader fails.
+    #[must_use]
+    pub const fn uses_snake_numeric_read_fallback(&self) -> bool {
+        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 3
     }
 
     /// User ERD aliases and the snake built-in alias recovery rules arrived in policy v2.
@@ -188,14 +214,14 @@ mod tests {
         let reference = CompatibilityIdentity::reference();
         let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
         assert_ne!(reference.digest(), snake.digest());
-        assert_eq!(reference.arithmetic, snake.arithmetic);
+        assert_ne!(reference.arithmetic, snake.arithmetic);
         assert_eq!(reference.rng_algorithm, snake.rng_algorithm);
         assert!(snake.is_experimental());
         assert!(snake.uses_snake_alias_rules());
         assert!(!reference.uses_snake_alias_rules());
         let mut previous_snake = snake.clone();
-        previous_snake.semantic_version = 1;
-        previous_snake.policy_version = 1;
+        previous_snake.semantic_version = 2;
+        previous_snake.policy_version = 2;
         assert!(previous_snake.validate().is_err());
         assert!(reference.validate().is_ok());
         assert!(snake.validate().is_ok());

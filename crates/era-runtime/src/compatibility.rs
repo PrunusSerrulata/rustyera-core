@@ -146,7 +146,7 @@ pub(crate) fn experimental_profile_diagnostic(
     let mut diagnostic = configuration_error(
         "runtime.experimental_compatibility_profile",
         format!(
-            "profile {} is experimental: arithmetic={}, RNG={}/state{}, layout={}; snake arithmetic, RNG, REF/extra arguments, TOINT, GETKEY and pixel layout differences remain unimplemented",
+            "profile {} is experimental: arithmetic={}, RNG={}/state{}, layout={}; this identity does not imply complete snake compatibility or parity with UseNewRandom",
             identity.profile,
             identity.arithmetic,
             identity.rng_algorithm,

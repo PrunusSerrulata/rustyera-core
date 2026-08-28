@@ -43,6 +43,7 @@ pub use host::{
     HostCallRequest, HostCallResult, HostReady, HostRebindRequest, HostWaitStability,
     ImmediateHostCall, ImmediateHostCallResult, NativeCallRequest, NativePlaceView, NativeReady,
     NativeService, NativeServiceRegistry, VmHost, evaluate_pure_native,
+    evaluate_pure_native_with_compatibility,
 };
 pub use hot_reload::{HotReloadPlan, HotReloadReport};
 pub use runtime_port::{
