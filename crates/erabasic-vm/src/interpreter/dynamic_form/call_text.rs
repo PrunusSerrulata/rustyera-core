@@ -51,6 +51,29 @@ impl RuntimeFormContinuation {
         let Some(parsed) = parsed.call else {
             return Ok(());
         }; // Blank JUMP is a no-op.
+        let mut arguments = parsed
+            .arguments
+            .into_iter()
+            .map(call_text_argument)
+            .collect::<Result<Vec<_>, _>>()?;
+        // ReduceArguments resolves variable/method names and expression types before
+        // CallFunction, inside TRY. This pass only inspects source/schema: actual
+        // storage reads and argument execution remain outside the protected stage.
+        let specs = match self.prepare_call_text_arguments(vm, natives, &mut arguments) {
+            Ok(specs) => specs,
+            Err(failure)
+                if spec.mode.allows_missing()
+                    && matches!(
+                        failure.category,
+                        crate::FaultCategory::Script(
+                            crate::ScriptFaultKind::Resolve | crate::ScriptFaultKind::Argument
+                        )
+                    ) =>
+            {
+                return self.fail_call_text(spec);
+            }
+            Err(failure) => return Err(failure),
+        };
         let Some(target) = program.function_by_name(&parsed.target) else {
             if spec.mode.allows_missing() {
                 return self.fail_call_text(spec);
@@ -61,35 +84,9 @@ impl RuntimeFormContinuation {
                 format!("CALLSTR target {} is missing", parsed.target),
             ));
         };
-        // C# CallFunction rejects Method/Event here, outside TRY. Use the shared
-        // target-kind helper rather than reimplementing profile rules in this module.
+        // Target kind errors originate after argument construction and are outside TRY.
         validate_user_call_target_kind(program, target, spec.mode.user_call_mode())
             .map_err(map_vm_error)?;
-        let mut arguments = parsed
-            .arguments
-            .into_iter()
-            .map(call_text_argument)
-            .collect::<Result<Vec<_>, _>>()?;
-        // Restructure/name/type checks happen for every actual before ConvertArg,
-        // and their failures are deliberately not caught by this instruction's TRY.
-        let mut specs = Vec::with_capacity(arguments.len());
-        for argument in &mut arguments {
-            let Some(expression) = argument else {
-                specs.push(erabasic_bytecode::UserArgumentSpec::Omitted);
-                continue;
-            };
-            frontend::resolve_expression_named_indices(program, self.function, expression, 0)?;
-            let (nodes, shape) = frontend::validate_runtime_expression(
-                vm,
-                natives,
-                self.generation,
-                self.function,
-                expression,
-                self.remaining_nodes,
-            )?;
-            self.remaining_nodes = self.remaining_nodes.saturating_sub(nodes);
-            specs.push(shape);
-        }
         let resolved = bind_user_call_signature(
             program,
             self.generation,
@@ -118,6 +115,36 @@ impl RuntimeFormContinuation {
         // TRY is now over: argument execution, service/callee failures propagate normally.
         self.queue_resolved_call(vm, call, specs, arguments);
         Ok(())
+    }
+
+    fn prepare_call_text_arguments(
+        &mut self,
+        vm: &Vm,
+        natives: &NativeServiceRegistry,
+        arguments: &mut [Option<erabasic_ast::Expr>],
+    ) -> Result<Vec<erabasic_bytecode::UserArgumentSpec>, StepError> {
+        let program = vm.generations.get(&self.generation).ok_or_else(|| {
+            StepError::new(VmFaultCode::MissingSymbol, "CALLSTR generation is missing")
+        })?;
+        let mut specs = Vec::with_capacity(arguments.len());
+        for argument in arguments {
+            let Some(expression) = argument else {
+                specs.push(erabasic_bytecode::UserArgumentSpec::Omitted);
+                continue;
+            };
+            frontend::resolve_expression_named_indices(program, self.function, expression, 0)?;
+            let (nodes, shape) = frontend::validate_runtime_expression(
+                vm,
+                natives,
+                self.generation,
+                self.function,
+                expression,
+                self.remaining_nodes,
+            )?;
+            self.remaining_nodes = self.remaining_nodes.saturating_sub(nodes);
+            specs.push(shape);
+        }
+        Ok(specs)
     }
 
     fn fail_call_text(&mut self, spec: CallTextSpec) -> Result<(), StepError> {

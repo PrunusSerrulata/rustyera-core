@@ -2285,7 +2285,7 @@ RETURNF STRFORM("%RECURSE()%")
 }
 
 #[test]
-fn call_text_try_catches_binding_failure_but_not_name_restructure_or_callee_failure() {
+fn call_text_try_catches_binding_and_name_failure_but_not_callee_failure() {
     let artifact = compile_source_with_options(
         r#"@SYSTEM_TITLE
 TRYCCALLSTR "TAKE(\"bad type\")"
@@ -2294,6 +2294,7 @@ CATCH
 FLAG:0 = 1
 ENDCATCH
 TRYCALLSTR "MISSING, 7"
+TRYCALLSTR "TAKE(UNKNOWN_VARIABLE)"
 CALLSTR "TAKE(8)"
 RETURN
 @TAKE(ARG)
@@ -2320,17 +2321,15 @@ RETURN
     );
     assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(1));
     assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(8));
-    for source in [
-        "@SYSTEM_TITLE\nTRYCALLSTR \"TAKE(UNKNOWN_VARIABLE)\"\nRETURN\n@TAKE(ARG)\nRETURN\n",
+    let artifact = compile_source_with_options(
         "@SYSTEM_TITLE\nTRYCALLSTR \"TAKE(7)\"\nRETURN\n@TAKE(ARG)\nFLAG:0 = FLAG:9999999\nRETURN\n",
-    ] {
-        let artifact = compile_source_with_options(source, &method_options(true));
-        let (_, report) = run_entry(&artifact, VmConfig::default());
-        assert!(matches!(
-            take_fault(report).category,
-            erabasic_vm::FaultCategory::Script(_)
-        ));
-    }
+        &method_options(true),
+    );
+    let (_, report) = run_entry(&artifact, VmConfig::default());
+    assert!(matches!(
+        take_fault(report).category,
+        erabasic_vm::FaultCategory::Script(_)
+    ));
 }
 
 #[test]
@@ -3928,7 +3927,12 @@ fn call_text_try_catches_only_argument_reduction_missing_target_and_binding_stag
         ("TAKE(1 +)", true),
         ("MISSING(7)", true),
         ("TAKE(\"bad\")", true),
-        ("TAKE(UNKNOWN_VARIABLE)", false),
+        ("TAKE(UNKNOWN_VARIABLE)", true),
+        ("TAKE(1, UNKNOWN_VARIABLE)", true),
+        ("TAKE(SIDE(), UNKNOWN_VARIABLE)", true),
+        ("METHOD(UNKNOWN_VARIABLE)", true),
+        ("TAKE(UNKNOWN_METHOD())", true),
+        ("TAKE(1 + \"bad\")", true),
         ("METHOD()", false),
         ("TAKE(FLAG:9999999)", false),
         ("BROKEN()", false),
@@ -3936,7 +3940,7 @@ fn call_text_try_catches_only_argument_reduction_missing_target_and_binding_stag
     ] {
         let artifact = compile_source_with_options(
             &format!(
-                "@SYSTEM_TITLE\nTRYCCALLSTR {}\nFLAG:0 = 99\nCATCH\nFLAG:1 = 1\nENDCATCH\nFLAG:2 = 1\nRETURN\n@TAKE(ARG)\nRETURN\n@METHOD\n#FUNCTION\nRETURNF 1\n@BROKEN\nRESULT = FLAG:9999999\nRETURN\n",
+                "@SYSTEM_TITLE\nTRYCCALLSTR {}\nFLAG:0 = 99\nCATCH\nFLAG:1 = 1\nENDCATCH\nFLAG:2 = 1\nRETURN\n@TAKE(ARG)\nRETURN\n@METHOD\n#FUNCTION\nRETURNF 1\n@BROKEN\nRESULT = FLAG:9999999\nRETURN\n@SIDE\n#FUNCTION\nFLAG:8 += 1\nRETURNF 1\n",
                 serde_json::to_string(text).unwrap(),
             ),
             &method_options(true),
@@ -3971,6 +3975,7 @@ fn call_text_try_catches_only_argument_reduction_missing_target_and_binding_stag
             assert_method_watch(&vm, &artifact, "FLAG", 2, VmValue::Integer(0));
         }
         assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(0));
+        assert_method_watch(&vm, &artifact, "FLAG", 8, VmValue::Integer(0));
     }
 }
 
