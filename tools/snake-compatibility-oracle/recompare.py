@@ -12,14 +12,21 @@ from run import FIXTURE, identity, subset, validate_load
 
 def recorded_steps(evidence, case, load_expect=None):
     records = [record for record in evidence["requests"] if record["case"] == case["id"]]
-    if not records or records[0]["request"].get("op") != "load":
+    # Current captures include the handshake; older completed captures start at load.
+    # Accept only that exact prefix, without discarding arbitrary recorded operations.
+    offset = 0
+    if records and records[0]["request"] == {"op": "capabilities"}:
+        subset(records[0]["response"], {"ok": True, "result": {
+            "observationVersions": {"presentationSnapshot": 1, "headlessInputTrace": 1}}})
+        offset = 1
+    if len(records) <= offset or records[offset]["request"].get("op") != "load":
         raise ValueError(f"missing initial load for {case['id']}")
-    load = records[0]["response"]
+    load = records[offset]["response"]
     validate_load(load, load_expect)
     count = len(case["requests"])
-    steps = records[1:1 + count]
+    steps = records[offset + 1:]
     if len(steps) != count:
-        raise ValueError(f"missing steps for {case['id']}")
+        raise ValueError(f"unexpected step count for {case['id']}")
     for planned, recorded in zip(case["requests"], steps):
         if planned["request"] != recorded["request"]:
             raise ValueError(f"recorded input differs for {case['id']}")

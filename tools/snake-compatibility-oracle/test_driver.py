@@ -169,6 +169,30 @@ class DriverTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             recorded_steps(evidence, case)
 
+    def test_offline_record_selection_validates_optional_capability_prefix(self):
+        request = {"op": "eval", "source": "1"}
+        case = {"id": "case", "requests": [{"request": request}]}
+        envelope = {"ok": True, "schemaVersion": 2, "referenceCommit": "a" * 40}
+        handshake = {"case": "case", "request": {"op": "capabilities"}, "response": {
+            **envelope, "result": {"observationVersions": {
+                "presentationSnapshot": 1, "headlessInputTrace": 1}}}}
+        load = {"case": "case", "request": {"op": "load"}, "response": envelope}
+        step = {"case": "case", "request": request, "response": envelope}
+        evidence = {"semanticBaseline": "a" * 40, "requests": [handshake, load, step]}
+        self.assertEqual(recorded_steps(evidence, case), (envelope, [step]))
+        for records in ([handshake], [handshake, handshake, load, step],
+                        [handshake, load, step, step], [load, handshake, step],
+                        [{**handshake, "request": {"op": "reset"}}, load, step]):
+            with self.subTest(records=records), self.assertRaises(ValueError):
+                recorded_steps({**evidence, "requests": records}, case)
+        for response in ({**envelope, "ok": False},
+                         {**handshake["response"], "referenceCommit": "b" * 40},
+                         {**handshake["response"], "schemaVersion": 3}):
+            with self.subTest(response=response), self.assertRaises(AssertionError):
+                recorded_steps({**evidence, "requests": [
+                    {**handshake, "response": response}, load, step]}, case)
+
+
     def test_rng_assertions_preserve_the_pinned_snake_state_loss(self):
         case = {"assertions": ["rng_roundtrip"]}
         snake = SimpleNamespace(args=SimpleNamespace(oracle="snake"))
