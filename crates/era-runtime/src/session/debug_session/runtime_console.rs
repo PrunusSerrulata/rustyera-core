@@ -10,8 +10,8 @@ use era_debug_protocol::{
 use erabasic_vm::{VmDebugControl, VmDebugInspect, VmDebugVariableWrite};
 
 use super::{
-    RuntimeError, RuntimeSession, console_diagnostic, parse_console_expression, protocol_value,
-    protocol_variable_value,
+    RuntimeError, RuntimeSession, console_diagnostic, parse_console_expression_with_compatibility,
+    protocol_value, protocol_variable_value,
 };
 
 impl RuntimeSession {
@@ -31,6 +31,14 @@ impl RuntimeSession {
             Ok(page) => page.values,
             Err(error) => return self.emit_vm_debug_error(error, Some(message_id)),
         };
+        let compatibility = self
+            .artifact
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Internal("debug console has no active artifact".into()))?
+            .artifact()
+            .manifest
+            .compatibility
+            .clone();
         let mut value = None;
         let mut changed_variables = Vec::new();
         let mut diagnostics = Vec::new();
@@ -65,7 +73,12 @@ impl RuntimeSession {
                     diagnostics,
                 );
             };
-            let parsed = match parse_console_expression(expression.trim(), &variables) {
+            let parsed = match parse_console_expression_with_compatibility(
+                expression.trim(),
+                &variables,
+                &compatibility,
+                &mut diagnostics,
+            ) {
                 Ok(value) => value,
                 Err((code, message)) => {
                     diagnostics.push(console_diagnostic(code, &message));
@@ -94,7 +107,12 @@ impl RuntimeSession {
                 Err(error) => return self.emit_vm_debug_error(error, Some(message_id)),
             }
         } else {
-            match parse_console_expression(trimmed, &variables) {
+            match parse_console_expression_with_compatibility(
+                trimmed,
+                &variables,
+                &compatibility,
+                &mut diagnostics,
+            ) {
                 Ok(parsed) => value = Some(protocol_value(parsed)),
                 Err((code, message)) => diagnostics.push(console_diagnostic(code, &message)),
             }

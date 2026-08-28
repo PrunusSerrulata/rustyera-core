@@ -237,6 +237,8 @@ impl Vm {
         for generation in obsolete {
             self.generations.remove(&generation);
             self.memory.reclaim_generation(generation);
+            self.arithmetic_warning_sites
+                .retain(|site| site.0 != generation);
             self.path_memo_cache
                 .retain(|head, _| head.generation != generation);
         }

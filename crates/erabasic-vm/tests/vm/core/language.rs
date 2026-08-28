@@ -1,5 +1,121 @@
 use super::*;
 
+type IntegerMutationBoundary = (i64, i64, i64, i64, i64);
+
+fn integer_mutation_boundary_cases() -> [(&'static str, [IntegerMutationBoundary; 3]); 4] {
+    // Each row contains input, original return/storage, then snake return/storage.
+    [
+        (
+            "++FLAG:0",
+            [
+                (42, 43, 43, 43, 43),
+                (
+                    i64::MIN,
+                    i64::MIN + 1,
+                    i64::MIN + 1,
+                    i64::MIN + 1,
+                    i64::MIN + 1,
+                ),
+                (i64::MAX, i64::MIN, i64::MIN, i64::MAX, i64::MAX),
+            ],
+        ),
+        (
+            "--FLAG:0",
+            [
+                (42, 41, 41, 41, 41),
+                (i64::MIN, i64::MAX, i64::MAX, i64::MIN, i64::MIN),
+                (
+                    i64::MAX,
+                    i64::MAX - 1,
+                    i64::MAX - 1,
+                    i64::MAX - 1,
+                    i64::MAX - 1,
+                ),
+            ],
+        ),
+        (
+            "FLAG:0++",
+            [
+                (42, 42, 43, 42, 43),
+                (i64::MIN, i64::MIN, i64::MIN + 1, i64::MIN, i64::MIN + 1),
+                (i64::MAX, i64::MAX, i64::MIN, i64::MAX - 1, i64::MAX),
+            ],
+        ),
+        (
+            "FLAG:0--",
+            [
+                (42, 42, 41, 42, 41),
+                (i64::MIN, i64::MIN, i64::MAX, i64::MIN + 1, i64::MIN),
+                (i64::MAX, i64::MAX, i64::MAX - 1, i64::MAX, i64::MAX - 1),
+            ],
+        ),
+    ]
+}
+
+#[test]
+fn prefix_and_postfix_preserve_profile_specific_return_and_storage_at_integer_boundaries() {
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let snake = profile == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake;
+        for (expression, cases) in integer_mutation_boundary_cases() {
+            let artifact = compile_source_with_options(
+                &format!("@SYSTEM_TITLE\nRESULT = {expression}\nRETURN RESULT\n"),
+                &AnalyzerOptions {
+                    compatibility: erabasic_compat::CompatibilityIdentity::for_profile(profile),
+                    ..AnalyzerOptions::default()
+                },
+            );
+            let flag = artifact
+                .globals
+                .iter()
+                .find(|global| global.name == "FLAG")
+                .unwrap()
+                .key;
+            let result = artifact
+                .globals
+                .iter()
+                .find(|global| global.name == "RESULT")
+                .unwrap()
+                .key;
+            for (initial, original_return, original_store, snake_return, snake_store) in cases {
+                let (returned, stored) = if snake {
+                    (snake_return, snake_store)
+                } else {
+                    (original_return, original_store)
+                };
+                let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+                let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+                vm.write_variable(flag, &[0], None, VmValue::Integer(initial))
+                    .unwrap();
+                let fiber = vm
+                    .spawn_entry(artifact.functions[0].key, Vec::new())
+                    .unwrap();
+                let report = vm.run_slice(
+                    &mut ReadyHost::default(),
+                    &mut natives,
+                    RunBudget::default(),
+                );
+                assert!(
+                    matches!(vm.fiber_status(fiber), Some(FiberStatus::Completed(_))),
+                    "{profile}: {expression}, input {initial}: {report:?}"
+                );
+                assert_eq!(
+                    vm.read_variable(result, &[0], None),
+                    Ok(VmValue::Integer(returned)),
+                    "{profile}: {expression}, input {initial}: return"
+                );
+                assert_eq!(
+                    vm.read_variable(flag, &[0], None),
+                    Ok(VmValue::Integer(stored)),
+                    "{profile}: {expression}, input {initial}: storage"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn dynamic_method_depth_failure_preserves_the_targets_persistent_argument() {
     let artifact = compile_source(

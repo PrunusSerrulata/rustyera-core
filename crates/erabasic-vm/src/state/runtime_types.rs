@@ -152,6 +152,8 @@ pub struct Vm {
     pub(crate) next_request: u64,
     pub(crate) next_generation: u64,
     pub(crate) pending_reload: Option<HotReloadPlan>,
+    pub(crate) arithmetic_warning_sites: BTreeSet<(GenerationId, SymbolKey, usize, u8)>,
+    pub(crate) pending_arithmetic_warnings: Vec<erabasic_compat::IntegerArithmeticWarning>,
     pub(crate) debug: DebugState,
     pub(crate) regex_cache: RegexCache,
     pub(crate) find_element_cache: HashMap<FindElementCacheKey, i64>,

@@ -1,5 +1,126 @@
 use super::*;
 
+fn corrupt_arithmetic_warning_site(
+    site: &mut serde_json::Value,
+    corruption: &str,
+    instruction_count: usize,
+) {
+    match corruption {
+        "generation" => site[0] = serde_json::json!(999),
+        "function" => {
+            site[1] = serde_json::to_value(SymbolKey::derive(
+                "test.snapshot",
+                b"missing-arithmetic-warning-function",
+            ))
+            .unwrap();
+        }
+        "instruction" => site[2] = serde_json::json!(instruction_count),
+        "tag" => site[3] = serde_json::json!(2),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn invalid_arithmetic_warning_sites_reject_before_restoring_native_random_state() {
+    let artifact = compile_source_with_options(
+        concat!(
+            "@SYSTEM_TITLE\nRESULT:10 = RAND:1000000\n",
+            "FLAG:0 = 9223372036854775807\nRESULT:11 = FLAG:0 + 1\n",
+            "RESULT:12 = 1 / FLAG:1\nWAIT\nRETURN RESULT\n",
+        ),
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::default()
+        },
+    );
+    assert!(
+        artifact
+            .native_imports
+            .iter()
+            .any(|import| import.import.name == "rand")
+    );
+    let entry = &artifact.functions[0];
+    let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 1234);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm.spawn_entry(entry.key, Vec::new()).unwrap();
+    let mut host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    assert!(
+        matches!(vm.fiber_status(fiber), Some(FiberStatus::WaitingHost(_))),
+        "{report:?}"
+    );
+    let snapshot = vm.snapshot(&natives).unwrap();
+    let json = serde_json::to_value(&snapshot).unwrap();
+    let sites = json["arithmetic_warning_sites"].as_array().unwrap();
+    assert_eq!(sites.len(), 2, "overflow and division-by-zero sites");
+    assert_eq!(sites[0][3], 0);
+    assert_eq!(sites[1][3], 1);
+    assert!(!json["native_states"].as_array().unwrap().is_empty());
+
+    for corruption in ["generation", "function", "instruction", "tag"] {
+        let mut corrupted = json.clone();
+        corrupt_arithmetic_warning_site(
+            &mut corrupted["arithmetic_warning_sites"][0],
+            corruption,
+            entry.code.len(),
+        );
+        let corrupted: VmSnapshot = serde_json::from_value(corrupted).unwrap();
+        let mut restored_natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 9876);
+        let before = serde_json::to_value(vm.snapshot(&restored_natives).unwrap()).unwrap();
+        // Different seeds make an accidental restore observable even if it later fails.
+        assert_ne!(before["native_states"], json["native_states"]);
+        let mut rejected_host = PendingHost {
+            stability: HostWaitStability::StableInput,
+            rebound: Vec::new(),
+        };
+        let rejected = Vm::restore_snapshot(
+            validated(&artifact),
+            VmConfig::default(),
+            corrupted,
+            &mut rejected_host,
+            &mut restored_natives,
+        );
+        assert!(
+            matches!(rejected, Err(VmError::Snapshot(message)) if message.contains("arithmetic diagnostic identity")),
+            "{corruption}"
+        );
+        assert!(rejected_host.rebound.is_empty(), "{corruption}");
+        let after = serde_json::to_value(vm.snapshot(&restored_natives).unwrap()).unwrap();
+        assert_eq!(
+            after["native_states"], before["native_states"],
+            "{corruption}"
+        );
+    }
+
+    let encoded = snapshot.encode().unwrap();
+    let decoded = VmSnapshot::decode(&encoded, VmConfig::default().maximum_snapshot_bytes).unwrap();
+    let mut restored_natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 9876);
+    let mut restored_host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let restored = Vm::restore_snapshot(
+        validated(&artifact),
+        VmConfig::default(),
+        decoded,
+        &mut restored_host,
+        &mut restored_natives,
+    )
+    .unwrap();
+    assert_eq!(restored_host.rebound.len(), 1);
+    let restored = serde_json::to_value(restored.snapshot(&restored_natives).unwrap()).unwrap();
+    assert_eq!(
+        restored["arithmetic_warning_sites"],
+        json["arithmetic_warning_sites"]
+    );
+    assert_eq!(restored["native_states"], json["native_states"]);
+}
+
 #[test]
 fn indexed_data_targets_dynamic_labels_and_try_lists_execute_lazily() {
     let artifact = compile_source(

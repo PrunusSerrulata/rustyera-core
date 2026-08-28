@@ -9,7 +9,7 @@ use crate::{
     catalog::Catalog,
     context::AnalysisParserContext,
     declarations::{
-        DeclarationInput, parse_integer_constant, parse_private_declaration,
+        DeclarationInput, constant_warnings, parse_integer_constant, parse_private_declaration,
         parse_scoped_declaration,
     },
     expression::{ExpressionAnalyzer, IndexResolver},
@@ -475,24 +475,31 @@ pub(super) fn register_function_declarations(
                 index_resolver,
                 options,
             ) {
-                Ok(size) if size > 0 && size < i64::from(i32::MAX) => {
-                    usize::try_from(size).expect("positive i32 local size fits usize")
-                }
-                Ok(size) => {
-                    diagnostics.push(AnalyzerDiagnostic::at(
-                        AnalyzerDiagnosticCode::InvalidDimension,
-                        AnalyzerDiagnosticSeverity::Warning,
-                        1,
+                Ok((size, warnings)) => {
+                    diagnostics.extend(constant_warnings(
+                        warnings,
                         source.source.id,
                         &source.source.relative_path,
                         &source.text,
                         directive.span,
-                        format!(
-                            "#{} size {size} is outside the supported range",
-                            directive.name
-                        ),
                     ));
-                    continue;
+                    if size <= 0 || size >= i64::from(i32::MAX) {
+                        diagnostics.push(AnalyzerDiagnostic::at(
+                            AnalyzerDiagnosticCode::InvalidDimension,
+                            AnalyzerDiagnosticSeverity::Warning,
+                            1,
+                            source.source.id,
+                            &source.source.relative_path,
+                            &source.text,
+                            directive.span,
+                            format!(
+                                "#{} size {size} is outside the supported range",
+                                directive.name
+                            ),
+                        ));
+                        continue;
+                    }
+                    usize::try_from(size).expect("positive i32 local size fits usize")
                 }
                 Err(message) => {
                     diagnostics.push(AnalyzerDiagnostic::at(
@@ -554,6 +561,7 @@ pub(super) fn register_function_declarations(
             options,
         ) {
             Ok(declaration) => {
+                diagnostics.extend(declaration.arithmetic_diagnostics.iter().cloned());
                 if symbols.register_private(function_id, &declaration).is_err() {
                     diagnostics.push(AnalyzerDiagnostic::at(
                         AnalyzerDiagnosticCode::DuplicateSymbol,
@@ -606,6 +614,7 @@ pub(super) fn register_function_declarations(
         ) {
             Ok(scoped) => {
                 let declaration = scoped.declaration;
+                diagnostics.extend(declaration.arithmetic_diagnostics.iter().cloned());
                 // Emuera.NET keeps the first scoped declaration with a given
                 // function-local name and permits later declaration statements
                 // to reinitialize that same scalar.

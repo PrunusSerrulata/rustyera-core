@@ -47,14 +47,29 @@ pub(in super::super) fn execute_integer_mutation(
             "integer mutation target has a different type".into(),
         ));
     };
-    let updated = if mode % 2 == 0 {
-        previous.wrapping_add(1)
+    let generation = fiber
+        .frames
+        .last()
+        .ok_or_else(|| VmError::InvalidState("integer mutation frame is missing".into()))?
+        .generation;
+    let increment = mode % 2 == 0;
+    let operation = if increment {
+        erabasic_compat::IntegerOperation::Add
     } else {
-        previous.wrapping_sub(1)
+        erabasic_compat::IntegerOperation::Subtract
     };
+    let updated = vm
+        .integer_arithmetic(generation, operation, previous, Some(1))
+        .map_err(|error| VmError::InvalidArguments(error.message))?;
     vm.write_place(fiber, place, VmValue::Integer(updated))?;
     Ok(VmValue::Integer(if *mode >= 2 {
-        previous
+        // Postfix reverses one step after the policy-selected update. This also
+        // preserves the pinned snake result at a saturated endpoint.
+        if increment {
+            updated.wrapping_sub(1)
+        } else {
+            updated.wrapping_add(1)
+        }
     } else {
         updated
     }))

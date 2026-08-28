@@ -115,7 +115,8 @@ fn compile_source_with_options(source: &str, options: &AnalyzerOptions) -> Bytec
     );
     assert!(
         compilation.artifact.is_some(),
-        "{:#?}",
+        "analysis: {:#?}; compilation: {:#?}",
+        analysis.diagnostics,
         compilation.diagnostics
     );
     compilation.artifact.unwrap()

@@ -2,11 +2,41 @@ use super::{
     AnalyzerOptions, BTreeMap, BinaryOp, ConstantValue, DimError, Expr, ExprKind, FormPart,
     FormattedString, IndexResolver, ParserContext, UnaryOp, normalize, parse_expression,
 };
+use std::cell::RefCell;
+
+use erabasic_compat::{IntegerArithmeticPolicy, IntegerArithmeticWarning, IntegerOperation};
+
+pub(crate) type ConstantWarnings = Vec<(IntegerArithmeticWarning, String)>;
+
 pub(super) struct ConstantEvaluation<'a> {
     pub(super) constants: &'a BTreeMap<String, ConstantValue>,
     pub(super) variable_dimensions: &'a BTreeMap<String, Vec<usize>>,
     pub(super) index_resolver: &'a IndexResolver,
     pub(super) options: &'a AnalyzerOptions,
+    pub(super) warnings: RefCell<ConstantWarnings>,
+}
+
+impl ConstantEvaluation<'_> {
+    fn integer(
+        &self,
+        operation: IntegerOperation,
+        left: i64,
+        right: Option<i64>,
+    ) -> Result<i64, DimError> {
+        let result = self
+            .options
+            .compatibility
+            .integer_arithmetic_policy()
+            .evaluate(operation, left, right)
+            .map_err(|error| DimError::Invalid(error.to_string()))?;
+        if let Some(warning) = result.warning {
+            self.warnings.borrow_mut().push((warning, format!(
+                "constant integer {operation:?} produced {warning:?}: {left}, {right:?}; result {}",
+                result.value
+            )));
+        }
+        Ok(result.value)
+    }
 }
 
 pub(super) fn parse_constant(
@@ -45,7 +75,7 @@ fn evaluate_constant(
             };
             let value = match op {
                 UnaryOp::Plus => value,
-                UnaryOp::Minus => value.wrapping_neg(),
+                UnaryOp::Minus => evaluation.integer(IntegerOperation::Negate, value, None)?,
                 UnaryOp::LogicalNot => i64::from(value == 0),
                 UnaryOp::BitNot => !value,
                 UnaryOp::PreIncrement | UnaryOp::PreDecrement => {
@@ -57,9 +87,7 @@ fn evaluate_constant(
             Ok(ConstantValue::Integer(value))
         }
         ExprKind::Binary { op, left, right } => {
-            let left = evaluate_constant(left, evaluation)?;
-            let right = evaluate_constant(right, evaluation)?;
-            evaluate_binary(*op, left, right)
+            evaluate_binary_expression(*op, left, right, evaluation)
         }
         ExprKind::Ternary {
             condition,
@@ -116,6 +144,33 @@ fn evaluate_constant(
             "initializer must be a load-time constant".into(),
         )),
     }
+}
+
+fn evaluate_binary_expression(
+    operation: BinaryOp,
+    left: &Expr,
+    right: &Expr,
+    evaluation: &ConstantEvaluation<'_>,
+) -> Result<ConstantValue, DimError> {
+    let left = evaluate_constant(left, evaluation)?;
+    if evaluation.options.compatibility.integer_arithmetic_policy()
+        == IntegerArithmeticPolicy::SnakeSaturatingV1
+        && let ConstantValue::Integer(value) = &left
+    {
+        // Do not emit warnings or faults from a branch that the VM skips.
+        let short_circuit = match operation {
+            BinaryOp::LogicalAnd if *value == 0 => Some(0),
+            BinaryOp::LogicalOr if *value != 0 => Some(1),
+            BinaryOp::Nand if *value == 0 => Some(1),
+            BinaryOp::Nor if *value != 0 => Some(0),
+            _ => None,
+        };
+        if let Some(value) = short_circuit {
+            return Ok(ConstantValue::Integer(value));
+        }
+    }
+    let right = evaluate_constant(right, evaluation)?;
+    evaluate_binary(operation, left, right, evaluation)
 }
 
 fn evaluate_string_length(
@@ -313,6 +368,7 @@ fn evaluate_binary(
     op: BinaryOp,
     left: ConstantValue,
     right: ConstantValue,
+    evaluation: &ConstantEvaluation<'_>,
 ) -> Result<ConstantValue, DimError> {
     if let (ConstantValue::String(left), ConstantValue::String(right)) = (&left, &right) {
         return match op {
@@ -347,6 +403,16 @@ fn evaluate_binary(
     let (ConstantValue::Integer(left), ConstantValue::Integer(right)) = (left, right) else {
         return Err(DimError::Invalid("constant operand types differ".into()));
     };
+    if evaluation.options.compatibility.integer_arithmetic_policy()
+        == IntegerArithmeticPolicy::SnakeSaturatingV1
+        && let Some(operation) = crate::integer::binary_operation(op)
+    {
+        return evaluation
+            .integer(operation, left, Some(right))
+            .map(ConstantValue::Integer);
+    }
+    // Preserve the established reference load-time overflow behavior separately
+    // from the VM's checked division/remainder fault path.
     let value = match op {
         BinaryOp::Multiply => left.wrapping_mul(right),
         BinaryOp::Divide if right != 0 => left.wrapping_div(right),

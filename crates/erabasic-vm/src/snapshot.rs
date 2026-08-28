@@ -19,7 +19,7 @@ pub use self::model::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 13;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 14;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 
@@ -40,6 +40,8 @@ pub struct VmSnapshot {
     // A sorted pair list keeps native state deterministic and independent from
     // a serializer's map-key representation.
     native_states: Vec<(erabasic_bytecode::SymbolKey, Vec<u8>)>,
+    arithmetic_warning_sites:
+        std::collections::BTreeSet<(GenerationId, erabasic_bytecode::SymbolKey, usize, u8)>,
 }
 
 #[derive(Serialize)]
@@ -57,6 +59,8 @@ struct VmSnapshotRef<'a> {
     next_request: u64,
     next_generation: u64,
     native_states: &'a [(erabasic_bytecode::SymbolKey, Vec<u8>)],
+    arithmetic_warning_sites:
+        &'a std::collections::BTreeSet<(GenerationId, erabasic_bytecode::SymbolKey, usize, u8)>,
 }
 
 impl VmSnapshot {
@@ -418,6 +422,7 @@ impl Vm {
             next_frame: self.next_frame,
             next_request: self.next_request,
             next_generation: self.next_generation,
+            arithmetic_warning_sites: self.arithmetic_warning_sites.clone(),
             native_states: natives
                 .snapshots()
                 .map_err(VmError::Snapshot)?
@@ -472,6 +477,7 @@ impl Vm {
             next_request: self.next_request,
             next_generation: self.next_generation,
             native_states: &native_states,
+            arithmetic_warning_sites: &self.arithmetic_warning_sites,
         })
     }
 
@@ -546,6 +552,8 @@ impl Vm {
             next_request: snapshot.next_request,
             next_generation: snapshot.next_generation,
             pending_reload: None,
+            arithmetic_warning_sites: snapshot.arithmetic_warning_sites,
+            pending_arithmetic_warnings: Vec::new(),
             debug: crate::debug::DebugState::default(),
             regex_cache: crate::regex_compat::RegexCache::default(),
             find_element_cache: HashMap::new(),
@@ -591,12 +599,40 @@ impl Vm {
     }
 }
 
+fn validate_arithmetic_warning_sites(
+    snapshot: &VmSnapshot,
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+) -> Result<(), VmError> {
+    if snapshot.arithmetic_warning_sites.is_empty() {
+        return Ok(());
+    }
+    let code_lengths: HashMap<_, _> = artifact
+        .functions
+        .iter()
+        .map(|function| (function.key, function.code.len()))
+        .collect();
+    for (generation, function, instruction, warning) in &snapshot.arithmetic_warning_sites {
+        if *generation != snapshot.current_generation
+            || *warning > 1
+            || code_lengths
+                .get(function)
+                .is_none_or(|length| instruction >= length)
+        {
+            return Err(VmError::Snapshot(
+                "snapshot arithmetic diagnostic identity is invalid".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn validate_snapshot(
     snapshot: &VmSnapshot,
     artifact: &erabasic_bytecode::BytecodeArtifact,
     config: VmConfig,
 ) -> Result<(), VmError> {
+    validate_arithmetic_warning_sites(snapshot, artifact)?;
     if !snapshot.memory.legacy.is_empty() {
         return Err(VmError::Snapshot(
             "stable snapshots cannot contain legacy-generation storage".into(),

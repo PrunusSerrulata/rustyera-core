@@ -158,6 +158,8 @@ impl Vm {
             next_request: 1,
             next_generation: 2,
             pending_reload: None,
+            arithmetic_warning_sites: BTreeSet::new(),
+            pending_arithmetic_warnings: Vec::new(),
             debug: DebugState::default(),
             regex_cache: RegexCache::default(),
             find_element_cache: HashMap::new(),

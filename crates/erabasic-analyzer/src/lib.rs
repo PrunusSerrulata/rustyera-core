@@ -13,6 +13,7 @@ mod expression;
 mod identifiers;
 mod index_resolver;
 mod input;
+mod integer;
 mod options;
 mod portability;
 mod project;

@@ -19,6 +19,7 @@ use registrations::add_registrations;
 
 mod constants;
 
+pub(crate) use constants::ConstantWarnings;
 use constants::{ConstantEvaluation, parse_constant};
 
 pub(crate) struct DeclarationInput<'a> {
@@ -35,6 +36,7 @@ pub(crate) struct DeclaredVariable {
     pub location: SourceLocation,
     pub reference: bool,
     pub static_lifetime: bool,
+    pub arithmetic_diagnostics: Vec<AnalyzerDiagnostic>,
 }
 
 pub(crate) struct ScopedDeclaration {
@@ -102,6 +104,7 @@ pub(crate) fn analyze_global_declarations(
             }
             match parsed {
                 Ok(variable) => {
+                    diagnostics.extend(variable.arithmetic_diagnostics.iter().cloned());
                     let key = normalize(variable.schema.id.name(), options.ignore_case);
                     if is_reserved(variable.schema.id.name()) {
                         diagnostics.push(at_input(
@@ -180,19 +183,20 @@ pub(crate) fn parse_integer_constant(
     variable_dimensions: &BTreeMap<String, Vec<usize>>,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
-) -> Result<i64, String> {
+) -> Result<(i64, ConstantWarnings), String> {
     let evaluation = ConstantEvaluation {
         constants,
         variable_dimensions,
         index_resolver,
         options,
+        warnings: std::cell::RefCell::default(),
     };
     let value = parse_constant(strip_declaration_comment(source), context, &evaluation)
         .map_err(|error| error.to_string())?;
     let ConstantValue::Integer(value) = value else {
         return Err("an integer constant expression is required".into());
     };
-    Ok(value)
+    Ok((value, evaluation.warnings.into_inner()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -291,6 +295,7 @@ fn parse_dim(
         variable_dimensions,
         index_resolver,
         options,
+        warnings: std::cell::RefCell::default(),
     };
     let is_string = input.directive.name == "DIMS";
     // Directive arguments are kept raw by the syntax parser. Emuera's declaration
@@ -503,7 +508,45 @@ fn parse_dim(
         location: SourceLocation::new(input.source, input.directive.span),
         reference,
         static_lifetime: is_static,
+        arithmetic_diagnostics: constant_warnings(
+            constant_evaluation.warnings.into_inner(),
+            input.source,
+            input.path,
+            input.text,
+            input.directive.span,
+        ),
     })
+}
+
+pub(crate) fn constant_warnings(
+    warnings: ConstantWarnings,
+    source: SourceId,
+    path: &str,
+    text: &str,
+    span: erabasic_ast::Span,
+) -> Vec<AnalyzerDiagnostic> {
+    warnings
+        .into_iter()
+        .map(|(warning, message)| {
+            AnalyzerDiagnostic::at(
+                match warning {
+                    erabasic_compat::IntegerArithmeticWarning::Overflow => {
+                        AnalyzerDiagnosticCode::IntegerOverflow
+                    }
+                    erabasic_compat::IntegerArithmeticWarning::DivideByZero => {
+                        AnalyzerDiagnosticCode::IntegerDivideByZero
+                    }
+                },
+                AnalyzerDiagnosticSeverity::Warning,
+                1,
+                source,
+                path,
+                text,
+                span,
+                message,
+            )
+        })
+        .collect()
 }
 
 fn take_word(source: &str) -> Option<(&str, &str)> {

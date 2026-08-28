@@ -5,7 +5,7 @@ use erabasic_bytecode::{BytecodeFunctionKind, BytecodeType, SymbolKey};
 use erabasic_parser::{DefaultParserContext, parse_formatted_at};
 use serde::{Deserialize, Serialize};
 
-use super::{StepError, binary_value, map_vm_error, unary_value};
+use super::{StepError, map_vm_error};
 use crate::{
     Fiber, FrameId, GenerationId, HostReady, NativeServiceRegistry, Vm, VmFaultCode, VmValue,
     bind_persistent_arguments, make_frame, prepare_dynamic_arguments,
@@ -303,7 +303,8 @@ impl RuntimeFormContinuation {
             }
             RuntimeFormTask::ApplyUnary(op) => {
                 let value = self.pop_value("STRFORM unary operand is missing")?;
-                self.values.push(unary_value(unary_tag(op), value)?);
+                self.values
+                    .push(vm.unary_value(self.generation, unary_tag(op), value)?);
             }
             RuntimeFormTask::EvaluateBinaryRight { op, right } => {
                 let left = self.pop_value("STRFORM binary left operand is missing")?;
@@ -343,7 +344,8 @@ impl RuntimeFormContinuation {
             RuntimeFormTask::ApplyBinary(op) => {
                 let right = self.pop_value("STRFORM binary right operand is missing")?;
                 let left = self.pop_value("STRFORM binary left operand is missing")?;
-                self.values.push(binary_value(binary_tag(op), left, right)?);
+                self.values
+                    .push(vm.binary_value(self.generation, binary_tag(op), left, right)?);
             }
             RuntimeFormTask::ChooseTernary {
                 then_expr,

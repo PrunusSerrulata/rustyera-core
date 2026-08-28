@@ -425,9 +425,14 @@ impl ExpressionAnalyzer<'_> {
             (Some(ConstantValue::Integer(value)), UnaryOp::Plus) => {
                 Some(ConstantValue::Integer(*value))
             }
-            (Some(ConstantValue::Integer(value)), UnaryOp::Minus) => {
-                Some(ConstantValue::Integer(value.wrapping_neg()))
-            }
+            (Some(ConstantValue::Integer(value)), UnaryOp::Minus) => self
+                .options
+                .compatibility
+                .integer_arithmetic_policy()
+                .evaluate(erabasic_compat::IntegerOperation::Negate, *value, None)
+                .ok()
+                .filter(|result| result.warning.is_none())
+                .map(|result| ConstantValue::Integer(result.value)),
             (Some(ConstantValue::Integer(value)), UnaryOp::LogicalNot) => {
                 Some(ConstantValue::Integer(i64::from(*value == 0)))
             }
@@ -615,7 +620,12 @@ impl ExpressionAnalyzer<'_> {
         } else {
             SemanticType::Integer
         };
-        let constant = fold_binary(op, left.constant.as_ref(), right.constant.as_ref());
+        let constant = fold_binary(
+            op,
+            left.constant.as_ref(),
+            right.constant.as_ref(),
+            self.options.compatibility.integer_arithmetic_policy(),
+        );
         HirExpr {
             kind: HirExprKind::Binary {
                 op,
