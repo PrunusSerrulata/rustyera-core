@@ -219,6 +219,39 @@ RETURN
 }
 
 #[test]
+fn inclusive_string_comparisons_preserve_equal_and_ordered_values_in_both_profiles() {
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let artifact = compile_source_with_options(
+            r#"@SYSTEM_TITLE
+#DIMS L_TEXT
+#DIMS R_TEXT
+L_TEXT '= "alpha"
+R_TEXT '= "alpha"
+RESULT = (L_TEXT >= R_TEXT) + (L_TEXT <= R_TEXT)
+R_TEXT '= "beta"
+RESULT += (L_TEXT <= R_TEXT) * 4
+RESULT += (L_TEXT >= R_TEXT) * 8
+RESULT += (R_TEXT >= L_TEXT) * 16
+RESULT += (R_TEXT <= L_TEXT) * 32
+RETURN RESULT
+"#,
+            &AnalyzerOptions {
+                compatibility: erabasic_compat::CompatibilityIdentity::for_profile(profile),
+                ..AnalyzerOptions::default()
+            },
+        );
+        assert_eq!(
+            run_compiled_result(&artifact),
+            VmValue::Integer(22),
+            "{profile}"
+        );
+    }
+}
+
+#[test]
 fn dynamic_method_depth_failure_preserves_the_targets_persistent_argument() {
     let artifact = compile_source(
         r#"@DEPTH_ENTRY
