@@ -551,8 +551,14 @@ impl RuntimeSession {
             name.as_str(),
             "PRINT_ABL" | "PRINT_TALENT" | "PRINT_MARK" | "PRINT_EXP"
         ) {
-            let target = u64::try_from(integer_argument_value(&request.arguments, 0)?)
-                .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+            let Ok(target) = u64::try_from(integer_argument_value(&request.arguments, 0)?) else {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "character index is negative",
+                );
+            };
             let (variable, table, format) = match name.as_str() {
                 "PRINT_ABL" => ("ABL", erabasic_data::NameTableKind::Abl, 0),
                 "PRINT_TALENT" => ("TALENT", erabasic_data::NameTableKind::Talent, 1),
@@ -572,8 +578,14 @@ impl RuntimeSession {
             return self.emit_presentation();
         }
         if name == "PRINT_PALAM" {
-            let target = u64::try_from(integer_argument_value(&request.arguments, 0)?)
-                .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+            let Ok(target) = u64::try_from(integer_argument_value(&request.arguments, 0)?) else {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "character index is negative",
+                );
+            };
             let per_line = self
                 .project_snapshot
                 .as_ref()

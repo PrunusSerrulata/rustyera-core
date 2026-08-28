@@ -170,6 +170,10 @@ impl CompatibilityIdentity {
         matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 4
     }
 
+    #[must_use]
+    pub const fn supports_checked_runtime_forms(&self) -> bool {
+        self.supports_call_text()
+    }
 
 
     /// Policy for non-variadic user calls; builtin signatures remain exact.

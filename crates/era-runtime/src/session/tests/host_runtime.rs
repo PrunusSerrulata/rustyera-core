@@ -70,27 +70,59 @@ fn goto_into_case_body_emits_a_nonfatal_warning_and_continues() {
 fn run_immediate_query_project(
     source: &str,
 ) -> (RuntimeSession, RuntimeDriveReport, Vec<RuntimeMessage>) {
+    run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::default(),
+    )
+}
+
+fn run_immediate_query_project_with_profile(
+    source: &str,
+    compatibility: erabasic_compat::CompatibilityIdentity,
+) -> (RuntimeSession, RuntimeDriveReport, Vec<RuntimeMessage>) {
+    run_immediate_query_project_with_budget(
+        source,
+        compatibility,
+        RuntimeDriveBudget {
+            maximum_vm_instructions: 1_000_000,
+            maximum_runtime_transitions: 1_024,
+        },
+    )
+}
+
+fn run_immediate_query_project_with_budget(
+    source: &str,
+    compatibility: erabasic_compat::CompatibilityIdentity,
+    budget: RuntimeDriveBudget,
+) -> (RuntimeSession, RuntimeDriveReport, Vec<RuntimeMessage>) {
     let mut session = negotiated_session();
+    let config = profile_configuration_file(compatibility.profile);
     submit(
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
-            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+            compatibility,
             project_revision: 1,
-            files: vec![SubmittedFile {
-                relative_path: "main.erb".into(),
-                category: FileCategory::Erb,
-                payload: FilePayload::Utf8(source.into()),
-                content_hash: None,
-            }],
+            files: vec![
+                config,
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(source.into()),
+                    content_hash: None,
+                },
+            ],
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
     let loaded = drain(&mut session);
-    assert!(loaded.iter().any(|message| matches!(
-        message,
-        RuntimeMessage::ProjectLoadReport(report) if report.success
-    )));
+    assert!(
+        loaded.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::ProjectLoadReport(report) if report.success
+        )),
+        "{loaded:#?}"
+    );
     submit(
         &mut session,
         2,
@@ -98,17 +130,10 @@ fn run_immediate_query_project(
             mode: StartMode::NewGame { seed: Some(1) },
         }),
     );
-    let report = session
-        .drive(RuntimeDriveBudget {
-            maximum_vm_instructions: 1_000_000,
-            maximum_runtime_transitions: 1_024,
-        })
-        .unwrap();
+    let report = session.drive(budget).unwrap();
     let messages = drain(&mut session);
     (session, report, messages)
 }
-
-
 
 #[test]
 fn immediate_queries_observe_latest_runtime_state_without_host_boundaries() {
@@ -439,7 +464,9 @@ fn moneystr_invalid_format_keeps_vm_fault_priority_without_project_context() {
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
                 category: FileCategory::Erb,
-                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nRESULTS '= MONEYSTR(1, \"invalid[\")\nRETURN\n".into(),
+                ),
                 content_hash: None,
             }],
         },
@@ -447,42 +474,34 @@ fn moneystr_invalid_format_keeps_vm_fault_priority_without_project_context() {
     );
     let artifact = build.artifact.expect("valid project");
     let mut vm = RuntimeVm::new(artifact, VmConfig::default());
-    let binding = erabasic_compiler::default_host_registry()
-        .resolve("MONEYSTR")
-        .expect("MONEYSTR Host binding");
-    let function = erabasic_bytecode::SymbolKey::derive("test.function", b"moneystr");
-    let request = VmHostRequest {
-        id: erabasic_vm::HostRequestId(1),
-        fiber: erabasic_vm::FiberId(1),
-        import: erabasic_bytecode::HostImport {
-            import: erabasic_bytecode::RuntimeImport {
-                key: erabasic_bytecode::SymbolKey::derive("test.host", b"moneystr"),
-                namespace: binding.namespace,
-                name: binding.name,
-                abi_version: binding.abi_version,
-                parameters: vec![
-                    erabasic_bytecode::BytecodeType::Integer,
-                    erabasic_bytecode::BytecodeType::String,
-                ],
-                result: Some(erabasic_bytecode::BytecodeType::String),
-            },
-            effect: binding.effect,
-            capability: binding.capability,
-            snapshot_capability: binding.snapshot_capability,
-            contract: binding.contract,
-        },
-        arguments: vec![VmValue::Integer(1), VmValue::String("invalid[".into())],
-        origin: erabasic_vm::VmExecutionOrigin {
-            generation: erabasic_vm::GenerationId(1),
-            function,
-            function_name: "SYSTEM_TITLE".into(),
-            instruction: 0,
-            command: "MONEYSTR".into(),
-            source: None,
-        },
-    };
+    let entry = vm
+        .vm()
+        .artifact()
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let request = vm
+        .drive(RunBudget::default(), VmDriveMode::Normal)
+        .events
+        .into_iter()
+        .find_map(|event| match event {
+            VmPortEvent::HostCall(request) => Some(request),
+            _ => None,
+        })
+        .expect("real MONEYSTR host request");
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     session.handle_host_call(&mut vm, &request).unwrap();
+    assert!(
+        !drain(&mut session)
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_)))
+    );
+    for event in vm.drive(RunBudget::default(), VmDriveMode::Normal).events {
+        session.handle_vm_event(&mut vm, event).unwrap();
+    }
     let messages = drain(&mut session);
     assert!(
         messages.iter().any(|message| matches!(
@@ -492,7 +511,7 @@ fn moneystr_invalid_format_keeps_vm_fault_priority_without_project_context() {
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
-            }) if message.contains("MONEYSTR format is invalid") && origin.command == "MONEYSTR"
+            }) if message.contains("MONEYSTR format is invalid") && origin.command.eq_ignore_ascii_case("MONEYSTR")
         )),
         "{messages:#?}"
     );
@@ -1271,8 +1290,98 @@ fn linecount_drives_clearline_and_bounded_padding_loops() {
 
 include!("host_runtime_continued.rs");
 
+#[test]
+fn host_assert_and_throw_keep_uncaught_fault_source_and_committed_effects() {
+    for (statement, command, expected) in [
+        ("ASSERT 0", "ASSERT", "ASSERT failed"),
+        ("THROW explicit-host-error", "THROW", "explicit-host-error"),
+        (
+            "SAVEDATA -1, \"invalid\"",
+            "SAVEDATA",
+            "SAVEDATA argument 1 must be between 0 and 2147483647",
+        ),
+    ] {
+        let source = format!("@SYSTEM_TITLE\nFLAG:0 = 7\n{statement}\nFLAG:0 = 9\nRETURN\n");
+        let (session, _, messages) = run_immediate_query_project(&source);
+        assert_eq!(session.phase(), RuntimePhase::Faulted);
+        assert_eq!(
+            read_runtime_integer(session.vm.as_ref().unwrap(), "FLAG", &[0], None).unwrap(),
+            7
+        );
+        let faults: Vec<_> = messages
+            .iter()
+            .filter_map(|message| match message {
+                RuntimeMessage::Fault(fault) => Some(fault),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(faults.len(), 1);
+        assert_eq!(faults[0].code, FaultCode::VmFault);
+        assert_eq!(faults[0].message, expected);
+        let origin = faults[0].origin.as_ref().unwrap();
+        assert!(origin.command.eq_ignore_ascii_case(command));
+        assert_eq!(origin.source.as_ref().unwrap().relative_path, "main.erb");
+    }
+}
 
+#[test]
+fn host_completion_remains_work_at_transition_and_instruction_boundaries() {
+    let (mut session, report, _) = run_immediate_query_project_with_budget(
+        "@SYSTEM_TITLE\nTHROW boundary\nRETURN\n",
+        erabasic_compat::CompatibilityIdentity::default(),
+        RuntimeDriveBudget {
+            maximum_vm_instructions: 1_000,
+            maximum_runtime_transitions: 2,
+        },
+    );
+    assert_eq!(report.runtime_transitions, 2);
+    assert_eq!(session.phase(), RuntimePhase::Running);
+    assert!(session.vm.as_ref().unwrap().has_pending_events());
+    assert!(!session.vm.as_ref().unwrap().has_runnable_fibers());
+    let completion = session
+        .drive(RuntimeDriveBudget {
+            maximum_vm_instructions: 0,
+            maximum_runtime_transitions: 1,
+        })
+        .unwrap();
+    assert_eq!(completion.vm_instructions, 0);
+    assert_eq!(completion.state, RuntimeDriveState::Faulted);
+    let messages = drain(&mut session);
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| matches!(message,
+                RuntimeMessage::Fault(fault) if fault.message == "boundary"
+            ))
+            .count(),
+        1
+    );
+}
 
+#[test]
+fn snake_strformcheck_catches_host_assert_and_throw_without_rollback() {
+    for statement in ["ASSERT 0", "THROW explicit-host-error"] {
+        let source = format!(
+            "@SYSTEM_TITLE\nFLAG:0 = STRFORMCHECK(\"{{FAIL()}}\")\nFLAG:2 = 1\nWAIT\nRETURN\n@FAIL\n#FUNCTION\nFLAG:1 += 1\n{statement}\nFLAG:1 = 99\nRETURNF 1\n"
+        );
+        let (session, _, messages) = run_immediate_query_project_with_profile(
+            &source,
+            erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+        );
+        assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+        let vm = session.vm.as_ref().unwrap();
+        assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 0);
+        assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+        assert_eq!(read_runtime_integer(vm, "FLAG", &[2], None).unwrap(), 1);
+        assert!(
+            !messages
+                .iter()
+                .any(|message| matches!(message, RuntimeMessage::Fault(_)))
+        );
+    }
+}
 
 #[test]
 fn html_error_wire_data_cannot_claim_script_provenance() {

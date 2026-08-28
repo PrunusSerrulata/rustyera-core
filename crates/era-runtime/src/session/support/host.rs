@@ -14,6 +14,35 @@ pub(in super::super) fn commit_completion(
         .map_err(|error| RuntimeError::Internal(error.to_string()))
 }
 
+// Only trusted runtime code at a known script-origin failure may call this helper.
+// Frontend error strings, invalid HostReady writes and RuntimeError::Internal are not sources.
+pub(in super::super) fn complete_script_fault(
+    vm: &mut RuntimeVm,
+    request: &VmHostRequest,
+    kind: erabasic_vm::ScriptFaultKind,
+    message: impl Into<String>,
+) -> Result<(), RuntimeError> {
+    complete_script_fault_request(vm, request.id, kind, message)
+}
+
+// The request id must come from a runtime-owned, identity-validated continuation.
+pub(in super::super) fn complete_script_fault_request(
+    vm: &mut RuntimeVm,
+    request: erabasic_vm::HostRequestId,
+    kind: erabasic_vm::ScriptFaultKind,
+    message: impl Into<String>,
+) -> Result<(), RuntimeError> {
+    commit_completion(
+        vm,
+        request,
+        VmHostCompletion::Error(erabasic_vm::ExecutionFailure::script(
+            kind,
+            erabasic_vm::VmFaultCode::Host,
+            message,
+        )),
+    )
+}
+
 pub(in super::super) fn commit_integer_result(
     vm: &mut RuntimeVm,
     request: erabasic_vm::HostRequestId,

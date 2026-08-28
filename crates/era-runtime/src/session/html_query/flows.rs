@@ -159,6 +159,11 @@ impl HtmlLineFlows {
         i64::try_from(flow.count).map_err(|_| limit())
     }
 
+    // Called only after this runtime has validated and failed its own active request.
+    pub(super) fn discard_failed_step(&mut self, ticket: &str) {
+        self.entries.remove(ticket);
+    }
+
     pub(super) fn end(&mut self, ticket: &str) -> Result<i64, HtmlQueryError> {
         let flow = self.entries.get(ticket).ok_or_else(invalid)?;
         if flow.in_flight || !flow.tail.is_empty() {

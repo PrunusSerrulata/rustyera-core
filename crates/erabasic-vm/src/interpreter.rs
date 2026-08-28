@@ -26,11 +26,12 @@ mod fastpaths;
 mod lookup;
 mod native_ops;
 mod operand;
+mod recovery;
 mod scheduler;
 
 use character_ops::{character_series, execute_character_mutation, execute_character_query};
 use dynamic_form::{
-    RuntimeFormStep, begin_runtime_call_text, begin_runtime_form,
+    RuntimeFormStep, begin_runtime_call_text, begin_runtime_form, begin_runtime_form_check,
     resume_runtime_form,
 };
 use extended_ops::{

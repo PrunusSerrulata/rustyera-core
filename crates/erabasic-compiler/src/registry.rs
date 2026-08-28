@@ -225,6 +225,7 @@ const IMPLEMENTED_NATIVE_NAMES: &[&str] = &[
     "strlen",
     "strlenu",
     "strform",
+    "strformcheck",
     "existmeth",
     "toint",
     "isnumeric",

@@ -32,3 +32,11 @@ The parser distinguishes lexical errors from ReduceArguments errors. Missing tar
 and argument binding use the instruction-local TRY policy; name/type restructuring,
 argument execution, service faults and callee faults remain outside that boundary.
 The general checked-form service catcher is not part of this stage.
+
+## Checked-form candidates
+
+The snake fixture now includes CHECK_EFFECT. Separate original profile-gate and
+nested-check parameter-failure roots are included without making their source-derived
+expectations execution evidence. Trusted Script failures may recover; resource,
+permission, cancellation and invalid service results remain Rust safety contracts,
+not invented C# equivalents. EXISTVAR cross-checkpoint fixtures are not present yet.

@@ -603,6 +603,41 @@
           }
         }
       ]
+    },
+    {
+      "id": "check-preserves-effect",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Pinned snake Creator.Method.cs:6660-6688: evaluate outer String before try; GetString in try; no transaction rollback",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "CHECK_EFFECT",
+            "watch": [
+              "RESULT:0",
+              "FLAG:0",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 0,
+                  "FLAG:0": 1,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   ]
 }

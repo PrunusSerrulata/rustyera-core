@@ -344,7 +344,10 @@ impl ExpressionAnalyzer<'_> {
                 location,
             };
         }
-        let Some(signature) = self.catalog.functions.get(&key) else {
+        let Some(signature) = self.catalog.functions.get(&key).filter(|_| {
+            self.catalog.extension_functions.contains(&key)
+                || crate::catalog::builtin_available(&key, &self.options.compatibility)
+        }) else {
             self.diagnostic(
                 AnalyzerDiagnosticCode::UnknownFunction,
                 location,

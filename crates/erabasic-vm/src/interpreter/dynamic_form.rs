@@ -9,11 +9,17 @@ use crate::{
 };
 
 mod call_text;
+mod checkpoints;
 mod frontend;
 mod methods;
+mod mutations;
 mod support;
 mod typing;
 
+use checkpoints::FormatCheckpoint;
+pub(crate) use checkpoints::{
+    RuntimeFormCatchTarget, finish_runtime_form_catch, select_runtime_form_catch,
+};
 use frontend::parse_runtime_form;
 use support::{binary_tag, owner_frame, owner_frame_mut, resource_limit, unary_tag, unsupported};
 const MAX_RUNTIME_FORM_BYTES: usize = 1024 * 1024;
@@ -29,6 +35,8 @@ pub(crate) struct RuntimeFormContinuation {
     values: Vec<VmValue>,
     outputs: Vec<String>,
     awaiting_user_call: Option<methods::RuntimeUserWait>,
+    checkpoints: Vec<FormatCheckpoint>,
+    next_checkpoint: u64,
     completion: RuntimeFormRoot,
     remaining_nodes: usize,
     remaining_source_bytes: usize,
@@ -41,6 +49,8 @@ enum RuntimeFormTask {
     RenderPart(FormPart),
     FinishFormValue,
     CompleteRoot,
+    BeginCheckedForm(String),
+    FinishCheck(u64),
     ParseCallText {
         source: String,
         spec: erabasic_bytecode::CallTextSpec,
@@ -51,6 +61,11 @@ enum RuntimeFormTask {
         indices: usize,
     },
     ApplyUnary(UnaryOp),
+    MutateVariable {
+        variable: SymbolKey,
+        indices: usize,
+        mode: u8,
+    },
     EvaluateBinaryRight {
         op: BinaryOp,
         right: Expr,
@@ -142,6 +157,8 @@ pub(super) fn begin_runtime_form(
         values: Vec::new(),
         outputs: Vec::new(),
         awaiting_user_call: None,
+        checkpoints: Vec::new(),
+        next_checkpoint: 1,
         completion: RuntimeFormRoot::Value(BytecodeType::String),
         remaining_nodes: node_limit.saturating_sub(nodes),
         remaining_source_bytes: MAX_RUNTIME_FORM_BYTES.saturating_sub(source.len()),
@@ -159,6 +176,25 @@ pub(super) fn begin_runtime_form(
     Ok(())
 }
 
+/// The caller evaluates and type-checks the outer String before entering this API.
+pub(super) fn begin_runtime_form_check(
+    vm: &Vm,
+    fiber: &mut Fiber,
+    generation: GenerationId,
+    function: SymbolKey,
+    instruction: usize,
+    source: String,
+) -> Result<(), StepError> {
+    begin_work(
+        vm,
+        fiber,
+        generation,
+        function,
+        instruction,
+        RuntimeFormRoot::Value(BytecodeType::Integer),
+        RuntimeFormTask::BeginCheckedForm(source),
+    )
+}
 
 pub(super) fn begin_runtime_call_text(
     vm: &Vm,
@@ -222,6 +258,8 @@ fn begin_work(
         values: Vec::new(),
         outputs: Vec::new(),
         awaiting_user_call: None,
+        checkpoints: Vec::new(),
+        next_checkpoint: 1,
         completion,
         remaining_nodes: vm.config.maximum_operand_stack.max(1),
         remaining_source_bytes: MAX_RUNTIME_FORM_BYTES,
@@ -276,7 +314,25 @@ pub(super) fn resume_runtime_form(
             }
             Ok(RuntimeFormStep::Pending)
         }
-        Err(error) => Err(error),
+        Err(error) => {
+            let frame = fiber
+                .frames
+                .iter_mut()
+                .find(|frame| frame.id == continuation.frame)
+                .ok_or_else(|| {
+                    StepError::new(
+                        VmFaultCode::InvalidInstruction,
+                        "STRFORM error owner disappeared",
+                    )
+                })?;
+            if frame.runtime_form.replace(continuation).is_some() {
+                return Err(StepError::new(
+                    VmFaultCode::InvalidInstruction,
+                    "STRFORM error owner already has a continuation",
+                ));
+            }
+            Err(error)
+        }
     }
 }
 
@@ -314,6 +370,7 @@ impl RuntimeFormContinuation {
             && self.outputs.len() <= MAX_RUNTIME_FORM_NESTING
             && self.remaining_nodes <= maximum_stack
             && self.remaining_source_bytes <= MAX_RUNTIME_FORM_BYTES
+            && self.checkpoints_valid()
     }
 
     // Keeping the continuation transition table together makes every resumable state auditable.
@@ -365,7 +422,7 @@ impl RuntimeFormContinuation {
                 self.values.push(VmValue::String(value));
             }
             RuntimeFormTask::CompleteRoot => {
-                if !self.outputs.is_empty() || !self.work.is_empty()
+                if !self.outputs.is_empty() || !self.checkpoints.is_empty() || !self.work.is_empty()
                 {
                     return Err(StepError::new(
                         VmFaultCode::InvalidInstruction,
@@ -399,6 +456,10 @@ impl RuntimeFormContinuation {
                     }
                 }
             }
+            RuntimeFormTask::BeginCheckedForm(source) => {
+                self.begin_checked_form(vm, fiber, natives, &source)?;
+            }
+            RuntimeFormTask::FinishCheck(id) => self.finish_checked_form(id)?,
             RuntimeFormTask::ParseCallText { source, spec } => {
                 self.parse_call_text(vm, fiber, natives, &source, spec)?;
             }
@@ -410,6 +471,11 @@ impl RuntimeFormContinuation {
                 self.values
                     .push(self.read_variable(vm, fiber, &name, &indices)?);
             }
+            RuntimeFormTask::MutateVariable {
+                variable,
+                indices,
+                mode,
+            } => self.mutate_variable(vm, fiber, variable, indices, mode)?,
             RuntimeFormTask::ApplyUnary(op) => {
                 let value = self.pop_value("STRFORM unary operand is missing")?;
                 self.values
@@ -683,13 +749,22 @@ impl RuntimeFormContinuation {
             ExprKind::Group(inner) => self.work.push(RuntimeFormTask::Evaluate(*inner)),
             ExprKind::Unary { op, operand } => {
                 if matches!(op, UnaryOp::PreIncrement | UnaryOp::PreDecrement) {
-                    return Err(unsupported("STRFORM increment expressions are unsupported"));
+                    self.schedule_integer_mutation(
+                        vm,
+                        &operand,
+                        u8::from(op == UnaryOp::PreDecrement),
+                    )?;
+                    return Ok(());
                 }
                 self.work.push(RuntimeFormTask::ApplyUnary(op));
                 self.work.push(RuntimeFormTask::Evaluate(*operand));
             }
-            ExprKind::Postfix { .. } => {
-                return Err(unsupported("STRFORM increment expressions are unsupported"));
+            ExprKind::Postfix { op, operand } => {
+                let mode = match op {
+                    erabasic_ast::PostfixOp::Increment => 2,
+                    erabasic_ast::PostfixOp::Decrement => 3,
+                };
+                self.schedule_integer_mutation(vm, &operand, mode)?;
             }
             ExprKind::Binary { op, left, right } => {
                 self.work
@@ -738,6 +813,31 @@ impl RuntimeFormContinuation {
         Ok(())
     }
 
+    fn schedule_form_source(
+        &mut self,
+        vm: &Vm,
+        natives: &NativeServiceRegistry,
+        source: &str,
+    ) -> Result<(), StepError> {
+        if source.len() > self.remaining_source_bytes {
+            return Err(resource_limit(
+                "nested form sources exceed the parser limit",
+            ));
+        }
+        self.remaining_source_bytes -= source.len();
+        let (formatted, nodes) = parse_runtime_form(
+            vm,
+            natives,
+            self.generation,
+            self.function,
+            source,
+            self.remaining_nodes,
+        )?;
+        self.remaining_nodes = self.remaining_nodes.saturating_sub(nodes);
+        self.work.push(RuntimeFormTask::StartForm(formatted));
+        Ok(())
+    }
+
     // Native and user-call completion share one exactly-once transition boundary.
     #[allow(clippy::too_many_lines)]
     fn finish_call(
@@ -758,29 +858,18 @@ impl RuntimeFormContinuation {
                 "user call bypassed lazy runtime-form resolver",
             ));
         }
-        if name.eq_ignore_ascii_case("STRFORM") {
+        if name.eq_ignore_ascii_case("STRFORM") || name.eq_ignore_ascii_case("STRFORMCHECK") {
             let [VmValue::String(source)] = arguments.as_slice() else {
                 return Err(StepError::new(
                     VmFaultCode::TypeMismatch,
-                    "STRFORM expects one string argument",
+                    "formatted-string function expects one string argument",
                 ));
             };
-            if source.len() > self.remaining_source_bytes {
-                return Err(resource_limit(
-                    "nested STRFORM sources exceed the runtime parser limit",
-                ));
+            if name.eq_ignore_ascii_case("STRFORMCHECK") {
+                self.begin_checked_form(vm, fiber, natives, source)?;
+            } else {
+                self.schedule_form_source(vm, natives, source)?;
             }
-            let (formatted, nodes) = parse_runtime_form(
-                vm,
-                natives,
-                self.generation,
-                self.function,
-                source,
-                self.remaining_nodes,
-            )?;
-            self.remaining_nodes = self.remaining_nodes.saturating_sub(nodes);
-            self.remaining_source_bytes = self.remaining_source_bytes.saturating_sub(source.len());
-            self.work.push(RuntimeFormTask::StartForm(formatted));
             return Ok(());
         }
 

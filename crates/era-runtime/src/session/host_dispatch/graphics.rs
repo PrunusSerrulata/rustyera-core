@@ -236,6 +236,22 @@ impl RuntimeSession {
             let created = match result {
                 Ok(value) => value,
                 Err(message) => {
+                    // Preserve create_canvas's conversion order and duplicate/full sentinel.
+                    let script_dimension_error = match (u32::try_from(width), u32::try_from(height))
+                    {
+                        (Err(_), _) => width < 0,
+                        (Ok(_), Err(_)) => height < 0,
+                        (Ok(width), Ok(height)) => width == 0 || height == 0,
+                    };
+                    if script_dimension_error {
+                        return complete_script_fault(
+                            vm,
+                            request,
+                            erabasic_vm::ScriptFaultKind::Argument,
+                            message,
+                        );
+                    }
+                    // Positive dimensions above the canvas safety limit remain noncatch.
                     return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
                 }
             };
@@ -730,6 +746,14 @@ impl RuntimeSession {
             let width = integer_argument_value(&request.arguments, 1)?;
             let height = integer_argument_value(&request.arguments, 2)?;
             if !(1..=8_192).contains(&width) || !(1..=8_192).contains(&height) {
+                if width <= 8_192 && height <= 8_192 && (width <= 0 || height <= 0) {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        "animation sprite dimensions are out of range",
+                    );
+                }
                 return self.fault(
                     FaultCode::VmFault,
                     "animation sprite dimensions are out of range",

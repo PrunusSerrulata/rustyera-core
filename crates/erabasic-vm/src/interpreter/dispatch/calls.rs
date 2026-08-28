@@ -242,8 +242,12 @@ impl Vm {
                         // records their keys so replay can reject a later service override.
                         // Unregistered interpreter-special natives use the conservative name
                         // policy. STRFORM can evaluate arbitrary script and is always a boundary.
-                        if native_name == "strform" || natives.contains(import.key) {
-                            if natives.path_memo_safe(import.key) && native_name != "strform" {
+                        if matches!(native_name, "strform" | "strformcheck")
+                            || natives.contains(import.key)
+                        {
+                            if natives.path_memo_safe(import.key)
+                                && !matches!(native_name, "strform" | "strformcheck")
+                            {
                                 self.observe_path_memo_safe_native(fiber.id, import.key);
                             } else {
                                 self.invalidate_path_memo(fiber.id);
@@ -275,8 +279,16 @@ impl Vm {
                                     name,
                                 ),
                             ))
-                        } else if native_name == "strform" {
-                            if result_type != Some(BytecodeType::String) || arguments.len() != 1 {
+                        } else if matches!(native_name, "strform" | "strformcheck") {
+                            let result = if native_name == "strformcheck" {
+                                BytecodeType::Integer
+                            } else {
+                                BytecodeType::String
+                            };
+                            if result_type != Some(result)
+                                || target.parameters != [BytecodeType::String]
+                                || arguments.len() != 1
+                            {
                                 return Err(StepError::new(
                                     VmFaultCode::InvalidInstruction,
                                     "STRFORM import signature is invalid",
@@ -292,15 +304,26 @@ impl Vm {
                                     "STRFORM expects a string",
                                 )
                             })?;
-                            begin_runtime_form(
-                                self,
-                                fiber,
-                                natives,
-                                position.generation,
-                                position.function,
-                                position.instruction,
-                                value,
-                            )?;
+                            if native_name == "strformcheck" {
+                                begin_runtime_form_check(
+                                    self,
+                                    fiber,
+                                    position.generation,
+                                    position.function,
+                                    position.instruction,
+                                    value.to_owned(),
+                                )?;
+                            } else {
+                                begin_runtime_form(
+                                    self,
+                                    fiber,
+                                    natives,
+                                    position.generation,
+                                    position.function,
+                                    position.instruction,
+                                    value,
+                                )?;
+                            }
                             return Ok(Some(StepOutcome::DeferredNative));
                         } else if matches!(native_name, "initrand" | "dumprand") {
                             execute_random_place_transaction(

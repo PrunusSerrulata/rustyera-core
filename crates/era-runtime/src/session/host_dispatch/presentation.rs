@@ -122,7 +122,12 @@ impl RuntimeSession {
             ) {
                 Ok(value) => value,
                 Err(message) => {
-                    return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        message,
+                    );
                 }
             };
             return commit_completion(
@@ -215,13 +220,24 @@ impl RuntimeSession {
             let mut prepared = match PreparedHtmlPrint::prepare(&request.arguments) {
                 Ok(prepared) => prepared,
                 Err(error) => {
-                    return self.fault(
-                        FaultCode::VmFault,
-                        &format!(
+                    if error.origin() != erabasic_html::HtmlQueryErrorOrigin::ScriptInput {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            &format!(
+                                "HTML_PRINT {:?} at UTF-8 bytes {}..{}",
+                                error.kind, error.start, error.end
+                            ),
+                            Some(request.origin.clone()),
+                        );
+                    }
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Parse,
+                        format!(
                             "HTML_PRINT {:?} at UTF-8 bytes {}..{}",
                             error.kind, error.start, error.end
                         ),
-                        Some(request.origin.clone()),
                     );
                 }
             };
@@ -249,13 +265,24 @@ impl RuntimeSession {
                 match erabasic_html::parse_document_with_warnings(&markup) {
                     Ok(parsed) => parsed,
                     Err(error) => {
-                        return self.fault(
-                            FaultCode::VmFault,
-                            &format!(
+                        if error.origin() != erabasic_html::HtmlQueryErrorOrigin::ScriptInput {
+                            return self.fault(
+                                FaultCode::VmFault,
+                                &format!(
+                                    "HTML_PRINT_ISLAND {:?} at UTF-8 bytes {}..{}",
+                                    error.kind, error.start, error.end
+                                ),
+                                Some(request.origin.clone()),
+                            );
+                        }
+                        return complete_script_fault(
+                            vm,
+                            request,
+                            erabasic_vm::ScriptFaultKind::Parse,
+                            format!(
                                 "HTML_PRINT_ISLAND {:?} at UTF-8 bytes {}..{}",
                                 error.kind, error.start, error.end
                             ),
-                            Some(request.origin.clone()),
                         );
                     }
                 };
@@ -292,7 +319,12 @@ impl RuntimeSession {
             ) {
                 Ok(value) => value,
                 Err(message) => {
-                    return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        message,
+                    );
                 }
             };
             self.presentation
@@ -364,6 +396,14 @@ impl RuntimeSession {
             Ok(None) => {}
             Err(PresentationStatePreparationError::Alignment) => {
                 *status = HostDispatchStatus::Handled;
+                if matches!(request.arguments.first(), Some(VmValue::String(_))) {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        "ALIGNMENT expects LEFT, CENTER, or RIGHT",
+                    );
+                }
                 return self.fault(
                     FaultCode::VmFault,
                     "ALIGNMENT expects LEFT, CENTER, or RIGHT",
@@ -376,6 +416,21 @@ impl RuntimeSession {
             }
             Err(PresentationStatePreparationError::Color(error)) => {
                 *status = HostDispatchStatus::Handled;
+                if matches!(
+                    request.arguments.as_slice(),
+                    [
+                        VmValue::Integer(_),
+                        VmValue::Integer(_),
+                        VmValue::Integer(_)
+                    ]
+                ) {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        error,
+                    );
+                }
                 return self.fault(FaultCode::VmFault, error, Some(request.origin.clone()));
             }
         }
@@ -383,10 +438,11 @@ impl RuntimeSession {
             *status = HostDispatchStatus::Handled;
             let color_name = string_argument_value(&request.arguments, 0, &name)?;
             let Some(color) = named_color(color_name) else {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
                     "unknown or transparent color name",
-                    Some(request.origin.clone()),
                 );
             };
             if name == "SETCOLORBYNAME" {
@@ -427,6 +483,21 @@ impl RuntimeSession {
             let color = match color_argument_value(&request.arguments) {
                 Ok(color) => color,
                 Err(error) => {
+                    if matches!(
+                        request.arguments.as_slice(),
+                        [
+                            VmValue::Integer(_),
+                            VmValue::Integer(_),
+                            VmValue::Integer(_)
+                        ]
+                    ) {
+                        return complete_script_fault(
+                            vm,
+                            request,
+                            erabasic_vm::ScriptFaultKind::Argument,
+                            error,
+                        );
+                    }
                     return self.fault(FaultCode::VmFault, error, Some(request.origin.clone()));
                 }
             };
@@ -460,10 +531,11 @@ impl RuntimeSession {
                 .first()
                 .map_or_else(String::new, display_value);
             if !self.presentation.remove_background(&resource) {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Operation,
                     "REMOVEBGIMAGE did not find the requested background",
-                    Some(request.origin.clone()),
                 );
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
@@ -529,10 +601,21 @@ impl RuntimeSession {
                         .set_tooltip_images(integer_argument_value(&request.arguments, 0)? != 0);
                     Ok(())
                 }
-                _ => Err("unsupported tooltip operation"),
+                _ => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        "unsupported tooltip operation",
+                        Some(request.origin.clone()),
+                    );
+                }
             };
             if let Err(message) = result {
-                return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
+                    message,
+                );
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();

@@ -86,5 +86,11 @@
       "entry": "PROBE_TRY_STAGE_7",
       "sourceFile": "probe-sources/try-stages.erb.txt"
     }
+  ],
+  "integrationOnly": [
+    "Runtime typed Permission/HostContract/ResourceLimit/Cancellation and malformed NativeReady are Rust safety contracts; never invent matching reference engine faults.",
+    "Snapshot child-origin and CallText-root attacks validate Rust snapshot trust boundaries; no C# oracle equivalent.",
+    "Deferred JUMP retaining LOCAL REF through recursive calls needs real oracle confirmation of return observations, while Rust candidate tests implement the approved ownership contract.",
+    "original CALLSTR/STRFORMCHECK rejection at the actually observed load or run stage must use a separate minimal project; never load snake-only definitions into the dual-oracle common fixture."
   ]
 }

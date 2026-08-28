@@ -97,6 +97,7 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("GETMETH", IntType, &[String, Integer, Any], 1, true);
     add("GETMETHS", StrType, &[String, String, Any], 1, true);
     add("EXISTVAR", IntType, &[String], 1, false);
+    add("STRFORMCHECK", IntType, &[String], 1, false);
     add("GETVAR", IntType, &[String], 1, false);
     add("GETVARS", StrType, &[String], 1, false);
     add("GETDOINGFUNCTION", StrType, &[], 0, false);

@@ -90,7 +90,9 @@ pub struct CallableSignature {
 }
 
 impl CallableSignature {
-    pub(crate) fn arguments_for_arity(&self, arity: usize) -> &[ArgumentConstraint] {
+    /// Argument contract after applying the built-in's arity-specific overload.
+    #[must_use]
+    pub fn arguments_for_arity(&self, arity: usize) -> &[ArgumentConstraint] {
         // The two-argument form replaces a stored document by numeric or string key.
         // Only the longer inline-XML form writes back into a mutable string argument.
         if self.name == "XML_REPLACE" && arity == 2 {
@@ -162,6 +164,7 @@ pub(crate) fn builtin_available(
         "CALLSTR" | "JUMPSTR" | "TRYCALLSTR" | "TRYJUMPSTR" | "TRYCCALLSTR" | "TRYCJUMPSTR" => {
             identity.supports_call_text()
         }
+        "STRFORMCHECK" => identity.supports_checked_runtime_forms(),
         _ => true,
     }
 }

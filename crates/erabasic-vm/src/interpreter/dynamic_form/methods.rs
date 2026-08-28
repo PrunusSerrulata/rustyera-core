@@ -393,6 +393,14 @@ impl RuntimeFormContinuation {
         let Some(owner) = fiber.frames.iter().position(|frame| frame.id == self.frame) else {
             return false;
         };
+        if !self.checkpoints_valid()
+            || self.checkpoints.iter().any(|checkpoint| {
+                checkpoint.owner_stack_depth > fiber.frames[owner].stack.len()
+                    || checkpoint.owner_user_calls != fiber.frames[owner].user_calls.len()
+            })
+        {
+            return false;
+        }
         if let Some(wait) = &self.awaiting_user_call {
             if self
                 .validate_method_call(vm, fiber, &wait.call, false)
@@ -437,6 +445,11 @@ impl RuntimeFormContinuation {
                     .iter()
                     .all(|value| argument_spec(program, self.function, value.as_ref()).is_ok())
             }
+            RuntimeFormTask::MutateVariable {
+                variable,
+                indices,
+                mode,
+            } => self.valid_mutation_task(vm, *variable, *indices, *mode),
             RuntimeFormTask::ParseCallText { spec, .. } => {
                 matches!(self.completion, RuntimeFormRoot::Call { spec: root, .. } if root == *spec)
             }
@@ -507,7 +520,8 @@ impl RuntimeFormContinuation {
             }
         }
         for task in &self.work {
-            if let RuntimeFormTask::ParseCallText { source, .. } = task
+            if let RuntimeFormTask::BeginCheckedForm(source)
+            | RuntimeFormTask::ParseCallText { source, .. } = task
             {
                 bytes = bytes.checked_add(source.len())?;
             }

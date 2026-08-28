@@ -144,7 +144,19 @@ impl RuntimeSession {
         let result = self.prepare_html_query(vm, request, name, operation, context, style);
         let prepared = match result {
             Ok(prepared) => prepared,
-            Err(error) => return self.html_query_failure(&error, Some(request.origin.clone())),
+            Err(error) => {
+                let outcome = self.complete_html_failure(vm, request.id, &error, &request.origin);
+                if outcome.is_ok()
+                    && error.origin() == erabasic_html::HtmlQueryErrorOrigin::ScriptInput
+                    && name == "HTML__LINES_STEP"
+                {
+                    // Source parsing occurs only after prepare_html_query validates this ticket.
+                    if let Some(VmValue::String(ticket)) = request.arguments.first() {
+                        self.operations.html_lines.discard_failed_step(ticket);
+                    }
+                }
+                return outcome;
+            }
         };
         match prepared {
             PreparedQuery::Ready(value) => commit_completion(
@@ -159,7 +171,15 @@ impl RuntimeSession {
                 let advance = match continuation.advance() {
                     Ok(advance) => advance,
                     Err(error) => {
-                        return self.html_query_failure(&error, Some(request.origin.clone()));
+                        let outcome =
+                            self.complete_html_failure(vm, request.id, &error, &request.origin);
+                        if outcome.is_ok()
+                            && error.origin() == erabasic_html::HtmlQueryErrorOrigin::ScriptInput
+                            && let Some(ticket) = &continuation.line_ticket
+                        {
+                            self.operations.html_lines.discard_failed_step(ticket);
+                        }
+                        return outcome;
                     }
                 };
                 match advance {
@@ -167,8 +187,12 @@ impl RuntimeSession {
                         let ready = match self.finish_html_query(vm, &continuation, value) {
                             Ok(ready) => ready,
                             Err(error) => {
-                                return self
-                                    .html_query_failure(&error, Some(request.origin.clone()));
+                                return self.complete_html_failure(
+                                    vm,
+                                    request.id,
+                                    &error,
+                                    &request.origin,
+                                );
                             }
                         };
                         commit_completion(vm, request.id, VmHostCompletion::Ready(ready))
@@ -178,8 +202,12 @@ impl RuntimeSession {
                         {
                             Ok(encoded) => encoded,
                             Err(error) => {
-                                return self
-                                    .html_query_failure(&error, Some(request.origin.clone()));
+                                return self.complete_html_failure(
+                                    vm,
+                                    request.id,
+                                    &error,
+                                    &request.origin,
+                                );
                             }
                         };
                         // Only the first service round changes the VM host wait.
@@ -371,13 +399,17 @@ impl RuntimeSession {
         {
             return self.html_backend_failure(&error.code, &error.message, &continuation.origin);
         }
-        let advanced = continuation
+        let received = continuation
             .budget
             .charge(payload.as_slice().len(), 0)
-            .and_then(|()| continuation.receive(response))
-            .and_then(|()| continuation.advance());
-        match advanced {
-            Err(error) => self.html_query_failure(&error, Some(continuation.origin.clone())),
+            .and_then(|()| continuation.receive(response));
+        if let Err(error) = received {
+            // The response side is a provider contract, even if future inner code
+            // accidentally propagates a source-looking error from a measurement.
+            return self.html_query_failure(&error, Some(continuation.origin.clone()));
+        }
+        match continuation.advance() {
+            Err(error) => self.complete_pending_html_failure(&continuation, &error),
             Ok(Advance::Request(payload)) => {
                 let encoded = match encode_html_request(&payload, &mut continuation.budget) {
                     Ok(encoded) => encoded,
@@ -407,7 +439,12 @@ impl RuntimeSession {
                 continuation.request,
                 VmHostCompletion::Ready(ready),
             ),
-            Err(error) => self.html_query_failure(&error, Some(continuation.origin.clone())),
+            Err(error) => self.complete_html_failure(
+                &mut vm,
+                continuation.request,
+                &error,
+                &continuation.origin,
+            ),
         };
         self.vm = Some(vm);
         outcome?;
@@ -483,6 +520,54 @@ impl RuntimeSession {
             value: Some(value),
             writes,
         })
+    }
+
+    fn complete_html_failure(
+        &mut self,
+        vm: &mut RuntimeVm,
+        request: HostRequestId,
+        error: &HtmlQueryError,
+        origin: &VmExecutionOrigin,
+    ) -> Result<(), RuntimeError> {
+        if error.origin() == erabasic_html::HtmlQueryErrorOrigin::ScriptInput {
+            complete_script_fault_request(
+                vm,
+                request,
+                erabasic_vm::ScriptFaultKind::Parse,
+                format!("html.query.{:?}: {error}", error.kind),
+            )
+        } else {
+            self.html_query_failure(error, Some(origin.clone()))
+        }
+    }
+
+    fn complete_pending_html_failure(
+        &mut self,
+        continuation: &HtmlQueryContinuation,
+        error: &HtmlQueryError,
+    ) -> Result<(), RuntimeError> {
+        if error.origin() != erabasic_html::HtmlQueryErrorOrigin::ScriptInput {
+            return self.html_query_failure(error, Some(continuation.origin.clone()));
+        }
+        // complete_service has consumed exactly this pending request and the caller
+        // has validated epoch, projection, frame and measurement identity above.
+        let mut vm = self
+            .vm
+            .take()
+            .ok_or_else(|| RuntimeError::Internal("HTML completion has no VM".into()))?;
+        let result =
+            self.complete_html_failure(&mut vm, continuation.request, error, &continuation.origin);
+        self.vm = Some(vm);
+        result?;
+        if let Some(ticket) = &continuation.line_ticket {
+            self.operations.html_lines.discard_failed_step(ticket);
+        }
+        if self.phase != RuntimePhase::DebugPaused {
+            // A local catcher is runnable; an uncaught fault is a queued VM event.
+            // Neither case should leave the session waiting for the consumed service.
+            self.set_phase(RuntimePhase::Running)?;
+        }
+        Ok(())
     }
 
     fn html_query_failure(

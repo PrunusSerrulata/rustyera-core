@@ -814,10 +814,14 @@ impl VmRuntimePort for RuntimeVm {
                 wait.rebind_payload = rebind_payload;
                 Ok(fiber_id)
             }
-            VmHostCompletion::Error(failure) => Err(VmError::InvalidState(format!(
-                "host request failed: {}",
-                failure.message
-            ))),
+            VmHostCompletion::Error(failure) => {
+                let (fiber, fault) = self.vm.fail_waiting_host(completion.request, failure)?;
+                if let Some(fault) = fault {
+                    self.pending_completion_events
+                        .push(VmPortEvent::FiberFaulted(fiber, fault));
+                }
+                Ok(fiber)
+            }
         }
     }
 

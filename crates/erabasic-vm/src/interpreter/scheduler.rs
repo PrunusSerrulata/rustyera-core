@@ -272,17 +272,34 @@ impl Vm {
                         }
                         break;
                     }
-                    Err(error) => {
-                        self.abort_path_memo(fiber.id);
-                        fiber.clear_runtime_forms();
-                        let fault = self.make_classified_fault(fiber.id, &position, error);
-                        fiber.state = FiberState::Faulted(fault.clone());
-                        report.events.push(VmEvent::FiberFaulted {
-                            fiber: fiber.id,
-                            fault,
-                        });
-                        break;
-                    }
+                    Err(error) => match self.recover_runtime_form_failure(&mut fiber, &error) {
+                        Ok(true) => {
+                            if debug_checks_active
+                                && let Some(stop) = self.debug_stop_after(&fiber, false, false)
+                            {
+                                report.events.push(VmEvent::DebugStopped(stop));
+                                break;
+                            }
+                        }
+                        outcome => {
+                            let error = match outcome {
+                                Err(internal) => internal,
+                                Ok(_) => error,
+                            };
+                            self.abort_path_memo(fiber.id);
+                            for frame in &fiber.frames {
+                                self.active_function_memos.remove(&frame.id);
+                            }
+                            fiber.clear_runtime_forms();
+                            let fault = self.make_classified_fault(fiber.id, &position, error);
+                            fiber.state = FiberState::Faulted(fault.clone());
+                            report.events.push(VmEvent::FiberFaulted {
+                                fiber: fiber.id,
+                                fault,
+                            });
+                            break;
+                        }
+                    },
                 }
                 if fiber.backward_branches_without_progress
                     > self.config.maximum_backward_branches_without_progress

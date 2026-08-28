@@ -135,7 +135,8 @@ impl RuntimeFormContinuation {
         if self
             .work
             .len()
-            .checked_add(method_slots)
+            .checked_add(self.checkpoints.len())
+            .and_then(|count| count.checked_add(method_slots))
             .is_none_or(|count| count > vm.config.maximum_operand_stack)
             || self.values.len() > vm.config.maximum_operand_stack
             || self.outputs.len() > MAX_RUNTIME_FORM_NESTING

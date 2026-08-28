@@ -16,6 +16,14 @@ impl RuntimeSession {
             let milliseconds = match request.arguments.first() {
                 None | Some(VmValue::Integer(0)) => 0,
                 Some(VmValue::Integer(value @ 1..=10_000)) => *value,
+                Some(VmValue::Integer(_)) => {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        "AWAIT duration must be between 0 and 10000 milliseconds",
+                    );
+                }
                 _ => {
                     return self.fault(
                         FaultCode::VmFault,
@@ -95,17 +103,19 @@ impl RuntimeSession {
                         VmValue::String(value)
                     }
                     ("GETCONFIG", era_config::ScriptConfigValue::String(_)) => {
-                        return self.fault(
-                            FaultCode::VmFault,
+                        return complete_script_fault(
+                            vm,
+                            request,
+                            erabasic_vm::ScriptFaultKind::Argument,
                             "GETCONFIG value is a string; use GETCONFIGS",
-                            Some(request.origin.clone()),
                         );
                     }
                     ("GETCONFIGS", era_config::ScriptConfigValue::Integer(_)) => {
-                        return self.fault(
-                            FaultCode::VmFault,
+                        return complete_script_fault(
+                            vm,
+                            request,
+                            erabasic_vm::ScriptFaultKind::Argument,
                             "GETCONFIGS value is an integer; use GETCONFIG",
-                            Some(request.origin.clone()),
                         );
                     }
                     _ => unreachable!(),
@@ -145,10 +155,11 @@ impl RuntimeSession {
                             replace.relation_default
                         }
                         _ => {
-                            return self.fault(
-                                FaultCode::VmFault,
-                                &format!("GETCONFIG does not expose configuration key {key:?}"),
-                                Some(request.origin.clone()),
+                            return complete_script_fault(
+                                vm,
+                                request,
+                                erabasic_vm::ScriptFaultKind::Resolve,
+                                format!("GETCONFIG does not expose configuration key {key:?}"),
                             );
                         }
                     };
@@ -180,10 +191,11 @@ impl RuntimeSession {
                         "BAR文字1" | "BAR character 1" => replace.bar_char_1.to_string(),
                         "BAR文字2" | "BAR character 2" => replace.bar_char_2.to_string(),
                         _ => {
-                            return self.fault(
-                                FaultCode::VmFault,
-                                &format!("GETCONFIGS does not expose configuration key {key:?}"),
-                                Some(request.origin.clone()),
+                            return complete_script_fault(
+                                vm,
+                                request,
+                                erabasic_vm::ScriptFaultKind::Resolve,
+                                format!("GETCONFIGS does not expose configuration key {key:?}"),
                             );
                         }
                     };
@@ -240,25 +252,36 @@ impl RuntimeSession {
                 );
             }
             let variable = string_argument_value(&request.arguments, 0, "VARSIZE")?;
-            let dimensions = vm
-                .variable_dimensions(request.fiber, variable)
-                .ok_or_else(|| {
-                    RuntimeError::Internal(format!(
-                        "VARSIZE argument is not a variable: {variable}"
-                    ))
-                })?;
+            let Some(dimensions) = vm.variable_dimensions(request.fiber, variable) else {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Resolve,
+                    format!("VARSIZE argument is not a variable: {variable}"),
+                );
+            };
             let dimension = request
                 .arguments
                 .get(1)
                 .map(|_| integer_argument_value(&request.arguments, 1))
                 .transpose()?
                 .unwrap_or(0);
-            let dimension = usize::try_from(dimension).map_err(|_| {
-                RuntimeError::Internal("VARSIZE dimension must be non-negative".into())
-            })?;
-            let value = dimensions.get(dimension).copied().ok_or_else(|| {
-                RuntimeError::Internal("VARSIZE dimension exceeds the variable rank".into())
-            })?;
+            let Ok(dimension) = usize::try_from(dimension) else {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "VARSIZE dimension must be non-negative",
+                );
+            };
+            let Some(value) = dimensions.get(dimension).copied() else {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "VARSIZE dimension exceeds the variable rank",
+                );
+            };
             return commit_completion(
                 vm,
                 request.id,
@@ -463,26 +486,39 @@ impl RuntimeSession {
         }
         if name == "HOTKEY_STATE_INIT" {
             *status = HostDispatchStatus::Handled;
-            let size =
-                usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
-                    RuntimeError::Internal("HOTKEY_STATE_INIT size must be non-negative".into())
-                })?;
+            let raw_size = integer_argument_value(&request.arguments, 0)?;
+            if raw_size < 0 {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "HOTKEY_STATE_INIT size must be non-negative",
+                );
+            }
+            let size = usize::try_from(raw_size).map_err(|_| {
+                RuntimeError::Internal("HOTKEY_STATE_INIT size must be non-negative".into())
+            })?;
             self.hotkey_state = vec![0; size];
             commit_integer_result(vm, request.id, 0)?;
             return self.emit_projection_state();
         }
         if name == "HOTKEY_STATE" {
             *status = HostDispatchStatus::Handled;
-            let index =
-                usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
-                    RuntimeError::Internal("HOTKEY_STATE index must be non-negative".into())
-                })?;
+            let Ok(index) = usize::try_from(integer_argument_value(&request.arguments, 0)?) else {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "HOTKEY_STATE index must be non-negative",
+                );
+            };
             let value = integer_argument_value(&request.arguments, 1)?;
             let Some(slot) = self.hotkey_state.get_mut(index) else {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
                     "HOTKEY_STATE requires an initialized in-range index",
-                    Some(request.origin.clone()),
                 );
             };
             *slot = value;
@@ -578,17 +614,19 @@ impl RuntimeSession {
             ) {
                 Ok(value) => value,
                 Err(BarStringError::NonPositiveMaximum) => {
-                    return self.fault(
-                        FaultCode::VmFault,
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
                         "BARSTR maximum must be positive",
-                        Some(request.origin.clone()),
                     );
                 }
                 Err(BarStringError::InvalidLength) => {
-                    return self.fault(
-                        FaultCode::VmFault,
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
                         "BARSTR length must be between 1 and 99",
-                        Some(request.origin.clone()),
                     );
                 }
             };
@@ -619,10 +657,11 @@ impl RuntimeSession {
                 let formatted = match format_optional_era_integer(value, format) {
                     Ok(value) => value,
                     Err(error) => {
-                        return self.fault(
-                            FaultCode::VmFault,
-                            &format!("{name} format is invalid: {error}"),
-                            Some(request.origin.clone()),
+                        return complete_script_fault(
+                            vm,
+                            request,
+                            erabasic_vm::ScriptFaultKind::Parse,
+                            format!("{name} format is invalid: {error}"),
                         );
                     }
                 };
@@ -638,10 +677,11 @@ impl RuntimeSession {
             let formatted = match format_optional_era_integer(value, format) {
                 Ok(value) => value,
                 Err(error) => {
-                    return self.fault(
-                        FaultCode::VmFault,
-                        &format!("{name} format is invalid: {error}"),
-                        Some(request.origin.clone()),
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Parse,
+                        format!("{name} format is invalid: {error}"),
                     );
                 }
             };
@@ -678,20 +718,32 @@ impl RuntimeSession {
         }
         if name == "CALLTRAIN" {
             *status = HostDispatchStatus::Handled;
-            let count =
-                usize::try_from(integer_argument_value(&request.arguments, 0)?).map_err(|_| {
-                    RuntimeError::Internal("CALLTRAIN count must be non-negative".into())
-                })?;
-            let capacity = vm
+            let Ok(count) = usize::try_from(integer_argument_value(&request.arguments, 0)?) else {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "CALLTRAIN count must be non-negative",
+                );
+            };
+            let Some(capacity) = vm
                 .variable_dimensions(request.fiber, "SELECTCOM")
                 .and_then(|dimensions| dimensions.first().copied())
                 .and_then(|value| usize::try_from(value).ok())
-                .unwrap_or(0);
-            if count >= capacity {
+            else {
+                // Missing/malformed implicit storage is not a script count error.
                 return self.fault(
                     FaultCode::VmFault,
                     "CALLTRAIN count must be smaller than SELECTCOM capacity",
                     Some(request.origin.clone()),
+                );
+            };
+            if count >= capacity {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "CALLTRAIN count must be smaller than SELECTCOM capacity",
                 );
             }
             self.controller.clear_continuous_train();
@@ -752,10 +804,11 @@ impl RuntimeSession {
                 || !allowed_step
                 || usize::try_from(command).map_or(true, |value| value >= train_name_count)
             {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Operation,
                     "DOTRAIN is not valid in this TRAIN phase or its command is outside TRAINNAME",
-                    Some(request.origin.clone()),
                 );
             }
             vm.cancel_fiber(request.fiber)
@@ -782,10 +835,11 @@ impl RuntimeSession {
                 );
             };
             let Some(flow) = SystemFlow::parse(keyword) else {
-                return self.fault(
-                    FaultCode::VmFault,
-                    &format!("unknown BEGIN system keyword: {keyword}"),
-                    Some(request.origin.clone()),
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
+                    format!("unknown BEGIN system keyword: {keyword}"),
                 );
             };
             // BEGIN resets the console style at instruction execution time, even

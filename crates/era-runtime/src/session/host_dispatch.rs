@@ -265,6 +265,20 @@ impl RuntimeSession {
         vm: &mut RuntimeVm,
         request: &VmHostRequest,
     ) -> Result<(), RuntimeError> {
+        match self.handle_host_call_inner(vm, request) {
+            Err(RuntimeError::Script { kind, message }) => {
+                complete_script_fault(vm, request, kind, message)
+            }
+            result => result,
+        }
+    }
+
+    #[allow(clippy::single_match_else, clippy::too_many_lines)]
+    fn handle_host_call_inner(
+        &mut self,
+        vm: &mut RuntimeVm,
+        request: &VmHostRequest,
+    ) -> Result<(), RuntimeError> {
         if let Some(time) = self.candidate_clock {
             match request.import.contract.candidate {
                 erabasic_bytecode::CandidatePolicy::Forbidden => {
@@ -333,27 +347,30 @@ impl RuntimeSession {
                 );
             }
             RuntimeQueryEvaluation::MalformedHtml => {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Parse,
                     "malformed HTML text",
-                    Some(request.origin.clone()),
                 );
             }
             RuntimeQueryEvaluation::InvalidPrintedHtmlIndex => {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
                     "HTML_GETPRINTEDSTR line number must be non-negative",
-                    Some(request.origin.clone()),
                 );
             }
             RuntimeQueryEvaluation::Unhandled => {}
         }
         if name == "ASSERT" {
             if integer_argument_value(&request.arguments, 0)? == 0 {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Assertion,
                     "ASSERT failed",
-                    Some(request.origin.clone()),
                 );
             }
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
@@ -363,22 +380,29 @@ impl RuntimeSession {
                 .arguments
                 .first()
                 .map_or_else(String::new, display_value);
-            return self.fault(FaultCode::VmFault, &message, Some(request.origin.clone()));
+            return complete_script_fault(
+                vm,
+                request,
+                erabasic_vm::ScriptFaultKind::ExplicitThrow,
+                &message,
+            );
         }
         if name == "FORCEKANA" {
             let mode = integer_argument_value(&request.arguments, 0)?;
             let Ok(mode) = u8::try_from(mode) else {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
                     "FORCEKANA mode must be between 0 and 3",
-                    Some(request.origin.clone()),
                 );
             };
             if mode > 3 {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
                     "FORCEKANA mode must be between 0 and 3",
-                    Some(request.origin.clone()),
                 );
             }
             self.force_kana_mode = mode;
@@ -386,8 +410,15 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "UPCHECK" | "CUPCHECK") {
             let (character, character_scoped) = if name == "CUPCHECK" {
-                let character = u64::try_from(integer_argument_value(&request.arguments, 0)?)
-                    .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+                let Ok(character) = u64::try_from(integer_argument_value(&request.arguments, 0)?)
+                else {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Bounds,
+                        "character index is negative",
+                    );
+                };
                 (character, true)
             } else {
                 let target = read_runtime_integer(vm, "TARGET", &[], None)?;
@@ -439,10 +470,11 @@ impl RuntimeSession {
         }
         if self.skip_print && is_runtime_print_command(&name) {
             if self.user_defined_skip && is_input_command(&name) {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Operation,
                     "an input command cannot execute while user SKIPDISP is active; wrap it in NOSKIP/ENDNOSKIP",
-                    Some(request.origin.clone()),
                 );
             }
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
@@ -484,6 +516,10 @@ impl RuntimeSession {
                 Some(request.origin.clone()),
                 Some(Box::new(
                     era_runtime_protocol::CompatibilityDiagnosticContext {
+                        artifact: None,
+                        project_load_id: None,
+                        runtime_epoch: None,
+                        generation: None,
                         identity: self
                             .project_snapshot
                             .as_ref()
@@ -646,6 +682,10 @@ impl RuntimeSession {
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                     context: Some(Box::new(
                         era_runtime_protocol::CompatibilityDiagnosticContext {
+                            artifact: None,
+                            project_load_id: None,
+                            runtime_epoch: None,
+                            generation: None,
                             identity: self
                                 .project_snapshot
                                 .as_ref()

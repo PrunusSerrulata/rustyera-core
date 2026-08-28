@@ -45,12 +45,21 @@ pub(super) fn valid_origin(
     let Some(result) = continuation.root_result_type() else {
         return false;
     };
-    if result != BytecodeType::String {
-        return false;
-    }
+    let name = match result {
+        BytecodeType::String => "STRFORM",
+        BytecodeType::Integer
+            if artifact
+                .manifest
+                .compatibility
+                .supports_checked_runtime_forms() =>
+        {
+            "STRFORMCHECK"
+        }
+        _ => return false,
+    };
     artifact.native_imports.iter().any(|native| {
         native.import.key == import.key
-            && native.import.name.eq_ignore_ascii_case("STRFORM")
+            && native.import.name.eq_ignore_ascii_case(name)
             && native.import.parameters == [BytecodeType::String]
             && native.import.result == Some(result)
     })

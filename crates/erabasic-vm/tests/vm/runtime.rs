@@ -1332,6 +1332,99 @@ fn isolated_candidate_can_create_columns_when_its_base_identity_is_still_current
 }
 
 #[test]
+fn host_fault_delivery_is_once_and_blocks_snapshot_fork_and_candidate_commit() {
+    let (artifact, entry) = host_artifact(HostSnapshotCapability::StableWait);
+    let mut runtime = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    let candidate = runtime
+        .fork_isolated()
+        .unwrap()
+        .into_candidate_state()
+        .unwrap();
+    let fiber = runtime.spawn_entry(entry, Vec::new()).unwrap();
+    let request = runtime
+        .drive(RunBudget::default(), VmDriveMode::Normal)
+        .events
+        .into_iter()
+        .find_map(|event| match event {
+            VmPortEvent::HostCall(request) => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let error = erabasic_vm::ExecutionFailure::classified(
+        erabasic_vm::FaultCategory::HostContract,
+        erabasic_vm::VmFaultCode::Host,
+        "bad provider contract",
+    );
+    let prepared = runtime
+        .validate_host_completion(request.id, VmHostCompletion::Error(error))
+        .unwrap();
+    runtime.commit_host_completion(prepared).unwrap();
+    assert!(runtime.has_pending_events());
+    assert!(runtime.has_work());
+    assert!(!runtime.has_runnable_fibers());
+    assert_eq!(runtime.retire_terminal_fibers(), 0);
+    assert_eq!(
+        runtime.snapshot_eligibility(),
+        SnapshotEligibility::Ineligible(vec![
+            erabasic_vm::SnapshotBlocker::PendingCompletionEvents,
+        ])
+    );
+    assert!(runtime.encode_unrestricted_snapshot().is_err());
+    assert!(runtime.fork_isolated().is_err());
+    assert!(runtime.prepare_hot_reload(validated(&artifact)).is_err());
+    assert!(runtime.commit_candidate_state(candidate).is_err());
+    assert!(matches!(
+        runtime.validate_host_completion(request.id, VmHostCompletion::Ready(HostReady::empty())),
+        Err(VmError::StaleHostRequest(_))
+    ));
+    let report = runtime.drive(RunBudget::default(), VmDriveMode::Normal);
+    assert_eq!(report.instructions, 0);
+    let [VmPortEvent::FiberFaulted(actual, fault)] = report.events.as_slice() else {
+        panic!("one original fault must be delivered: {report:?}");
+    };
+    assert_eq!(*actual, fiber);
+    assert_eq!(fault.category, erabasic_vm::FaultCategory::HostContract);
+    assert_eq!(fault.generation, request.origin.generation);
+    assert_eq!(fault.function, request.origin.function);
+    assert_eq!(fault.instruction, request.origin.instruction);
+    assert!(!runtime.has_work());
+    assert!(
+        runtime
+            .drive(RunBudget::default(), VmDriveMode::Normal)
+            .events
+            .is_empty()
+    );
+}
+
+#[test]
+fn candidate_extraction_rejects_an_undelivered_host_fault() {
+    let (artifact, entry) = host_artifact(HostSnapshotCapability::StableWait);
+    let mut runtime = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    runtime.spawn_entry(entry, Vec::new()).unwrap();
+    let request = runtime
+        .drive(RunBudget::default(), VmDriveMode::Normal)
+        .events
+        .into_iter()
+        .find_map(|event| match event {
+            VmPortEvent::HostCall(request) => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let prepared = runtime
+        .validate_host_completion(
+            request.id,
+            VmHostCompletion::Error(erabasic_vm::ExecutionFailure::classified(
+                erabasic_vm::FaultCategory::HostContract,
+                erabasic_vm::VmFaultCode::Host,
+                "bad provider contract",
+            )),
+        )
+        .unwrap();
+    runtime.commit_host_completion(prepared).unwrap();
+    assert!(runtime.into_candidate_state().is_err());
+}
+
+#[test]
 #[allow(clippy::too_many_lines)] // One shared host exercises all return continuation modes.
 fn host_return_current_preserves_dynamic_jump_and_event_continuations() {
     for (entry_call, expected_after, expected_later) in [

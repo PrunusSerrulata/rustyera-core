@@ -78,10 +78,11 @@ impl RuntimeSession {
                 self.controller.flow,
                 Some(SystemFlow::Title | SystemFlow::Shop | SystemFlow::Normal)
             ) {
-                return self.fault(
-                    FaultCode::VmFault,
-                    &format!("{name} cannot open outside the reference __CAN_SAVE__ states"),
-                    Some(request.origin.clone()),
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Operation,
+                    format!("{name} cannot open outside the reference __CAN_SAVE__ states"),
                 );
             }
             commit_completion(
@@ -129,13 +130,23 @@ impl RuntimeSession {
         }
         if name == "SAVEDATA" {
             *status = HostDispatchStatus::Handled;
+            let slot_value = integer_argument_value(&request.arguments, 0)?;
+            if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    format!("SAVEDATA argument 1 must be between 0 and {}", i32::MAX),
+                );
+            }
             let slot = save_slot_argument(&request.arguments, 0, "SAVEDATA")?;
             let description = string_argument_value(&request.arguments, 1, "SAVEDATA")?;
             if description.contains(['\r', '\n']) {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
                     "SAVEDATA description cannot contain a newline",
-                    Some(request.origin.clone()),
                 );
             }
             let bytes = encode_scoped_save(
@@ -169,6 +180,15 @@ impl RuntimeSession {
         }
         if name == "LOADDATA" {
             *status = HostDispatchStatus::Handled;
+            let slot_value = integer_argument_value(&request.arguments, 0)?;
+            if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    format!("LOADDATA argument 1 must be between 0 and {}", i32::MAX),
+                );
+            }
             let slot = save_slot_argument(&request.arguments, 0, "LOADDATA")?;
             return self.issue_host_storage(
                 vm,
@@ -181,6 +201,15 @@ impl RuntimeSession {
         }
         if name == "DELDATA" {
             *status = HostDispatchStatus::Handled;
+            let slot_value = integer_argument_value(&request.arguments, 0)?;
+            if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    format!("DELDATA argument 1 must be between 0 and {}", i32::MAX),
+                );
+            }
             let slot = save_slot_argument(&request.arguments, 0, "DELDATA")?;
             return self.issue_host_storage(
                 vm,
@@ -250,23 +279,30 @@ impl RuntimeSession {
             let mut selected = Vec::new();
             let mut seen = std::collections::BTreeSet::new();
             for index in 2..request.arguments.len() {
-                let value = usize::try_from(integer_argument_value(&request.arguments, index)?)
-                    .map_err(|_| {
-                        RuntimeError::Internal(format!(
-                            "SAVECHARA argument {} must be non-negative",
-                            index + 1
-                        ))
-                    })?;
+                let Ok(value) = usize::try_from(integer_argument_value(&request.arguments, index)?)
+                else {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Bounds,
+                        format!("SAVECHARA argument {} must be non-negative", index + 1),
+                    );
+                };
                 if value >= exported.characters.len() {
-                    return Err(RuntimeError::Internal(format!(
-                        "SAVECHARA argument {} is not a character",
-                        index + 1
-                    )));
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Bounds,
+                        format!("SAVECHARA argument {} is not a character", index + 1),
+                    );
                 }
                 if !seen.insert(value) {
-                    return Err(RuntimeError::Internal(format!(
-                        "SAVECHARA character {value} is duplicated"
-                    )));
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        format!("SAVECHARA character {value} is duplicated"),
+                    );
                 }
                 selected.push(exported.characters[value].clone());
             }
@@ -319,6 +355,15 @@ impl RuntimeSession {
         }
         if name == "CHKDATA" {
             *status = HostDispatchStatus::Handled;
+            let slot_value = integer_argument_value(&request.arguments, 0)?;
+            if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    format!("CHKDATA argument 1 must be between 0 and {}", i32::MAX),
+                );
+            }
             let slot = save_slot_argument(&request.arguments, 0, "CHKDATA")?;
             return self.issue_host_storage(
                 vm,

@@ -820,3 +820,14 @@ TRYCCALLSTR、TRYCJUMPSTR 与 `InvokeCallText`。解析器接受括号和逗号�
 CALLSTR 的局部 TRY 只处理指定的实参归约、目标缺失和绑定阶段；词法、名字/类型重构、
 实参执行以及 callee/Host/Native 失败继续传播。RuntimeForm Call 根与原 String 根分离，
 恢复快照须验证真实 InvokeCallText 来源与子调用身份。此阶段没有通用 FORM 服务捕获。
+
+### STRFORMCHECK 与可信失败恢复
+
+外层 String 先求值，再建立 STRFORMCHECK 捕获范围；正常展开返回 1，可信脚本解析或展开
+错误返回 0。已经提交的脚本、REF、Host/Native 副作用不回滚，展开资源与看门狗计数不重置。
+运行期 FORM 的 prefix/postfix 修改使用当前 compatibility 算术策略和真实变量/REF 索引。
+
+异步 `VmHostCompletion::Error` 经相同的可信分类进入最近 FORM 捕获范围，或排队原始 fault
+事件。坏 NativeReady/写集合、失败 rollback、权限、资源和取消不能通过错误文本取得捕获权。
+待交付终态必须先 `drive`，不允许 snapshot/fork/reload/候选提交丢弃未观测的完成事件。
+此阶段不包含 EXISTVAR 的第二次 source 检查点。

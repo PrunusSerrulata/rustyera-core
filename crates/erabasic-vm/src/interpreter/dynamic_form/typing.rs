@@ -106,13 +106,16 @@ impl<'a> TypeAnalysis<'a> {
             ExprKind::Unary { op, operand } => {
                 let kind = self.expression(operand, depth + 1)?;
                 if matches!(op, UnaryOp::PreIncrement | UnaryOp::PreDecrement) {
-                    return Err(unsupported("STRFORM increment expressions are unsupported"));
+                    self.mutable_integer(operand)?;
                 }
                 require_type(Some(kind), BytecodeType::Integer)?;
                 Ok(BytecodeType::Integer)
             }
-            ExprKind::Postfix { .. } => {
-                return Err(unsupported("STRFORM increment expressions are unsupported"));
+            ExprKind::Postfix { operand, .. } => {
+                let kind = self.expression(operand, depth + 1)?;
+                self.mutable_integer(operand)?;
+                require_type(Some(kind), BytecodeType::Integer)?;
+                Ok(BytecodeType::Integer)
             }
             ExprKind::Call { name, args } => {
                 let shapes = args
@@ -219,6 +222,26 @@ impl<'a> TypeAnalysis<'a> {
         Ok(())
     }
 
+    fn mutable_integer(&self, expression: &Expr) -> Result<(), StepError> {
+        let definition = variable(self.program, self.function, expression)
+            .ok_or_else(|| bad_type("increment/decrement needs a variable"))?;
+        if !definition.mutable || definition.value_type != BytecodeType::Integer {
+            return Err(bad_type("increment/decrement needs a writable Integer"));
+        }
+        {
+            let expression = ungroup(expression);
+            if let ExprKind::Variable { indices, .. } = &expression.kind
+                && indices.len()
+                    > definition.dimensions.len()
+                        + usize::from(
+                            definition.storage == erabasic_bytecode::BytecodeStorage::Character,
+                        )
+            {
+                return Err(bad_type("mutation index count exceeds variable rank"));
+            }
+        }
+        Ok(())
+    }
 
     fn call(
         &self,
@@ -292,12 +315,29 @@ impl<'a> TypeAnalysis<'a> {
             require_type(types[0], BytecodeType::String)?;
             return Ok(BytecodeType::Integer);
         }
-        if name.eq_ignore_ascii_case("STRFORM") {
+        if name.eq_ignore_ascii_case("STRFORM") || name.eq_ignore_ascii_case("STRFORMCHECK") {
+            let checked = name.eq_ignore_ascii_case("STRFORMCHECK");
+            if checked
+                && !self
+                    .program
+                    .artifact
+                    .manifest
+                    .compatibility
+                    .supports_checked_runtime_forms()
+            {
+                return Err(support::permission_denied(
+                    "STRFORMCHECK is unavailable in this compatibility identity",
+                ));
+            }
             if types.len() != 1 {
                 return Err(bad_type("formatted-string function expects one String"));
             }
             require_type(types[0], BytecodeType::String)?;
-            return Ok(BytecodeType::String);
+            return Ok(if checked {
+                BytecodeType::Integer
+            } else {
+                BytecodeType::String
+            });
         }
         self.native_call(name, &types)
     }

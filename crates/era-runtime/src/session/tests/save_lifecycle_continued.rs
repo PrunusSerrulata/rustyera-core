@@ -434,7 +434,7 @@ fn runtime_drive_reinstalls_the_vm_before_propagating_host_event_errors() {
                 relative_path: "invalid-save.erb".into(),
                 category: FileCategory::Erb,
                 payload: FilePayload::Utf8(
-                    "@SYSTEM_TITLE\nSAVEDATA -1, \"invalid\"\nRETURN\n".into(),
+                    "@SYSTEM_TITLE\nLOADDATA 0\nRETURN\n".into(),
                 ),
                 content_hash: None,
             }],
@@ -451,13 +451,20 @@ fn runtime_drive_reinstalls_the_vm_before_propagating_host_event_errors() {
         }),
     );
 
+    // Complete Start before exhausting the journal, so the error arises while
+    // dispatching the real storage Host event with the VM taken out of the session.
+    session.drive(RuntimeDriveBudget {
+        maximum_vm_instructions: 0,
+        maximum_runtime_transitions: 1,
+    }).unwrap();
+    drain(&mut session);
+    let journal_limit = session.options.limits.maximum_journal_entries;
+    session.options.limits.maximum_journal_entries = 0;
     let error = session.drive(RuntimeDriveBudget::default()).unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "SAVEDATA argument 1 must be between 0 and 2147483647"
-    );
+    assert!(matches!(error, RuntimeError::ResourceLimit("outbound journal is full")));
     assert!(session.vm.is_some(), "host error must not remove the VM");
 
+    session.options.limits.maximum_journal_entries = journal_limit;
     session.drive(RuntimeDriveBudget::default()).unwrap();
     let messages = drain(&mut session);
     assert_ne!(session.phase(), RuntimePhase::Faulted, "{messages:#?}");

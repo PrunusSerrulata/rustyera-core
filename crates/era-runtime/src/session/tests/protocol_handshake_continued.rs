@@ -413,6 +413,15 @@ fn prepare_html_execution(
     source: &str,
     service_version: Option<ProtocolVersion>,
 ) -> RuntimeSession {
+    prepare_html_execution_with_profile(source, service_version, erabasic_compat::CompatibilityIdentity::default())
+}
+
+fn prepare_html_execution_with_profile(
+    source: &str,
+    service_version: Option<ProtocolVersion>,
+    compatibility: erabasic_compat::CompatibilityIdentity,
+) -> RuntimeSession {
+    let config = profile_configuration_file(compatibility.profile);
     let mut client = capabilities();
     client.html = true;
     if let Some(version) = service_version {
@@ -452,9 +461,9 @@ fn prepare_html_execution(
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
-            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+            compatibility,
             project_revision: 1,
-            files: vec![SubmittedFile {
+            files: vec![config, SubmittedFile {
                 relative_path: "html-v2.erb".into(),
                 category: FileCategory::Erb,
                 payload: FilePayload::Utf8(source.into()),
@@ -1551,4 +1560,39 @@ fn malformed_pointer_and_canvas_replies_fault_without_losing_the_host_wait() {
             );
         }
     }
+}
+
+#[test]
+fn snake_strformcheck_catches_later_html_parser_fault_after_service_completion() {
+    let source = "@SYSTEM_TITLE\nRESULTS:0 = old-head\nRESULTS:1 = old-tail\nFLAG:0 = STRFORMCHECK(\"%BAD_HTML()%\")\nFLAG:1 = 1\nWAIT\nRETURN\n@BAD_HTML\n#FUNCTIONS\nRETURNF HTML_SUBSTRING(\"a</b>\", 100)\n";
+    let mut session = prepare_html_execution_with_profile(source, Some(ProtocolVersion::new(2, 0)), erabasic_compat::CompatibilityIdentity::for_profile(erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake));
+    let (_, messages) = start_html_execution(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    assert_eq!((html_flag(&session, 0), html_flag(&session, 1)), (0, 1));
+    assert!(messages.iter().any(|message| matches!(message, RuntimeMessage::ServiceRequest(_))));
+    assert!(!messages.iter().any(|message| matches!(message, RuntimeMessage::Fault(_))));
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(html_result(vm, 0), VmValue::String("old-head".into()));
+    assert_eq!(html_result(vm, 1), VmValue::String("old-tail".into()));
+    assert!(session.operations.html_lines.is_empty());
+}
+
+#[test]
+fn snake_strformcheck_cannot_catch_frontend_claimed_script_failure() {
+    let source = "@SYSTEM_TITLE\nFLAG:0 = STRFORMCHECK(\"%MEASURE_HTML()%\")\nFLAG:1 = 1\nWAIT\nRETURN\n@MEASURE_HTML\n#FUNCTIONS\nRETURNF HTML_SUBSTRING(\"abc\", 100)\n";
+    let mut session = prepare_html_execution_with_profile(source, Some(ProtocolVersion::new(2, 0)), erabasic_compat::CompatibilityIdentity::for_profile(erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake));
+    submit(&mut session, 2, RuntimeMessage::Start(StartRequest { mode: StartMode::NewGame { seed: Some(123_456) } }));
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let request = drain(&mut session).into_iter().find_map(|message| match message { RuntimeMessage::ServiceRequest(request) => Some(request), _ => None }).expect("measurement request");
+    submit(&mut session, 3, RuntimeMessage::ServiceResponse(ServiceResponse {
+        request_id: request.request_id,
+        result: ServiceResult::Error { error: era_runtime_protocol::ServiceError {
+            code: "script.parse".into(), message: "frontend cannot declare ScriptInput".into(),
+        } },
+    }));
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let messages = drain(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    assert_eq!(html_flag(&session, 1), 0);
+    assert!(messages.iter().any(|message| matches!(message, RuntimeMessage::Fault(RuntimeFault { code: FaultCode::ServiceFailure, .. }))));
 }

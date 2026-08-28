@@ -1729,6 +1729,34 @@ RETURNF "user-method"
     );
 }
 
+#[test]
+fn runtime_form_rejects_non_lvalue_mutation_before_any_user_side_effect() {
+    let artifact = compile_source(
+        r#"@SYSTEM_TITLE
+RESULT = 0
+RESULTS:0 '= STRFORM("{BUMP()}|{(RESULT + 1)++}")
+RETURN
+@BUMP
+#FUNCTION
+RESULT += 1
+RETURNF 1
+"#,
+    );
+    let result = named_key(&artifact, "RESULT");
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    let fault = take_fault(report);
+    assert!(matches!(
+        fault.category,
+        erabasic_vm::FaultCategory::Script(
+            erabasic_vm::ScriptFaultKind::Parse | erabasic_vm::ScriptFaultKind::Argument
+        )
+    ));
+    assert_eq!(
+        vm.read_variable(result, &[], None),
+        Ok(VmValue::Integer(0)),
+        "preflight must reject before BUMP executes"
+    );
+}
 
 #[test]
 fn runtime_form_survives_tiny_budgets_and_executes_user_side_effects_once() {
@@ -2045,7 +2073,70 @@ fn instruction_step_treats_context_free_runtime_form_work_as_one_native_call() {
     );
 }
 
+#[test]
+fn strformcheck_catches_parse_and_expansion_failures_without_rolling_back_effects() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:0 = STRFORMCHECK("{SIDE()}")
+RESULT:1 = STRFORMCHECK("{SIDE()} {FLAG:9999999}")
+RESULT:2 = STRFORMCHECK("{")
+RESULT:3 = STRFORMCHECK("{UNKNOWN_FORM_VARIABLE}")
+RESULTS:0 '= "{SIDE()} {FLAG:9999999}"
+RESULTS:1 '= "{STRFORMCHECK(RESULTS:0)}"
+RESULT:4 = STRFORMCHECK(RESULTS:1)
+RESULT:5 = FLAG:0
+RETURN RESULT:0
+@SIDE
+#FUNCTION
+FLAG:0 += 1
+RETURNF FLAG:0
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    for (index, expected) in [(0, 1), (1, 0), (2, 0), (3, 0), (4, 1), (5, 3)] {
+        assert_method_watch(&vm, &artifact, "RESULT", index, VmValue::Integer(expected));
+    }
+}
 
+#[test]
+fn strformcheck_outer_argument_failure_is_not_caught_by_its_own_checkpoint() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:0 = STRFORMCHECK(BAD_SOURCE())
+FLAG:1 = 1
+RETURN
+@BAD_SOURCE
+#FUNCTIONS
+FLAG:0 += 1
+RESULT:9 = FLAG:9999999
+RETURNF "unused"
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    let fault = take_fault(report);
+    assert!(matches!(
+        fault.category,
+        erabasic_vm::FaultCategory::Script(erabasic_vm::ScriptFaultKind::Bounds)
+    ));
+    assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(1));
+    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(0));
+}
 
 #[test]
 fn runtime_form_user_calls_discard_extra_actuals_before_evaluation() {
@@ -2086,10 +2177,298 @@ RETURNF FLAG:9999999
     assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(0));
 }
 
+#[test]
+fn strformcheck_checkpoint_survives_input_wait_and_rejects_forged_snapshot_markers() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:0 = STRFORMCHECK("{WAIT_FAILURE()}")
+FLAG:1 = 1
+RETURN
+@WAIT_FAILURE
+#FUNCTION
+INPUT
+FLAG:0 += 1
+RETURNF FLAG:9999999
+"#,
+        &method_options(true),
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let suspended = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    let request = suspended
+        .events
+        .iter()
+        .find_map(|event| match event {
+            VmEvent::HostPending { request, .. } => Some(*request),
+            _ => None,
+        })
+        .expect("checked expansion must reach the real Host wait");
+    let saved = serde_json::to_value(vm.snapshot(&natives).unwrap()).unwrap();
+    for field in ["id", "work_depth", "value_depth", "owner_stack_depth"] {
+        let mut corrupted = saved.clone();
+        corrupted["fibers"][fiber.0.to_string()]["frames"][0]["runtime_form"]["checkpoints"][0]
+            [field] = serde_json::json!(999_999);
+        let mut rejected = PendingHost {
+            stability: HostWaitStability::StableInput,
+            rebound: Vec::new(),
+        };
+        assert!(
+            Vm::restore_snapshot(
+                validated(&artifact),
+                VmConfig::default(),
+                serde_json::from_value(corrupted).unwrap(),
+                &mut rejected,
+                &mut natives
+            )
+            .is_err(),
+            "{field}"
+        );
+        assert!(
+            rejected.rebound.is_empty(),
+            "{field}: invalid checkpoint rebound Host"
+        );
+    }
+    let mut restored = Vm::restore_snapshot(
+        validated(&artifact),
+        VmConfig::default(),
+        serde_json::from_value(saved).unwrap(),
+        &mut host,
+        &mut natives,
+    )
+    .unwrap();
+    restored.resume_host(request, HostReady::empty()).unwrap();
+    let resumed = restored.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    completed_without_fault(&resumed, fiber);
+    assert_method_watch(&restored, &artifact, "RESULT", 0, VmValue::Integer(0));
+    assert_method_watch(&restored, &artifact, "FLAG", 0, VmValue::Integer(1));
+    assert_method_watch(&restored, &artifact, "FLAG", 1, VmValue::Integer(1));
+}
 
+#[test]
+fn strformcheck_does_not_catch_call_depth_resource_failure() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:0 = STRFORMCHECK("%RECURSE()%")
+FLAG:1 = 1
+RETURN
+@RECURSE
+#FUNCTIONS
+RETURNF STRFORM("%RECURSE()%")
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(
+        &artifact,
+        VmConfig {
+            maximum_call_depth: 4,
+            ..VmConfig::default()
+        },
+    );
+    let fault = take_fault(report);
+    assert_eq!(fault.category, erabasic_vm::FaultCategory::ResourceLimit);
+    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(0));
+}
 
+#[test]
+fn call_text_try_catches_binding_failure_but_not_name_restructure_or_callee_failure() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+TRYCCALLSTR "TAKE(\"bad type\")"
+FLAG:0 = 99
+CATCH
+FLAG:0 = 1
+ENDCATCH
+TRYCALLSTR "MISSING, 7"
+CALLSTR "TAKE(8)"
+RETURN
+@TAKE(ARG)
+FLAG:1 = ARG
+RETURN
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert_eq!(report.stop, erabasic_vm::VmRunStop::Idle);
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(1));
+    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(8));
+    for source in [
+        "@SYSTEM_TITLE\nTRYCALLSTR \"TAKE(UNKNOWN_VARIABLE)\"\nRETURN\n@TAKE(ARG)\nRETURN\n",
+        "@SYSTEM_TITLE\nTRYCALLSTR \"TAKE(7)\"\nRETURN\n@TAKE(ARG)\nFLAG:0 = FLAG:9999999\nRETURN\n",
+    ] {
+        let artifact = compile_source_with_options(source, &method_options(true));
+        let (_, report) = run_entry(&artifact, VmConfig::default());
+        assert!(matches!(
+            take_fault(report).category,
+            erabasic_vm::FaultCategory::Script(_)
+        ));
+    }
+}
 
+#[test]
+fn runtime_form_prefix_postfix_share_fixed_profile_boundary_results_and_warnings() {
+    for snake in [false, true] {
+        for (expression, initial, original_return, original_store, snake_return, snake_store) in [
+            ("++FLAG:0", i64::MAX, i64::MIN, i64::MIN, i64::MAX, i64::MAX),
+            ("--FLAG:0", i64::MIN, i64::MAX, i64::MAX, i64::MIN, i64::MIN),
+            (
+                "FLAG:0++",
+                i64::MAX,
+                i64::MAX,
+                i64::MIN,
+                i64::MAX - 1,
+                i64::MAX,
+            ),
+            (
+                "FLAG:0--",
+                i64::MIN,
+                i64::MIN,
+                i64::MAX,
+                i64::MIN + 1,
+                i64::MIN,
+            ),
+        ] {
+            let artifact = compile_source_with_options(
+                &format!("@SYSTEM_TITLE\nRESULTS:0 '= STRFORM(\"{{{expression}}}\")\nRETURN\n"),
+                &method_options(snake),
+            );
+            let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+            vm.write_variable(
+                named_key(&artifact, "FLAG"),
+                &[0],
+                None,
+                VmValue::Integer(initial),
+            )
+            .unwrap();
+            let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+            let entry = artifact
+                .functions
+                .iter()
+                .find(|function| function.name == "SYSTEM_TITLE")
+                .unwrap()
+                .key;
+            let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+            let report = vm.run_slice(
+                &mut ReadyHost::default(),
+                &mut natives,
+                RunBudget::default(),
+            );
+            completed_without_fault(&report, fiber);
+            let (returned, stored) = if snake {
+                (snake_return, snake_store)
+            } else {
+                (original_return, original_store)
+            };
+            assert_method_watch(
+                &vm,
+                &artifact,
+                "RESULTS",
+                0,
+                VmValue::String(returned.to_string()),
+            );
+            assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(stored));
+            assert_eq!(
+                report
+                    .events
+                    .iter()
+                    .filter(|event| matches!(event,
+                VmEvent::Diagnostic { code, .. } if code == "compat.arithmetic.overflow"))
+                    .count(),
+                usize::from(snake)
+            );
+        }
+    }
+}
 
+#[test]
+fn runtime_form_mutation_preserves_index_value_order_and_character_and_ref_places() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#DIM DYNAMIC NUMBERS, 3
+FLAG:0 = 10
+RESULTS:0 '= STRFORM("{++FLAG:(INDEX())}|{FLAG:0++}|{OBSERVE()}")
+ADDVOIDCHARA
+CFLAG:0:0 = 20
+RESULTS:1 '= STRFORM("{CFLAG:0:0++}|{++CFLAG:0:0}")
+NUMBERS:0 = 30
+RESULTS:2 '= STRFORM("%CHANGE_REF(NUMBERS)%")
+RESULT:2 = NUMBERS:0
+RETURN
+@INDEX
+#FUNCTION
+FLAG:1 = FLAG:1 * 10 + 1
+RETURNF 0
+@OBSERVE
+#FUNCTION
+FLAG:1 = FLAG:1 * 10 + 2
+RETURNF FLAG:0
+@CHANGE_REF(VALUES)
+#FUNCTIONS
+#DIM REF VALUES
+RETURNF STRFORM("{VALUES:0++}|{++VALUES:0}")
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert_eq!(report.stop, erabasic_vm::VmRunStop::Idle);
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    for (index, expected) in [(0, "11|11|12"), (1, "20|22"), (2, "30|32")] {
+        assert_method_watch(
+            &vm,
+            &artifact,
+            "RESULTS",
+            index,
+            VmValue::String(expected.into()),
+        );
+    }
+    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(12));
+    assert_method_watch(&vm, &artifact, "RESULT", 2, VmValue::Integer(32));
+    assert_eq!(
+        vm.read_variable(named_key(&artifact, "CFLAG"), &[0], Some(0)),
+        Ok(VmValue::Integer(22))
+    );
+}
 
 
 
@@ -2504,109 +2883,65 @@ fn faulted_snapshot_keeps_partial_operand_diagnostics_but_no_active_leases() {
     );
 }
 
-
-
-
-
-// Append to the existing tests/vm/strform.rs; not a new test module.
-
-
-
 #[test]
-fn snake_statement_extra_actuals_skip_side_effects_and_original_dynamic_calls_are_strict() {
-    for (statement, method, continued) in [
-        ("CALL TAKE, 7, SIDE()", false, 1),
-        ("CALLFORM TAKE(7, SIDE())", false, 1),
-        ("TRYCALLFORM TAKE(7, SIDE())", false, 1),
-        ("CALLFORMF TAKE(7, SIDE())", true, 1),
-        ("TRYCALLFORMF TAKE(7, SIDE())", true, 1),
-        (
-            "TRYCALLLIST\nFUNC MISSING, SIDE()\nFUNC TAKE, 7, SIDE()\nENDFUNC",
-            false,
-            1,
-        ),
-        (
-            "TRYJUMPLIST\nFUNC MISSING, SIDE()\nFUNC TAKE, 7, SIDE()\nENDFUNC",
-            false,
-            0,
-        ),
+fn strformcheck_catches_special_native_domains_and_retains_prior_effects() {
+    for body in [
+        "ARRAYREMOVE FLAG, -1, 1",
+        "VARSET FLAG, 3, 0, 9999999",
+        "ARRAYCOPY \"MISSING_ARRAY\", \"FLAG\"",
+        "ADDCHARA 9999999",
+        "DELCHARA -1",
+        "RESULT:9 = CSVNAME(9999999) == \"unused\"",
+        "RESULT:9 = SUMARRAY(RESULTS, 0, 1)",
+        "RESULT:9 = FINDELEMENT(FLAG, \"wrong scalar type\", 0, 1)",
     ] {
-        let kind = if method { "#FUNCTION\n" } else { "" };
-        let returned = if method { "RETURNF ARG" } else { "RETURN" };
         let source = format!(
-            "@SYSTEM_TITLE\n{statement}\nFLAG:2 = 1\nRETURN\n@TAKE(ARG)\n{kind}FLAG:1 = ARG\n{returned}\n@SIDE\n#FUNCTION\nFLAG:0 += 1\nRETURNF FLAG:9999999\n"
+            "@SYSTEM_TITLE\nRESULT:0 = STRFORMCHECK(\"{{FAILURE()}}\")\nRESULT:1 = FLAG:0\nRETURN\n@FAILURE\n#FUNCTION\nFLAG:0 += 1\n{body}\nFLAG:1 = 1\nRETURNF 99\n"
         );
         let artifact = compile_source_with_options(&source, &method_options(true));
         let (vm, report) = run_entry(&artifact, VmConfig::default());
-        assert!(
-            !report
-                .events
-                .iter()
-                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
-            "{statement}: {report:?}"
-        );
         assert!(
             report
                 .events
                 .iter()
                 .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
-            "{report:?}"
+            "{body}: {report:?}"
         );
-        for (index, value) in [(0, 0), (1, 7), (2, continued)] {
-            assert_method_watch(&vm, &artifact, "FLAG", index, VmValue::Integer(value));
-        }
-    }
-    // Dynamic resolution keeps the strict original policy observable at execution.
-    let artifact = compile_source_with_options(
-        "@SYSTEM_TITLE\nCALLFORM TAKE(7, SIDE())\nFLAG:2 = 1\nRETURN\n@TAKE(ARG)\nFLAG:1 = ARG\nRETURN\n@SIDE\n#FUNCTION\nFLAG:0 += 1\nRETURNF 8\n",
-        &method_options(false),
-    );
-    let (vm, report) = run_entry(&artifact, VmConfig::default());
-    assert!(matches!(
-        take_fault(report).category,
-        erabasic_vm::FaultCategory::Script(erabasic_vm::ScriptFaultKind::Argument)
-    ));
-    for index in 0..3 {
-        assert_method_watch(&vm, &artifact, "FLAG", index, VmValue::Integer(0));
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{body}: {report:?}"
+        );
+        assert_method_watch(&vm, &artifact, "RESULT", 0, VmValue::Integer(0));
+        assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(1));
+        assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(0));
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Exercise real script scopes. Candidate oracle captures are separate from these
-// Rust contract assertions and remain pending until the authorized matrix runs.
-
 #[test]
-fn call_text_try_catches_binding_failure_but_not_name_restructure_or_callee_failure() {
+fn strformcheck_randdata_failure_is_atomic_and_keeps_the_original_rng() {
     let artifact = compile_source_with_options(
         r#"@SYSTEM_TITLE
-TRYCCALLSTR "TAKE(\"bad type\")"
-FLAG:0 = 99
-CATCH
-FLAG:0 = 1
-ENDCATCH
-TRYCALLSTR "MISSING, 7"
-CALLSTR "TAKE(8)"
+DUMPRAND
+FLAG:2 = RANDDATA:624
+RESULT:0 = STRFORMCHECK("{BAD_STATE()}")
+DUMPRAND
+RESULT:1 = RANDDATA:624 == FLAG:2
+RESULT:2 = FLAG:0
 RETURN
-@TAKE(ARG)
-FLAG:1 = ARG
-RETURN
+@BAD_STATE
+#FUNCTION
+FLAG:0 += 1
+RANDDATA:624 = 625
+INITRAND
+FLAG:1 = 1
+RETURNF 99
 "#,
         &method_options(true),
     );
     let (vm, report) = run_entry(&artifact, VmConfig::default());
-    assert_eq!(report.stop, erabasic_vm::VmRunStop::Idle);
     assert!(
         report
             .events
@@ -2621,20 +2956,87 @@ RETURN
             .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
         "{report:?}"
     );
-    assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(1));
-    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(8));
-    for source in [
-        "@SYSTEM_TITLE\nTRYCALLSTR \"TAKE(UNKNOWN_VARIABLE)\"\nRETURN\n@TAKE(ARG)\nRETURN\n",
-        "@SYSTEM_TITLE\nTRYCALLSTR \"TAKE(7)\"\nRETURN\n@TAKE(ARG)\nFLAG:0 = FLAG:9999999\nRETURN\n",
-    ] {
-        let artifact = compile_source_with_options(source, &method_options(true));
-        let (_, report) = run_entry(&artifact, VmConfig::default());
-        assert!(matches!(
-            take_fault(report).category,
-            erabasic_vm::FaultCategory::Script(_)
-        ));
+    for (index, expected) in [(0, 0), (1, 1), (2, 1)] {
+        assert_method_watch(&vm, &artifact, "RESULT", index, VmValue::Integer(expected));
     }
+    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(0));
 }
+
+#[test]
+fn strformcheck_does_not_catch_a_missing_random_provider() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:0 = STRFORMCHECK("{DUMP_STATE()}")
+FLAG:1 = 1
+RETURN
+@DUMP_STATE
+#FUNCTION
+FLAG:0 += 1
+DUMPRAND
+RETURNF 99
+"#,
+        &method_options(true),
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut NativeServiceRegistry::default(),
+        RunBudget::default(),
+    );
+    let fault = take_fault(report);
+    assert_eq!(
+        fault.category,
+        erabasic_vm::FaultCategory::InternalInvariant
+    );
+    assert_eq!(fault.code, erabasic_vm::VmFaultCode::Native);
+    assert_eq!(fault.message, "random native service is not registered");
+    assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(1));
+    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(0));
+}
+
+#[test]
+fn strformcheck_preserves_special_native_success_sentinels() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:0 = STRFORMCHECK("{NO_MATCH()}")
+RESULT:1 = FLAG:0
+RETURN RESULT:0
+@NO_MATCH
+#FUNCTION
+ARRAYREMOVE FLAG, 9999999, 1
+PICKUPCHARA -1
+FLAG:0 = GETCHARA(9999999)
+RETURNF FLAG:0
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "RESULT", 0, VmValue::Integer(1));
+    assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(-1));
+}
+
+// Append to the existing tests/vm/strform.rs; not a new test module.
 
 #[test]
 fn call_text_six_modes_accept_both_argument_syntaxes_and_preserve_jump_return() {
@@ -2720,6 +3122,65 @@ fn blank_call_text_jump_is_successful_fallthrough_including_catch_mode() {
 }
 
 #[test]
+fn snake_statement_extra_actuals_skip_side_effects_and_original_dynamic_calls_are_strict() {
+    for (statement, method, continued) in [
+        ("CALL TAKE, 7, SIDE()", false, 1),
+        ("CALLFORM TAKE(7, SIDE())", false, 1),
+        ("TRYCALLFORM TAKE(7, SIDE())", false, 1),
+        ("CALLFORMF TAKE(7, SIDE())", true, 1),
+        ("TRYCALLFORMF TAKE(7, SIDE())", true, 1),
+        (
+            "TRYCALLLIST\nFUNC MISSING, SIDE()\nFUNC TAKE, 7, SIDE()\nENDFUNC",
+            false,
+            1,
+        ),
+        (
+            "TRYJUMPLIST\nFUNC MISSING, SIDE()\nFUNC TAKE, 7, SIDE()\nENDFUNC",
+            false,
+            0,
+        ),
+    ] {
+        let kind = if method { "#FUNCTION\n" } else { "" };
+        let returned = if method { "RETURNF ARG" } else { "RETURN" };
+        let source = format!(
+            "@SYSTEM_TITLE\n{statement}\nFLAG:2 = 1\nRETURN\n@TAKE(ARG)\n{kind}FLAG:1 = ARG\n{returned}\n@SIDE\n#FUNCTION\nFLAG:0 += 1\nRETURNF FLAG:9999999\n"
+        );
+        let artifact = compile_source_with_options(&source, &method_options(true));
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{statement}: {report:?}"
+        );
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+            "{report:?}"
+        );
+        for (index, value) in [(0, 0), (1, 7), (2, continued)] {
+            assert_method_watch(&vm, &artifact, "FLAG", index, VmValue::Integer(value));
+        }
+    }
+    // Dynamic resolution keeps the strict original policy observable at execution.
+    let artifact = compile_source_with_options(
+        "@SYSTEM_TITLE\nCALLFORM TAKE(7, SIDE())\nFLAG:2 = 1\nRETURN\n@TAKE(ARG)\nFLAG:1 = ARG\nRETURN\n@SIDE\n#FUNCTION\nFLAG:0 += 1\nRETURNF 8\n",
+        &method_options(false),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(matches!(
+        take_fault(report).category,
+        erabasic_vm::FaultCategory::Script(erabasic_vm::ScriptFaultKind::Argument)
+    ));
+    for index in 0..3 {
+        assert_method_watch(&vm, &artifact, "FLAG", index, VmValue::Integer(0));
+    }
+}
+
+#[test]
 fn call_text_jump_keeps_caller_local_ref_alive_through_recursive_forwarding() {
     let artifact = compile_source_with_options(
         r#"@SYSTEM_TITLE
@@ -2768,6 +3229,245 @@ RETURNF FLAG:9999999
     );
     for (index, value) in [(0, 0), (1, 43), (8, 0), (9, 1)] {
         assert_method_watch(&vm, &artifact, "FLAG", index, VmValue::Integer(value));
+    }
+}
+
+#[test]
+fn checked_form_child_failure_preserves_ref_writes_and_allows_a_fresh_call() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#DIM DYNAMIC VALUES, 2
+VALUES:0 = 10
+RESULT:0 = STRFORMCHECK("{FAIL_WITH_REF(VALUES)}")
+RESULT:1 = GOOD_WITH_REF(VALUES)
+FLAG:9 = VALUES:0
+RETURN
+@FAIL_WITH_REF(ITEMS)
+#FUNCTION
+#DIM REF ITEMS
+ITEMS:0 += 1
+RETURNF ITEMS:9999999
+@GOOD_WITH_REF(ITEMS)
+#FUNCTION
+#DIM REF ITEMS
+ITEMS:0 += 2
+RETURNF ITEMS:0
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "RESULT", 0, VmValue::Integer(0));
+    assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(13));
+    assert_method_watch(&vm, &artifact, "FLAG", 9, VmValue::Integer(13));
+}
+
+fn checked_input_runtime() -> (
+    RuntimeVm,
+    BytecodeArtifact,
+    FiberId,
+    erabasic_vm::VmHostRequest,
+) {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:10 = 73
+RESULT:10 = STRFORMCHECK("{WAITING_METHOD()}")
+FLAG:9 = 1
+RETURN
+@WAITING_METHOD
+#FUNCTION
+FLAG:0 += 1
+INPUT
+FLAG:1 += 1
+RETURNF 7
+"#,
+        &method_options(true),
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut runtime = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    let fiber = runtime.spawn_entry(entry, Vec::new()).unwrap();
+    let report = runtime.drive(RunBudget::default(), VmDriveMode::Normal);
+    let request = report
+        .events
+        .into_iter()
+        .find_map(|event| match event {
+            VmPortEvent::HostCall(request) => Some(request),
+            _ => None,
+        })
+        .expect("checked method must reach INPUT through the real runtime port");
+    let prepared = runtime
+        .validate_host_completion(
+            request.id,
+            VmHostCompletion::Pending {
+                stability: HostWaitStability::StableInput,
+                rebind_payload: Vec::new(),
+            },
+        )
+        .unwrap();
+    runtime.commit_host_completion(prepared).unwrap();
+    assert_eq!(
+        runtime.fiber_status(fiber),
+        Some(FiberStatus::WaitingHost(request.id))
+    );
+    (runtime, artifact, fiber, request)
+}
+
+#[test]
+fn checked_form_async_input_success_and_typed_failures_keep_their_categories() {
+    use erabasic_vm::{ExecutionFailure, FaultCategory, ScriptFaultKind};
+    for category in [
+        None,
+        Some(FaultCategory::Script(ScriptFaultKind::Operation)),
+        Some(FaultCategory::HostContract),
+        Some(FaultCategory::Permission),
+        Some(FaultCategory::ResourceLimit),
+        Some(FaultCategory::Cancellation),
+    ] {
+        let (mut runtime, artifact, fiber, request) = checked_input_runtime();
+        let completion = category.map_or_else(
+            || VmHostCompletion::Ready(HostReady::empty()),
+            |category| {
+                VmHostCompletion::Error(ExecutionFailure::classified(
+                    category,
+                    VmFaultCode::Host,
+                    "same legacy host message",
+                ))
+            },
+        );
+        let prepared = runtime
+            .validate_host_completion(request.id, completion)
+            .unwrap();
+        runtime.commit_host_completion(prepared).unwrap();
+        let report = runtime.drive(RunBudget::default(), VmDriveMode::Normal);
+        let catchable =
+            category.is_some_and(|category| matches!(category, FaultCategory::Script(_)));
+        if category.is_none() || catchable {
+            assert!(
+                matches!(runtime.fiber_status(fiber), Some(FiberStatus::Completed(_))),
+                "{category:?}: {report:?}"
+            );
+            assert_method_watch(
+                runtime.vm(),
+                &artifact,
+                "RESULT",
+                10,
+                VmValue::Integer(i64::from(!catchable)),
+            );
+            assert_method_watch(runtime.vm(), &artifact, "FLAG", 9, VmValue::Integer(1));
+        } else {
+            let Some(FiberStatus::Faulted(fault)) = runtime.fiber_status(fiber) else {
+                panic!("{category:?}: {report:?}");
+            };
+            assert_eq!(Some(fault.category), category);
+            assert_method_watch(runtime.vm(), &artifact, "RESULT", 10, VmValue::Integer(73));
+            assert_method_watch(runtime.vm(), &artifact, "FLAG", 9, VmValue::Integer(0));
+        }
+        assert_method_watch(runtime.vm(), &artifact, "FLAG", 0, VmValue::Integer(1));
+        assert_method_watch(
+            runtime.vm(),
+            &artifact,
+            "FLAG",
+            1,
+            VmValue::Integer(i64::from(category.is_none())),
+        );
+        assert!(
+            runtime
+                .validate_host_completion(request.id, VmHostCompletion::Ready(HostReady::empty()))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn cancelling_checked_input_does_not_complete_the_checker_or_accept_late_input() {
+    let (mut runtime, artifact, fiber, request) = checked_input_runtime();
+    runtime.cancel_fiber(fiber).unwrap();
+    assert_eq!(runtime.fiber_status(fiber), Some(FiberStatus::Cancelled));
+    assert!(
+        runtime
+            .validate_host_completion(request.id, VmHostCompletion::Ready(HostReady::empty()))
+            .is_err()
+    );
+    runtime.drive(RunBudget::default(), VmDriveMode::Normal);
+    assert_method_watch(runtime.vm(), &artifact, "RESULT", 10, VmValue::Integer(73));
+    assert_method_watch(runtime.vm(), &artifact, "FLAG", 9, VmValue::Integer(0));
+}
+
+#[test]
+fn checked_form_does_not_catch_malformed_native_ready_value_or_write() {
+    struct MalformedReady(bool);
+    impl NativeService for MalformedReady {
+        fn call(
+            &mut self,
+            _request: NativeCallRequest,
+        ) -> Result<NativeReady, erabasic_vm::ExecutionFailure> {
+            Ok(if self.0 {
+                NativeReady::value(VmValue::String("wrong return type".into()))
+            } else {
+                NativeReady {
+                    value: Some(VmValue::Integer(1)),
+                    writes: vec![erabasic_vm::HostWrite {
+                        target: erabasic_vm::PlaceDescriptor {
+                            variable: SymbolKey::derive("test", b"missing-host-write"),
+                            ..Default::default()
+                        },
+                        value: VmValue::Integer(2),
+                    }],
+                }
+            })
+        }
+    }
+    let artifact = compile_source_with_options(
+        "@SYSTEM_TITLE\nRESULT:10 = 73\nRESULT:10 = STRFORMCHECK(\"{ABS(FLAG:0)}\")\nFLAG:9 = 1\nFLAG:8 = ABS(FLAG:0)\nRETURN\n",
+        &method_options(true),
+    );
+    let key = artifact
+        .native_imports
+        .iter()
+        .find(|native| native.import.name.eq_ignore_ascii_case("abs"))
+        .unwrap()
+        .import
+        .key;
+    for wrong_type in [true, false] {
+        let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+        natives.register(key, MalformedReady(wrong_type));
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        let entry = artifact
+            .functions
+            .iter()
+            .find(|function| function.name == "SYSTEM_TITLE")
+            .unwrap()
+            .key;
+        vm.spawn_entry(entry, Vec::new()).unwrap();
+        let report = vm.run_slice(
+            &mut ReadyHost::default(),
+            &mut natives,
+            RunBudget::default(),
+        );
+        assert_eq!(
+            take_fault(report).category,
+            erabasic_vm::FaultCategory::HostContract
+        );
+        assert_method_watch(&vm, &artifact, "RESULT", 10, VmValue::Integer(73));
+        assert_method_watch(&vm, &artifact, "FLAG", 9, VmValue::Integer(0));
     }
 }
 
@@ -2865,6 +3565,33 @@ RETURN
 }
 
 #[test]
+fn original_profile_rejects_snake_call_text_and_checked_form_at_load() {
+    for body in ["CALLSTR \"TARGET()\"", "RESULT = STRFORMCHECK(\"plain\")"] {
+        let report = analyze_project(
+            AnalysisInput {
+                project_data: project_data(),
+                sources: vec![ProjectSource {
+                    relative_path: "profile-gate.erb".into(),
+                    payload: SourcePayload::Utf8(format!(
+                        "@SYSTEM_TITLE\n{body}\nRETURN\n@TARGET\nRETURN\n"
+                    )),
+                }],
+            },
+            &method_options(false),
+            &ExtensionRegistry::default(),
+        );
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.reference_level >= 2),
+            "{body}: {:#?}",
+            report.diagnostics
+        );
+    }
+}
+
+#[test]
 fn call_text_try_catches_only_argument_reduction_missing_target_and_binding_stages() {
     for (text, caught) in [
         ("TAKE(1 +)", true),
@@ -2914,4 +3641,299 @@ fn call_text_try_catches_only_argument_reduction_missing_target_and_binding_stag
         }
         assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(0));
     }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Keep each fixture and its lifecycle assertions together.
+fn checked_native_failure_restores_checkpoint_and_failed_rollback_is_uncatchable() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    };
+    struct MutatingFailure {
+        state: Arc<AtomicU8>,
+        fail_restore: bool,
+    }
+    impl NativeService for MutatingFailure {
+        fn call(
+            &mut self,
+            _request: NativeCallRequest,
+        ) -> Result<NativeReady, erabasic_vm::ExecutionFailure> {
+            self.state.store(9, Ordering::SeqCst);
+            Err(erabasic_vm::ExecutionFailure::script(
+                erabasic_vm::ScriptFaultKind::Operation,
+                VmFaultCode::Native,
+                "script domain failure",
+            ))
+        }
+        fn snapshot(&self) -> Result<Option<Vec<u8>>, String> {
+            Ok(Some(vec![self.state.load(Ordering::SeqCst)]))
+        }
+        fn restore(&mut self, bytes: &[u8]) -> Result<(), String> {
+            if self.fail_restore {
+                return Err("rollback deliberately unavailable".into());
+            }
+            let [value] = bytes else {
+                return Err("invalid test snapshot".into());
+            };
+            self.state.store(*value, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    let artifact = compile_source_with_options(
+        "@SYSTEM_TITLE\nIF FLAG:7\nRESULT:8 = ABS(FLAG:0)\nENDIF\nRESULT:10 = 73\nRESULT:10 = STRFORMCHECK(\"{ABS(FLAG:0)}\")\nFLAG:9 = 1\nRETURN\n",
+        &method_options(true),
+    );
+    let key = artifact
+        .native_imports
+        .iter()
+        .find(|native| native.import.name.eq_ignore_ascii_case("abs"))
+        .unwrap()
+        .import
+        .key;
+    for fail_restore in [false, true] {
+        let state = Arc::new(AtomicU8::new(1));
+        let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+        natives.register(
+            key,
+            MutatingFailure {
+                state: Arc::clone(&state),
+                fail_restore,
+            },
+        );
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        let entry = artifact
+            .functions
+            .iter()
+            .find(|function| function.name == "SYSTEM_TITLE")
+            .unwrap()
+            .key;
+        vm.spawn_entry(entry, Vec::new()).unwrap();
+        let report = vm.run_slice(
+            &mut ReadyHost::default(),
+            &mut natives,
+            RunBudget::default(),
+        );
+        if fail_restore {
+            assert_eq!(
+                take_fault(report).category,
+                erabasic_vm::FaultCategory::HostContract
+            );
+            assert_eq!(state.load(Ordering::SeqCst), 9);
+            assert_method_watch(&vm, &artifact, "RESULT", 10, VmValue::Integer(73));
+        } else {
+            assert!(
+                !report
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+                "{report:?}"
+            );
+            assert!(
+                report
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+                "{report:?}"
+            );
+            assert_eq!(state.load(Ordering::SeqCst), 1);
+            assert_method_watch(&vm, &artifact, "RESULT", 10, VmValue::Integer(0));
+        }
+        assert_method_watch(
+            &vm,
+            &artifact,
+            "FLAG",
+            9,
+            VmValue::Integer(i64::from(!fail_restore)),
+        );
+    }
+}
+
+fn run_checked_variable_domain_case(local_setup: &str, failing_statement: &str) {
+    let source = format!(
+        r#"@SYSTEM_TITLE
+#DIM DYNAMIC VALUES, 2
+VALUES:0 = 10
+FLAG:4 = 17
+RESULT:10 = 73
+RESULT:10 = STRFORMCHECK("{{VARIABLE_FAILURE(VALUES)}}")
+RESULT:11 = RECOVERED_VARIABLE_METHOD(VALUES)
+RESULT:12 = CHECK_LOCKED
+FLAG:9 = VALUES:0
+RETURN
+@VARIABLE_FAILURE(ITEMS)
+#FUNCTION
+#DIM REF ITEMS
+{local_setup}
+ITEMS:0 += 1
+{failing_statement}
+FLAG:8 = 1
+RETURNF 99
+@RECOVERED_VARIABLE_METHOD(ITEMS)
+#FUNCTION
+#DIM REF ITEMS
+ITEMS:0 += 2
+RETURNF ITEMS:0
+"#
+    );
+    let artifact = compile_with_header(
+        "#DIM CONST CHECK_LOCKED = 7\n",
+        &source,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{failing_statement}: {report:?}"
+    );
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{failing_statement}: {report:?}"
+    );
+    for (index, value) in [(8, 0), (10, 0), (11, 13), (12, 7)] {
+        assert_method_watch(&vm, &artifact, "RESULT", index, VmValue::Integer(value));
+    }
+    for (index, value) in [(4, 17), (8, 0), (9, 13)] {
+        assert_method_watch(&vm, &artifact, "FLAG", index, VmValue::Integer(value));
+    }
+}
+
+#[test]
+fn checked_user_method_catches_dynamic_variable_read_and_named_index_domains() {
+    for (setup, statement) in [
+        (
+            "#DIMS REFERENCE\nREFERENCE '= \"MISSING_CHECK_VARIABLE\"",
+            "RESULT:8 = GETVAR(REFERENCE)",
+        ),
+        (
+            "#DIMS KEY\nKEY '= \"MISSING_CHECK_FLAG_NAME\"",
+            "RESULT:8 = FLAG:KEY",
+        ),
+        (
+            "#DIMS REFERENCE\nREFERENCE '= \"FLAG:9999999\"",
+            "RESULT:8 = GETVAR(REFERENCE)",
+        ),
+    ] {
+        run_checked_variable_domain_case(setup, statement);
+    }
+}
+
+#[test]
+fn checked_user_method_catches_read_only_negative_and_out_of_range_setvar_domains() {
+    for reference in ["CHECK_LOCKED", "FLAG:-1", "FLAG:9999999"] {
+        let setup = format!("#DIMS REFERENCE\nREFERENCE '= \"{reference}\"");
+        run_checked_variable_domain_case(&setup, "RESULT:8 = SETVAR(REFERENCE, 99)");
+    }
+}
+
+// Exercise real script scopes. Candidate oracle captures are separate from these
+// Rust contract assertions and remain pending until the authorized matrix runs.
+
+
+
+
+#[test]
+fn checked_forms_classify_root_and_nested_source_types_before_execution() {
+    let forms = [
+        r#"{1 + "x"}"#,
+        r#"{-"x"}"#,
+        r#"{FLAG:"x"}"#,
+        r#"{1,"x"}"#,
+        r#"{("x" ? 1 # 2)}"#,
+        r"%1%",
+        r#"{ABS("x")}"#,
+    ];
+    for form in forms {
+        for nested in [false, true] {
+            // A formatted expression nested in an interpolation must receive
+            // exactly the same source check as the root template.
+            let form = if nested {
+                format!("%\\@ 1 ? {form} # unused \\@%")
+            } else {
+                form.to_owned()
+            };
+            let form = format!("{{EFFECT()}}{form}");
+            let escaped = form.replace('\\', "\\\\").replace('"', "\\\"");
+            let source = format!(
+                "@SYSTEM_TITLE\nIF FLAG:99\nRESULT:9 = ABS(FLAG:99)\nENDIF\nRESULT:0 = STRFORMCHECK(\"{escaped}\")\nRESULT:1 = STRFORMCHECK(\"{{EFFECT()}}\")\nRETURN\n@ORDINARY\nRESULTS:0 '= STRFORM(\"{escaped}\")\nRETURN\n@EFFECT\n#FUNCTION\nFLAG:0 += 1\nRETURNF 7\n"
+            );
+            let artifact = compile_source_with_options(&source, &method_options(true));
+            let (vm, report) = run_entry(&artifact, VmConfig::default());
+            assert!(
+                report
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+                "{form}: {report:?}"
+            );
+            assert_method_watch(&vm, &artifact, "RESULT", 0, VmValue::Integer(0));
+            assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(1));
+            assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(1));
+            let (vm, report) = run_method_case(&artifact, "ORDINARY", VmConfig::default());
+            let fault = take_fault(report);
+            assert_eq!(
+                fault.category,
+                erabasic_vm::FaultCategory::Script(erabasic_vm::ScriptFaultKind::Argument),
+                "{form}: {fault:?}"
+            );
+            assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(0));
+        }
+    }
+}
+
+#[test]
+fn checked_forms_distinguish_unknown_names_from_missing_native_providers() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+IF FLAG:99
+RESULT:9 = ABS(FLAG:99)
+ENDIF
+RESULT:0 = STRFORMCHECK("{ABS(-3)}")
+RESULT:1 = STRFORMCHECK("{UNKNOWN_PROVIDER_NAME(3)}")
+FLAG:0 = 1
+RETURN RESULT:0
+"#,
+        &method_options(true),
+    );
+    assert!(
+        artifact
+            .native_imports
+            .iter()
+            .any(|native| native.import.name.eq_ignore_ascii_case("ABS"))
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut NativeServiceRegistry::default(),
+        RunBudget::default(),
+    );
+    let fault = take_fault(report);
+    assert_eq!(fault.category, erabasic_vm::FaultCategory::HostContract);
+    assert_eq!(fault.code, VmFaultCode::Native);
+    assert!(fault.message.to_ascii_uppercase().contains("ABS"));
+    assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(0));
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "RESULT", 0, VmValue::Integer(1));
+    assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(0));
+    assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(1));
 }
