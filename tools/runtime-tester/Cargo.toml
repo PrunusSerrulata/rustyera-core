@@ -25,6 +25,7 @@ erabasic-compat = { path = "../../crates/erabasic-compat" }
 erabasic-compiler = { path = "../../crates/erabasic-compiler" }
 erabasic-csv = { path = "../../crates/erabasic-csv" }
 erabasic-data = { path = "../../crates/erabasic-data" }
+erabasic-html = { path = "../../crates/erabasic-html" }
 erabasic-bytecode = { path = "../../crates/erabasic-bytecode" }
 erabasic-parser = { path = "../../crates/erabasic-parser" }
 erabasic-validator = { path = "../../crates/erabasic-validator" }

@@ -4,8 +4,8 @@
 
 use era_debug_protocol::DebugCommand;
 use era_runtime_protocol::{
-    AdvanceTime, DisplayLine, FrontendInput, InputIntent, RuntimeMessage, RuntimePhase, StartMode,
-    StartRequest, WaitKind,
+    AdvanceTime, DisplayLine, DisplayRun, FrontendInput, InputIntent, RuntimeMessage, RuntimePhase,
+    StartMode, StartRequest, WaitKind,
 };
 use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
 use serde_json::{Value, json};
@@ -283,8 +283,8 @@ fn observe_step(
     let lines: Vec<_> = runtime
         .lines
         .iter()
-        .filter(|line| !line_text(line).contains(COMPLETE))
         .cloned()
+        .filter_map(strip_completion_marker)
         .collect();
     let output = lines.iter().map(line_text).collect::<Vec<_>>();
     let blocked = termination == "blocked" || required_observation_blocked;
@@ -317,4 +317,84 @@ fn line_text(line: &DisplayLine) -> String {
         }
     }
     line.runs.iter().map(text).collect()
+}
+
+fn strip_completion_marker(mut line: DisplayLine) -> Option<DisplayLine> {
+    let mut found = false;
+    line.runs.retain_mut(|run| match run {
+        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
+            if text.contains(COMPLETE) =>
+        {
+            found = true;
+            *text = text.replace(COMPLETE, "");
+            !text.is_empty()
+        }
+        _ => true,
+    });
+    if !found {
+        return Some(line);
+    }
+    if line.runs.is_empty() {
+        return None;
+    }
+    line.text_background_eligible = runs_have_text_background(&line.runs);
+    Some(line)
+}
+
+fn runs_have_text_background(runs: &[DisplayRun]) -> bool {
+    runs.iter().any(|run| match run {
+        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+            !text.trim().is_empty()
+        }
+        DisplayRun::Button { runs, .. } => runs_have_text_background(runs),
+        DisplayRun::ColumnCell { content, .. } => runs_have_text_background(content),
+        DisplayRun::HtmlDocument { document } => html_nodes_have_text(&document.nodes),
+        DisplayRun::Separator { pattern, .. } => !pattern.trim().is_empty(),
+        DisplayRun::Image { .. } | DisplayRun::Shape { .. } | DisplayRun::Space { .. } => false,
+    })
+}
+
+fn html_nodes_have_text(nodes: &[erabasic_html::HtmlNode]) -> bool {
+    nodes.iter().any(|node| match node {
+        erabasic_html::HtmlNode::Text { text, .. } => !text.trim().is_empty(),
+        erabasic_html::HtmlNode::Element { children, .. } => html_nodes_have_text(children),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{COMPLETE, line_text, strip_completion_marker};
+    use era_runtime_protocol::{DisplayLine, DisplayRun, LineAlignment, TextStyle};
+
+    fn line(parts: &[&str]) -> DisplayLine {
+        DisplayLine {
+            line_id: 1,
+            temporary: false,
+            logical_line_start: true,
+            line_end: true,
+            alignment: LineAlignment::Left,
+            runs: parts
+                .iter()
+                .map(|text| DisplayRun::Text {
+                    text: (*text).into(),
+                    style: TextStyle::default(),
+                    system_text: None,
+                })
+                .collect(),
+            text_background_eligible: true,
+        }
+    }
+
+    #[test]
+    fn completion_marker_removal_preserves_pending_text_and_recomputes_eligibility() {
+        let pending = strip_completion_marker(line(&["pending", COMPLETE])).unwrap();
+        assert_eq!(line_text(&pending), "pending");
+        assert!(pending.text_background_eligible);
+
+        let whitespace = strip_completion_marker(line(&[" ", COMPLETE])).unwrap();
+        assert_eq!(line_text(&whitespace), " ");
+        assert!(!whitespace.text_background_eligible);
+
+        assert!(strip_completion_marker(line(&[COMPLETE])).is_none());
+    }
 }
