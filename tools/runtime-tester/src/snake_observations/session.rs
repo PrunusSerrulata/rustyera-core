@@ -14,9 +14,9 @@ use era_runtime::{ProjectProgressReporter, RuntimeDriveBudget, RuntimeOptions, R
 use era_runtime_protocol::{
     ClientCapabilities, ClientHello, ClientStateChanged, DeviceStateChanged, DisplayLine,
     GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
-    GetKeyStateResponse, InputDeviceKind, InputModality, InputWait, ProjectLoadReport,
-    RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeMessage, ServiceCapability, ServiceKind,
-    PresentationOperation, PresentationSettings, ResourceReplay, ServiceResponse, ServiceResult,
+    GetKeyStateResponse, InputDeviceKind, InputModality, InputWait, PresentationOperation,
+    PresentationSettings, ProjectLoadReport, RUNTIME_PROTOCOL_VERSION, ResourceReplay,
+    RuntimeFeature, RuntimeMessage, ServiceCapability, ServiceKind, ServiceResponse, ServiceResult,
     StorageCapabilities, WaitChange,
 };
 use serde_json::{Value, json};
