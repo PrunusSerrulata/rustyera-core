@@ -1,5 +1,5 @@
 //! Source token semantics for the fixed reference. These are not VM permissions.
-use erabasic_data::{StorageScope, VariableSchema};
+use erabasic_data::VariableSchema;
 use erabasic_hir::ReferenceVariableSemantics;
 
 pub(crate) fn variable_semantics(
@@ -14,7 +14,11 @@ pub(crate) fn variable_semantics(
         };
     }
     if declared {
-        let is_const = schema.storage == StorageScope::Constant;
+        // Function-private CONST declarations use Local storage even though
+        // their source token still has CONST restructure semantics. Within
+        // this declared-only branch, immutable means the CONST modifier; the
+        // readonly pseudo-variable exception below does not apply.
+        let is_const = !schema.mutable;
         return ReferenceVariableSemantics {
             is_const,
             can_restructure: is_const,

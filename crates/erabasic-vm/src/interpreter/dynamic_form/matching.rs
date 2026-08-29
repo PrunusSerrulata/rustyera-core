@@ -27,6 +27,24 @@ fn variable(expression: &Expr) -> Option<&str> {
         _ => None,
     }
 }
+fn constant_index(expression: &Expr) -> bool {
+    match &source_atom(expression).kind {
+        ExprKind::Integer(_) => true,
+        ExprKind::Unary { op, operand } => {
+            matches!(
+                op,
+                erabasic_ast::UnaryOp::Plus | erabasic_ast::UnaryOp::Minus
+            ) && constant_index(operand)
+        }
+        ExprKind::Binary { left, right, .. } => constant_index(left) && constant_index(right),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => constant_index(condition) && constant_index(then_expr) && constant_index(else_expr),
+        _ => false,
+    }
+}
 pub(super) fn is_match(name: &str) -> bool {
     name.eq_ignore_ascii_case("MATCHALL") || name.eq_ignore_ascii_case("MATCHALLEX")
 }
@@ -66,6 +84,21 @@ pub(super) fn match_spec(
             .map(|value| value.key)
             .ok_or_else(|| unsupported("MATCH variable token does not exist"))
     };
+    let input_restructured_to_scalar = if name.eq_ignore_ascii_case("MATCHALL") {
+        let ExprKind::Variable { name, indices } = &source_atom(first).kind else {
+            return Err(unsupported("MATCHALL requires a variable token"));
+        };
+        let definition = program
+            .scoped_variable(function, name)
+            .ok_or_else(|| unsupported("MATCH variable token does not exist"))?;
+        !indices.is_empty()
+            && indices.iter().all(constant_index)
+            && program.artifact.runtime_variables.iter().any(|variable| {
+                variable.key == definition.key && variable.reference_semantics.can_restructure
+            })
+    } else {
+        false
+    };
     let input = if name.eq_ignore_ascii_case("MATCHALLEX") {
         let ExprKind::String(value) = &source_atom(first).kind else {
             return Err(unsupported("MATCHALLEX requires a source string literal"));
@@ -92,7 +125,7 @@ pub(super) fn match_spec(
         .transpose()?;
     Ok(MatchCallSpec {
         input,
-        input_restructured_to_scalar: false,
+        input_restructured_to_scalar,
         output,
         needle: scalar(1)?.ok_or_else(|| unsupported("MATCH needle omitted"))?,
         begin_type: scalar(2)?.unwrap_or(BytecodeType::Integer),
