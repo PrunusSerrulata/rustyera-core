@@ -1,6 +1,11 @@
 # 蛇版 Emuera 适配：分批次实施与验收记录
 
 > 文档状态：批次 0、批次 1 已完成；批次 2 产品实施与功能行为验收完成，保留一项规模采集基础设施缺口；后续批次仍待登记。各批明确差异继续保留，已完成批次均不代表完整蛇版语义或蛇版 TW 可玩性。
+>
+> 2026-08-30 按用户明确要求完成全历史本地材料清理：已删除可再生构建产物、运行 payload、
+> 原始日志、DOM/runtime 快照和缓存；保留测试脚本、fixture/config、工具、环境、review、索引及
+> 精简 summary。下文历史证据路径仍用于说明当时的验收绑定，但被清理的原始 payload 不再承诺
+> 本机可用，不能据此重新宣称动态测试仍可 cache-only 复跑。
 
 ## 文档职责与填写规则
 
@@ -661,10 +666,10 @@ Tauri 额外不可比来自 `info runtime.compiled_cache_ready`，未过滤或�
   `62f21992a3bb998a1f39db0732c59ac67560584d812203fd95e4d18e49557f71`，webdriver manifest SHA
   `0f3d7f92f626897f9b9bfb29a4de98ffc09df78dfb366753c1c5b8b5838d431d`。manifest 与 binary、
   WASM、core `68d0f208` 和 Web source 输入一致。
-- 过程、失败、定向复验、DOM/runtime 快照、trace、双 oracle 和压缩规模报告保留在
-  `batch-2-work/2A/`–`2F/`；最后 Tauri 结论为
-  `2F/dynamic/tauri-compiled-cache-owner-routing-final/summary.txt`。这些 ignored 材料不提交，
-  暂不清理，以便审计首次全量和有意差异。
+- review、索引、精简 summary、测试脚本及 fixture/config 保留在 `batch-2-work/2A/`–`2F/`；
+  最后 Tauri 结论为 `2F/dynamic/tauri-compiled-cache-owner-routing-final/summary.txt`。2026-08-30
+  按用户明确要求删除其中可再生构建产物、运行 payload、原始日志和 DOM/runtime 快照；后续若需
+  重跑必须重新构建并生成独立证据，不能把精简 summary 当作 cache-only 产物。
 - 根 `CHANGELOG_PENDING.md` 已在整批收尾单独追加已验证产品行为；没有调整发布版本、推送或
   合并主线，也没有启动批次 3。
 
