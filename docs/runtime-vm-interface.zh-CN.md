@@ -5,7 +5,7 @@
 
 - `erabasic-vm` 的 crate 根重导出、`runtime_port.rs`、`runtime_vm.rs`；
 - `era-runtime::RuntimeSession` 的 `drive`、Host 分派、状态事务、存档与热重载调用点；
-- 当前 VM snapshot 格式版本 `15`，magic 为 `RERAVMS\0`；容器版本 `18`、ISA `9`、compiler ABI `43`、Native ABI `19`、Host ABI `14`、VM ABI `18`。
+- 当前 VM snapshot 格式版本 `17`，magic 为 `RERAVMS\0`；容器版本 `19`、ISA `9`、compiler ABI `44`、Native ABI `20`、Host ABI `15`、VM ABI `19`。
 
 相关源码：
 

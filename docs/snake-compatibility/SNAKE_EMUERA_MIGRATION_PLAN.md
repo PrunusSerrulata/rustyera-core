@@ -105,6 +105,14 @@ Browser/Tauri 完成真实服务，TUI 本批对像素测量/pointer/canvas 明�
 - 实施 S05-S11、S13：`EXISTVAR` 非零参数模式执行表达式解析，不读取 storage cell 或额外验证访问越界；`STRFORMCHECK` 实际展开并保留副作用，受捕获的解析/展开错误返回 0，参数求值失败正常传播。S12 已在批次 1 完成，S14 留批次 4，S05 的 Float bit 留批次 6。
 - CSV/数组、bit、MAP 复用既有存储与写回事务。MAP 保留稳定插入顺序与蛇版无转义分隔符格式，FROMSTRING 不清空旧 MAP，只对无分隔符冲突数据承诺 round-trip。BGC 为独立全局整行背景状态，影响符合条件的历史行，不复用 run 背景。
 - 实施 D04、D06-D08、D10-D13、D17。CALLSTR 六变体运行时解析完整调用文本及实参，不是 CALLFORM 名称别名；snake 非 variadic 多余实参不求值，内置 arity 不放宽。集中算术策略覆盖折叠和优化，逐操作保留固定参考边界，不笼统以饱和替代全部算术。错误钩子保留原 fault 且防重入。
+  CALLSTR 的“不求值”指 ConvertArg 后的普通运行时求值：固定参考先按源顺序
+  Restructure 全部外层实参，再转换目标参数；常量越界、常量除零及 REPLACE/STRFORM
+  特有的重构读取仍可能先发生。嵌套用户方法则先转换参数，只重构保留的参数子树。
+  动态 Native/Host 调用须复用实际授权、服务状态及 continuation，不依赖未执行的静态
+  调用制造 import，也不把 parser 目录当作服务权限。
+  MAP prefix/suffix 与 FROMSTRING 的 kvSep 查找固定到参考实际使用的 ICU 数据及
+  UTF16 边界，不用当前宿主 locale 或 Unicode 版本；FROMSTRING 逐条写入，后条错误
+  保留先条结果。Rust UTF8 无法表示孤立 surrogate 的切片须明确拒绝并登记差异。
 - 算术告警使用独立诊断通道，不向脚本文本历史插入本地化诊断行；明确保留与固定蛇版的输出及历史查询差异，逐例保留原始差分，不能将其仅标为 Schema 不可比或过滤后宣称一致。
 - 先统一 D10/S13 的逻辑计时器，再接查询；获准最小 headless 接线修复必须逐文件审计且不改变正常引擎。先定 D13 输入排序，再验 D12 键/鼠 latch 与真实 AWAIT 0 输入泵；TUI 不新增终端按键扩展，撤销无法提供的完整 GETKEY 能力。
 - C03 提供版本化 `ENV_HAS_CAPABILITY(name[, major])`；`GETPLATFORM` 以保持视口的定时输入能力映射 0/5，按位置发 portability diagnostic，不暴露实际 OS。

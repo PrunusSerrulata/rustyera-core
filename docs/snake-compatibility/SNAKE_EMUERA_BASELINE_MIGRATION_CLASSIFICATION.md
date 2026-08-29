@@ -96,9 +96,9 @@ CALLSTR 完整调用文本、EXISTVAR 解析模式、STRFORMCHECK 实际展开�
 | S03 | `GETMETH/GETMETHS/EXISTMETH` | 取得/判断动态用户函数并执行，蛇版 TW 构图初始化 P0 依赖 | analyzer 已接受，但 compiler 会 trap；接入现有动态调用、签名和 REF 校验 | 属参考实现能力补完，不是蛇版行为覆盖 | M |
 | S04 | 已有 presentation/pointer/canvas service 接线 | 让 `HTML_STRINGLEN/SUBSTRING/STRINGLINES`、`MOUSEX/Y/B`、像素采样等到达实际前端 | core 已有请求模型，前端 capability 未协商或未实现 | 补通已有公共协议；不应改变不调用这些能力的游戏 | M/L |
 | S05 | `EXISTVAR(name, mode)` 第二参数 | 非零模式执行表达式解析，保留调用方 scope、ERD/ALS、REF 解析和参数求值顺序；不读取 storage cell，不额外验证访问越界 | 单参数及 mode=0 保留 bitmask；复用动态表达式前端，Float bit 留批次 6 | 加法式重载，其他游戏只使用单参数；解析不能误作实际存储访问 | M |
-| S06 | 数组/角色 CSV 查询 | `MATCHALL/MATCHALLEX` 批量匹配；四个 `GETCSVNO*` 按 name/nickname/callname/mastername 查角色号 | 在既有数组和 CSV 索引上增加确定性方法 | 纯查询、无 I/O、无旧签名覆盖 | S/M |
+| S06 | 数组/角色 CSV 查询 | `MATCHALL/MATCHALLEX` 批量匹配；四个 `GETCSVNO*` 按原始 name/nickname/callname/mastername 查角色号 | 索引在 CALLNAME 回填前按 NO 逆序写入，正常域重复名取最小 NO；保留缺字段/空字段区别，极端 NO 使用 i64 安全总序并登记参考截断排序差异 | 无 I/O、无旧签名覆盖；数组输出仍有写回副作用 | S/M |
 | S07 | bit 数组操作 | `BITSET/BITGET/BITTOGGLE/BITINDEXOFFIRST` 在 `long[]` bit storage 上修改或查找 | 定义负索引、越界、空数组和返回值 | 局部确定性运算，名字全新 | S |
-| S08 | MAP 确定性扩展 | `MAP_VALUES/MERGE/REMOVEIF/FINDKEY/TOSTRING/FROMSTRING` 提取、合并、过滤、反查和序列化 | 保留插入顺序和蛇版无转义分隔符格式；覆盖不移动 key，FROMSTRING 不先清空 MAP；只对无分隔符冲突数据承诺 round-trip | 名字全新且建立在既有 MAP 状态上；不触碰旧操作 | M |
+| S08 | MAP 确定性扩展 | `MAP_VALUES/MERGE/REMOVEIF/FINDKEY/TOSTRING/FROMSTRING` 提取、合并、过滤、反查和序列化 | 保留插入顺序、无转义格式及逐条写入；key/contains/equality 为 ordinal，前后缀及键值分隔符查找固定为参考环境的 ICU invariant-culture 规则；UTF-16 切分不可表示时明确报错 | 名字全新且建立在既有 MAP 状态上；不触碰旧操作，round-trip 仅限无分隔符冲突数据 | M |
 | S09 | `STRFORMCHECK` | 解析并实际展开格式字符串，成功返回 1、受捕获的脚本解析/展开错误返回 0，保留已发生副作用 | 复用正常 STRFORM、服务权限与等待；参数求值失败仍传播；取消、资源耗尽、坏字节码和协议故障不能伪装为检查失败；捕获 continuation 恢复 caller/REF/资源 | 新增 API，不是纯检查；跨动态执行与错误生命周期，按 2B 大批次实现 | M/L |
 | S10 | `TEXT_BGC_ON/OFF` | 设置/清除全局整行文本背景，影响符合条件的已有历史行 | 独立规范化背景状态保存 RGB/alpha/行资格，进入 snapshot/delta；不复用 run 背景，TUI 显式颜色合成降级 | 状态是抽象颜色/开关，能跨客户端降级；历史投影需同步更新 | M |
 | S11 | 显式非检查整数操作 | `UNCHECKED_ADD/SUB/MUL/NEG` 提供二补码回环，供噪声/哈希使用 | 在 VM 中明确 wrapping 规则 | 新名字使意图显式，不改变普通运算；蛇版 TW 的 `NOISE` 需要 | S |
