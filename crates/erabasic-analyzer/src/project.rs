@@ -465,7 +465,7 @@ fn analyze_with_context(
             continue;
         }
         for (function_index, function) in source.script.functions.iter().enumerate() {
-            let (kind, return_type) = function_semantics(function);
+            let (kind, return_type) = function_semantics(function, &options.compatibility);
             if is_reserved(&function.name) {
                 diagnostics.push(at_function(
                     source,
@@ -698,6 +698,8 @@ fn analyze_with_context(
         compatible_rand: options.compatible_rand,
         system_no_target: options.system_no_target,
         ignore_case: options.ignore_case,
+        before_error_throw_hooks: options.compatibility.supports_fault_hooks()
+            && !options.disable_before_error_throw,
     };
     program.variables = symbols.variables;
     program.functions = functions;

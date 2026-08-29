@@ -8,10 +8,10 @@
 
 - 文件使用 TOML，设置按用途放入浅层表中，例如 `text.font_size` 和
   `save.auto_save`。设置名称使用小写、完整且直观的英语单词。
-- `[meta]` 只保存格式元数据。`schema_version` 当前为整数 `4`；
+- `[meta]` 只保存格式元数据。`schema_version` 当前为整数 `5`；
   `locked_settings` 是不可由客户端设置面板修改的规范路径数组，用来承接旧
   `_fixed.config` 的语义。
-- 版本 1、2、3 文件及未写版本号的旧文件会在读取时升级为版本 4。版本 1 升级会移除退役字段；
+- 版本 1、2、3、4 文件及未写版本号的旧文件会在读取时升级为版本 5。版本 1 升级会移除退役字段；
   `compatibility.drawline_starts_new_line = true` 会转移为仍受支持的
   `compatibility.legacy_nonbutton_wrapping = true`，对应锁定状态也一并转移。
 - 版本 2 的 `interface.menu_visible` 布尔项会升级为 `interface.menu_mode`：`true` 转为
@@ -30,7 +30,7 @@
 
 ## 新增的通用设置
 
-### 版本 4 兼容 profile
+### 版本 4 兼容 profile 与版本 5 故障钩子配置
 
 `[compatibility] profile` 缺省为 `"emuera.em"`，也可显式声明
 `"emuera.skia.snake"`。未知 profile 或不支持的格式版本会阻止加载，不静默回退。
@@ -45,7 +45,7 @@ snake profile 仍为实验状态。当前身份选择逐操作蛇版整数策略
 
 ```toml
 [meta]
-schema_version = 4
+schema_version = 5
 
 [compatibility]
 profile = "emuera.skia.snake"
@@ -56,8 +56,14 @@ profile = "emuera.skia.snake"
 `diagnostics.strict_user_call_arguments`（设置 ID `128`）默认 `false`，仅影响 snake
 非 variadic 用户函数：默认告警并且不求值多余实参；设为 `true` 时提升为错误。内置函数
 始终按原有 arity 校验，原版 profile 始终拒绝用户函数多余实参。修改此项需要重新加载项目，
-会改变编译身份并使不兼容缓存失效。该项不改变 TOML 格式结构，schema 版本仍为 `4`；
-Schema、锁定路径和客户端设置目录同步包含该可选字段。
+会改变编译身份并使不兼容缓存失效。Schema、锁定路径和客户端设置目录同步包含该可选字段。
+
+### 蛇版最终故障钩子
+
+`runtime.disable_before_error_throw`（设置 ID `129`）映射蛇版
+`DisableBeforeErrorThrow`，默认 `false`。仅 snake profile 会在最终脚本故障前运行
+`BEFORE_ERROR`，显式 `THROW` 则只运行 `BEFORE_THROW`。设置为 `true` 后两个 hook 均禁用；
+原版 profile 始终不触发。该设置参与编译身份，修改后需要重新加载项目。
 
 ### 展示设置
 

@@ -395,7 +395,7 @@ fn semantic_configuration_is_applied_and_retired_settings_are_reported_once() {
     let config = parse_configuration(
         &[
             configuration(
-                "\u{feff}Sort filenames:YES\nIgnore case:NO\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nTreat snake excess user arguments as errors:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nImitate behavior for RAND:YES\nDo not auto-complete arguments for character variables:YES\nImitate ERD to VARSIZE dimension specification:YES\nText color:1,2,3\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nTreat snake excess user arguments as errors:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nImitate behavior for RAND:YES\nDo not auto-complete arguments for character variables:YES\nImitate ERD to VARSIZE dimension specification:YES\nDisable BEFORE_ERROR/THROW events:YES\nText color:1,2,3\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
             ),
             SubmittedFile {
                 relative_path: "setting.json".into(),
@@ -429,6 +429,7 @@ fn semantic_configuration_is_applied_and_retired_settings_are_reported_once() {
     assert!(config.analyzer.compatible_rand);
     assert!(config.analyzer.system_no_target);
     assert!(config.analyzer.varsize_dimension_is_one_based);
+    assert!(config.analyzer.disable_before_error_throw);
     assert_eq!(config.analyzer.default_foreground_color, 0x0001_0203);
     assert_eq!(config.legacy_encoding, LegacyEncoding::Korean);
     assert_eq!(
@@ -518,7 +519,7 @@ fn schema_v1_reraconfig_is_returned_for_atomic_client_persistence() {
     let generated = parsed
         .generated_source
         .expect("schema version 1 must be persisted as version 4");
-    assert!(generated.contains("schema_version = 4"));
+    assert!(generated.contains("schema_version = 5"));
     assert!(generated.contains("font_size = 20"));
     assert!(!generated.contains("drawing_method"));
     assert!(diagnostics.iter().any(|diagnostic| {

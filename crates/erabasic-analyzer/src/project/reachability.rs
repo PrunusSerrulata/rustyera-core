@@ -335,7 +335,10 @@ pub(super) fn report_uncalled(
     ));
 }
 
-pub(super) fn function_semantics(function: &AstFunction) -> (FunctionKind, SemanticType) {
+pub(super) fn function_semantics(
+    function: &AstFunction,
+    compatibility: &erabasic_compat::CompatibilityIdentity,
+) -> (FunctionKind, SemanticType) {
     if function
         .attributes
         .iter()
@@ -351,7 +354,10 @@ pub(super) fn function_semantics(function: &AstFunction) -> (FunctionKind, Seman
         return (FunctionKind::Method, SemanticType::Integer);
     }
     let upper = function.name.to_ascii_uppercase();
-    if is_event_name(&upper) {
+    if is_event_name(&upper)
+        || (compatibility.supports_fault_hooks()
+            && matches!(upper.as_str(), "BEFORE_ERROR" | "BEFORE_THROW"))
+    {
         (FunctionKind::Event, SemanticType::Void)
     } else if is_system_name(&upper) {
         (FunctionKind::System, SemanticType::Void)

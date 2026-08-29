@@ -97,6 +97,7 @@ pub fn catalog() -> Vec<ConfigSpec> {
         spec!(InfiniteLoopAlertTime, "無限ループ警告までのミリ秒数", "Milliseconds for infinite loop warning", i 5000, PortableSemantic),
         spec!(DisplayWarningLevel, "表示する最低警告レベル", "Minimum warning level", i 1, PortableSemantic),
         spec!(StrictUserCallArguments, "蛇版ユーザー関数の過剰引数をエラーにする", "Treat snake excess user arguments as errors", b false, PortableSemantic),
+        spec!(DisableBeforeErrorThrow, "BEFORE_ERROR/THROWイベントを無効化する", "Disable BEFORE_ERROR/THROW events", b false, PortableSemantic),
         spec!(IgnoreUncalledFunction, "呼び出されなかった関数を無視する", "Ignore uncalled functions", b true, PortableSemantic),
         spec!(FunctionNotFoundWarning, "関数が見つからない警告の扱い", "Function is not found warning", e "IGNORE" ["IGNORE", "LATER", "ONCE", "DISPLAY"], PortableSemantic),
         spec!(FunctionNotCalledWarning, "関数が呼び出されなかった警告の扱い", "Function not called warning", e "IGNORE" ["IGNORE", "LATER", "ONCE", "DISPLAY"], PortableSemantic),
@@ -261,6 +262,7 @@ pub fn tui_application(code: &str) -> Option<ConfigApplication> {
         | "WarnFunctionOverloading"
         | "DisplayWarningLevel"
         | "StrictUserCallArguments"
+        | "DisableBeforeErrorThrow"
         | "FunctionNotFoundWarning"
         | "FunctionNotCalledWarning"
         | "CompatiCallEvent"
@@ -315,6 +317,7 @@ pub fn browser_application(code: &str) -> Option<ConfigApplication> {
         | "WarnFunctionOverloading"
         | "DisplayWarningLevel"
         | "StrictUserCallArguments"
+        | "DisableBeforeErrorThrow"
         | "FunctionNotFoundWarning"
         | "FunctionNotCalledWarning"
         | "CompatiCallEvent"

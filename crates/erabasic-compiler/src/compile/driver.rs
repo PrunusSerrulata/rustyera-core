@@ -563,6 +563,10 @@ fn compile_project_inner(
         compatible_rand: project_ref.program.call_compatibility.compatible_rand,
         system_no_target: project_ref.program.call_compatibility.system_no_target,
         ignore_case: project_ref.program.call_compatibility.ignore_case,
+        before_error_throw_hooks: project_ref
+            .program
+            .call_compatibility
+            .before_error_throw_hooks,
     };
     let runtime_variables = super::runtime_symbols::runtime_variable_symbols(
         &project_ref.program.variables,

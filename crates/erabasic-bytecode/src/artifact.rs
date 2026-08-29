@@ -99,6 +99,8 @@ pub struct BytecodeCallCompatibility {
     pub system_no_target: bool,
     /// Config.IgnoreCase for runtime variable-name token lookup.
     pub ignore_case: bool,
+    /// Run snake `BEFORE_ERROR`/`BEFORE_THROW` before publishing a final script fault.
+    pub before_error_throw_hooks: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

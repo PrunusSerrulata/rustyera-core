@@ -33,7 +33,7 @@ mod tests {
 
     #[test]
     fn catalog_aliases_types_and_fixed_precedence_are_deterministic() {
-        assert_eq!(catalog().len(), 88, "Era configuration catalog drifted");
+        assert_eq!(catalog().len(), 89, "Era configuration catalog drifted");
         let mut store = ConfigStore::default();
         assert_eq!(
             store.get("フォントサイズ").unwrap().script_value(),
@@ -136,6 +136,7 @@ mod tests {
             "CompatiSPChara",
             "Ctrl_Z_Enabled",
             "DisplayWarningLevel",
+            "DisableBeforeErrorThrow",
             "StrictUserCallArguments",
             "FocusColor",
             "ForeColor",
@@ -230,6 +231,7 @@ mod tests {
             "CompatiSPChara",
             "Ctrl_Z_Enabled",
             "DisplayWarningLevel",
+            "DisableBeforeErrorThrow",
             "StrictUserCallArguments",
             "FocusColor",
             "FontName",

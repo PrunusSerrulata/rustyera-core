@@ -60,7 +60,7 @@ const CALL_PROJECT_VERSION: u8 = 11;
 /// Last source-extractable project container before Batch 2 data APIs changed bytecode.
 /// Compiled caches at this version are deliberately rebuilt instead of decoded.
 const DATA_PROJECT_VERSION: u8 = 12;
-const VERSION: u8 = 13;
+const VERSION: u8 = 14;
 const PROJECT_COMPRESSION_LEVEL: i32 = 3;
 const CACHE_COMPRESSION_LEVEL: i32 = 1;
 const TARGET_PARALLEL_SECTIONS: usize = 32;

@@ -264,6 +264,9 @@ fn apply_catalog_semantics(config: &mut SemanticConfig) {
     if let Some(value) = boolean("StrictUserCallArguments") {
         config.analyzer.strict_user_call_arguments = value;
     }
+    if let Some(value) = boolean("DisableBeforeErrorThrow") {
+        config.analyzer.disable_before_error_throw = value;
+    }
     if let Some(value) = boolean("IgnoreUncalledFunction") {
         config.analyzer.ignore_uncalled_functions = value;
     }

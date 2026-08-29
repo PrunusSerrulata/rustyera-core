@@ -1,5 +1,5 @@
 {
-  "$id": "urn:rustyera:reraconfig:schema:4",
+  "$id": "urn:rustyera:reraconfig:schema:5",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "RustyEra 跨客户端项目配置。所有设置项均可省略，省略时采用各项统一默认值。",
@@ -568,7 +568,7 @@
     },
     "meta": {
       "additionalProperties": false,
-      "description": "配置格式元数据。所有字段均可省略，省略时按 schema 版本 1 输入并自动升级到版本 4，且没有锁定项。",
+      "description": "配置格式元数据。所有字段均可省略，省略时按 schema 版本 1 输入并自动升级到版本 5，且没有锁定项。",
       "properties": {
         "locked_settings": {
           "default": [],
@@ -606,6 +606,7 @@
               "runtime.infinite_loop_warning_ms",
               "diagnostics.minimum_warning_level",
               "diagnostics.strict_user_call_arguments",
+              "runtime.disable_before_error_throw",
               "diagnostics.ignore_uncalled_functions",
               "diagnostics.missing_function",
               "diagnostics.uncalled_function",
@@ -670,9 +671,9 @@
           "uniqueItems": true
         },
         "schema_version": {
-          "const": 4,
-          "default": 4,
-          "description": "reraconfig.toml 的格式版本。新文件使用整数 4。",
+          "const": 5,
+          "default": 5,
+          "description": "reraconfig.toml 的格式版本。新文件使用整数 5。",
           "type": "integer"
         }
       },
@@ -1093,6 +1094,20 @@
     "runtime": {
       "additionalProperties": false,
       "properties": {
+        "disable_before_error_throw": {
+          "default": false,
+          "description": "用途：禁用蛇版 BEFORE_ERROR 与 BEFORE_THROW 最终故障钩子；类型：布尔",
+          "type": "boolean",
+          "x-rustyera-application": "restart",
+          "x-rustyera-clients": [
+            "runtime",
+            "tui",
+            "browser",
+            "tauri"
+          ],
+          "x-rustyera-legacy-code": "DisableBeforeErrorThrow",
+          "x-rustyera-setting-id": 129
+        },
         "infinite_loop_warning_ms": {
           "default": 5000,
           "description": "用途：设置无限循环警告等待时间；类型：整数；范围：-2147483648..=2147483647",

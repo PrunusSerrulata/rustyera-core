@@ -26,6 +26,8 @@ pub struct AnalyzerOptions {
     pub compatible_function_argument_optional: bool,
     /// Promote the snake non-variadic excess-argument warning to a load error.
     pub strict_user_call_arguments: bool,
+    /// Disable snake `BEFORE_ERROR`/`BEFORE_THROW` final-fault hooks.
+    pub disable_before_error_throw: bool,
     pub compatible_call_event: bool,
     pub system_save_in_binary: bool,
     pub use_erd: bool,
@@ -62,6 +64,7 @@ impl Default for AnalyzerOptions {
             compatible_function_argument_auto_convert: false,
             compatible_function_argument_optional: false,
             strict_user_call_arguments: false,
+            disable_before_error_throw: false,
             compatible_call_event: false,
             system_save_in_binary: false,
             use_erd: true,

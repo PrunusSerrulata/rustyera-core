@@ -5,10 +5,10 @@ use crate::{ConfigStore, ConfigValue};
 use super::*;
 
 #[test]
-fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
+fn catalog_has_explicit_unique_ids_paths_and_codes() {
     catalog::validate_catalog();
     let specs = rera_catalog();
-    assert_eq!(specs.len(), 88);
+    assert_eq!(specs.len(), 89);
     let mappings = specs
         .iter()
         .map(|spec| (spec.code, spec.id, spec.path))
@@ -28,20 +28,18 @@ fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
             128,
             "diagnostics.strict_user_call_arguments",
         ),
+        (
+            "DisableBeforeErrorThrow",
+            129,
+            "runtime.disable_before_error_throw",
+        ),
     ] {
         assert!(
             mappings.contains(&expected),
             "missing pinned mapping {expected:?}"
         );
     }
-    assert_eq!(RERACONFIG_SCHEMA_VERSION, 4);
-    assert_eq!(
-        ConfigStore::default().get_code("UseMenu"),
-        Some(&ConfigValue::Enum {
-            value: "AUTO".into(),
-            allowed: vec!["SHOW".into(), "AUTO".into(), "HIDE".into()],
-        })
-    );
+    assert_eq!(RERACONFIG_SCHEMA_VERSION, 5);
     let active_ids = specs.iter().map(|spec| spec.id).collect::<BTreeSet<_>>();
     assert_eq!(retired::RETIRED_CONFIG_SPECS.len(), 40);
     assert_eq!(
@@ -85,21 +83,29 @@ fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
     ] {
         assert!(specs.iter().all(|spec| spec.code != retired));
     }
+}
+
+#[test]
+fn catalog_defaults_are_unified() {
+    let defaults = ConfigStore::default();
     assert_eq!(
-        ConfigStore::default().get_code("MaxLog"),
-        Some(&ConfigValue::Integer(1000))
+        defaults.get_code("UseMenu"),
+        Some(&ConfigValue::Enum {
+            value: "AUTO".into(),
+            allowed: vec!["SHOW".into(), "AUTO".into(), "HIDE".into()],
+        })
     );
+    for (code, expected) in [
+        ("MaxLog", ConfigValue::Integer(1000)),
+        ("PrintCPerLine", ConfigValue::Integer(5)),
+        ("PrintCLength", ConfigValue::Integer(24)),
+        ("AudioVolume", ConfigValue::Integer(100)),
+    ] {
+        assert_eq!(defaults.get_code(code), Some(&expected));
+    }
     assert_eq!(
-        ConfigStore::default().get_code("PrintCPerLine"),
-        Some(&ConfigValue::Integer(5))
-    );
-    assert_eq!(
-        ConfigStore::default().get_code("PrintCLength"),
-        Some(&ConfigValue::Integer(24))
-    );
-    assert_eq!(
-        ConfigStore::default().get_code("AudioVolume"),
-        Some(&ConfigValue::Integer(100))
+        defaults.get_code("DisableBeforeErrorThrow"),
+        Some(&ConfigValue::Boolean(false))
     );
 }
 
@@ -391,7 +397,7 @@ fn schema_v1_is_upgraded_and_retired_locks_and_fields_are_removed() {
         &["TextDrawingMode", "CompatiDRAWLINE"]
     );
     let output = document.to_lf_string();
-    assert!(output.contains("schema_version = 4"));
+    assert!(output.contains("schema_version = 5"));
     assert!(output.contains("font_size = 20 # keep"));
     assert!(output.contains("legacy_nonbutton_wrapping = true"));
     assert!(!output.contains("drawing_method"));
@@ -418,7 +424,7 @@ fn schema_v2_menu_visibility_is_upgraded_to_menu_mode() {
         );
         assert!(document.values().unwrap().is_fixed("UseMenu"));
         let output = document.to_lf_string();
-        assert!(output.contains("schema_version = 4"));
+        assert!(output.contains("schema_version = 5"));
         assert!(output.contains(&format!(
             "menu_mode = \"{}\" # keep",
             expected.to_lowercase()
@@ -464,7 +470,7 @@ fn canonical_materialization_rejects_values_from_an_old_catalog_type() {
 fn schema_v2_menu_upgrade_preserves_unrelated_lock_formatting() {
     let input = "[meta]\nschema_version = 2\nlocked_settings = [\n  \"text.font_size\", # font\n  \"interface.menu_visible\", # menu\n  \"input.mouse_enabled\", # mouse\n] # locks\n\n[interface]\nmenu_visible = true # value\n";
     let expected = input
-        .replace("schema_version = 2", "schema_version = 4")
+        .replace("schema_version = 2", "schema_version = 5")
         .replace("interface.menu_visible", "interface.menu_mode")
         .replace("menu_visible = true", "menu_mode = \"auto\"");
     let document = ReraConfigDocument::parse(input).unwrap();

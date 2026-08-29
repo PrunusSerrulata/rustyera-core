@@ -82,6 +82,7 @@ pub struct CallCompatibility {
     pub system_no_target: bool,
     /// Config.IgnoreCase for runtime variable-name token lookup.
     pub ignore_case: bool,
+    pub before_error_throw_hooks: bool,
 }
 
 /// Reference event modifiers retained after parsing. They affect dispatch order rather

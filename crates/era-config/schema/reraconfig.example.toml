@@ -1,8 +1,8 @@
 # RustyEra 跨客户端项目配置示例。所有字段都可以省略，省略时使用注释中的默认值。
 
 [meta]
-# 类型：整数；当前仅支持 4。
-schema_version = 4
+# 类型：整数；当前仅支持 5。
+schema_version = 5
 # 类型：字符串数组；列出的设置不可由客户端设置面板修改。
 locked_settings = []
 
@@ -163,6 +163,8 @@ default_relation = 0
 [runtime]
 # 用途：设置无限循环警告等待时间；类型：整数；范围：-2147483648..=2147483647
 infinite_loop_warning_ms = 5000
+# 用途：禁用蛇版 BEFORE_ERROR 与 BEFORE_THROW 最终故障钩子；类型：布尔
+disable_before_error_throw = false
 
 [save]
 # 用途：商店事件结束后执行自动保存；类型：布尔

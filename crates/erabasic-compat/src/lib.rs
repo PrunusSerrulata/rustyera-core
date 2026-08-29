@@ -121,7 +121,7 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 1,
-            CompatibilityProfileId::EmueraSkiaSnake => 6,
+            CompatibilityProfileId::EmueraSkiaSnake => 7,
         };
         Self {
             profile,
@@ -189,6 +189,12 @@ impl CompatibilityIdentity {
     #[must_use]
     pub const fn supports_map_extensions(&self) -> bool {
         self.supports_snake_data_apis()
+    }
+
+    /// Final script-fault hooks are part of the v7 snake execution policy.
+    #[must_use]
+    pub const fn supports_fault_hooks(&self) -> bool {
+        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 7
     }
 
     /// Policy for non-variadic user calls; builtin signatures remain exact.
