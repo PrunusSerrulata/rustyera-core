@@ -17,6 +17,8 @@ mod column_identity;
 mod column_options;
 mod data_table;
 mod legacy;
+mod map_calls;
+mod map_leases;
 mod xml;
 
 use data_table::{
@@ -28,9 +30,11 @@ use data_table::{
 };
 use xml::{parse_xml, xml_attribute_escape, xml_text_escape};
 
-pub(crate) const STRUCTURED_BUNDLE_VERSION: u32 = 3;
+pub(crate) const STRUCTURED_BUNDLE_VERSION: u32 = 4;
 
 pub(crate) fn bundle_key() -> SymbolKey {
+    // Provider identity remains stable across compatible payload revisions; the
+    // explicit four-byte bundle header rejects older serialized state.
     SymbolKey::derive("rustyera.native.bundle", b"structured-data-v3")
 }
 
@@ -42,6 +46,7 @@ pub(crate) fn is_structured_name(name: &str) -> bool {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct StructuredState {
     maps: BTreeMap<String, OrderedMap>,
+    map_leases: map_leases::MapLeaseBook,
     xml_documents: BTreeMap<String, XmlDocument>,
     data_tables: BTreeMap<String, DataTable>,
     next_column_identity: u64,
@@ -52,6 +57,7 @@ impl Default for StructuredState {
     fn default() -> Self {
         Self {
             maps: BTreeMap::new(),
+            map_leases: map_leases::MapLeaseBook::default(),
             xml_documents: BTreeMap::new(),
             data_tables: BTreeMap::new(),
             next_column_identity: 1,
@@ -62,6 +68,8 @@ impl Default for StructuredState {
 
 pub(crate) use column_identity::ColumnIdentityStamp;
 pub(crate) use column_options::is_internal_column_native;
+pub(crate) use map_calls::MapOperation;
+pub(crate) use map_leases::{MapLease, MapLeaseOrigin, MapLeaseOwner, MapLeaseStamp};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StructuredScope {
@@ -268,6 +276,8 @@ impl StructuredState {
     pub(crate) fn encode(&self) -> Result<Vec<u8>, String> {
         self.validate_identity_state()
             .map_err(|failure| failure.to_string())?;
+        self.validate_map_leases()
+            .map_err(|failure| failure.to_string())?;
         let payload = serde_json::to_vec(self).map_err(|error| error.to_string())?;
         let mut output = STRUCTURED_BUNDLE_VERSION.to_le_bytes().to_vec();
         output.extend(payload);
@@ -289,6 +299,9 @@ impl StructuredState {
         state
             .validate_identity_state()
             .map_err(|failure| failure.to_string())?;
+        state
+            .validate_map_leases()
+            .map_err(|failure| failure.to_string())?;
         Ok(state)
     }
 
@@ -296,7 +309,7 @@ impl StructuredState {
         &mut self,
         extensions: &ExtensionData,
         transaction: &crate::VmRuntimeStateTransaction,
-    ) {
+    ) -> Result<(), ExecutionFailure> {
         match transaction {
             crate::VmRuntimeStateTransaction::ResetNewGame
             | crate::VmRuntimeStateTransaction::ResetGameData
@@ -306,31 +319,32 @@ impl StructuredState {
                     &extensions.save_maps,
                     &extensions.save_xmls,
                     &extensions.save_data_tables,
-                );
+                )?;
             }
             crate::VmRuntimeStateTransaction::ResetGlobalData => {
                 self.clear_declared(
                     &extensions.global_maps,
                     &extensions.global_xmls,
                     &extensions.global_data_tables,
-                );
+                )?;
                 self.clear_declared(
                     &extensions.static_maps,
                     &extensions.static_xmls,
                     &extensions.static_data_tables,
-                );
+                )?;
             }
             crate::VmRuntimeStateTransaction::OverlayGlobal(_) => {
                 self.clear_declared(
                     &extensions.global_maps,
                     &extensions.global_xmls,
                     &extensions.global_data_tables,
-                );
+                )?;
             }
             crate::VmRuntimeStateTransaction::AppendCharacters(_)
             | crate::VmRuntimeStateTransaction::SetLastLoad { .. }
             | crate::VmRuntimeStateTransaction::Mutate { .. } => {}
         }
+        Ok(())
     }
 
     fn clear_declared(
@@ -338,10 +352,10 @@ impl StructuredState {
         maps: &BTreeSet<String>,
         xmls: &BTreeSet<String>,
         tables: &BTreeSet<String>,
-    ) {
+    ) -> Result<(), ExecutionFailure> {
         for key in maps {
-            if let Some(map) = self.maps.get_mut(key) {
-                map.entries.clear();
+            if self.maps.contains_key(key) {
+                self.replace_map_binding(key, OrderedMap::default())?;
             }
         }
         for key in xmls {
@@ -352,6 +366,7 @@ impl StructuredState {
                 table.rows.clear();
             }
         }
+        Ok(())
     }
 
     pub(crate) fn export_extensions(
@@ -426,7 +441,8 @@ impl StructuredState {
                     for (entry_key, value) in entries {
                         map.set(entry_key.clone(), value.clone());
                     }
-                    self.maps.insert(key.clone(), map);
+                    self.replace_map_binding(key, map)
+                        .map_err(|failure| failure.to_string())?;
                     imported.insert((0x20, key.clone()));
                 }
                 StructuredExtension::Xml { key, document } if xmls.contains(key) => {
@@ -449,7 +465,7 @@ impl StructuredState {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn call(
+    pub(crate) fn call(
         &mut self,
         name: &str,
         request: &NativeCallRequest,
@@ -478,6 +494,18 @@ impl StructuredState {
         name: &str,
         request: &NativeCallRequest,
     ) -> Result<NativeReady, ExecutionFailure> {
+        if matches!(
+            name,
+            "map_create"
+                | "map_release"
+                | "map_set"
+                | "map_remove"
+                | "map_clear"
+                | "map_fromxml"
+                | "map_merge"
+        ) {
+            self.bump_map_revision()?;
+        }
         let map_name = string_argument(request, 0)?.to_owned();
         match name {
             "map_create" => {
@@ -491,7 +519,7 @@ impl StructuredState {
             }
             "map_exist" => ready_integer(i64::from(self.maps.contains_key(&map_name))),
             "map_release" => {
-                self.maps.remove(&map_name);
+                self.retire_map_binding(&map_name);
                 ready_integer(1)
             }
             "map_get" => {
@@ -616,6 +644,10 @@ impl StructuredState {
                 }
                 ready_integer(1)
             }
+            "map_merge" => self.merge_maps(request),
+            name if MapOperation::from_name(name).is_some() => Err(contract_failure(
+                "MAP extension requires staged capture; eager dispatch is invalid",
+            )),
             _ => Err(contract_failure(format!("unsupported map native {name}"))),
         }
     }

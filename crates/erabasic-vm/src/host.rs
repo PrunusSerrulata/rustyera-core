@@ -247,6 +247,9 @@ pub struct NativeServiceRegistry {
     random: Option<Arc<Mutex<Sfmt19937>>>,
     structured: Option<Arc<Mutex<StructuredState>>>,
     structured_keys: SymbolKeySet,
+    staged_map_keys: SymbolKeySet,
+    /// Parent VM roots retained only while this registry belongs to an isolated candidate.
+    protected_map_leases: BTreeSet<crate::structured::MapLease>,
     extensions: erabasic_data::ExtensionData,
     character_width_mode: CharacterWidthModeHandle,
 }
@@ -296,6 +299,9 @@ impl NativeServiceRegistry {
                     service_key,
                     StructuredNative::new(name, Arc::clone(&structured)),
                 );
+                if erabasic_bytecode::MapCallKind::from_name(name).is_some() {
+                    registry.staged_map_keys.insert(service_key);
+                }
             } else if matches!(name, "format_integer" | "format_string" | "times")
                 || name.starts_with("control_")
             {
@@ -333,6 +339,7 @@ impl NativeServiceRegistry {
     }
 
     pub fn register(&mut self, key: SymbolKey, service: impl NativeService + 'static) -> bool {
+        self.staged_map_keys.remove(&key);
         self.path_memo_safe_keys.remove(&key);
         self.services.insert(key, Box::new(service)).is_none()
     }
@@ -416,7 +423,9 @@ impl NativeServiceRegistry {
             .lock()
             .map_err(|_| "structured native state lock is poisoned".to_owned())?
             .clone();
-        candidate.clear_for_transaction(&self.extensions, transaction);
+        candidate
+            .clear_for_transaction(&self.extensions, transaction)
+            .map_err(|failure| failure.to_string())?;
         candidate.encode().map(Some)
     }
 
@@ -433,7 +442,9 @@ impl NativeServiceRegistry {
             .lock()
             .map_err(|_| "structured native state lock is poisoned".to_owned())?
             .clone();
-        candidate.clear_for_transaction(&self.extensions, transaction);
+        candidate
+            .clear_for_transaction(&self.extensions, transaction)
+            .map_err(|failure| failure.to_string())?;
         let imported = candidate.import_extensions(&self.extensions, scope, values)?;
         Ok((Some(candidate.encode()?), imported))
     }
@@ -479,6 +490,7 @@ impl NativeServiceRegistry {
         &mut self,
         bytes: &[u8],
         expected: Option<ColumnIdentityStamp>,
+        expected_maps: Option<crate::structured::MapLeaseStamp>,
     ) -> Result<(), String> {
         let decoded = StructuredState::decode(bytes)?;
         let mut state = self
@@ -489,6 +501,14 @@ impl NativeServiceRegistry {
             .map_err(|_| "structured native state lock is poisoned".to_owned())?;
         if Some(state.column_identity_stamp()) != expected {
             return Err("structured state belongs to a stale column identity timeline".into());
+        }
+        if Some(
+            state
+                .map_lease_stamp()
+                .map_err(|failure| failure.to_string())?,
+        ) != expected_maps
+        {
+            return Err("structured state belongs to a stale MAP timeline".into());
         }
         *state = decoded;
         Ok(())
@@ -612,6 +632,32 @@ impl NativeServiceRegistry {
     ) -> Result<Self, String> {
         let previous = self.snapshots()?;
         let mut target = Self::for_artifact(artifact);
+        let active_maps = self
+            .structured
+            .as_ref()
+            .map(|state| {
+                state
+                    .lock()
+                    .map(|state| !state.all_map_leases().is_empty())
+                    .map_err(|_| "MAP state lock poisoned".to_owned())
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if active_maps && !self.staged_map_keys.is_subset(&target.staged_map_keys) {
+            return Err(
+                "hot reload removes a MAP provider still owned by an active continuation".into(),
+            );
+        }
+        if target.structured.is_none()
+            && let Some(state) = &self.structured
+        {
+            let state = state
+                .lock()
+                .map_err(|_| "MAP state lock poisoned".to_owned())?;
+            if !state.all_map_leases().is_empty() {
+                target.structured = Some(Arc::new(Mutex::new(state.clone())));
+            }
+        }
         let retained = previous
             .into_iter()
             .filter(|(key, _)| {
@@ -620,6 +666,9 @@ impl NativeServiceRegistry {
             })
             .collect();
         target.restore_snapshots(&retained)?;
+        target
+            .protected_map_leases
+            .clone_from(&self.protected_map_leases);
         target.set_character_width_mode(self.character_width_mode.get());
         Ok(target)
     }
@@ -630,6 +679,7 @@ fn compiler_native_path_memo_safe(name: &str) -> bool {
 }
 
 mod core;
+mod maps;
 mod services;
 #[cfg(test)]
 mod tests;
