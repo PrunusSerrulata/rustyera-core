@@ -107,7 +107,7 @@ fn generated_configuration_can_be_confirmed_before_the_next_edit() {
             _ => None,
         })
         .expect("empty transaction confirms generated contents");
-    assert!(prepared.contents.contains("schema_version = 4"));
+    assert!(prepared.contents.contains("schema_version = 5"));
     submit(
         &mut session,
         3,

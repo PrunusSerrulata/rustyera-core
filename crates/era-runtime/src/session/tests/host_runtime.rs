@@ -424,6 +424,7 @@ fn malformed_immediate_html_print_falls_back_to_a_sourced_vm_fault() {
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
+                ..
         }) if message.contains("HTML_PRINT UnknownTag")
             && origin.command.eq_ignore_ascii_case("HTML_PRINT")
                 && origin.source.as_ref().is_some_and(|source| source.relative_path == "main.erb")
@@ -447,6 +448,7 @@ fn malformed_immediate_html_query_falls_back_to_a_sourced_vm_fault() {
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
+                ..
         }) if message == "malformed HTML text"
             && origin.command.eq_ignore_ascii_case("HTML_TOPLAINTEXT")
                 && origin.source.as_ref().is_some_and(|source| source.relative_path == "main.erb")
@@ -511,6 +513,7 @@ fn moneystr_invalid_format_keeps_vm_fault_priority_without_project_context() {
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
+                ..
             }) if message.contains("MONEYSTR format is invalid") && origin.command.eq_ignore_ascii_case("MONEYSTR")
         )),
         "{messages:#?}"
@@ -1322,6 +1325,264 @@ fn host_assert_and_throw_keep_uncaught_fault_source_and_committed_effects() {
         assert!(origin.command.eq_ignore_ascii_case(command));
         assert_eq!(origin.source.as_ref().unwrap().relative_path, "main.erb");
     }
+}
+
+#[test]
+fn snake_before_throw_reports_the_original_throw_without_before_error() {
+    let source = "@SYSTEM_TITLE\nFLAG:0 = 7\nTHROW original-throw\nFLAG:0 = 9\nRETURN\n\
+        @BEFORE_THROW\nFLAG:1 += 1\nRETURN\n\
+        @BEFORE_ERROR\nFLAG:2 += 1\nRETURN\n";
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 7);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[2], None).unwrap(), 0);
+    let fault = messages
+        .iter()
+        .find_map(|message| match message {
+            RuntimeMessage::Fault(fault) => Some(fault),
+            _ => None,
+        })
+        .expect("original throw fault");
+    assert_eq!(fault.message, "original-throw");
+    let vm_fault = fault.vm.as_ref().expect("structured VM fault");
+    assert_ne!(vm_fault.primary.correlation_id, 0);
+    assert!(vm_fault.secondary.is_none());
+    assert!(
+        fault
+            .origin
+            .as_ref()
+            .unwrap()
+            .command
+            .eq_ignore_ascii_case("THROW")
+    );
+}
+
+#[test]
+fn snake_before_error_keeps_original_fault_and_attaches_hook_failure() {
+    let source = "@SYSTEM_TITLE\nFLAG:0 = 7\nASSERT 0\nFLAG:0 = 9\nRETURN\n\
+        @BEFORE_ERROR\nFLAG:1 += 1\nTHROW hook-failed\nRETURN\n\
+        @BEFORE_THROW\nFLAG:2 += 1\nRETURN\n";
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 7);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[2], None).unwrap(), 0);
+    let fault = messages
+        .iter()
+        .find_map(|message| match message {
+            RuntimeMessage::Fault(fault) => Some(fault),
+            _ => None,
+        })
+        .expect("original assertion fault");
+    assert_eq!(fault.message, "ASSERT failed");
+    let vm_fault = fault.vm.as_ref().expect("structured VM fault");
+    let secondary = vm_fault.secondary.as_ref().expect("secondary hook fault");
+    assert_eq!(secondary.message, "hook-failed");
+    assert_eq!(
+        secondary.parent_correlation_id,
+        Some(vm_fault.primary.correlation_id)
+    );
+    assert!(
+        secondary
+            .origin
+            .as_ref()
+            .unwrap()
+            .command
+            .eq_ignore_ascii_case("THROW")
+    );
+}
+
+#[test]
+fn snake_before_error_normal_completion_still_reports_original_fault() {
+    let source = "@SYSTEM_TITLE\nFLAG:0 = 7\nASSERT 0\nFLAG:0 = 9\nRETURN\n\
+        @BEFORE_ERROR\nFLAG:1 += 1\nRETURN\n";
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 7);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+    let fault = messages
+        .iter()
+        .find_map(|message| match message {
+            RuntimeMessage::Fault(fault) => Some(fault),
+            _ => None,
+        })
+        .expect("original assertion fault");
+    assert_eq!(fault.message, "ASSERT failed");
+    assert!(
+        fault
+            .vm
+            .as_ref()
+            .is_some_and(|vm_fault| vm_fault.secondary.is_none())
+    );
+}
+
+#[test]
+fn disabled_and_reference_profiles_do_not_run_final_fault_hooks() {
+    let source = "@SYSTEM_TITLE\nASSERT 0\nRETURN\n@BEFORE_ERROR\nFLAG:1 += 1\nRETURN\n";
+    let compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let mut session = negotiated_session();
+    let mut config = profile_configuration_file(compatibility.profile);
+    let FilePayload::Utf8(contents) = &mut config.payload else {
+        unreachable!("profile configuration is UTF-8")
+    };
+    contents.push_str("[runtime]\ndisable_before_error_throw = true\n");
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility,
+            project_revision: 1,
+            files: vec![
+                config,
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(source.into()),
+                    content_hash: None,
+                },
+            ],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(message,
+        RuntimeMessage::ProjectLoadReport(report) if report.success)));
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "FLAG", &[1], None).unwrap(),
+        0
+    );
+    assert!(
+        !session
+            .vm
+            .as_ref()
+            .unwrap()
+            .vm()
+            .artifact()
+            .call_compatibility
+            .before_error_throw_hooks
+    );
+
+    let (reference, _, _) = run_immediate_query_project(source);
+    assert_eq!(
+        read_runtime_integer(reference.vm.as_ref().unwrap(), "FLAG", &[1], None).unwrap(),
+        0
+    );
+    assert!(
+        !reference
+            .vm
+            .as_ref()
+            .unwrap()
+            .vm()
+            .artifact()
+            .call_compatibility
+            .before_error_throw_hooks
+    );
+    let (enabled, _, _) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    let disabled_artifact = session.vm.as_ref().unwrap().artifact_id();
+    let enabled_vm = enabled.vm.as_ref().unwrap();
+    assert!(
+        enabled_vm
+            .vm()
+            .artifact()
+            .call_compatibility
+            .before_error_throw_hooks
+    );
+    assert_ne!(disabled_artifact, enabled_vm.artifact_id());
+}
+
+#[test]
+fn stable_snapshot_is_rejected_while_before_error_waits_for_input() {
+    let source = "@SYSTEM_TITLE\nASSERT 0\nRETURN\n@BEFORE_ERROR\nINPUT\nRETURN\n";
+    let (mut session, _, messages) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    session
+        .export_state(
+            100,
+            StateExportRequest {
+                kind: StateExportKind::VmSnapshot,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
+            },
+        )
+        .unwrap();
+    let messages = drain(&mut session);
+    assert!(
+        messages.iter().any(|message| matches!(message,
+        RuntimeMessage::StateExportReady(StateExportReady {
+            result: StateExportResult::Ineligible { reasons }, ..
+        }) if reasons.contains(&SnapshotIneligibleReason::SnapshotStateUnavailable))),
+        "{messages:#?}"
+    );
+}
+
+#[test]
+fn runaway_resource_fault_does_not_enter_before_error() {
+    let source = "@SYSTEM_TITLE\nWHILE 1\nWEND\nRETURN\n@BEFORE_ERROR\nFLAG:1 += 1\nRETURN\n";
+    let (mut session, _, _) = run_immediate_query_project_with_budget(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+        RuntimeDriveBudget {
+            maximum_vm_instructions: 1,
+            maximum_runtime_transitions: 1,
+        },
+    );
+    for _ in 0..140 {
+        if session.phase() == RuntimePhase::Faulted {
+            break;
+        }
+        session
+            .drive(RuntimeDriveBudget {
+                maximum_vm_instructions: 1,
+                maximum_runtime_transitions: 1,
+            })
+            .unwrap();
+        drain(&mut session);
+    }
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "FLAG", &[1], None).unwrap(),
+        0
+    );
 }
 
 #[test]

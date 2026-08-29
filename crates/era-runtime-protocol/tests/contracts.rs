@@ -16,12 +16,13 @@ use era_runtime_protocol::{
     PresentationOperation, PrimitiveInput, ProjectConfigurationEntry, ProjectConfigurationSnapshot,
     ProjectLoadRequest, ProjectManifest, ProjectionLength, ProjectionObservation,
     ProjectionQueryContext, ProjectionSize, ProjectionTransform, ProtocolDiagnostic,
-    RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay, ReturnToTitleRequest, RuntimeLimits,
-    RuntimeLog, RuntimeLogLevel, RuntimeMessage, SAMPLE_CANVAS_PIXEL_OPERATION, SeparatorRole,
-    ServiceKind, ServiceRequest, SnapshotExportPurpose, StateExportCancel, StateExportChunkRequest,
-    StateExportKind, StateExportRequest, StateImportBegin, StateImportCommit, StorageNamespace,
-    StorageOperation, StorageRequest, TextExtentRequest, TextStyle, parse_document,
-    validate_relative_path,
+    RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay, ReturnToTitleRequest, RuntimeFault,
+    RuntimeLimits, RuntimeLog, RuntimeLogLevel, RuntimeMessage, RuntimeVmFault,
+    RuntimeVmFaultCategory, RuntimeVmFaultCode, RuntimeVmFaultDetail,
+    SAMPLE_CANVAS_PIXEL_OPERATION, SeparatorRole, ServiceKind, ServiceRequest,
+    SnapshotExportPurpose, StateExportCancel, StateExportChunkRequest, StateExportKind,
+    StateExportRequest, StateImportBegin, StateImportCommit, StorageNamespace, StorageOperation,
+    StorageRequest, TextExtentRequest, TextStyle, parse_document, validate_relative_path,
 };
 
 #[test]
@@ -162,7 +163,50 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(38, 0));
+}
+
+#[test]
+fn protocol_38_carries_correlated_secondary_vm_faults() {
+    let message = RuntimeMessage::Fault(RuntimeFault {
+        context: None,
+        code: era_runtime_protocol::FaultCode::VmFault,
+        message: "original".into(),
+        origin: None,
+        vm: Some(Box::new(RuntimeVmFault {
+            primary: RuntimeVmFaultDetail {
+                correlation_id: 41,
+                parent_correlation_id: None,
+                category: RuntimeVmFaultCategory::ScriptAssertion,
+                code: RuntimeVmFaultCode::Trap,
+                message: "original".into(),
+                origin: None,
+            },
+            secondary: Some(Box::new(RuntimeVmFaultDetail {
+                correlation_id: 42,
+                parent_correlation_id: Some(41),
+                category: RuntimeVmFaultCategory::ResourceLimit,
+                code: RuntimeVmFaultCode::RunawayExecution,
+                message: "hook failed".into(),
+                origin: None,
+            })),
+        })),
+    });
+    assert_eq!(
+        RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
+        message
+    );
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(38, 0));
+    let schema = include_str!("../schema/runtime.cddl");
+    assert!(schema.contains("runtime-vm-fault-detail"));
+    assert_eq!(
+        encode_canonical(&RuntimeVmFaultCategory::ScriptAssertion).unwrap(),
+        vec![5]
+    );
+    assert_eq!(
+        encode_canonical(&RuntimeVmFaultCode::RunawayExecution).unwrap(),
+        vec![10]
+    );
 }
 
 #[test]
@@ -187,7 +231,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(38, 0));
 }
 
 #[test]
@@ -210,7 +254,7 @@ fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
     assert!(include_str!("../schema/runtime.cddl").contains(
         "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
     ));
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(38, 0));
 }
 
 #[test]
@@ -356,7 +400,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(38, 0));
 }
 
 #[test]
@@ -365,7 +409,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(38, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -531,7 +575,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(38, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -570,7 +614,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(37, 1));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(38, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 
