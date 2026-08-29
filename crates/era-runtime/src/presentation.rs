@@ -1,7 +1,7 @@
 #[cfg(test)]
 use era_runtime_protocol::PresentationHistoryOperation;
 use era_runtime_protocol::{
-    CellAlignment, DisplayLine, DisplayRun, InteractionToken, LineAlignment, LogicalLength,
+    CellAlignment, Color, DisplayLine, DisplayRun, InteractionToken, LineAlignment, LogicalLength,
     MediaPlacement, PresentationLength, ProtocolValue, RationalOpacity, SeparatorRole, Shape,
     SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
 };
@@ -640,6 +640,12 @@ impl PresentationModel {
         self.bump();
     }
 
+    pub(crate) fn set_text_line_background(&mut self, color: Option<Color>) {
+        self.settings.text_line_background = color;
+        self.delivery.dirty.settings = true;
+        self.bump();
+    }
+
     pub(crate) fn set_bold(&mut self, enabled: bool) {
         self.current_style.bold = enabled;
         self.bump();
@@ -708,13 +714,15 @@ impl PresentationModel {
 
     fn commit_line(&mut self) {
         self.last_committed_plain_runs = std::mem::take(&mut self.pending_plain_runs);
+        let runs = std::mem::take(&mut self.pending_runs);
         let line = Arc::new(DisplayLine {
             line_id: self.next_line,
             temporary: self.pending_temporary,
             logical_line_start: true,
             line_end: true,
             alignment: self.current_alignment,
-            runs: std::mem::take(&mut self.pending_runs),
+            text_background_eligible: line_has_text_background(&runs),
+            runs,
         });
         self.pending_temporary = false;
         self.next_line = self.next_line.saturating_add(1);
@@ -815,18 +823,20 @@ impl PresentationModel {
         token: InteractionToken,
         system_text: Option<SystemTextRef>,
     ) {
+        let runs = vec![self.button_run(
+            text,
+            ProtocolValue::String(String::new()),
+            token,
+            system_text,
+        )];
         let line = Arc::new(DisplayLine {
             line_id: self.next_line,
             temporary: false,
             logical_line_start: true,
             line_end: true,
             alignment: self.current_alignment,
-            runs: vec![self.button_run(
-                text,
-                ProtocolValue::String(String::new()),
-                token,
-                system_text,
-            )],
+            text_background_eligible: line_has_text_background(&runs),
+            runs,
         });
         self.next_line = self.next_line.saturating_add(1);
         self.lines.push_back(Arc::clone(&line));
@@ -937,6 +947,30 @@ fn replace_matching_style_defaults(
         changed = true;
     }
     changed
+}
+
+pub(super) fn line_has_text_background(runs: &[DisplayRun]) -> bool {
+    runs.iter().any(run_has_text_background)
+}
+
+fn run_has_text_background(run: &DisplayRun) -> bool {
+    match run {
+        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+            !text.trim().is_empty()
+        }
+        DisplayRun::Button { runs, .. } => line_has_text_background(runs),
+        DisplayRun::ColumnCell { content, .. } => line_has_text_background(content),
+        DisplayRun::HtmlDocument { document } => html_nodes_have_text(&document.nodes),
+        DisplayRun::Separator { pattern, .. } => !pattern.trim().is_empty(),
+        DisplayRun::Image { .. } | DisplayRun::Shape { .. } | DisplayRun::Space { .. } => false,
+    }
+}
+
+fn html_nodes_have_text(nodes: &[erabasic_html::HtmlNode]) -> bool {
+    nodes.iter().any(|node| match node {
+        erabasic_html::HtmlNode::Text { text, .. } => !text.trim().is_empty(),
+        erabasic_html::HtmlNode::Element { children, .. } => html_nodes_have_text(children),
+    })
 }
 
 mod defaults;

@@ -317,6 +317,7 @@ impl PresentationModel {
                 line_end: false,
                 alignment: self.current_alignment,
                 runs: self.pending_runs.clone(),
+                text_background_eligible: super::line_has_text_background(&self.pending_runs),
             });
         }
         for line in &mut lines {
@@ -383,6 +384,7 @@ impl PresentationModel {
             line_end: false,
             alignment: self.current_alignment,
             runs: self.pending_runs.clone(),
+            text_background_eligible: super::line_has_text_background(&self.pending_runs),
         })
     }
 

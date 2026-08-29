@@ -459,6 +459,37 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
+        if matches!(name.as_str(), "TEXT_BGC_ON" | "TEXT_BGC_OFF") {
+            *status = HostDispatchStatus::Handled;
+            let color = if name == "TEXT_BGC_OFF" {
+                None
+            } else {
+                let rgb = integer_argument_value(request, 0)?;
+                let alpha_percent = integer_argument_value(request, 1)?;
+                if !(0..=100).contains(&alpha_percent) {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Bounds,
+                        "TEXT_BGC_ON alpha must be between 0 and 100",
+                    );
+                }
+                let rgb_channel = |shift| {
+                    u8::try_from((rgb >> shift) & 0xff_i64)
+                        .expect("masked TEXT_BGC_ON channel fits u8")
+                };
+                Some(era_runtime_protocol::Color {
+                    red: rgb_channel(16),
+                    green: rgb_channel(8),
+                    blue: rgb_channel(0),
+                    alpha: u8::try_from((alpha_percent * 255) / 100)
+                        .expect("validated TEXT_BGC_ON alpha fits u8"),
+                })
+            };
+            self.presentation.set_text_line_background(color);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
         if name == "REDRAW" {
             *status = HostDispatchStatus::Handled;
             let flags = integer_argument_value(request, 0)?;

@@ -43,6 +43,7 @@ pub(super) fn model() -> PresentationModel {
             maximum_physical_lines: 5_000,
             prevent_button_wrap: false,
             legacy_nonbutton_wrap: false,
+            text_line_background: None,
         },
         project_column_cells: true,
         project_separators: true,
