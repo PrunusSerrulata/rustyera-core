@@ -4718,7 +4718,7 @@ fn call_text_unique_restructure_reads_outer_excess_but_not_converted_nested_exce
 }
 
 #[test]
-fn call_text_retained_constant_bounds_precede_later_index_restructure_and_are_try_catchable() {
+fn call_text_retained_constant_bounds_precede_later_index_restructure_and_are_not_catchable() {
     let artifact = compile_source_with_options(
         r#"@SYSTEM_TITLE
 #DIM GRID, 2, 2
@@ -4738,16 +4738,14 @@ RETURNF 0
         &method_options(true),
     );
     let (vm, report) = run_entry(&artifact, VmConfig::default());
-    assert!(
-        report
-            .events
-            .iter()
-            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
-        "{report:?}"
-    );
+    let fault = take_fault(report);
+    assert!(matches!(
+        fault.category,
+        erabasic_vm::FaultCategory::Script(erabasic_vm::ScriptFaultKind::Bounds)
+    ));
     assert_method_watch(&vm, &artifact, "FLAG", 8, VmValue::Integer(0));
     assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(0));
-    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(1));
+    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(0));
 }
 
 #[test]
