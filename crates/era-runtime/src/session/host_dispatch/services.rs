@@ -709,6 +709,7 @@ impl RuntimeSession {
                     timeout_message: None,
                     submission_token: self.allocate_interaction(),
                     countdown_remaining_ms: None,
+                    viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
                 };
                 let pending = PendingInput {
                     host_request: Some(request.id),

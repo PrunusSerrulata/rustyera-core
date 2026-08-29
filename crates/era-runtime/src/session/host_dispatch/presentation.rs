@@ -11,6 +11,27 @@ impl RuntimeSession {
         name: &String,
         status: &mut HostDispatchStatus,
     ) -> Result<(), RuntimeError> {
+        if matches!(
+            name.as_str(),
+            "TINPUTNF" | "TINPUTSNF" | "TONEINPUTNF" | "TONEINPUTSNF"
+        ) && !vm
+            .vm()
+            .artifact()
+            .manifest
+            .compatibility
+            .supports_snake_input()
+        {
+            *status = HostDispatchStatus::Handled;
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Error(erabasic_vm::ExecutionFailure::classified(
+                    erabasic_vm::FaultCategory::Permission,
+                    erabasic_vm::VmFaultCode::Host,
+                    "NF input is unavailable for this compatibility policy",
+                )),
+            );
+        }
         if let Some(mut pending) = input_wait(
             request,
             self.allocate_wait(),
@@ -43,7 +64,14 @@ impl RuntimeSession {
             }
             let timed_value_input = matches!(
                 name.as_str(),
-                "TINPUT" | "TONEINPUT" | "TINPUTS" | "TONEINPUTS"
+                "TINPUT"
+                    | "TONEINPUT"
+                    | "TINPUTS"
+                    | "TONEINPUTS"
+                    | "TINPUTNF"
+                    | "TONEINPUTNF"
+                    | "TINPUTSNF"
+                    | "TONEINPUTSNF"
             );
             let untimed_value_input = matches!(
                 name.as_str(),

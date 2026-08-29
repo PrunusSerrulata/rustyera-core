@@ -202,6 +202,7 @@ fn one_input_normalization_is_scalar_default_and_activation_aware() {
             timeout_message: None,
             submission_token: submission,
             countdown_remaining_ms: None,
+            viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
         },
         result_name: Some("RESULTS".into()),
         choices: BTreeMap::from([
@@ -327,6 +328,7 @@ fn empty_string_input_without_a_default_remains_a_valid_string() {
             timeout_message: None,
             submission_token: submission,
             countdown_remaining_ms: None,
+            viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
         },
         result_name: Some("RESULTS".into()),
         choices: BTreeMap::from([(empty_button, VmValue::String(String::new()))]),
@@ -521,6 +523,7 @@ fn primitive_input_uses_runtime_selection_tokens_and_rejects_timeout_spoofing() 
             timeout_message: None,
             submission_token: submission,
             countdown_remaining_ms: None,
+            viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
         },
         result_name: Some("RESULT".into()),
         choices: BTreeMap::from([(selection, VmValue::Integer(42))]),
