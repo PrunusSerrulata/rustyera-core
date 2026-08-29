@@ -22,8 +22,9 @@ use era_runtime_protocol::{
     CanvasPixelResponse, CanvasPoint, CellAlignment, ClientCapabilities, ClientHello,
     CommandErrorCode, CommandRejected, ConfigurationApplication, ConfigurationClientProfile,
     ConfigurationUpdateCommitted, ConfigurationUpdateOutcome, ConfigurationUpdatePrepared,
-    DECODE_CANVAS_IMAGE_OPERATION, DECODE_CANVAS_IMAGE_OPERATION_VERSION, DecodeCanvasImageRequest,
-    DecodeCanvasImageResponse, DiagnosticNotification, ENCODE_CANVAS_PNG_OPERATION,
+    DECODE_CANVAS_IMAGE_OPERATION, DECODE_CANVAS_IMAGE_OPERATION_VERSION, DEVICE_PUMP_OPERATION,
+    DEVICE_PUMP_OPERATION_VERSION, DecodeCanvasImageRequest, DecodeCanvasImageResponse,
+    DevicePumpRequest, DevicePumpResponse, DiagnosticNotification, ENCODE_CANVAS_PNG_OPERATION,
     ENCODE_CANVAS_PNG_OPERATION_VERSION, EffectAcknowledgement, EffectBatch, EffectEvent,
     EffectKind, EffectOutcomeStatus, EncodeCanvasPngRequest, EncodeCanvasPngResponse, ExitReason,
     ExitRequested, ExtensionDeclaration, ExtensionRegistrySubmit, ExternalRequestKind, FaultCode,
@@ -35,7 +36,8 @@ use era_runtime_protocol::{
     HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
     HTML_STRING_LINES_OPERATION_VERSION, HTML_SUBSTRING_OPERATION,
     HTML_SUBSTRING_OPERATION_VERSION, IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION,
-    IMAGE_PIXEL_OPERATION, IMAGE_PIXEL_OPERATION_VERSION, ImageMetadataRequest,
+    IMAGE_PIXEL_OPERATION, IMAGE_PIXEL_OPERATION_VERSION, INPUT_DEVICE_LATCH_CAPABILITY,
+    INPUT_DEVICE_PUMP_CAPABILITY, INPUT_TIMED_VIEWPORT_CAPABILITY, ImageMetadataRequest,
     ImageMetadataResponse, ImagePixelRequest, ImagePixelResponse, InputIntent, InputUndoRequest,
     InputUndoState, InputWait, InteractionToken, KeyMacroCommand, KeyMacroProfileSubmit,
     LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment,
@@ -86,7 +88,11 @@ use crate::host::{
 use crate::input_replay::{
     InputReplayHistory, NewGameTrigger, ReplayOrigin, ReplayOriginDetails, ReplayProject,
 };
-use crate::input_set::{InputSegment, preprocess_input};
+use crate::input_set::preprocess_input;
+use crate::input_source::{
+    InputController, InputRoot, InputSource, PendingSequence, QueuedInput, RecordedInput,
+    SequenceSite,
+};
 use crate::key_macro::KeyMacros;
 use crate::operation::{
     CandidateSaveContinuation, PendingOperations, PendingService, PendingStorage,
@@ -684,7 +690,7 @@ pub struct RuntimeSession {
     negotiated_features: BTreeSet<RuntimeFeature>,
     configuration_profile: ConfigurationClientProfile,
     client_preferences: Option<ClientPreferenceLayers>,
-    inbound: VecDeque<(u64, InboundMessage)>,
+    inbound: VecDeque<(u64, Option<SessionEpoch>, InboundMessage)>,
     outbound: VecDeque<Vec<u8>>,
     outbound_journal: BTreeMap<u64, Vec<u8>>,
     outbound_journal_bytes: u64,
@@ -704,9 +710,14 @@ pub struct RuntimeSession {
     pending_presentation_update: bool,
     operations: PendingOperations,
     key_toggle_state: [u8; 256],
+    device_input: crate::device_input::DeviceInput,
+    environment: crate::environment::Environment,
+    input_notice_sites: BTreeSet<(String, u64, erabasic_bytecode::SymbolKey, u32)>,
     hotkey_state: Vec<i64>,
     key_macros: KeyMacros,
-    queued_input: VecDeque<InputSegment>,
+    queued_input: VecDeque<QueuedInput>,
+    input_controller: InputController,
+    active_input_source: Option<InputSource>,
     deferred_input_completion: Option<InputSubmission>,
     text_box: String,
     text_box_layout: TextBoxLayout,
@@ -781,12 +792,14 @@ pub(crate) struct UndoCheckpoint {
     slot: u32,
     save_bytes: Vec<u8>,
     random_state: Vec<i64>,
-    inputs: Vec<String>,
+    inputs: Vec<RecordedInput>,
+    input_history_bytes: u64,
+    input_controller: InputController,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct UndoReplay {
-    remaining: VecDeque<String>,
+    remaining: VecDeque<RecordedInput>,
     queued_repeats: u32,
 }
 

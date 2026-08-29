@@ -8,6 +8,13 @@ impl RuntimeSession {
         message_id: u64,
         reload: &ReloadProject,
     ) -> Result<(), RuntimeError> {
+        if self.input_controller.pending_sequence.is_some() || !self.queued_input.is_empty() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "project reload cannot discard pending sequence or macro input",
+            );
+        }
         if !self.operations.html_lines.is_empty() {
             return self.reject(
                 message_id,

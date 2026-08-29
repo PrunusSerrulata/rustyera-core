@@ -9,6 +9,7 @@ pub(in super::super) fn selected_capabilities(client: &ClientCapabilities) -> Cl
                 && capability.operation == GGET_TEXT_SIZE_OPERATION
         });
     ClientCapabilities {
+        environment: crate::environment::select_environment(&client.environment, &services),
         input_modalities: client.input_modalities.clone(),
         rich_text: client.rich_text,
         html: client.html,
@@ -41,6 +42,7 @@ pub(in super::super) fn selected_service_capabilities(
                     LOCAL_DATE_TIME_OPERATION_VERSION
                 }
                 (ServiceKind::Entropy, RANDOM_SEED_OPERATION) => RANDOM_SEED_OPERATION_VERSION,
+                (ServiceKind::InputState, DEVICE_PUMP_OPERATION) => DEVICE_PUMP_OPERATION_VERSION,
                 (ServiceKind::InputState, GET_KEY_STATE_OPERATION) => {
                     GET_KEY_STATE_OPERATION_VERSION
                 }

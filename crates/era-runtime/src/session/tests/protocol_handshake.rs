@@ -143,6 +143,7 @@ fn wait_lifecycle_messages_follow_their_presentation_revision() {
         timeout_message: None,
         submission_token: InteractionToken { epoch: 1, id: 9 },
         countdown_remaining_ms: None,
+        viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
     };
 
     session.presentation.set_wait(Some(wait.clone()));
@@ -350,6 +351,7 @@ fn key_macro_activation_recalls_runtime_text_without_completing_the_wait() {
             timeout_message: None,
             submission_token: token,
             countdown_remaining_ms: None,
+            viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
         },
         result_name: Some("RESULTS".into()),
         choices: BTreeMap::new(),

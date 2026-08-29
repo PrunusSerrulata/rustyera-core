@@ -21,6 +21,12 @@ pub(crate) enum PostInputAction {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum ExternalCompletion {
+    DevicePump {
+        request: HostRequestId,
+        epoch: u64,
+        after_event_sequence: u64,
+        milliseconds: u64,
+    },
     GetKey {
         request: HostRequestId,
         key_code: u8,
@@ -111,13 +117,13 @@ pub(crate) fn input_wait(
     let (kind, one_input, stop_message_skip, result_name) = match name.as_str() {
         "WAIT" | "FORCEWAIT" => (WaitKind::EnterKey, false, name == "FORCEWAIT", None),
         "WAITANYKEY" => (WaitKind::AnyKey, false, false, None),
-        "INPUT" | "ONEINPUT" | "TINPUT" | "TONEINPUT" => (
+        "INPUT" | "ONEINPUT" | "TINPUT" | "TONEINPUT" | "TINPUTNF" | "TONEINPUTNF" => (
             WaitKind::IntegerValue,
             name.starts_with("ONE") || name.starts_with("TONE"),
             false,
             Some("RESULT"),
         ),
-        "INPUTS" | "ONEINPUTS" | "TINPUTS" | "TONEINPUTS" => (
+        "INPUTS" | "ONEINPUTS" | "TINPUTS" | "TONEINPUTS" | "TINPUTSNF" | "TONEINPUTSNF" => (
             WaitKind::StringValue,
             name.starts_with("ONE") || name.starts_with("TONE"),
             false,
@@ -196,6 +202,7 @@ pub(crate) fn input_wait(
             display_time,
             timeout_message,
             submission_token,
+            viewport_policy: input_viewport_policy(&name),
             countdown_remaining_ms: deadline_ns
                 .filter(|_| display_time)
                 .map(|_| timelimit_ms.cast_unsigned()),
@@ -206,6 +213,14 @@ pub(crate) fn input_wait(
             .then(|| timelimit_ms.cast_unsigned().saturating_mul(1_000_000)),
         post_input: None,
     })
+}
+
+fn input_viewport_policy(name: &str) -> era_runtime_protocol::InputViewportPolicy {
+    if name.ends_with("NF") {
+        era_runtime_protocol::InputViewportPolicy::PreserveUserViewport
+    } else {
+        era_runtime_protocol::InputViewportPolicy::FollowOutput
+    }
 }
 
 fn integer(value: Option<&VmValue>) -> Option<i64> {
@@ -274,6 +289,39 @@ mod tests {
                 command: name.into(),
                 source: None,
             },
+        }
+    }
+
+    #[test]
+    fn nf_waits_reuse_timed_flags_and_only_change_viewport_policy() {
+        for (ordinary, nf, default) in [
+            ("TINPUT", "TINPUTNF", VmValue::Integer(7)),
+            ("TONEINPUT", "TONEINPUTNF", VmValue::Integer(7)),
+            ("TINPUTS", "TINPUTSNF", VmValue::String("default".into())),
+            (
+                "TONEINPUTS",
+                "TONEINPUTSNF",
+                VmValue::String("default".into()),
+            ),
+        ] {
+            let arguments = vec![
+                VmValue::Integer(100),
+                default,
+                VmValue::Integer(1),
+                VmValue::String("timeout".into()),
+                VmValue::Integer(0),
+                VmValue::Integer(0),
+            ];
+            let token = InteractionToken { epoch: 1, id: 3 };
+            let ordinary = input_wait(&request(ordinary, arguments.clone()), 7, token, 42).unwrap();
+            let mut nf = input_wait(&request(nf, arguments), 7, token, 42).unwrap();
+            assert_eq!(
+                nf.wait.viewport_policy,
+                era_runtime_protocol::InputViewportPolicy::PreserveUserViewport
+            );
+            nf.wait.viewport_policy = era_runtime_protocol::InputViewportPolicy::FollowOutput;
+            assert_eq!(nf.wait, ordinary.wait);
+            assert_eq!(nf.result_name, ordinary.result_name);
         }
     }
 

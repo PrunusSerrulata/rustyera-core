@@ -382,6 +382,18 @@ impl PendingOperations {
         (services, storage)
     }
 
+    pub(crate) fn has_device_pump(&self) -> bool {
+        self.entries.values().any(|entry| {
+            matches!(
+                entry,
+                PendingOperation::Service {
+                    value: PendingService::Host(ExternalCompletion::DevicePump { .. }),
+                    ..
+                }
+            )
+        })
+    }
+
     pub(crate) fn has_candidate_write(&self) -> bool {
         self.entries.values().any(|operation| {
             matches!(

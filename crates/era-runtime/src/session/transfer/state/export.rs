@@ -24,7 +24,14 @@ impl RuntimeSession {
                 "snapshot purpose is only valid for VM snapshot exports",
             );
         }
-        if request.kind == StateExportKind::VmSnapshot && !self.queued_input.is_empty() {
+        if request.kind == StateExportKind::VmSnapshot
+            && (!self.queued_input.is_empty()
+                || self.input_controller.pending_sequence.is_some()
+                || self.undo_checkpoint.as_ref().is_some_and(|checkpoint| {
+                    checkpoint.input_controller.pending_sequence.is_some()
+                })
+                || self.operations.has_device_pump())
+        {
             return self.emit(
                 RuntimeMessage::StateExportReady(StateExportReady {
                     kind: request.kind,
@@ -333,6 +340,7 @@ impl RuntimeSession {
                         force_kana_mode: self.force_kana_mode,
                         hotkey_state: self.hotkey_state.clone(),
                         key_macros: self.key_macros.clone(),
+                        input_controller: self.input_controller.clone(),
                         text_box: self.text_box.clone(),
                         text_box_layout: self.text_box_layout,
                         flow_input_enabled: self.flow_input_enabled,

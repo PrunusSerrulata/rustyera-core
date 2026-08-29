@@ -16,6 +16,7 @@ use super::*;
 
 fn capabilities() -> ClientCapabilities {
     ClientCapabilities {
+        environment: Vec::new(),
         input_modalities: vec![era_runtime_protocol::InputModality::Keyboard],
         rich_text: false,
         html: false,

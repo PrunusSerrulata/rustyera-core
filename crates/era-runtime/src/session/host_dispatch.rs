@@ -6,6 +6,7 @@ use super::*;
 
 mod control;
 mod graphics;
+mod input_extensions;
 mod presentation;
 mod services;
 mod storage;
@@ -303,6 +304,9 @@ impl RuntimeSession {
             return self.issue_extension(vm, request);
         }
         let name = request.import.import.name.to_ascii_uppercase();
+        if self.dispatch_input_extensions(vm, request, &name)? {
+            return Ok(());
+        }
         if name == "SKIPDISP" {
             self.skip_print = integer_argument_value(request, 0)? != 0;
             self.user_defined_skip = self.skip_print;

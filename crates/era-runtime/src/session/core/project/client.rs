@@ -140,6 +140,8 @@ impl RuntimeSession {
                 )
             })
             .collect();
+        self.environment =
+            crate::environment::Environment::from_selected(&selected_capabilities.environment);
         self.storage_capabilities = selected_capabilities.storage;
         self.available_fonts = selected_capabilities
             .available_fonts

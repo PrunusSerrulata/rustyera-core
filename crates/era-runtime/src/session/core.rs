@@ -104,9 +104,14 @@ impl RuntimeSession {
             pending_presentation_update: false,
             operations: PendingOperations::default(),
             key_toggle_state: [0; 256],
+            device_input: crate::device_input::DeviceInput::default(),
+            environment: crate::environment::Environment::default(),
+            input_notice_sites: BTreeSet::new(),
             hotkey_state: Vec::new(),
             key_macros: KeyMacros::default(),
             queued_input: VecDeque::new(),
+            input_controller: InputController::default(),
+            active_input_source: None,
             deferred_input_completion: None,
             text_box: String::new(),
             text_box_layout: TextBoxLayout::default(),
@@ -273,7 +278,8 @@ impl RuntimeSession {
         while accepted_ids.len() > self.options.limits.maximum_journal_entries as usize {
             accepted_ids.pop_first();
         }
-        self.inbound.push_back((message_id, message));
+        self.inbound
+            .push_back((message_id, envelope.session_epoch, message));
         Ok(())
     }
 
@@ -292,13 +298,7 @@ impl RuntimeSession {
         let mut instructions = 0;
         let mut queued_input_quantum = (!self.queued_input.is_empty()).then_some(());
         while transitions < transition_limit {
-            if let Some((message_id, message)) = self.take_next_inbound() {
-                match message {
-                    InboundMessage::Runtime(message) => self.handle_message(message_id, message)?,
-                    InboundMessage::Debug(message) => {
-                        self.handle_debug_message(message_id, message)?;
-                    }
-                }
+            if self.drive_next_inbound()? {
                 transitions += 1;
                 continue;
             }
@@ -388,6 +388,25 @@ impl RuntimeSession {
         })
     }
 
+    fn drive_next_inbound(&mut self) -> Result<bool, RuntimeError> {
+        let Some((message_id, accepted_epoch, message)) = self.take_next_inbound() else {
+            return Ok(false);
+        };
+        if self.state == SessionState::Active && accepted_epoch != Some(self.epoch) {
+            self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "queued envelope belongs to an old epoch",
+            )?;
+            return Ok(true);
+        }
+        match message {
+            InboundMessage::Runtime(message) => self.handle_message(message_id, message)?,
+            InboundMessage::Debug(message) => self.handle_debug_message(message_id, message)?,
+        }
+        Ok(true)
+    }
+
     fn drive_vm_quantum(&mut self, vm: &mut RuntimeVm, budget: RunBudget) -> VmPortDriveReport {
         let replace = &vm.vm().artifact().project_data.static_data.replace;
         let (bar_char_1, bar_char_2) = (replace.bar_char_1, replace.bar_char_2);
@@ -462,38 +481,7 @@ impl RuntimeSession {
         Ok(false)
     }
 
-    fn take_next_inbound(&mut self) -> Option<(u64, InboundMessage)> {
-        let timer_is_next = matches!(
-            self.inbound.front(),
-            Some((_, InboundMessage::Runtime(RuntimeMessage::AdvanceTime(_))))
-        );
-        if timer_is_next {
-            let matching_input = self.operations.active_input().and_then(|pending| {
-                self.inbound
-                    .iter()
-                    .position(|(_, message)| {
-                        !matches!(
-                            message,
-                            InboundMessage::Runtime(RuntimeMessage::AdvanceTime(_))
-                        )
-                    })
-                    .filter(|&index| {
-                        matches!(
-                            &self.inbound[index].1,
-                            InboundMessage::Runtime(RuntimeMessage::Input(input))
-                                if input.wait_id == pending.wait.wait_id
-                                    && input.token == pending.wait.submission_token
-                        )
-                    })
-            });
-            if let Some(index) = matching_input {
-                // A timer sampled before a user action can be queued first even though both
-                // commands are present for the same visible wait. Preserve wait identity and
-                // idempotency while giving every matching user-input intent priority over that
-                // automatic transition, just as a UI event cancels the current timer tick.
-                return self.inbound.remove(index);
-            }
-        }
+    fn take_next_inbound(&mut self) -> Option<(u64, Option<SessionEpoch>, InboundMessage)> {
         self.inbound.pop_front()
     }
 
@@ -649,24 +637,11 @@ impl RuntimeSession {
             }
             RuntimeMessage::AdvanceTime(time) => self.advance_time(message_id, time),
             RuntimeMessage::DeviceStateChanged(state) => {
-                if self.phase == RuntimePhase::DebugPaused {
-                    self.debug_frontend_time_sample = Some(state.monotonic_time_ns);
-                } else {
-                    self.observe_frontend_time(state.monotonic_time_ns);
-                    // Emuera sets MesSkip as soon as the secondary mouse button is pressed, even
-                    // while the interpreter is running. Scripts can therefore observe MESSKIP and
-                    // abort an animation before the next input wait is opened.
-                    if state.device == era_runtime_protocol::InputDeviceKind::Mouse
-                        && state.code == 2
-                        && state.pressed
-                    {
-                        self.message_skip = true;
-                    }
-                }
-                Ok(())
+                self.receive_device_state(message_id, state)
             }
             RuntimeMessage::ClientStateChanged(state) => {
-                self.client_focused = state.focused;
+                self.client_focused = state.focused && state.visible;
+                // Blur/visibility never consumes snake latch or observation state.
                 self.client_audio_available = state.audio_available;
                 Ok(())
             }

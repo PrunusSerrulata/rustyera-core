@@ -192,6 +192,35 @@ impl RuntimeSession {
             }
         };
         let replay_digest = crate::input_replay::digest_hex(bytes);
+        if payload.input_controller.pending_sequence.is_some()
+            || payload.input_controller.next_admission == 0
+            || payload.undo_checkpoint.as_ref().is_some_and(|checkpoint| {
+                checkpoint.input_controller.pending_sequence.is_some()
+                    || checkpoint.input_controller.next_admission == 0
+            })
+            || payload.operations.has_device_pump()
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "snapshot contains unconsumed sequence or device pump",
+            );
+        }
+        if let Some(checkpoint) = &payload.undo_checkpoint {
+            let bytes = checkpoint.inputs.iter().try_fold(0_u64, |total, record| {
+                total.checked_add(record.storage_bytes()?)
+            });
+            if bytes != Some(checkpoint.input_history_bytes)
+                || bytes.is_none_or(|bytes| bytes > self.options.limits.maximum_transfer_bytes)
+                || checkpoint.inputs.len() > self.options.limits.maximum_journal_entries as usize
+            {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "snapshot input provenance limit differs",
+                );
+            }
+        }
         let replay_snapshot_format = format!("runtime_snapshot_v{}", payload.format_version);
         let replay_snapshot_origin = match payload.origin {
             RuntimeSnapshotOrigin::Normal => "normal",
@@ -355,6 +384,7 @@ impl RuntimeSession {
 
         self.retained_title_program = None;
         self.epoch = SessionEpoch(new_epoch);
+        self.device_input = crate::device_input::DeviceInput::default();
         self.accepted_message_ids.clear();
         self.vm = Some(vm);
         self.presentation = presentation;
@@ -379,6 +409,8 @@ impl RuntimeSession {
         self.force_kana_mode = payload.force_kana_mode;
         self.hotkey_state = payload.hotkey_state;
         self.key_macros = payload.key_macros;
+        self.input_controller = payload.input_controller;
+        self.active_input_source = None;
         self.queued_input.clear();
         self.deferred_input_completion = None;
         self.text_box = payload.text_box;
@@ -638,8 +670,11 @@ impl RuntimeSession {
         // Drop them here so they cannot retain large payloads or act on the new timeline.
         self.inbound = VecDeque::new();
         self.key_toggle_state = [0; 256];
+        self.device_input = crate::device_input::DeviceInput::default();
         self.hotkey_state = Vec::new();
         self.queued_input = VecDeque::new();
+        self.input_controller = InputController::default();
+        self.active_input_source = None;
         self.deferred_input_completion = None;
         self.text_box = String::new();
         self.text_box_layout = TextBoxLayout::default();
@@ -780,6 +815,7 @@ impl RuntimeSession {
             timeout_message: None,
             submission_token,
             countdown_remaining_ms: None,
+            viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
         }
     }
 }
