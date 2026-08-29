@@ -1924,4 +1924,22 @@ fn invalid_animation_timer_is_atomic() {
             .animation_timer(),
         20
     );
+    assert!(
+        messages.iter().any(|message| match message {
+            RuntimeMessage::PresentationSnapshot(snapshot) => {
+                snapshot.resources.animation_timer_ms == 20
+            }
+            RuntimeMessage::PresentationDelta(delta) => {
+                delta.operations.iter().any(|operation| {
+                    matches!(
+                        operation,
+                        PresentationOperation::SetResources { resources }
+                            if resources.animation_timer_ms == 20
+                    )
+                })
+            }
+            _ => false,
+        }),
+        "{messages:#?}"
+    );
 }

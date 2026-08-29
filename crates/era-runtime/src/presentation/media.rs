@@ -45,6 +45,15 @@ impl PresentationModel {
         self.bump();
     }
 
+    pub(crate) fn set_animation_timer(&mut self, milliseconds: i32) {
+        if self.resources.animation_timer_ms == milliseconds {
+            return;
+        }
+        self.resources.animation_timer_ms = milliseconds;
+        self.delivery.dirty.resources = true;
+        self.bump();
+    }
+
     pub(crate) fn mark_resource_replay_stale(&mut self) {
         self.resource_replay_stale = true;
     }

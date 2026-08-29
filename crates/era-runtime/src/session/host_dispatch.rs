@@ -465,23 +465,30 @@ impl RuntimeSession {
         }
         if name == "SETANIMETIMER" {
             let milliseconds = integer_argument_value(request, 0)?;
-            let project = self
-                .project_snapshot
-                .as_mut()
-                .ok_or_else(|| RuntimeError::Internal("SETANIMETIMER has no project".into()))?;
-            if !project.resource_graph.set_animation_timer(milliseconds) {
-                return complete_script_fault(
-                    vm,
-                    request,
-                    erabasic_vm::ScriptFaultKind::Bounds,
-                    "SETANIMETIMER expects a value between i32::MIN and 32767",
-                );
-            }
-            let snake = project
-                .manifest
-                .compatibility
-                .supports_snake_display_state();
-            self.sync_resource_replay();
+            let (snake, normalized) = {
+                let project = self
+                    .project_snapshot
+                    .as_mut()
+                    .ok_or_else(|| RuntimeError::Internal("SETANIMETIMER has no project".into()))?;
+                if !project.resource_graph.set_animation_timer(milliseconds) {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Bounds,
+                        "SETANIMETIMER expects a value between i32::MIN and 32767",
+                    );
+                }
+                (
+                    project
+                        .manifest
+                        .compatibility
+                        .supports_snake_display_state(),
+                    project.resource_graph.animation_timer(),
+                )
+            };
+            // The timer is logical runtime state, so publish it immediately instead of
+            // waiting for a graphics replay boundary that may never occur before a fault.
+            self.presentation.set_animation_timer(normalized);
             if snake {
                 commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             } else {
