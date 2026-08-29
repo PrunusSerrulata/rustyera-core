@@ -468,14 +468,13 @@ fn validate_runtime_layout(
         );
         let unbound_reference = global.storage == BytecodeStorage::FunctionLocal
             && reference_parameters.contains(&global.key);
-        let disabled_builtin = global.dimensions.contains(&0)
+        let declared_zero_length = global.dimensions.contains(&0)
             && artifact
                 .project_data
                 .schema
                 .variable(&global.name)
                 .is_some_and(|schema| {
-                    schema.can_forbid
-                        && schema.dimensions.len() == global.dimensions.len()
+                    schema.dimensions.len() == global.dimensions.len()
                         && schema
                             .dimensions
                             .iter()
@@ -489,7 +488,7 @@ fn validate_runtime_layout(
             || (global.storage != BytecodeStorage::Calculated
                 && global.dimensions.contains(&0)
                 && !unbound_reference
-                && !disabled_builtin)
+                && !declared_zero_length)
         {
             diagnostics.push(ValidationDiagnostic::project(
                 ValidationCode::InvalidOperand,
