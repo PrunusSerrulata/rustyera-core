@@ -442,6 +442,24 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     }
     // SETFONT uses STR_EXPRESSION_NULLABLE: an empty invocation resets the font.
     add("SETFONT", Expressions, &[String], 0, false, true);
+    add("SETANIMETIMER", Expressions, &[Integer], 1, false, false);
+    add(
+        "BITMAP_CACHE_ENABLE",
+        Expressions,
+        &[Integer],
+        1,
+        false,
+        false,
+    );
+    add(
+        "TEXT_BGC_ON",
+        Expressions,
+        &[Integer, Integer],
+        2,
+        false,
+        false,
+    );
+    add("TEXT_BGC_OFF", NoArgs, &[], 0, false, false);
     add("PRINTDATA", Expressions, &[MutableInteger], 0, false, true);
     add("STRDATA", Expressions, &[MutableString], 0, false, false);
     // Raw is used only for host/plugin statements whose grammar is intentionally

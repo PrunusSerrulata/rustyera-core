@@ -121,7 +121,7 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 1,
-            CompatibilityProfileId::EmueraSkiaSnake => 7,
+            CompatibilityProfileId::EmueraSkiaSnake => 8,
         };
         Self {
             profile,
@@ -195,6 +195,12 @@ impl CompatibilityIdentity {
     #[must_use]
     pub const fn supports_fault_hooks(&self) -> bool {
         matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 7
+    }
+
+    /// Normalized history display state and logical animation timers are part of policy v8.
+    #[must_use]
+    pub const fn supports_snake_display_state(&self) -> bool {
+        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 8
     }
 
     /// Policy for non-variadic user calls; builtin signatures remain exact.

@@ -1317,7 +1317,7 @@ fn static_call_diagnostic_manifest() -> ProjectManifest {
             },
             SubmittedFile {
                 relative_path: "reraconfig.toml".into(), category: FileCategory::Configuration,
-                payload: FilePayload::Utf8("[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n".into()),
+                payload: FilePayload::Utf8("[meta]\nschema_version = 5\n[compatibility]\nprofile = \"emuera.skia.snake\"\n".into()),
                 content_hash: None,
             },
         ],

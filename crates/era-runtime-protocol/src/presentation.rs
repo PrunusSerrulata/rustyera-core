@@ -314,6 +314,8 @@ pub enum DisplayRun {
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
+// These booleans are independent observable line properties in the wire contract.
+#[allow(clippy::struct_excessive_bools)]
 pub struct DisplayLine {
     #[n(0)]
     pub line_id: u64,
@@ -327,6 +329,9 @@ pub struct DisplayLine {
     pub alignment: LineAlignment,
     #[n(5)]
     pub runs: Vec<DisplayRun>,
+    /// Whether this row contains styled text eligible for the global whole-line background.
+    #[n(6)]
+    pub text_background_eligible: bool,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -349,6 +354,9 @@ pub struct PresentationSettings {
     pub legacy_nonbutton_wrap: bool,
     #[n(7)]
     pub drawable_height: LogicalLength,
+    /// Snake-compatible whole-line text background, independent of run and console backgrounds.
+    #[n(8)]
+    pub text_line_background: Option<Color>,
 }
 
 /// Ordered semantic edits from which a frontend derives physical console rows.

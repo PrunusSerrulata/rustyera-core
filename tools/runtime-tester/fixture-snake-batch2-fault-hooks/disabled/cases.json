@@ -12,8 +12,8 @@
   },
   "requiredRustPolicy": {
     "snake": {
-      "semantic_version": 7,
-      "policy_version": 7
+      "semantic_version": 8,
+      "policy_version": 8
     }
   },
   "evidenceStatus": "batch_2d_dynamic_observation_not_a_golden",

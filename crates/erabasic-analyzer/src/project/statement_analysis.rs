@@ -493,7 +493,7 @@ fn analyze_instruction(
     let key = key(name, options.ignore_case);
     let signature = catalog.instructions.get(&key).filter(|_| {
         catalog.extension_instructions.contains(&key)
-            || crate::catalog::builtin_available(&key, &options.compatibility)
+            || crate::catalog::builtin_instruction_available(&key, &options.compatibility)
     });
     let method_signature = signature
         .is_none()
@@ -501,7 +501,7 @@ fn analyze_instruction(
         .flatten()
         .filter(|_| {
             catalog.extension_functions.contains(&key)
-                || crate::catalog::builtin_available(&key, &options.compatibility)
+                || crate::catalog::builtin_function_available(&key, &options.compatibility)
         });
     if matches!(key.as_str(), "VARI" | "VARS") {
         return analyze_scoped_declaration_statement(

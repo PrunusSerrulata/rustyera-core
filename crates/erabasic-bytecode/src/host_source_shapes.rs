@@ -16,6 +16,11 @@ pub fn canonical_host_source_shapes(name: &str, snake: bool) -> Option<Vec<Runti
 fn profile_shapes(name: &str, snake: bool) -> Option<Vec<RuntimeCallableShape>> {
     Some(if snake {
         match name {
+            "getanimetimer" | "text_bgc_off" => vec![shape(0, 0, 0, false, &[])],
+            "setanimetimer" | "bitmap_cache_enable" => {
+                vec![shape(1, 1, 1, false, &[Integer])]
+            }
+            "text_bgc_on" => vec![shape(2, 2, 2, false, &[Integer, Integer])],
             "cbgsetsprite" => vec![shape(
                 1,
                 8,

@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `37.1`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `39.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.9 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 37.1 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 39.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -560,8 +560,8 @@ SetButtonGeneration、TrimLines。
 | `MediaPlacement` | resource_id、x/y/width/height、depth、opacity、revision、hover/mask resource?、requested width/height/y? |
 | `RationalOpacity` | numerator:i64、denominator:u32；前端不应制造分母 0 |
 | `Shape` | kind、parameters[]、foreground?、background? |
-| `DisplayLine` | line_id、temporary、logical_line_start、line_end、alignment、runs[] |
-| `PresentationSettings` | drawable_width、line_height、background、button_focus_foreground、maximum_physical_lines、prevent_button_wrap、legacy_nonbutton_wrap |
+| `DisplayLine` | line_id、temporary、logical_line_start、line_end、alignment、runs[]、text_background_eligible |
+| `PresentationSettings` | drawable_width、drawable_height、line_height、background、button_focus_foreground、maximum_physical_lines、prevent_button_wrap、legacy_nonbutton_wrap、text_line_background? |
 | `PresentationHistory` | logical_lines 和可重放 operations；snapshot 不是无限审计日志 |
 | `RedrawState` | enabled |
 | `AudioState` | channel_id、resource_id、repeat_count、volume_millionths、playing、revision |
@@ -586,6 +586,11 @@ history operation 是 Append、DeletePhysical、ReplaceTemporary、Clear、
 SetButtonGeneration、TrimPhysical。`TrimPhysical`/`TrimLines` 只裁掉最旧物理行，不改变
 脚本逻辑行计数。
 
+`text_line_background` 是独立的全宽整行背景，不等于 console `background` 或 run style
+背景。前端只对 `text_background_eligible=true` 的行投影它；开关变化通过 SetSettings
+重绘已保留和虚拟化历史行。Browser/Tauri 保留 RGBA，TUI 将其按 8-bit sRGB 通道合成到
+不透明 console 背景。
+
 资源重放字段：
 
 - `ResourceReplay {sprites, canvases, animation_timer_ms}`；
@@ -597,6 +602,9 @@ SetButtonGeneration、TrimPhysical。`TrimPhysical`/`TrimLines` 只裁掉最旧�
   SetDashStyle、SetFont、DrawLine、DrawText、DrawCanvas、LoadEncodedImage；字段与
   [`presentation.rs`](../crates/era-runtime-protocol/src/presentation.rs) 同名。颜色矩阵
   是整数数组；DrawCanvas 的 5×5 值为 1/256 定点，rotation 是 millidegrees。
+
+`animation_timer_ms` 是 runtime 持有的逻辑重绘节拍：0 表示停用，1–9ms 规范化为 10ms。
+前端据此安排绘制，但不得用渲染帧推进游戏时间或反向覆盖该值。
 
 tooltip 的 `normalized_format.flags` 是明确枚举，`unknown_bits` 保留未识别原始位；前端
 应使用规范 flags，同时在往返/诊断中保留 unknown bits。

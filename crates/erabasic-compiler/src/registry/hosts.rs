@@ -305,6 +305,9 @@ pub(super) const GRAPHICS: &[&str] = &[
     "SPRITEPOSX",
     "SPRITEPOSY",
     "SETANIMETIMER",
+    "GETANIMETIMER",
+    "TEXT_BGC_ON",
+    "TEXT_BGC_OFF",
 ];
 
 pub(super) const AUDIO: &[&str] = &[

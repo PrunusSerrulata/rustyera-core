@@ -609,6 +609,8 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("MOVETEXTBOX", IntType, &[Integer; 3], 3, false);
     add("RESUMETEXTBOX", IntType, &[Integer; 3], 3, false);
     add("BITMAP_CACHE_ENABLE", IntType, &[Integer], 1, false);
+    add("SETANIMETIMER", IntType, &[Integer], 1, false);
+    add("GETANIMETIMER", IntType, &[], 0, false);
     add(
         "BITSET",
         IntType,

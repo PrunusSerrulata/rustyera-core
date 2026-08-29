@@ -1,4 +1,4 @@
-; Runtime channel version: 37.1.
+; Runtime channel version: 39.0.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -151,11 +151,18 @@ text-box-layout = { 0: int, 1: int, 2: int }
 projection-state = { 0: uint, 1: tstr, 2: [* int], 3: uint, 4: text-box-layout }
 presentation-history = { 0: [* any], 1: [* any] }
 redraw-state = { 0: bool }
+color = { 0: uint, 1: uint, 2: uint, 3: uint }
+presentation-settings = {
+  0: int, 1: int, 2: color, 3: color, 4: uint, 5: bool, 6: bool, 7: int,
+  8: color / null
+}
 presentation-snapshot = {
   0: uint, 1: tstr, 2: presentation-history, 3: [* any], 4: [* any],
-  5: any / null, 6: any, 7: any, 8: any, 9: [* any], 10: redraw-state
+  5: any / null, 6: presentation-settings, 7: any, 8: any, 9: [* any], 10: redraw-state
 }
-display-line = any
+display-line = {
+  0: uint, 1: bool, 2: bool, 3: bool, 4: uint, 5: [* any], 6: bool
+}
 presentation-delta = { 0: uint, 1: uint, 2: [* presentation-operation] }
 presentation-operation =
   [0, [display-line]] /
@@ -166,7 +173,7 @@ presentation-operation =
   [5, [[* any]]] /
   [6, [any / null]] /
   [7, [uint, display-line]] /
-  [8, [any]] /
+  [8, [presentation-settings]] /
   [9, [any]] /
   [10, [any]] /
   [11, [[* any]]] /

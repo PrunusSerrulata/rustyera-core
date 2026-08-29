@@ -86,6 +86,7 @@ fn pinned_reference_wait_and_output_are_losslessly_representable() {
         logical_line_start: true,
         line_end: true,
         alignment: LineAlignment::Left,
+        text_background_eligible: true,
         runs: vec![DisplayRun::Text {
             text: observed.load.last_output,
             system_text: None,

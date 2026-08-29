@@ -166,14 +166,34 @@ pub fn builtin_function_signatures(
 ) -> Vec<CallableSignature> {
     builtin_functions()
         .into_values()
-        .filter(|signature| builtin_available(&signature.name, identity))
+        .filter(|signature| builtin_function_available(&signature.name, identity))
         .collect()
 }
 
-pub(crate) fn builtin_available(
+pub(crate) fn builtin_instruction_available(
     name: &str,
     identity: &erabasic_compat::CompatibilityIdentity,
 ) -> bool {
+    match name.to_ascii_uppercase().as_str() {
+        "SETANIMETIMER" | "BITMAP_CACHE_ENABLE" | "TEXT_BGC_ON" | "TEXT_BGC_OFF" => {
+            identity.supports_snake_display_state()
+        }
+        _ => builtin_shared_available(name, identity),
+    }
+}
+
+pub(crate) fn builtin_function_available(
+    name: &str,
+    identity: &erabasic_compat::CompatibilityIdentity,
+) -> bool {
+    match name.to_ascii_uppercase().as_str() {
+        "SETANIMETIMER" | "BITMAP_CACHE_ENABLE" => !identity.is_experimental(),
+        "GETANIMETIMER" => identity.supports_snake_display_state(),
+        _ => builtin_shared_available(name, identity),
+    }
+}
+
+fn builtin_shared_available(name: &str, identity: &erabasic_compat::CompatibilityIdentity) -> bool {
     match name.to_ascii_uppercase().as_str() {
         "CALLSTR" | "JUMPSTR" | "TRYCALLSTR" | "TRYJUMPSTR" | "TRYCCALLSTR" | "TRYCJUMPSTR" => {
             identity.supports_call_text()
@@ -251,8 +271,10 @@ pub(super) fn instruction(
 mod tests {
     use super::{
         ArgumentConstraint, ArgumentStyle, Catalog, ExtensionRegistry, InstructionSignature,
-        builtin_function_names, builtin_instruction_names,
+        builtin_function_available, builtin_function_names, builtin_instruction_available,
+        builtin_instruction_names,
     };
+    use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
 
     #[test]
     fn builtin_inventories_are_sorted_and_extensions_do_not_replace_them() {
@@ -273,5 +295,23 @@ mod tests {
         let catalog = Catalog::build(&extensions);
         let print = catalog.instructions.get("PRINT").expect("PRINT built-in");
         assert_ne!(print.argument_style, ArgumentStyle::None);
+    }
+
+    #[test]
+    fn animation_and_display_builtins_have_profile_specific_source_forms() {
+        let original = CompatibilityIdentity::reference();
+        let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        for name in ["SETANIMETIMER", "BITMAP_CACHE_ENABLE"] {
+            assert!(builtin_function_available(name, &original));
+            assert!(!builtin_instruction_available(name, &original));
+            assert!(!builtin_function_available(name, &snake));
+            assert!(builtin_instruction_available(name, &snake));
+        }
+        assert!(!builtin_function_available("GETANIMETIMER", &original));
+        assert!(builtin_function_available("GETANIMETIMER", &snake));
+        for name in ["TEXT_BGC_ON", "TEXT_BGC_OFF"] {
+            assert!(!builtin_instruction_available(name, &original));
+            assert!(builtin_instruction_available(name, &snake));
+        }
     }
 }

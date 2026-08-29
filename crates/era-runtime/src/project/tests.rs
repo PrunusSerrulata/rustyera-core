@@ -481,7 +481,7 @@ fn reraconfig_takes_priority_and_legacy_sources_generate_it_only_when_absent() {
         relative_path: "reraconfig.toml".into(),
         category: FileCategory::Configuration,
         payload: FilePayload::Utf8(
-            "[meta]\r\nschema_version = 4\r\n[text]\r\nfont_size = 24\r\n".into(),
+            "[meta]\r\nschema_version = 5\r\n[text]\r\nfont_size = 24\r\n".into(),
         ),
         content_hash: None,
     };
