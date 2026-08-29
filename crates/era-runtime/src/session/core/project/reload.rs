@@ -40,6 +40,16 @@ impl RuntimeSession {
                 "project reload cannot cross transient runtime operations",
             );
         }
+        if self.sql.has_inflight()
+            || self.sql.has_active_readers()
+            || self.sql.has_active_transactions()
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "project reload cannot cross SQL pending requests, readers, or transactions",
+            );
+        }
         let current = self
             .project_snapshot
             .as_ref()
@@ -86,6 +96,31 @@ impl RuntimeSession {
                 Some(message_id),
             )?;
             return self.set_phase(previous_phase);
+        }
+        if let Some(next) = build.snapshot.as_ref() {
+            let resources_unchanged = self.sql.connections().all(|(_, connection)| {
+                let Some(seed) = crate::sql::database_source_resource(&connection.identity) else {
+                    return true;
+                };
+                let Some(expected) = connection.resource_digest else {
+                    return false;
+                };
+                next.resources.iter().any(|resource| {
+                    resource.category == FileCategory::Resource
+                        && resource
+                            .relative_path
+                            .eq_ignore_ascii_case(&seed.resource_id)
+                        && resource.payload_digest == expected
+                })
+            });
+            if !resources_unchanged {
+                self.set_phase(previous_phase)?;
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "project reload changes a Resource seed used by an open SQL connection",
+                );
+            }
         }
         if let (Some(next), Some(previous)) =
             (build.snapshot.as_mut(), self.project_snapshot.as_ref())

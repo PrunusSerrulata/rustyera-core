@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
-use era_runtime_protocol::InteractionToken;
+use era_runtime_protocol::{InteractionToken, SqlDatabaseIdentityV1, SqlRevisionV1};
 use erabasic_bytecode::Digest;
 use erabasic_vm::VmValue;
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 26;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 27;
 #[cfg(test)]
 const LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 20;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
@@ -73,6 +73,21 @@ pub(crate) enum RuntimeSnapshotOrigin {
     Diagnosis,
 }
 
+/// Stable SQL state carried by a runtime snapshot. Provider-native and script-reader handles are
+/// deliberately absent: restore reopens every database at the exact immutable revision before
+/// publishing the candidate VM state.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct SqlRuntimeSnapshot {
+    pub(crate) connections: Vec<SqlConnectionSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct SqlConnectionSnapshot {
+    pub(crate) logical_name: String,
+    pub(crate) identity: SqlDatabaseIdentityV1,
+    pub(crate) durable_revision: SqlRevisionV1,
+}
+
 #[derive(Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct RuntimeSnapshotPayload {
@@ -88,6 +103,7 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) vm_snapshot: Vec<u8>,
     pub(crate) presentation: PresentationModel,
     pub(crate) operations: PendingOperations,
+    pub(crate) sql: SqlRuntimeSnapshot,
     pub(crate) controller: SystemController,
     pub(crate) logical_time_ns: u64,
     pub(crate) random_seed: Option<u64>,
@@ -517,6 +533,7 @@ mod tests {
             vm_snapshot: vec![3],
             presentation: PresentationModel::default(),
             operations: PendingOperations::default(),
+            sql: SqlRuntimeSnapshot::default(),
             controller: SystemController::default(),
             logical_time_ns: 4,
             random_seed: Some(5),
@@ -588,6 +605,19 @@ mod tests {
             vm_snapshot: vec![3],
             presentation,
             operations: PendingOperations::default(),
+            sql: SqlRuntimeSnapshot {
+                connections: vec![SqlConnectionSnapshot {
+                    logical_name: "main".into(),
+                    identity: SqlDatabaseIdentityV1 {
+                        source: era_runtime_protocol::SqlDatabaseSourceV1::Memory,
+                        sqlite_version: era_runtime_protocol::SQL_SQLITE_VERSION.into(),
+                        format_version: era_runtime_protocol::SQL_DATABASE_FORMAT_VERSION,
+                    },
+                    durable_revision: SqlRevisionV1 {
+                        sha256: era_protocol::ProtocolBytes::new(vec![7; 32]),
+                    },
+                }],
+            },
             controller: SystemController::default(),
             logical_time_ns: 4,
             random_seed: Some(5),
@@ -647,6 +677,8 @@ mod tests {
         assert_eq!(decoded.force_kana_mode, 0);
         assert_eq!(decoded.system_menu, 3);
         assert_eq!(decoded.system_menu_slot, Some(17));
+        assert_eq!(decoded.sql.connections.len(), 1);
+        assert_eq!(decoded.sql.connections[0].logical_name, "main");
     }
 
     #[test]

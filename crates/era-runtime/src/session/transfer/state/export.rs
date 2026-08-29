@@ -234,6 +234,20 @@ impl RuntimeSession {
                 && pending.wait.deadline_ns.is_none()
         });
         let mut reasons = Vec::new();
+        if request.kind == StateExportKind::VmSnapshot
+            && let Err(blocker) = self.sql.snapshot()
+        {
+            reasons.push(match blocker {
+                crate::sql::SqlSnapshotBlocker::Inflight => {
+                    SnapshotIneligibleReason::ExternalOperationPending
+                }
+                crate::sql::SqlSnapshotBlocker::Reader
+                | crate::sql::SqlSnapshotBlocker::Transaction
+                | crate::sql::SqlSnapshotBlocker::RevisionMissing => {
+                    SnapshotIneligibleReason::SnapshotStateUnavailable
+                }
+            });
+        }
         if !unrestricted_snapshot {
             if self.phase != RuntimePhase::WaitingInput || !stable_wait {
                 reasons.push(SnapshotIneligibleReason::StableWaitRequired);
@@ -328,6 +342,11 @@ impl RuntimeSession {
                         vm_snapshot,
                         presentation: self.presentation.clone(),
                         operations: self.operations.clone(),
+                        sql: self.sql.snapshot().map_err(|_| {
+                            RuntimeError::Internal(
+                                "SQL snapshot state changed after eligibility check".into(),
+                            )
+                        })?,
                         controller: self.controller.clone(),
                         logical_time_ns: self.logical_time_ns,
                         random_seed: self.random_seed,

@@ -20,6 +20,13 @@ impl RuntimeSession {
                 "project loading requires an idle runtime",
             );
         }
+        if self.sql.has_inflight() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "project loading cannot cross SQL pending requests",
+            );
+        }
         if request.manifest.is_none()
             && request.compiled_cache_transfer_id.is_none()
             && let Some(manifest) = staged_manifest
@@ -350,6 +357,10 @@ impl RuntimeSession {
         message_id: u64,
         candidate: PendingColdProjectLoad,
     ) -> Result<(), RuntimeError> {
+        // A cold project commit is an ownership boundary. Provider-native state belongs to the
+        // previous project; advancing the SQL epoch prevents any late reply from reviving it.
+        self.emit_sql_cleanup_requests()?;
+        self.sql.reset_for_project_boundary();
         let load_id = self
             .project_load_id
             .checked_add(1)

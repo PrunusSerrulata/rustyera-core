@@ -350,6 +350,7 @@ impl RuntimeSession {
                 "runtime and VM snapshot waits do not correspond",
             );
         }
+        let snapshot_digest = *blake3::hash(bytes).as_bytes();
         let mut vm = RuntimeVm::commit_restore(prepared)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         if let Err(error) = payload
@@ -363,6 +364,52 @@ impl RuntimeSession {
         vm.set_character_width_mode(configured_character_width_mode(
             self.project_snapshot.as_ref(),
         ));
+        let sql_restore_ready = self
+            .ready_sql_snapshot_restore
+            .as_ref()
+            .is_some_and(|ready| ready.digest == snapshot_digest);
+        if !payload.sql.connections.is_empty() && !sql_restore_ready {
+            if self.sql.snapshot().is_err() {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "runtime snapshot replacement cannot cross active SQL state",
+                );
+            }
+            return self.begin_sql_snapshot_restore(
+                message_id,
+                bytes.to_vec(),
+                payload.sql.connections.clone(),
+            );
+        }
+        if payload.sql.connections.is_empty() && self.sql.snapshot().is_err() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "runtime snapshot replacement cannot cross active SQL state",
+            );
+        }
+        let replacement_sql = if payload.sql.connections.is_empty() {
+            let mut candidate = self.sql.clone();
+            candidate.reset_for_project_boundary();
+            candidate
+        } else {
+            self.ready_sql_snapshot_restore
+                .take()
+                .filter(|ready| ready.digest == snapshot_digest)
+                .ok_or_else(|| {
+                    RuntimeError::Internal("validated SQL snapshot candidate is missing".into())
+                })?
+                .candidate_sql
+        };
+        let old_sql = std::mem::replace(&mut self.sql, replacement_sql);
+        let sql_cleanup = (
+            old_sql.provider(),
+            old_sql
+                .connections()
+                .map(|(_, connection)| connection.handle)
+                .collect::<Vec<_>>(),
+        );
 
         let new_epoch = self.epoch.0.max(payload.epoch).saturating_add(1);
         let mut operations = payload.operations;
@@ -469,6 +516,7 @@ impl RuntimeSession {
         ) {
             let save = self.system_menu == SystemMenuState::SaveSlots;
             self.operations.clear();
+            self.emit_sql_cleanup_for(sql_cleanup.0, &sql_cleanup.1)?;
             return self.issue_storage(
                 if save {
                     PendingStorage::ListSaveSlots
@@ -483,6 +531,7 @@ impl RuntimeSession {
                 String::new(),
             );
         }
+        self.emit_sql_cleanup_for(sql_cleanup.0, &sql_cleanup.1)?;
         self.set_phase(RuntimePhase::WaitingInput)?;
         self.renew_debug_grant()?;
         self.install_input_replay(replay_origin);

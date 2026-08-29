@@ -44,7 +44,12 @@ impl RuntimeSession {
                 None,
             )?;
         }
+        self.discard_sql_snapshot_candidates()?;
+        // Disconnects are emitted after cancelling older work so shutdown never cancels its own
+        // provider cleanup. The frontend session teardown is the final acknowledgement boundary.
+        self.emit_sql_cleanup_requests()?;
         self.operations.clear();
+        self.sql.reset_for_project_boundary();
         self.effect_journal.clear();
         self.inbound_transfer = None;
         self.outbound_transfer = None;
