@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `39.0`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `40.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.9 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 39.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 40.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -363,7 +363,7 @@ epoch 时会清理两个 channel 的接受 ID，但仍不重置 sequence；VM sn
 | 0 | `runtime_versions` | `{min,max}`，两端闭区间 |
 | 1 | `client_name` | UTF-8，不作为身份授权 |
 | 2 | `features` | `RuntimeFeature[]` 请求集合 |
-| 3 | `requested_limits` | 六个非负限制字段 |
+| 3 | `requested_limits` | 七个非负限制字段 |
 | 4 | `capabilities` | 下表；session 固定 |
 | 5 | `preferred_locales` | 有序 BCP-47；当前选择 `zh-Hans`、`en` 或默认 `ja` |
 
@@ -377,7 +377,11 @@ resync、11 storage、12 input undo、13 project analysis、14 key macros。当�
 gamepad=3）；1–8 依次为 `rich_text/html/graphics/audio/video/font_metrics/
 column_cells/separators`；9 `available_fonts[]`（ServerHello 按大小写不敏感排序/去重并
 保留选中的拼写；runtime 内部再小写化供 CHKFONT 查询）；
-10 `services[]`；11 `StorageCapabilities`。当前 `video` 总被选为 false；
+10 `services[]`；11 `StorageCapabilities`；12 `EnvironmentCapability[]`，每项为规范名称与
+版本范围。当前输入环境名称为 `input.timed_viewport`、`input.device_latch`、
+`input.device_pump`、`input.sequence` 和 `input.macros`；后两项由 runtime 自身选择，
+`input.device_pump` 还要求协商 `InputState/device_pump@1.0` 服务。未知名称不会由 modality
+或宿主 OS 推导。当前 `video` 总被选为 false；
 `font_metrics` 还要求 `gget_text_size` 服务。布尔值没有缺省，前端必须全部发送。
 
 `RuntimeLimits` 键 0–6：`maximum_envelope_bytes:u64`、`maximum_payload_bytes:u64`、
@@ -419,7 +423,7 @@ payload 使用 minicbor enum 形式 `[tag, [value]]`；无值变体为 `[tag, []
 | 28 | `ApplyClientPreferences` | 29 `ClientPreferencesApplied`；只改变客户端展示画像 |
 | 30 | `Input` | 消费当前 wait/token |
 | 31 | `AdvanceTime` | 推进 deadline/countdown |
-| 33 | `DeviceStateChanged` | 更新设备采样时间 |
+| 33 | `DeviceStateChanged` | 按 epoch 内事件序号更新 runtime 设备状态 |
 | 34 | `ClientStateChanged` | 更新焦点/音频等前端状态 |
 | 35 | `ProjectionObservation` | 36 `ProjectionState` 或拒绝 |
 | 37 | `InputUndoRequest` | 38 `InputUndoStateChanged` |
@@ -486,11 +490,12 @@ byte column，前端可用提交的 UTF-8 源码按 `byte_start..byte_end` 显�
 
 ### 7.2 输入
 
-`InteractionToken { epoch, id }` 由 runtime 创建和撤销。`InputWait` 的 13 个字段是：
+`InteractionToken { epoch, id }` 由 runtime 创建和撤销。`InputWait` 的 14 个字段是：
 `wait_id`、`kind`、`stability`、`one_input`、`stop_message_skip`、`system_input`、
 `mouse_input`、`default_value?`、`deadline_ns?`、`display_time`、`timeout_message?`、
-`submission_token`、`countdown_remaining_ms?`。`countdown_remaining_ms` 只供显示，超时
-判定仍由 runtime 完成。
+`submission_token`、`countdown_remaining_ms?`、`viewport_policy`。最后一项为
+`FollowOutput=0` 或 `PreserveUserViewport=1`；只描述前端上滚策略，不改变超时或输入语义。
+`countdown_remaining_ms` 只供显示，超时判定仍由 runtime 完成。
 
 `WaitKind`：EnterKey、AnyKey、IntegerValue、StringValue、Void、AnyValue、
 IntegerButton、StringButton、PrimitiveMouseKey。无 deadline 且用户可恢复的 wait 才是
@@ -507,12 +512,19 @@ ActivateKeyMacro `{group,slot}`。前端从不提供 `RESULT[5]`；按钮必须�
 
 `AdvanceTime { monotonic_time_ns }` 驱动超时。当前边界为：时间采样达到 deadline 会超时；
 恰在 deadline 观察到的输入仍可能被接受，而晚于 deadline 的输入让 runtime 先完成
-超时。前端应使用同一单调时钟并按观察顺序发送。
+超时。前端应使用同一单调时钟并按观察顺序发送。Runtime 严格按收到的信封 FIFO 处理
+外部输入、设备事件和 `AdvanceTime`，不会用前端时间戳倒推或重新排序胜负。
 
-`DeviceStateChanged` 字段是 `device, code, pressed, x, y, monotonic_time_ns`。当前 runtime
-只吸收单调时间，尚未把其余字段转为通用设备状态。`ClientStateChanged` 字段为
+`DeviceStateChanged` 字段是 `device, code, pressed, x, y, monotonic_time_ns,
+event_sequence, toggle, repeat`。`event_sequence` 在每个 epoch 从 1 连续递增；旧值、跳号、
+越界 key code 和无效 repeat/up 组合原子拒绝。Runtime 保存键盘 0–255 与鼠标左/右/中键
+（code 1/2/4）的 held、toggle 和一次性 latch；完整 down/up 在同一设备泵中仍保留 latch。
+`InputState/device_pump@1.0` 请求携带 epoch 与 runtime 已接受的事件水位，前端经过真实事件
+循环边界、提交所有已排队设备事件后，返回同 epoch 的精确最终水位。
+`ClientStateChanged` 字段为
 `focused, visible, audio_available, reduce_motion, high_contrast, screen_reader`；当前
-只有 `focused` 和 `audio_available` 进入行为判断，其余仅属于已定义协议面。
+`focused && visible` 决定设备查询是否活动，失焦不消费 latch；`audio_available` 进入音频
+行为判断，其余仍属于已定义协议面。
 
 undo 请求返回 token；`InputUndoState` 字段为 `enabled, available_steps, in_progress,
 runtime_revision, token?`。
@@ -1046,7 +1058,7 @@ try:
         capabilities = {
             0: [0], 1: True, 2: True, 3: False, 4: False, 5: False,
             6: False, 7: True, 8: True, 9: [], 10: [],
-            11: {0: False, 1: False, 2: False, 3: False},
+            11: {0: False, 1: False, 2: False, 3: False}, 12: [],
         }
         client.send(0, {
             0: version_range(*RUNTIME_VERSION), 1: "minimal-python",
