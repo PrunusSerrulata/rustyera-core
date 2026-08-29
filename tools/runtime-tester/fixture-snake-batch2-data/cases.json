@@ -12,7 +12,7 @@
   },
   "requiredRustPolicy": {
     "original": { "semantic_version": 1, "policy_version": 1 },
-    "snake": { "semantic_version": 6, "policy_version": 6 }
+    "snake": { "semantic_version": 7, "policy_version": 7 }
   },
   "evidenceStatus": "source_derived_candidates_not_executed",
   "allowedOracles": ["snake"],

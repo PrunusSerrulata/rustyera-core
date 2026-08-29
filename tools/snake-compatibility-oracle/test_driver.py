@@ -405,6 +405,11 @@ class DriverTests(unittest.TestCase):
         validate_rust_evidence(restructure_policy, "snake", fixture, 1, {"semantic_version": 5, "policy_version": 5})
         data_policy = {**current, "profile": {**current["profile"], "semantic_version": 6, "policy_version": 6}}
         validate_rust_evidence(data_policy, "snake", fixture, 1, {"semantic_version": 6, "policy_version": 6})
+        hook_policy = {**current, "profile": {**current["profile"], "semantic_version": 7, "policy_version": 7}}
+        validate_rust_evidence(hook_policy, "snake", fixture, 1, {"semantic_version": 7, "policy_version": 7})
+        with self.assertRaises(ValueError):
+            validate_rust_evidence({**hook_policy, "profile": {**hook_policy["profile"], "policy_version": 6}},
+                                   "snake", fixture, 1)
         with self.assertRaises(ValueError):
             validate_rust_evidence(call_policy, "snake", fixture, 1, {"semantic_version": 5, "policy_version": 5})
         with self.assertRaises(ValueError):

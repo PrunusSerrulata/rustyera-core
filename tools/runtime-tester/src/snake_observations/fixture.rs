@@ -130,6 +130,7 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
         "INDEX" => "index",
         "METHODS" => "methods",
         "COLUMNS" => "columns",
+        "FAULT_HOOKS" => "fault_hooks",
         _ => return Err(format!("unknown fixture group {group}").into()),
     };
     let mut files = Vec::new();
@@ -442,6 +443,23 @@ mod tests {
                 "csv/CHARA90.CSV"
             ]
         );
+    }
+
+    #[test]
+    fn batch_2d_fixture_routes_fault_hook_sources_and_configuration() {
+        for variant in ["enabled", "disabled"] {
+            let root = crate::tool_root()
+                .join("fixture-snake-batch2-fault-hooks")
+                .join(variant);
+            let files = load_fixture_files(&root, "FAULT_HOOKS").unwrap();
+            assert!(files.iter().any(|file| {
+                file.relative_path == "erb/fault_hooks.erb" && file.category == FileCategory::Erb
+            }));
+            assert!(files.iter().any(|file| {
+                file.relative_path == "emuera.config"
+                    && file.category == FileCategory::Configuration
+            }));
+        }
     }
 
     #[test]
