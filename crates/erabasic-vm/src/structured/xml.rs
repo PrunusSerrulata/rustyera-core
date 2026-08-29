@@ -454,6 +454,13 @@ impl XmlElement {
             .collect()
     }
 
+    pub(super) fn element_named(&self, name: &str) -> Option<&Self> {
+        self.children.iter().find_map(|child| match child {
+            XmlChild::Element(element) if element.name == name => Some(element),
+            XmlChild::Element(_) | XmlChild::Text(_) => None,
+        })
+    }
+
     pub(super) fn inner_text(&self) -> String {
         let mut output = String::new();
         for child in &self.children {

@@ -94,6 +94,39 @@ pub enum StructuredExtension {
     },
 }
 
+/// Parse the deterministic MAP XML subset used by `SQL_IMPORT_MAP_XML`.
+///
+/// Only direct `/map/p` elements participate. Each row uses the first direct `k` and `v`
+/// child, skips entries missing either child, and preserves source order and duplicate keys.
+/// Values use the same `InnerXml` projection as the `EraBasic` XML operations.
+///
+/// # Errors
+///
+/// Returns a script parse failure when the XML is malformed or its root is not exactly `map`.
+pub fn parse_map_xml_rows(input: &str) -> Result<Vec<(String, String)>, ExecutionFailure> {
+    let document = parse_xml(input)?;
+    if document.root.name != "map" {
+        return Err(parse_failure("MAP XML root element must be map"));
+    }
+
+    Ok(document
+        .root
+        .children
+        .iter()
+        .filter_map(|child| {
+            let XmlChild::Element(row) = child else {
+                return None;
+            };
+            if row.name != "p" {
+                return None;
+            }
+            let key = row.element_named("k")?;
+            let value = row.element_named("v")?;
+            Some((key.inner_text(), value.inner_xml()))
+        })
+        .collect())
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 struct OrderedMap {
     entries: Vec<(String, String)>,

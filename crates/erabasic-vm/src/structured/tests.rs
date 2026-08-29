@@ -28,6 +28,48 @@ fn xml_subset_preserves_mixed_content_and_selects_paths() {
 }
 
 #[test]
+fn sql_map_xml_rows_preserve_inner_xml_order_and_duplicate_keys() {
+    let rows = parse_map_xml_rows(
+        r#"<?xml version="1.0"?>
+        <map>
+          <p><k>plain</k><v>first</v></p>
+          <p><k>markup</k><v><b lang="zh">bold</b>&amp;text</v></p>
+          <p><k>empty</k><v /></p>
+          <p><k>duplicate</k><v>old</v></p>
+          <p><k>duplicate</k><v><i>new</i></v></p>
+          <p><k>missing-value</k></p>
+          <p><v>missing-key</v></p>
+        </map>"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        rows,
+        vec![
+            ("plain".into(), "first".into()),
+            ("markup".into(), "<b lang=\"zh\">bold</b>&amp;text".into()),
+            ("empty".into(), String::new()),
+            ("duplicate".into(), "old".into()),
+            ("duplicate".into(), "<i>new</i>".into()),
+        ]
+    );
+}
+
+#[test]
+fn sql_map_xml_rows_require_the_exact_root_and_direct_children() {
+    assert!(parse_map_xml_rows("<root><map /></root>").is_err());
+    assert!(parse_map_xml_rows("<Map />").is_err());
+
+    let rows = parse_map_xml_rows(
+        "<map><group><p><k>nested-row</k><v>x</v></p></group>\
+         <p><group><k>nested-key</k></group><v>x</v></p>\
+         <p><k>first</k><k>second</k><v>one</v><v>two</v></p></map>",
+    )
+    .unwrap();
+    assert_eq!(rows, vec![("first".into(), "one".into())]);
+}
+
+#[test]
 fn xpath_subset_handles_descendants_attributes_and_predicates() {
     let document =
         parse_xml("<root><p id='a'><k>one</k></p><group><p id='b'><k>two</k></p></group></root>")

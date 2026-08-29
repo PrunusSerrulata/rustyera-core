@@ -66,7 +66,7 @@ pub use snapshot::{
     SnapshotEligibility, SnapshotInspection, VmSnapshot, inspect_snapshot,
 };
 pub use state::{Vm, VmPreparationProgress, VmPreparationStage};
-pub use structured::{StructuredExtension, StructuredScope};
+pub use structured::{StructuredExtension, StructuredScope, parse_map_xml_rows};
 pub use value::{ArrayBackingId, HostWrite, PlaceDescriptor, VmValue};
 
 pub(crate) use memory::{
