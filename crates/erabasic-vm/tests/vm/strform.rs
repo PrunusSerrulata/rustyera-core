@@ -5612,6 +5612,30 @@ fn direct_runtime_host_without_static_import_uses_ready_and_single_completion_pa
 }
 
 #[test]
+fn direct_runtime_html_lines_empty_source_skips_width_and_host_service() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"{HTML_STRINGLINES(\\\"\\\", WIDTH())}\"\nRESULTS:10 '= STRFORM(RESULTS:0)\nFLAG:9 = 1\nRETURN\n@WIDTH\n#FUNCTION\nFLAG:8 += 1\nRETURNF 0\n",
+    );
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(artifact.functions[0].key, Vec::new())
+        .unwrap();
+    let mut host = DirectFormHost::default();
+    let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:#?}"
+    );
+    assert!(host.requests.is_empty());
+    assert_method_watch(&vm, &artifact, "RESULTS", 10, VmValue::String("0".into()));
+    assert_method_watch(&vm, &artifact, "FLAG", 8, VmValue::Integer(0));
+    assert_method_watch(&vm, &artifact, "FLAG", 9, VmValue::Integer(1));
+}
+
+#[test]
 fn direct_host_authorization_is_not_inferred_from_catalog_or_forged_artifact() {
     let mut artifact = compile_source(
         "@SYSTEM_TITLE\nRESULTS:0 '= \"{GETKEY(7)}\"\nRESULT = STRFORM(RESULTS:0) == \"42\"\nRETURN RESULT\n",

@@ -137,6 +137,16 @@ impl RuntimeFormContinuation {
         match phase {
             HostPhase::Collect { stage, count } => {
                 let values = self.take_values(count)?;
+                if stage == RuntimeHostStage::LinesBegin
+                    && matches!(values.as_slice(), [VmValue::String(source)] if source.is_empty())
+                {
+                    self.host_calls
+                        .pop()
+                        .ok_or_else(|| invalid("empty HTML line scope missing"))?;
+                    self.values.push(VmValue::Integer(0));
+                    self.check_resources(vm)?;
+                    return Ok(RuntimeFormStep::Pending);
+                }
                 let call = &mut self.host_calls[index];
                 let mut arguments = call.prefix.clone();
                 arguments.extend(values);
