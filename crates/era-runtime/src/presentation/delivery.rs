@@ -149,11 +149,7 @@ impl PresentationModel {
         }
         if delivery.dirty.resources {
             operations.push(PresentationOperation::SetResources {
-                resources: if self.project_graphics {
-                    self.resources.clone()
-                } else {
-                    ResourceReplay::default()
-                },
+                resources: self.projected_resources(),
             });
         }
         if delivery.dirty.html_island {
@@ -360,11 +356,7 @@ impl PresentationModel {
             input_wait: self.input_wait.clone(),
             settings: self.settings.clone(),
             tooltip: self.tooltip.clone(),
-            resources: if self.project_graphics {
-                self.resources.clone()
-            } else {
-                ResourceReplay::default()
-            },
+            resources: self.projected_resources(),
             html_island: self.project_html_island(),
             redraw: RedrawState {
                 enabled: self.redraw_enabled,
@@ -374,6 +366,16 @@ impl PresentationModel {
 
     pub(super) fn bump(&mut self) {
         self.revision = self.revision.saturating_add(1);
+    }
+
+    fn projected_resources(&self) -> ResourceReplay {
+        if self.project_graphics {
+            return self.resources.clone();
+        }
+        ResourceReplay {
+            animation_timer_ms: self.resources.animation_timer_ms,
+            ..ResourceReplay::default()
+        }
     }
 
     fn pending_line(&self) -> Option<DisplayLine> {

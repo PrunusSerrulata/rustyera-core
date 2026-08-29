@@ -724,16 +724,18 @@ impl ResourceGraph {
         }
     }
 
-    pub(crate) fn set_animation_timer(&mut self, milliseconds: i64) {
+    pub(crate) fn set_animation_timer(&mut self, milliseconds: i64) -> bool {
+        if !(i64::from(i32::MIN)..=i64::from(i16::MAX)).contains(&milliseconds) {
+            return false;
+        }
         self.animation_timer_ms = if milliseconds <= 0 {
             0
         } else {
-            i32::try_from(milliseconds.clamp(10, i64::from(i16::MAX)))
-                .expect("clamped animation timer fits i32")
+            i32::try_from(milliseconds.max(10)).expect("clamped animation timer fits i32")
         };
+        true
     }
 
-    #[cfg(test)]
     pub(crate) const fn animation_timer(&self) -> i32 {
         self.animation_timer_ms
     }

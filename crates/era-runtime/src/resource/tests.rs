@@ -238,7 +238,7 @@ fn canvas_and_dynamic_sprite_mutations_form_a_deterministic_replay_graph() {
         Some((64, 32))
     );
     assert!(graph.move_sprite("generated", 4, 5, false));
-    graph.set_animation_timer(55);
+    assert!(graph.set_animation_timer(55));
     assert_eq!(graph.animation_timer(), 55);
     assert_eq!(
         graph
@@ -432,8 +432,16 @@ fn portable_canvas_replay_captures_style_draw_and_snapshot_revisions() {
             ..
         }) if matrix.len() == 25
     ));
-    graph.set_animation_timer(1);
+    assert!(graph.set_animation_timer(1));
     assert_eq!(graph.animation_timer(), 10);
-    graph.set_animation_timer(-1);
+    assert!(graph.set_animation_timer(-1));
     assert_eq!(graph.animation_timer(), 0);
+    assert!(graph.set_animation_timer(i64::from(i32::MIN)));
+    assert_eq!(graph.animation_timer(), 0);
+    assert!(graph.set_animation_timer(i64::from(i16::MAX)));
+    assert_eq!(graph.animation_timer(), i32::from(i16::MAX));
+    assert!(!graph.set_animation_timer(i64::from(i16::MAX) + 1));
+    assert_eq!(graph.animation_timer(), i32::from(i16::MAX));
+    assert!(!graph.set_animation_timer(i64::from(i32::MIN) - 1));
+    assert_eq!(graph.animation_timer(), i32::from(i16::MAX));
 }

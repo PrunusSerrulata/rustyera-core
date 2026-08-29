@@ -465,14 +465,38 @@ impl RuntimeSession {
         }
         if name == "SETANIMETIMER" {
             let milliseconds = integer_argument_value(request, 0)?;
-            self.project_snapshot
+            let project = self
+                .project_snapshot
                 .as_mut()
-                .ok_or_else(|| RuntimeError::Internal("SETANIMETIMER has no project".into()))?
-                .resource_graph
-                .set_animation_timer(milliseconds);
+                .ok_or_else(|| RuntimeError::Internal("SETANIMETIMER has no project".into()))?;
+            if !project.resource_graph.set_animation_timer(milliseconds) {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "SETANIMETIMER expects a value between i32::MIN and 32767",
+                );
+            }
+            let snake = project
+                .manifest
+                .compatibility
+                .supports_snake_display_state();
             self.sync_resource_replay();
-            commit_integer_result(vm, request.id, 1)?;
+            if snake {
+                commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            } else {
+                commit_integer_result(vm, request.id, 1)?;
+            }
             return self.emit_presentation();
+        }
+        if name == "GETANIMETIMER" {
+            let value = self
+                .project_snapshot
+                .as_ref()
+                .ok_or_else(|| RuntimeError::Internal("GETANIMETIMER has no project".into()))?
+                .resource_graph
+                .animation_timer();
+            return commit_integer_result(vm, request.id, i64::from(value));
         }
         if self.controller.step == SystemStep::TrainEventComEnd
             && matches!(name.as_str(), "WAIT" | "WAITANYKEY" | "FORCEWAIT" | "TWAIT")
