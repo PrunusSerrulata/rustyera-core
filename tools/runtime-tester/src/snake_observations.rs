@@ -320,20 +320,34 @@ fn line_text(line: &DisplayLine) -> String {
 }
 
 fn strip_completion_marker(mut line: DisplayLine) -> Option<DisplayLine> {
-    let mut found = false;
+    let text = line
+        .runs
+        .iter()
+        .filter_map(|run| match run {
+            DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .collect::<String>();
+    let Some(start) = text.find(COMPLETE) else {
+        return Some(line);
+    };
+    let end = start + COMPLETE.len();
+    let mut cursor = 0_usize;
     line.runs.retain_mut(|run| match run {
-        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. }
-            if text.contains(COMPLETE) =>
-        {
-            found = true;
-            *text = text.replace(COMPLETE, "");
+        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+            let run_start = cursor;
+            cursor += text.len();
+            let remove_start = start.saturating_sub(run_start).min(text.len());
+            let remove_end = end.saturating_sub(run_start).min(text.len());
+            if remove_start < remove_end {
+                text.replace_range(remove_start..remove_end, "");
+            }
             !text.is_empty()
         }
         _ => true,
     });
-    if !found {
-        return Some(line);
-    }
     if line.runs.is_empty() {
         return None;
     }
@@ -366,7 +380,11 @@ mod tests {
     use super::{COMPLETE, line_text, strip_completion_marker};
     use era_runtime_protocol::{DisplayLine, DisplayRun, LineAlignment, TextStyle};
 
-    fn line(parts: &[&str]) -> DisplayLine {
+    fn line<I, S>(parts: I) -> DisplayLine
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
         DisplayLine {
             line_id: 1,
             temporary: false,
@@ -374,9 +392,9 @@ mod tests {
             line_end: true,
             alignment: LineAlignment::Left,
             runs: parts
-                .iter()
+                .into_iter()
                 .map(|text| DisplayRun::Text {
-                    text: (*text).into(),
+                    text: text.into(),
                     style: TextStyle::default(),
                     system_text: None,
                 })
@@ -387,14 +405,16 @@ mod tests {
 
     #[test]
     fn completion_marker_removal_preserves_pending_text_and_recomputes_eligibility() {
-        let pending = strip_completion_marker(line(&["pending", COMPLETE])).unwrap();
+        let split_marker = std::iter::once("pending".to_owned())
+            .chain(COMPLETE.chars().map(|character| character.to_string()));
+        let pending = strip_completion_marker(line(split_marker)).unwrap();
         assert_eq!(line_text(&pending), "pending");
         assert!(pending.text_background_eligible);
 
-        let whitespace = strip_completion_marker(line(&[" ", COMPLETE])).unwrap();
+        let whitespace = strip_completion_marker(line([" ", COMPLETE])).unwrap();
         assert_eq!(line_text(&whitespace), " ");
         assert!(!whitespace.text_background_eligible);
 
-        assert!(strip_completion_marker(line(&[COMPLETE])).is_none());
+        assert!(strip_completion_marker(line([COMPLETE])).is_none());
     }
 }
