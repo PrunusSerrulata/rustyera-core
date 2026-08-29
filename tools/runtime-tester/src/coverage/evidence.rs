@@ -108,6 +108,9 @@ pub(super) fn registration(binding: Option<&ExecutionBinding>) -> Value {
         Some(ExecutionBinding::Unsupported { reason }) => {
             json!({"classification": "Unsupported", "reason": reason, "lowering_when_reached": "UnsupportedConstruct diagnostic and Trap; actual compilation is reported separately"})
         }
+        Some(ExecutionBinding::UnsupportedCapability { capability, reason }) => {
+            json!({"classification": "UnsupportedCapability", "capability": capability, "reason": reason, "lowering_when_reached": "MissingCapability diagnostic; no executable artifact or runtime Trap"})
+        }
         None => json!({"classification": "Unregistered", "implementation_verified": false}),
     }
 }
@@ -150,6 +153,22 @@ pub(super) fn required_service(api: &str) -> Option<Value> {
             SAMPLE_CANVAS_PIXEL_OPERATION,
             SAMPLE_CANVAS_PIXEL_OPERATION_VERSION,
         ),
+        "SQL_CONNECT"
+        | "SQL_DISCONNECT"
+        | "SQL_EXECUTE_NONQUERY"
+        | "SQL_P_EXECUTE_NONQUERY"
+        | "SQL_EXECUTE_SCALAR_LONG"
+        | "SQL_EXECUTE_SCALAR_STRING"
+        | "SQL_P_EXECUTE_SCALAR_LONG"
+        | "SQL_P_EXECUTE_SCALAR_STRING"
+        | "SQL_EXECUTE_READER"
+        | "SQL_P_EXECUTE_READER"
+        | "SQL_READER_READ"
+        | "SQL_READER_GET_LONG"
+        | "SQL_READER_GET_STRING"
+        | "SQL_READER_ISNULL"
+        | "SQL_READER_CLOSE"
+        | "SQL_IMPORT_MAP_XML" => (ServiceKind::Sql, SQL_OPERATION, SQL_OPERATION_VERSION),
         _ => return None,
     };
     Some(
@@ -227,5 +246,9 @@ mod tests {
             required_service("HTML_STRINGLEN").unwrap()["version"],
             json!(era_runtime_protocol::HTML_STRING_LEN_OPERATION_VERSION)
         );
+        let sql = required_service("SQL_P_EXECUTE_NONQUERY").unwrap();
+        assert_eq!(sql["kind"], json!(era_runtime_protocol::ServiceKind::Sql));
+        assert_eq!(sql["operation"], era_runtime_protocol::SQL_OPERATION);
+        assert_eq!(migration("SQL_CONNECT", "")["classification"], "C01");
     }
 }

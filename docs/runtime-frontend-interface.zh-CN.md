@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `40.0`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `41.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.9 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 40.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 41.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -717,12 +717,29 @@ Error{code,message}。不要返回 JSON、平台对象或错误栈。
 | Canvas | `sample_canvas_pixel` | context + canvas/revision/point → context + revision/ARGB |
 | Canvas | `decode_canvas_image` | encoded bytes → width/height |
 | Canvas | `encode_canvas_png` | canvas/revision → encoded bytes |
+| Sql | `rustyera.sql` | `SqlRequestV1` → `SqlResponseV1` |
 | Extension | 动态声明的 operation | `ExtensionInvocation` → `ExtensionResult` |
 
 presentation query 的 `context` 是 presentation/environment/projection-space 三个 revision；
 响应必须原样带回，runtime 用它拒绝已过时的物理观察。普通 service 错误通常成为终止
 `ServiceFailure`；少数宿主路径有源码明确的兼容降级，因此前端仍应返回真实 Error，
 不能自行伪造成功。
+
+`Sql/rustyera.sql@1.0` 是蛇版兼容身份要求的安全 SQL 服务。协议只传 session epoch 限定的
+provider/connection/reader 逻辑句柄、项目 Resource ID 与摘要、不可变数据库修订和类型化
+`Null/Integer/String` 值；不得传操作系统路径、任意连接字符串或 provider 原生句柄。请求
+覆盖 Open、Execute、ReaderRead/Get/IsNull/Close、ImportMapRows 和 Disconnect；响应始终
+回传权威 connection transaction/durable revision 与 reader 状态，SQL 语义错误使用
+`SqlResultV1::Error` 的稳定 code/context，只有传输或 provider 崩溃才使用外层
+`ServiceResult::Error`。v1 固定限制为 8 个连接、32 个 reader、256 KiB SQL、64 个参数、
+8 MiB 参数总量、1 MiB 单元格、64 MiB 单数据库、100,000 行/8 MiB MAP 数据、1,000,000
+reader 行与 5 秒 provider 执行预算。
+
+蛇版 profile semantic/policy v10 同时固定 `rustyera.sql@1` 与
+`rustyera.sql.limits@1` 身份；这两个服务身份参与项目与编译缓存 key。前端没有精确协商
+`Sql/rustyera.sql@1.0` 时，兼容身份解析和项目加载会在读取项目源码、storage 或缓存前返回
+`runtime.missing_sql_service`。当前 3.1 仅建立协议、编译目录和加载前门禁；runtime-owned
+SQL 调度与 provider 生命周期由后续子批次接入。
 
 ### 9.3 状态传输
 

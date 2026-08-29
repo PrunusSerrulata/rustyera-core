@@ -197,6 +197,7 @@ pub(crate) fn builtin_function_available(
 
 fn builtin_shared_available(name: &str, identity: &erabasic_compat::CompatibilityIdentity) -> bool {
     match name.to_ascii_uppercase().as_str() {
+        name if name.starts_with("SQL_") => identity.supports_safe_sql(),
         "CALLSTR" | "JUMPSTR" | "TRYCALLSTR" | "TRYJUMPSTR" | "TRYCCALLSTR" | "TRYCJUMPSTR" => {
             identity.supports_call_text()
         }
@@ -280,12 +281,15 @@ pub(super) fn instruction(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
         ArgumentConstraint, ArgumentStyle, Catalog, ExtensionRegistry, InstructionSignature,
-        builtin_function_available, builtin_function_names, builtin_instruction_available,
-        builtin_instruction_names,
+        builtin_function_available, builtin_function_names, builtin_function_signatures,
+        builtin_instruction_available, builtin_instruction_names,
     };
     use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
+    use erabasic_hir::SemanticType;
 
     #[test]
     fn builtin_inventories_are_sorted_and_extensions_do_not_replace_them() {
@@ -324,5 +328,52 @@ mod tests {
             assert!(!builtin_instruction_available(name, &original));
             assert!(builtin_instruction_available(name, &snake));
         }
+    }
+
+    #[test]
+    fn safe_sql_catalog_is_snake_only_and_preserves_parameter_physical_arity() {
+        let reference = CompatibilityIdentity::reference();
+        let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        let supported = [
+            "SQL_CONNECT",
+            "SQL_DISCONNECT",
+            "SQL_EXECUTE_NONQUERY",
+            "SQL_P_EXECUTE_NONQUERY",
+            "SQL_EXECUTE_SCALAR_LONG",
+            "SQL_EXECUTE_SCALAR_STRING",
+            "SQL_P_EXECUTE_SCALAR_LONG",
+            "SQL_P_EXECUTE_SCALAR_STRING",
+            "SQL_EXECUTE_READER",
+            "SQL_P_EXECUTE_READER",
+            "SQL_READER_READ",
+            "SQL_READER_GET_LONG",
+            "SQL_READER_GET_STRING",
+            "SQL_READER_ISNULL",
+            "SQL_READER_CLOSE",
+            "SQL_IMPORT_MAP_XML",
+        ];
+        for name in supported {
+            assert!(!builtin_function_available(name, &reference));
+            assert!(builtin_function_available(name, &snake));
+        }
+
+        let signatures = builtin_function_signatures(&snake)
+            .into_iter()
+            .map(|signature| (signature.name.clone(), signature))
+            .collect::<BTreeMap<_, _>>();
+        let connect = &signatures["SQL_CONNECT"];
+        assert_eq!(connect.minimum_arguments, 1);
+        assert_eq!(connect.arguments, [ArgumentConstraint::String; 2]);
+        assert!(!connect.variadic);
+        assert!(connect.allow_omitted);
+
+        let parameterized = &signatures["SQL_P_EXECUTE_NONQUERY"];
+        assert_eq!(parameterized.minimum_arguments, 2);
+        assert_eq!(parameterized.arguments, [ArgumentConstraint::String; 3]);
+        assert!(parameterized.variadic);
+        assert!(parameterized.allow_omitted);
+
+        let deferred_float = &signatures["SQL_READER_GET_FLOAT"];
+        assert_eq!(deferred_float.return_type, SemanticType::Error);
     }
 }

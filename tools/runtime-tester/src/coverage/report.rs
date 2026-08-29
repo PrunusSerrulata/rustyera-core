@@ -55,6 +55,11 @@ fn statuses(
         .any(|&id| pipeline.diagnostics[id].code == "UnsupportedConstruct")
     {
         "compiler_trap"
+    } else if compiler
+        .iter()
+        .any(|&id| pipeline.diagnostics[id].code == "MissingCapability")
+    {
+        "unsupported_capability"
     } else if compiler.iter().any(|&id| pipeline.diagnostics[id].error) {
         "rejected"
     } else if appearance.activity != "active_ast" {
@@ -113,7 +118,10 @@ pub(super) fn write_project(
             "expression" => {
                 functions.contains(&appearance.api) || user_functions.contains(&appearance.api)
             }
-            "instruction" => instructions.contains(&appearance.api),
+            // Emuera FunctionMethod names are also valid discarded-result METHOD statements.
+            "instruction" => {
+                instructions.contains(&appearance.api) || functions.contains(&appearance.api)
+            }
             "declaration"
             | "operator"
             | "compound_assignment"

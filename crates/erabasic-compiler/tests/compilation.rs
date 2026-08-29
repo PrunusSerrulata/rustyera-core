@@ -40,6 +40,39 @@ fn analyze(text: &str) -> erabasic_analyzer::AnalyzedProject {
     report.project.expect("analysis should produce a project")
 }
 
+fn analyze_snake(text: &str) -> erabasic_analyzer::AnalyzedProject {
+    let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+        .data
+        .expect("default project data should load");
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: data,
+            sources: vec![ProjectSource {
+                relative_path: "snake.erb".into(),
+                payload: SourcePayload::Utf8(text.into()),
+            }],
+        },
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::analysis_mode()
+        },
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    report
+        .project
+        .expect("snake analysis should produce a project")
+}
+
 #[test]
 fn column_options_lower_to_validated_private_native_steps() {
     let project = analyze(
@@ -543,6 +576,176 @@ fn host_operations_use_only_call_host_and_round_trip() {
 }
 
 #[test]
+fn safe_sql_calls_emit_validated_v1_host_imports_with_physical_variadic_arity() {
+    let project = analyze_snake(
+        "@SYSTEM_TITLE\nSQL_CONNECT \"discarded\"\nRESULT:0 = SQL_CONNECT(\"db\")\nRESULT:1 = SQL_CONNECT(\"db\", )\nRESULT:2 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0\")\nRESULT:3 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0\", \"one\")\nRESULT:4 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0, @1\", , \"two\")\nRESULT:5 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0, @1\", \"one\", \"two\")\nSQL_DISCONNECT \"discarded\"\nRETURN\n",
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
+    let artifact = report.artifact.expect("safe SQL calls should compile");
+    let sql_imports = artifact
+        .host_imports
+        .iter()
+        .filter(|host| host.import.namespace == "rustyera.sql")
+        .collect::<Vec<_>>();
+    assert_eq!(sql_imports.len(), 6);
+    assert!(sql_imports.iter().all(|host| {
+        host.import.abi_version == 1
+            && host.capability == HostCapability::Sql
+            && host.contract.state == erabasic_bytecode::OperationState::External
+            && host.contract.transaction == erabasic_bytecode::TransactionPolicy::Forbidden
+            && host.contract.persistence == erabasic_bytecode::OperationPersistence::ProjectDerived
+            && host.contract.snapshot == erabasic_bytecode::OperationSnapshotPolicy::PendingBlocks
+            && host.contract.hot_reload == erabasic_bytecode::OperationHotReloadPolicy::ActiveBlocks
+            && host.contract.wait == erabasic_bytecode::OperationWaitPolicy::TransientExternal
+            && host.contract.debug == erabasic_bytecode::OperationDebugPolicy::Forbidden
+            && host.contract.portability == erabasic_bytecode::OperationPortability::Portable
+            && host.contract.is_coherent()
+    }));
+    let parameter_shapes = sql_imports
+        .iter()
+        .filter(|host| host.import.name == "sql_p_execute_nonquery")
+        .map(|host| host.import.parameters.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        parameter_shapes,
+        [
+            vec![BytecodeType::String, BytecodeType::String],
+            vec![
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::String,
+            ],
+            vec![
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::Integer,
+                BytecodeType::String,
+            ],
+            vec![
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::String,
+            ],
+        ]
+        .into_iter()
+        .collect()
+    );
+
+    let bytes = encode_artifact(&artifact).expect("SQL artifact should encode");
+    let decoded = decode_artifact(&bytes, &DecodeLimits::default()).expect("SQL artifact decodes");
+    let validation = validate_bytecode(
+        decoded,
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
+    );
+    assert!(validation.is_valid(), "{:#?}", validation.diagnostics);
+}
+
+#[test]
+fn every_deferred_sql_call_reports_missing_capability_without_runtime_traps() {
+    for (name, call, capability) in [
+        (
+            "SQL_CONNECTION_OPEN",
+            "SQL_CONNECTION_OPEN \"db\"",
+            "rustyera.sql.connection-open@future",
+        ),
+        (
+            "SQL_READER_GET_FLOAT",
+            "SQL_READER_GET_FLOAT 1, 0",
+            "rustyera.sql.float@future",
+        ),
+        (
+            "SQL_EXECUTE_SCALAR_FLOAT",
+            "SQL_EXECUTE_SCALAR_FLOAT \"db\", \"SELECT 1\"",
+            "rustyera.sql.float@future",
+        ),
+        (
+            "SQL_P_EXECUTE_SCALAR_FLOAT",
+            "SQL_P_EXECUTE_SCALAR_FLOAT \"db\", \"SELECT @0\", \"1\"",
+            "rustyera.sql.float@future",
+        ),
+        (
+            "SQL_ESCAPE",
+            "SQL_ESCAPE \"text\"",
+            "rustyera.sql.escape@future",
+        ),
+        (
+            "SQL_IMPORT_DT_XML",
+            "SQL_IMPORT_DT_XML \"db\", \"table\", \"schema.xml\", \"data.xml\"",
+            "rustyera.sql.dt-xml@future",
+        ),
+        (
+            "SQL_EXPORT_MAP_XML",
+            "SQL_EXPORT_MAP_XML \"db\", \"table\", \"data.xml\"",
+            "rustyera.sql.xml-export@future",
+        ),
+        (
+            "SQL_EXPORT_DT_XML",
+            "SQL_EXPORT_DT_XML \"db\", \"table\", \"schema.xml\", \"data.xml\"",
+            "rustyera.sql.xml-export@future",
+        ),
+        (
+            "SQL_IMPORT_XML_CUSTOM",
+            "SQL_IMPORT_XML_CUSTOM \"db\", \"table\", \"data.xml\", \"row\", \"key\"",
+            "rustyera.sql.custom-xml@future",
+        ),
+    ] {
+        let source = format!("@SYSTEM_TITLE\n{call}\nRETURN\n");
+        let report = compile_project(
+            &analyze_snake(&source),
+            &CompilerOptions::default(),
+            &default_host_registry(),
+            None,
+        );
+        assert!(report.artifact.is_none(), "{name} unexpectedly compiled");
+        assert!(
+            report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == CompilerDiagnosticCode::MissingCapability
+                    && diagnostic.message.contains(capability)
+            }),
+            "{name}: {:#?}",
+            report.diagnostics
+        );
+        assert!(
+            !report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == CompilerDiagnosticCode::UnsupportedConstruct
+                    || diagnostic.message.contains("unknown function")
+            }),
+            "{name}: {:#?}",
+            report.diagnostics
+        );
+    }
+}
+
+#[test]
+fn every_deferred_sql_name_has_a_deterministic_capability_classification() {
+    let registry = default_host_registry();
+    for name in [
+        "SQL_CONNECTION_OPEN",
+        "SQL_READER_GET_FLOAT",
+        "SQL_EXECUTE_SCALAR_FLOAT",
+        "SQL_P_EXECUTE_SCALAR_FLOAT",
+        "SQL_ESCAPE",
+        "SQL_IMPORT_DT_XML",
+        "SQL_EXPORT_MAP_XML",
+        "SQL_EXPORT_DT_XML",
+        "SQL_IMPORT_XML_CUSTOM",
+    ] {
+        assert!(matches!(
+            registry.classification(name),
+            Some(ExecutionBinding::UnsupportedCapability { capability, reason })
+                if capability.starts_with("rustyera.sql.") && !reason.is_empty()
+        ));
+    }
+}
+
+#[test]
 fn printdata_lowers_to_lazy_skip_random_selection_and_valid_stack_control() {
     let project = analyze(
         "@SYSTEM_TITLE\nPRINTDATAKW\nDATAFORM first={1}\nDATALIST\nDATAFORM second={2}\nDATAFORM third={3}\nENDLIST\nENDDATA\nRETURN\n",
@@ -848,7 +1051,8 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
             ExecutionBinding::BitArray
             | ExecutionBinding::ArrayMatch
             | ExecutionBinding::ExpressionMethod { .. }
-            | ExecutionBinding::Unsupported { .. } => {}
+            | ExecutionBinding::Unsupported { .. }
+            | ExecutionBinding::UnsupportedCapability { .. } => {}
         }
     }
     assert!(matches!(

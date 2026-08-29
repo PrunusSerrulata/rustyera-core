@@ -13,7 +13,9 @@ mod contracts;
 mod hosts;
 
 use contracts::{host_contract, native_contract};
-use hosts::{AUDIO, CLOCK, GRAPHICS, INPUT, NETWORK, STORAGE, SYSTEM, TEXT, register_hosts};
+use hosts::{
+    AUDIO, CLOCK, GRAPHICS, INPUT, NETWORK, STORAGE, SYSTEM, TEXT, register_hosts, register_sql,
+};
 
 pub(crate) fn column_options_contract() -> OperationContract {
     let mut contract = native_contract("dt_column_options");
@@ -57,6 +59,10 @@ pub enum ExecutionBinding {
     ArrayMatch,
     Host(HostBinding),
     Unsupported {
+        reason: String,
+    },
+    UnsupportedCapability {
+        capability: String,
         reason: String,
     },
 }
@@ -105,7 +111,8 @@ impl HostRegistry {
                 | ExecutionBinding::BitArray
                 | ExecutionBinding::ArrayMatch
                 | ExecutionBinding::ExpressionMethod { .. }
-                | ExecutionBinding::Unsupported { .. },
+                | ExecutionBinding::Unsupported { .. }
+                | ExecutionBinding::UnsupportedCapability { .. },
             )
             | None => None,
         }
@@ -206,6 +213,7 @@ pub fn default_host_registry() -> HostRegistry {
         HostCapability::Network,
         true,
     );
+    register_sql(&mut registry);
     // Preserve CALLSHARP as an external extension intent without embedding the
     // reference runtime's CLR plugin loader. The raw call expression is the
     // single ABI argument, so frontends can provide an explicit adapter.

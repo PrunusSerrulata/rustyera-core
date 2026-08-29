@@ -11,6 +11,7 @@ pub fn canonical_host_source_shapes(name: &str, snake: bool) -> Option<Vec<Runti
         .or_else(|| common_shapes(&name))
         .or_else(|| graphics_shapes(&name))
         .or_else(|| service_shapes(&name))
+        .or_else(|| sql_shapes(&name, snake))
 }
 
 fn profile_shapes(name: &str, snake: bool) -> Option<Vec<RuntimeCallableShape>> {
@@ -254,6 +255,51 @@ fn service_shapes(name: &str) -> Option<Vec<RuntimeCallableShape>> {
         "spriteanimecreate" | "spritegetcolor" | "spritemove" | "spritesetpos" => {
             vec![shape(3, 3, 3, false, &[String, Integer, Integer])]
         }
+        _ => return None,
+    })
+}
+
+fn sql_shapes(name: &str, snake: bool) -> Option<Vec<RuntimeCallableShape>> {
+    if !snake {
+        return None;
+    }
+    let exact = |arguments: &[RuntimeArgumentConstraint]| {
+        vec![shape(
+            arguments.len(),
+            arguments.len(),
+            arguments.len(),
+            false,
+            arguments,
+        )]
+    };
+    Some(match name {
+        "sql_connect" => vec![RuntimeCallableShape {
+            minimum: 1,
+            maximum: Some(2),
+            omitted_from: 1,
+            arguments: vec![String, String],
+            allow_omitted: true,
+        }],
+        "sql_disconnect" => exact(&[String]),
+        "sql_execute_nonquery"
+        | "sql_execute_reader"
+        | "sql_execute_scalar_long"
+        | "sql_execute_scalar_string" => exact(&[String, String]),
+        "sql_reader_read" | "sql_reader_close" => exact(&[Integer]),
+        "sql_reader_get_long" | "sql_reader_get_string" | "sql_reader_isnull" => {
+            exact(&[Integer, Integer])
+        }
+        "sql_import_map_xml" => exact(&[String, String, String]),
+        "sql_p_execute_nonquery"
+        | "sql_p_execute_reader"
+        | "sql_p_execute_scalar_long"
+        | "sql_p_execute_scalar_string" => vec![RuntimeCallableShape {
+            minimum: 2,
+            maximum: None,
+            omitted_from: 2,
+            arguments: vec![String, String, String],
+            allow_omitted: true,
+        }],
         _ => return None,
     })
 }

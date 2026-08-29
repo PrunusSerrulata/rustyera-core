@@ -42,6 +42,9 @@ impl Builder<'_> {
             Some(ExecutionBinding::Unsupported { reason }) => {
                 self.emit_unsupported_call(name, reason, location);
             }
+            Some(ExecutionBinding::UnsupportedCapability { capability, reason }) => {
+                self.emit_missing_capability_call(name, capability, reason, location);
+            }
             None if extension => {
                 let binding = extension_binding(name);
                 self.emit_host_call(name, parameters, result, &binding, location);
@@ -134,6 +137,23 @@ impl Builder<'_> {
             EncodedInstruction::new(Opcode::Trap, format!("unsupported {name}").into_bytes()),
             location,
         );
+    }
+
+    fn emit_missing_capability_call(
+        &mut self,
+        name: &str,
+        capability: &str,
+        reason: &str,
+        location: SourceLocation,
+    ) {
+        self.diagnostics.push(CompilerDiagnostic::at(
+            CompilerDiagnosticCode::MissingCapability,
+            location,
+            format!("{name} requires unavailable capability {capability}: {reason}"),
+        ));
+        // Error diagnostics discard the complete artifact before validation or execution. A NOP
+        // keeps lowering deterministic without manufacturing a runtime Trap for a known API.
+        self.emit(EncodedInstruction::new(Opcode::Nop, Vec::new()), location);
     }
 
     pub(in super::super) fn emit_native_call(

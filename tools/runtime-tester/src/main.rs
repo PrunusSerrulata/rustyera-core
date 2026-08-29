@@ -507,7 +507,10 @@ fn audit_registry() {
         .filter(|name| {
             matches!(
                 registry.classification(name),
-                Some(ExecutionBinding::Unsupported { .. })
+                Some(
+                    ExecutionBinding::Unsupported { .. }
+                        | ExecutionBinding::UnsupportedCapability { .. },
+                )
             )
         })
         .collect::<Vec<_>>();

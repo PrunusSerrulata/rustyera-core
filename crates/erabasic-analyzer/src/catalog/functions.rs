@@ -14,7 +14,7 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         Any, Integer, IntegerOrMutableString, IntegerOrReference, MutableInteger, MutableString,
         ReferenceAny, ReferenceOrString, String,
     };
-    use SemanticType::{Integer as IntType, String as StrType};
+    use SemanticType::{Error as ErrorType, Integer as IntType, String as StrType};
 
     let mut result = BTreeMap::new();
     let mut add = |name: &str, return_type, arguments: &[ArgumentConstraint], minimum, variadic| {
@@ -289,6 +289,116 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("MOUSEX", IntType, &[], 0, false);
     add("MOUSEY", IntType, &[], 0, false);
     add("MOUSEB", StrType, &[], 0, false);
+
+    // Safe SQL is a snake-profile Host service. Parameterized calls keep the third String
+    // constraint as the repeated variadic tail; omitted tail slots become SQL NULL at runtime.
+    add("SQL_CONNECT", IntType, &[String, String], 1, false);
+    for name in ["SQL_DISCONNECT", "SQL_READER_READ", "SQL_READER_CLOSE"] {
+        add(
+            name,
+            IntType,
+            &[if name == "SQL_DISCONNECT" {
+                String
+            } else {
+                Integer
+            }],
+            1,
+            false,
+        );
+    }
+    for name in [
+        "SQL_EXECUTE_NONQUERY",
+        "SQL_EXECUTE_READER",
+        "SQL_EXECUTE_SCALAR_LONG",
+    ] {
+        add(name, IntType, &[String, String], 2, false);
+    }
+    add(
+        "SQL_EXECUTE_SCALAR_STRING",
+        StrType,
+        &[String, String],
+        2,
+        false,
+    );
+    for name in ["SQL_READER_GET_LONG", "SQL_READER_ISNULL"] {
+        add(name, IntType, &[Integer, Integer], 2, false);
+    }
+    add(
+        "SQL_READER_GET_STRING",
+        StrType,
+        &[Integer, Integer],
+        2,
+        false,
+    );
+    add(
+        "SQL_IMPORT_MAP_XML",
+        IntType,
+        &[String, String, String],
+        3,
+        false,
+    );
+    for (name, result_type) in [
+        ("SQL_P_EXECUTE_NONQUERY", IntType),
+        ("SQL_P_EXECUTE_READER", IntType),
+        ("SQL_P_EXECUTE_SCALAR_LONG", IntType),
+        ("SQL_P_EXECUTE_SCALAR_STRING", StrType),
+    ] {
+        add(name, result_type, &[String, String, String], 2, true);
+    }
+
+    // Deferred SQL names remain known to the catalog so the compiler can return one stable
+    // missing-capability diagnostic rather than misclassifying them as unknown functions.
+    add("SQL_CONNECTION_OPEN", IntType, &[String], 1, false);
+    add("SQL_ESCAPE", StrType, &[String], 1, false);
+    add(
+        "SQL_READER_GET_FLOAT",
+        ErrorType,
+        &[Integer, Integer],
+        2,
+        false,
+    );
+    add(
+        "SQL_EXECUTE_SCALAR_FLOAT",
+        ErrorType,
+        &[String, String],
+        2,
+        false,
+    );
+    add(
+        "SQL_P_EXECUTE_SCALAR_FLOAT",
+        ErrorType,
+        &[String, String, String],
+        2,
+        true,
+    );
+    add(
+        "SQL_IMPORT_DT_XML",
+        IntType,
+        &[String, String, String, String],
+        4,
+        false,
+    );
+    add(
+        "SQL_EXPORT_MAP_XML",
+        IntType,
+        &[String, String, String],
+        3,
+        false,
+    );
+    add(
+        "SQL_EXPORT_DT_XML",
+        IntType,
+        &[String, String, String, String],
+        4,
+        false,
+    );
+    add(
+        "SQL_IMPORT_XML_CUSTOM",
+        IntType,
+        &[String, String, String, String, String],
+        5,
+        false,
+    );
     add("CURRENTALIGN", StrType, &[], 0, false);
     add("CURRENTREDRAW", IntType, &[], 0, false);
     add("GETFONT", StrType, &[], 0, false);
@@ -641,6 +751,22 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         .get_mut("RAND")
         .expect("RAND signature was inserted")
         .allow_omitted = true;
+    result
+        .get_mut("SQL_CONNECT")
+        .expect("SQL_CONNECT signature was inserted")
+        .allow_omitted = true;
+    for name in [
+        "SQL_P_EXECUTE_NONQUERY",
+        "SQL_P_EXECUTE_READER",
+        "SQL_P_EXECUTE_SCALAR_LONG",
+        "SQL_P_EXECUTE_SCALAR_STRING",
+        "SQL_P_EXECUTE_SCALAR_FLOAT",
+    ] {
+        result
+            .get_mut(name)
+            .expect("parameterized SQL signature was inserted")
+            .allow_omitted = true;
+    }
     for name in [
         "GETMETH",
         "GETMETHS",
