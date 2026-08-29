@@ -520,7 +520,7 @@ fn printform_and_printc_family_preserve_reference_semantics() {
 }
 
 #[test]
-fn matching_timed_input_wins_over_queued_timer_and_starts_message_skip() {
+fn queued_timer_precedes_later_input_and_rejects_its_expired_token() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(
         &mut session,
@@ -604,19 +604,18 @@ fn matching_timed_input_wins_over_queued_timer_and_starts_message_skip() {
             .drive(RuntimeDriveBudget::default())
             .expect("resume");
     }
-    drain(&mut session);
-    let snapshot = session.presentation.snapshot();
-    assert!(
-        snapshot
-            .history
-            .logical_lines
-            .iter()
-            .any(|line| projected_line_text(line).contains("got=9"))
-    );
+    let messages = drain(&mut session);
+    assert!(messages.iter().any(|message| matches!(message,
+        RuntimeMessage::CommandRejected(error) if error.code == CommandErrorCode::StaleRequest)));
+    assert_eq!(read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(), 7);
+    assert_eq!(read_runtime_integer(session.vm.as_ref().unwrap(), "ISTIMEOUT", &[], None).unwrap(), 1);
+    assert!(!session.message_skip);
+    let next = session.operations.active_input().expect("second timed input");
+    assert_eq!(next.wait.default_value, Some(era_runtime_protocol::ProtocolValue::Integer(9)));
     let replay = input_replay_records(&session);
     assert_eq!(replay[0]["step_count"], 1);
-    assert_eq!(replay[1]["action"], "text");
-    assert_eq!(replay[1]["result"]["value"], "42");
+    assert_eq!(replay[1]["action"], "timeout");
+    assert_eq!(replay[1]["result"]["value"], "7");
 }
 
 #[test]

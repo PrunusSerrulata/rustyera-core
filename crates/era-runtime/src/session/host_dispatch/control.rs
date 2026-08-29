@@ -32,6 +32,41 @@ impl RuntimeSession {
                     );
                 }
             };
+            if vm
+                .vm()
+                .artifact()
+                .manifest
+                .compatibility
+                .supports_snake_input()
+            {
+                if !self.environment.has(INPUT_DEVICE_PUMP_CAPABILITY, 1) {
+                    return self.fault(
+                        FaultCode::ServiceFailure,
+                        "AWAIT requires negotiated device_pump",
+                        Some(request.origin.clone()),
+                    );
+                }
+                self.flush_presentation_for_observation()?;
+                let after_event_sequence = self.device_input.event_sequence;
+                self.device_input.clear_latches();
+                return self.issue_host_service(
+                    vm,
+                    request,
+                    ExternalCompletion::DevicePump {
+                        request: request.id,
+                        epoch: self.epoch.0,
+                        after_event_sequence,
+                        milliseconds: milliseconds.cast_unsigned(),
+                    },
+                    ServiceKind::InputState,
+                    DEVICE_PUMP_OPERATION,
+                    DEVICE_PUMP_OPERATION_VERSION,
+                    &DevicePumpRequest {
+                        epoch: self.epoch.0,
+                        after_event_sequence,
+                    },
+                );
+            }
             if milliseconds == 0 {
                 return commit_completion(
                     vm,
@@ -54,6 +89,7 @@ impl RuntimeSession {
             );
             return Ok(());
         }
+
         if matches!(
             name.as_str(),
             "QUIT" | "FORCE_QUIT" | "QUIT_AND_RESTART" | "FORCE_QUIT_AND_RESTART"

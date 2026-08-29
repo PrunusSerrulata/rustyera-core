@@ -16,6 +16,21 @@ impl RuntimeSession {
                 "service response has no pending request",
             );
         };
+        if let PendingService::Host(ExternalCompletion::DevicePump {
+            request,
+            epoch,
+            after_event_sequence,
+            milliseconds,
+        }) = pending
+        {
+            return self.finish_device_pump(
+                request,
+                epoch,
+                after_event_sequence,
+                milliseconds,
+                response.result,
+            );
+        }
         if let PendingService::Host(ExternalCompletion::HtmlQuery { continuation }) = pending {
             return self.complete_html_query(continuation, response.result);
         }
@@ -230,7 +245,8 @@ impl RuntimeSession {
             PendingService::Host(completion) => {
                 let mut writes = Vec::new();
                 let host_request = match &completion {
-                    ExternalCompletion::HtmlQuery { .. } => {
+                    ExternalCompletion::DevicePump { .. }
+                    | ExternalCompletion::HtmlQuery { .. } => {
                         unreachable!("handled before payload decoding")
                     }
                     ExternalCompletion::GetKey { request: id, .. }
@@ -247,6 +263,9 @@ impl RuntimeSession {
                     | ExternalCompletion::SerializePhysicalHistory { request: id, .. } => *id,
                 };
                 let value = match completion {
+                    ExternalCompletion::DevicePump { .. } => {
+                        unreachable!("device pump handled before generic response decoding")
+                    }
                     ExternalCompletion::GetKey {
                         key_code,
                         triggered,
