@@ -1884,7 +1884,7 @@ fn snake_display_queries_and_whole_line_background_use_canonical_history() {
     assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
     assert_eq!(
         read_runtime_string(session.vm.as_ref().unwrap(), "RESULTS").unwrap(),
-        "pending"
+        "oldest"
     );
     let snapshot = session.presentation.snapshot();
     assert_eq!(

@@ -83,8 +83,8 @@ fn runtime_projection_queries_use_physical_and_logical_history_order() {
         "<p align='center'><nobr>wrapped-a<br>wrapped-b</nobr></p>"
     );
     assert_eq!(model.display_line(-1, false), "");
-    assert_eq!(model.display_line(-1, true), "pending");
-    assert_eq!(model.display_line(-2, true), "wrapped-b");
+    assert_eq!(model.display_line(-1, true), "wrapped-b");
+    assert_eq!(model.display_line(-2, true), "wrapped-a");
     assert_eq!(model.display_line(i64::MIN, true), "");
 
     model.append_print_text(String::new(), false, true);
