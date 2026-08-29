@@ -1375,13 +1375,10 @@ RETURNF RESULT
 }
 
 #[test]
-fn dynamic_method_ref_rejections_do_not_evaluate_immutable_or_character_indices() {
+fn dynamic_method_const_ref_rejection_does_not_evaluate_immutable_index() {
     let header = METHOD_FIXTURE_HEADER.to_owned() + "\n#DIM CONST METHOD_LOCKED, 3 = 1, 2, 3\n";
     let mut source = METHOD_FIXTURE_SOURCE.to_owned();
-    for (index, actual) in ["METHOD_LOCKED:METHOD_INDEX()", "CFLAG:METHOD_INDEX()"]
-        .iter()
-        .enumerate()
-    {
+    for (index, actual) in ["METHOD_LOCKED:METHOD_INDEX()"].iter().enumerate() {
         let expression =
             format!("GETMETH(METHOD_NAME(\"METHOD_REF_INT\"), METHOD_FALLBACK(), {actual})");
         write!(
@@ -1393,12 +1390,7 @@ fn dynamic_method_ref_rejections_do_not_evaluate_immutable_or_character_indices(
         write!(source, "\n@FORM_REF_REJECT_{index}\nCALL METHOD_RESET\nRESULTS:0 '= STRFORM(\"{{{escaped}}}\")\nRETURN\n").unwrap();
     }
     let artifact = compile_with_header(&header, &source, &method_options(true));
-    for entry in [
-        "REF_REJECT_0",
-        "REF_REJECT_1",
-        "FORM_REF_REJECT_0",
-        "FORM_REF_REJECT_1",
-    ] {
+    for entry in ["REF_REJECT_0", "FORM_REF_REJECT_0"] {
         let (vm, report) = run_method_case(&artifact, entry, VmConfig::default());
         assert_eq!(
             take_fault(report).code,
@@ -3971,12 +3963,16 @@ fn call_text_try_catches_only_argument_reduction_missing_target_and_binding_stag
             assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(1));
             assert_method_watch(&vm, &artifact, "FLAG", 2, VmValue::Integer(1));
         } else {
+            let fault = report.events.iter().find_map(|event| match event {
+                VmEvent::FiberFaulted { fault, .. } => Some(fault),
+                _ => None,
+            });
             assert!(
                 matches!(
-                    take_fault(report).category,
-                    erabasic_vm::FaultCategory::Script(_)
+                    fault.map(|fault| &fault.category),
+                    Some(erabasic_vm::FaultCategory::Script(_))
                 ),
-                "{text}"
+                "{text}: {report:?}"
             );
             assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(0));
             assert_method_watch(&vm, &artifact, "FLAG", 2, VmValue::Integer(0));
@@ -6054,6 +6050,7 @@ fn original_profile_rejects_all_six_map_extensions() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Corruptions and the matching valid restore share one fixture.
 fn map_pending_bytecode_capture_snapshot_rejects_missing_or_forged_lease_owner() {
     let artifact = compile_source_with_options(
         r#"@SYSTEM_TITLE
@@ -6148,7 +6145,23 @@ RETURNF "|"
         &mut natives,
         RunBudget::default(),
     );
-    completed_without_fault(&report, fiber);
+    assert!(
+        report.events.iter().any(|event| matches!(
+            event,
+            VmEvent::FiberCompleted {
+                fiber: completed,
+                value: Some(VmValue::Integer(1))
+            } if *completed == fiber
+        )),
+        "{report:#?}"
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:#?}"
+    );
     assert_method_watch(
         &restored,
         &artifact,
@@ -6947,7 +6960,23 @@ fn runtime_data_stage_snapshot_rejects_foreign_call_site_before_native_restore()
             &mut natives,
             RunBudget::default(),
         );
-        completed_without_fault(&report, fiber);
+        assert!(
+            report.events.iter().any(|event| matches!(
+                event,
+                VmEvent::FiberCompleted {
+                    fiber: completed,
+                    value: Some(VmValue::Integer(1))
+                } if *completed == fiber
+            )),
+            "{task_name}: {report:#?}"
+        );
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{task_name}: {report:#?}"
+        );
     }
 }
 

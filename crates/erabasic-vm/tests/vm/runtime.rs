@@ -1,12 +1,14 @@
 use super::*;
 
 #[test]
+#[allow(clippy::too_many_lines)] // Keep the snapshot format and exact-artifact checks together.
 fn stable_wait_snapshot_round_trips_and_requires_exact_artifact() {
     let (mut artifact, entry) = host_artifact(HostSnapshotCapability::StableWait);
     artifact.globals.push(global(
         SymbolKey::derive("test.snapshot", b"dense-zero-array"),
         vec![16_384],
     ));
+    fixture_runtime_variables(&mut artifact);
     artifact.refresh_ids().unwrap();
     let mut vm = Vm::new(validated(&artifact), VmConfig::default());
     vm.spawn_entry(entry, Vec::new()).unwrap();
@@ -1893,7 +1895,11 @@ fn pending_map_candidate_rejects_stale_object_updates_and_recreated_bindings() {
 
 /// Inspect the raw encoder before any eligibility/snapshot call can prune leases.
 /// Restore uses the existing snapshot/Native validators, not a test MAP decoder.
-fn assert_map_cleanup_can_restore_raw_state(runtime: &RuntimeVm, artifact: &BytecodeArtifact) {
+fn assert_map_cleanup_can_restore_raw_state(
+    runtime: &RuntimeVm,
+    artifact: &BytecodeArtifact,
+    expected_rebinds: usize,
+) {
     let bytes = runtime.encode_unrestricted_snapshot().unwrap();
     let inspection = inspect_snapshot(&bytes, VmConfig::default().maximum_snapshot_bytes).unwrap();
     for fiber in inspection.state["fibers"].as_object().unwrap().values() {
@@ -1916,7 +1922,7 @@ fn assert_map_cleanup_can_restore_raw_state(runtime: &RuntimeVm, artifact: &Byte
         &mut natives,
     )
     .unwrap();
-    assert!(host.rebound.is_empty());
+    assert_eq!(host.rebound.len(), expected_rebinds);
     let read = artifact
         .functions
         .iter()
@@ -2061,6 +2067,25 @@ fn pending_map_cancel_host_error_and_check_recovery_release_native_and_frame_lea
                 );
             }
         }
-        assert_map_cleanup_can_restore_raw_state(&runtime, &artifact);
+        let expected_rebinds = if ending == "host_contract" {
+            let primary = run_identity_entry(&mut runtime, &artifact, "MAP_WAIT");
+            let Some(FiberStatus::WaitingHost(request)) = runtime.vm().fiber_status(primary) else {
+                panic!("stable MAP cleanup primary did not reach INPUT");
+            };
+            let prepared = runtime
+                .validate_host_completion(
+                    request,
+                    VmHostCompletion::Pending {
+                        stability: HostWaitStability::StableInput,
+                        rebind_payload: Vec::new(),
+                    },
+                )
+                .unwrap();
+            runtime.commit_host_completion(prepared).unwrap();
+            1
+        } else {
+            0
+        };
+        assert_map_cleanup_can_restore_raw_state(&runtime, &artifact, expected_rebinds);
     }
 }

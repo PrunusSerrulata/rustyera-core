@@ -1157,6 +1157,20 @@ fn runtime_fault_resolves_to_utf8_source_location() {
 
 #[test]
 fn runtime_host_call_plan_obeys_runnable_and_transient_snapshot_boundaries() {
+    struct RuntimeInputHost;
+    impl VmHost for RuntimeInputHost {
+        fn call(&mut self, request: HostCallRequest) -> HostCallResult {
+            if request.import.name.eq_ignore_ascii_case("__GETKEY_ACTIVE") {
+                HostCallResult::Ready(HostReady {
+                    value: Some(VmValue::Integer(1)),
+                    writes: Vec::new(),
+                })
+            } else {
+                assert!(request.import.name.eq_ignore_ascii_case("GETKEY"));
+                HostCallResult::Deferred
+            }
+        }
+    }
     let artifact = compile_source_with_options(
         "@SYSTEM_TITLE\nRESULTS:1 '= \"{GETKEY(7)}\"\nRESULTS:0 '= STRFORM(RESULTS:1)\nFLAG:0 = STRFORMCHECK(RESULTS:0)\nRETURN RESULT\n",
         &AnalyzerOptions {
@@ -1190,10 +1204,7 @@ fn runtime_host_call_plan_obeys_runnable_and_transient_snapshot_boundaries() {
     ));
     assert!(vm.encode_snapshot(&natives).is_err());
 
-    let mut pending = PendingHost {
-        stability: HostWaitStability::Transient,
-        rebound: Vec::new(),
-    };
+    let mut pending = RuntimeInputHost;
     vm.run_slice(&mut pending, &mut natives, RunBudget::default());
     let Some(FiberStatus::WaitingHost(request)) = vm.fiber_status(fiber) else {
         panic!("runtime Host request was not issued");
