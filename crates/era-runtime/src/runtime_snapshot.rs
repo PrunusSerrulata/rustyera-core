@@ -12,7 +12,7 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 24;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 25;
 #[cfg(test)]
 const LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 20;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
@@ -565,6 +565,15 @@ mod tests {
     fn canvas_replay_state_round_trips_in_exact_runtime_snapshots() {
         let mut resource_graph = ResourceGraph::default();
         resource_graph.create_canvas(7, 20, 10).unwrap();
+        assert!(resource_graph.set_animation_timer(7));
+        let text_line_background = era_runtime_protocol::Color {
+            red: 17,
+            green: 34,
+            blue: 51,
+            alpha: 127,
+        };
+        let mut presentation = PresentationModel::default();
+        presentation.set_text_line_background(Some(text_line_background));
         let payload = RuntimeSnapshotPayload {
             format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
             origin: RuntimeSnapshotOrigin::Debug,
@@ -575,7 +584,7 @@ mod tests {
             resource_graph,
             epoch: 3,
             vm_snapshot: vec![3],
-            presentation: PresentationModel::default(),
+            presentation,
             operations: PendingOperations::default(),
             controller: SystemController::default(),
             logical_time_ns: 4,
@@ -621,6 +630,15 @@ mod tests {
         let decoded = decode(&encoded, uncompressed.len()).unwrap();
         assert_eq!(decoded.origin, RuntimeSnapshotOrigin::Debug);
         assert_eq!(decoded.resource_graph.canvas_state(7), Some((20, 10)));
+        assert_eq!(decoded.resource_graph.animation_timer(), 10);
+        assert_eq!(
+            decoded
+                .presentation
+                .snapshot()
+                .settings
+                .text_line_background,
+            Some(text_line_background)
+        );
         assert_eq!(decoded.selected_locale, "ja");
         assert_eq!(decoded.culture_table_version, CULTURE_TABLE_VERSION);
         assert_eq!(decoded.force_kana_mode, 0);
