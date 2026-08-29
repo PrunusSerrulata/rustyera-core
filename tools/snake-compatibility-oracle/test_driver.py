@@ -166,6 +166,28 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(step["rust"]["result"]["termination"], "compileError")
         self.assertEqual(step["oracle"]["result"]["termination"], "error")
 
+        case["expectedExecutionOutcomeDifference"] = {
+            "rust": "compileError",
+            "oracle": "script_error",
+            "reason": "the runtimes reject the same syntax at different reported phases",
+        }
+        registered_with_watch_difference = compare_case(
+            case, [{"request": request, "response": response}], rust, load)
+        registered_watch_step = registered_with_watch_difference["steps"][0]
+        self.assertEqual(registered_with_watch_difference["status"], "different")
+        self.assertEqual(registered_watch_step["differences"][0]["field"], "watches")
+        self.assertEqual(registered_watch_step["registeredDifferences"][0]["field"],
+                         "executionOutcome")
+
+        response["result"]["watches"] = {}
+        registered = compare_case(case, [{"request": request, "response": response}], rust, load)
+        registered_step = registered["steps"][0]
+        self.assertEqual(registered["status"], "incomparable")
+        self.assertEqual(registered_step["differences"], [])
+        self.assertEqual(registered_step["registeredDifferences"][0]["field"], "executionOutcome")
+        self.assertEqual(registered_step["rejectionComparison"]["status"],
+                         "registered_stage_difference")
+
     def test_output_removes_only_the_exact_load_prefix_and_preserves_script_lines(self):
         load = {"result": {"output": ["Now Loading...", "Elapsed time:3ms", "COMPAT_READY"]}}
         raw = load["result"]["output"] + ["Now Loading...", "COMPAT_READY", "script"]

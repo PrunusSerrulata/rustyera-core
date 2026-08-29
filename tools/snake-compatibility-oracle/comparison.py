@@ -297,6 +297,21 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
                         "oracle": expected.get(field),
                     }
                 )
+        registered_differences = []
+        expected_outcome_difference = case.get("expectedExecutionOutcomeDifference")
+        if expected_outcome_difference is not None:
+            remaining_differences = []
+            for difference in differences:
+                if (difference["field"] == "executionOutcome"
+                        and difference["rust"] == expected_outcome_difference.get("rust")
+                        and difference["oracle"] == expected_outcome_difference.get("oracle")):
+                    registered_differences.append({
+                        **difference,
+                        "reason": expected_outcome_difference["reason"],
+                    })
+                else:
+                    remaining_differences.append(difference)
+            differences = remaining_differences
         # Neither localized oracle diagnostics nor Rust protocol faults have a
         # shared semantic schema yet. Empty streams are comparable; otherwise
         # retain the evidence and explicitly decline a parity claim.
@@ -314,7 +329,8 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
         result = {
             "step": index,
             "status": ("different" if differences else "incomparable"
-                       if diagnostic_incomparable or output_incomparable or display_state_incomparable
+                       if (diagnostic_incomparable or output_incomparable
+                           or display_state_incomparable or registered_differences)
                        else "matched_observables"),
             "compared": compared,
             "outputComparison": output_comparison,
@@ -322,12 +338,15 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
             "setupDiagnostics": setup_diagnostics,
             "oracleRequestAccepted": response["ok"],
             "differences": differences,
+            "registeredDifferences": registered_differences,
             "diagnosticComparison": {
                 "status": "incomparable_schema" if diagnostic_incomparable else "matched_empty",
                 **diagnostics,
             },
             "rejectionComparison": {
-                "status": "matched_observed_rejection" if (
+                "status": "registered_stage_difference" if (
+                    registered_differences and not differences
+                ) else "matched_observed_rejection" if (
                     actual.get("executionOutcome") == "script_error"
                     and expected.get("executionOutcome") == "script_error"
                     and not differences) else "not_established",
