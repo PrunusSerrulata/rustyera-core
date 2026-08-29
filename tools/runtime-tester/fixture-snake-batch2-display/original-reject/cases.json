@@ -26,6 +26,11 @@
       "allowedOracles": ["original"],
       "observation": true,
       "expectationStatus": "compare_actual_rejection",
+      "expectedExecutionOutcomeDifference": {
+        "rust": "compileError",
+        "oracle": "script_error",
+        "reason": "Rust rejects during project compilation; the original wrapper reports the same unsupported syntax through its Error console state"
+      },
       "requests": [{ "request": { "op": "run", "entry": "PROBE_ORIGINAL_REJECT", "watch": [] } }]
     }
   ]
