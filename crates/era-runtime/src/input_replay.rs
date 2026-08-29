@@ -2,7 +2,7 @@ use era_runtime_protocol::{FileCategory, InputIntent, WaitKind};
 use erabasic_vm::VmValue;
 use serde::Serialize;
 
-const INPUT_REPLAY_SCHEMA_VERSION: u32 = 1;
+const INPUT_REPLAY_SCHEMA_VERSION: u32 = 2;
 const MAXIMUM_REPLAY_STEPS: usize = 4096;
 const MAXIMUM_REPLAY_BYTES: u64 = 16 * 1024 * 1024;
 const REPLAY_LIMITATIONS: [&str; 3] = [
@@ -193,6 +193,7 @@ pub(crate) enum ReplayAction {
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct ReplayStep {
+    pub(crate) source: Option<crate::input_source::InputSource>,
     pub(crate) record: &'static str,
     pub(crate) sequence: usize,
     pub(crate) action: ReplayAction,
@@ -239,6 +240,7 @@ impl From<WaitKind> for ReplayWaitKind {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReplayStepDraft {
+    pub(crate) source: Option<crate::input_source::InputSource>,
     pub(crate) action: ReplayAction,
     pub(crate) wait_kind: ReplayWaitKind,
     pub(crate) result: Option<ReplayValue>,
@@ -251,6 +253,7 @@ pub(crate) struct ReplayStepDraft {
 impl ReplayStepDraft {
     pub(crate) fn into_step(self, sequence: usize) -> ReplayStep {
         ReplayStep {
+            source: self.source,
             record: "step",
             sequence,
             action: self.action,
@@ -454,6 +457,7 @@ mod tests {
 
     fn text_step() -> ReplayStepDraft {
         ReplayStepDraft {
+            source: None,
             action: ReplayAction::Text,
             wait_kind: ReplayWaitKind::StringValue,
             result: Some(ReplayValue::String("actual".into())),

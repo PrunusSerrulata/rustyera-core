@@ -263,6 +263,18 @@ impl RuntimeSession {
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         self.save_extensions = load.opaque_extensions;
         self.advance_epoch();
+        self.queued_input.clear();
+        self.active_input_source = None;
+        self.input_controller = if self.undo_replay.is_some() {
+            self.undo_checkpoint
+                .as_ref()
+                .map(|checkpoint| checkpoint.input_controller.clone())
+                .unwrap_or_default()
+        } else {
+            // Bare saves do not serialize process-owned input controls. A LOAD
+            // in the same process retains the live switch and single pending slot.
+            self.input_controller.clone()
+        };
         self.controller.clear();
         self.controller.flow = Some(SystemFlow::Shop);
         self.controller.step = SystemStep::PostLoadShop;

@@ -627,7 +627,17 @@ fn input_undo_records_only_accepted_scalar_input_after_a_checkpoint() {
                 break;
             }
         }
-        assert_eq!(session.undo_checkpoint.as_ref().unwrap().inputs, vec!["42"]);
+        assert_eq!(
+            session
+                .undo_checkpoint
+                .as_ref()
+                .unwrap()
+                .inputs
+                .iter()
+                .map(|input| input.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["42"]
+        );
         let vm = session.vm.as_ref().unwrap();
         let sample = read_runtime_integer(vm, "FLAG", &[20], None).unwrap();
         let advanced_random = vm.export_random_state().unwrap();
@@ -722,22 +732,40 @@ fn input_undo_records_only_accepted_scalar_input_after_a_checkpoint() {
 fn input_undo_keeps_the_next_scalar_queued_across_primitive_waits() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     session.undo_replay = Some(UndoReplay {
-        remaining: VecDeque::from(["12".to_owned()]),
+        remaining: VecDeque::from([RecordedInput {
+            value: "12".to_owned(),
+            source: None,
+        }]),
         queued_repeats: 0,
     });
     let mut wait = session.system_wait(InteractionToken { epoch: 0, id: 1 });
     wait.kind = WaitKind::PrimitiveMouseKey;
-    assert_eq!(session.replay_submission(&wait), None);
+    let mut pending = PendingInput {
+        host_request: None,
+        wait,
+        result_name: None,
+        choices: BTreeMap::new(),
+        timeout_duration_ns: None,
+        post_input: None,
+    };
+    assert_eq!(session.replay_submission(&pending).unwrap(), None);
     assert_eq!(
         session.undo_replay.as_ref().unwrap().remaining,
-        VecDeque::from(["12".to_owned()])
+        VecDeque::from([RecordedInput {
+            value: "12".to_owned(),
+            source: None
+        }])
     );
 
-    wait.kind = WaitKind::IntegerValue;
+    pending.wait.kind = WaitKind::IntegerValue;
     assert_eq!(
-        session.replay_submission(&wait),
+        session.replay_submission(&pending).unwrap(),
         Some(InputSubmission::Value(VmValue::Integer(12)))
     );
+    assert_eq!(session.undo_replay.as_ref().unwrap().remaining.len(), 1);
+    session
+        .verify_replayed_input(&VmValue::Integer(12))
+        .unwrap();
     assert!(session.undo_replay.as_ref().unwrap().remaining.is_empty());
 }
 

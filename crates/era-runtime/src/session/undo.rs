@@ -70,6 +70,8 @@ impl RuntimeSession {
             save_bytes,
             random_state,
             inputs: Vec::new(),
+            input_history_bytes: 0,
+            input_controller: self.input_controller.clone(),
         });
         self.undo_replay = None;
         self.undo_token = None;
@@ -93,7 +95,21 @@ impl RuntimeSession {
                 "Ctrl-Z input history exceeded the negotiated journal limit",
             ));
         }
-        checkpoint.inputs.push(value);
+        let record = RecordedInput {
+            value,
+            source: self.active_input_source.clone(),
+        };
+        let Some(bytes) = record
+            .storage_bytes()
+            .and_then(|bytes| checkpoint.input_history_bytes.checked_add(bytes))
+            .filter(|bytes| *bytes <= self.options.limits.maximum_transfer_bytes)
+        else {
+            return self.invalidate_input_undo(Some(
+                "Ctrl-Z input provenance exceeded the negotiated transfer limit",
+            ));
+        };
+        checkpoint.input_history_bytes = bytes;
+        checkpoint.inputs.push(record);
         self.undo_token = None;
         self.emit_input_undo_state()
     }
@@ -130,6 +146,8 @@ impl RuntimeSession {
         if self.phase != RuntimePhase::WaitingInput
             || self.pending_candidate_commit.is_some()
             || self.operations.has_candidate_write()
+            || self.input_controller.pending_sequence.is_some()
+            || self.operations.has_device_pump()
         {
             return self.reject(
                 message_id,
@@ -144,13 +162,16 @@ impl RuntimeSession {
                 "input undo has no save/load checkpoint",
             );
         };
-        if checkpoint.inputs.pop().is_none() {
+        let Some(removed) = checkpoint.inputs.pop() else {
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidState,
                 "input undo history is empty",
             );
-        }
+        };
+        checkpoint.input_history_bytes = checkpoint
+            .input_history_bytes
+            .saturating_sub(removed.storage_bytes().unwrap_or(u64::MAX));
         let slot = checkpoint.slot;
         let bytes = checkpoint.save_bytes.clone();
         let random = checkpoint.random_state.clone();
@@ -175,22 +196,62 @@ impl RuntimeSession {
         self.complete_ordinary_load(slot, &bytes)
     }
 
-    pub(super) fn replay_submission(&mut self, wait: &InputWait) -> Option<InputSubmission> {
-        let replay = self.undo_replay.as_mut()?;
-        let Some(text) = replay.remaining.front().cloned() else {
+    pub(super) fn replay_submission(
+        &mut self,
+        pending: &PendingInput,
+    ) -> Result<Option<InputSubmission>, RuntimeError> {
+        let Some(replay) = self.undo_replay.as_ref() else {
+            return Ok(None);
+        };
+        let Some(record) = replay.remaining.front().cloned() else {
             self.undo_replay = None;
             self.undo_token = None;
-            return None;
+            return Ok(None);
         };
-        let value = match wait.kind {
-            WaitKind::StringValue | WaitKind::StringButton => VmValue::String(text),
-            // Primitive waits were never recorded by the reference Ctrl-Z history.
-            // Leave the next scalar value queued while the frontend satisfies it.
-            WaitKind::PrimitiveMouseKey => return None,
-            _ => VmValue::Integer(text.trim().parse().ok()?),
-        };
-        replay.remaining.pop_front();
-        Some(InputSubmission::Value(value))
+        if pending.wait.kind == WaitKind::PrimitiveMouseKey {
+            return Ok(None);
+        }
+        if let Some(source) = record.source {
+            match source.root {
+                InputRoot::Sequence(_) => return Ok(None),
+                InputRoot::External => {
+                    if self.input_controller.pending_sequence.is_some() {
+                        return Ok(None); // Let the regenerated script input run first; finish verifies provenance.
+                    }
+                    if let Some(queued) = self.queued_input.front() {
+                        if !queued.source.same_replay_origin(&source) {
+                            return Err(RuntimeError::Internal(
+                                "replay queue source differs from recorded input".into(),
+                            ));
+                        }
+                        return Ok(None);
+                    }
+                    if source.macro_enabled != self.input_controller.macro_enabled {
+                        return Err(RuntimeError::Internal(
+                            "replay macro switch differs from recorded admission".into(),
+                        ));
+                    }
+                    let regenerated = self
+                        .input_controller
+                        .admit(
+                            InputRoot::External,
+                            source.raw.as_ref().clone(),
+                            source.message_skip,
+                        )
+                        .map_err(RuntimeError::ResourceLimit)?;
+                    return self.prepare_text_fragment(pending, &regenerated, source.fragment);
+                }
+            }
+        }
+        self.active_input_source = None;
+        let value =
+            match pending.wait.kind {
+                WaitKind::StringValue | WaitKind::StringButton => VmValue::String(record.value),
+                _ => VmValue::Integer(record.value.trim().parse().map_err(|_| {
+                    RuntimeError::Internal("replay value is not an integer".into())
+                })?),
+            };
+        Ok(Some(InputSubmission::Value(value)))
     }
 
     pub(super) fn restart_queued_input_undo(&mut self) -> Result<bool, RuntimeError> {
@@ -204,12 +265,15 @@ impl RuntimeSession {
         let checkpoint = self.undo_checkpoint.as_mut().ok_or_else(|| {
             RuntimeError::Internal("queued input undo lost its checkpoint".into())
         })?;
-        if checkpoint.inputs.pop().is_none() {
+        let Some(removed) = checkpoint.inputs.pop() else {
             if let Some(replay) = self.undo_replay.as_mut() {
                 replay.queued_repeats = 0;
             }
             return Ok(false);
-        }
+        };
+        checkpoint.input_history_bytes = checkpoint
+            .input_history_bytes
+            .saturating_sub(removed.storage_bytes().unwrap_or(u64::MAX));
         let slot = checkpoint.slot;
         let bytes = checkpoint.save_bytes.clone();
         let random = checkpoint.random_state.clone();
