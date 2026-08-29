@@ -165,6 +165,7 @@ fn compile_and_export(manifest: ProjectManifest) -> Vec<u8> {
             features: vec![RuntimeFeature::StateResynchronization],
             requested_limits,
             capabilities: ClientCapabilities {
+                environment: Vec::new(),
                 input_modalities: vec![InputModality::Keyboard],
                 rich_text: false,
                 html: false,

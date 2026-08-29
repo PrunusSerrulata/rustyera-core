@@ -79,7 +79,7 @@ pub fn run_cli() -> AuditResult<()> {
             "watches": "authorized_debug_list_variables_and_read_variable",
             "completion": "synthetic title marker followed by INPUT; original entry returned",
             "presentation": "runtime logical lines, no pixel renderer or font measurement",
-            "keyInput": "primitive trace to get_key_state v1 pressed/toggle/frontend_active",
+            "keyInput": "epoch-scoped ordered device events plus device_pump v1; legacy get_key_state retained for original profile",
             "supervision": "parent process, complete state every five seconds, identical state terminates"
         }
     });
@@ -106,7 +106,7 @@ fn observe_case(
 ) -> AuditResult<Value> {
     if case.requests.is_empty() {
         return Ok(json!({"id": case.id, "group": case.group, "steps": [],
-            "status": "blocked", "reason": "fixture assertions require reference input atomicity/reset commands; runtime protocol has no equivalent input trace transaction/reset endpoint"}));
+            "status": "blocked", "reason": "case has no executable requests"}));
     }
     let (manifest, harness) =
         build_manifest(root, identity, &case.group, &case.requests[0].request)?;
@@ -172,7 +172,7 @@ fn observe_step(
     runtime.begin_step(request, initial)?;
     let mut blocks = Vec::new();
     let mut required_observation_blocked = false;
-    if let Err(error) = runtime.install_input_trace(&request["inputTrace"]) {
+    if let Err(error) = runtime.validate_input_trace(&request["inputTrace"]) {
         return Ok(
             json!({"request": request, "status": "blocked", "reason": error.to_string(),
             "result": {"ok": false, "termination": "blocked", "output": [], "watches": {}, "diagnostics": runtime.diagnostics, "hostLogs": runtime.host_logs}}),
@@ -182,7 +182,11 @@ fn observe_step(
         runtime.send(RuntimeMessage::Start(StartRequest {
             mode: StartMode::NewGame { seed: Some(seed) },
         }))?;
+        // Observe the new epoch without allowing the VM to execute the entry
+        // function, then deliver physical state under that epoch.
+        runtime.pump_start_boundary()?;
     }
+    runtime.install_input_trace(&request["inputTrace"])?;
     let mut inputs: VecDeque<String> = request["inputs"]
         .as_array()
         .into_iter()
@@ -294,6 +298,7 @@ fn observe_step(
             "value": value, "watches": watches, "output": output, "diagnostics": runtime.diagnostics,
             "hostLogs": runtime.host_logs, "presentation": lines, "observationBlocks": blocks, "inputEvidence": runtime.input_evidence,
             "displayState": {"settings": runtime.settings, "resources": runtime.resources},
+            "inputWait": runtime.wait,
             "inputObservation": if inputs.is_empty() && runtime.await_pumps.is_empty() { "consumed" } else { "blocked" },
             "runtimePhase": runtime.session.phase(), "instructions": runtime.instructions}});
     if let Some(evidence) = &runtime.storage_evidence {

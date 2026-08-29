@@ -575,6 +575,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
             ],
             requested_limits,
             capabilities: ClientCapabilities {
+                environment: Vec::new(),
                 input_modalities: vec![InputModality::Keyboard],
                 rich_text: false,
                 html: false,
@@ -1131,6 +1132,7 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
             ],
             requested_limits,
             capabilities: ClientCapabilities {
+                environment: Vec::new(),
                 input_modalities: vec![InputModality::Keyboard],
                 rich_text: false,
                 html: false,

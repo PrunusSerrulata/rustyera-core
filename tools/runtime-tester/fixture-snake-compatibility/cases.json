@@ -918,18 +918,6 @@
       "snakeTargetStatus": "deferred_semantics"
     },
     {
-      "id": "key-validation-and-reset",
-      "group": "GETKEY",
-      "requests": [],
-      "targetBatch": 2,
-      "rustCurrentPolicy": "record_actual_profile_policy",
-      "snakeTargetStatus": "deferred_semantics",
-      "assertions": [
-        "input_atomicity",
-        "input_reset"
-      ]
-    },
-    {
       "id": "toint-runtime-overflow",
       "group": "TOINT",
       "targetBatch": 2,
@@ -948,6 +936,72 @@
           }
         }
       ]
+    },
+    {
+      "id": "input-sequence-macro-literal",
+      "group": "INPUT",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMPAT_SEQUENCE_MACRO",
+            "watch": [
+              "RESULT:0",
+              "SAVESTR:0"
+            ]
+          },
+          "expect": {
+            "original": { "ok": false },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 21,
+                  "SAVESTR:0": "literal\\n@CONFIG(1)*2\\e"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2_input_state_machine",
+      "snakeTargetStatus": "implemented_pending_verification"
+    },
+    {
+      "id": "input-nf-environment",
+      "group": "INPUT",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMPAT_NF_ENVIRONMENT",
+            "watch": [
+              "RESULT:0",
+              "RESULT:1",
+              "RESULT:2"
+            ]
+          },
+          "expect": {
+            "original": { "ok": false },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "waitingInput",
+                "watches": {
+                  "RESULT:0": 0,
+                  "RESULT:1": 1,
+                  "RESULT:2": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2_input_state_machine",
+      "snakeTargetStatus": "implemented_pending_verification"
     }
   ],
   "deferredSyntax": [

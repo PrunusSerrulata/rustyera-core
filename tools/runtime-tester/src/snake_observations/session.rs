@@ -13,11 +13,13 @@ use era_protocol::{
 use era_runtime::{ProjectProgressReporter, RuntimeDriveBudget, RuntimeOptions, RuntimeSession};
 use era_runtime_protocol::{
     ClientCapabilities, ClientHello, ClientStateChanged, DeviceStateChanged, DisplayLine,
-    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
-    GetKeyStateResponse, InputDeviceKind, InputModality, InputWait, PresentationOperation,
-    PresentationSettings, ProjectLoadReport, RUNTIME_PROTOCOL_VERSION, ResourceReplay,
-    RuntimeFeature, RuntimeMessage, ServiceCapability, ServiceKind, ServiceResponse, ServiceResult,
-    StorageCapabilities, WaitChange,
+    DEVICE_PUMP_OPERATION, DEVICE_PUMP_OPERATION_VERSION, DevicePumpRequest, DevicePumpResponse,
+    EnvironmentCapability, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
+    GetKeyStateRequest, GetKeyStateResponse, INPUT_DEVICE_LATCH_CAPABILITY,
+    INPUT_DEVICE_PUMP_CAPABILITY, INPUT_ENVIRONMENT_VERSION, InputDeviceKind, InputModality,
+    InputWait, PresentationOperation, PresentationSettings, ProjectLoadReport,
+    RUNTIME_PROTOCOL_VERSION, ResourceReplay, RuntimeFeature, RuntimeMessage, ServiceCapability,
+    ServiceKind, ServiceResponse, ServiceResult, StorageCapabilities, WaitChange,
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -48,6 +50,7 @@ pub(super) struct ObservationSession {
     active: bool,
     pub(super) await_pumps: VecDeque<Value>,
     pub(super) clock: u64,
+    device_sequence: u64,
     pub(super) input_evidence: Vec<Value>,
     storage: Option<FixtureStorage>,
     pub(super) storage_evidence: Option<Vec<Value>>,
@@ -97,6 +100,7 @@ impl ObservationSession {
             active: true,
             await_pumps: VecDeque::new(),
             clock: 0,
+            device_sequence: 0,
             input_evidence: Vec::new(),
             storage,
             storage_evidence: storage_enabled.then(Vec::new),
@@ -130,6 +134,13 @@ impl ObservationSession {
             requested_limits: limits,
             features,
             capabilities: ClientCapabilities {
+                environment: [INPUT_DEVICE_LATCH_CAPABILITY, INPUT_DEVICE_PUMP_CAPABILITY]
+                    .into_iter()
+                    .map(|name| EnvironmentCapability {
+                        name: name.into(),
+                        versions: VersionRange::exact(INPUT_ENVIRONMENT_VERSION),
+                    })
+                    .collect(),
                 input_modalities: vec![InputModality::Keyboard],
                 rich_text: false,
                 html: false,
@@ -140,11 +151,18 @@ impl ObservationSession {
                 column_cells: true,
                 separators: true,
                 available_fonts: Vec::new(),
-                services: vec![ServiceCapability {
-                    kind: ServiceKind::InputState,
-                    operation: GET_KEY_STATE_OPERATION.into(),
-                    versions: VersionRange::exact(GET_KEY_STATE_OPERATION_VERSION),
-                }],
+                services: vec![
+                    ServiceCapability {
+                        kind: ServiceKind::InputState,
+                        operation: GET_KEY_STATE_OPERATION.into(),
+                        versions: VersionRange::exact(GET_KEY_STATE_OPERATION_VERSION),
+                    },
+                    ServiceCapability {
+                        kind: ServiceKind::InputState,
+                        operation: DEVICE_PUMP_OPERATION.into(),
+                        versions: VersionRange::exact(DEVICE_PUMP_OPERATION_VERSION),
+                    },
+                ],
                 storage: StorageCapabilities {
                     revisions: storage_enabled,
                     atomic_replace: storage_enabled,
@@ -186,7 +204,7 @@ impl ObservationSession {
         }
         snapshot["inputState"] = json!({"active": self.active,
             "keys": self.keys.iter().map(|key| json!({"down":key.down,"toggle":key.toggle})).collect::<Vec<_>>(),
-            "awaitPumps":self.await_pumps});
+            "awaitPumps":self.await_pumps, "deviceSequence":self.device_sequence});
         crate::watchdog::publish(snapshot.clone())?;
         Ok(())
     }
@@ -242,10 +260,21 @@ impl ObservationSession {
     }
 
     pub(super) fn pump(&mut self) -> AuditResult<()> {
-        let report = self.session.drive(RuntimeDriveBudget {
+        self.pump_with_budget(RuntimeDriveBudget {
             maximum_vm_instructions: 10_000,
             maximum_runtime_transitions: 128,
-        })?;
+        })
+    }
+
+    pub(super) fn pump_start_boundary(&mut self) -> AuditResult<()> {
+        self.pump_with_budget(RuntimeDriveBudget {
+            maximum_vm_instructions: 0,
+            maximum_runtime_transitions: 1,
+        })
+    }
+
+    fn pump_with_budget(&mut self, budget: RuntimeDriveBudget) -> AuditResult<()> {
+        let report = self.session.drive(budget)?;
         self.instructions = self.instructions.saturating_add(report.vm_instructions);
         self.pending.clear();
         let mut responses = Vec::new();
@@ -260,7 +289,7 @@ impl ObservationSession {
                 continue;
             }
             if let Some(epoch) = envelope.session_epoch {
-                self.epoch = Some(epoch);
+                self.observe_epoch(epoch);
             }
             let message = RuntimeMessage::from_envelope(&envelope)?;
             self.raw_messages.push(json!({"direction": "runtime_to_frontend", "envelope": envelope, "message": message}));
@@ -268,9 +297,11 @@ impl ObservationSession {
             match message {
                 RuntimeMessage::ServerHello(hello) => {
                     self.session_id = Some(hello.session);
-                    self.epoch = Some(SessionEpoch(hello.epoch));
+                    self.observe_epoch(SessionEpoch(hello.epoch));
                 }
-                RuntimeMessage::StateChanged(state) => self.epoch = Some(SessionEpoch(state.epoch)),
+                RuntimeMessage::StateChanged(state) => {
+                    self.observe_epoch(SessionEpoch(state.epoch));
+                }
                 RuntimeMessage::ProjectLoadReport(report) => {
                     self.setup_diagnostics.extend(
                         report
@@ -358,6 +389,27 @@ impl ObservationSession {
                                 payload: ProtocolBytes::new(encode_canonical(&reply)?),
                             },
                         }));
+                    } else if request.kind == ServiceKind::InputState
+                        && request.operation == DEVICE_PUMP_OPERATION
+                        && request.operation_version == DEVICE_PUMP_OPERATION_VERSION
+                    {
+                        let query: DevicePumpRequest =
+                            decode_canonical(request.payload.as_slice())?;
+                        if let Some(events) = self.await_pumps.pop_front() {
+                            self.apply_key_events(&events)?;
+                        }
+                        let reply = DevicePumpResponse {
+                            epoch: query.epoch,
+                            through_event_sequence: self.device_sequence,
+                        };
+                        self.input_evidence
+                            .push(json!({"pump": query, "response": reply}));
+                        responses.push(RuntimeMessage::ServiceResponse(ServiceResponse {
+                            request_id: request.request_id,
+                            result: ServiceResult::Ready {
+                                payload: ProtocolBytes::new(encode_canonical(&reply)?),
+                            },
+                        }));
                     } else {
                         self.blocked = Some(format!(
                             "unsupported required service {:?}/{}@{:?}",
@@ -385,11 +437,23 @@ impl ObservationSession {
                 .any(|line| line_text(line).contains(COMPLETE))
     }
 
-    pub(super) fn install_input_trace(&mut self, trace: &Value) -> AuditResult<()> {
+    fn observe_epoch(&mut self, epoch: SessionEpoch) {
+        if self.epoch == Some(epoch) {
+            return;
+        }
+        // Device event watermarks and physical observations are scoped to one
+        // runtime epoch. Keep scripted future pump batches, but never carry an
+        // accepted edge or sequence number into the next project/session state.
+        self.epoch = Some(epoch);
+        self.device_sequence = 0;
+        self.keys = [KeyState::default(); 256];
+    }
+
+    pub(super) fn validate_input_trace(&self, trace: &Value) -> AuditResult<()> {
         if trace.is_null() {
             return Ok(());
         }
-        let active = trace["active"]
+        trace["active"]
             .as_bool()
             .ok_or("inputTrace.active must be boolean")?;
         let before = trace.get("beforeRun").cloned().unwrap_or_else(|| json!([]));
@@ -401,6 +465,22 @@ impl ObservationSession {
         for batch in pumps.as_array().ok_or("awaitPumps must be an array")? {
             parse_key_events(batch)?;
         }
+        Ok(())
+    }
+
+    pub(super) fn install_input_trace(&mut self, trace: &Value) -> AuditResult<()> {
+        if trace.is_null() {
+            return Ok(());
+        }
+        self.validate_input_trace(trace)?;
+        let active = trace["active"]
+            .as_bool()
+            .ok_or("inputTrace.active must be boolean")?;
+        let before = trace.get("beforeRun").cloned().unwrap_or_else(|| json!([]));
+        let pumps = trace
+            .get("awaitPumps")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
         self.active = active;
         self.await_pumps = pumps.as_array().unwrap().iter().cloned().collect();
         self.send(RuntimeMessage::ClientStateChanged(ClientStateChanged {
@@ -420,8 +500,12 @@ impl ObservationSession {
         let parsed = parse_key_events(events)?;
         for (code, state) in parsed {
             self.keys[usize::from(code)] = state;
+            self.device_sequence = self.device_sequence.saturating_add(1);
             self.clock = self.clock.saturating_add(1);
             let event = DeviceStateChanged {
+                event_sequence: self.device_sequence,
+                toggle: state.toggle,
+                repeat: false,
                 device: InputDeviceKind::Keyboard,
                 code: u32::from(code),
                 pressed: state.down,
