@@ -96,6 +96,12 @@ pub(super) fn registration(binding: Option<&ExecutionBinding>) -> Value {
         Some(ExecutionBinding::Native(contract)) => {
             json!({"classification": "Native", "contract": contract, "implementation_verified": false})
         }
+        Some(ExecutionBinding::BitArray) => {
+            json!({"classification": "BitArray", "lowering": "staged_vm_array_backing", "implementation_verified": false})
+        }
+        Some(ExecutionBinding::ArrayMatch) => {
+            json!({"classification": "ArrayMatch", "lowering": "staged_vm_array_scan", "implementation_verified": false})
+        }
         Some(ExecutionBinding::Host(binding)) => {
             json!({"classification": "Host", "namespace": binding.namespace, "operation": binding.name, "abi_version": binding.abi_version, "capability": binding.capability, "contract": binding.contract, "implementation_verified": false})
         }

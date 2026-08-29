@@ -179,6 +179,30 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
             FileCategory::Csv,
             fs::read_to_string(root.join("csv/VarExt.csv"))?,
         ));
+        let csv_root = root.join("csv");
+        let mut character_files = fs::read_dir(&csv_root)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<Vec<_>, _>>()?;
+        character_files.sort();
+        for path in character_files {
+            let metadata = fs::symlink_metadata(&path)?;
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                return Err("observation CSV path is not UTF-8".into());
+            };
+            let upper = name.to_ascii_uppercase();
+            if !upper.starts_with("CHARA") || !upper.ends_with(".CSV") {
+                continue;
+            }
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err("observation character CSV must be a regular file".into());
+            }
+            let relative = format!("csv/{name}");
+            files.push(submitted(
+                &relative,
+                FileCategory::Csv,
+                fs::read_to_string(path)?,
+            ));
+        }
         load_fixture_resources(root, &root.join("plugins"), &mut files)?;
         let patterns = root.join("patterns");
         match fs::symlink_metadata(&patterns) {
@@ -397,6 +421,26 @@ mod tests {
                 .iter()
                 .any(|file| file.relative_path == "erb/columns.erh"
                     && file.category == FileCategory::Erh)
+        );
+    }
+
+    #[test]
+    fn batch_2c_fixture_adds_character_csv_files_in_stable_path_order() {
+        let root = crate::tool_root().join("fixture-snake-batch2-data");
+        let paths = load_fixture_files(&root, "COLUMNS")
+            .unwrap()
+            .into_iter()
+            .filter(|file| file.relative_path.starts_with("csv/CHARA"))
+            .map(|file| file.relative_path)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            [
+                "csv/CHARA1.CSV",
+                "csv/CHARA20.CSV",
+                "csv/CHARA30.CSV",
+                "csv/CHARA90.CSV"
+            ]
         );
     }
 
