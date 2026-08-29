@@ -111,8 +111,9 @@ impl RuntimeFormContinuation {
     }
 
     pub(crate) fn next_is_host_call(&self) -> bool {
-        matches!(self.work.last(), Some(RuntimeFormTask::HostAdvance(id))
-            if self.host_calls.last().is_some_and(|call| call.id == *id && matches!(call.phase, HostPhase::Ready { .. })))
+        self.next_step_calls_input_host()
+            || matches!(self.work.last(), Some(RuntimeFormTask::HostAdvance(id))
+                if self.host_calls.last().is_some_and(|call| call.id == *id && matches!(call.phase, HostPhase::Ready { .. })))
     }
 
     #[allow(clippy::too_many_arguments)]

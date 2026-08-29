@@ -357,7 +357,7 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     // The timed input builders in the reference implementation share a strict
     // six-slot layout. Optional trailing slots may be absent, but an interior
     // omission is not accepted by ArgumentBuilder.checkArgumentType.
-    for name in ["TINPUT", "TONEINPUT"] {
+    for name in ["TINPUT", "TONEINPUT", "TINPUTNF", "TONEINPUTNF"] {
         add(
             name,
             Expressions,
@@ -367,7 +367,7 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
             false,
         );
     }
-    for name in ["TINPUTS", "TONEINPUTS"] {
+    for name in ["TINPUTS", "TONEINPUTS", "TINPUTSNF", "TONEINPUTSNF"] {
         add(
             name,
             Expressions,

@@ -62,6 +62,8 @@ pub fn builtin_callable_portability(name: &str) -> CallablePortability {
             | "MOUSEB"
             | "GETKEY"
             | "GETKEYTRIGGERED"
+            | "GETPLATFORM"
+            | "ENV_HAS_CAPABILITY"
             | "CLIENTWIDTH"
             | "CLIENTHEIGHT"
             | "GETLINESTR"
@@ -199,6 +201,15 @@ fn builtin_shared_available(name: &str, identity: &erabasic_compat::Compatibilit
             identity.supports_call_text()
         }
         "STRFORMCHECK" => identity.supports_checked_runtime_forms(),
+        "TINPUTNF"
+        | "TINPUTSNF"
+        | "TONEINPUTNF"
+        | "TONEINPUTSNF"
+        | "SEQUENCEINPUT"
+        | "DISABLE_INPUT_MACRO"
+        | "ENABLE_INPUT_MACRO"
+        | "ENV_HAS_CAPABILITY"
+        | "GETPLATFORM" => identity.supports_snake_input(),
         "GETCSVNOBYNAME"
         | "GETCSVNOBYCALLNAME"
         | "GETCSVNOBYNICKNAME"

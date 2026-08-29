@@ -25,6 +25,13 @@ impl Builder<'_> {
             return;
         }
         if let InstructionTarget::BuiltinMethod { return_type, .. } = target {
+            if self.context.program.snake_input && matches!(name, "GETKEY" | "GETKEYTRIGGERED") {
+                let values = Self::method_statement_arguments(arguments, location);
+                if self.lower_key_query(name, &values, location).is_some() {
+                    self.store_method_result(*return_type, location);
+                    return;
+                }
+            }
             if erabasic_bytecode::MapCallKind::from_name(name).is_some() {
                 let arguments = Self::method_statement_arguments(arguments, location);
                 self.lower_map_call(name, &arguments, location);

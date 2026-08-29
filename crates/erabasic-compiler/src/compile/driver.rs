@@ -343,6 +343,7 @@ fn compile_project_inner(
         let context = LoweringContext {
             program: LoweringProgram {
                 variables: &project_ref.program.variables,
+                snake_input: project_ref.program.compatibility.supports_snake_input(),
                 call_compatibility: project_ref.program.call_compatibility,
             },
             function_keys: &function_keys,
@@ -676,6 +677,16 @@ fn compile_project_inner(
     }
     drop(native_import_indices);
     drop(host_import_indices);
+    if compatibility.supports_snake_input() {
+        for import in super::runtime_symbols::runtime_input_imports(host_registry) {
+            if !host_imports
+                .iter()
+                .any(|existing| existing.import.key == import.import.key)
+            {
+                host_imports.push(import);
+            }
+        }
+    }
     native_imports.sort_unstable_by_key(|value| value.import.key);
     host_imports.sort_unstable_by_key(|value| value.import.key);
     assert!(

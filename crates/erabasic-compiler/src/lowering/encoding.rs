@@ -48,7 +48,7 @@ pub(super) fn compiler_variable_mutation_contract() -> erabasic_bytecode::Operat
     }
 }
 
-pub(super) fn runtime_import(
+pub(crate) fn runtime_import(
     namespace: &str,
     name: &str,
     abi_version: u32,

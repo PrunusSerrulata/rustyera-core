@@ -70,6 +70,9 @@ impl Builder<'_> {
             HirExprKind::Call { target, arguments } => {
                 // These built-ins must resolve the method before evaluating fallback or actuals.
                 if let CallTarget::Builtin { name } = target {
+                    if let Some(result) = self.lower_key_query(name, arguments, location) {
+                        return result;
+                    }
                     if let Some(result) = self.lower_map_call(name, arguments, location) {
                         return result;
                     }

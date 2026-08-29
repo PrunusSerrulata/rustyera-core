@@ -15,6 +15,7 @@ mod checkpoints;
 mod existvar;
 mod frontend;
 mod host_calls;
+mod input_host;
 mod map_calls;
 mod matching;
 mod methods;
@@ -65,6 +66,19 @@ pub(crate) struct RuntimeFormContinuation {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 enum RuntimeFormTask {
+    GateInputHost {
+        plan: u64,
+        key: Expr,
+        triggered: bool,
+    },
+    FinishInputHost {
+        name: String,
+        count: usize,
+    },
+    ReadInputHost {
+        depth: usize,
+        gate: Option<(Expr, bool)>,
+    },
     BitCapture {
         spec: erabasic_bytecode::BitCallSpec,
         site: call_plan::RuntimeCallSite,
@@ -504,6 +518,42 @@ impl RuntimeFormContinuation {
             )
         })?;
         match task {
+            RuntimeFormTask::GateInputHost { key, triggered, .. } => {
+                self.call_input_host(
+                    vm,
+                    fiber,
+                    host,
+                    host_count,
+                    input_host::InputHostInvocation {
+                        name: "__GETKEY_ACTIVE",
+                        arguments: Vec::new(),
+                        gate: Some((key, triggered)),
+                    },
+                )?;
+                if matches!(fiber.state, crate::FiberState::WaitingHost(_)) {
+                    return Ok(RuntimeFormStep::Blocked);
+                }
+            }
+            RuntimeFormTask::FinishInputHost { name, count } => {
+                let arguments = self.take_values(count)?;
+                self.call_input_host(
+                    vm,
+                    fiber,
+                    host,
+                    host_count,
+                    input_host::InputHostInvocation {
+                        name: &name,
+                        arguments,
+                        gate: None,
+                    },
+                )?;
+                if matches!(fiber.state, crate::FiberState::WaitingHost(_)) {
+                    return Ok(RuntimeFormStep::Blocked);
+                }
+            }
+            RuntimeFormTask::ReadInputHost { depth, gate } => {
+                self.read_input_host(fiber, depth, gate)?;
+            }
             RuntimeFormTask::HostAdvance(id) => {
                 return self.advance_host_call(vm, fiber, id, position, host, host_count);
             }
@@ -1000,6 +1050,9 @@ impl RuntimeFormContinuation {
                     .is_some_and(|program| program.function_by_name(&name).is_some());
                 if user_defined {
                     self.schedule_direct_user_call(vm, &name, args)?;
+                    return Ok(());
+                }
+                if self.schedule_input_host(&name, &args)? {
                     return Ok(());
                 }
                 if name.eq_ignore_ascii_case("EXISTVAR") {

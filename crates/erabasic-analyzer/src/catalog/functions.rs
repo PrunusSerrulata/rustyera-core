@@ -268,6 +268,12 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     // integer virtual-key code. HIR calls are never folded, so the signature is
     // sufficient to retain that behavior in the current analyzer.
     add("GETKEY", IntType, &[Integer], 1, false);
+    add("GETKEYTRIGGERED", IntType, &[Integer], 1, false);
+    add("SEQUENCEINPUT", IntType, &[String], 1, false);
+    add("DISABLE_INPUT_MACRO", IntType, &[], 0, false);
+    add("ENABLE_INPUT_MACRO", IntType, &[], 0, false);
+    add("ENV_HAS_CAPABILITY", IntType, &[String, Integer], 1, false);
+    add("GETPLATFORM", IntType, &[], 0, false);
     add("GETTEXTBOX", StrType, &[], 0, false);
     add("SETTEXTBOX", IntType, &[String], 1, false);
     add("HOTKEY_STATE_INIT", IntType, &[Integer], 1, false);

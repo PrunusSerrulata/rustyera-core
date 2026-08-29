@@ -511,6 +511,32 @@ impl RuntimeFormContinuation {
             return false;
         }
         self.work.iter().all(|task| match task {
+            RuntimeFormTask::GateInputHost { plan, key, .. } => {
+                program
+                    .artifact
+                    .manifest
+                    .compatibility
+                    .supports_snake_input()
+                    && self.validate_planned_expression(program, *plan, key)
+                    && self.planned_expression_type(*plan, key).ok() == Some(BytecodeType::Integer)
+            }
+            RuntimeFormTask::FinishInputHost { name, count } => {
+                super::input_host::allowed(name)
+                    && program
+                        .artifact
+                        .manifest
+                        .compatibility
+                        .supports_snake_input()
+                    && program.artifact.host_imports.iter().any(|host| {
+                        host.import.namespace == "rustyera.input"
+                            && host.import.name.eq_ignore_ascii_case(name)
+                            && host.import.parameters.len() == *count
+                            && host.import.result == Some(BytecodeType::Integer)
+                    })
+            }
+            // Controller Host completions are transient. A stable snapshot cannot
+            // invent an unreturned input observation or a gate result stack slot.
+            RuntimeFormTask::ReadInputHost { .. } => false,
             RuntimeFormTask::MapCapture {
                 bound,
                 site,
@@ -601,6 +627,14 @@ impl RuntimeFormContinuation {
         let mut expressions = Vec::new();
         for task in &self.work {
             match task {
+                RuntimeFormTask::GateInputHost { key, .. }
+                | RuntimeFormTask::ReadInputHost {
+                    gate: Some((key, _)),
+                    ..
+                } => expressions.push(key),
+                RuntimeFormTask::FinishInputHost { count, .. } => {
+                    slots = slots.checked_add(*count)?;
+                }
                 RuntimeFormTask::MapCapture {
                     bound, arguments, ..
                 } => {

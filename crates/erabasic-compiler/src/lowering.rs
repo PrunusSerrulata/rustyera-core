@@ -22,7 +22,7 @@ mod planning;
 use builder::Builder;
 use encoding::{
     assign_tag, binary_tag, compiler_native_contract, compiler_variable_mutation_contract,
-    runtime_import, unary_tag,
+    unary_tag,
 };
 use planning::{
     DataBlock, DataLine, TryListBlock, TryListLine, add_control_flow, argument_place,
@@ -43,6 +43,7 @@ pub(crate) struct LoweringContext<'a> {
 
 pub(crate) struct LoweringProgram<'a> {
     pub variables: &'a [Variable],
+    pub snake_input: bool,
     pub call_compatibility: erabasic_hir::CallCompatibility,
 }
 
@@ -525,6 +526,8 @@ fn append_source_entry(entries: &mut Vec<LoweredSourceMapEntry>, entry: LoweredS
         entries.push(entry);
     }
 }
+
+pub(crate) use encoding::runtime_import;
 
 #[cfg(test)]
 mod tests {

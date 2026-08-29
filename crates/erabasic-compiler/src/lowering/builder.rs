@@ -16,6 +16,7 @@ mod expressions;
 mod formatted;
 mod html_queries;
 mod imports;
+mod input_queries;
 mod map_calls;
 mod matching;
 mod methods;

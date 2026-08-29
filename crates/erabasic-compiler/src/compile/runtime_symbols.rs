@@ -70,6 +70,42 @@ fn constraint(value: A) -> B {
     }
 }
 
+pub(super) fn runtime_input_imports(
+    registry: &crate::HostRegistry,
+) -> Vec<erabasic_bytecode::HostImport> {
+    use erabasic_bytecode::BytecodeType::{Integer, String};
+
+    let mut result = Vec::new();
+    for (name, parameters) in [
+        ("__GETKEY_ACTIVE", vec![]),
+        ("GETKEY", vec![Integer]),
+        ("GETKEYTRIGGERED", vec![Integer]),
+        ("SEQUENCEINPUT", vec![String]),
+        ("DISABLE_INPUT_MACRO", vec![]),
+        ("ENABLE_INPUT_MACRO", vec![]),
+        ("ENV_HAS_CAPABILITY", vec![String]),
+        ("ENV_HAS_CAPABILITY", vec![String, Integer]),
+        ("GETPLATFORM", vec![]),
+    ] {
+        if let Some(crate::ExecutionBinding::Host(binding)) = registry.classification(name) {
+            result.push(erabasic_bytecode::HostImport {
+                import: crate::lowering::runtime_import(
+                    &binding.namespace,
+                    &binding.name,
+                    binding.abi_version,
+                    &parameters,
+                    Some(Integer),
+                ),
+                effect: binding.effect,
+                capability: binding.capability,
+                snapshot_capability: binding.snapshot_capability,
+                contract: binding.contract,
+            });
+        }
+    }
+    result
+}
+
 pub(super) fn runtime_variable_symbols(
     variables: &[erabasic_hir::Variable],
     keys: &super::DenseIdIndex<erabasic_bytecode::SymbolKey>,

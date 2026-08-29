@@ -106,7 +106,13 @@ pub(super) fn host_contract(namespace: &str, name: &str) -> OperationContract {
         "rustyera.input"
             if matches!(
                 name,
-                "GETTEXTBOX"
+                "__GETKEY_ACTIVE"
+                    | "SEQUENCEINPUT"
+                    | "DISABLE_INPUT_MACRO"
+                    | "ENABLE_INPUT_MACRO"
+                    | "ENV_HAS_CAPABILITY"
+                    | "GETPLATFORM"
+                    | "GETTEXTBOX"
                     | "SETTEXTBOX"
                     | "CLEARTEXTBOX"
                     | "HOTKEY_STATE"

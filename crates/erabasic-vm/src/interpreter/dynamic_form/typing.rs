@@ -373,6 +373,40 @@ impl<'a> TypeAnalysis<'a> {
                 return Ok(kind.result_type());
             }
         }
+        if super::input_host::allowed(name) {
+            if !self
+                .program
+                .artifact
+                .manifest
+                .compatibility
+                .supports_snake_input()
+            {
+                return Err(support::permission_denied(
+                    "snake input form API unavailable",
+                ));
+            }
+            let types = shapes
+                .iter()
+                .map(|shape| shape.as_ref().map(|shape| shape.value_type))
+                .collect::<Vec<_>>();
+            let valid = self.program.artifact.host_imports.iter().any(|host| {
+                host.import.namespace == "rustyera.input"
+                    && host.import.name.eq_ignore_ascii_case(name)
+                    && host.import.result == Some(BytecodeType::Integer)
+                    && host.import.parameters.len() == types.len()
+                    && host
+                        .import
+                        .parameters
+                        .iter()
+                        .zip(&types)
+                        .all(|(expected, actual)| Some(*expected) == *actual)
+            });
+            return if valid {
+                Ok(BytecodeType::Integer)
+            } else {
+                Err(bad_type("input form callable signature differs"))
+            };
+        }
         if self.probe {
             let symbol = self
                 .program
