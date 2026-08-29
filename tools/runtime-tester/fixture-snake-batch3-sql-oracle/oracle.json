@@ -1,0 +1,102 @@
+{
+  "projection": {
+    "bbasPreflight": {
+      "inputs": {
+        "ERB/BODY_INFO/BBAS_DATASET.ERB": {"exists": true, "sha256": "c0de5585e2c0c0ac4a79a48276fdd72828174d8c2eabdc863d1c45ca3c97807d", "size": 603},
+        "plugins/bbas_dataset.xml": {"exists": true, "sha256": "d17b4ec540698f707e37c4a9f0b2b4b0093ff5b664196ae331f254a62abe4054", "size": 36420},
+        "plugins/bbas_map.xml": {"exists": false},
+        "plugins/bbas_map_schema.xml": {"exists": false},
+        "plugins/schema.xml": {"exists": true, "sha256": "83b7abf02eda889d85f6d094d26b2069c5483ad0668173de8941aef14ae279ce", "size": 1532}
+      },
+      "result": {"diagnostics": [], "ok": true, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "WaitInput", "termination": "completed", "watches": {"DT_ROW_LENGTH(\"bbas_dataset\")": 0, "DT_ROW_LENGTH(\"bbas_map\")": 0}}
+    },
+    "cases": {
+      "connection-transaction": {
+        "absentPaths": {"plugins/conflict.db": [false, false]},
+        "diagnostics": [], "ok": true, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "WaitInput", "termination": "completed",
+        "watches": {"RESULT:0": 0, "RESULT:1": 0, "RESULT:10": 1, "RESULT:11": 1, "RESULT:12": 1, "RESULT:13": 1, "RESULT:14": 1, "RESULT:2": 1, "RESULT:3": 1, "RESULT:4": 1, "RESULT:5": 0, "RESULT:6": 1, "RESULT:7": 1, "RESULT:8": 0, "RESULT:9": 1, "RESULTS:0": "committed"}
+      },
+      "error-column-range": {"diagnostics": [], "ok": true, "position": {"file": "sql_oracle.erb", "line": 115}, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "Error", "termination": "error", "watches": {}},
+      "error-disconnected": {"diagnostics": [], "ok": true, "position": {"file": "sql_oracle.erb", "line": 103}, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "Error", "termination": "error", "watches": {}},
+      "error-invalid-reader": {"diagnostics": [], "ok": true, "position": {"file": "sql_oracle.erb", "line": 107}, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "Error", "termination": "error", "watches": {}},
+      "error-scalar-type": {"diagnostics": [], "ok": true, "position": {"file": "sql_oracle.erb", "line": 120}, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "Error", "termination": "error", "watches": {}},
+      "error-transaction": {"databaseSideEffect": {"rowCount": 0, "table": "side_effect"}, "diagnostics": [], "ok": true, "position": {"file": "sql_oracle.erb", "line": 136}, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "Error", "termination": "error", "watches": {}},
+      "map-xml": {
+        "diagnostics": [], "ok": true, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "WaitInput", "termination": "completed",
+        "watches": {"RESULT:0": 0, "RESULT:1": 4, "RESULT:2": 1, "RESULT:3": 4, "RESULT:4": 0, "RESULTS:0": "first", "RESULTS:1": "<b lang=\"zh\">bold</b>&amp;text", "RESULTS:2": "", "RESULTS:3": "<i>new</i>", "RESULTS:4": "CREATE TABLE map_rows (k TEXT PRIMARY KEY, v TEXT)"}
+      },
+      "parameterized-reader": {"diagnostics": [], "ok": true, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "WaitInput", "termination": "completed", "watches": {"RESULT:0": 0, "RESULT:1": 1, "RESULT:2": 0, "RESULT:3": 1, "RESULTS:0": "two", "RESULTS:1": "", "RESULTS:2": "zero"}},
+      "reader-conversions": {"diagnostics": [], "ok": true, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "WaitInput", "termination": "completed", "watches": {"RESULT:0": 0, "RESULT:1": 1, "RESULTS:0": "42"}},
+      "reader-lifecycle": {
+        "diagnostics": [], "ok": true, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "WaitInput", "termination": "completed",
+        "watches": {"RESULT:0": 0, "RESULT:1": 7, "RESULT:10": 1, "RESULT:11": 0, "RESULT:12": 0, "RESULT:13": 1, "RESULT:2": 1, "RESULT:3": 0, "RESULT:4": 1, "RESULT:5": 8, "RESULT:6": 0, "RESULT:7": 0, "RESULT:8": 0, "RESULT:9": 1, "RESULTS:0": "seven", "RESULTS:1": "", "RESULTS:2": "eight"}
+      },
+      "reader-text-conversion": {"diagnostics": [], "ok": true, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "WaitInput", "termination": "completed", "watches": {"RESULT": 0}},
+      "scalar-parameters": {
+        "diagnostics": [], "ok": true, "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91", "schemaVersion": 2, "state": "WaitInput", "termination": "completed",
+        "watches": {"RESULT:0": 0, "RESULT:1": 0, "RESULT:2": 42, "RESULT:3": 1, "RESULT:4": 1, "RESULTS:0": "", "RESULTS:1": "", "RESULTS:2": "42", "RESULTS:3": "alpha|<null>|omega|text|null|text", "RESULTS:4": "two|<null>|zero"}
+      }
+    },
+    "fixture": {
+      "inputManifest": [
+        {"exists": true, "path": "cases.json", "sha256": "4915448e0ab13f716be59c9caaf1a90f600e817baf20b02742a978bba8c13092", "size": 3508},
+        {"exists": true, "path": "csv/GAMEBASE.CSV", "sha256": "140f8548a432811e8c94a27827a1d8240daf36268e2e5f246d698cb21791a485", "size": 114},
+        {"exists": true, "path": "emuera.config", "sha256": "be44af5560a6fe33737f52d7e988a47a57d9a67e7612a53bbf22dd81663295d1", "size": 223},
+        {"exists": true, "path": "erb/sql_oracle.erb", "sha256": "463d2d79547b2032a660ee0abd23396af42ed0279f4be6021558b45afaeddf41", "size": 5634},
+        {"exists": true, "path": "plugins/map.xml", "sha256": "3e1cc7b090f2972004983e9a3e118b6355adc13ce3d027fdd64029297564f360", "size": 304},
+        {"exists": true, "path": "setting.json", "sha256": "091306fa38d3276ab95e4aa60b058206093e87dc0b278ef110cda186e9c3b83f", "size": 81}
+      ],
+      "runnerSha256": "87e8b0725ef981a7baba5ef135f5b0ecd3496df4e37ce89b45c90b245f5a7e0a"
+    },
+    "formatVersion": 1,
+    "implementation": "emuera_lazyloading_selfmodified_version",
+    "referenceExecutable": {"exists": true, "sha256": "6caa1eebb7a781e6c42fed97e3109d33da27dfd2e7d8c7f22cba1b88d9d1c642", "size": 151552},
+    "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+    "snakeTwResources": {
+      "plugins/bbas_dataset.xml": {"exists": true, "sha256": "d17b4ec540698f707e37c4a9f0b2b4b0093ff5b664196ae331f254a62abe4054", "size": 36420},
+      "plugins/bbas_map.xml": {"exists": false},
+      "plugins/bbas_map_schema.xml": {"exists": false},
+      "plugins/qol_data.db": {
+        "exists": true, "sha256": "e03c5a3279735f68e0cabf108e1a786fb5793ab94c69e5a6f46d078b495593a1", "size": 1368064,
+        "sqlite": {
+          "meta": [
+            {"key": "dish_schema_version", "value": "20260727"},
+            {"key": "graph_schema_version", "value": "20260727"},
+            {"key": "item_schema_version", "value": "20260727"},
+            {"key": "mushi_schema_version", "value": "20260727"},
+            {"key": "pharma_schema_version", "value": "20260727"},
+            {"key": "wood_schema_version", "value": "20260727"}
+          ],
+          "rowCounts": {"GRAPH_CROSS_MAP_EDGE": 132, "GRAPH_DISTANCE": 36418, "GRAPH_EDGE": 1555, "GRAPH_NODE_ATTR": 642, "QOL_CRAFT_RECIPE": 173, "QOL_DISH_DB": 342, "QOL_ITEM_DB": 313, "QOL_ITEM_META": 83, "QOL_MUSHI_DB": 197, "QOL_WOOD_DB": 13, "_meta": 6},
+          "schema": [
+            {"name": "sqlite_autoindex_GRAPH_CROSS_MAP_EDGE_1", "sql": null, "table": "GRAPH_CROSS_MAP_EDGE", "type": "index"},
+            {"name": "sqlite_autoindex_GRAPH_DISTANCE_1", "sql": null, "table": "GRAPH_DISTANCE", "type": "index"},
+            {"name": "sqlite_autoindex_GRAPH_EDGE_1", "sql": null, "table": "GRAPH_EDGE", "type": "index"},
+            {"name": "sqlite_autoindex_QOL_CRAFT_RECIPE_1", "sql": null, "table": "QOL_CRAFT_RECIPE", "type": "index"},
+            {"name": "sqlite_autoindex__meta_1", "sql": null, "table": "_meta", "type": "index"},
+            {"name": "GRAPH_CROSS_MAP_EDGE", "sql": "CREATE TABLE GRAPH_CROSS_MAP_EDGE (from_map INTEGER NOT NULL, from_entrance INTEGER NOT NULL, to_map INTEGER NOT NULL, to_entrance INTEGER NOT NULL, safe_time INTEGER NOT NULL DEFAULT 0, danger_time INTEGER NOT NULL DEFAULT -1, PRIMARY KEY (from_map, to_map))", "table": "GRAPH_CROSS_MAP_EDGE", "type": "table"},
+            {"name": "GRAPH_DISTANCE", "sql": "CREATE TABLE GRAPH_DISTANCE (map_id INTEGER NOT NULL, source INTEGER NOT NULL, target INTEGER NOT NULL, distance INTEGER NOT NULL, previous INTEGER NOT NULL DEFAULT -1, PRIMARY KEY (map_id, source, target))", "table": "GRAPH_DISTANCE", "type": "table"},
+            {"name": "GRAPH_EDGE", "sql": "CREATE TABLE GRAPH_EDGE (map_id INTEGER NOT NULL, from_node INTEGER NOT NULL, to_node INTEGER NOT NULL, can_move INTEGER NOT NULL DEFAULT 0, can_see INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (map_id, from_node, to_node))", "table": "GRAPH_EDGE", "type": "table"},
+            {"name": "GRAPH_NODE_ATTR", "sql": "CREATE TABLE GRAPH_NODE_ATTR (place_id INTEGER PRIMARY KEY, map_id INTEGER NOT NULL, node_id INTEGER NOT NULL, name TEXT, coord_x INTEGER DEFAULT -1, coord_y INTEGER DEFAULT -1, is_indoor INTEGER DEFAULT 0, has_bath INTEGER DEFAULT 0, has_kitchen INTEGER DEFAULT 0, can_rest INTEGER DEFAULT 0, can_train INTEGER DEFAULT 0, can_study INTEGER DEFAULT 0, is_entrance INTEGER DEFAULT 0)", "table": "GRAPH_NODE_ATTR", "type": "table"},
+            {"name": "QOL_CRAFT_RECIPE", "sql": "CREATE TABLE QOL_CRAFT_RECIPE (product_id INTEGER NOT NULL, recipe_num INTEGER NOT NULL, ingredients TEXT, amount INTEGER DEFAULT 0, water INTEGER DEFAULT 0, lot INTEGER DEFAULT 0, is_custom INTEGER DEFAULT 0, PRIMARY KEY (product_id, recipe_num))", "table": "QOL_CRAFT_RECIPE", "type": "table"},
+            {"name": "QOL_DISH_DB", "sql": "CREATE TABLE QOL_DISH_DB (dish_id INTEGER PRIMARY KEY, dish_name TEXT, dish_taste TEXT, dish_comment TEXT, dish_ing TEXT, dish_time INTEGER DEFAULT 0, dish_maxlimit INTEGER DEFAULT 0, typecheck TEXT, skill_lv INTEGER DEFAULT 0, has_dynamic INTEGER DEFAULT 0)", "table": "QOL_DISH_DB", "type": "table"},
+            {"name": "QOL_ITEM_DB", "sql": "CREATE TABLE QOL_ITEM_DB (item_id INTEGER PRIMARY KEY, types TEXT, shops TEXT, sales_mode TEXT, sales_cond TEXT, buy_func TEXT, is_custom INTEGER DEFAULT 0, shop_cond TEXT, types_cond TEXT)", "table": "QOL_ITEM_DB", "type": "table"},
+            {"name": "QOL_ITEM_META", "sql": "CREATE TABLE QOL_ITEM_META (item_id INTEGER PRIMARY KEY, rank INTEGER DEFAULT 0, cond_type TEXT DEFAULT '', cond_chara_id INTEGER DEFAULT -1, cond_req_val INTEGER DEFAULT 0)", "table": "QOL_ITEM_META", "type": "table"},
+            {"name": "QOL_MUSHI_DB", "sql": "CREATE TABLE QOL_MUSHI_DB (mushi_id INTEGER PRIMARY KEY, name TEXT, rare INTEGER DEFAULT 0, tribe TEXT, type TEXT, field INTEGER DEFAULT 0, area INTEGER DEFAULT 0, favos TEXT, size INTEGER DEFAULT 0, hp INTEGER DEFAULT 0, atk INTEGER DEFAULT 0, spd INTEGER DEFAULT 0, skl TEXT, has_dynamic INTEGER DEFAULT 0, gettable TEXT DEFAULT '', desc1 TEXT, desc2 TEXT, desc3 TEXT, desc4 TEXT, desc5 TEXT)", "table": "QOL_MUSHI_DB", "type": "table"},
+            {"name": "QOL_WOOD_DB", "sql": "CREATE TABLE QOL_WOOD_DB (wood_id INTEGER PRIMARY KEY, name TEXT, value_log INTEGER DEFAULT 0, value_plank INTEGER DEFAULT 0, effort INTEGER DEFAULT 0, item_id INTEGER DEFAULT 0, intro1 TEXT, intro2 TEXT, tribe TEXT)", "table": "QOL_WOOD_DB", "type": "table"},
+            {"name": "_meta", "sql": "CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT)", "table": "_meta", "type": "table"}
+          ],
+          "schemaVersion": 101,
+          "userVersion": 0
+        }
+      },
+      "plugins/schema.xml": {"exists": true, "sha256": "83b7abf02eda889d85f6d094d26b2069c5483ad0668173de8941aef14ae279ce", "size": 1532},
+      "plugins/tw_csv_chs.xml": {"exists": true, "sha256": "6cb8cf45805aaee1e81136cf18e66b05e9972f95a4abebb243ed88acaef90635", "size": 224596},
+      "plugins/tw_taste_chs.xml": {"exists": true, "sha256": "560863447ce754ac33f829f97e3d4f30decf59b41c79a27e13817edaf1583750", "size": 102749}
+    },
+    "wrapper": {"commit": "0c50ccbe0c2434567ef527d72a54c967bd576f2a", "dirty": false}
+  },
+  "schemaVersion": 2,
+  "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+  "status": "fixed-snake-reference-golden"
+}
