@@ -22,9 +22,39 @@ pub enum RuntimeArgumentConstraint {
 pub struct RuntimeCallableShape {
     pub minimum: usize,
     pub maximum: Option<usize>,
+    #[serde(with = "portable_omitted_from")]
     pub omitted_from: usize,
     pub arguments: Vec<RuntimeArgumentConstraint>,
     pub allow_omitted: bool,
+}
+
+mod portable_omitted_from {
+    use serde::{Deserialize, Deserializer, Serializer, de::Error as _};
+
+    // Serde's `with` contract passes the field by reference even for Copy scalars.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn serialize<S>(value: &usize, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = if *value == usize::MAX {
+            u64::MAX
+        } else {
+            u64::try_from(*value).expect("usize always fits in u64")
+        };
+        serializer.serialize_u64(value)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<usize, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = u64::deserialize(deserializer)?;
+        if value == u64::MAX {
+            return Ok(usize::MAX);
+        }
+        usize::try_from(value).map_err(|_| D::Error::custom("omission boundary is not addressable"))
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeBuiltinSymbol {
@@ -111,6 +141,28 @@ impl RuntimeArgumentConstraint {
                 | Self::ReferenceOrString
                 | Self::MutableReferenceOrString
         ) || self == Self::IntegerOrMutableString && value_type == BytecodeType::String
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variadic_omission_boundary_uses_a_host_neutral_sentinel() {
+        let shape = RuntimeCallableShape {
+            minimum: 1,
+            maximum: None,
+            omitted_from: usize::MAX,
+            arguments: vec![RuntimeArgumentConstraint::Integer],
+            allow_omitted: false,
+        };
+        let encoded = serde_json::to_value(&shape).unwrap();
+        assert_eq!(encoded["omitted_from"], serde_json::json!(u64::MAX));
+        assert_eq!(
+            serde_json::from_value::<RuntimeCallableShape>(encoded).unwrap(),
+            shape
+        );
     }
 }
 
