@@ -845,7 +845,10 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
                     "incoherent Native contract for {name}"
                 );
             }
-            ExecutionBinding::ExpressionMethod { .. } | ExecutionBinding::Unsupported { .. } => {}
+            ExecutionBinding::BitArray
+            | ExecutionBinding::ArrayMatch
+            | ExecutionBinding::ExpressionMethod { .. }
+            | ExecutionBinding::Unsupported { .. } => {}
         }
     }
     assert!(matches!(
@@ -887,6 +890,83 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
         Some(ExecutionBinding::Host(binding))
             if binding.namespace == "rustyera.extension" && binding.name == "callsharp"
     ));
+    for name in ["MATCHALL", "MATCHALLEX"] {
+        assert!(matches!(
+            registry.classification(name),
+            Some(ExecutionBinding::ArrayMatch)
+        ));
+    }
+}
+
+#[test]
+fn static_bit_and_match_openers_require_exact_staged_authorization() {
+    let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+        .data
+        .unwrap();
+    let analysis = analyze_project(
+        AnalysisInput {
+            project_data: data,
+            sources: vec![ProjectSource {
+                relative_path: "staged-auth.erb".into(),
+                payload: SourcePayload::Utf8(
+                    "@SYSTEM_TITLE\n#DIM BITS, 2\nRESULT:0 = BITGET(BITS, 0)\nRESULT:1 = MATCHALL(BITS, 0)\nRETURN\n"
+                        .into(),
+                ),
+            }],
+        },
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::analysis_mode()
+        },
+        &ExtensionRegistry::default(),
+    );
+    let artifact = compile_project(
+        &analysis.project.expect("snake data calls analyze"),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .expect("snake data calls compile");
+    let context =
+        erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry());
+
+    let mut removed = artifact.clone();
+    removed.runtime_staged_authorizations.clear();
+    removed.refresh_ids().unwrap();
+    let report = validate_bytecode(removed.into_unvalidated(), &context);
+    assert!(report.value.is_none());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("lacks artifact authorization")),
+        "{:#?}",
+        report.diagnostics
+    );
+
+    let mut replaced = artifact.clone();
+    let bit = replaced
+        .runtime_staged_authorizations
+        .iter_mut()
+        .find(|family| family.name == "bitget")
+        .unwrap();
+    bit.shapes.clear();
+    bit.key = bit.canonical_key();
+    replaced.refresh_ids().unwrap();
+    let report = validate_bytecode(replaced.into_unvalidated(), &context);
+    assert!(report.value.is_none());
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.code,
+            erabasic_validator::ValidationCode::HostAbiMismatch
+                | erabasic_validator::ValidationCode::InvalidOperand
+        )),
+        "{:#?}",
+        report.diagnostics
+    );
 }
 
 #[test]

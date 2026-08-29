@@ -25,6 +25,7 @@ fn rejects_stack_type_mismatches_before_vm_execution() {
         runtime_builtins: Vec::new(),
         runtime_native_authorizations: Vec::new(),
         runtime_host_authorizations: Vec::new(),
+        runtime_staged_authorizations: Vec::new(),
         runtime_variables: Vec::new(),
         project_data: project_data(),
         globals: Vec::new(),
@@ -48,6 +49,7 @@ fn rejects_stack_type_mismatches_before_vm_execution() {
         event_groups: Vec::new(),
         source_map: SourceMap::default(),
     };
+    fixture_runtime_variables(&mut artifact);
     artifact.refresh_ids().unwrap();
     let report = validate_bytecode(
         artifact.clone().into_unvalidated(),
@@ -71,6 +73,7 @@ fn rejects_unknown_opcodes() {
         runtime_builtins: Vec::new(),
         runtime_native_authorizations: Vec::new(),
         runtime_host_authorizations: Vec::new(),
+        runtime_staged_authorizations: Vec::new(),
         runtime_variables: Vec::new(),
         project_data: project_data(),
         globals: Vec::new(),
@@ -93,6 +96,7 @@ fn rejects_unknown_opcodes() {
         event_groups: Vec::new(),
         source_map: SourceMap::default(),
     };
+    fixture_runtime_variables(&mut artifact);
     artifact.refresh_ids().unwrap();
     let report = validate_bytecode(
         artifact.clone().into_unvalidated(),
@@ -115,6 +119,7 @@ fn compiler_output_validation_defers_identity_checks_only() {
         runtime_builtins: Vec::new(),
         runtime_native_authorizations: Vec::new(),
         runtime_host_authorizations: Vec::new(),
+        runtime_staged_authorizations: Vec::new(),
         runtime_variables: Vec::new(),
         project_data: project_data(),
         globals: Vec::new(),
@@ -167,7 +172,10 @@ fn accepts_a_builtin_array_disabled_by_variable_size() {
         runtime_builtins: Vec::new(),
         runtime_native_authorizations: Vec::new(),
         runtime_host_authorizations: Vec::new(),
+        runtime_staged_authorizations: Vec::new(),
         runtime_variables: vec![erabasic_bytecode::RuntimeVariableSymbol {
+            match_name_rejection: None,
+            character_disposal: erabasic_bytecode::CharacterArrayDisposal::Preserve,
             key: variable_key,
             reference: false,
             reference_semantics: erabasic_bytecode::RuntimeReferenceSemantics {
@@ -203,6 +211,7 @@ fn accepts_a_builtin_array_disabled_by_variable_size() {
         event_groups: Vec::new(),
         source_map: SourceMap::default(),
     };
+    fixture_runtime_variables(&mut artifact);
     artifact.refresh_ids().unwrap();
 
     let report = validate_bytecode(
@@ -246,6 +255,7 @@ fn total_variable_limit_counts_each_function_storage_group_independently() {
             runtime_builtins: Vec::new(),
             runtime_native_authorizations: Vec::new(),
             runtime_host_authorizations: Vec::new(),
+            runtime_staged_authorizations: Vec::new(),
             runtime_variables: Vec::new(),
             project_data: project_data(),
             globals: [first_function, second_function]
@@ -272,6 +282,7 @@ fn total_variable_limit_counts_each_function_storage_group_independently() {
             event_groups: Vec::new(),
             source_map: SourceMap::default(),
         };
+        fixture_runtime_variables(&mut artifact);
         artifact.refresh_ids().unwrap();
         artifact
     };
@@ -302,6 +313,7 @@ fn rejects_snapshot_vm_abi_mismatch() {
         runtime_builtins: Vec::new(),
         runtime_native_authorizations: Vec::new(),
         runtime_host_authorizations: Vec::new(),
+        runtime_staged_authorizations: Vec::new(),
         runtime_variables: Vec::new(),
         project_data: project_data(),
         globals: Vec::new(),
@@ -322,6 +334,7 @@ fn rejects_snapshot_vm_abi_mismatch() {
         source_map: SourceMap::default(),
     };
     artifact.manifest.program_version.vm_abi += 1;
+    fixture_runtime_variables(&mut artifact);
     artifact.refresh_ids().unwrap();
     let report = validate_bytecode(
         artifact.clone().into_unvalidated(),
@@ -362,6 +375,7 @@ fn rejects_contradictory_persisted_operation_contracts() {
         runtime_builtins: Vec::new(),
         runtime_native_authorizations: Vec::new(),
         runtime_host_authorizations: Vec::new(),
+        runtime_staged_authorizations: Vec::new(),
         runtime_variables: Vec::new(),
         project_data: project_data(),
         globals: Vec::new(),
@@ -387,6 +401,7 @@ fn rejects_contradictory_persisted_operation_contracts() {
         event_groups: Vec::new(),
         source_map: SourceMap::default(),
     };
+    fixture_runtime_variables(&mut artifact);
     artifact.refresh_ids().unwrap();
     let report = validate_bytecode(
         artifact.clone().into_unvalidated(),
@@ -412,9 +427,12 @@ fn method_artifact(
         runtime_builtins: Vec::new(),
         runtime_native_authorizations: Vec::new(),
         runtime_host_authorizations: Vec::new(),
+        runtime_staged_authorizations: Vec::new(),
         runtime_variables: globals
             .iter()
             .map(|global| erabasic_bytecode::RuntimeVariableSymbol {
+                match_name_rejection: None,
+                character_disposal: erabasic_bytecode::CharacterArrayDisposal::Preserve,
                 key: global.key,
                 reference: false,
                 reference_semantics: erabasic_bytecode::RuntimeReferenceSemantics {
@@ -441,6 +459,7 @@ fn method_artifact(
         event_groups: Vec::new(),
         source_map: SourceMap::default(),
     };
+    fixture_runtime_variables(&mut artifact);
     artifact.refresh_ids().unwrap();
     artifact
 }
@@ -816,6 +835,7 @@ fn method_variable_specs_require_the_callers_frame_local_owner() {
         other_function.name = "OTHER_METHOD".into();
         other_function.code = vec![opcode::push_integer(0), opcode::return_value(true)];
         artifact.functions.push(other_function);
+        fixture_runtime_variables(&mut artifact);
         artifact.refresh_ids().unwrap();
         let report = validate_bytecode(
             artifact.clone().into_unvalidated(),
@@ -1066,6 +1086,7 @@ fn user_call_procedure_discard_and_jump_modes_have_explicit_result_effects() {
         if mode.unwinds_caller() {
             artifact.functions[0].kind = erabasic_bytecode::BytecodeFunctionKind::Normal;
             artifact.functions[0].result = None;
+            fixture_runtime_variables(&mut artifact);
             artifact.refresh_ids().unwrap();
         }
         let report = validate_bytecode(
@@ -1171,4 +1192,49 @@ fn rejects_guard_and_advance_invalid_slot_shape_flags_and_payload_lengths() {
         ]);
         assert!(codes.contains(&ValidationCode::InvalidOperand), "{codes:?}");
     }
+}
+
+fn fixture_runtime_variables(artifact: &mut BytecodeArtifact) {
+    let previous = std::mem::take(&mut artifact.runtime_variables);
+    artifact.runtime_variables = artifact
+        .globals
+        .iter()
+        .map(|global| {
+            let reference = artifact
+                .functions
+                .iter()
+                .flat_map(|function| &function.parameters)
+                .any(|formal| formal.key == global.key && formal.by_reference);
+            let sparse = global.owner.is_none()
+                && global.storage == erabasic_bytecode::BytecodeStorage::Character
+                && global.dimensions.len() == 1
+                && artifact
+                    .project_data
+                    .schema
+                    .variable(&global.name)
+                    .is_some_and(|schema| {
+                        matches!(&schema.id, erabasic_data::VariableId::Builtin(_))
+                    });
+            erabasic_bytecode::RuntimeVariableSymbol {
+                reference_semantics: previous
+                    .iter()
+                    .find(|symbol| symbol.key == global.key)
+                    .map_or(
+                        erabasic_bytecode::RuntimeReferenceSemantics {
+                            is_const: false,
+                            can_restructure: false,
+                        },
+                        |symbol| symbol.reference_semantics,
+                    ),
+                key: global.key,
+                reference,
+                match_name_rejection: None,
+                character_disposal: if sparse {
+                    erabasic_bytecode::CharacterArrayDisposal::ClearSparse
+                } else {
+                    erabasic_bytecode::CharacterArrayDisposal::Preserve
+                },
+            }
+        })
+        .collect();
 }

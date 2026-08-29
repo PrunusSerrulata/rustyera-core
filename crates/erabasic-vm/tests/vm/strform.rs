@@ -1103,6 +1103,7 @@ RETURN RESULT:0
             "indices",
             "character",
             "character_source",
+            "backing",
             "immutable",
             "cycle",
             "cell_type",
@@ -1129,6 +1130,7 @@ RETURN RESULT:0
                 }
                 "indices" => place["indices"] = serde_json::json!([0]),
                 "character" => place["character"] = serde_json::json!(0),
+                "backing" => place["backing"] = serde_json::json!(u64::MAX),
                 "character_source" => {
                     place["variable"] =
                         serde_json::to_value(named_key(&artifact, "CFLAG")).unwrap();
@@ -5765,6 +5767,83 @@ fn direct_host_wrong_ready_type_or_write_is_not_script_catchable() {
 }
 
 #[test]
+fn native_write_batch_follows_ref_backing_and_rejects_invalid_sibling_atomically() {
+    struct RefWriter {
+        invalid_sibling: bool,
+    }
+    impl NativeService for RefWriter {
+        fn call(
+            &mut self,
+            request: NativeCallRequest,
+        ) -> Result<NativeReady, erabasic_vm::ExecutionFailure> {
+            let mut target = request.places[0].target.clone();
+            target.indices.push(0);
+            let mut writes = vec![erabasic_vm::HostWrite {
+                target,
+                value: VmValue::String("written".into()),
+            }];
+            if self.invalid_sibling {
+                writes.push(erabasic_vm::HostWrite {
+                    target: erabasic_vm::PlaceDescriptor {
+                        variable: SymbolKey::derive("test", b"missing-ref-sibling"),
+                        ..Default::default()
+                    },
+                    value: VmValue::String("invalid".into()),
+                });
+            }
+            Ok(NativeReady {
+                value: Some(VmValue::Integer(1)),
+                writes,
+            })
+        }
+    }
+
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#DIMS OUT, 2
+OUT:0 '= "before"
+CALL WRITE_REF, OUT
+RETURN
+@WRITE_REF(VALUES)
+#DIMS REF VALUES
+RESULT = DT_COLUMN_NAMES("table", VALUES)
+RETURN
+"#,
+        &method_options(true),
+    );
+    let key = artifact
+        .native_imports
+        .iter()
+        .find(|native| native.import.name.eq_ignore_ascii_case("DT_COLUMN_NAMES"))
+        .unwrap()
+        .import
+        .key;
+    for invalid_sibling in [false, true] {
+        let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+        natives.register(key, RefWriter { invalid_sibling });
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        let fiber = vm
+            .spawn_entry(artifact.functions[0].key, Vec::new())
+            .unwrap();
+        let report = vm.run_slice(
+            &mut ReadyHost::default(),
+            &mut natives,
+            RunBudget::default(),
+        );
+        if invalid_sibling {
+            assert!(matches!(
+                vm.fiber_status(fiber),
+                Some(FiberStatus::Faulted(_))
+            ));
+            assert_method_watch(&vm, &artifact, "OUT", 0, VmValue::String("before".into()));
+        } else {
+            completed_without_fault(&report, fiber);
+            assert_method_watch(&vm, &artifact, "OUT", 0, VmValue::String("written".into()));
+        }
+    }
+}
+
+#[test]
 fn direct_host_request_after_reload_uses_its_prior_generation_authorization() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\nRESULTS:0 '= \"{GETKEY(7)}\"\nRESULT = STRFORM(RESULTS:0) == \"42\"\nRETURN RESULT\n",
@@ -5822,4 +5901,1096 @@ fn direct_host_request_after_reload_uses_its_prior_generation_authorization() {
         runtime.fiber_status(fiber),
         Some(FiberStatus::Completed(Some(VmValue::Integer(1))))
     );
+}
+
+#[test]
+fn map_staged_capture_precedes_recreate_in_bytecode_and_runtime_form() {
+    for dynamic in [false, true] {
+        let expression = "MAP_TOSTRING(\"m\", RECREATE_MAP())";
+        let expression = if dynamic {
+            format!(
+                "STRFORM({})",
+                serde_json::to_string(&format!("%{expression}%")).unwrap()
+            )
+        } else {
+            expression.into()
+        };
+        let source = format!(
+            r#"@SYSTEM_TITLE
+RESULT = MAP_CREATE("m")
+RESULT = MAP_SET("m", "a", "1")
+RESULT = MAP_SET("m", "b", "2")
+RESULTS:10 '= {expression}
+RESULTS:11 '= MAP_TOSTRING("m")
+RETURN RESULT
+@RECREATE_MAP
+#FUNCTIONS
+FLAG:0 += 1
+RESULT = MAP_RELEASE("m")
+RESULT = MAP_CREATE("m")
+RESULT = MAP_SET("m", "fresh", "new")
+RETURNF "|"
+"#
+        );
+        let artifact = compile_source_with_options(&source, &method_options(true));
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+            "{dynamic}: {report:?}"
+        );
+        assert_method_watch(
+            &vm,
+            &artifact,
+            "RESULTS",
+            10,
+            VmValue::String("a=1|b=2".into()),
+        );
+        assert_method_watch(
+            &vm,
+            &artifact,
+            "RESULTS",
+            11,
+            VmValue::String("fresh=new".into()),
+        );
+        assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(1));
+    }
+}
+
+#[test]
+fn map_missing_name_and_disabled_output_skip_tail_expressions() {
+    for dynamic in [false, true] {
+        let expressions = [
+            "MAP_TOSTRING(\"missing\", MAP_TAIL())",
+            "MAP_VALUES(\"m\", OUT:MAP_INDEX(), 0)",
+        ];
+        let body = expressions
+            .iter()
+            .enumerate()
+            .map(|(index, expression)| {
+                let expression = if dynamic {
+                    format!(
+                        "STRFORM({})",
+                        serde_json::to_string(&format!("%{expression}%")).unwrap()
+                    )
+                } else {
+                    (*expression).into()
+                };
+                format!("RESULTS:{} '= {expression}\n", index + 10)
+            })
+            .collect::<Vec<_>>()
+            .concat();
+        let source = format!(
+            r#"@SYSTEM_TITLE
+#DIMS OUT, 2
+RESULT = MAP_CREATE("m")
+{body}RETURN RESULT
+@MAP_TAIL
+#FUNCTIONS
+FLAG:0 += 1
+RETURNF ","
+@MAP_INDEX
+#FUNCTION
+FLAG:1 += 1
+RETURNF 999999
+"#
+        );
+        let artifact = compile_source_with_options(&source, &method_options(true));
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+            "{dynamic}: {report:?}"
+        );
+        for index in [0, 1] {
+            assert_method_watch(&vm, &artifact, "FLAG", index, VmValue::Integer(0));
+        }
+        for index in [10, 11] {
+            assert_method_watch(
+                &vm,
+                &artifact,
+                "RESULTS",
+                index,
+                VmValue::String(String::new()),
+            );
+        }
+    }
+}
+
+#[test]
+fn original_profile_rejects_all_six_map_extensions() {
+    for expression in [
+        "MAP_VALUES(\"m\")",
+        "MAP_MERGE(\"m\", \"n\")",
+        "MAP_REMOVEIF(\"m\", \"x\", \"KEY_PREFIX\")",
+        "MAP_FINDKEY(\"m\", \"x\", \"KEY_PREFIX\")",
+        "MAP_TOSTRING(\"m\")",
+        "MAP_FROMSTRING(\"m\", \"a=1\")",
+    ] {
+        let source = format!("@SYSTEM_TITLE\nIF {expression} == {expression}\nENDIF\nRETURN\n");
+        let report = analyze_project(
+            AnalysisInput {
+                project_data: project_data(),
+                sources: vec![ProjectSource {
+                    relative_path: "map-profile.erb".into(),
+                    payload: SourcePayload::Utf8(source),
+                }],
+            },
+            &method_options(false),
+            &ExtensionRegistry::default(),
+        );
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.reference_level >= 2),
+            "{expression}: {report:?}"
+        );
+    }
+}
+
+#[test]
+fn map_pending_bytecode_capture_snapshot_rejects_missing_or_forged_lease_owner() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT = MAP_CREATE("m")
+RESULT = MAP_SET("m", "a", "old")
+RESULT:9 = RAND:1000000
+RESULTS:10 '= MAP_TOSTRING("m", MAP_WAIT())
+RETURN RESULT
+@MAP_WAIT
+#FUNCTIONS
+RESULT = MAP_RELEASE("m")
+RESULT = MAP_CREATE("m")
+RESULT = MAP_SET("m", "a", "new")
+INPUT
+RETURNF "|"
+"#,
+        &method_options(true),
+    );
+    let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 1234);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    let saved = serde_json::to_value(vm.snapshot(&natives).unwrap()).unwrap();
+    for attack in ["drop", "frame", "generation", "begin"] {
+        let mut corrupted = saved.clone();
+        let frame = &mut corrupted["fibers"][fiber.0.to_string()]["frames"][0];
+        match attack {
+            "drop" => frame["map_calls"] = serde_json::json!([]),
+            "frame" => {
+                frame["map_calls"][0]["lease"]["owner"]["frame"] = serde_json::json!(999_999);
+            }
+            "generation" => {
+                frame["map_calls"][0]["lease"]["owner"]["generation"] = serde_json::json!(999_999);
+            }
+            "begin" => frame["map_calls"][0]["begin"] = serde_json::json!(999_999),
+            _ => unreachable!(),
+        }
+        let mut rejected_natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 9876);
+        // Use a no-active-call VM to snapshot the independent registry; the saved live VM
+        // must not be paired with a registry which intentionally has none of its leases.
+        let control = Vm::new(validated(&artifact), VmConfig::default());
+        let before = control
+            .encode_unrestricted_snapshot(&rejected_natives)
+            .unwrap();
+        let mut rejected_host = PendingHost {
+            stability: HostWaitStability::StableInput,
+            rebound: Vec::new(),
+        };
+        assert!(
+            Vm::restore_snapshot(
+                validated(&artifact),
+                VmConfig::default(),
+                serde_json::from_value(corrupted).unwrap(),
+                &mut rejected_host,
+                &mut rejected_natives
+            )
+            .is_err(),
+            "{attack}"
+        );
+        assert!(rejected_host.rebound.is_empty());
+        assert_eq!(
+            control
+                .encode_unrestricted_snapshot(&rejected_natives)
+                .unwrap(),
+            before
+        );
+    }
+    let Some(FiberStatus::WaitingHost(request)) = vm.fiber_status(fiber) else {
+        panic!("MAP argument did not wait");
+    };
+    let mut restored = Vm::restore_snapshot(
+        validated(&artifact),
+        VmConfig::default(),
+        serde_json::from_value(saved).unwrap(),
+        &mut host,
+        &mut natives,
+    )
+    .unwrap();
+    restored.resume_host(request, HostReady::empty()).unwrap();
+    let report = restored.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    completed_without_fault(&report, fiber);
+    assert_method_watch(
+        &restored,
+        &artifact,
+        "RESULTS",
+        10,
+        VmValue::String("a=old".into()),
+    );
+}
+
+#[test]
+fn map_values_character_getarray_failure_is_delayed_until_enabled() {
+    for enabled in [0, 1] {
+        let artifact = compile_source_with_options(
+            &format!(
+                r#"@SYSTEM_TITLE
+RESULT = MAP_CREATE("m")
+RESULTS:10 '= MAP_VALUES("m", CSTR:MAP_CHAR_INDEX(), {enabled})
+FLAG:9 = 1
+RETURN RESULT
+@MAP_CHAR_INDEX
+#FUNCTION
+FLAG:0 += 1
+RETURNF 999999
+"#
+            ),
+            &method_options(true),
+        );
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(0));
+        if enabled == 0 {
+            assert!(
+                report
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+                "{report:?}"
+            );
+            assert_method_watch(&vm, &artifact, "FLAG", 9, VmValue::Integer(1));
+        } else {
+            assert_eq!(
+                take_fault(report).category,
+                erabasic_vm::FaultCategory::Script(erabasic_vm::ScriptFaultKind::Operation)
+            );
+            assert_method_watch(&vm, &artifact, "FLAG", 9, VmValue::Integer(0));
+        }
+    }
+}
+
+#[test]
+fn whole_character_ref_captures_before_later_actual_and_preserves_profile_disposal() {
+    for snake in [false, true] {
+        for mode in ["static", "method", "form"] {
+            let invocation = match mode {
+                "static" => {
+                    "CALL CHANGE_ARRAY, CFLAG:SELECT_CHAR():SKIPPED_INDEX(), DELETE_SELECTED()\nRESULT:0 = FLAG:2"
+                }
+                "method" => {
+                    "RESULT:0 = CHANGE_METHOD(CFLAG:SELECT_CHAR():SKIPPED_INDEX(), DELETE_SELECTED())"
+                }
+                _ => {
+                    "RESULTS:0 '= STRFORM(\"{CHANGE_METHOD(CFLAG:SELECT_CHAR():SKIPPED_INDEX(), DELETE_SELECTED())}\")"
+                }
+            };
+            let source = format!(
+                r"@SYSTEM_TITLE
+DELALLCHARA
+ADDVOIDCHARA
+ADDVOIDCHARA
+CFLAG:0:0 = 17
+CFLAG:1:0 = 99
+{invocation}
+RESULT:1 = FLAG:0
+RESULT:2 = CFLAG:0:0
+RETURN RESULT
+@SELECT_CHAR
+#FUNCTION
+FLAG:0 += 1
+RETURNF 0
+@SKIPPED_INDEX
+#FUNCTION
+FLAG:0 += 100
+RETURNF 0
+@DELETE_SELECTED
+#FUNCTION
+DELCHARA 0
+RETURNF 0
+@CHANGE_ARRAY(VALUES, DUMMY)
+#DIM REF VALUES
+#DIM DUMMY
+VALUES:0 += 3
+FLAG:2 = VALUES:0
+RETURN FLAG:2
+@CHANGE_METHOD(VALUES, DUMMY)
+#FUNCTION
+#DIM REF VALUES
+#DIM DUMMY
+VALUES:0 += 3
+RETURNF VALUES:0
+"
+            );
+            let artifact = compile_source_with_options(&source, &method_options(snake));
+            let (vm, report) = run_entry(&artifact, VmConfig::default());
+            assert!(
+                report
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+                "{snake}/{mode}: {report:?}"
+            );
+            assert!(
+                !report
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+                "{snake}/{mode}: {report:?}"
+            );
+            let expected = if snake { 3 } else { 20 };
+            if mode == "form" {
+                assert_method_watch(
+                    &vm,
+                    &artifact,
+                    "RESULTS",
+                    0,
+                    VmValue::String(expected.to_string()),
+                );
+            } else {
+                assert_method_watch(&vm, &artifact, "RESULT", 0, VmValue::Integer(expected));
+            }
+            assert_method_watch(&vm, &artifact, "RESULT", 1, VmValue::Integer(1));
+            assert_method_watch(&vm, &artifact, "RESULT", 2, VmValue::Integer(99));
+        }
+    }
+}
+
+#[test]
+fn ref_unwind_retires_child_capture_and_jump_keeps_live_ancestor_backing() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#DIM DYNAMIC ITEMS, 2
+ITEMS:0 = 10
+RESULT:0 = STRFORMCHECK("{FAIL_REF(ITEMS)}")
+CALL JUMP_REF, ITEMS
+FLAG:9 = ITEMS:0
+RETURN RESULT
+@FAIL_REF(VALUES)
+#FUNCTION
+#DIM REF VALUES
+VALUES:0 += 1
+RETURNF VALUES:999999
+@JUMP_REF(VALUES)
+#DIM REF VALUES
+JUMP INCREMENT_REF, VALUES
+@INCREMENT_REF(VALUES)
+#DIM REF VALUES
+VALUES:0 += 2
+RETURN
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "FLAG", 9, VmValue::Integer(13));
+}
+
+#[test]
+fn runtime_variable_metadata_includes_private_ref_and_survives_codec_patch() {
+    let artifact = compile_source_with_options(
+        r"@SYSTEM_TITLE
+#DIM REF PRIVATE_ARRAY
+RETURN
+",
+        &method_options(true),
+    );
+    let variable = artifact
+        .globals
+        .iter()
+        .find(|variable| variable.name == "PRIVATE_ARRAY")
+        .unwrap();
+    assert!(
+        artifact
+            .runtime_variables
+            .iter()
+            .find(|metadata| metadata.key == variable.key)
+            .unwrap()
+            .reference
+    );
+    let bytes = erabasic_bytecode::encode_artifact(&artifact).unwrap();
+    let decoded =
+        erabasic_bytecode::decode_artifact(&bytes, &erabasic_bytecode::DecodeLimits::default())
+            .unwrap();
+    let decoded = erabasic_validator::validate_bytecode(
+        decoded,
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
+    )
+    .value
+    .unwrap();
+    assert_eq!(
+        decoded.artifact().runtime_variables,
+        artifact.runtime_variables
+    );
+    let mut changed = artifact.clone();
+    changed
+        .runtime_variables
+        .iter_mut()
+        .find(|metadata| metadata.key == variable.key)
+        .unwrap()
+        .reference = false;
+    changed.refresh_ids().unwrap();
+    assert_ne!(
+        changed.manifest.program_version.execution_id,
+        artifact.manifest.program_version.execution_id
+    );
+    let patch = erabasic_bytecode::create_patch(&artifact, &changed);
+    assert_eq!(
+        erabasic_bytecode::apply_patch(&artifact, &patch)
+            .unwrap()
+            .runtime_variables,
+        changed.runtime_variables
+    );
+    for corruption in ["missing", "duplicate", "wrong_disposal"] {
+        let mut broken = artifact.clone();
+        match corruption {
+            "missing" => {
+                broken.runtime_variables.pop();
+            }
+            "duplicate" => {
+                broken
+                    .runtime_variables
+                    .push(broken.runtime_variables[0].clone());
+            }
+            _ => {
+                let entry = broken
+                    .runtime_variables
+                    .iter_mut()
+                    .find(|metadata| metadata.key == variable.key)
+                    .unwrap();
+                entry.character_disposal = erabasic_bytecode::CharacterArrayDisposal::ClearSparse;
+            }
+        }
+        assert!(
+            validate_bytecode(
+                broken.into_unvalidated(),
+                &erabasic_compiler::runtime_native_validation_context(
+                    &artifact,
+                    &default_host_registry()
+                )
+            )
+            .value
+            .is_none(),
+            "{corruption}"
+        );
+    }
+}
+
+#[test]
+fn public_zero_length_user_name_metadata_is_not_omitted_by_schema_lookup() {
+    let mut data = project_data();
+    data.schema.variables.insert(
+        "ZERO_USER".into(),
+        erabasic_data::VariableSchema {
+            id: erabasic_data::VariableId::user("ZERO_USER"),
+            value_type: erabasic_data::ValueType::Integer,
+            storage: erabasic_data::StorageScope::Normal,
+            dimensions: vec![0],
+            mutable: true,
+            persistence: erabasic_data::Persistence::None,
+            can_forbid: false,
+        },
+    );
+    let artifact = compile_source_with_data_and_options(
+        "@SYSTEM_TITLE\nRETURN\n",
+        data,
+        &method_options(true),
+    );
+    let variable = artifact
+        .globals
+        .iter()
+        .find(|variable| variable.name == "ZERO_USER")
+        .unwrap();
+    let metadata = artifact
+        .runtime_variables
+        .iter()
+        .find(|metadata| metadata.key == variable.key)
+        .unwrap();
+    assert_eq!(
+        metadata.match_name_rejection,
+        Some(erabasic_bytecode::MatchNameRejectionKind::Internal)
+    );
+}
+
+#[test]
+fn ref_to_bit_keeps_detached_character_backing_after_a_later_argument_deletes_it() {
+    for dynamic in [false, true] {
+        let operation = if dynamic {
+            "RESULTS:10 '= STRFORM(\"{BITSET(VALUES, DELETE_SELECTED())}\")"
+        } else {
+            "RESULT:10 = BITSET(VALUES, DELETE_SELECTED())"
+        };
+        let source = format!(
+            r"@SYSTEM_TITLE
+DELALLCHARA
+ADDVOIDCHARA
+ADDVOIDCHARA
+CFLAG:0:0 = 17
+CFLAG:1:0 = 99
+RESULT:11 = MUTATE(CFLAG:0:0)
+RESULT:12 = CFLAG:0:0
+RETURN
+@MUTATE(VALUES)
+#FUNCTION
+#DIM REF VALUES
+{operation}
+RETURNF VALUES:0
+@DELETE_SELECTED
+#FUNCTION
+FLAG:8 += 1
+DELCHARA 0
+RETURNF 1
+"
+        );
+        let artifact = compile_source_with_options(&source, &method_options(true));
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+            "{dynamic}: {report:?}"
+        );
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{dynamic}: {report:?}"
+        );
+        if dynamic {
+            assert_method_watch(&vm, &artifact, "RESULTS", 10, VmValue::String("1".into()));
+        } else {
+            assert_method_watch(&vm, &artifact, "RESULT", 10, VmValue::Integer(1));
+        }
+        // Snake disposal clears this built-in sparse array first. BITSET bit1
+        // then writes2 to the detached object shared by the REF and BIT leases.
+        assert_method_watch(&vm, &artifact, "RESULT", 11, VmValue::Integer(2));
+        assert_method_watch(&vm, &artifact, "RESULT", 12, VmValue::Integer(99));
+        assert_method_watch(&vm, &artifact, "FLAG", 8, VmValue::Integer(1));
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One matrix proves rank, storage and profile behavior together.
+fn user_character_string_and_two_dimensional_ref_preserve_deleted_backing() {
+    for snake in [false, true] {
+        for dynamic in [false, true] {
+            for string in [false, true] {
+                let (header, initialize, expression, method, after, expected) = if string {
+                    (
+                        "#DIMS CHARADATA USER_TEXT, 2\n",
+                        "USER_TEXT:0:0 '= \"kept\"\nUSER_TEXT:1:0 '= \"other\"",
+                        "MUTATE(USER_TEXT:0:0, DELETE_SELECTED())",
+                        "@MUTATE(VALUES, DUMMY)\n#FUNCTIONS\n#DIMS REF VALUES\n#DIM DUMMY\nVALUES:0 '= VALUES:0 + \"!\"\nRETURNF VALUES:0",
+                        "RESULTS:12 '= USER_TEXT:0:0",
+                        VmValue::String("kept!".into()),
+                    )
+                } else {
+                    (
+                        "#DIM CHARADATA USER_GRID, 2, 2\n",
+                        "USER_GRID:0:1:1 = 17\nUSER_GRID:1:1:1 = 99",
+                        "MUTATE(USER_GRID:0:0:0, DELETE_SELECTED())",
+                        "@MUTATE(VALUES, DUMMY)\n#FUNCTION\n#DIM REF VALUES, 0, 0\n#DIM DUMMY\nVALUES:1:1 += 3\nRETURNF VALUES:1:1",
+                        "RESULT:12 = USER_GRID:0:1:1",
+                        VmValue::Integer(20),
+                    )
+                };
+                let call = if dynamic {
+                    let form = if string {
+                        format!("%{expression}%")
+                    } else {
+                        format!("{{{expression}}}")
+                    };
+                    format!(
+                        "RESULTS:11 '= STRFORM({})",
+                        serde_json::to_string(&form).unwrap()
+                    )
+                } else if string {
+                    format!("RESULTS:11 '= {expression}")
+                } else {
+                    format!("RESULT:11 = {expression}")
+                };
+                let source = format!(
+                    r"@SYSTEM_TITLE
+DELALLCHARA
+ADDVOIDCHARA
+ADDVOIDCHARA
+{initialize}
+{call}
+{after}
+RETURN
+{method}
+@DELETE_SELECTED
+#FUNCTION
+FLAG:8 += 1
+DELCHARA 0
+RETURNF 0
+"
+                );
+                let mut options = method_options(snake);
+                options.system_save_in_binary = true;
+                let artifact = compile_with_header(header, &source, &options);
+                let (vm, report) = run_entry(&artifact, VmConfig::default());
+                assert!(
+                    report
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+                    "{snake}/{dynamic}/{string}: {report:?}"
+                );
+                assert!(
+                    !report
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+                    "{snake}/{dynamic}/{string}: {report:?}"
+                );
+                if dynamic {
+                    let text = match expected {
+                        VmValue::Integer(value) => value.to_string(),
+                        VmValue::String(value) => value,
+                        _ => unreachable!(),
+                    };
+                    assert_method_watch(&vm, &artifact, "RESULTS", 11, VmValue::String(text));
+                } else {
+                    assert_method_watch(
+                        &vm,
+                        &artifact,
+                        if string { "RESULTS" } else { "RESULT" },
+                        11,
+                        expected,
+                    );
+                }
+                assert_method_watch(
+                    &vm,
+                    &artifact,
+                    if string { "RESULTS" } else { "RESULT" },
+                    12,
+                    if string {
+                        VmValue::String("other".into())
+                    } else {
+                        VmValue::Integer(99)
+                    },
+                );
+                assert_method_watch(&vm, &artifact, "FLAG", 8, VmValue::Integer(1));
+            }
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // The reload lifecycle must retain both nested REF frames.
+fn shape_reload_keeps_forwarded_ref_backing_until_aliases_and_old_frames_return() {
+    let source = r"@SYSTEM_TITLE
+SHARED_VALUES:0 = 11
+SHARED_VALUES:1 = 22
+RESULT:10 = OUTER(SHARED_VALUES)
+INPUT
+RETURN
+@OUTER(VALUES)
+#FUNCTION
+#DIM REF VALUES
+RETURNF INNER(VALUES)
+@INNER(VALUES)
+#FUNCTION
+#DIM REF VALUES
+INPUT
+VALUES:1 = 44
+RETURNF VALUES:1
+";
+    let base = compile_with_header("#DIM SHARED_VALUES, 2\n", source, &method_options(true));
+    let target = compile_with_header("#DIM SHARED_VALUES, 3\n", source, &method_options(true));
+    let key = named_key(&base, "SHARED_VALUES");
+    let entry = base
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&base), VmConfig::default());
+    let mut natives = NativeServiceRegistry::for_artifact(&base);
+    let mut host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let first = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    assert!(
+        !first
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{first:?}"
+    );
+    let Some(FiberStatus::WaitingHost(first_request)) = vm.fiber_status(fiber) else {
+        panic!("INNER did not wait: {first:?}");
+    };
+    let before = inspect_snapshot(
+        &vm.encode_unrestricted_snapshot(&natives).unwrap(),
+        VmConfig::default().maximum_snapshot_bytes,
+    )
+    .unwrap()
+    .state;
+    assert_eq!(
+        before["memory"]["array_leases"]["entries"]
+            .as_object()
+            .unwrap()
+            .len(),
+        2,
+        "direct capture plus forwarding capture"
+    );
+    let patch = create_patch(&base, &target);
+    vm.prepare_hot_reload(
+        &patch,
+        &erabasic_compiler::runtime_native_validation_context(&target, &default_host_registry()),
+    )
+    .unwrap();
+    let reload = vm.commit_hot_reload().unwrap();
+    assert_eq!(reload.retained_generations, 2);
+    let old_key = reload.old_generation.0.to_string();
+    let migrated = inspect_snapshot(
+        &vm.encode_unrestricted_snapshot(&natives).unwrap(),
+        VmConfig::default().maximum_snapshot_bytes,
+    )
+    .unwrap()
+    .state;
+    assert!(migrated["memory"]["legacy"].get(&old_key).is_some());
+    let entries = migrated["memory"]["array_leases"]["entries"]
+        .as_object()
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .values()
+            .all(|lease| lease["location"]["Shared"]["legacy"]
+                == serde_json::json!(reload.old_generation.0))
+    );
+    vm.write_variable(key, &[1], None, VmValue::Integer(77))
+        .unwrap();
+    assert_eq!(
+        vm.read_variable(key, &[2], None).unwrap(),
+        VmValue::Integer(0)
+    );
+    vm.resume_host(first_request, HostReady::empty()).unwrap();
+    let resumed = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    assert!(
+        !resumed
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{resumed:?}"
+    );
+    let Some(FiberStatus::WaitingHost(last_request)) = vm.fiber_status(fiber) else {
+        panic!("caller did not reach final INPUT: {resumed:?}");
+    };
+    assert_method_watch(&vm, &target, "RESULT", 10, VmValue::Integer(44));
+    assert_eq!(
+        vm.read_variable(key, &[1], None).unwrap(),
+        VmValue::Integer(77)
+    );
+    let after_aliases = inspect_snapshot(
+        &vm.encode_unrestricted_snapshot(&natives).unwrap(),
+        VmConfig::default().maximum_snapshot_bytes,
+    )
+    .unwrap()
+    .state;
+    assert!(
+        after_aliases["memory"]["array_leases"]["entries"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+    // The old caller is still executing. It legitimately pins its generation
+    // even though both REF aliases and their backing leases have returned.
+    assert!(after_aliases["memory"]["legacy"].get(&old_key).is_some());
+    vm.resume_host(last_request, HostReady::empty()).unwrap();
+    let finished = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    completed_without_fault(&finished, fiber);
+    let final_state = inspect_snapshot(
+        &vm.encode_unrestricted_snapshot(&natives).unwrap(),
+        VmConfig::default().maximum_snapshot_bytes,
+    )
+    .unwrap()
+    .state;
+    assert!(
+        final_state["memory"]["legacy"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        final_state["memory"]["array_leases"]["entries"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        vm.read_variable(key, &[1], None).unwrap(),
+        VmValue::Integer(77)
+    );
+}
+
+#[test]
+fn runtime_data_calls_use_trusted_plan_grants_without_static_import_anchors() {
+    for (name, form, expected) in [
+        ("map_tostring", "%MAP_TOSTRING(\"m\")%", "a=v"),
+        ("bitget", "{BITGET(FLAG, 0)}", "1"),
+        ("matchall", "{MATCHALL(FLAG, 1, 0, 1)}", "1"),
+        ("matchallex", "{MATCHALLEX(\"FLAG\", 1, 0, 1)}", "1"),
+    ] {
+        let source = format!(
+            "@SYSTEM_TITLE\nRESULT = MAP_CREATE(\"m\")\nRESULT = MAP_SET(\"m\", \"a\", \"v\")\nFLAG:0 = 1\nRESULTS:10 '= STRFORM({})\nRETURN RESULT\n",
+            serde_json::to_string(form).unwrap()
+        );
+        let artifact = compile_source_with_options(&source, &method_options(true));
+        assert!(
+            artifact
+                .native_imports
+                .iter()
+                .all(|native| native.import.name != name)
+        );
+        if name.starts_with("map_") {
+            assert!(
+                artifact
+                    .runtime_native_authorizations
+                    .iter()
+                    .any(|family| family.name == name)
+            );
+        } else {
+            assert!(
+                artifact
+                    .runtime_native_authorizations
+                    .iter()
+                    .all(|family| family.name != name)
+            );
+            assert!(
+                artifact
+                    .runtime_staged_authorizations
+                    .iter()
+                    .any(|family| family.name == name)
+            );
+        }
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{name}: {report:?}"
+        );
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+            "{name}: {report:?}"
+        );
+        assert_method_watch(
+            &vm,
+            &artifact,
+            "RESULTS",
+            10,
+            VmValue::String(expected.into()),
+        );
+    }
+}
+
+#[test]
+fn runtime_staged_parse_symbols_do_not_grant_execution_or_become_check_failures() {
+    for name in ["bitget", "matchall"] {
+        let expression = if name == "bitget" {
+            "BITGET(FLAG, 0)"
+        } else {
+            "MATCHALL(FLAG, 0, 0, 1)"
+        };
+        let source = format!(
+            "@SYSTEM_TITLE\nRESULT:10 = STRFORMCHECK({})\nFLAG:9 = 1\nRETURN RESULT\n",
+            serde_json::to_string(&format!("{{{expression}}}")).unwrap()
+        );
+        let mut artifact = compile_source_with_options(&source, &method_options(true));
+        artifact
+            .runtime_staged_authorizations
+            .retain(|family| family.name != name);
+        artifact.refresh_ids().unwrap();
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert_eq!(
+            take_fault(report).category,
+            erabasic_vm::FaultCategory::Permission
+        );
+        assert_method_watch(&vm, &artifact, "FLAG", 9, VmValue::Integer(0));
+    }
+}
+
+#[test]
+fn runtime_data_stage_snapshot_rejects_foreign_call_site_before_native_restore() {
+    for (form, task_name) in [
+        ("%MAP_TOSTRING(\"m\", WAIT_S())%", "MapFinish"),
+        ("{BITSET(FLAG, WAIT_I())}", "BitFinish"),
+        ("{MATCHALL(FLAG, WAIT_I(), 0, 1)}", "MatchNeedle"),
+    ] {
+        let source = format!(
+            "@SYSTEM_TITLE\nRESULT = MAP_CREATE(\"m\")\nRESULT = MAP_SET(\"m\", \"a\", \"v\")\nRESULT:9 = RAND:1000000\nRESULTS:10 '= STRFORM({})\nRETURN RESULT\n@WAIT_S\n#FUNCTIONS\nINPUT\nRETURNF \"|\"\n@WAIT_I\n#FUNCTION\nINPUT\nRETURNF 0\n",
+            serde_json::to_string(form).unwrap()
+        );
+        let artifact = compile_source_with_options(&source, &method_options(true));
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 1234);
+        let entry = artifact
+            .functions
+            .iter()
+            .find(|function| function.name == "SYSTEM_TITLE")
+            .unwrap()
+            .key;
+        let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+        let mut host = PendingHost {
+            stability: HostWaitStability::StableInput,
+            rebound: Vec::new(),
+        };
+        let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+        assert!(
+            matches!(vm.fiber_status(fiber), Some(FiberStatus::WaitingHost(_))),
+            "{task_name}: {report:?}"
+        );
+        let saved = serde_json::to_value(vm.snapshot(&natives).unwrap()).unwrap();
+        let mut bad = saved.clone();
+        let work = bad["fibers"][fiber.0.to_string()]["frames"][0]["runtime_form"]["work"]
+            .as_array_mut()
+            .unwrap();
+        let call = work
+            .iter_mut()
+            .find_map(|task| task.get_mut(task_name))
+            .expect("pending stage owns a call site");
+        call["site"]["plan"] = serde_json::json!(u64::MAX);
+        let mut other = NativeServiceRegistry::for_artifact_with_seed(&artifact, 9876);
+        let control = Vm::new(validated(&artifact), VmConfig::default());
+        let before = control.encode_unrestricted_snapshot(&other).unwrap();
+        let mut rebound = PendingHost {
+            stability: HostWaitStability::StableInput,
+            rebound: Vec::new(),
+        };
+        assert!(
+            Vm::restore_snapshot(
+                validated(&artifact),
+                VmConfig::default(),
+                serde_json::from_value(bad).unwrap(),
+                &mut rebound,
+                &mut other
+            )
+            .is_err(),
+            "{task_name}"
+        );
+        assert!(rebound.rebound.is_empty());
+        assert_eq!(
+            control.encode_unrestricted_snapshot(&other).unwrap(),
+            before
+        );
+        // The untouched evidence remains restorable with the same pending site.
+        let Some(FiberStatus::WaitingHost(request)) = vm.fiber_status(fiber) else {
+            unreachable!()
+        };
+        let mut restored = Vm::restore_snapshot(
+            validated(&artifact),
+            VmConfig::default(),
+            serde_json::from_value(saved).unwrap(),
+            &mut host,
+            &mut natives,
+        )
+        .unwrap();
+        restored.resume_host(request, HostReady::empty()).unwrap();
+        let report = restored.run_slice(
+            &mut ReadyHost::default(),
+            &mut natives,
+            RunBudget::default(),
+        );
+        completed_without_fault(&report, fiber);
+    }
+}
+
+#[test]
+fn staged_grants_roundtrip_but_cannot_be_forged_from_parse_metadata() {
+    let artifact = compile_source_with_options("@SYSTEM_TITLE\nRETURN\n", &method_options(true));
+    let context =
+        erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry());
+    let bytes = erabasic_bytecode::encode_artifact(&artifact).unwrap();
+    let decoded =
+        erabasic_bytecode::decode_artifact(&bytes, &erabasic_bytecode::DecodeLimits::default())
+            .unwrap();
+    assert!(
+        erabasic_validator::validate_bytecode(decoded, &context)
+            .value
+            .is_some()
+    );
+    for attack in ["name", "kind", "shape"] {
+        let mut forged = artifact.clone();
+        let family = forged
+            .runtime_staged_authorizations
+            .iter_mut()
+            .find(|family| family.name == "bitset")
+            .unwrap();
+        match attack {
+            "name" => family.name = "bitget".into(),
+            "kind" => family.kind = erabasic_bytecode::RuntimeStagedKind::MatchAll,
+            "shape" => {
+                family.shapes[0].arguments[0] = erabasic_bytecode::RuntimeArgumentConstraint::Any;
+            }
+            _ => unreachable!(),
+        }
+        family.key = family.canonical_key();
+        forged.refresh_ids().unwrap();
+        let report = erabasic_validator::validate_bytecode(forged.into_unvalidated(), &context);
+        assert!(report.value.is_none(), "{attack}");
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code
+                    == erabasic_validator::ValidationCode::HostAbiMismatch),
+            "{attack}: {report:?}"
+        );
+    }
 }

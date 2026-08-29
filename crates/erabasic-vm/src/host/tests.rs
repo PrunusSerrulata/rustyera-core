@@ -832,3 +832,57 @@ fn native_registry_keeps_family_service_key_distinct_from_physical_import() {
         FaultCategory::HostContract
     );
 }
+
+#[test]
+fn map_candidate_protection_preserves_parent_roots_and_rejects_stale_guard() {
+    use crate::structured::{MapLeaseOrigin, MapLeaseOwner};
+    let mut state = StructuredState::default();
+    let request = NativeCallRequest {
+        service_key: SymbolKey::default(),
+        omitted_arguments: Vec::new(),
+        import: RuntimeImport {
+            key: SymbolKey::default(),
+            namespace: "rustyera.vm".into(),
+            name: "map_create".into(),
+            abi_version: erabasic_bytecode::NATIVE_ABI_VERSION,
+            parameters: vec![erabasic_bytecode::BytecodeType::String],
+            result: Some(erabasic_bytecode::BytecodeType::Integer),
+        },
+        arguments: vec![VmValue::String("m".into())],
+        places: Vec::new(),
+        implicit_places: BTreeMap::new(),
+    };
+    state.call("map_create", &request).unwrap();
+    let owner = MapLeaseOwner {
+        fiber: crate::FiberId(1),
+        frame: crate::FrameId(1),
+        generation: crate::GenerationId(1),
+        function: SymbolKey::derive("test.map", b"candidate"),
+        origin: MapLeaseOrigin::Bytecode { begin: 1 },
+    };
+    let parent_lease = state.capture_map("m", owner).unwrap().unwrap();
+    let roots = [parent_lease].into_iter().collect::<BTreeSet<_>>();
+    let parent = NativeServiceRegistry {
+        structured: Some(Arc::new(Mutex::new(state.clone()))),
+        ..NativeServiceRegistry::default()
+    };
+    let base = parent.map_lease_stamp().unwrap();
+    let mut candidate = NativeServiceRegistry {
+        structured: Some(Arc::new(Mutex::new(state))),
+        ..NativeServiceRegistry::default()
+    };
+    candidate.protect_map_roots(roots.clone()).unwrap();
+    candidate.retain_map_leases(&BTreeSet::new()).unwrap();
+    candidate.validate_map_roots(&roots).unwrap();
+    assert!(
+        candidate
+            .finish_map_candidate(&BTreeSet::new(), BTreeSet::new())
+            .is_err()
+    );
+    parent.validate_map_lease_stamp(base).unwrap();
+    candidate
+        .finish_map_candidate(&roots, BTreeSet::new())
+        .unwrap();
+    parent.release_map(parent_lease).unwrap();
+    assert!(parent.validate_map_lease_stamp(base).is_err());
+}

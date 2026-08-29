@@ -16,6 +16,7 @@ fn artifact() -> BytecodeArtifact {
         runtime_variables: Vec::new(),
         runtime_native_authorizations: Vec::new(),
         runtime_host_authorizations: Vec::new(),
+        runtime_staged_authorizations: Vec::new(),
         project_data,
         globals: Vec::new(),
         native_imports: Vec::new(),

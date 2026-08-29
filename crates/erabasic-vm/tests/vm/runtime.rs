@@ -1272,6 +1272,40 @@ fn candidate_state_rejects_stale_column_identities_without_mutating_live_frames(
 }
 
 #[test]
+fn hot_reload_rejects_removing_a_map_provider_owned_by_an_old_generation() {
+    let artifact = map_lifecycle_artifact();
+    let mut runtime = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    let waiter = run_identity_entry(&mut runtime, &artifact, "WAITING_MAP");
+    let Some(FiberStatus::WaitingHost(request)) = runtime.vm().fiber_status(waiter) else {
+        panic!("MAP tail did not wait");
+    };
+    let options = AnalyzerOptions {
+        compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+        ..AnalyzerOptions::analysis_mode()
+    };
+    let target = compile_source_with_options("@SYSTEM_TITLE\nRETURN\n", &options);
+    let before = runtime.encode_unrestricted_snapshot().unwrap();
+    let error = runtime.prepare_hot_reload(validated(&target)).unwrap_err();
+    assert!(error.to_string().contains("active continuation"), "{error}");
+    assert_eq!(runtime.encode_unrestricted_snapshot().unwrap(), before);
+
+    let ready = runtime
+        .validate_host_completion(request, VmHostCompletion::Ready(HostReady::empty()))
+        .unwrap();
+    runtime.commit_host_completion(ready).unwrap();
+    let report = runtime.drive(RunBudget::default(), VmDriveMode::Normal);
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmPortEvent::FiberFaulted(..))),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn runtime_transaction_rejects_stale_column_identities_before_installing_memory() {
     let artifact = column_identity_artifact();
     let result = artifact
@@ -1547,5 +1581,293 @@ RETURN
                 .events
                 .is_empty()
         );
+    }
+}
+
+fn map_lifecycle_artifact() -> BytecodeArtifact {
+    let options = AnalyzerOptions {
+        compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+        ..AnalyzerOptions::analysis_mode()
+    };
+    compile_source_with_options(
+        r#"@WAITING_MAP
+RESULT = MAP_CREATE("m")
+RESULT = MAP_SET("m", "a", "old")
+RESULTS:10 '= MAP_TOSTRING("m", MAP_WAIT())
+FLAG:9 = 1
+RETURN
+@CHECK_WAITING_MAP
+RESULT = MAP_CREATE("m")
+RESULT = MAP_SET("m", "a", "old")
+RESULT:10 = STRFORMCHECK("%MAP_TOSTRING(\"m\", MAP_WAIT())%")
+FLAG:9 = 1
+RETURN
+@MAP_WAIT
+#FUNCTIONS
+INPUT
+RETURNF "|"
+@UPDATE_MAP
+RESULT = MAP_SET("m", "a", "new")
+RETURN
+@RECREATE_MAP
+RESULT = MAP_RELEASE("m")
+RESULT = MAP_CREATE("m")
+RESULT = MAP_SET("m", "b", "fresh")
+RETURN
+@READ_MAP
+RESULTS:20 '= MAP_TOSTRING("m")
+RETURN
+"#,
+        &options,
+    )
+}
+
+#[test]
+fn pending_map_candidate_rejects_stale_object_updates_and_recreated_bindings() {
+    let artifact = map_lifecycle_artifact();
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS" && global.owner.is_none())
+        .unwrap()
+        .key;
+    for (change, captured, current) in [
+        ("UPDATE_MAP", "a=new", "a=new"),
+        ("RECREATE_MAP", "a=old", "b=fresh"),
+    ] {
+        let mut live = RuntimeVm::new(validated(&artifact), VmConfig::default());
+        let waiter = run_identity_entry(&mut live, &artifact, "WAITING_MAP");
+        let Some(FiberStatus::WaitingHost(request)) = live.vm().fiber_status(waiter) else {
+            panic!("MAP tail did not wait");
+        };
+        let candidate = live.fork_isolated().unwrap();
+        assert!(matches!(
+            candidate.snapshot_eligibility(),
+            SnapshotEligibility::Ineligible(ref blockers)
+                if blockers.iter().any(|blocker| matches!(
+                    blocker,
+                    SnapshotBlocker::NativeService(message)
+                        if message.contains("candidate MAP roots")
+                ))
+        ));
+        assert!(candidate.snapshot().is_err());
+        assert!(candidate.encode_snapshot().is_err());
+        let candidate = candidate.into_candidate_state().unwrap();
+        run_identity_entry(&mut live, &artifact, change);
+        let before = live.encode_unrestricted_snapshot().unwrap();
+        assert!(matches!(
+            live.commit_candidate_state(candidate),
+            Err(VmError::InvalidState(_))
+        ));
+        assert_eq!(
+            live.encode_unrestricted_snapshot().unwrap(),
+            before,
+            "{change}: failed commit changed live state"
+        );
+        assert!(live.fiber_frame_count(waiter).unwrap() >= 2);
+        run_identity_entry(&mut live, &artifact, "READ_MAP");
+        assert_eq!(
+            live.vm().read_variable(results, &[20], None).unwrap(),
+            VmValue::String(current.into())
+        );
+        let ready = live
+            .validate_host_completion(request, VmHostCompletion::Ready(HostReady::empty()))
+            .unwrap();
+        live.commit_host_completion(ready).unwrap();
+        let resumed = live.drive(RunBudget::default(), VmDriveMode::Normal);
+        assert!(
+            !resumed
+                .events
+                .iter()
+                .any(|event| matches!(event, VmPortEvent::FiberFaulted(..))),
+            "{change}: {resumed:?}"
+        );
+        assert!(
+            resumed
+                .events
+                .iter()
+                .any(|event| matches!(event, VmPortEvent::FiberCompleted(id, _) if *id == waiter)),
+            "{change}: {resumed:?}"
+        );
+        assert_eq!(
+            live.vm().read_variable(results, &[10], None).unwrap(),
+            VmValue::String(captured.into())
+        );
+    }
+}
+
+/// Inspect the raw encoder before any eligibility/snapshot call can prune leases.
+/// Restore uses the existing snapshot/Native validators, not a test MAP decoder.
+fn assert_map_cleanup_can_restore_raw_state(runtime: &RuntimeVm, artifact: &BytecodeArtifact) {
+    let bytes = runtime.encode_unrestricted_snapshot().unwrap();
+    let inspection = inspect_snapshot(&bytes, VmConfig::default().maximum_snapshot_bytes).unwrap();
+    for fiber in inspection.state["fibers"].as_object().unwrap().values() {
+        for frame in fiber["frames"].as_array().unwrap() {
+            assert!(frame["map_calls"].as_array().unwrap().is_empty());
+            assert!(frame["runtime_form"].is_null());
+        }
+    }
+    let snapshot = VmSnapshot::decode(&bytes, VmConfig::default().maximum_snapshot_bytes).unwrap();
+    let mut natives = NativeServiceRegistry::for_artifact(artifact);
+    let mut host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let mut restored = Vm::restore_snapshot(
+        validated(artifact),
+        VmConfig::default(),
+        snapshot,
+        &mut host,
+        &mut natives,
+    )
+    .unwrap();
+    assert!(host.rebound.is_empty());
+    let read = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "READ_MAP")
+        .unwrap()
+        .key;
+    let reader = restored.spawn_entry(read, Vec::new()).unwrap();
+    let report = restored.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        report.events.iter().any(
+            |event| matches!(event, VmEvent::FiberCompleted { fiber, .. } if *fiber == reader)
+        ),
+        "{report:?}"
+    );
+    let results = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS" && global.owner.is_none())
+        .unwrap()
+        .key;
+    assert_eq!(
+        restored.read_variable(results, &[20], None).unwrap(),
+        VmValue::String("a=old".into())
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // All termination modes share the same pending MAP fixture.
+fn pending_map_cancel_host_error_and_check_recovery_release_native_and_frame_leases() {
+    let artifact = map_lifecycle_artifact();
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG" && global.owner.is_none())
+        .unwrap()
+        .key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT" && global.owner.is_none())
+        .unwrap()
+        .key;
+    for ending in ["cancel", "host_contract", "script_check"] {
+        let mut runtime = RuntimeVm::new(validated(&artifact), VmConfig::default());
+        let entry = if ending == "script_check" {
+            "CHECK_WAITING_MAP"
+        } else {
+            "WAITING_MAP"
+        };
+        let fiber = run_identity_entry(&mut runtime, &artifact, entry);
+        let Some(FiberStatus::WaitingHost(request)) = runtime.vm().fiber_status(fiber) else {
+            panic!("MAP tail did not reach INPUT");
+        };
+        let waiting = inspect_snapshot(
+            &runtime.encode_unrestricted_snapshot().unwrap(),
+            VmConfig::default().maximum_snapshot_bytes,
+        )
+        .unwrap()
+        .state;
+        let frames = waiting["fibers"][fiber.0.to_string()]["frames"]
+            .as_array()
+            .unwrap();
+        if ending == "script_check" {
+            assert!(frames.iter().any(|frame| !frame["runtime_form"].is_null()));
+        } else {
+            assert!(
+                frames
+                    .iter()
+                    .any(|frame| !frame["map_calls"].as_array().unwrap().is_empty())
+            );
+        }
+        if ending == "cancel" {
+            runtime.cancel_fiber(fiber).unwrap();
+            assert_eq!(
+                runtime.vm().fiber_status(fiber),
+                Some(FiberStatus::Cancelled)
+            );
+        } else {
+            let failure = if ending == "script_check" {
+                erabasic_vm::ExecutionFailure::script(
+                    erabasic_vm::ScriptFaultKind::Operation,
+                    VmFaultCode::Host,
+                    "test script input failure",
+                )
+            } else {
+                erabasic_vm::ExecutionFailure::classified(
+                    erabasic_vm::FaultCategory::HostContract,
+                    VmFaultCode::Host,
+                    "test provider contract failure",
+                )
+            };
+            let completion = runtime
+                .validate_host_completion(request, VmHostCompletion::Error(failure))
+                .unwrap();
+            runtime.commit_host_completion(completion).unwrap();
+            let report = runtime.drive(RunBudget::default(), VmDriveMode::Normal);
+            if ending == "script_check" {
+                assert!(
+                    !report
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, VmPortEvent::FiberFaulted(..))),
+                    "{report:?}"
+                );
+                assert!(
+                    report.events.iter().any(
+                        |event| matches!(event, VmPortEvent::FiberCompleted(id, _) if *id == fiber)
+                    ),
+                    "{report:?}"
+                );
+                assert_eq!(
+                    runtime.vm().read_variable(result, &[10], None).unwrap(),
+                    VmValue::Integer(0)
+                );
+                assert_eq!(
+                    runtime.vm().read_variable(flag, &[9], None).unwrap(),
+                    VmValue::Integer(1)
+                );
+            } else {
+                assert!(
+                    report
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, VmPortEvent::FiberFaulted(id, fault)
+                    if *id == fiber && fault.category == erabasic_vm::FaultCategory::HostContract)),
+                    "{report:?}"
+                );
+                assert_eq!(
+                    runtime.vm().read_variable(flag, &[9], None).unwrap(),
+                    VmValue::Integer(0)
+                );
+            }
+        }
+        assert_map_cleanup_can_restore_raw_state(&runtime, &artifact);
     }
 }

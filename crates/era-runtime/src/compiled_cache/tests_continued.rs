@@ -297,6 +297,27 @@ fn compiled_project_cache_rejects_corruption() {
     assert!(decode_project_file_frontend_manifest(&obsolete, obsolete.len()).is_err());
 }
 
+fn project_fixture_version(bytes: &[u8], version: u8) -> Vec<u8> {
+    let mut fixture = bytes.to_vec();
+    fixture[8] = version;
+    let digest_offset = fixture.len() - 32;
+    let digest = blake3::hash(&fixture[..digest_offset]);
+    fixture[digest_offset..].copy_from_slice(digest.as_bytes());
+    fixture
+}
+
+fn assert_streamed_project_manifest(
+    bytes: &[u8],
+    chunk_size: usize,
+    project: &ProjectManifest,
+) {
+    let mut decoder = ProjectFileStreamDecoder::new(bytes.len(), bytes.len()).unwrap();
+    for chunk in bytes.chunks(chunk_size) {
+        decoder.append(chunk).unwrap();
+    }
+    assert_eq!(&decoder.finish().unwrap().project.manifest, project);
+}
+
 #[test]
 fn project_file_projection_honors_limits_and_version() {
     let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
@@ -324,11 +345,7 @@ fn project_file_projection_honors_limits_and_version() {
         decode_project_file(&legacy, legacy.len()).unwrap().manifest,
         project
     );
-    let mut streamed_legacy = ProjectFileStreamDecoder::new(legacy.len(), legacy.len()).unwrap();
-    for byte in legacy.chunks(1) {
-        streamed_legacy.append(byte).unwrap();
-    }
-    assert_eq!(streamed_legacy.finish().unwrap().project.manifest, project);
+    assert_streamed_project_manifest(&legacy, 1, &project);
     let previous = profileless_project_fixture(&bytes, PREVIOUS_PROJECT_VERSION);
     assert_eq!(
         decode_project_file(&previous, previous.len())
@@ -336,26 +353,26 @@ fn project_file_projection_honors_limits_and_version() {
             .manifest,
         project
     );
-    let mut streamed_previous =
-        ProjectFileStreamDecoder::new(previous.len(), previous.len()).unwrap();
-    for byte in previous.chunks(1) {
-        streamed_previous.append(byte).unwrap();
-    }
+    assert_streamed_project_manifest(&previous, 1, &project);
+    assert_streamed_project_manifest(&bytes, 1, &project);
+    // v12 remains a portable source container, while its compiled artifact is
+    // intentionally obsolete under the Batch 2 data ABI.
+    let data_v12 = project_fixture_version(&bytes, DATA_PROJECT_VERSION);
     assert_eq!(
-        streamed_previous.finish().unwrap().project.manifest,
+        decode_project_file(&data_v12, data_v12.len())
+            .unwrap()
+            .manifest,
         project
     );
-    let mut streamed_current = ProjectFileStreamDecoder::new(bytes.len(), bytes.len()).unwrap();
-    for byte in bytes.chunks(1) {
-        streamed_current.append(byte).unwrap();
-    }
-    assert_eq!(streamed_current.finish().unwrap().project.manifest, project);
+    assert!(
+        decode(&data_v12, data_v12.len())
+            .err()
+            .expect("v12 compiled artifact must require a source rebuild")
+            .contains("requires a source rebuild")
+    );
+    assert_streamed_project_manifest(&data_v12, 17, &project);
     // v9 has the same source-manifest representation but obsolete compiled semantics.
-    let mut profiled = bytes.clone();
-    profiled[8] = PROFILED_PROJECT_VERSION;
-    let digest_offset = profiled.len() - 32;
-    let digest = blake3::hash(&profiled[..digest_offset]);
-    profiled[digest_offset..].copy_from_slice(digest.as_bytes());
+    let profiled = project_fixture_version(&bytes, PROFILED_PROJECT_VERSION);
     assert_eq!(
         decode_project_file(&profiled, profiled.len())
             .unwrap()
@@ -368,15 +385,7 @@ fn project_file_projection_honors_limits_and_version() {
             .unwrap()
             .contains("requires a source rebuild")
     );
-    let mut streamed_profiled =
-        ProjectFileStreamDecoder::new(profiled.len(), profiled.len()).unwrap();
-    for chunk in profiled.chunks(11) {
-        streamed_profiled.append(chunk).unwrap();
-    }
-    assert_eq!(
-        streamed_profiled.finish().unwrap().project.manifest,
-        project
-    );
+    assert_streamed_project_manifest(&profiled, 11, &project);
     let mut stale_cache = previous.clone();
     stale_cache[..8].copy_from_slice(b"RERACACH");
     let error = decode(&stale_cache, stale_cache.len())

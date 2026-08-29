@@ -149,7 +149,7 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
 
     assert_eq!(&bytes[..8], b"RERAPROJ");
-    assert_eq!(bytes[8], 11);
+    assert_eq!(bytes[8], VERSION);
     assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
     assert_eq!(decoded_file.identity, project_identity(&project));
     assert_eq!(decoded_file.manifest, project);

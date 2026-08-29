@@ -352,10 +352,17 @@ fn binary_save_adapter_encodes_zero_length_saved_arrays() {
         runtime_builtins: Vec::new(),
         runtime_native_authorizations: Vec::new(),
         runtime_host_authorizations: Vec::new(),
+        runtime_staged_authorizations: Vec::new(),
         runtime_variables: vec![erabasic_bytecode::RuntimeVariableSymbol {
-            key, reference: false,
+            match_name_rejection: Some(
+                erabasic_bytecode::MatchNameRejectionKind::Internal,
+            ),
+            character_disposal: erabasic_bytecode::CharacterArrayDisposal::Preserve,
+            key,
+            reference: false,
             reference_semantics: erabasic_bytecode::RuntimeReferenceSemantics {
-                is_const: false, can_restructure: false,
+                is_const: false,
+                can_restructure: false,
             },
         }],
         project_data,

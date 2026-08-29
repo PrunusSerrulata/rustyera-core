@@ -31,6 +31,125 @@ fn profile_options(profile: CompatibilityProfileId) -> CsvLoadOptions {
 }
 
 #[test]
+fn character_name_indexes_use_raw_fields_and_no_order_before_callname_fallback() {
+    let mut files = ProjectFiles {
+        csv: vec![
+            file(
+                "CHARA90.CSV",
+                "NO,9\nNAME,Shared\nCALLNAME,Call\nNICKNAME,Nick\nMASTERNAME,Master\n",
+            ),
+            file(
+                "CHARA20.CSV",
+                "NO,2\nNAME,replaced\nNAME,Shared\nCALLNAME,Call\nNICKNAME,Nick\nMASTERNAME,Master\n",
+            ),
+            file("CHARA1.CSV", "NO,1\nNAME,OnlyName\n"),
+            file(
+                "CHARA30.CSV",
+                "NO,3\nNAME,\nCALLNAME,\nNICKNAME,\nMASTERNAME,\n",
+            ),
+            file("CHARA21.CSV", "NO,2\nNAME,Special\nCFLAG,0,1\n"),
+        ],
+        erb: Vec::new(),
+    };
+    for reverse in [false, true] {
+        if reverse {
+            files.csv.reverse();
+        }
+        for compatible_call_name in [false, true] {
+            let options = CsvLoadOptions {
+                compatible_call_name,
+                compatible_sp_character: true,
+                ..profile_options(CompatibilityProfileId::EmueraSkiaSnake)
+            };
+            let project = load_project(&files, &options).data.unwrap();
+            let lookup = &project.static_data.character_name_lookup;
+            for (table, key) in [
+                (&lookup.names, "Shared"),
+                (&lookup.call_names, "Call"),
+                (&lookup.nick_names, "Nick"),
+                (&lookup.master_names, "Master"),
+            ] {
+                assert_eq!(table.get(key), Some(&2), "{key}: reverse={reverse}");
+                assert_eq!(table.get(""), Some(&3));
+                assert!(!table.contains_key(&key.to_ascii_lowercase()));
+            }
+            assert_eq!(lookup.names.get("OnlyName"), Some(&1));
+            assert_eq!(lookup.names.get("Special"), Some(&2));
+            assert!(!lookup.names.contains_key("replaced"));
+            assert!(!lookup.call_names.contains_key("OnlyName"));
+            assert!(!lookup.call_names.contains_key("Special"));
+            let template = project
+                .static_data
+                .characters
+                .iter()
+                .find(|item| item.no == 1)
+                .unwrap();
+            assert_eq!(
+                template.call_name,
+                if compatible_call_name { "OnlyName" } else { "" }
+            );
+        }
+    }
+}
+
+#[test]
+fn raw_callname_presence_changes_project_data_even_when_normalized_templates_match() {
+    let load = |content| {
+        load_project(
+            &ProjectFiles {
+                csv: vec![file("CHARA7.CSV", content)],
+                erb: Vec::new(),
+            },
+            &CsvLoadOptions {
+                compatible_call_name: true,
+                ..CsvLoadOptions::default()
+            },
+        )
+        .data
+        .unwrap()
+    };
+    let missing = load("NO,7\nNAME,Alice\n");
+    let explicit_empty = load("NO,7\nNAME,Alice\nCALLNAME,\n");
+    assert_eq!(
+        missing.static_data.characters,
+        explicit_empty.static_data.characters
+    );
+    assert_eq!(
+        missing.save_load_context(),
+        explicit_empty.save_load_context()
+    );
+    assert_eq!(missing.new_game_seed(), explicit_empty.new_game_seed());
+    assert!(
+        missing
+            .static_data
+            .character_name_lookup
+            .call_names
+            .is_empty()
+    );
+    assert_eq!(
+        explicit_empty
+            .static_data
+            .character_name_lookup
+            .call_names
+            .get(""),
+        Some(&7)
+    );
+    assert_ne!(
+        serde_json::to_vec(&missing).unwrap(),
+        serde_json::to_vec(&explicit_empty).unwrap()
+    );
+    let serialized = serde_json::to_value(&explicit_empty).unwrap();
+    let decoded: erabasic_data::ProjectData = serde_json::from_value(serialized.clone()).unwrap();
+    assert_eq!(decoded, explicit_empty);
+    let mut incomplete = serialized;
+    incomplete["static_data"]
+        .as_object_mut()
+        .unwrap()
+        .remove("character_name_lookup");
+    assert!(serde_json::from_value::<erabasic_data::ProjectData>(incomplete).is_err());
+}
+
+#[test]
 fn owned_loader_preserves_borrowed_results_and_diagnostics() {
     let files = ProjectFiles {
         csv: vec![
