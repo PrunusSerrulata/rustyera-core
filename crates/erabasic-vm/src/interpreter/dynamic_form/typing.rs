@@ -373,18 +373,14 @@ impl<'a> TypeAnalysis<'a> {
                 return Ok(kind.result_type());
             }
         }
-        if super::input_host::allowed(name) {
-            if !self
+        if super::input_host::allowed(name)
+            && self
                 .program
                 .artifact
                 .manifest
                 .compatibility
                 .supports_snake_input()
-            {
-                return Err(support::permission_denied(
-                    "snake input form API unavailable",
-                ));
-            }
+        {
             let types = shapes
                 .iter()
                 .map(|shape| shape.as_ref().map(|shape| shape.value_type))

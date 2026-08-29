@@ -1052,7 +1052,7 @@ impl RuntimeFormContinuation {
                     self.schedule_direct_user_call(vm, &name, args)?;
                     return Ok(());
                 }
-                if self.schedule_input_host(&name, &args)? {
+                if self.schedule_input_host(vm, &name, &args)? {
                     return Ok(());
                 }
                 if name.eq_ignore_ascii_case("EXISTVAR") {

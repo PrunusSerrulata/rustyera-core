@@ -42,10 +42,18 @@ impl RuntimeFormContinuation {
     }
     pub(super) fn schedule_input_host(
         &mut self,
+        vm: &Vm,
         name: &str,
         arguments: &[Option<Expr>],
     ) -> Result<bool, StepError> {
-        if !allowed(name) {
+        let snake_input = vm.generations.get(&self.generation).is_some_and(|program| {
+            program
+                .artifact
+                .manifest
+                .compatibility
+                .supports_snake_input()
+        });
+        if !snake_input || !allowed(name) {
             return Ok(false);
         }
         if matches!(
