@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use erabasic_data::{CharacterTemplate, NameTable, NameTableKind, ProjectSchema};
+use erabasic_data::{
+    CharacterNameLookup, CharacterTemplate, NameTable, NameTableKind, ProjectSchema,
+};
 
 use crate::{
     CsvDiagnostic, CsvDiagnosticCode, CsvDiagnosticSeverity, CsvLoadOptions,
@@ -15,13 +17,33 @@ use value::{
     character_csv_number, duplicate_field, equal_keyword, index_out_of_range, parse_era_integer,
 };
 
+#[derive(Clone, Default)]
+struct RawCharacterNames {
+    name: Option<String>,
+    call_name: Option<String>,
+    nick_name: Option<String>,
+    master_name: Option<String>,
+}
+
+#[derive(Clone)]
+struct ParsedCharacter {
+    template: CharacterTemplate,
+    names: RawCharacterNames,
+}
+
+pub(crate) struct LoadedCharacters {
+    pub templates: Vec<CharacterTemplate>,
+    pub name_lookup: CharacterNameLookup,
+    pub relation_lookup: BTreeMap<String, i64>,
+}
+
 pub(crate) fn load_characters(
     files: &FileIndex,
     schema: &ProjectSchema,
     tables: &BTreeMap<NameTableKind, NameTable>,
     options: &CsvLoadOptions,
     diagnostics: &mut Vec<CsvDiagnostic>,
-) -> (Vec<CharacterTemplate>, BTreeMap<String, i64>) {
+) -> LoadedCharacters {
     let mut paths: Vec<_> = files
         .all()
         .filter(|file| {
@@ -47,8 +69,24 @@ pub(crate) fn load_characters(
             diagnostics,
             &mut characters,
         );
-        characters.sort_by_key(|character| character.no);
+        characters.sort_by_key(|character| character.template.no);
     }
+    let mut name_lookup = CharacterNameLookup::default();
+    // The reference indexes reverse No order before applying CALLNAME fallback.
+    // Use Rust's total i64 order, not its overflowing Int32 subtraction comparator.
+    for character in characters.iter().rev() {
+        for (name, lookup) in [
+            (&character.names.name, &mut name_lookup.names),
+            (&character.names.call_name, &mut name_lookup.call_names),
+            (&character.names.nick_name, &mut name_lookup.nick_names),
+            (&character.names.master_name, &mut name_lookup.master_names),
+        ] {
+            if let Some(name) = name {
+                lookup.insert(name.clone(), character.template.no);
+            }
+        }
+    }
+    let mut characters: Vec<_> = characters.into_iter().map(|entry| entry.template).collect();
     if options.compatible_call_name {
         for character in &mut characters {
             if character.call_name.is_empty() {
@@ -75,7 +113,11 @@ pub(crate) fn load_characters(
             }
         }
     }
-    (characters, relation_lookup)
+    LoadedCharacters {
+        templates: characters,
+        name_lookup,
+        relation_lookup,
+    }
 }
 
 #[allow(clippy::case_sensitive_file_extension_comparisons)]
@@ -92,9 +134,9 @@ fn load_character_file(
     tables: &BTreeMap<NameTableKind, NameTable>,
     options: &CsvLoadOptions,
     diagnostics: &mut Vec<CsvDiagnostic>,
-    output: &mut Vec<CharacterTemplate>,
+    output: &mut Vec<ParsedCharacter>,
 ) {
-    let mut template: Option<CharacterTemplate> = None;
+    let mut template: Option<ParsedCharacter> = None;
     for line in enabled_lines(path, content, options, diagnostics) {
         let tokens: Vec<_> = line.text.split(',').collect();
         if tokens.len() < 2 {
@@ -138,10 +180,13 @@ fn load_character_file(
                 ));
                 continue;
             };
-            let value = CharacterTemplate {
-                no,
-                csv_no: character_csv_number(path),
-                ..CharacterTemplate::default()
+            let value = ParsedCharacter {
+                template: CharacterTemplate {
+                    no,
+                    csv_no: character_csv_number(path),
+                    ..CharacterTemplate::default()
+                },
+                names: RawCharacterNames::default(),
             };
             output.push(value.clone());
             template = Some(value);
@@ -157,10 +202,22 @@ fn load_character_file(
             ));
             continue;
         };
-        if !apply_character_field(current, &tokens, schema, tables, &line, diagnostics) {
+        if !apply_character_field(
+            &mut current.template,
+            &mut current.names,
+            &tokens,
+            schema,
+            tables,
+            &line,
+            diagnostics,
+        ) {
             break;
         }
-        if let Some(last) = output.iter_mut().rev().find(|item| item.no == current.no) {
+        if let Some(last) = output
+            .iter_mut()
+            .rev()
+            .find(|item| item.template.no == current.template.no)
+        {
             last.clone_from(current);
         }
     }
@@ -169,6 +226,7 @@ fn load_character_file(
 #[allow(clippy::too_many_lines)]
 fn apply_character_field(
     character: &mut CharacterTemplate,
+    names: &mut RawCharacterNames,
     tokens: &[&str],
     schema: &ProjectSchema,
     tables: &BTreeMap<NameTableKind, NameTable>,
@@ -177,10 +235,22 @@ fn apply_character_field(
 ) -> bool {
     let field = tokens[0].to_uppercase();
     match field.as_str() {
-        "NAME" | "名前" => tokens[1].clone_into(&mut character.name),
-        "CALLNAME" | "呼び名" => tokens[1].clone_into(&mut character.call_name),
-        "NICKNAME" | "あだ名" => tokens[1].clone_into(&mut character.nick_name),
-        "MASTERNAME" | "主人の呼び方" => tokens[1].clone_into(&mut character.master_name),
+        "NAME" | "名前" => {
+            tokens[1].clone_into(&mut character.name);
+            names.name = Some(tokens[1].to_owned());
+        }
+        "CALLNAME" | "呼び名" => {
+            tokens[1].clone_into(&mut character.call_name);
+            names.call_name = Some(tokens[1].to_owned());
+        }
+        "NICKNAME" | "あだ名" => {
+            tokens[1].clone_into(&mut character.nick_name);
+            names.nick_name = Some(tokens[1].to_owned());
+        }
+        "MASTERNAME" | "主人の呼び方" => {
+            tokens[1].clone_into(&mut character.master_name);
+            names.master_name = Some(tokens[1].to_owned());
+        }
         "ISASSI" | "助手" => {}
         "MARK" | "刻印" => assign_integer(
             "MARK",

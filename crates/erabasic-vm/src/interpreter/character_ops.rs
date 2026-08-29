@@ -39,6 +39,35 @@ pub(super) fn character_series(
         .collect()
 }
 
+/// Query only the caller's artifact data; no current-session template or registry state is consulted.
+pub(super) fn query_character_name(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    operation: &str,
+    arguments: &[VmValue],
+) -> Result<Option<VmValue>, VmError> {
+    let names = &artifact.project_data.static_data.character_name_lookup;
+    let lookup = match operation.to_ascii_lowercase().as_str() {
+        "getcsvnobyname" => &names.names,
+        "getcsvnobycallname" => &names.call_names,
+        "getcsvnobynickname" => &names.nick_names,
+        "getcsvnobymastername" => &names.master_names,
+        _ => return Ok(None),
+    };
+    if !artifact.manifest.compatibility.supports_snake_data_apis() {
+        return Err(VmError::InvalidState(
+            "GETCSVNO is unavailable in this compatibility identity".into(),
+        ));
+    }
+    let [VmValue::String(name)] = arguments else {
+        return Err(VmError::InvalidArguments(
+            "GETCSVNO name lookup expects exactly one string".into(),
+        ));
+    };
+    Ok(Some(VmValue::Integer(
+        lookup.get(name).copied().unwrap_or(-1),
+    )))
+}
+
 #[allow(clippy::too_many_lines)]
 pub(super) fn execute_character_query(
     vm: &Vm,
@@ -52,6 +81,9 @@ pub(super) fn execute_character_query(
         .get(&generation)
         .ok_or_else(|| VmError::InvalidState("character query generation is missing".into()))?
         .artifact;
+    if let Some(value) = query_character_name(artifact, operation, arguments)? {
+        return Ok(value);
+    }
     if operation == "charanum" {
         return Ok(VmValue::Integer(
             i64::try_from(vm.memory.characters.len()).unwrap_or(i64::MAX),
@@ -303,11 +335,22 @@ pub(super) fn execute_character_mutation(
                     "DELCHARA index is duplicated or out of range".into(),
                 ));
             }
+            let order = (0..memory.characters.len())
+                .filter(|index| indices.binary_search(index).is_err())
+                .collect::<Vec<_>>();
+            memory
+                .array_leases
+                .remap_characters(None, &memory.characters, &order)?;
             for index in indices.into_iter().rev() {
                 memory.characters.remove(index);
             }
         }
-        "delallchara" => memory.characters.clear(),
+        "delallchara" => {
+            memory
+                .array_leases
+                .remap_characters(None, &memory.characters, &[])?;
+            memory.characters.clear();
+        }
         "swapchara" | "copychara" => {
             let left = usize::try_from(integer_argument(arguments, 0)?).map_err(|_| {
                 script_native_error(
@@ -328,8 +371,14 @@ pub(super) fn execute_character_mutation(
                 ));
             }
             if operation == "swapchara" {
+                let mut order = (0..memory.characters.len()).collect::<Vec<_>>();
+                order.swap(left, right);
+                memory
+                    .array_leases
+                    .remap_characters(None, &memory.characters, &order)?;
                 memory.characters.swap(left, right);
             } else {
+                memory.array_leases.character_values_replaced();
                 memory.characters[right] = memory.characters[left].clone();
             }
         }
@@ -603,6 +652,9 @@ fn commit_character_reorder(
             return Err(error);
         }
     }
+    memory
+        .array_leases
+        .remap_characters(None, &memory.characters, &plan.order)?;
     let mut old = std::mem::take(&mut memory.characters)
         .into_iter()
         .map(Some)

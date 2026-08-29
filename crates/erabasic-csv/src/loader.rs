@@ -63,8 +63,7 @@ fn load_index(
         };
     }
     let (name_tables, item_prices) = load_name_tables(&index, &schema, options, &mut diagnostics);
-    let (characters, relation_lookup) =
-        load_characters(&index, &schema, &name_tables, options, &mut diagnostics);
+    let characters = load_characters(&index, &schema, &name_tables, options, &mut diagnostics);
     let extensions = load_extensions(&index, options, &mut diagnostics);
     let deferred_indices = collect_deferred_indices(&index, options);
     drop(index);
@@ -78,8 +77,9 @@ fn load_index(
                 game_base,
                 name_tables,
                 item_prices,
-                characters,
-                relation_lookup,
+                characters: characters.templates,
+                character_name_lookup: characters.name_lookup,
+                relation_lookup: characters.relation_lookup,
                 extensions,
                 rename,
                 replace,
