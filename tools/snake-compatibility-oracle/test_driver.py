@@ -395,7 +395,7 @@ class DriverTests(unittest.TestCase):
                             "arithmetic": "snake_saturating_i64_v1"}
         validate_rust_evidence(current, "snake", fixture, 1, current_required)
         for fields in ({"arithmetic": "wrapping_i64_v1"}, {"rng_algorithm": "mt19937"},
-                       {"rng_state_version": 2}, {"semantic_version": 6, "policy_version": 6}):
+                       {"rng_state_version": 2}, {"semantic_version": 6, "policy_version": 5}):
             with self.subTest(fields=fields), self.assertRaises(ValueError):
                 validate_rust_evidence({**current, "profile": {**current["profile"], **fields}},
                                        "snake", fixture, 1)
@@ -403,6 +403,8 @@ class DriverTests(unittest.TestCase):
         validate_rust_evidence(call_policy, "snake", fixture, 1, {"semantic_version": 4, "policy_version": 4})
         restructure_policy = {**current, "profile": {**current["profile"], "semantic_version": 5, "policy_version": 5}}
         validate_rust_evidence(restructure_policy, "snake", fixture, 1, {"semantic_version": 5, "policy_version": 5})
+        data_policy = {**current, "profile": {**current["profile"], "semantic_version": 6, "policy_version": 6}}
+        validate_rust_evidence(data_policy, "snake", fixture, 1, {"semantic_version": 6, "policy_version": 6})
         with self.assertRaises(ValueError):
             validate_rust_evidence(call_policy, "snake", fixture, 1, {"semantic_version": 5, "policy_version": 5})
         with self.assertRaises(ValueError):
