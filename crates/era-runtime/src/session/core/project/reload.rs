@@ -206,6 +206,7 @@ impl RuntimeSession {
         build.incremental.compact();
         self.incremental = Arc::new(build.incremental);
         self.project_snapshot = build.snapshot;
+        self.bitmap_cache_notice_emitted = false;
         if let (Some(snapshot), Some(preferences)) =
             (&mut self.project_snapshot, &self.client_preferences)
         {

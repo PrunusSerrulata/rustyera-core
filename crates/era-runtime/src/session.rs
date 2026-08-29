@@ -765,6 +765,7 @@ pub struct RuntimeSession {
     candidate_clock: Option<LocalDateTimeResponse>,
     compiled_project_cache: Option<Arc<Vec<u8>>>,
     compiled_cache_diagnostics: Vec<ProtocolDiagnostic>,
+    bitmap_cache_notice_emitted: bool,
     // Publication state is session-owned, never part of game snapshots or project caches.
     project_load_id: u64,
     project_diagnostic_publication: Option<ProjectDiagnosticPublication>,

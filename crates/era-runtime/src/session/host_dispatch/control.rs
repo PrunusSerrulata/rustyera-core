@@ -483,7 +483,33 @@ impl RuntimeSession {
             *status = HostDispatchStatus::Handled;
             // Reference compatibility no-op: bitmap line caching is only a
             // renderer performance hint and cannot affect portable semantics.
-            return commit_integer_result(vm, request.id, 0);
+            let snake = self.project_snapshot.as_ref().is_some_and(|project| {
+                project
+                    .manifest
+                    .compatibility
+                    .supports_snake_display_state()
+            });
+            if snake && !self.bitmap_cache_notice_emitted {
+                let code = "compat.bitmap_cache_enable_noop";
+                self.emit(
+                    RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        context: self.vm_diagnostic_context(vm, &request.origin, code),
+                        code: code.into(),
+                        level: RuntimeLogLevel::Warning,
+                        message: "BITMAP_CACHE_ENABLE is accepted as a compatibility no-op; RustyEra does not expose renderer bitmap-cache policy"
+                            .into(),
+                        source: protocol_execution_origin(request.origin.clone()).source,
+                        notification: DiagnosticNotification::LogOnly,
+                    }),
+                    None,
+                )?;
+                self.bitmap_cache_notice_emitted = true;
+            }
+            return if snake {
+                commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))
+            } else {
+                commit_integer_result(vm, request.id, 0)
+            };
         }
         if name == "HOTKEY_STATE_INIT" {
             *status = HostDispatchStatus::Handled;

@@ -170,6 +170,7 @@ impl RuntimeSession {
             candidate_clock: None,
             compiled_project_cache: None,
             compiled_cache_diagnostics: Vec::new(),
+            bitmap_cache_notice_emitted: false,
             project_load_id: 0,
             project_diagnostic_publication: None,
             compiled_cache_task: None,

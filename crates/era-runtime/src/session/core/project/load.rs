@@ -380,6 +380,7 @@ impl RuntimeSession {
         self.retained_title_program = None;
         self.artifact = candidate.build.artifact;
         self.project_snapshot = candidate.build.snapshot;
+        self.bitmap_cache_notice_emitted = false;
         self.undo_checkpoint = None;
         self.undo_replay = None;
         self.undo_token = None;
