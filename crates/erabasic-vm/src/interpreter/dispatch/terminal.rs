@@ -63,73 +63,26 @@ impl Vm {
                         "CALLEVENT is not allowed inside an event dispatch",
                     ));
                 }
-                let frame_id = self.allocate_frame_id();
-                let generation = self
+                let non_event_target = self
                     .generations
                     .get(&position.generation)
-                    .expect("validated frame generation exists");
-                let artifact = &generation.artifact;
-                let Some(group) = artifact
-                    .event_groups
+                    .expect("validated frame generation exists")
+                    .artifact
+                    .functions
                     .iter()
-                    .find(|group| group.name.eq_ignore_ascii_case(&name))
-                else {
-                    if artifact.functions.iter().any(|function| {
+                    .any(|function| {
                         function.name.eq_ignore_ascii_case(&name)
                             && function.kind != BytecodeFunctionKind::Event
-                    }) {
+                    });
+                if !self.start_event_dispatch(fiber, position.generation, &name)? {
+                    if non_event_target {
                         return Err(StepError::new(
                             VmFaultCode::TypeMismatch,
                             format!("CALLEVENT target {name} is not an event"),
                         ));
                     }
                     return Ok(Some(StepOutcome::Continue));
-                };
-                let mut pending = std::collections::VecDeque::new();
-                let groups: &[(&[erabasic_bytecode::BytecodeEventEntry], u8)] =
-                    if group.only.is_empty() {
-                        &[(&group.priority, 1), (&group.normal, 2), (&group.later, 3)]
-                    } else {
-                        &[(&group.only, 0)]
-                    };
-                for (entries, group_id) in groups {
-                    pending.extend(entries.iter().map(|entry| EventDispatchEntry {
-                        function: entry.function,
-                        single: entry.single,
-                        group: *group_id,
-                    }));
                 }
-                let Some(active) = pending.pop_front() else {
-                    return Ok(Some(StepOutcome::Continue));
-                };
-                if fiber.frames.len() >= self.config.maximum_call_depth {
-                    return Err(StepError::new(
-                        VmFaultCode::ResourceLimit,
-                        "maximum call depth exceeded",
-                    ));
-                }
-                let target = generation.function(active.function).ok_or_else(|| {
-                    StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
-                })?;
-                self.memory.ensure_function_statics(
-                    position.generation,
-                    target.key,
-                    generation.function_statics(target.key),
-                );
-                fiber
-                    .frames
-                    .last_mut()
-                    .expect("frame exists")
-                    .event_dispatch = Some(EventDispatch { active, pending });
-                fiber.frames.push(make_frame(
-                    frame_id,
-                    position.generation,
-                    target,
-                    generation.function_locals(target.key),
-                    Vec::new(),
-                    false,
-                    true,
-                ));
             }
             Opcode::Return => {
                 let has_value = position.encoded.payload.first().copied().unwrap_or(0) != 0;

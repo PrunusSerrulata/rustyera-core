@@ -360,18 +360,7 @@ impl Vm {
     ) -> VmFault {
         let command = self.command_for_position(position);
         let origin = self.execution_origin(position, &command);
-        VmFault {
-            category: failure.category,
-            code: failure.code,
-            message: failure.message,
-            fiber,
-            generation: position.generation,
-            function: position.function,
-            function_name: origin.function_name,
-            instruction: u32::try_from(position.instruction).unwrap_or(u32::MAX),
-            command,
-            source: origin.source,
-        }
+        VmFault::from_origin(fiber, origin, failure)
     }
 
     pub(super) fn execution_origin(

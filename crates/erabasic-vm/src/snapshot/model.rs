@@ -31,6 +31,7 @@ pub enum SnapshotBlocker {
     RunnableFiber(FiberId),
     TransientHostWait(FiberId),
     AwaitResume(FiberId),
+    FaultHook(FiberId),
     OldGenerationFrame(FiberId, GenerationId),
     LegacyGenerationState,
     NativeService(String),

@@ -884,7 +884,8 @@ pub(crate) use runtime_types::{
     FindElementCacheKey, FindElementNeedle, ForLoopState, Frame, FunctionMemoEntry,
     FunctionMemoKey, FunctionMemoPlan, LiteralGroupMatchPlan, MemoValue, MemoizedIndexedReadPlan,
     PathMemoBaseKey, PathMemoCache, PathMemoDependency, PathMemoEntry, PathMemoHead,
-    PathMemoMutation, PathMemoMutationGroup, PathMemoPlace, PathMemoResultReadPlan, WaitingHost,
+    PathMemoMutation, PathMemoMutationGroup, PathMemoPlace, PathMemoResultReadPlan,
+    PendingFaultHook, WaitingHost,
 };
 
 pub(crate) use frames::{

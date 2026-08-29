@@ -21,7 +21,7 @@ pub use self::model::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 18;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 19;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 
@@ -369,6 +369,9 @@ impl Vm {
             blockers.push(SnapshotBlocker::PrimaryFiberNotSnapshotStable);
         }
         for (id, fiber) in &self.fibers {
+            if fiber.fault_hook.is_some() {
+                blockers.push(SnapshotBlocker::FaultHook(*id));
+            }
             match &fiber.state {
                 FiberState::Runnable => blockers.push(SnapshotBlocker::RunnableFiber(*id)),
                 FiberState::WaitingHost(wait) if wait.stability == HostWaitStability::Transient => {
@@ -755,6 +758,11 @@ fn validate_snapshot(
     let mut frame_ids = std::collections::BTreeSet::new();
     let mut request_ids = std::collections::BTreeSet::new();
     for (fiber_id, fiber) in &snapshot.fibers {
+        if fiber.fault_hook.is_some() {
+            return Err(VmError::Snapshot(
+                "stable snapshots cannot contain a final-fault hook".into(),
+            ));
+        }
         if fiber.id != *fiber_id || fiber.frames.len() > config.maximum_call_depth {
             return Err(VmError::Snapshot(
                 "snapshot fiber identity or call depth is invalid".into(),

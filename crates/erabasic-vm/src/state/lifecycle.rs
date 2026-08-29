@@ -318,6 +318,7 @@ impl Vm {
                 state: FiberState::Runnable,
                 backward_branches_without_progress: 0,
                 consecutive_budget_exhaustions: 0,
+                fault_hook: None,
             },
         );
         self.next_fiber = self.next_available_fiber_id().0;
@@ -347,15 +348,32 @@ impl Vm {
     ///
     /// Returns an error if the fiber does not exist.
     pub fn cancel_fiber(&mut self, fiber: FiberId) -> Result<(), VmError> {
-        let fiber = self
+        let mut state = self
             .fibers
-            .get_mut(&fiber)
+            .remove(&fiber)
             .ok_or(VmError::UnknownFiber(fiber))?;
-        for frame in &fiber.frames {
-            self.active_function_memos.remove(&frame.id);
+        if let Some(hook) = state.fault_hook.as_ref() {
+            let failure = crate::ExecutionFailure::classified(
+                crate::FaultCategory::Cancellation,
+                crate::VmFaultCode::Host,
+                "final-fault hook was cancelled",
+            );
+            let mut origin = hook.original.origin();
+            origin.command = "CANCEL".into();
+            let cancellation = crate::VmFault::from_origin(fiber, origin, failure);
+            let transition = self.transition_fault(&mut state, cancellation);
+            debug_assert!(matches!(
+                transition,
+                crate::interpreter::fault_hooks::FaultTransition::Published(_)
+            ));
+        } else {
+            for frame in &state.frames {
+                self.active_function_memos.remove(&frame.id);
+            }
+            state.frames.clear();
+            state.state = FiberState::Cancelled;
         }
-        fiber.frames.clear();
-        fiber.state = FiberState::Cancelled;
+        self.fibers.insert(fiber, state);
         self.prune_bit_leases();
         Ok(())
     }

@@ -118,6 +118,7 @@ pub struct VmRunReport {
     pub events: Vec<VmEvent>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FiberStatus {
     Runnable,

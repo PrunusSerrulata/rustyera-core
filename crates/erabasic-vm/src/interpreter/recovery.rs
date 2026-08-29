@@ -131,26 +131,16 @@ impl Vm {
             Ok(false) => error,
             Err(internal) => internal,
         };
-        self.abort_path_memo(fiber_id);
-        for frame in &fiber.frames {
-            self.active_function_memos.remove(&frame.id);
-        }
-        fiber.clear_runtime_forms();
-        let fault = VmFault {
-            category: error.category,
-            code: error.code,
-            message: error.message,
-            fiber: fiber_id,
-            generation: origin.generation,
-            function: origin.function,
-            function_name: origin.function_name,
-            instruction: origin.instruction,
-            command: origin.command,
-            source: origin.source,
+        let fault = VmFault::from_origin(fiber_id, origin, error);
+        let published = match self.transition_fault(&mut fiber, fault) {
+            super::fault_hooks::FaultTransition::HookStarted => {
+                self.runnable.push_back(fiber_id);
+                None
+            }
+            super::fault_hooks::FaultTransition::Published(fault) => Some(*fault),
         };
-        fiber.state = FiberState::Faulted(fault.clone());
         self.fibers.insert(fiber_id, fiber);
         self.prune_bit_leases();
-        Ok((fiber_id, Some(fault)))
+        Ok((fiber_id, published))
     }
 }

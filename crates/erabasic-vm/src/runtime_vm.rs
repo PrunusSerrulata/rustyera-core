@@ -807,27 +807,31 @@ impl RuntimeVm {
             } else {
                 // Internal failures are never catchable. A missing wait or
                 // an impossible recovery still reports the captured origin.
-                let fault = crate::VmFault {
-                    category: crate::FaultCategory::InternalInvariant,
-                    code: crate::VmFaultCode::Host,
-                    message: "captured Host request has no recoverable authorized owner".into(),
-                    fiber: request.fiber,
-                    generation: request.origin.generation,
-                    function: request.origin.function,
-                    function_name: request.origin.function_name,
-                    instruction: request.origin.instruction,
-                    command: request.origin.command,
-                    source: request.origin.source,
-                };
-                self.vm.abort_path_memo(request.fiber);
-                if let Some(fiber) = self.vm.fibers.get_mut(&request.fiber) {
-                    for frame in &fiber.frames {
-                        self.vm.active_function_memos.remove(&frame.id);
+                let fault = crate::VmFault::from_origin(
+                    request.fiber,
+                    request.origin,
+                    crate::ExecutionFailure::classified(
+                        crate::FaultCategory::InternalInvariant,
+                        crate::VmFaultCode::Host,
+                        "captured Host request has no recoverable authorized owner",
+                    ),
+                );
+                let published = match self.vm.fibers.remove(&request.fiber) {
+                    Some(mut fiber) => {
+                        let published = match self.vm.transition_fault(&mut fiber, fault) {
+                            crate::interpreter::fault_hooks::FaultTransition::Published(fault) => {
+                                *fault
+                            }
+                            crate::interpreter::fault_hooks::FaultTransition::HookStarted => {
+                                unreachable!("internal invariant faults cannot start script hooks")
+                            }
+                        };
+                        self.vm.fibers.insert(request.fiber, fiber);
+                        published
                     }
-                    fiber.clear_runtime_forms();
-                    fiber.state = FiberState::Faulted(fault.clone());
-                }
-                events.push(VmPortEvent::FiberFaulted(request.fiber, fault));
+                    None => fault,
+                };
+                events.push(VmPortEvent::FiberFaulted(request.fiber, published));
             }
         }
     }
@@ -1088,6 +1092,10 @@ impl VmRuntimePort for RuntimeVm {
 
     fn cancel_fiber(&mut self, fiber: FiberId) -> Result<(), VmError> {
         self.vm.cancel_fiber(fiber)?;
+        if let Some(FiberStatus::Faulted(fault)) = self.vm.fiber_status(fiber) {
+            self.pending_completion_events
+                .push(VmPortEvent::FiberFaulted(fiber, fault));
+        }
         self.natives
             .retain_map_leases(&crate::interpreter::map_calls::live_map_leases(
                 self.vm.fibers.values(),

@@ -122,6 +122,13 @@ pub(crate) struct Fiber {
     pub state: FiberState,
     pub backward_branches_without_progress: u64,
     pub consecutive_budget_exhaustions: u32,
+    pub fault_hook: Option<PendingFaultHook>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct PendingFaultHook {
+    pub original: VmFault,
+    pub original_frame_depth: usize,
 }
 
 impl Fiber {
