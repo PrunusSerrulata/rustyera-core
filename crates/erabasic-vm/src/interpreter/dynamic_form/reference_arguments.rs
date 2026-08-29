@@ -27,7 +27,7 @@ fn invalid(message: impl Into<String>) -> StepError {
     StepError::new(VmFaultCode::InvalidInstruction, message)
 }
 impl PendingReferenceArguments {
-    pub(super) fn new(template: ReferenceTermGraph, retained_roots: usize) -> Self {
+    pub(super) fn new(template: ReferenceTermGraph, _retained_roots: usize) -> Self {
         let graph = PreparedReferenceArguments::new(template);
         let mut tasks = vec![RestructureTask::Publish];
         for (index, root) in graph.roots.iter().enumerate().rev() {
@@ -35,7 +35,9 @@ impl PendingReferenceArguments {
                 tasks.push(RestructureTask::CaptureRoot(index));
                 tasks.push(RestructureTask::Visit {
                     term: root.clone(),
-                    reject_constant_index: index >= retained_roots,
+                    // VariableTerm rejects constant bounds while restructuring every
+                    // outer actual; CALLSTR's TRY begins only at ConvertArg.
+                    reject_constant_index: true,
                 });
             }
         }
