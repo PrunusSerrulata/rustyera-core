@@ -85,17 +85,21 @@ pub(super) fn match_spec(
             .ok_or_else(|| unsupported("MATCH variable token does not exist"))
     };
     let input_restructured_to_scalar = if name.eq_ignore_ascii_case("MATCHALL") {
-        let ExprKind::Variable { name, indices } = &source_atom(first).kind else {
-            return Err(unsupported("MATCHALL requires a variable token"));
-        };
-        let definition = program
-            .scoped_variable(function, name)
-            .ok_or_else(|| unsupported("MATCH variable token does not exist"))?;
-        !indices.is_empty()
-            && indices.iter().all(constant_index)
-            && program.artifact.runtime_variables.iter().any(|variable| {
-                variable.key == definition.key && variable.reference_semantics.can_restructure
-            })
+        match &source_atom(first).kind {
+            ExprKind::Identifier(_) => false,
+            ExprKind::Variable { name, indices } => {
+                let definition = program
+                    .scoped_variable(function, name)
+                    .ok_or_else(|| unsupported("MATCH variable token does not exist"))?;
+                !indices.is_empty()
+                    && indices.iter().all(constant_index)
+                    && program.artifact.runtime_variables.iter().any(|variable| {
+                        variable.key == definition.key
+                            && variable.reference_semantics.can_restructure
+                    })
+            }
+            _ => return Err(unsupported("MATCHALL requires a variable token")),
+        }
     } else {
         false
     };
