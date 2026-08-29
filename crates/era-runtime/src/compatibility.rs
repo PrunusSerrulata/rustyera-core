@@ -1,11 +1,14 @@
 //! Compatibility resolution is independent of session state and frontend I/O.
 
+use std::collections::BTreeMap;
+
 use era_config::{ReraConfigDocument, normalize_line_endings};
+use era_protocol::ProtocolVersion;
 use era_runtime_protocol::{
     CompatibilityDiagnosticContext, CompatibilityIdentity, FileCategory, FilePayload,
     ProjectCompatibilityResolved, ProjectManifest, ProtocolBytes, ProtocolDiagnostic,
-    ResolveProjectCompatibility, RuntimeLogLevel, SourceLocation, SubmittedFile,
-    validate_relative_path,
+    ResolveProjectCompatibility, RuntimeLogLevel, SQL_OPERATION, SQL_OPERATION_VERSION,
+    ServiceKind, SourceLocation, SubmittedFile, validate_relative_path,
 };
 
 /// Parse only the submitted root configuration, without loading a project or changing a session.
@@ -39,6 +42,43 @@ pub fn resolve_project_compatibility(
     }
     report.identity = Some(identity);
     report
+}
+
+/// Check profile-level services before project storage, cache, or source loading begins.
+pub(crate) fn missing_compatibility_service(
+    identity: &CompatibilityIdentity,
+    services: &BTreeMap<(ServiceKind, String), ProtocolVersion>,
+) -> Option<Box<ProtocolDiagnostic>> {
+    let requires_sql = identity.services.iter().any(|service| {
+        service.name == erabasic_compat::SQL_SERVICE_CONTRACT_NAME
+            && service.version == u32::from(erabasic_compat::SQL_SERVICE_CONTRACT_VERSION)
+    });
+    if !requires_sql
+        || services.get(&(ServiceKind::Sql, SQL_OPERATION.into())) == Some(&SQL_OPERATION_VERSION)
+    {
+        return None;
+    }
+    let mut diagnostic = configuration_error(
+        "runtime.missing_sql_service",
+        format!(
+            "profile {} requires negotiated service {SQL_OPERATION}@{}.{} before project loading",
+            identity.profile, SQL_OPERATION_VERSION.major, SQL_OPERATION_VERSION.minor
+        ),
+        None,
+    );
+    let context = diagnostic
+        .context
+        .as_mut()
+        .expect("configuration diagnostics carry context");
+    context.identity = Some(identity.clone());
+    context.stage = "service".into();
+    context.api = Some("SQL_CONNECT".into());
+    context.required_capability = Some(era_runtime_protocol::RequiredCapability {
+        kind: ServiceKind::Sql,
+        operation: SQL_OPERATION.into(),
+        version: SQL_OPERATION_VERSION,
+    });
+    Some(diagnostic)
 }
 
 /// Hash the submitted root configuration without interpreting it.

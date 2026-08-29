@@ -43,6 +43,11 @@ fn capabilities() -> ClientCapabilities {
                 operation: GET_KEY_STATE_OPERATION.into(),
                 versions: VersionRange::exact(GET_KEY_STATE_OPERATION_VERSION),
             },
+            ServiceCapability {
+                kind: ServiceKind::Sql,
+                operation: SQL_OPERATION.into(),
+                versions: VersionRange::exact(SQL_OPERATION_VERSION),
+            },
         ],
         storage: StorageCapabilities {
             revisions: true,
@@ -93,6 +98,18 @@ fn drain(session: &mut RuntimeSession) -> Vec<RuntimeMessage> {
 }
 
 fn negotiated_session() -> RuntimeSession {
+    negotiated_session_with_capabilities(capabilities())
+}
+
+fn negotiated_session_without_sql() -> RuntimeSession {
+    let mut client_capabilities = capabilities();
+    client_capabilities
+        .services
+        .retain(|service| service.kind != ServiceKind::Sql);
+    negotiated_session_with_capabilities(client_capabilities)
+}
+
+fn negotiated_session_with_capabilities(client_capabilities: ClientCapabilities) -> RuntimeSession {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(
         &mut session,
@@ -102,7 +119,7 @@ fn negotiated_session() -> RuntimeSession {
             client_name: "test".into(),
             features: Vec::new(),
             requested_limits: RuntimeOptions::default().limits,
-            capabilities: capabilities(),
+            capabilities: client_capabilities,
             preferred_locales: vec!["ja".into()],
             configuration_profile: None,
         }),

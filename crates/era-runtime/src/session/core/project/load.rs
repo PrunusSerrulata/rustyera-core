@@ -26,7 +26,7 @@ impl RuntimeSession {
         {
             request.manifest = Some(manifest);
         }
-        if let Err(diagnostic) = validate_compatibility_load(&request) {
+        if let Err(diagnostic) = validate_compatibility_load(&request, &self.service_capabilities) {
             return self.emit(
                 RuntimeMessage::ProjectLoadReport(compatibility_load_error_report(
                     &request.identity,
@@ -435,6 +435,7 @@ fn prefer_complete_manifest(
 
 fn validate_compatibility_load(
     request: &ProjectLoadRequest,
+    services: &BTreeMap<(ServiceKind, String), ProtocolVersion>,
 ) -> Result<(), Box<ProtocolDiagnostic>> {
     request.identity.compatibility.validate().map_err(|error| {
         crate::compatibility::configuration_error(
@@ -443,6 +444,12 @@ fn validate_compatibility_load(
             None,
         )
     })?;
+    if let Some(diagnostic) = crate::compatibility::missing_compatibility_service(
+        &request.identity.compatibility,
+        services,
+    ) {
+        return Err(diagnostic);
+    }
     if request
         .identity
         .configuration_digest

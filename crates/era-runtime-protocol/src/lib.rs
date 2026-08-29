@@ -18,6 +18,7 @@ mod message;
 mod presentation;
 mod project;
 mod service;
+mod sql;
 pub mod storage_pattern;
 mod value;
 
@@ -118,4 +119,5 @@ pub use service::{
     StorageResponse, StorageResult, TextExtentRequest, TextExtentResponse, UPDATE_CHECK_OPERATION,
     UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest, UpdateCheckResponse,
 };
+pub use sql::*;
 pub use value::ProtocolValue;

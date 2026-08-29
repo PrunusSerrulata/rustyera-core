@@ -221,6 +221,9 @@ pub enum ServiceKind {
     /// Queries of physical lines and HTML as realized by the authoritative frontend.
     #[n(10)]
     PresentationQuery,
+    /// Safe project-scoped `SQLite` service. The only v1 operation is `rustyera.sql`.
+    #[n(11)]
+    Sql,
 }
 
 pub const LOCAL_DATE_TIME_OPERATION: &str = "local_date_time";

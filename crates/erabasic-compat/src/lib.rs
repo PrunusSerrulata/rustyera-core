@@ -16,6 +16,11 @@ pub use integer::{
     IntegerArithmeticWarning, IntegerOperation,
 };
 
+pub const SQL_SERVICE_CONTRACT_NAME: &str = "rustyera.sql";
+pub const SQL_SERVICE_CONTRACT_VERSION: u16 = 1;
+pub const SQL_LIMITS_CONTRACT_NAME: &str = "rustyera.sql.limits";
+pub const SQL_LIMITS_CONTRACT_VERSION: u32 = 1;
+
 #[derive(
     Clone,
     Copy,
@@ -121,7 +126,7 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 1,
-            CompatibilityProfileId::EmueraSkiaSnake => 9,
+            CompatibilityProfileId::EmueraSkiaSnake => 10,
         };
         Self {
             profile,
@@ -140,7 +145,19 @@ impl CompatibilityIdentity {
                 CompatibilityProfileId::EmueraSkiaSnake => "rustyera_envelope_v1:emuera1808",
             }
             .into(),
-            services: Vec::new(),
+            services: match profile {
+                CompatibilityProfileId::EmueraEm => Vec::new(),
+                CompatibilityProfileId::EmueraSkiaSnake => vec![
+                    CompatibilityServiceContract {
+                        name: SQL_SERVICE_CONTRACT_NAME.into(),
+                        version: u32::from(SQL_SERVICE_CONTRACT_VERSION),
+                    },
+                    CompatibilityServiceContract {
+                        name: SQL_LIMITS_CONTRACT_NAME.into(),
+                        version: SQL_LIMITS_CONTRACT_VERSION,
+                    },
+                ],
+            },
         }
     }
 
@@ -207,6 +224,12 @@ impl CompatibilityIdentity {
     #[must_use]
     pub const fn supports_snake_input(&self) -> bool {
         matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 9
+    }
+
+    /// Safe SQL catalog and service identity are part of snake policy v10.
+    #[must_use]
+    pub const fn supports_safe_sql(&self) -> bool {
+        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 10
     }
 
     /// Policy for non-variadic user calls; builtin signatures remain exact.
@@ -277,11 +300,35 @@ mod tests {
         assert_eq!(reference.rng_algorithm, snake.rng_algorithm);
         assert!(snake.is_experimental());
         assert!(snake.uses_snake_alias_rules());
+        assert!(snake.supports_safe_sql());
         assert!(!reference.uses_snake_alias_rules());
+        assert!(!reference.supports_safe_sql());
+        assert_eq!(
+            snake.services,
+            vec![
+                CompatibilityServiceContract {
+                    name: SQL_SERVICE_CONTRACT_NAME.into(),
+                    version: u32::from(SQL_SERVICE_CONTRACT_VERSION),
+                },
+                CompatibilityServiceContract {
+                    name: SQL_LIMITS_CONTRACT_NAME.into(),
+                    version: SQL_LIMITS_CONTRACT_VERSION,
+                },
+            ]
+        );
         let mut previous_snake = snake.clone();
         previous_snake.semantic_version = 3;
         previous_snake.policy_version = 3;
         assert!(previous_snake.validate().is_err());
+        let mut different_limits = snake.clone();
+        different_limits
+            .services
+            .iter_mut()
+            .find(|service| service.name == SQL_LIMITS_CONTRACT_NAME)
+            .expect("snake identity carries the SQL limits contract")
+            .version += 1;
+        assert_ne!(different_limits.digest(), snake.digest());
+        assert!(different_limits.validate().is_err());
         assert!(reference.validate().is_ok());
         assert!(snake.validate().is_ok());
         let mut unsupported = snake;

@@ -1,4 +1,4 @@
-; Runtime channel version: 40.0.
+; Runtime channel version: 41.0.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -68,7 +68,8 @@ configuration-client-profile = 0..3
 protocol-version = { 0: uint, 1: uint }
 version-range = { 0: protocol-version, 1: protocol-version }
 environment-capability = { 0: tstr, 1: version-range }
-service-capability = { 0: uint, 1: tstr, 2: version-range }
+service-kind = 0..11
+service-capability = { 0: service-kind, 1: tstr, 2: version-range }
 storage-capabilities = { 0: bool, 1: bool, 2: bool, 3: bool }
 client-capabilities = {
   0: [* uint], 1: bool, 2: bool, 3: bool, 4: bool, 5: bool, 6: bool,
@@ -97,7 +98,7 @@ resolve-project-compatibility = { 0: uint, ? 1: any / null }
 project-compatibility-resolved = {
   0: uint, ? 1: compatibility-identity / null, ? 2: bstr / null, 3: [* protocol-diagnostic]
 }
-required-capability = { 0: uint, 1: tstr, 2: { 0: uint, 1: uint } }
+required-capability = { 0: service-kind, 1: tstr, 2: { 0: uint, 1: uint } }
 compatibility-diagnostic-context = {
   ? 0: compatibility-identity / null, 1: tstr, ? 2: tstr / null,
   ? 3: required-capability / null, ? 4: bstr / null,
@@ -214,9 +215,58 @@ storage-operation =
   [4] /
   [5, uint, uint, tstr / null]
 storage-precondition = [0] / [1] / [2, tstr]
-service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr, 5: uint / null }
+service-request = { 0: uint, 1: service-kind, 2: tstr, 3: any, 4: bstr, 5: uint / null }
 service-response = { 0: uint, 1: any }
-; Protocol 29 adds export-only input replay while retaining the existing descriptor,
+sql-limits-v1 = {
+  0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint,
+  6: uint, 7: uint, 8: uint, 9: uint, 10: uint
+}
+sql-provider-handle-v1 = { 0: uint, 1: uint }
+sql-connection-handle-v1 = { 0: uint, 1: uint }
+sql-reader-handle-v1 = { 0: uint, 1: uint }
+sql-resource-seed-v1 = { 0: tstr, 1: bstr }
+sql-database-source-v1 = [0] / [1, sql-resource-seed-v1]
+sql-database-identity-v1 = { 0: sql-database-source-v1, 1: tstr, 2: uint }
+sql-revision-v1 = { 0: bstr }
+sql-open-revision-v1 = [0] / [1, sql-revision-v1]
+sql-value-v1 = [0] / [1, int] / [2, tstr]
+sql-execute-mode-v1 = 0..3
+sql-map-row-v1 = { 0: tstr, 1: tstr }
+sql-operation-v1 =
+  [0, sql-connection-handle-v1, tstr, sql-database-identity-v1,
+      sql-open-revision-v1, sql-limits-v1] /
+  [1, sql-connection-handle-v1, sql-execute-mode-v1, tstr, [* sql-value-v1]] /
+  [2, sql-reader-handle-v1] /
+  [3, sql-reader-handle-v1, uint] /
+  [4, sql-reader-handle-v1, uint] /
+  [5, sql-reader-handle-v1] /
+  [6, sql-connection-handle-v1, tstr, [* sql-map-row-v1]] /
+  [7, sql-connection-handle-v1]
+sql-request-v1 = { 0: sql-provider-handle-v1, 1: sql-operation-v1 }
+sql-reader-status-v1 = 0..3
+sql-database-state-v1 = { 0: sql-connection-handle-v1, 1: bool, 2: bool, 3: sql-revision-v1 / null }
+sql-reader-state-v1 = { 0: sql-reader-handle-v1, 1: sql-reader-status-v1, 2: uint }
+sql-operation-kind-v1 = 0..7
+sql-error-code-v1 = 0..29
+sql-error-context-v1 = { 0: tstr, 1: tstr }
+sql-error-v1 = { 0: sql-error-code-v1, 1: sql-operation-kind-v1, 2: [* sql-error-context-v1], 3: int / null, 4: tstr / null }
+sql-result-v1 =
+  [0, tstr, sql-limits-v1] /
+  [1, int] /
+  [2, sql-value-v1] /
+  [3, sql-reader-handle-v1] /
+  [4, bool] /
+  [5, sql-value-v1] /
+  [6, bool] /
+  [7] /
+  [8, uint] /
+  [9] /
+  [10, sql-error-v1]
+sql-response-v1 = {
+  0: sql-provider-handle-v1, 1: sql-database-state-v1 / null,
+  2: sql-reader-state-v1 / null, 3: sql-result-v1
+}
+; Protocol 41 adds safe SQL v1 payloads and ServiceKind 11 while retaining the existing descriptor,
 ; digest, chunking, and cancellation flow. It retains Protocol 24 authoritative logs,
 ; Protocol 23 snapshot purposes, source-identity-first project loading,
 ; bounded storage range reads,

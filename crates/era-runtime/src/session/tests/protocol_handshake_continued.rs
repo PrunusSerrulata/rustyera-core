@@ -1341,6 +1341,37 @@ fn pointer_service_negotiates_only_the_existing_operation_version() {
     );
 }
 
+#[test]
+fn sql_service_negotiates_only_the_pinned_v1_operation() {
+    let selected = crate::session::selected_service_capabilities(&[
+        ServiceCapability {
+            kind: ServiceKind::Sql,
+            operation: SQL_OPERATION.into(),
+            versions: VersionRange::exact(SQL_OPERATION_VERSION),
+        },
+        ServiceCapability {
+            kind: ServiceKind::Sql,
+            operation: "rustyera.sql.native".into(),
+            versions: VersionRange::exact(SQL_OPERATION_VERSION),
+        },
+    ]);
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].kind, ServiceKind::Sql);
+    assert_eq!(selected[0].operation, SQL_OPERATION);
+    assert_eq!(
+        selected[0].versions,
+        VersionRange::exact(SQL_OPERATION_VERSION)
+    );
+    assert!(
+        crate::session::selected_service_capabilities(&[ServiceCapability {
+            kind: ServiceKind::Sql,
+            operation: SQL_OPERATION.into(),
+            versions: VersionRange::exact(ProtocolVersion::new(2, 0)),
+        }])
+        .is_empty()
+    );
+}
+
 fn complete_projection_reply(
     session: &mut RuntimeSession,
     request: &ServiceRequest,

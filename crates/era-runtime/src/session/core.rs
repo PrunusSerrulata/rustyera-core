@@ -598,12 +598,22 @@ impl RuntimeSession {
             );
         }
         match message {
-            RuntimeMessage::ResolveProjectCompatibility(request) => self.emit(
-                RuntimeMessage::ProjectCompatibilityResolved(crate::resolve_project_compatibility(
-                    &request,
-                )),
-                Some(message_id),
-            ),
+            RuntimeMessage::ResolveProjectCompatibility(request) => {
+                let mut report = crate::resolve_project_compatibility(&request);
+                if let Some(identity) = report.identity.as_ref()
+                    && let Some(diagnostic) = crate::compatibility::missing_compatibility_service(
+                        identity,
+                        &self.service_capabilities,
+                    )
+                {
+                    report.identity = None;
+                    report.diagnostics.push(*diagnostic);
+                }
+                self.emit(
+                    RuntimeMessage::ProjectCompatibilityResolved(report),
+                    Some(message_id),
+                )
+            }
             RuntimeMessage::ProjectManifest(manifest) => {
                 let identity = crate::compiled_cache::project_identity(&manifest);
                 self.load_project(

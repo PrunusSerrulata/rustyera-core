@@ -2,6 +2,7 @@ use era_protocol::{
     Channel, Envelope, ProtocolBytes, ProtocolErrorCode, ProtocolVersion, SessionId,
     decode_canonical, encode_canonical,
 };
+use era_runtime_protocol as runtime_protocol;
 use era_runtime_protocol::{
     AdvanceTime, AudioEffect, AudioEffectAction, CanvasPixelRequest, CanvasReplay,
     CanvasReplayCommand, CanvasSize, ClientPreferenceLayers, Color, ConfigurationApplication,
@@ -212,7 +213,7 @@ fn protocol_40_round_trips_input_environment_wait_and_ordered_device_contracts()
         .unwrap(),
         pump
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
     let schema = include_str!("../schema/runtime.cddl");
     for definition in [
         "environment-capability",
@@ -243,7 +244,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
 }
 
 #[test]
@@ -276,7 +277,7 @@ fn protocol_38_carries_correlated_secondary_vm_faults() {
         RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("runtime-vm-fault-detail"));
     assert_eq!(
@@ -311,7 +312,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
 }
 
 #[test]
@@ -334,7 +335,7 @@ fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
     assert!(include_str!("../schema/runtime.cddl").contains(
         "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
     ));
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
 }
 
 #[test]
@@ -480,7 +481,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
 }
 
 #[test]
@@ -489,7 +490,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -655,7 +656,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -694,7 +695,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 
@@ -1003,4 +1004,202 @@ fn project_diagnostic_scope_round_trips_without_requiring_a_vm_generation() {
         ),
         (None, None, None)
     );
+}
+
+#[test]
+fn protocol_41_carries_safe_sql_v1_without_native_paths_or_handles() {
+    use runtime_protocol::{
+        SQL_DATABASE_FORMAT_VERSION, SQL_LIMITS_POLICY_VERSION, SQL_OPERATION,
+        SQL_OPERATION_VERSION, SQL_SQLITE_VERSION, ServiceKind, SqlConnectionHandleV1,
+        SqlDatabaseIdentityV1, SqlDatabaseSourceV1, SqlErrorCodeV1, SqlErrorContextV1, SqlErrorV1,
+        SqlLimitsV1, SqlOpenRevisionV1, SqlOperationV1, SqlProviderHandleV1, SqlReaderHandleV1,
+        SqlReaderStateV1, SqlRequestV1, SqlResourceSeedV1, SqlResponseV1, SqlResultV1,
+        SqlRevisionV1,
+    };
+
+    let provider = SqlProviderHandleV1 {
+        service_epoch: 7,
+        id: 3,
+    };
+    let connection = SqlConnectionHandleV1 {
+        service_epoch: 7,
+        id: 11,
+    };
+    let reader = SqlReaderHandleV1 {
+        service_epoch: 7,
+        id: 13,
+    };
+    let revision = SqlRevisionV1 {
+        sha256: ProtocolBytes::new(vec![9; 32]),
+    };
+    let request = SqlRequestV1 {
+        provider,
+        operation: SqlOperationV1::Open {
+            connection,
+            logical_name: "qol_data".into(),
+            identity: SqlDatabaseIdentityV1 {
+                source: SqlDatabaseSourceV1::ResourceSeed(SqlResourceSeedV1 {
+                    resource_id: "plugins/qol_data.db".into(),
+                    sha256: ProtocolBytes::new(vec![4; 32]),
+                }),
+                sqlite_version: SQL_SQLITE_VERSION.into(),
+                format_version: SQL_DATABASE_FORMAT_VERSION,
+            },
+            revision: SqlOpenRevisionV1::Exact(revision.clone()),
+            limits: SqlLimitsV1::FIXED,
+        },
+    };
+    let encoded = encode_canonical(&request).unwrap();
+    assert_eq!(decode_canonical::<SqlRequestV1>(&encoded).unwrap(), request);
+    let json = serde_json::to_string(&request).unwrap();
+    assert_eq!(
+        serde_json::from_str::<SqlRequestV1>(&json).unwrap(),
+        request
+    );
+
+    let response = SqlResponseV1 {
+        provider,
+        database: Some(runtime_protocol::SqlDatabaseStateV1 {
+            connection,
+            connected: true,
+            transaction_active: true,
+            durable_revision: Some(revision),
+        }),
+        reader: Some(SqlReaderStateV1 {
+            reader,
+            status: runtime_protocol::SqlReaderStatusV1::Row,
+            rows_read: 17,
+        }),
+        result: SqlResultV1::Error {
+            error: SqlErrorV1 {
+                code: SqlErrorCodeV1::Sqlite,
+                operation: runtime_protocol::SqlOperationKindV1::ReaderRead,
+                context: vec![SqlErrorContextV1 {
+                    key: "row_index".into(),
+                    value: "17".into(),
+                }],
+                sqlite_code: Some(19),
+                sqlite_message: Some("constraint failed".into()),
+            },
+        },
+    };
+    let encoded = encode_canonical(&response).unwrap();
+    assert_eq!(
+        decode_canonical::<SqlResponseV1>(&encoded).unwrap(),
+        response
+    );
+    let json = serde_json::to_string(&response).unwrap();
+    assert_eq!(
+        serde_json::from_str::<SqlResponseV1>(&json).unwrap(),
+        response
+    );
+
+    assert_eq!(encode_canonical(&ServiceKind::Sql).unwrap(), [11]);
+    assert_eq!(SQL_OPERATION, "rustyera.sql");
+    assert_eq!(SQL_OPERATION_VERSION, ProtocolVersion::new(1, 0));
+    assert_eq!(
+        SQL_LIMITS_POLICY_VERSION,
+        erabasic_compat::SQL_LIMITS_CONTRACT_VERSION
+    );
+    assert_eq!(SqlLimitsV1::FIXED.maximum_connections, 8);
+    assert_eq!(SqlLimitsV1::FIXED.execution_budget_ms, 5_000);
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
+    let schema = include_str!("../schema/runtime.cddl");
+    assert!(schema.contains("sql-request-v1"));
+    assert!(schema.contains("sql-response-v1"));
+}
+
+#[test]
+fn safe_sql_v1_round_trips_every_operation_and_result_variant() {
+    use runtime_protocol::{
+        SQL_DATABASE_FORMAT_VERSION, SQL_SQLITE_VERSION, SqlConnectionHandleV1,
+        SqlDatabaseIdentityV1, SqlDatabaseSourceV1, SqlErrorCodeV1, SqlErrorV1, SqlExecuteModeV1,
+        SqlLimitsV1, SqlMapRowV1, SqlOpenRevisionV1, SqlOperationKindV1, SqlOperationV1,
+        SqlReaderHandleV1, SqlResultV1, SqlValueV1,
+    };
+
+    let connection = SqlConnectionHandleV1 {
+        service_epoch: 2,
+        id: 3,
+    };
+    let reader = SqlReaderHandleV1 {
+        service_epoch: 2,
+        id: 5,
+    };
+    let operations = vec![
+        SqlOperationV1::Open {
+            connection,
+            logical_name: "memory".into(),
+            identity: SqlDatabaseIdentityV1 {
+                source: SqlDatabaseSourceV1::Memory,
+                sqlite_version: SQL_SQLITE_VERSION.into(),
+                format_version: SQL_DATABASE_FORMAT_VERSION,
+            },
+            revision: SqlOpenRevisionV1::Current,
+            limits: SqlLimitsV1::FIXED,
+        },
+        SqlOperationV1::Execute {
+            connection,
+            mode: SqlExecuteModeV1::Reader,
+            sql: "SELECT @0, @1, @2".into(),
+            parameters: vec![
+                SqlValueV1::Null,
+                SqlValueV1::Integer(7),
+                SqlValueV1::String("text".into()),
+            ],
+        },
+        SqlOperationV1::ReaderRead { reader },
+        SqlOperationV1::ReaderGet { reader, column: 1 },
+        SqlOperationV1::ReaderIsNull { reader, column: 2 },
+        SqlOperationV1::ReaderClose { reader },
+        SqlOperationV1::ImportMapRows {
+            connection,
+            table: "translations".into(),
+            rows: vec![SqlMapRowV1 {
+                key: "k".into(),
+                value: "<b>v</b>".into(),
+            }],
+        },
+        SqlOperationV1::Disconnect { connection },
+    ];
+    for operation in operations {
+        let encoded = encode_canonical(&operation).unwrap();
+        assert_eq!(
+            decode_canonical::<SqlOperationV1>(&encoded).unwrap(),
+            operation
+        );
+    }
+
+    let results = vec![
+        SqlResultV1::Opened {
+            sqlite_version: SQL_SQLITE_VERSION.into(),
+            limits: SqlLimitsV1::FIXED,
+        },
+        SqlResultV1::NonQuery { affected_rows: 2 },
+        SqlResultV1::Scalar {
+            value: SqlValueV1::Integer(3),
+        },
+        SqlResultV1::ReaderOpened { reader },
+        SqlResultV1::ReaderAdvanced { has_row: true },
+        SqlResultV1::ReaderValue {
+            value: SqlValueV1::String("v".into()),
+        },
+        SqlResultV1::ReaderNull { is_null: true },
+        SqlResultV1::ReaderClosed,
+        SqlResultV1::MapImported { rows: 1 },
+        SqlResultV1::Disconnected,
+        SqlResultV1::Error {
+            error: SqlErrorV1 {
+                code: SqlErrorCodeV1::InvalidState,
+                operation: SqlOperationKindV1::Execute,
+                context: Vec::new(),
+                sqlite_code: None,
+                sqlite_message: None,
+            },
+        },
+    ];
+    for result in results {
+        let encoded = encode_canonical(&result).unwrap();
+        assert_eq!(decode_canonical::<SqlResultV1>(&encoded).unwrap(), result);
+    }
 }

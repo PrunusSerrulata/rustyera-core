@@ -755,6 +755,16 @@ fn profile_identity_survives_cache_and_full_project_without_cross_profile_keys()
         CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
     assert_eq!(project_identity(&project).source_digest, source_digest);
     assert_ne!(project_key(&project_identity(&project), &[]), reference_key);
+    let snake_key = project_key(&project_identity(&project), &[]);
+    let mut different_limits = project.clone();
+    bump_compatibility_service_version(
+        &mut different_limits.compatibility,
+        erabasic_compat::SQL_LIMITS_CONTRACT_NAME,
+    );
+    assert_ne!(
+        project_key(&project_identity(&different_limits), &[]),
+        snake_key
+    );
     project.files.push(SubmittedFile {
         relative_path: "reraconfig.toml".into(),
         category: FileCategory::Configuration,
@@ -809,7 +819,23 @@ fn profile_identity_survives_cache_and_full_project_without_cross_profile_keys()
     let mut old_snake = project.compatibility.clone();
     old_snake.semantic_version = 1;
     old_snake.policy_version = 1;
-    let historical = project_manifest_fixture(&full, PROFILED_PROJECT_VERSION, Some(&old_snake));
+    assert_historical_profile_rejected(&full, &old_snake);
+    let journal = encode_record(
+        configuration_digest(&project).unwrap(),
+        "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.em\"\n",
+    )
+    .unwrap()
+    .0;
+    let mut changed = full.clone();
+    changed.extend_from_slice(&journal);
+    assert!(decode_project_file(&changed, changed.len()).is_err());
+}
+
+fn assert_historical_profile_rejected(
+    full: &[u8],
+    identity: &erabasic_compat::CompatibilityIdentity,
+) {
+    let historical = project_manifest_fixture(full, PROFILED_PROJECT_VERSION, Some(identity));
     let error = decode_project_file(&historical, historical.len())
         .unwrap_err()
         .to_string();
@@ -831,13 +857,16 @@ fn profile_identity_survives_cache_and_full_project_without_cross_profile_keys()
         error.contains("unsupported compatibility identity"),
         "{error}"
     );
-    let journal = encode_record(
-        configuration_digest(&project).unwrap(),
-        "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.em\"\n",
-    )
-    .unwrap()
-    .0;
-    let mut changed = full.clone();
-    changed.extend_from_slice(&journal);
-    assert!(decode_project_file(&changed, changed.len()).is_err());
+}
+
+fn bump_compatibility_service_version(
+    identity: &mut erabasic_compat::CompatibilityIdentity,
+    name: &str,
+) {
+    identity
+        .services
+        .iter_mut()
+        .find(|service| service.name == name)
+        .expect("compatibility identity carries the requested service contract")
+        .version += 1;
 }
