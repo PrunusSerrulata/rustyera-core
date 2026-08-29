@@ -12,8 +12,11 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         let request_id = self.allocate_request()?;
         self.operations.insert_storage(request_id, pending);
-        self.set_phase(RuntimePhase::WaitingExternal)?;
-        self.emit(
+        if let Err(error) = self.set_phase(RuntimePhase::WaitingExternal) {
+            self.operations.take_storage(request_id);
+            return Err(error);
+        }
+        let result = self.emit(
             RuntimeMessage::StorageRequest(StorageRequest {
                 request_id,
                 namespace,
@@ -26,7 +29,11 @@ impl RuntimeSession {
                 deadline_ns: None,
             }),
             None,
-        )
+        );
+        if result.is_err() {
+            self.operations.take_storage(request_id);
+        }
+        result
     }
 
     #[allow(clippy::too_many_lines)]
@@ -43,6 +50,11 @@ impl RuntimeSession {
             );
         };
         match (pending, response.result) {
+            (
+                pending @ (PendingStorage::SqlSeedRead { .. }
+                | PendingStorage::SqlMapXmlRead { .. }),
+                result,
+            ) => self.complete_sql_storage(message_id, pending, result),
             (
                 pending @ (PendingStorage::HostResourceText { .. }
                 | PendingStorage::HostResourceStat { .. }

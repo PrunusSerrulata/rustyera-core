@@ -8,7 +8,7 @@ use era_protocol::{
 use era_runtime_protocol::{
     CanvasReplayCommand, ConfigurationValueKind, DisplayLine, DisplayRun, FileCategory, FileChange,
     FilePayload, PresentationOperation, PresentationSnapshot, ProjectIdentity, ProjectManifest,
-    ProjectionLength, ProjectionSize, ProjectionTransform, SubmittedFile,
+    ProjectionLength, ProjectionSize, ProjectionTransform, ShutdownRequest, SubmittedFile,
 };
 use erabasic_vm::VmDebugInspect;
 
@@ -216,3 +216,5 @@ mod protocol_project;
 mod reload_transfer;
 mod resource_storage;
 mod save_lifecycle;
+mod sql_map_snapshot;
+mod sql_runtime;

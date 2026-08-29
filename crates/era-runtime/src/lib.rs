@@ -24,6 +24,7 @@ mod resource;
 mod runtime_snapshot;
 mod save_adapter;
 mod session;
+mod sql;
 
 pub use compatibility::{compatibility_configuration_digest, resolve_project_compatibility};
 pub use compiled_cache::{

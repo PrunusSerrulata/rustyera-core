@@ -6,6 +6,74 @@ use serde::{Deserialize, Serialize};
 
 use crate::host::{ExternalCompletion, PendingInput};
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) enum SqlServiceContinuation {
+    Open {
+        request: HostRequestId,
+        epoch: u64,
+        logical_name: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        identity: era_runtime_protocol::SqlDatabaseIdentityV1,
+        resource_digest: Option<[u8; 32]>,
+    },
+    Execute {
+        request: HostRequestId,
+        epoch: u64,
+        connection_key: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        mode: era_runtime_protocol::SqlExecuteModeV1,
+        reader_id: Option<i64>,
+    },
+    ReaderRead {
+        request: HostRequestId,
+        epoch: u64,
+        reader_id: i64,
+        reader: era_runtime_protocol::SqlReaderHandleV1,
+    },
+    ReaderGet {
+        request: HostRequestId,
+        epoch: u64,
+        reader_id: i64,
+        reader: era_runtime_protocol::SqlReaderHandleV1,
+        string: bool,
+    },
+    ReaderIsNull {
+        request: HostRequestId,
+        epoch: u64,
+        reader_id: i64,
+        reader: era_runtime_protocol::SqlReaderHandleV1,
+    },
+    ReaderClose {
+        request: HostRequestId,
+        epoch: u64,
+        reader_id: i64,
+        reader: era_runtime_protocol::SqlReaderHandleV1,
+    },
+    ImportMap {
+        request: HostRequestId,
+        epoch: u64,
+        connection_key: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        expected_rows: u32,
+    },
+    Disconnect {
+        request: HostRequestId,
+        epoch: u64,
+        connection_key: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+    },
+    RestoreOpen {
+        epoch: u64,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        snapshot: crate::runtime_snapshot::SqlConnectionSnapshot,
+    },
+    CleanupDisconnect {
+        epoch: u64,
+        provider: era_runtime_protocol::SqlProviderHandleV1,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) enum CandidateSaveContinuation {
     Autosave,
@@ -27,6 +95,7 @@ pub(crate) enum PendingService {
         continuation: CandidateSaveContinuation,
     },
     Host(ExternalCompletion),
+    Sql(SqlServiceContinuation),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -124,6 +193,24 @@ pub(crate) enum PendingStorage {
     },
     CandidateSaveWrite {
         continuation: CandidateSaveContinuation,
+    },
+    SqlSeedRead {
+        request: HostRequestId,
+        epoch: u64,
+        connection_key: String,
+        logical_name: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        path: String,
+        expected_digest: [u8; 32],
+    },
+    SqlMapXmlRead {
+        request: HostRequestId,
+        epoch: u64,
+        connection_key: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        table: String,
+        path: String,
+        expected_digest: [u8; 32],
     },
 }
 

@@ -16,6 +16,14 @@ impl RuntimeSession {
                 "service response has no pending request",
             );
         };
+        if let PendingService::Sql(continuation) = pending {
+            return self.complete_sql_service(
+                message_id,
+                response.request_id,
+                continuation,
+                response.result,
+            );
+        }
         if let PendingService::Host(ExternalCompletion::DevicePump {
             request,
             epoch,
@@ -691,7 +699,8 @@ impl RuntimeSession {
             }
             PendingService::ProjectImageMetadata { .. }
             | PendingService::PlatformEffect { .. }
-            | PendingService::CandidateSaveClock { .. } => {
+            | PendingService::CandidateSaveClock { .. }
+            | PendingService::Sql(_) => {
                 unreachable!("handled above")
             }
         }

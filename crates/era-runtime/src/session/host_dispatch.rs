@@ -9,6 +9,7 @@ mod graphics;
 mod input_extensions;
 mod presentation;
 mod services;
+mod sql;
 mod storage;
 
 pub(in crate::session) use services::immediate_tag_split_targets;
@@ -302,6 +303,14 @@ impl RuntimeSession {
             .eq_ignore_ascii_case("rustyera.extension")
         {
             return self.issue_extension(vm, request);
+        }
+        if request
+            .import
+            .import
+            .namespace
+            .eq_ignore_ascii_case(SQL_OPERATION)
+        {
+            return self.dispatch_sql(vm, request);
         }
         let name = request.import.import.name.to_ascii_uppercase();
         if self.dispatch_input_extensions(vm, request, &name)? {

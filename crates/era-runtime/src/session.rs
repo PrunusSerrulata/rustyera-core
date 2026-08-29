@@ -97,6 +97,7 @@ use crate::input_source::{
 use crate::key_macro::KeyMacros;
 use crate::operation::{
     CandidateSaveContinuation, PendingOperations, PendingService, PendingStorage,
+    SqlServiceContinuation,
 };
 use crate::presentation::{PresentationModel, PresentationUpdate, display_value};
 use crate::project::{
@@ -113,6 +114,7 @@ use crate::save_adapter::{
     DecodedEraSave, decode_era_save, decode_scoped_save, encode_era_save, encode_scoped_save,
     merge_opaque_extensions, merge_structured_extensions,
 };
+use crate::sql::SqlRuntimeState;
 
 fn configured_character_width_mode(
     project: Option<&NormalizedProjectSnapshot>,
@@ -710,6 +712,7 @@ pub struct RuntimeSession {
     presentation: PresentationModel,
     pending_presentation_update: bool,
     operations: PendingOperations,
+    sql: SqlRuntimeState,
     key_toggle_state: [u8; 256],
     device_input: crate::device_input::DeviceInput,
     environment: crate::environment::Environment,
@@ -754,6 +757,8 @@ pub struct RuntimeSession {
     undo_token: Option<InteractionToken>,
     project_snapshot: Option<NormalizedProjectSnapshot>,
     pending_configuration_update: Option<PendingConfigurationUpdate>,
+    pending_sql_snapshot_restore: Option<PendingSqlSnapshotRestore>,
+    ready_sql_snapshot_restore: Option<ReadySqlSnapshotRestore>,
     selected_locale: String,
     available_fonts: BTreeSet<String>,
     service_capabilities: BTreeMap<(ServiceKind, String), ProtocolVersion>,
@@ -851,6 +856,18 @@ struct PendingConfigurationUpdate {
     values: era_config::ConfigStore,
     document: era_config::ReraConfigDocument,
     changed_codes: BTreeSet<String>,
+}
+
+struct PendingSqlSnapshotRestore {
+    message_id: u64,
+    bytes: Vec<u8>,
+    candidate_sql: SqlRuntimeState,
+    remaining: VecDeque<crate::runtime_snapshot::SqlConnectionSnapshot>,
+}
+
+struct ReadySqlSnapshotRestore {
+    digest: [u8; 32],
+    candidate_sql: SqlRuntimeState,
 }
 
 #[allow(clippy::struct_excessive_bools)]
