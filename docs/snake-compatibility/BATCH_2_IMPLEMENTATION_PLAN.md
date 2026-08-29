@@ -3,6 +3,7 @@
 > 2026-08-29 用户批准的实施契约。本文只维护方案、依赖、授权和验收标准，不表示实现或验证完成。
 > 总体入口：[改造思路 / 批次 2](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-2)；
 > 编号定义：[功能分类与替代契约](SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md)。
+> 2026-08-30 最终实施与验收结果见[实施记录 / 批次 2](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#batch-2)。
 
 ## 1. 目标、基线与已确认取舍
 

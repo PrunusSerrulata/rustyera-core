@@ -1,6 +1,6 @@
 # 蛇版 Emuera 适配：分批次实施与验收记录
 
-> 文档状态：批次 0、批次 1 已完成，保留各批明确差异；其他批次仍待登记。批次 0 完成范围是 profile、隔离、基线与门禁，不是完整蛇版语义或蛇版 TW 可玩性。
+> 文档状态：批次 0、批次 1 已完成；批次 2 产品实施与功能行为验收完成，保留一项规模采集基础设施缺口；后续批次仍待登记。各批明确差异继续保留，已完成批次均不代表完整蛇版语义或蛇版 TW 可玩性。
 
 ## 文档职责与填写规则
 
@@ -38,7 +38,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 |---|---|---|---|---|
 | [0](#batch-0) | 建立基线、profile 与门禁 | 已完成 | 2026-08-27 / Codex | 三端、双 oracle、8 游戏基线与 9 份覆盖报告已验证；后续语义差异逐例保留，磁盘已治理 |
 | [1](#batch-1) | 完整摄取与参考能力阻塞项 | 已完成 | 2026-08-28 / Codex | 1A–1D分项提交及必要验收完成；参考/像素差异与后置资源阻塞见验收汇总，不代表蛇版TW完整可玩 |
-| [2](#batch-2) | 确定性 API、输入与兼容差异骨架 | 待登记 | 待填写 | 待填写 |
+| [2](#batch-2) | 确定性 API、输入与兼容差异骨架 | 功能验收完成；规模证据有缺口 | 2026-08-30 / Codex | 2A–2F 产品与三端行为已交付；峰值 RSS 因沙箱权限未取得，后续性能批次补采 |
 | [3](#batch-3) | 安全 SQL（蛇版 TW P0） | 待登记 | 待填写 | 待填写 |
 | [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 待登记 | 待填写 | 待填写 |
 | [5](#batch-5) | 蛇版存档互操作与音频 | 待登记 | 待填写 | 待填写 |
@@ -575,45 +575,98 @@ Tauri 额外不可比来自 `info runtime.compiled_cache_ready`，未过滤或�
 
 ## 批次 2：确定性 API、输入与兼容差异骨架
 
-计划入口：[改造思路 / 批次 2](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-2)。状态：待登记；负责人 / 最近更新：待填写。
+计划入口：[详细实施方案](BATCH_2_IMPLEMENTATION_PLAN.md)；总体入口：
+[改造思路 / 批次 2](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-2)。状态：**产品实施与功能行为验收完成；
+保留一项规模采集基础设施缺口**。负责人：Codex；最终更新：2026-08-30。
 
 ### 具体实施方案
 
-- 目标、S/D/C/N 编号、范围与明确不做项：待填写。
-- 前置批次/子项、已通过门禁和对应证据：待填写；区分可并行实现与必须汇合的集成验收。
-- 受影响仓库/模块、接口与数据格式、profile/cache/save/service 版本变化：待填写。
-- 分项步骤、文件/hunk 归属、共享基础依赖、资源隔离与提交划分：待填写。
-- 验收目标、最小 fixture、获准测试范围、风险/回退方案与用户时限：待填写。
+- 实施固定的 2A–2F：D07/D11/S11/TOINT，D04/D06/S05/S09/N01，S06–S08，D17，
+  D08/D10/S10/S13，以及 D13/D12/C03 和最终三端汇合。依赖顺序、测试 agent 粒度、
+  单次全量和唯一重构审查均按[详细方案](BATCH_2_IMPLEMENTATION_PLAN.md)执行。
+- 明确不做 SQL、Float、variadic、元素 REF/OUT、扩展 HTML/scene、外部蛇版存档和真实游戏
+  可玩性；TUI 不宣称完整 GETKEY。固定 RNG 为 RustyEra 的统一 SFMT 权威状态，不实现
+  `UseNewRandom` 的 `.NET Random` 双路径，也不复制蛇版 dump 临时副本缺陷。
+- 最终身份为 snake semantic/policy **9/9**，arithmetic `snake_saturating_i64_v1`，
+  RNG `sfmt19937/state1`；runtime protocol **40.0**、HIR **18**、container **21.0**、ISA **10.0**、
+  compiler/native/host/VM ABI **46/21/16/21**、VM snapshot **20**、runtime snapshot **26**。
+  旧 snake cache 与不兼容状态明确拒绝，不做静默迁移；原版 profile 行为保持隔离。
+- 规划基线为 core `35275f8`、TUI `ad5c018`、Web `e363331`；最终产品绑定为 core
+  `68d0f208ce4c8d7cb2c95b0c2d894e1a4c0c72a4`、TUI
+  `69ed1249ed5859ef6f486b43aec0ea7983e5863d`、Web
+  `2158972c6041e3855021d3c45411a39ecc019329`。三仓均在 `codex/snake-compatibility`，收尾时干净。
 
 ### 所作改动
 
 | 功能/修复项编号 | 组件与文件 | 实际改动及理由 | 契约/兼容性影响 | commit 与依赖 |
 |---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+| 2A / D07、D11、S11、D12 | core compat、analyzer/compiler、VM、runtime、oracle fixture | 集中逐操作整数策略；普通 snake 算术按固定边界处理，UNCHECKED 始终 wrapping；TOINT 仅捕获整数 reader；SFMT dump/restore、snapshot/replay 统一且非法状态原子拒绝 | snake identity 3/3；保留原版及固定 RNG 有意差异 | `d6cbf820`–`6e730606` |
+| 2B / D04、D06、S05、S09、N01 | parser/HIR/compiler/validator/VM/runtime/cache | CALLSTR 六变体解析完整调用文本；多余用户实参不求值；EXISTVAR 模式解析表达式；STRFORMCHECK 实际展开并捕获限定脚本故障；动态调用依赖保守失效 | identity 4/4；新增 continuation、typed failure、cache 依赖与严格实参配置 | `5bda5424`–`277f1929` |
+| 2C / S06–S08 | analyzer、VM structured/data、runtime-tester | MATCHALL/EX、CSV 名称反向索引、事务 bit API 和有序 MAP 扩展；MAP string 格式无转义且逐条写入 | identity 5/5；structured snapshot/GLOBAL 走既有状态契约 | `aaffe753`–`1e869fa6` |
+| 2D / D17 | compat、VM fault lifecycle、protocol | snake BEFORE_THROW/BEFORE_ERROR 在最终 fault 前运行；保留原错误并附 secondary fault，禁重入和恢复执行 | identity 6/6；协议发布结构化 fault chain | `cc4be698`–`194d5e3d` |
+| 2E / D08、D10、S10、S13 | core runtime/presentation；TUI/Web renderer | 负历史索引、全局整行背景、逻辑动画计时器和 bitmap-cache 诊断；状态进入 snapshot/delta，TUI 合成透明色 | identity 7/7；前端不从 DOM/终端私有状态重建语义 | core `7988576c`–`cb2ef2fa`；TUI `81dc782`–`73d1dff`；Web `2457df2`–`21945d0` |
+| 2F / D13、D12、C03 | core protocol/runtime/input；TUI；Web/WASM/Tauri | sequence 单槽、宏开关、NF viewport、设备事件/latch、真实 AWAIT 0 泵、Environment capability、GETPLATFORM 映射；按 runtime 收件顺序裁决 | identity 9/9、runtime protocol 40；TUI 明确缺按键 latch 能力，Browser/Tauri 提交真实事件 | core `5fafb61c`–`68d0f208`；TUI `05ed41c`–`69ed124`；Web `c6c191f`–`c30d202` |
+| 2F 汇合修复 | Web store 与 Tauri/cache harness | 串行原生 IPC；缓存 handoff mtime/variadic sentinel 可移植；结构化验证合法 snake profile warning；按 correlation owner 路由拒绝；修复偏好 applied 早于 message ID 的竞态 | 不吞合法诊断，也不把 stale projection context 投成独立 warning；cache hit 与热设置可继续 | Web `38bdc36`、`738fd83`–`2158972`；core `68d0f208` |
 
 ### 审查与验收结果
 
-- 实现/测试输入 revision、工作目录、环境、游戏/资源 hash、profile/seed：待填写。
-- 重构审查是否触发、唯一审查记录、结论及要求落实情况：待填写；未触发须说明。
-- 首条测试命令时间、已用/剩余墙钟预算、首次全量启动记录：待填写。
-- Oracle 选择与理由、语义基准和 wrapper revision：待填写；按范围分别记录原版与蛇版，或说明不适用。
+- 六个子批次均在各自首条测试前完成且只完成一次独立重构审查，审查要求先落实后测试。
+  2A/2B 的完整落盘审查分别为 `batch-2-work/2A/review/review.md` 与
+  `batch-2-work/2B/refactor-review.md`；2C–2F 的结论与落实记录保留在任务审查回执及各目录
+  冻结输入/定向验证证据中，没有启动第二次审查。
+- 原版 oracle 为 `emuera.em` wrapper `ffe560d`、exe SHA
+  `0361383d31daf9931f2cd4cde214190e71a09788d83a05fb0038d5cb78886132`；蛇版 oracle wrapper
+  `2c67518`、exe SHA `098ed2fbed4100b732f182a90ebda7b99f4b16b484af4ac133b279ec57089dc3`。
+  每例依次完成 Rust 执行、adapter、返回值/副作用/终态/诊断断言和差分；原始
+  `different`/`incomparable` 与已登记差异均保留，未改写成相等。
+- 首次全量各只启动一次。core 最终汇合的 `cargo test --workspace` 首次在两个 VM 数组用例失败；
+  TUI 首次完整 pytest 为 **474 passed / 9 failed / 5 skipped**，失败均为旧 C ABI protocol mismatch；
+  Web 首次完整 Vitest 为 **1360 passed / 7 failed**。修复后只跑受影响定向集合：core 两用例及
+  相关 VM 集恢复；TUI 9 个 real-CABI 用例恢复；Web runtimeStore 定向 **197 passed**。
+  因规则禁止重跑全量，这些结果不得描述为“修复后全量通过”。
+- 最终 Tauri 断面只允许一条可见 warning：core 发布的结构化
+  `runtime.experimental_compatibility_profile`，severity `warning`、stage `configuration`，并携带
+  snake semantic/policy identity 9/9。测试按 code、stage、identity 和 correlation 验证来源，
+  不按显示文案放行；无结构化来源、重复或额外 warning 均失败。偏好回复早到和拒绝误归属已在
+  Web 事务路由修复，合法 profile warning 本身未被隐藏或降级。
 
 | 验收项 / 静态或动态阶段 | 命令与 fixture | 预期 | 首次结果 / 退出码 / 时间 | 修复后定向复验 | 证据与结论 |
 |---|---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+| 2A 算术/RNG/TOINT | policy fixture，双 profile Rust + 双 oracle，35 个 case | 数值、告警、状态与固定差异逐例可判 | 原始 matched/different/incomparable 均保留 | acceptance index 离线绑定全部最终 receipt | `batch-2-work/2A/acceptance-index-v1.json`；通过，固定原版 MIN 负号历史差异和 UseNewRandom 差异 |
+| 2B 动态调用 | call fixture 46 个 profile ordinal | 完整文本、lazy args、REF、TRY/JUMP、EXISTVAR、STRFORMCHECK、cache | raw：27 matched、16 incomparable、2 different、1 load rejection | 后续定向修复及静态覆盖完成 | `batch-2-work/2B/acceptance-index-v1.json`、`validation/`；登记拒绝阶段和诊断不可比 |
+| 2C 数据 API | 8-case snake matrix + original profile rejection | CSV/MATCH/bit/MAP 返回、副作用和顺序一致 | 8/8 matched observables | 不需动态重跑 | `batch-2-work/2C/dynamic/audit-index.json`；通过 |
+| 2D fault hook | 5 个 snake hook + 1 个 original no-hook | hook 分流、secondary fault、禁用和原错误保留 | 6 个断面完成；诊断文字不可比单列 | 不需动态重跑 | `batch-2-work/2D/dynamic/audit-index.json`；通过 |
+| 2E 展示/计时器 | core 双 oracle + TUI/Web 三端 fixture | 历史、背景 alpha、timer 边界、snapshot/delta | 静态首次全量记录在 `2E/static/phase2/` | 定向修复负历史 pending 行和 timer fault publication | `batch-2-work/2E/`；Browser/Tauri 全宽投影和 TUI 合成降级通过 |
+| 2F 静态门禁 | core fmt/check/Clippy/minimal/一次 workspace；TUI minimal/full/Ruff；Web minimal/full/type/lint/format/build/WASM/Rust | 输入冻结后全部适用门禁可判 | 三套首次全量均保留失败结果 | 只跑最小受影响集合，最终静态门禁全绿 | `batch-2-work/2F/static/`；不得解读为第二次全量 |
+| 2F 真实客户端输入 | Chromium、Firefox、SafariDriver、Tauri、TUI | NF、sequence/macro、设备泵、down/up、blur、缺能力路径 | harness 差异逐个停止并修复 | Chromium/Firefox/Safari/Tauri/TUI 最终断面通过 | `batch-2-work/2F/dynamic/results/`；Safari 仅 SafariDriver API，未请求 Accessibility |
+| 编译缓存汇合 | TUI↔Browser/Tauri source-index handoff、warm/hot setting | 跨端实际保存/加载、identity 拒绝、零错误命中 | 初次暴露 mtime 与 sentinel 可移植性问题 | 双向 handoff 和两个 Tauri source-index 通过；Tauri cache hit + FontSize 18→17 通过 | `cache-handoff-mtime-retest/summary.txt`、`tauri-compiled-cache-owner-routing-final/summary.txt` |
+| 蛇版 TW 规模断面 | frozen runtime-tester coverage，profile snake | 一次流式压缩报告，保留阶段/诊断/缺口 | child exit 0；1576.74s；5,069,815 appearances、8,571 diagnostics | 按规则不重跑 | `snake-tw-final-scale/`；静态覆盖，不是编译通过或可玩性证据；峰值 RSS 未取得 |
 
 ### 未完成项、阻塞与计划偏差
 
 | 项目 | 未完成原因 / 依赖 | 影响与已验证边界 | 下一步及解除条件 | 是否需更新改造思路 |
 |---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+| 蛇版 TW 峰值 RSS | `/usr/bin/time -l` 在任务沙箱结束时因 `sysctl kern.clockrate: Operation not permitted` 返回 1；coverage 子进程已 exit 0 | wall/user/sys、压缩报告及阶段完整；只有 peak RSS 缺失。按证据复用规则不为补报告重跑 26 分钟任务 | 在允许 `time` 读取该系统信息的同输入环境下，于后续性能批次重新采集；不能从现有报告伪造 | 否，属于非功能证据缺口 |
+| 真实蛇版 TW 编译/标题 | 报告仍有 8,571 个 analyzer 诊断，SQL、扩展 HTML/scene 与存档闭环后置 | 本批只证明已承诺 API 不落 trap 及输入/缓存契约；不声称标题、地图或新游戏可用 | 批次 3 完成 SQL，批次 4 汇合 presentation/自身存档 | 否，原计划明确排除 |
+| TUI GETKEY latch | 终端没有可靠完整 down/up/toggle 设备面 | 普通/NF/宏/sequence 输入通过；Environment 明确缺能力并返回诊断 | 若将来有可验证终端协议再单独提案 | 否，已确认取舍 |
+| 有意参考差异 | SFMT 不复制 UseNewRandom 双状态；MAP 无转义；原版 MIN 负号系统行不注入 Rust 历史；部分诊断文字/拒绝阶段不可比 | 返回、副作用、终态和差异均逐项登记，不将不同改写为相同 | 后续批次继续沿 identity 与 difference ledger 验收 | 否，已写入分类/计划 |
 
 ### 交付与续做入口
 
-- 本批结论、已完成与未验证范围、是否满足整批验收：待填写。
-- 各组件提交、分项对应关系、发布/迁移注意事项、CHANGELOG_PENDING 更新情况：待填写。
-- 当前轮次/起止时间、最近观察状态或指标、材料与复现命令、下一步恢复入口：待填写。
-- 临时材料保留/清理、相关进程停止与资源释放情况：待填写。
+- 2A–2F 产品范围、三端绑定和功能行为矩阵已交付；没有未登记行为差异。严格完成判定中的
+  “无必需未验证项”仍保留上述 peak RSS 基础设施缺口，因此本文不伪称该数值已验收。
+- 最终产品产物：release C ABI SHA
+  `ff32b62199454db263743862729e8d58b6c3ddd750975f1810d2b8684e8368c8`；WASM SHA
+  `ed012d84a6dab23712065e82e756f8810d63b1c2e5818bb89827993bf6c8873a`；Tauri binary SHA
+  `62f21992a3bb998a1f39db0732c59ac67560584d812203fd95e4d18e49557f71`，webdriver manifest SHA
+  `0f3d7f92f626897f9b9bfb29a4de98ffc09df78dfb366753c1c5b8b5838d431d`。manifest 与 binary、
+  WASM、core `68d0f208` 和 Web source 输入一致。
+- 过程、失败、定向复验、DOM/runtime 快照、trace、双 oracle 和压缩规模报告保留在
+  `batch-2-work/2A/`–`2F/`；最后 Tauri 结论为
+  `2F/dynamic/tauri-compiled-cache-owner-routing-final/summary.txt`。这些 ignored 材料不提交，
+  暂不清理，以便审计首次全量和有意差异。
+- 根 `CHANGELOG_PENDING.md` 已在整批收尾单独追加已验证产品行为；没有调整发布版本、推送或
+  合并主线，也没有启动批次 3。
 
 <a id="batch-3"></a>
 
