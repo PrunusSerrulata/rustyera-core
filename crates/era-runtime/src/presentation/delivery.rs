@@ -12,8 +12,14 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 impl PresentationModel {
-    pub(crate) fn display_line(&self, index: usize) -> String {
-        let Some(line) = self.projected_line(index) else {
+    pub(crate) fn display_line(&self, raw_index: i64, from_end: bool) -> String {
+        let index = if from_end && raw_index < 0 {
+            let distance = usize::try_from(raw_index.unsigned_abs()).unwrap_or(usize::MAX);
+            self.delivered_line_count().checked_sub(distance)
+        } else {
+            usize::try_from(raw_index).ok()
+        };
+        let Some(line) = index.and_then(|index| self.projected_line(index)) else {
             return String::new();
         };
         let mut output = String::new();

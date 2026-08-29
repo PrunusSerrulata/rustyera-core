@@ -206,6 +206,12 @@ impl RuntimeSession {
             query_state: RuntimeQueryState {
                 skip_print: self.skip_print,
                 message_skip: self.message_skip,
+                snake_display_state: self.project_snapshot.as_ref().is_some_and(|project| {
+                    project
+                        .manifest
+                        .compatibility
+                        .supports_snake_display_state()
+                }),
             },
             user_defined_skip: self.user_defined_skip,
             force_kana_mode: self.force_kana_mode,
@@ -1144,6 +1150,7 @@ mod immediate_tests {
         let state = RuntimeQueryState {
             skip_print: false,
             message_skip: true,
+            snake_display_state: false,
         };
         let cases = [
             (
@@ -1244,6 +1251,7 @@ mod immediate_tests {
                 RuntimeQueryState {
                     skip_print: false,
                     message_skip: false,
+                    snake_display_state: false,
                 },
             )
             .unwrap(),

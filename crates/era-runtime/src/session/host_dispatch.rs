@@ -22,6 +22,7 @@ enum HostDispatchStatus {
 struct RuntimeQueryState {
     skip_print: bool,
     message_skip: bool,
+    snake_display_state: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -229,12 +230,10 @@ fn evaluate_runtime_query(
         "GETSTYLE" => VmValue::Integer(presentation.style_bits()),
         "GETDISPLAYLINE" => {
             let index = match arguments.argument(0) {
-                Some(VmValue::Integer(value)) => usize::try_from(*value).ok(),
-                Some(_) | None => Some(0),
+                Some(VmValue::Integer(value)) => *value,
+                Some(_) | None => 0,
             };
-            VmValue::String(
-                index.map_or_else(String::new, |index| presentation.display_line(index)),
-            )
+            VmValue::String(presentation.display_line(index, state.snake_display_state))
         }
         "HTML_GETPRINTEDSTR" => {
             let raw_index = match arguments.argument(0) {
@@ -344,6 +343,12 @@ impl RuntimeSession {
             RuntimeQueryState {
                 skip_print: self.skip_print,
                 message_skip: self.message_skip,
+                snake_display_state: self.project_snapshot.as_ref().is_some_and(|project| {
+                    project
+                        .manifest
+                        .compatibility
+                        .supports_snake_display_state()
+                }),
             },
         )? {
             RuntimeQueryEvaluation::Ready(value) => {
