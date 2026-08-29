@@ -52,18 +52,7 @@ impl RuntimeSession {
                 None,
             ),
             VmPortEvent::HostCall(request) => self.handle_host_call(vm, &request),
-            VmPortEvent::FiberFaulted(_, fault) => self.fault(
-                FaultCode::VmFault,
-                &fault.message,
-                Some(erabasic_vm::VmExecutionOrigin {
-                    generation: fault.generation,
-                    function: fault.function,
-                    function_name: fault.function_name,
-                    instruction: fault.instruction,
-                    command: fault.command,
-                    source: fault.source,
-                }),
-            ),
+            VmPortEvent::FiberFaulted(_, fault) => self.fault_from_vm(&fault),
             VmPortEvent::FiberCompleted(fiber, value) => {
                 if self.controller.completed(fiber, value.as_ref()) {
                     self.spawn_next_event(vm)?;

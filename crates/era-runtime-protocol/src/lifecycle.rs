@@ -509,6 +509,98 @@ pub struct RuntimeFault {
     pub message: String,
     #[n(2)]
     pub origin: Option<ExecutionOrigin>,
+    #[n(4)]
+    pub vm: Option<Box<RuntimeVmFault>>,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct RuntimeVmFault {
+    #[n(0)]
+    pub primary: RuntimeVmFaultDetail,
+    #[n(1)]
+    pub secondary: Option<Box<RuntimeVmFaultDetail>>,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct RuntimeVmFaultDetail {
+    #[n(0)]
+    pub correlation_id: u64,
+    #[n(1)]
+    pub parent_correlation_id: Option<u64>,
+    #[n(2)]
+    pub category: RuntimeVmFaultCategory,
+    #[n(3)]
+    pub code: RuntimeVmFaultCode,
+    #[n(4)]
+    pub message: String,
+    #[n(5)]
+    pub origin: Option<ExecutionOrigin>,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeVmFaultCategory {
+    #[n(0)]
+    ScriptParse,
+    #[n(1)]
+    ScriptResolve,
+    #[n(2)]
+    ScriptArgument,
+    #[n(3)]
+    ScriptBounds,
+    #[n(4)]
+    ScriptArithmetic,
+    #[n(5)]
+    ScriptAssertion,
+    #[n(6)]
+    ScriptExplicitThrow,
+    #[n(7)]
+    ScriptOperation,
+    #[n(8)]
+    ResourceLimit,
+    #[n(9)]
+    Cancellation,
+    #[n(10)]
+    InternalInvariant,
+    #[n(11)]
+    HostContract,
+    #[n(12)]
+    Protocol,
+    #[n(13)]
+    Permission,
+    #[n(14)]
+    Infrastructure,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeVmFaultCode {
+    #[n(0)]
+    InvalidInstruction,
+    #[n(1)]
+    StackUnderflow,
+    #[n(2)]
+    TypeMismatch,
+    #[n(3)]
+    Bounds,
+    #[n(4)]
+    DivideByZero,
+    #[n(5)]
+    MissingSymbol,
+    #[n(6)]
+    Host,
+    #[n(7)]
+    Native,
+    #[n(8)]
+    Trap,
+    #[n(9)]
+    ResourceLimit,
+    #[n(10)]
+    RunawayExecution,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

@@ -297,6 +297,40 @@ impl RuntimeSession {
                 code,
                 message: message.into(),
                 origin: origin.map(protocol_execution_origin),
+                vm: None,
+            }),
+            None,
+        )?;
+        self.set_phase(RuntimePhase::Faulted)
+    }
+
+    pub(in super::super) fn fault_from_vm(
+        &mut self,
+        fault: &erabasic_vm::VmFault,
+    ) -> Result<(), RuntimeError> {
+        self.operations.html_lines.clear();
+        let secondary = fault
+            .secondary
+            .as_deref()
+            .map(protocol_vm_fault_detail)
+            .map(Box::new);
+        self.emit_log(
+            RuntimeLogLevel::Error,
+            format!(
+                "runtime VM fault [{}]: {}",
+                fault.correlation_id, fault.message
+            ),
+        )?;
+        self.emit(
+            RuntimeMessage::Fault(RuntimeFault {
+                context: None,
+                code: FaultCode::VmFault,
+                message: fault.message.clone(),
+                origin: Some(protocol_execution_origin(fault.origin())),
+                vm: Some(Box::new(era_runtime_protocol::RuntimeVmFault {
+                    primary: protocol_vm_fault_detail(fault),
+                    secondary,
+                })),
             }),
             None,
         )?;
@@ -551,5 +585,62 @@ impl RuntimeSession {
         self.next_interaction_id = 1;
         self.accepted_message_ids.clear();
         self.accepted_debug_message_ids.clear();
+    }
+}
+
+fn protocol_vm_fault_detail(
+    fault: &erabasic_vm::VmFault,
+) -> era_runtime_protocol::RuntimeVmFaultDetail {
+    era_runtime_protocol::RuntimeVmFaultDetail {
+        correlation_id: fault.correlation_id,
+        parent_correlation_id: fault.parent_correlation_id,
+        category: protocol_vm_fault_category(fault.category),
+        code: protocol_vm_fault_code(fault.code),
+        message: fault.message.clone(),
+        origin: Some(protocol_execution_origin(fault.origin())),
+    }
+}
+
+const fn protocol_vm_fault_category(
+    category: erabasic_vm::FaultCategory,
+) -> era_runtime_protocol::RuntimeVmFaultCategory {
+    use era_runtime_protocol::RuntimeVmFaultCategory as Protocol;
+    match category {
+        erabasic_vm::FaultCategory::Script(kind) => match kind {
+            erabasic_vm::ScriptFaultKind::Parse => Protocol::ScriptParse,
+            erabasic_vm::ScriptFaultKind::Resolve => Protocol::ScriptResolve,
+            erabasic_vm::ScriptFaultKind::Argument => Protocol::ScriptArgument,
+            erabasic_vm::ScriptFaultKind::Bounds => Protocol::ScriptBounds,
+            erabasic_vm::ScriptFaultKind::Arithmetic => Protocol::ScriptArithmetic,
+            erabasic_vm::ScriptFaultKind::Assertion => Protocol::ScriptAssertion,
+            erabasic_vm::ScriptFaultKind::ExplicitThrow => Protocol::ScriptExplicitThrow,
+            erabasic_vm::ScriptFaultKind::Operation => Protocol::ScriptOperation,
+        },
+        erabasic_vm::FaultCategory::ResourceLimit => Protocol::ResourceLimit,
+        erabasic_vm::FaultCategory::Cancellation => Protocol::Cancellation,
+        erabasic_vm::FaultCategory::InternalInvariant => Protocol::InternalInvariant,
+        erabasic_vm::FaultCategory::HostContract => Protocol::HostContract,
+        erabasic_vm::FaultCategory::Protocol => Protocol::Protocol,
+        erabasic_vm::FaultCategory::Permission => Protocol::Permission,
+        erabasic_vm::FaultCategory::Infrastructure => Protocol::Infrastructure,
+    }
+}
+
+const fn protocol_vm_fault_code(
+    code: erabasic_vm::VmFaultCode,
+) -> era_runtime_protocol::RuntimeVmFaultCode {
+    use era_runtime_protocol::RuntimeVmFaultCode as Protocol;
+    match code {
+        erabasic_vm::VmFaultCode::InvalidInstruction => Protocol::InvalidInstruction,
+        erabasic_vm::VmFaultCode::StackUnderflow => Protocol::StackUnderflow,
+        erabasic_vm::VmFaultCode::TypeMismatch => Protocol::TypeMismatch,
+        erabasic_vm::VmFaultCode::Bounds => Protocol::Bounds,
+        erabasic_vm::VmFaultCode::DivideByZero => Protocol::DivideByZero,
+        erabasic_vm::VmFaultCode::MissingSymbol => Protocol::MissingSymbol,
+        erabasic_vm::VmFaultCode::Host => Protocol::Host,
+        erabasic_vm::VmFaultCode::Native => Protocol::Native,
+        erabasic_vm::VmFaultCode::Trap => Protocol::Trap,
+        erabasic_vm::VmFaultCode::ResourceLimit => Protocol::ResourceLimit,
+        erabasic_vm::VmFaultCode::RunawayExecution => Protocol::RunawayExecution,
     }
 }
