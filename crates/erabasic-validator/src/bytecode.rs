@@ -80,6 +80,24 @@ impl ValidationContext {
                 .cloned()
                 .map(|import| (import.import.key, import))
                 .collect(),
+            runtime_native_authorizations: artifact
+                .runtime_native_authorizations
+                .iter()
+                .cloned()
+                .map(|authorization| (authorization.key, authorization))
+                .collect(),
+            runtime_host_authorizations: artifact
+                .runtime_host_authorizations
+                .iter()
+                .cloned()
+                .map(|authorization| (authorization.key, authorization))
+                .collect(),
+            runtime_staged_authorizations: artifact
+                .runtime_staged_authorizations
+                .iter()
+                .cloned()
+                .map(|authorization| (authorization.key, authorization))
+                .collect(),
             host_imports: artifact
                 .host_imports
                 .iter()
@@ -90,6 +108,16 @@ impl ValidationContext {
                 .host_imports
                 .iter()
                 .map(|import| import.capability)
+                .chain(
+                    artifact
+                        .runtime_host_authorizations
+                        .iter()
+                        .flat_map(|family| {
+                            std::iter::once(&family.prototype)
+                                .chain(family.stages.iter().map(|(_, import)| import))
+                                .map(|import| import.capability)
+                        }),
+                )
                 .collect(),
             ..Self::default()
         }

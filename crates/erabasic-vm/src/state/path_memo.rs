@@ -1212,7 +1212,9 @@ mod tests {
         );
         (
             Vm::new(
-                validation.value.expect("validated artifact"),
+                validation
+                    .value
+                    .unwrap_or_else(|| panic!("validated artifact: {:#?}", validation.diagnostics)),
                 VmConfig::default(),
             ),
             artifact,
