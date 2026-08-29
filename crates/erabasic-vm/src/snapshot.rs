@@ -21,7 +21,7 @@ pub use self::model::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 19;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 20;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 

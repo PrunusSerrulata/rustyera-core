@@ -145,6 +145,86 @@ fn runtime_payload_and_envelope_tags_agree() {
 }
 
 #[test]
+fn protocol_40_round_trips_input_environment_wait_and_ordered_device_contracts() {
+    let capability = era_runtime_protocol::EnvironmentCapability {
+        name: era_runtime_protocol::INPUT_DEVICE_LATCH_CAPABILITY.into(),
+        versions: era_protocol::VersionRange::exact(
+            era_runtime_protocol::INPUT_ENVIRONMENT_VERSION,
+        ),
+    };
+    assert_eq!(
+        decode_canonical::<era_runtime_protocol::EnvironmentCapability>(
+            &encode_canonical(&capability).unwrap(),
+        )
+        .unwrap(),
+        capability
+    );
+
+    let wait = era_runtime_protocol::InputWait {
+        wait_id: 7,
+        kind: era_runtime_protocol::WaitKind::StringValue,
+        stability: era_runtime_protocol::WaitStability::Transient,
+        one_input: false,
+        stop_message_skip: false,
+        system_input: false,
+        mouse_input: false,
+        default_value: Some(era_runtime_protocol::ProtocolValue::String(
+            "default".into(),
+        )),
+        deadline_ns: Some(11),
+        display_time: true,
+        timeout_message: Some("timeout".into()),
+        submission_token: InteractionToken { epoch: 2, id: 3 },
+        countdown_remaining_ms: Some(4),
+        viewport_policy: era_runtime_protocol::InputViewportPolicy::PreserveUserViewport,
+    };
+    assert_eq!(
+        decode_canonical::<era_runtime_protocol::InputWait>(&encode_canonical(&wait).unwrap())
+            .unwrap(),
+        wait
+    );
+
+    let event = era_runtime_protocol::DeviceStateChanged {
+        event_sequence: 9,
+        toggle: true,
+        repeat: false,
+        device: era_runtime_protocol::InputDeviceKind::Keyboard,
+        code: 65,
+        pressed: true,
+        x: 0,
+        y: 0,
+        monotonic_time_ns: 12,
+    };
+    let message = RuntimeMessage::DeviceStateChanged(event);
+    assert_eq!(
+        RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
+        message
+    );
+
+    let pump = era_runtime_protocol::DevicePumpRequest {
+        epoch: 2,
+        after_event_sequence: 9,
+    };
+    assert_eq!(
+        decode_canonical::<era_runtime_protocol::DevicePumpRequest>(
+            &encode_canonical(&pump).unwrap(),
+        )
+        .unwrap(),
+        pump
+    );
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
+    let schema = include_str!("../schema/runtime.cddl");
+    for definition in [
+        "environment-capability",
+        "input-wait",
+        "device-state-changed",
+        "client-state-changed",
+    ] {
+        assert!(schema.contains(definition));
+    }
+}
+
+#[test]
 fn protocol_24_carries_backend_authoritative_logs() {
     for (level, encoded_level) in [
         (RuntimeLogLevel::Debug, 0_u8),
@@ -163,7 +243,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(39, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
 }
 
 #[test]
@@ -196,7 +276,7 @@ fn protocol_38_carries_correlated_secondary_vm_faults() {
         RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(39, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("runtime-vm-fault-detail"));
     assert_eq!(
@@ -231,7 +311,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(39, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
 }
 
 #[test]
@@ -254,7 +334,7 @@ fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
     assert!(include_str!("../schema/runtime.cddl").contains(
         "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
     ));
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(39, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
 }
 
 #[test]
@@ -400,7 +480,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(39, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
 }
 
 #[test]
@@ -409,7 +489,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(39, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -575,7 +655,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(39, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -614,7 +694,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(39, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(40, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 

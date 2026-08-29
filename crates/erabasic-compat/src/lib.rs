@@ -121,7 +121,7 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 1,
-            CompatibilityProfileId::EmueraSkiaSnake => 8,
+            CompatibilityProfileId::EmueraSkiaSnake => 9,
         };
         Self {
             profile,
@@ -201,6 +201,12 @@ impl CompatibilityIdentity {
     #[must_use]
     pub const fn supports_snake_display_state(&self) -> bool {
         matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 8
+    }
+
+    /// Runtime-owned input control, device latches, and environment queries are policy v9.
+    #[must_use]
+    pub const fn supports_snake_input(&self) -> bool {
+        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 9
     }
 
     /// Policy for non-variadic user calls; builtin signatures remain exact.

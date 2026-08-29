@@ -1,4 +1,4 @@
-; Runtime channel version: 39.0.
+; Runtime channel version: 40.0.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -25,8 +25,8 @@ runtime-message =
   [30, frontend-input] /
   [31, advance-time] /
   [32, wait-change] /
-  [33, any] /
-  [34, any] /
+  [33, device-state-changed] /
+  [34, client-state-changed] /
   [35, projection-observation] /
   [36, projection-state] /
   [37, input-undo-request] /
@@ -65,12 +65,24 @@ runtime-message =
   [98, runtime-log]
 
 configuration-client-profile = 0..3
+protocol-version = { 0: uint, 1: uint }
+version-range = { 0: protocol-version, 1: protocol-version }
+environment-capability = { 0: tstr, 1: version-range }
+service-capability = { 0: uint, 1: tstr, 2: version-range }
+storage-capabilities = { 0: bool, 1: bool, 2: bool, 3: bool }
+client-capabilities = {
+  0: [* uint], 1: bool, 2: bool, 3: bool, 4: bool, 5: bool, 6: bool,
+  7: bool, 8: bool, 9: [* tstr], 10: [* service-capability],
+  11: storage-capabilities, 12: [* environment-capability]
+}
 client-hello = {
-  0: any, 1: tstr, 2: [* uint], 3: runtime-limits, 4: any, 5: [* tstr],
+  0: version-range, 1: tstr, 2: [* uint], 3: runtime-limits,
+  4: client-capabilities, 5: [* tstr],
   ? 6: configuration-client-profile / null
 }
 server-hello = {
-  0: any, 1: any, 2: [* uint], 3: runtime-limits, 4: uint, 5: any, 6: tstr,
+  0: protocol-version, 1: any, 2: [* uint], 3: runtime-limits, 4: uint,
+  5: client-capabilities, 6: tstr,
   ? 7: configuration-client-profile / null
 }
 runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }
@@ -134,6 +146,18 @@ finalize-configuration-update = { 0: uint, 1: 0..1 }
 configuration-update-committed = { 0: project-configuration-snapshot }
 frontend-input = { 0: uint, 1: interaction-token, 2: uint, 3: any, 4: bool }
 advance-time = { 0: uint }
+input-wait = {
+  0: uint, 1: uint, 2: uint, 3: bool, 4: bool, 5: bool, 6: bool,
+  7: any / null, 8: uint / null, 9: bool, 10: tstr / null,
+  11: interaction-token, 12: uint / null, 13: 0..1
+}
+device-state-changed = {
+  0: 0..3, 1: uint, 2: bool, 3: int, 4: int, 5: uint,
+  6: uint, 7: bool, 8: bool
+}
+client-state-changed = {
+  0: bool, 1: bool, 2: bool, 3: bool, 4: bool, 5: bool
+}
 wait-change = any
 input-undo-request = { 0: interaction-token }
 input-undo-state = { 0: bool, 1: uint, 2: bool, 3: uint, 4: interaction-token / null }

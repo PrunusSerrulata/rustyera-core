@@ -37,6 +37,8 @@ pub enum InputModality {
 #[cbor(map)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ClientCapabilities {
+    #[n(12)]
+    pub environment: Vec<crate::EnvironmentCapability>,
     #[n(0)]
     pub input_modalities: Vec<InputModality>,
     #[n(1)]

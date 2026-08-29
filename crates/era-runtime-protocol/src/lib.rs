@@ -6,6 +6,8 @@
 mod compatibility;
 mod configuration;
 mod effect;
+mod environment;
+pub use environment::*;
 mod extension;
 mod html_query;
 mod input;

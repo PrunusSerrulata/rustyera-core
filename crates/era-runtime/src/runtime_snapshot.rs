@@ -12,7 +12,7 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 25;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 26;
 #[cfg(test)]
 const LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 20;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
@@ -100,6 +100,7 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) force_kana_mode: u8,
     pub(crate) hotkey_state: Vec<i64>,
     pub(crate) key_macros: crate::key_macro::KeyMacros,
+    pub(crate) input_controller: crate::input_source::InputController,
     pub(crate) text_box: String,
     pub(crate) text_box_layout: era_runtime_protocol::TextBoxLayout,
     pub(crate) flow_input_enabled: bool,
@@ -528,6 +529,7 @@ mod tests {
             force_kana_mode: 0,
             hotkey_state: Vec::new(),
             key_macros: crate::key_macro::KeyMacros::default(),
+            input_controller: crate::input_source::InputController::default(),
             text_box: String::new(),
             text_box_layout: era_runtime_protocol::TextBoxLayout::default(),
             flow_input_enabled: false,
@@ -598,6 +600,7 @@ mod tests {
             force_kana_mode: 0,
             hotkey_state: Vec::new(),
             key_macros: crate::key_macro::KeyMacros::default(),
+            input_controller: crate::input_source::InputController::default(),
             text_box: String::new(),
             text_box_layout: era_runtime_protocol::TextBoxLayout::default(),
             flow_input_enabled: false,
