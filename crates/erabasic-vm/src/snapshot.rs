@@ -635,7 +635,8 @@ impl Vm {
 }
 
 fn validate_restored_continuations(vm: &Vm) -> Result<(), VmError> {
-    vm.validate_bit_leases()?;
+    vm.validate_bit_leases()
+        .map_err(|error| VmError::Snapshot(error.to_string()))?;
     for fiber in vm.fibers.values() {
         for frame in &fiber.frames {
             if !vm.valid_frame_match_calls(fiber, frame)
