@@ -5,10 +5,17 @@ pub(in super::super) fn execute_strjoin(
     vm: &Vm,
     fiber: &Fiber,
     arguments: &[VmValue],
+    omitted_arguments: &[usize],
 ) -> Result<VmValue, VmError> {
     let place = array_place(arguments)?;
     let values = array_snapshot_any_rank(vm, fiber, place)?;
-    let delimiter = match arguments.get(1) {
+    // Omission is source provenance, never a particular Integer/String value.
+    let argument = |slot| {
+        (!omitted_arguments.contains(&slot))
+            .then(|| arguments.get(slot))
+            .flatten()
+    };
+    let delimiter = match argument(1) {
         None => ",",
         Some(VmValue::String(value)) => value,
         _ => {
@@ -17,7 +24,7 @@ pub(in super::super) fn execute_strjoin(
             ));
         }
     };
-    let start = match arguments.get(2) {
+    let start = match argument(2) {
         None => 0,
         Some(VmValue::Integer(value)) => usize::try_from(*value).map_err(|_| {
             script_native_error(
@@ -37,7 +44,7 @@ pub(in super::super) fn execute_strjoin(
             "STRJOIN start exceeds the array".into(),
         ));
     }
-    let count = match arguments.get(3) {
+    let count = match argument(3) {
         None => values.len() - start,
         Some(VmValue::Integer(value)) => usize::try_from(*value).map_err(|_| {
             script_native_error(

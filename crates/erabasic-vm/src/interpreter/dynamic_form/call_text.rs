@@ -59,8 +59,8 @@ impl RuntimeFormContinuation {
         // ReduceArguments resolves variable/method names and expression types before
         // CallFunction, inside TRY. This pass only inspects source/schema: actual
         // storage reads and argument execution remain outside the protected stage.
-        let specs = match self.prepare_call_text_arguments(vm, natives, &mut arguments) {
-            Ok(specs) => specs,
+        let graph = match self.prepare_call_text_arguments(vm, natives, &mut arguments) {
+            Ok(graph) => graph,
             Err(failure)
                 if spec.mode.allows_missing()
                     && matches!(
@@ -87,6 +87,79 @@ impl RuntimeFormContinuation {
         // Target kind errors originate after argument construction and are outside TRY.
         validate_user_call_target_kind(program, target, spec.mode.user_call_mode())
             .map_err(map_vm_error)?;
+        // CALLSTR restructures ALL outer terms before ConvertArg, including
+        // excess ones. The bounded pump is not enclosed in TRY's binder catch.
+        self.reference_arguments =
+            Some(super::reference_arguments::PendingReferenceArguments::new(
+                graph,
+                target.parameters.len(),
+            ));
+        self.work
+            .push(super::RuntimeFormTask::FinishCallTextArguments {
+                target: target.key,
+                spec,
+            });
+        self.work
+            .push(super::RuntimeFormTask::ReferenceArgumentsPump);
+        Ok(())
+    }
+
+    pub(super) fn finish_call_text_arguments(
+        &mut self,
+        vm: &mut Vm,
+        fiber: &Fiber,
+        target: erabasic_bytecode::SymbolKey,
+        spec: CallTextSpec,
+    ) -> Result<(), StepError> {
+        let program = vm.generations.get(&self.generation).ok_or_else(|| {
+            StepError::new(VmFaultCode::MissingSymbol, "CALLSTR generation disappeared")
+        })?;
+        let target = program.function(target).ok_or_else(|| {
+            StepError::new(VmFaultCode::MissingSymbol, "CALLSTR target disappeared")
+        })?;
+        let pending = self
+            .reference_arguments
+            .as_ref()
+            .filter(|pending| !pending.preparing)
+            .ok_or_else(|| {
+                StepError::new(
+                    VmFaultCode::InvalidInstruction,
+                    "CALLSTR binding preceded restructuring",
+                )
+            })?;
+        let arguments = pending
+            .graph
+            .roots
+            .iter()
+            .map(|root| {
+                root.as_ref()
+                    .map(|root| pending.graph.expression(program, root))
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let specs = pending
+            .graph
+            .roots
+            .iter()
+            .zip(&arguments)
+            .map(|(root, expression)| {
+                let Some(root) = root else {
+                    return erabasic_bytecode::UserArgumentSpec::Omitted;
+                };
+                let kind = match root {
+                    super::reference_arguments::graph::TermRef::Single(value) => value.value_type(),
+                    super::reference_arguments::graph::TermRef::Original(id) => {
+                        pending.graph.template.nodes[*id as usize].value_type
+                    }
+                };
+                super::typing::shape_spec(
+                    program,
+                    self.function,
+                    expression.as_ref().expect("present root"),
+                    kind,
+                )
+            })
+            .collect::<Vec<_>>();
         let resolved = bind_user_call_signature(
             program,
             self.generation,
@@ -108,12 +181,25 @@ impl RuntimeFormContinuation {
                         crate::FaultCategory::Script(crate::ScriptFaultKind::Argument)
                     ) =>
             {
+                self.reference_arguments = None;
                 return self.fail_call_text(spec);
             }
             Err(failure) => return Err(failure),
         };
-        // TRY is now over: argument execution, service/callee failures propagate normally.
-        self.queue_resolved_call(vm, call, specs, arguments);
+        // All Restructure effects have already happened outside TRY. ConvertArg
+        // remains protected; subsequent ordinary actual/callee execution is not.
+        self.work
+            .push(super::RuntimeFormTask::ReleaseReferenceArguments);
+        self.reference_bindings = true;
+        let checkpoint = self.begin_call_text_argument_checkpoint(fiber, spec)?;
+        self.queue_resolved_call(vm, call, specs, arguments)?;
+        let Some(super::RuntimeFormTask::MethodArgument(call)) = self.work.last_mut() else {
+            return Err(StepError::new(
+                VmFaultCode::InvalidInstruction,
+                "CALLSTR argument checkpoint lacks its user-call state",
+            ));
+        };
+        call.argument_checkpoint = checkpoint;
         Ok(())
     }
 
@@ -122,29 +208,40 @@ impl RuntimeFormContinuation {
         vm: &Vm,
         natives: &NativeServiceRegistry,
         arguments: &mut [Option<erabasic_ast::Expr>],
-    ) -> Result<Vec<erabasic_bytecode::UserArgumentSpec>, StepError> {
+    ) -> Result<erabasic_bytecode::ReferenceTermGraph, StepError> {
         let program = vm.generations.get(&self.generation).ok_or_else(|| {
             StepError::new(VmFaultCode::MissingSymbol, "CALLSTR generation is missing")
         })?;
-        let mut specs = Vec::with_capacity(arguments.len());
-        for argument in arguments {
-            let Some(expression) = argument else {
-                specs.push(erabasic_bytecode::UserArgumentSpec::Omitted);
-                continue;
-            };
+        // Resolve in source order first. This source-only pass includes excess
+        // nested arguments, as ReduceArguments/Create precede ConvertArg.
+        for expression in arguments.iter_mut().flatten() {
             frontend::resolve_expression_named_indices(program, self.function, expression, 0)?;
-            let (nodes, shape) = frontend::validate_runtime_expression(
-                vm,
-                natives,
-                self.generation,
-                self.function,
-                expression,
-                self.remaining_nodes,
-            )?;
-            self.remaining_nodes = self.remaining_nodes.saturating_sub(nodes);
-            specs.push(shape);
         }
-        Ok(specs)
+        let mut analysis = super::typing::TypeAnalysis::new(
+            program,
+            self.function,
+            self.generation,
+            false,
+            self.remaining_nodes,
+            Some(natives),
+        );
+        analysis.reference_terms = true;
+        for expression in arguments.iter().flatten() {
+            analysis.expression(expression, 0)?;
+        }
+        self.remaining_nodes = self.remaining_nodes.saturating_sub(analysis.nodes());
+        let graph = super::reference_arguments::GraphBuilder::new(
+            program,
+            self.function,
+            &analysis.expression_types,
+        )
+        .build(arguments)?;
+        let plan = super::call_plan::RuntimeCallPlan::from_analysis(
+            super::call_plan::RuntimePlanSource::Arguments(arguments.to_vec()),
+            analysis,
+        )?;
+        self.install_call_plan(plan)?;
+        Ok(graph)
     }
 
     fn fail_call_text(&mut self, spec: CallTextSpec) -> Result<(), StepError> {

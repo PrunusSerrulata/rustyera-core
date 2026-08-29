@@ -82,3 +82,32 @@ impl RuntimeCallableShape {
         })
     }
 }
+
+/// Fixed token metadata required for source reconstruction (including private REF).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeVariableSymbol {
+    pub key: crate::SymbolKey,
+    pub reference: bool,
+    pub reference_semantics: RuntimeReferenceSemantics,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeReferenceSemantics {
+    pub is_const: bool,
+    pub can_restructure: bool,
+}
+
+impl RuntimeArgumentConstraint {
+    /// Exactly the analyzer's builtin value/place conversion, not a REF permission grant.
+    #[must_use]
+    pub fn keeps_place(self, value_type: BytecodeType) -> bool {
+        matches!(
+            self,
+            Self::MutableInteger
+                | Self::MutableString
+                | Self::MutableAny
+                | Self::ReferenceAny
+                | Self::ReferenceOrString
+                | Self::MutableReferenceOrString
+        ) || self == Self::IntegerOrMutableString && value_type == BytecodeType::String
+    }
+}

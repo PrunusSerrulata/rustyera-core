@@ -144,6 +144,8 @@ pub fn evaluate_pure_native_with_compatibility(
         return Err(format!("{name} is not a pure core-native service"));
     }
     let request = NativeCallRequest {
+        service_key: SymbolKey::default(),
+        omitted_arguments: Vec::new(),
         import: RuntimeImport {
             key: SymbolKey::default(),
             namespace: "debug".into(),
@@ -180,7 +182,7 @@ impl NativeService for CoreNative {
     )]
     fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, ExecutionFailure> {
         let args = &request.arguments;
-        let integer = |index: usize| match args.get(index) {
+        let integer = |index: usize| match request.argument(index) {
             Some(VmValue::Integer(value)) => Ok(*value),
             _ => Err(native_contract_failure(format!(
                 "{} argument {} must be integer",
@@ -188,7 +190,7 @@ impl NativeService for CoreNative {
                 index + 1
             ))),
         };
-        let string = |index: usize| match args.get(index) {
+        let string = |index: usize| match request.argument(index) {
             Some(VmValue::String(value)) => Ok(value.as_str()),
             _ => Err(native_contract_failure(format!(
                 "{} argument {} must be string",
@@ -393,11 +395,11 @@ impl NativeService for CoreNative {
             )),
             "tostr" => VmValue::String(integer(0)?.to_string()),
             "substring" => {
-                let start = match args.get(1) {
+                let start = match request.argument(1) {
                     None | Some(VmValue::Integer(i64::MIN)) => 0,
                     Some(_) => integer(1)?,
                 };
-                let length = match args.get(2) {
+                let length = match request.argument(2) {
                     None | Some(VmValue::Integer(i64::MIN)) => None,
                     Some(_) => Some(integer(2)?),
                 };
@@ -409,11 +411,11 @@ impl NativeService for CoreNative {
                 ))
             }
             "substringu" => {
-                let start = match args.get(1) {
+                let start = match request.argument(1) {
                     None | Some(VmValue::Integer(i64::MIN)) => 0,
                     Some(_) => integer(1)?,
                 };
-                let length = match args.get(2) {
+                let length = match request.argument(2) {
                     None | Some(VmValue::Integer(i64::MIN)) => None,
                     Some(_) => Some(integer(2)?),
                 };
@@ -563,7 +565,7 @@ fn replace_text(
 ) -> Result<String, ExecutionFailure> {
     let input = request_string(request, 0)?;
     let pattern = request_string(request, 1)?;
-    let mode = match request.arguments.get(3) {
+    let mode = match request.argument(3) {
         None => 0,
         Some(VmValue::Integer(value)) => *value,
         Some(_) => {
@@ -580,7 +582,7 @@ fn replace_text(
         .get_or_compile(pattern)
         .map_err(|error| regex_failure("REPLACE", &error))?;
     if mode == 1 {
-        match request.arguments.get(2) {
+        match request.argument(2) {
             Some(VmValue::StringPlace(_)) => {}
             Some(_) => {
                 return Err(native_script_failure(
@@ -622,7 +624,7 @@ fn replace_text(
 }
 
 fn request_string(request: &NativeCallRequest, index: usize) -> Result<&str, ExecutionFailure> {
-    match request.arguments.get(index) {
+    match request.argument(index) {
         Some(VmValue::String(value)) => Ok(value),
         Some(VmValue::StringPlace(_)) => request
             .places

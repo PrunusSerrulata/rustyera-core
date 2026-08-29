@@ -545,6 +545,16 @@ mod tests {
             manifest: ArtifactManifest::new(Digest::default()),
             call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
             runtime_builtins: Vec::new(),
+            runtime_native_authorizations: Vec::new(),
+            runtime_host_authorizations: Vec::new(),
+            runtime_variables: vec![erabasic_bytecode::RuntimeVariableSymbol {
+                key: definition.key,
+                reference: false,
+                reference_semantics: erabasic_bytecode::RuntimeReferenceSemantics {
+                    is_const: false,
+                    can_restructure: false,
+                },
+            }],
             project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
                 .data
                 .unwrap(),

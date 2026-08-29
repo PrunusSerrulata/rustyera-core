@@ -93,6 +93,8 @@ pub(crate) struct WaitingHost {
     pub stability: HostWaitStability,
     pub rebind_payload: Vec<u8>,
     pub origin: VmExecutionOrigin,
+    /// Present only for an authorized direct Host expression owned by a live form.
+    pub form_scope: Option<crate::RuntimeHostScope>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

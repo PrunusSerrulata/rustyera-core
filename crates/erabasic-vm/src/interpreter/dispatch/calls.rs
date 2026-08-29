@@ -334,155 +334,11 @@ impl Vm {
                                 native_name,
                             )?;
                             NativeReady::default()
-                        } else if native_name == "__mutate_integer" {
-                            NativeReady::value(
-                                execute_integer_mutation(self, fiber, &arguments)
-                                    .map_err(map_vm_error)?,
-                            )
-                        } else if matches!(native_name, "swap" | "swapvar") {
-                            execute_swap_transaction(self, fiber, &arguments)
-                                .map_err(map_vm_error)?;
-                            NativeReady::default()
-                        } else if matches!(native_name, "setbit" | "clearbit" | "invertbit") {
-                            execute_bit_mutation(self, fiber, native_name, &arguments)
-                                .map_err(map_vm_error)?;
-                            NativeReady::default()
-                        } else if native_name == "split" {
-                            execute_split_transaction(self, fiber, &arguments)
-                                .map_err(map_vm_error)?;
-                            NativeReady::default()
-                        } else if native_name == "getnum" {
-                            NativeReady::value(
-                                execute_getnum(self, fiber, &arguments).map_err(map_vm_error)?,
-                            )
-                        } else if native_name == "erdname" {
-                            NativeReady::value(
-                                execute_erdname(self, fiber, &arguments).map_err(map_vm_error)?,
-                            )
-                        } else if native_name == "__indexbyname" {
-                            NativeReady::value(
-                                execute_index_by_name(self, fiber, &arguments)
-                                    .map_err(map_vm_error)?,
-                            )
-                        } else if native_name == "setvar" {
-                            NativeReady::value(
-                                execute_set_var(self, fiber, &arguments).map_err(map_vm_error)?,
-                            )
-                        } else if matches!(native_name, "getvar" | "getvars") {
-                            NativeReady::value(
-                                execute_get_var(self, fiber, &arguments, native_name == "getvars")
-                                    .map_err(map_vm_error)?,
-                            )
-                        } else if native_name == "__encodetouni_result" {
-                            execute_encode_to_uni_result(self, fiber, &arguments)
-                                .map_err(map_vm_error)?;
-                            NativeReady::default()
-                        } else if native_name == "strjoin" {
-                            NativeReady::value(
-                                execute_strjoin(self, fiber, &arguments).map_err(map_vm_error)?,
-                            )
-                        } else if matches!(native_name, "arrayremove" | "arrayshift" | "arraysort")
+                        } else if let Some(ready) = self
+                            .execute_special_native(fiber, native_name, &arguments, &[])
+                            .map_err(map_vm_error)?
                         {
-                            execute_array_mutation(self, fiber, native_name, &arguments)
-                                .map_err(map_vm_error)?;
-                            NativeReady::default()
-                        } else if native_name == "arraycopy" {
-                            execute_array_copy(self, fiber, &arguments).map_err(map_vm_error)?;
-                            NativeReady::default()
-                        } else if matches!(native_name, "varset" | "cvarset") {
-                            execute_variable_fill(self, fiber, native_name, &arguments)
-                                .map_err(map_vm_error)?;
-                            NativeReady::default()
-                        } else if native_name == "arraymsort" {
-                            NativeReady::value(
-                                execute_array_multi_sort(self, fiber, &arguments)
-                                    .map_err(map_vm_error)?,
-                            )
-                        } else if native_name == "arraymsortex" {
-                            NativeReady::value(
-                                execute_array_multi_sort_ex(self, fiber, &arguments)
-                                    .map_err(map_vm_error)?,
-                            )
-                        } else if matches!(native_name, "findelement" | "findlastelement") {
-                            NativeReady::value(
-                                execute_find_element(
-                                    self,
-                                    fiber,
-                                    native_name == "findlastelement",
-                                    &arguments,
-                                )
-                                .map_err(map_vm_error)?,
-                            )
-                        } else if native_name == "regexpmatch" {
-                            NativeReady::value(
-                                execute_regex_match(self, fiber, &arguments)
-                                    .map_err(map_vm_error)?,
-                            )
-                        } else if matches!(
-                            native_name,
-                            "sumarray"
-                                | "sumcarray"
-                                | "maxarray"
-                                | "maxcarray"
-                                | "minarray"
-                                | "mincarray"
-                                | "match"
-                                | "cmatch"
-                                | "inrangearray"
-                                | "inrangecarray"
-                                | "groupmatch"
-                                | "nosames"
-                                | "allsames"
-                        ) {
-                            NativeReady::value(
-                                execute_array_query(self, fiber, native_name, &arguments)
-                                    .map_err(map_vm_error)?,
-                            )
-                        } else if matches!(
-                            native_name,
-                            "charanum"
-                                | "getchara"
-                                | "getspchara"
-                                | "existcsv"
-                                | "csvname"
-                                | "csvcallname"
-                                | "csvnickname"
-                                | "csvmastername"
-                                | "csvcstr"
-                                | "csvbase"
-                                | "csvabl"
-                                | "csvmark"
-                                | "csvexp"
-                                | "csvrelation"
-                                | "csvtalent"
-                                | "csvcflag"
-                                | "csvequip"
-                                | "csvjuel"
-                                | "findchara"
-                                | "findlastchara"
-                        ) {
-                            NativeReady::value(
-                                execute_character_query(self, fiber, native_name, &arguments)
-                                    .map_err(map_vm_error)?,
-                            )
-                        } else if matches!(
-                            native_name,
-                            "addchara"
-                                | "addspchara"
-                                | "adddefchara"
-                                | "addvoidchara"
-                                | "delchara"
-                                | "delallchara"
-                                | "swapchara"
-                                | "copychara"
-                                | "addcopychara"
-                                | "pickupchara"
-                                | "sortchara"
-                                | "reset_stain"
-                        ) {
-                            execute_character_mutation(self, native_name, &arguments)
-                                .map_err(map_vm_error)?;
-                            NativeReady::default()
+                            ready
                         } else {
                             let (ready, checkpoint) = self.call_registered_native(
                                 fiber,
@@ -562,73 +418,20 @@ impl Vm {
                                 }
                             }
                         }
-                        self.invalidate_path_memo(fiber.id);
                         let target = target.clone();
-                        let request = self.allocate_request_id();
-                        *host_calls = host_calls.saturating_add(1);
                         let origin = self.execution_origin(position, &target.import.name);
-                        match host.call(HostCallRequest {
-                            id: request,
-                            fiber: fiber.id,
-                            import: target.import.clone(),
-                            arguments,
-                            origin: origin.clone(),
-                        }) {
-                            HostCallResult::Ready(ready) => self
-                                .apply_host_ready(fiber, target.import.result, ready)
-                                .map_err(|error| {
-                                    StepError::classified(
-                                        crate::FaultCategory::HostContract,
-                                        VmFaultCode::Host,
-                                        error.to_string(),
-                                    )
-                                })?,
-                            HostCallResult::Pending {
-                                stability,
-                                rebind_payload,
-                            } => {
-                                if !target.effect.may_suspend {
-                                    return Err(StepError::new(
-                                        VmFaultCode::Host,
-                                        "non-suspending host import returned pending",
-                                    ));
-                                }
-                                if stability == HostWaitStability::StableInput
-                                    && target.snapshot_capability
-                                        != HostSnapshotCapability::StableWait
-                                {
-                                    return Err(StepError::new(
-                                        VmFaultCode::Host,
-                                        "host import reported a wait above its snapshot capability",
-                                    ));
-                                }
-                                let result = target.import.result;
-                                fiber.state = FiberState::WaitingHost(WaitingHost {
-                                    request,
-                                    import: target.import,
-                                    result,
-                                    stability,
-                                    rebind_payload,
-                                    origin: origin.clone(),
-                                });
-                                return Ok(Some(StepOutcome::Blocked));
-                            }
-                            HostCallResult::Error(error) => {
-                                return Err(error);
-                            }
-                            HostCallResult::Deferred => {
-                                let result = target.import.result;
-                                fiber.state = FiberState::WaitingHost(WaitingHost {
-                                    request,
-                                    import: target.import,
-                                    result,
-                                    stability: HostWaitStability::Transient,
-                                    rebind_payload: Vec::new(),
-                                    origin,
-                                });
-                                return Ok(Some(StepOutcome::Blocked));
-                            }
-                        }
+                        return self
+                            .dispatch_host_call(
+                                fiber,
+                                target,
+                                arguments,
+                                Vec::new(),
+                                origin,
+                                None,
+                                host,
+                                host_calls,
+                            )
+                            .map(Some);
                     }
                     _ => {
                         return Err(StepError::new(

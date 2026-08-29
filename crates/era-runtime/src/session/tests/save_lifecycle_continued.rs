@@ -350,6 +350,14 @@ fn binary_save_adapter_encodes_zero_length_saved_arrays() {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: BytecodeCallCompatibility::default(),
         runtime_builtins: Vec::new(),
+        runtime_native_authorizations: Vec::new(),
+        runtime_host_authorizations: Vec::new(),
+        runtime_variables: vec![erabasic_bytecode::RuntimeVariableSymbol {
+            key, reference: false,
+            reference_semantics: erabasic_bytecode::RuntimeReferenceSemantics {
+                is_const: false, can_restructure: false,
+            },
+        }],
         project_data,
         globals: vec![BytecodeGlobal {
             key,

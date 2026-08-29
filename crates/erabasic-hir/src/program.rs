@@ -27,6 +27,7 @@ pub struct Variable {
     pub persistence: Persistence,
     pub mutable: bool,
     pub reference: bool,
+    pub reference_semantics: ReferenceVariableSemantics,
     pub static_lifetime: bool,
     pub initial_values: Vec<ConstantValue>,
     pub scope: VariableScope,
@@ -209,4 +210,11 @@ impl Program {
             functions: Vec::new(),
         }
     }
+}
+
+/// Fixed source token flags, independent of mutability and REF binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReferenceVariableSemantics {
+    pub is_const: bool,
+    pub can_restructure: bool,
 }

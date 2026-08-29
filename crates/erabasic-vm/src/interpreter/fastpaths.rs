@@ -43,6 +43,25 @@ impl Vm {
         arguments: Vec<VmValue>,
         natives: &mut NativeServiceRegistry,
     ) -> Result<(NativeReady, Option<Vec<u8>>), StepError> {
+        self.call_registered_native_with_omissions(
+            fiber,
+            key,
+            import,
+            arguments,
+            Vec::new(),
+            natives,
+        )
+    }
+
+    pub(super) fn call_registered_native_with_omissions(
+        &mut self,
+        fiber: &mut Fiber,
+        key: SymbolKey,
+        import: erabasic_bytecode::RuntimeImport,
+        arguments: Vec<VmValue>,
+        omitted_arguments: Vec<usize>,
+        natives: &mut NativeServiceRegistry,
+    ) -> Result<(NativeReady, Option<Vec<u8>>), StepError> {
         let places = native_place_views(self, fiber, &arguments).map_err(map_vm_error)?;
         let implicit_place_names = natives
             .implicit_place_names(key)
@@ -55,6 +74,8 @@ impl Vm {
         let ready = match natives.call(
             key,
             NativeCallRequest {
+                service_key: key,
+                omitted_arguments,
                 import,
                 arguments,
                 places,

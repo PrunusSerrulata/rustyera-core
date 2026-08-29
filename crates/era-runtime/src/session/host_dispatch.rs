@@ -193,7 +193,7 @@ impl HtmlInteractionBindings<'_> {
 
 fn evaluate_runtime_query(
     name: &str,
-    arguments: &[VmValue],
+    arguments: &(impl HostArgumentValues + ?Sized),
     presentation: &PresentationModel,
     state: RuntimeQueryState,
 ) -> Result<RuntimeQueryEvaluation, RuntimeError> {
@@ -228,7 +228,7 @@ fn evaluate_runtime_query(
         "GETFOCUSCOLOR" => VmValue::Integer(presentation.focus_rgb()),
         "GETSTYLE" => VmValue::Integer(presentation.style_bits()),
         "GETDISPLAYLINE" => {
-            let index = match arguments.first() {
+            let index = match arguments.argument(0) {
                 Some(VmValue::Integer(value)) => usize::try_from(*value).ok(),
                 Some(_) | None => Some(0),
             };
@@ -237,7 +237,7 @@ fn evaluate_runtime_query(
             )
         }
         "HTML_GETPRINTEDSTR" => {
-            let raw_index = match arguments.first() {
+            let raw_index = match arguments.argument(0) {
                 Some(VmValue::Integer(value)) => *value,
                 Some(_) | None => 0,
             };
@@ -305,7 +305,7 @@ impl RuntimeSession {
         }
         let name = request.import.import.name.to_ascii_uppercase();
         if name == "SKIPDISP" {
-            self.skip_print = integer_argument_value(&request.arguments, 0)? != 0;
+            self.skip_print = integer_argument_value(request, 0)? != 0;
             self.user_defined_skip = self.skip_print;
             // Host calls execute while the caller-pumped drive loop temporarily
             // owns the VM, so RESULT must be resolved through that VM rather than
@@ -313,7 +313,7 @@ impl RuntimeSession {
             return commit_host_result_write(vm, request.id, i64::from(self.skip_print));
         }
         if name == "SKIPLOG" {
-            self.message_skip = integer_argument_value(&request.arguments, 0)? != 0;
+            self.message_skip = integer_argument_value(request, 0)? != 0;
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
         if name == "NOSKIP" {
@@ -327,9 +327,19 @@ impl RuntimeSession {
             }
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
+        if matches!(name.as_str(), "GETDISPLAYLINE" | "HTML_GETPRINTEDSTR")
+            && request.omitted_arguments.contains(&0)
+        {
+            return complete_script_fault(
+                vm,
+                request,
+                erabasic_vm::ScriptFaultKind::Operation,
+                "display query dereferenced an omitted source argument",
+            );
+        }
         match evaluate_runtime_query(
             &name,
-            &request.arguments,
+            request,
             &self.presentation,
             RuntimeQueryState {
                 skip_print: self.skip_print,
@@ -365,7 +375,7 @@ impl RuntimeSession {
             RuntimeQueryEvaluation::Unhandled => {}
         }
         if name == "ASSERT" {
-            if integer_argument_value(&request.arguments, 0)? == 0 {
+            if integer_argument_value(request, 0)? == 0 {
                 return complete_script_fault(
                     vm,
                     request,
@@ -376,10 +386,7 @@ impl RuntimeSession {
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
         if name == "THROW" {
-            let message = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
+            let message = request.argument(0).map_or_else(String::new, display_value);
             return complete_script_fault(
                 vm,
                 request,
@@ -388,7 +395,7 @@ impl RuntimeSession {
             );
         }
         if name == "FORCEKANA" {
-            let mode = integer_argument_value(&request.arguments, 0)?;
+            let mode = integer_argument_value(request, 0)?;
             let Ok(mode) = u8::try_from(mode) else {
                 return complete_script_fault(
                     vm,
@@ -410,8 +417,7 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "UPCHECK" | "CUPCHECK") {
             let (character, character_scoped) = if name == "CUPCHECK" {
-                let Ok(character) = u64::try_from(integer_argument_value(&request.arguments, 0)?)
-                else {
+                let Ok(character) = u64::try_from(integer_argument_value(request, 0)?) else {
                     return complete_script_fault(
                         vm,
                         request,
@@ -453,7 +459,7 @@ impl RuntimeSession {
             );
         }
         if name == "SETANIMETIMER" {
-            let milliseconds = integer_argument_value(&request.arguments, 0)?;
+            let milliseconds = integer_argument_value(request, 0)?;
             self.project_snapshot
                 .as_mut()
                 .ok_or_else(|| RuntimeError::Internal("SETANIMETIMER has no project".into()))?

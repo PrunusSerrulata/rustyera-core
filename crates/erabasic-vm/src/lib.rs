@@ -26,8 +26,9 @@ mod structured;
 mod value;
 
 pub use config::{
-    FiberId, FiberStatus, FrameId, GenerationId, HostRequestId, RunBudget, VmBacktraceFrame,
-    VmConfig, VmDiagnosticNotification, VmEvent, VmExecutionOrigin, VmRunReport, VmRunStop,
+    FiberId, FiberStatus, FrameId, GenerationId, HostRequestId, RunBudget, RuntimeHostScope,
+    VmBacktraceFrame, VmConfig, VmDiagnosticNotification, VmEvent, VmExecutionOrigin, VmRunReport,
+    VmRunStop,
 };
 pub use debug_port::{
     VmBreakpoint, VmBreakpointBinding, VmBreakpointLocation, VmDebugControl, VmDebugFiber,

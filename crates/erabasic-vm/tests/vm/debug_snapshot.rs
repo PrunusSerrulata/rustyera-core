@@ -1154,3 +1154,78 @@ fn runtime_fault_resolves_to_utf8_source_location() {
     assert_eq!(source.line, 2);
     assert_eq!(source.byte_column, 0);
 }
+
+#[test]
+fn runtime_host_call_plan_obeys_runnable_and_transient_snapshot_boundaries() {
+    let artifact = compile_source_with_options(
+        "@SYSTEM_TITLE\nRESULTS:1 '= \"{GETKEY(7)}\"\nRESULTS:0 '= STRFORM(RESULTS:1)\nFLAG:0 = STRFORMCHECK(RESULTS:0)\nRETURN RESULT\n",
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::default()
+        },
+    );
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm
+        .spawn_entry(artifact.functions[0].key, Vec::new())
+        .unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget {
+            maximum_host_calls: 0,
+            ..RunBudget::default()
+        },
+    );
+    assert!(
+        matches!(vm.fiber_status(fiber), Some(FiberStatus::Runnable)),
+        "{report:?}"
+    );
+    assert!(matches!(
+        vm.snapshot_eligibility(&natives),
+        SnapshotEligibility::Ineligible(ref blockers)
+            if blockers.contains(&SnapshotBlocker::RunnableFiber(fiber))
+    ));
+    assert!(vm.encode_snapshot(&natives).is_err());
+
+    let mut pending = PendingHost {
+        stability: HostWaitStability::Transient,
+        rebound: Vec::new(),
+    };
+    vm.run_slice(&mut pending, &mut natives, RunBudget::default());
+    let Some(FiberStatus::WaitingHost(request)) = vm.fiber_status(fiber) else {
+        panic!("runtime Host request was not issued");
+    };
+    assert!(matches!(
+        vm.snapshot_eligibility(&natives),
+        SnapshotEligibility::Ineligible(ref blockers)
+            if blockers.contains(&SnapshotBlocker::TransientHostWait(fiber))
+    ));
+    assert!(vm.encode_snapshot(&natives).is_err());
+    vm.resume_host(
+        request,
+        HostReady {
+            value: Some(VmValue::Integer(42)),
+            writes: Vec::new(),
+        },
+    )
+    .unwrap();
+    vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(matches!(
+        vm.fiber_status(fiber),
+        Some(FiberStatus::Completed(_))
+    ));
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|value| value.name == "FLAG")
+        .unwrap()
+        .key;
+    assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(1)));
+}

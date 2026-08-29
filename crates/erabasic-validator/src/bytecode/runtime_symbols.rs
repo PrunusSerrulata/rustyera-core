@@ -33,3 +33,55 @@ pub(super) fn validate_runtime_builtins(symbols: &[RuntimeBuiltinSymbol]) -> Res
     }
     Ok(())
 }
+
+pub(super) fn validate_runtime_variables(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+) -> Result<(), String> {
+    use erabasic_bytecode::BytecodeStorage;
+    if artifact.runtime_variables.len() != artifact.globals.len() {
+        return Err("runtime variable metadata does not exactly cover globals".into());
+    }
+    let globals = artifact
+        .globals
+        .iter()
+        .map(|global| (global.key, global))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut previous = None;
+    for symbol in &artifact.runtime_variables {
+        if previous.is_some_and(|previous| previous >= symbol.key) {
+            return Err("runtime variable metadata is not sorted and unique".into());
+        }
+        previous = Some(symbol.key);
+        let definition = globals
+            .get(&symbol.key)
+            .copied()
+            .ok_or("runtime variable metadata key is not a global")?;
+        if symbol.reference
+            && (!definition.mutable
+                || definition.storage != BytecodeStorage::FunctionLocal
+                || definition.owner.is_none()
+                || !(1..=3).contains(&definition.dimensions.len()))
+        {
+            return Err("runtime REF metadata has an invalid declaration shape".into());
+        }
+        if (symbol.reference_semantics.can_restructure && !symbol.reference_semantics.is_const)
+            || (symbol.reference && symbol.reference_semantics.is_const)
+        {
+            return Err("runtime reference token semantics are inconsistent".into());
+        }
+    }
+    for function in &artifact.functions {
+        for parameter in &function.parameters {
+            let metadata = artifact
+                .runtime_variables
+                .binary_search_by_key(&parameter.key, |symbol| symbol.key)
+                .ok()
+                .map(|index| &artifact.runtime_variables[index])
+                .ok_or("formal lacks variable metadata")?;
+            if parameter.by_reference != metadata.reference {
+                return Err("formal and runtime variable REF metadata disagree".into());
+            }
+        }
+    }
+    Ok(())
+}

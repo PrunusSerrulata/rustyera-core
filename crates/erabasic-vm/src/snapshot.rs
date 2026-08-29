@@ -21,7 +21,7 @@ pub use self::model::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 15;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 17;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 
@@ -615,7 +615,8 @@ fn validate_restored_continuations(vm: &Vm) -> Result<(), VmError> {
                 ));
             }
             if let Some(continuation) = &frame.runtime_form
-                && !continuation.valid_method_state(vm, fiber)
+                && (!continuation.valid_method_state(vm, fiber)
+                    || !continuation.valid_host_snapshot(vm, fiber))
             {
                 return Err(VmError::Snapshot(
                     "snapshot STRFORM method state is invalid".into(),
@@ -709,7 +710,8 @@ fn validate_snapshot(
             ));
         }
         if let FiberState::WaitingHost(wait) = &fiber.state {
-            let valid = request_ids.insert(wait.request)
+            let valid = wait.form_scope.is_none()
+                && request_ids.insert(wait.request)
                 && artifact.host_imports.iter().any(|import| {
                     import.import == wait.import && import.import.result == wait.result
                 });

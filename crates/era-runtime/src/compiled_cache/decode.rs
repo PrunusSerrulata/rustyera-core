@@ -31,6 +31,9 @@ fn decode_sections_with_progress(
         manifest: parts.metadata.manifest,
         call_compatibility: parts.metadata.call_compatibility,
         runtime_builtins: parts.metadata.runtime_builtins,
+        runtime_variables: parts.metadata.runtime_variables,
+        runtime_native_authorizations: parts.metadata.runtime_native_authorizations,
+        runtime_host_authorizations: parts.metadata.runtime_host_authorizations,
         project_data: parts.project_data,
         globals: parts.globals,
         native_imports: parts.metadata.native_imports,
@@ -48,7 +51,10 @@ fn decode_sections_with_progress(
     }
     report_decode_stage(progress, crate::ProjectProgressStage::CacheValidating, 0);
     let unvalidated = artifact.into_unvalidated();
-    let context = ValidationContext::for_artifact(unvalidated.artifact());
+    let context = erabasic_compiler::runtime_native_validation_context(
+        unvalidated.artifact(),
+        &erabasic_compiler::default_host_registry(),
+    );
     let validation = validate_bytecode(unvalidated, &context);
     let artifact = validation.value.ok_or_else(|| {
         validation.diagnostics.first().map_or_else(
@@ -469,6 +475,7 @@ fn parse_container_header(
                 | PROFILELESS_PROJECT_VERSION
                 | PROFILED_PROJECT_VERSION
                 | ARITHMETIC_PROJECT_VERSION
+                | CALL_PROJECT_VERSION
                 | VERSION
         ) | (ProjectContainerKind::CompiledCache, VERSION)
     ) {

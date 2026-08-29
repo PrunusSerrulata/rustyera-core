@@ -130,8 +130,15 @@ impl Vm {
                         break;
                     }
                 };
-                if continuation_origin.is_none()
+                if (continuation_origin.is_none()
                     && position.encoded.opcode == Opcode::CallHost as u16
+                    || fiber
+                        .frames
+                        .last()
+                        .and_then(|frame| frame.runtime_form.as_ref())
+                        .is_some_and(
+                            super::dynamic_form::RuntimeFormContinuation::next_is_host_call,
+                        ))
                     && report.host_calls >= budget.maximum_host_calls
                 {
                     budget_exhausted = true;
@@ -151,7 +158,16 @@ impl Vm {
                 };
                 let outcome = if continuation_origin.is_some() {
                     self.invalidate_path_memo(fiber.id);
-                    resume_runtime_form(self, &mut fiber, natives).and_then(|step| match step {
+                    resume_runtime_form(
+                        self,
+                        &mut fiber,
+                        natives,
+                        &position,
+                        host,
+                        &mut report.host_calls,
+                    )
+                    .and_then(|step| match step {
+                        RuntimeFormStep::Blocked => Ok(StepOutcome::Blocked),
                         RuntimeFormStep::Pending => Ok(StepOutcome::DeferredNative),
                         RuntimeFormStep::CompleteCall => Ok(StepOutcome::Continue),
                         RuntimeFormStep::Complete(value) => {

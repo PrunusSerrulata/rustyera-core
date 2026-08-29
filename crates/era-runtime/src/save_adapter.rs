@@ -494,6 +494,9 @@ mod tests {
             manifest: ArtifactManifest::new(Digest::default()),
             call_compatibility: BytecodeCallCompatibility::default(),
             runtime_builtins: Vec::new(),
+            runtime_native_authorizations: Vec::new(),
+            runtime_host_authorizations: Vec::new(),
+            runtime_variables: Vec::new(),
             project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
                 .data
                 .unwrap(),
@@ -630,6 +633,9 @@ mod tests {
             manifest: ArtifactManifest::new(Digest::default()),
             call_compatibility: BytecodeCallCompatibility::default(),
             runtime_builtins: Vec::new(),
+            runtime_native_authorizations: Vec::new(),
+            runtime_host_authorizations: Vec::new(),
+            runtime_variables: Vec::new(),
             project_data,
             globals: Vec::new(),
             native_imports: Vec::new(),
@@ -701,6 +707,19 @@ mod tests {
             manifest: ArtifactManifest::new(Digest::default()),
             call_compatibility: BytecodeCallCompatibility::default(),
             runtime_builtins: Vec::new(),
+            runtime_native_authorizations: Vec::new(),
+            runtime_host_authorizations: Vec::new(),
+            runtime_variables: definitions
+                .iter()
+                .map(|global| erabasic_bytecode::RuntimeVariableSymbol {
+                    key: global.key,
+                    reference: false,
+                    reference_semantics: erabasic_bytecode::RuntimeReferenceSemantics {
+                        is_const: false,
+                        can_restructure: false,
+                    },
+                })
+                .collect(),
             project_data,
             globals: definitions.to_vec(),
             native_imports: Vec::new(),

@@ -8,12 +8,17 @@ use crate::{
     Fiber, FrameId, GenerationId, HostReady, NativeServiceRegistry, Vm, VmFaultCode, VmValue,
 };
 
+mod call_plan;
 mod call_text;
 mod checkpoints;
 mod existvar;
 mod frontend;
+mod host_calls;
 mod methods;
 mod mutations;
+mod native_binding;
+mod reference_arguments;
+mod source_arguments;
 mod support;
 mod typing;
 
@@ -39,7 +44,14 @@ pub(crate) struct RuntimeFormContinuation {
     awaiting_user_call: Option<methods::RuntimeUserWait>,
     checkpoints: Vec<FormatCheckpoint>,
     next_checkpoint: u64,
+    host_calls: Vec<host_calls::RuntimeHostCall>,
+    next_host_scope: u64,
     completion: RuntimeFormRoot,
+    reference_arguments: Option<reference_arguments::PendingReferenceArguments>,
+    reference_bindings: bool,
+    call_plans: Vec<call_plan::RuntimeCallPlan>,
+    current_call_plan: Option<u64>,
+    next_call_plan: u64,
     remaining_nodes: usize,
     remaining_source_bytes: usize,
 }
@@ -54,16 +66,31 @@ enum RuntimeFormTask {
     BeginCheckedForm(String),
     FinishCheck(u64),
     FinishExpressionProbe(u64),
+    FinishCallTextArgumentCatch(u64),
     ExistVarFirst {
+        plan: u64,
         source: Expr,
         mode: Option<Expr>,
     },
     ExistVarMode {
+        plan: u64,
         source: Expr,
     },
     ParseCallText {
         source: String,
         spec: erabasic_bytecode::CallTextSpec,
+    },
+    ReferenceArgumentsPump,
+    RestoreReferenceBindings(bool),
+    RestoreCallPlan(Option<u64>),
+    ReleaseReferenceArguments,
+    FinishCallTextArguments {
+        target: SymbolKey,
+        spec: erabasic_bytecode::CallTextSpec,
+    },
+    CaptureReferencePlace {
+        key: SymbolKey,
+        indices: usize,
     },
     Evaluate(Expr),
     ReadVariable {
@@ -85,6 +112,12 @@ enum RuntimeFormTask {
         then_expr: Expr,
         else_expr: Expr,
     },
+    FinishNative {
+        site: call_plan::RuntimeCallSite,
+        bound: erabasic_bytecode::BoundRuntimeNative,
+        source: Vec<Option<Expr>>,
+    },
+    HostAdvance(u64),
     FinishCall {
         name: String,
         arguments: usize,
@@ -100,6 +133,7 @@ enum RuntimeFormTask {
     },
     PushOmitted,
     ResolveMethod {
+        plan: u64,
         result: erabasic_bytecode::MethodResult,
         fallback: Option<Expr>,
         arguments: Vec<Option<Expr>>,
@@ -120,6 +154,7 @@ enum RuntimeFormRoot {
 
 pub(super) enum RuntimeFormStep {
     Pending,
+    Blocked,
     Complete(VmValue),
     CompleteCall,
 }
@@ -153,8 +188,10 @@ pub(super) fn begin_runtime_form(
         ));
     }
     let node_limit = vm.config.maximum_operand_stack.max(1);
-    let (formatted, nodes) =
+    let (formatted, mut plan) =
         parse_runtime_form(vm, natives, generation, function, source, node_limit)?;
+    let nodes = plan.nodes;
+    plan.id = 1;
     let continuation = RuntimeFormContinuation {
         generation,
         function,
@@ -169,7 +206,14 @@ pub(super) fn begin_runtime_form(
         awaiting_user_call: None,
         checkpoints: Vec::new(),
         next_checkpoint: 1,
+        host_calls: Vec::new(),
+        next_host_scope: 1,
         completion: RuntimeFormRoot::Value(BytecodeType::String),
+        reference_arguments: None,
+        reference_bindings: false,
+        call_plans: vec![plan],
+        current_call_plan: Some(1),
+        next_call_plan: 2,
         remaining_nodes: node_limit.saturating_sub(nodes),
         remaining_source_bytes: MAX_RUNTIME_FORM_BYTES.saturating_sub(source.len()),
     };
@@ -270,7 +314,14 @@ fn begin_work(
         awaiting_user_call: None,
         checkpoints: Vec::new(),
         next_checkpoint: 1,
+        host_calls: Vec::new(),
+        next_host_scope: 1,
         completion,
+        reference_arguments: None,
+        reference_bindings: false,
+        call_plans: Vec::new(),
+        current_call_plan: None,
+        next_call_plan: 1,
         remaining_nodes: vm.config.maximum_operand_stack.max(1),
         remaining_source_bytes: MAX_RUNTIME_FORM_BYTES,
     });
@@ -281,6 +332,9 @@ pub(super) fn resume_runtime_form(
     vm: &mut Vm,
     fiber: &mut Fiber,
     natives: &mut NativeServiceRegistry,
+    position: &super::InstructionPosition<'_>,
+    host: &mut impl crate::VmHost,
+    host_count: &mut u32,
 ) -> Result<RuntimeFormStep, StepError> {
     let owner = fiber.frames.last().ok_or_else(|| {
         StepError::new(
@@ -301,11 +355,11 @@ pub(super) fn resume_runtime_form(
             )
         })?;
 
-    let result = continuation.step(vm, fiber, natives);
+    let result = continuation.step(vm, fiber, natives, position, host, host_count);
     match result {
         Ok(RuntimeFormStep::Complete(value)) => Ok(RuntimeFormStep::Complete(value)),
         Ok(RuntimeFormStep::CompleteCall) => Ok(RuntimeFormStep::CompleteCall),
-        Ok(RuntimeFormStep::Pending) => {
+        Ok(step @ (RuntimeFormStep::Pending | RuntimeFormStep::Blocked)) => {
             let frame = fiber
                 .frames
                 .iter_mut()
@@ -322,7 +376,7 @@ pub(super) fn resume_runtime_form(
                     "STRFORM owner acquired a second continuation",
                 ));
             }
-            Ok(RuntimeFormStep::Pending)
+            Ok(step)
         }
         Err(error) => {
             let frame = fiber
@@ -380,7 +434,17 @@ impl RuntimeFormContinuation {
             && self.outputs.len() <= MAX_RUNTIME_FORM_NESTING
             && self.remaining_nodes <= maximum_stack
             && self.remaining_source_bytes <= MAX_RUNTIME_FORM_BYTES
+            && self.host_scopes_valid()
             && self.checkpoints_valid()
+            && self.host_resources().is_some_and(|(slots, bytes)| {
+                slots <= maximum_stack && bytes <= MAX_RUNTIME_FORM_BYTES
+            })
+            && self.reference_arguments_valid()
+            && self
+                .reference_argument_resources()
+                .is_some_and(|(slots, bytes)| {
+                    slots <= maximum_stack && bytes <= MAX_RUNTIME_FORM_BYTES
+                })
     }
 
     // Keeping the continuation transition table together makes every resumable state auditable.
@@ -390,6 +454,9 @@ impl RuntimeFormContinuation {
         vm: &mut Vm,
         fiber: &mut Fiber,
         natives: &mut NativeServiceRegistry,
+        position: &super::InstructionPosition<'_>,
+        host: &mut impl crate::VmHost,
+        host_count: &mut u32,
     ) -> Result<RuntimeFormStep, StepError> {
         if self.awaiting_user_call.is_some() {
             self.finish_user_wait(vm, fiber)?;
@@ -404,6 +471,26 @@ impl RuntimeFormContinuation {
             )
         })?;
         match task {
+            RuntimeFormTask::HostAdvance(id) => {
+                return self.advance_host_call(vm, fiber, id, position, host, host_count);
+            }
+            RuntimeFormTask::ReferenceArgumentsPump => self.advance_reference_arguments(vm)?,
+            RuntimeFormTask::RestoreCallPlan(previous) => {
+                self.restore_call_plan(previous)?;
+            }
+            RuntimeFormTask::RestoreReferenceBindings(previous) => {
+                self.reference_bindings = previous;
+            }
+            RuntimeFormTask::ReleaseReferenceArguments => {
+                self.reference_bindings = false;
+                self.reference_arguments = None;
+            }
+            RuntimeFormTask::FinishCallTextArguments { target, spec } => {
+                self.finish_call_text_arguments(vm, fiber, target, spec)?;
+            }
+            RuntimeFormTask::CaptureReferencePlace { key, indices } => {
+                self.capture_reference_place(vm, fiber, key, indices)?;
+            }
             RuntimeFormTask::StartForm(formatted) => {
                 if self.outputs.len() >= MAX_RUNTIME_FORM_NESTING {
                     return Err(resource_limit("STRFORM nesting limit exceeded"));
@@ -432,7 +519,10 @@ impl RuntimeFormContinuation {
                 self.values.push(VmValue::String(value));
             }
             RuntimeFormTask::CompleteRoot => {
-                if !self.outputs.is_empty() || !self.checkpoints.is_empty() || !self.work.is_empty()
+                if !self.host_calls.is_empty()
+                    || !self.outputs.is_empty()
+                    || !self.checkpoints.is_empty()
+                    || !self.work.is_empty()
                 {
                     return Err(StepError::new(
                         VmFaultCode::InvalidInstruction,
@@ -473,11 +563,19 @@ impl RuntimeFormContinuation {
             RuntimeFormTask::ParseCallText { source, spec } => {
                 self.parse_call_text(vm, fiber, natives, &source, spec)?;
             }
-            RuntimeFormTask::ExistVarFirst { source, mode } => {
-                self.existvar_first(vm, source, mode)?;
+            RuntimeFormTask::ExistVarFirst { plan, source, mode } => {
+                self.existvar_first(vm, plan, source, mode)?;
             }
-            RuntimeFormTask::ExistVarMode { source } => self.existvar_mode(vm, fiber, source)?,
+            RuntimeFormTask::ExistVarMode { source, .. } => {
+                self.existvar_mode(vm, fiber, source)?;
+            }
             RuntimeFormTask::FinishExpressionProbe(id) => self.finish_expression_probe(vm, id)?,
+            RuntimeFormTask::FinishCallTextArgumentCatch(_) => {
+                return Err(StepError::new(
+                    VmFaultCode::InvalidInstruction,
+                    "CALLSTR argument checkpoint escaped its user-call state",
+                ));
+            }
             RuntimeFormTask::Evaluate(expression) => {
                 self.evaluate_expression(vm, expression)?;
             }
@@ -548,9 +646,13 @@ impl RuntimeFormContinuation {
                     else_expr
                 }));
             }
+            RuntimeFormTask::FinishNative { bound, source, .. } => {
+                let arguments = self.take_values(source.len())?;
+                self.finish_native(vm, fiber, natives, bound, arguments)?;
+            }
             RuntimeFormTask::FinishCall { name, arguments } => {
                 let arguments = self.take_values(arguments)?;
-                self.finish_call(vm, fiber, natives, &name, arguments)?;
+                self.finish_call(vm, fiber, natives, &name, &arguments)?;
             }
             RuntimeFormTask::FinishInterpolation {
                 string,
@@ -604,11 +706,12 @@ impl RuntimeFormContinuation {
             }
             RuntimeFormTask::PushOmitted => self.values.push(VmValue::Integer(i64::MIN)),
             RuntimeFormTask::ResolveMethod {
+                plan,
                 result,
                 fallback,
                 arguments,
             } => {
-                self.resolve_method(vm, result, fallback, arguments)?;
+                self.resolve_method(vm, plan, result, fallback, arguments)?;
             }
             RuntimeFormTask::MethodArgument(call) => {
                 self.advance_method_arguments(vm, fiber, call)?;
@@ -810,7 +913,19 @@ impl RuntimeFormContinuation {
                     self.schedule_existvar(&args)?;
                     return Ok(());
                 }
+                if name.eq_ignore_ascii_case("EXISTMETH") {
+                    let program = vm.generations.get(&self.generation).ok_or_else(|| {
+                        StepError::new(VmFaultCode::MissingSymbol, "EXISTMETH generation missing")
+                    })?;
+                    native_binding::authorization(program, &name)?;
+                }
                 if self.schedule_method(&name, &args)? {
+                    return Ok(());
+                }
+                if !name.eq_ignore_ascii_case("STRFORM")
+                    && !name.eq_ignore_ascii_case("STRFORMCHECK")
+                {
+                    self.schedule_planned_call(vm, expression.span, &args)?;
                     return Ok(());
                 }
                 let count = args.len();
@@ -844,7 +959,7 @@ impl RuntimeFormContinuation {
             ));
         }
         self.remaining_source_bytes -= source.len();
-        let (formatted, nodes) = parse_runtime_form(
+        let (formatted, plan) = parse_runtime_form(
             vm,
             natives,
             self.generation,
@@ -852,7 +967,14 @@ impl RuntimeFormContinuation {
             source,
             self.remaining_nodes,
         )?;
-        self.remaining_nodes = self.remaining_nodes.saturating_sub(nodes);
+        self.remaining_nodes = self.remaining_nodes.saturating_sub(plan.nodes);
+        let previous = self.current_call_plan;
+        self.install_call_plan(plan)?;
+        self.work.push(RuntimeFormTask::RestoreCallPlan(previous));
+        self.work.push(RuntimeFormTask::RestoreReferenceBindings(
+            self.reference_bindings,
+        ));
+        self.reference_bindings = false;
         self.work.push(RuntimeFormTask::StartForm(formatted));
         Ok(())
     }
@@ -865,7 +987,7 @@ impl RuntimeFormContinuation {
         fiber: &mut Fiber,
         natives: &mut NativeServiceRegistry,
         name: &str,
-        arguments: Vec<VmValue>,
+        arguments: &[VmValue],
     ) -> Result<(), StepError> {
         let generation =
             std::sync::Arc::clone(vm.generations.get(&self.generation).ok_or_else(|| {
@@ -878,7 +1000,9 @@ impl RuntimeFormContinuation {
             ));
         }
         if name.eq_ignore_ascii_case("STRFORM") || name.eq_ignore_ascii_case("STRFORMCHECK") {
-            let [VmValue::String(source)] = arguments.as_slice() else {
+            let family = native_binding::authorization(&generation, name)?;
+            native_binding::require_provider(natives, family)?;
+            let [VmValue::String(source)] = arguments else {
                 return Err(StepError::new(
                     VmFaultCode::TypeMismatch,
                     "formatted-string function expects one string argument",
@@ -892,46 +1016,75 @@ impl RuntimeFormContinuation {
             return Ok(());
         }
 
-        if crate::structured::is_internal_column_native(name) {
-            return Err(support::permission_denied(
-                "STRFORM cannot invoke an internal column operation",
+        Err(StepError::new(
+            VmFaultCode::InvalidInstruction,
+            "Native call bypassed source authorization binding",
+        ))
+    }
+
+    fn finish_native(
+        &mut self,
+        vm: &mut Vm,
+        fiber: &mut Fiber,
+        natives: &mut NativeServiceRegistry,
+        bound: erabasic_bytecode::BoundRuntimeNative,
+        arguments: Vec<VmValue>,
+    ) -> Result<(), StepError> {
+        let generation =
+            std::sync::Arc::clone(vm.generations.get(&self.generation).ok_or_else(|| {
+                StepError::new(VmFaultCode::MissingSymbol, "Native generation missing")
+            })?);
+        let family = native_binding::authorization(&generation, &bound.import.name)?;
+        if family.bind_physical(
+            bound.import.parameters.clone(),
+            bound.omitted_arguments.clone(),
+        ) != bound
+            || bound.import.parameters.len() != arguments.len()
+            || bound
+                .import
+                .parameters
+                .iter()
+                .zip(&arguments)
+                .any(|(expected, value)| *expected != value.value_type())
+        {
+            return Err(StepError::new(
+                VmFaultCode::InvalidInstruction,
+                "Native operands differ from bound source signature",
             ));
         }
-        let native = generation
-            .artifact
-            .native_imports
-            .iter()
-            .map(|native| &native.import)
-            .find(|native| {
-                native.name.eq_ignore_ascii_case(name)
-                    && native.result.is_some()
-                    && native.parameters.len() == arguments.len()
-                    && native
-                        .parameters
-                        .iter()
-                        .zip(&arguments)
-                        .all(|(expected, value)| *expected == value.value_type())
-            })
-            .cloned()
-            .ok_or_else(|| {
-                StepError::new(
-                    VmFaultCode::MissingSymbol,
-                    format!("STRFORM callable {name} has no compatible runtime import"),
-                )
-            })?;
-        typing::require_native_provider(natives, &native)?;
-        if matches!(
-            native.result,
-            Some(BytecodeType::IntegerPlace | BytecodeType::StringPlace)
-        ) {
-            return Err(unsupported(format!(
-                "STRFORM callable {name} returns a reference"
-            )));
+        native_binding::require_provider(natives, family)?;
+        let service_key = bound.service_key;
+        if bound.import.name == "replace" && bound.omitted_arguments.contains(&3) {
+            return Err(StepError::script(
+                crate::ScriptFaultKind::Operation,
+                VmFaultCode::Native,
+                "REPLACE omitted mode is read by the reference method",
+            ));
         }
+        let omitted_arguments = bound.omitted_arguments;
+        let native = bound.import;
         let expected = native.result;
         let owner_stack = owner_frame(fiber, self.frame)?.stack.len();
-        let (ready, rollback) =
-            vm.call_registered_native(fiber, native.key, native.clone(), arguments, natives)?;
+        let (ready, rollback) = if let Some(ready) = vm
+            .execute_special_native(
+                fiber,
+                &native.name.to_ascii_lowercase(),
+                &arguments,
+                &omitted_arguments,
+            )
+            .map_err(map_vm_error)?
+        {
+            (ready, None)
+        } else {
+            vm.call_registered_native_with_omissions(
+                fiber,
+                service_key,
+                native.clone(),
+                arguments,
+                omitted_arguments,
+                natives,
+            )?
+        };
         let commit = super::validate_native_ready(vm, fiber, expected, &ready).and_then(|()| {
             vm.apply_host_ready(
                 fiber,
@@ -944,7 +1097,7 @@ impl RuntimeFormContinuation {
         });
         if let Err(error) = commit {
             if let Some(checkpoint) = rollback
-                && let Err(rollback) = natives.rollback(native.key, &checkpoint)
+                && let Err(rollback) = natives.rollback(service_key, &checkpoint)
             {
                 return Err(StepError::classified(
                     crate::FaultCategory::HostContract,

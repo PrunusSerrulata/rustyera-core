@@ -7,15 +7,25 @@ use super::{
 };
 use crate::{ExecutionFailure, FiberId};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(super) enum FormatCheckpointKind {
+    CheckedForm,
+    ExpressionProbe,
+    CallTextArguments(erabasic_bytecode::CallTextSpec),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(super) struct FormatCheckpoint {
     pub id: u64,
-    pub expression_probe: bool,
+    pub kind: FormatCheckpointKind,
+    pub reference_bindings: bool,
+    pub call_plan: Option<u64>,
     pub work_depth: usize,
     pub value_depth: usize,
     pub output_depth: usize,
     pub owner_stack_depth: usize,
     pub owner_user_calls: usize,
+    pub host_scope_frontier: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +36,7 @@ pub(crate) struct RuntimeFormCatchTarget {
     pub function: SymbolKey,
     pub instruction: usize,
     pub checkpoint: u64,
+    kind: FormatCheckpointKind,
     pub owner_stack_depth: usize,
     pub owner_user_calls: usize,
 }
@@ -50,6 +61,7 @@ pub(crate) fn select_runtime_form_catch(
         function: form.function,
         instruction: form.instruction,
         checkpoint: checkpoint.id,
+        kind: checkpoint.kind,
         owner_stack_depth: checkpoint.owner_stack_depth,
         owner_user_calls: checkpoint.owner_user_calls,
     })
@@ -96,6 +108,7 @@ pub(crate) fn finish_runtime_form_catch(
         .last()
         .filter(|checkpoint| {
             checkpoint.id == target.checkpoint
+                && checkpoint.kind == target.kind
                 && checkpoint.owner_stack_depth == target.owner_stack_depth
                 && checkpoint.owner_user_calls == target.owner_user_calls
         })
@@ -106,12 +119,92 @@ pub(crate) fn finish_runtime_form_catch(
     form.outputs.truncate(checkpoint.output_depth);
     form.checkpoints.pop();
     form.awaiting_user_call = None;
+    form.abandon_host_scopes(checkpoint.host_scope_frontier);
+    form.reference_bindings = checkpoint.reference_bindings;
+    form.restore_call_plan(checkpoint.call_plan)?;
     // Do not refund parser/work budgets: failed checks still consumed resources.
-    form.values.push(VmValue::Integer(0));
+    match target.kind {
+        FormatCheckpointKind::CheckedForm | FormatCheckpointKind::ExpressionProbe => {
+            form.values.push(VmValue::Integer(0));
+        }
+        FormatCheckpointKind::CallTextArguments(spec) => {
+            if !matches!(form.completion, super::RuntimeFormRoot::Call { spec: root, .. } if root == spec)
+            {
+                return Err(invalid_checkpoint(
+                    "CALLSTR argument catch root differs from its checkpoint",
+                ));
+            }
+            form.completion = super::RuntimeFormRoot::Call { spec, failed: true };
+        }
+    }
     Ok(())
 }
 
 impl RuntimeFormContinuation {
+    pub(super) fn begin_call_text_argument_checkpoint(
+        &mut self,
+        fiber: &Fiber,
+        spec: erabasic_bytecode::CallTextSpec,
+    ) -> Result<Option<u64>, StepError> {
+        if !spec.mode.has_catch() {
+            return Ok(None);
+        }
+        if self.checkpoints.len() >= MAX_RUNTIME_FORM_NESTING {
+            return Err(resource_limit("CALLSTR checkpoint nesting limit"));
+        }
+        if self.awaiting_user_call.is_some() {
+            return Err(invalid_checkpoint(
+                "CALLSTR argument checkpoint began during a suspended user call",
+            ));
+        }
+        let owner = owner_frame(fiber, self.frame)?;
+        let id = self.next_checkpoint;
+        self.next_checkpoint = id
+            .checked_add(1)
+            .ok_or_else(|| resource_limit("CALLSTR checkpoint identity exhausted"))?;
+        self.checkpoints.push(FormatCheckpoint {
+            id,
+            kind: FormatCheckpointKind::CallTextArguments(spec),
+            reference_bindings: self.reference_bindings,
+            call_plan: self.current_call_plan,
+            work_depth: self.work.len(),
+            value_depth: self.values.len(),
+            output_depth: self.outputs.len(),
+            owner_stack_depth: owner.stack.len(),
+            owner_user_calls: owner.user_calls.len(),
+            host_scope_frontier: self.next_host_scope,
+        });
+        self.work
+            .push(RuntimeFormTask::FinishCallTextArgumentCatch(id));
+        Ok(Some(id))
+    }
+
+    pub(super) fn finish_call_text_argument_checkpoint(
+        &mut self,
+        id: u64,
+    ) -> Result<(), StepError> {
+        let checkpoint = self
+            .checkpoints
+            .last()
+            .filter(|checkpoint| {
+                checkpoint.id == id
+                    && matches!(checkpoint.kind, FormatCheckpointKind::CallTextArguments(_))
+            })
+            .ok_or_else(|| invalid_checkpoint("CALLSTR argument completion has no checkpoint"))?;
+        if self.work.len() != checkpoint.work_depth.saturating_add(1)
+            || self.values.len() != checkpoint.value_depth
+            || self.outputs.len() != checkpoint.output_depth
+            || self.work.last() != Some(&RuntimeFormTask::FinishCallTextArgumentCatch(id))
+        {
+            return Err(invalid_checkpoint(
+                "CALLSTR argument conversion has an invalid completion shape",
+            ));
+        }
+        self.work.pop();
+        self.checkpoints.pop();
+        Ok(())
+    }
+
     pub(super) fn begin_checked_form(
         &mut self,
         vm: &Vm,
@@ -148,12 +241,15 @@ impl RuntimeFormContinuation {
             .ok_or_else(|| resource_limit("STRFORMCHECK checkpoint identity exhausted"))?;
         self.checkpoints.push(FormatCheckpoint {
             id,
-            expression_probe: false,
+            kind: FormatCheckpointKind::CheckedForm,
+            reference_bindings: self.reference_bindings,
+            call_plan: self.current_call_plan,
             work_depth: self.work.len(),
             value_depth: self.values.len(),
             output_depth: self.outputs.len(),
             owner_stack_depth: owner.stack.len(),
             owner_user_calls: owner.user_calls.len(),
+            host_scope_frontier: self.next_host_scope,
         });
         self.work.push(RuntimeFormTask::FinishCheck(id));
         // Both parsing and actual expansion are inside the checkpoint. The outer
@@ -190,21 +286,30 @@ impl RuntimeFormContinuation {
         }
         let mut previous: Option<&FormatCheckpoint> = None;
         for checkpoint in &self.checkpoints {
-            if checkpoint.id == 0
+            if checkpoint.host_scope_frontier == 0
+                || checkpoint.host_scope_frontier > self.next_host_scope
+                || checkpoint.id == 0
                 || checkpoint.id >= self.next_checkpoint
                 || checkpoint.value_depth > self.values.len()
                 || checkpoint.output_depth > self.outputs.len()
                 || self.work.get(checkpoint.work_depth)
-                    != Some(&if checkpoint.expression_probe {
-                        RuntimeFormTask::FinishExpressionProbe(checkpoint.id)
-                    } else {
-                        RuntimeFormTask::FinishCheck(checkpoint.id)
+                    != Some(&match checkpoint.kind {
+                        FormatCheckpointKind::CheckedForm => {
+                            RuntimeFormTask::FinishCheck(checkpoint.id)
+                        }
+                        FormatCheckpointKind::ExpressionProbe => {
+                            RuntimeFormTask::FinishExpressionProbe(checkpoint.id)
+                        }
+                        FormatCheckpointKind::CallTextArguments(_) => {
+                            RuntimeFormTask::FinishCallTextArgumentCatch(checkpoint.id)
+                        }
                     })
             {
                 return false;
             }
             if previous.is_some_and(|outer| {
-                checkpoint.id <= outer.id
+                checkpoint.host_scope_frontier < outer.host_scope_frontier
+                    || checkpoint.id <= outer.id
                     || checkpoint.work_depth <= outer.work_depth
                     || checkpoint.value_depth < outer.value_depth
                     || checkpoint.output_depth < outer.output_depth
@@ -220,7 +325,9 @@ impl RuntimeFormContinuation {
             .filter(|task| {
                 matches!(
                     task,
-                    RuntimeFormTask::FinishCheck(_) | RuntimeFormTask::FinishExpressionProbe(_)
+                    RuntimeFormTask::FinishCheck(_)
+                        | RuntimeFormTask::FinishExpressionProbe(_)
+                        | RuntimeFormTask::FinishCallTextArgumentCatch(_)
                 )
             })
             .count()

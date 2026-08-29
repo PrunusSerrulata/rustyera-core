@@ -13,6 +13,7 @@ pub use compile::{
     compile_owned_validated_project_with_artifact_and_progress, compile_project,
     compile_project_with_artifact, compile_project_with_artifact_and_progress,
     compile_validated_project_with_artifact, compile_validated_project_with_artifact_and_progress,
+    runtime_native_validation_context,
 };
 pub use diagnostic::{CompilerDiagnostic, CompilerDiagnosticCode, CompilerDiagnosticSeverity};
 pub use options::{CompilerOptions, OptimizationLevel};

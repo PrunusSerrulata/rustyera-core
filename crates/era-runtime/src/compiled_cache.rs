@@ -18,7 +18,7 @@ use erabasic_bytecode::{
     SourceRecord, SymbolKey,
 };
 use erabasic_compiler::IncrementalState;
-use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode};
+use erabasic_validator::{ValidatedArtifact, validate_bytecode};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -56,7 +56,8 @@ const PREVIOUS_PROJECT_VERSION: u8 = 7;
 const PROFILELESS_PROJECT_VERSION: u8 = 8;
 const PROFILED_PROJECT_VERSION: u8 = 9;
 const ARITHMETIC_PROJECT_VERSION: u8 = 10;
-const VERSION: u8 = 11;
+const CALL_PROJECT_VERSION: u8 = 11;
+const VERSION: u8 = 12;
 const PROJECT_COMPRESSION_LEVEL: i32 = 3;
 const CACHE_COMPRESSION_LEVEL: i32 = 1;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
@@ -103,6 +104,9 @@ struct CompiledCacheMetadataRef<'a> {
     manifest: &'a ArtifactManifest,
     call_compatibility: &'a BytecodeCallCompatibility,
     runtime_builtins: &'a [erabasic_bytecode::RuntimeBuiltinSymbol],
+    runtime_variables: &'a [erabasic_bytecode::RuntimeVariableSymbol],
+    runtime_native_authorizations: &'a [erabasic_bytecode::RuntimeNativeAuthorization],
+    runtime_host_authorizations: &'a [erabasic_bytecode::RuntimeHostAuthorization],
     native_imports: &'a [NativeImport],
     host_imports: &'a [HostImport],
     event_groups: &'a [BytecodeEventGroup],
@@ -113,6 +117,9 @@ struct CompiledCacheMetadata {
     manifest: ArtifactManifest,
     call_compatibility: BytecodeCallCompatibility,
     runtime_builtins: Vec<erabasic_bytecode::RuntimeBuiltinSymbol>,
+    runtime_variables: Vec<erabasic_bytecode::RuntimeVariableSymbol>,
+    runtime_native_authorizations: Vec<erabasic_bytecode::RuntimeNativeAuthorization>,
+    runtime_host_authorizations: Vec<erabasic_bytecode::RuntimeHostAuthorization>,
     native_imports: Vec<NativeImport>,
     host_imports: Vec<HostImport>,
     event_groups: Vec<BytecodeEventGroup>,

@@ -14,7 +14,7 @@ use erabasic_compiler::{CompilerOptions, compile_project, default_host_registry}
 use erabasic_csv::{
     CsvLoadOptions, FilePayload as CsvFilePayload, FrontendFile, ProjectFiles, load_project,
 };
-use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode};
+use erabasic_validator::{ValidatedArtifact, validate_bytecode};
 use erabasic_vm::{
     EraSaveScope, FiberId, FiberStatus, HostCallRequest, HostCallResult, HostReady,
     HostRebindRequest, HostWaitStability, ImmediateHostCall, ImmediateHostCallResult,
@@ -56,6 +56,22 @@ fn artifact(functions: Vec<BytecodeFunction>, globals: Vec<BytecodeGlobal>) -> B
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
         runtime_builtins: Vec::new(),
+        runtime_native_authorizations: Vec::new(),
+        runtime_host_authorizations: Vec::new(),
+        runtime_variables: globals
+            .iter()
+            .map(|global| erabasic_bytecode::RuntimeVariableSymbol {
+                key: global.key,
+                reference: functions
+                    .iter()
+                    .flat_map(|function| &function.parameters)
+                    .any(|parameter| parameter.key == global.key && parameter.by_reference),
+                reference_semantics: erabasic_bytecode::RuntimeReferenceSemantics {
+                    is_const: false,
+                    can_restructure: false,
+                },
+            })
+            .collect(),
         project_data: project_data(),
         globals,
         native_imports: Vec::new(),
@@ -71,7 +87,7 @@ fn artifact(functions: Vec<BytecodeFunction>, globals: Vec<BytecodeGlobal>) -> B
 fn validated(artifact: &BytecodeArtifact) -> ValidatedArtifact {
     let report = validate_bytecode(
         artifact.clone().into_unvalidated(),
-        &ValidationContext::for_artifact(artifact),
+        &erabasic_compiler::runtime_native_validation_context(artifact, &default_host_registry()),
     );
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     report.value.expect("artifact should validate")

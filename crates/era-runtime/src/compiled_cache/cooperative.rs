@@ -187,6 +187,15 @@ impl CooperativeCompiledCacheEncoder {
                     manifest: &self.artifact.artifact().manifest,
                     call_compatibility: &self.artifact.artifact().call_compatibility,
                     runtime_builtins: &self.artifact.artifact().runtime_builtins,
+                    runtime_variables: &self.artifact.artifact().runtime_variables,
+                    runtime_native_authorizations: &self
+                        .artifact
+                        .artifact()
+                        .runtime_native_authorizations,
+                    runtime_host_authorizations: &self
+                        .artifact
+                        .artifact()
+                        .runtime_host_authorizations,
                     native_imports: &self.artifact.artifact().native_imports,
                     host_imports: &self.artifact.artifact().host_imports,
                     event_groups: &self.artifact.artifact().event_groups,

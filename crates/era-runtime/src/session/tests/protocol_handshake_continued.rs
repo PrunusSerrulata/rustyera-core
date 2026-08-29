@@ -413,7 +413,11 @@ fn prepare_html_execution(
     source: &str,
     service_version: Option<ProtocolVersion>,
 ) -> RuntimeSession {
-    prepare_html_execution_with_profile(source, service_version, erabasic_compat::CompatibilityIdentity::default())
+    prepare_html_execution_with_profile(
+        source,
+        service_version,
+        erabasic_compat::CompatibilityIdentity::default(),
+    )
 }
 
 fn prepare_html_execution_with_profile(
@@ -463,12 +467,15 @@ fn prepare_html_execution_with_profile(
         RuntimeMessage::ProjectManifest(ProjectManifest {
             compatibility,
             project_revision: 1,
-            files: vec![config, SubmittedFile {
-                relative_path: "html-v2.erb".into(),
-                category: FileCategory::Erb,
-                payload: FilePayload::Utf8(source.into()),
-                content_hash: None,
-            }],
+            files: vec![
+                config,
+                SubmittedFile {
+                    relative_path: "html-v2.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(source.into()),
+                    content_hash: None,
+                },
+            ],
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -517,7 +524,9 @@ fn start_html_execution(session: &mut RuntimeSession) -> (u64, Vec<RuntimeMessag
         session,
         2,
         RuntimeMessage::Start(StartRequest {
-            mode: StartMode::NewGame { seed: Some(123_456) },
+            mode: StartMode::NewGame {
+                seed: Some(123_456),
+            },
         }),
     );
     let mut sequence = 3;
@@ -622,121 +631,132 @@ fn html_substring_keeps_results_atomic_and_rejects_bad_probe_response() {
 
 #[test]
 fn html_lines_input_snapshot_restores_exact_flow_and_rejects_tampered_owner() {
-    let source = "@SYSTEM_TITLE\nFLAG:1 = HTML_STRINGLINES(\"abc\", HTML_WIDTH())\nWAIT\nRETURN\n@HTML_WIDTH\n#FUNCTION\nFLAG:0 += 1\nIF FLAG:0 == 1\nINPUT\nENDIF\nRETURNF 2\n";
-    let mut session = prepare_html_execution(source, Some(ProtocolVersion::new(2, 0)));
-    let (mut sequence, _) = start_html_execution(&mut session);
-    assert_eq!(session.operations.html_lines.len(), 1);
-    assert!(session.operations.is_snapshot_stable());
-    session
-        .export_state(
-            100,
-            StateExportRequest {
-                kind: StateExportKind::VmSnapshot,
-                snapshot_purpose: SnapshotExportPurpose::Normal,
-            },
-        )
-        .unwrap();
-    let bytes = session
-        .outbound_transfer
-        .take()
-        .expect("stable HTML width INPUT snapshot")
-        .bytes;
-    drain(&mut session);
-    let before_epoch = session.epoch;
-    let before_wait = session.operations.active_input().unwrap().wait.clone();
-    for field in [
-        "epoch",
-        "frame",
-        "generation",
-        "depth",
-        "count",
-        "in_flight",
-    ] {
-        let mut snapshot = runtime_snapshot::decode(&bytes, usize::MAX).unwrap();
-        let mut json = serde_json::to_value(&snapshot.operations).unwrap();
-        let flow = json["html_lines"]["entries"]
-            .as_object_mut()
-            .unwrap()
-            .values_mut()
-            .next()
-            .unwrap();
-        flow[field] = if field == "in_flight" {
-            serde_json::json!(true)
+    for dynamic in [false, true] {
+        let source = "@SYSTEM_TITLE\nFLAG:1 = HTML_STRINGLINES(\"abc\", HTML_WIDTH())\nWAIT\nRETURN\n@HTML_WIDTH\n#FUNCTION\nFLAG:0 += 1\nIF FLAG:0 == 1\nINPUT\nENDIF\nRETURNF 2\n";
+        let source = if dynamic {
+            "@SYSTEM_TITLE\nRESULTS:10 = {HTML_STRINGLINES(\"abc\", HTML_WIDTH())}\nFLAG:1 = TOINT(STRFORM(RESULTS:10))\nWAIT\nRETURN\n@HTML_WIDTH\n#FUNCTION\nFLAG:0 += 1\nIF FLAG:0 == 1\nINPUT\nENDIF\nRETURNF 2\n"
         } else {
-            serde_json::json!(999_999)
+            source
         };
-        snapshot.operations = serde_json::from_value(json).unwrap();
+        let mut session = prepare_html_execution(source, Some(ProtocolVersion::new(2, 0)));
+        let (mut sequence, _) = start_html_execution(&mut session);
+        assert_eq!(session.operations.html_lines.len(), 1);
+        assert!(session.operations.is_snapshot_stable());
         session
-            .start_vm_snapshot(101, &runtime_snapshot::encode(&snapshot).unwrap())
+            .export_state(
+                100,
+                StateExportRequest {
+                    kind: StateExportKind::VmSnapshot,
+                    snapshot_purpose: SnapshotExportPurpose::Normal,
+                },
+            )
             .unwrap();
-        let messages = drain(&mut session);
-        assert!(
-            messages
-                .iter()
-                .any(|message| matches!(message, RuntimeMessage::CommandRejected(_))),
-            "{field}: {messages:#?}"
+        let bytes = session
+            .outbound_transfer
+            .take()
+            .expect("stable HTML width INPUT snapshot")
+            .bytes;
+        drain(&mut session);
+        let before_epoch = session.epoch;
+        let before_wait = session.operations.active_input().unwrap().wait.clone();
+        for field in [
+            "epoch",
+            "frame",
+            "generation",
+            "depth",
+            "count",
+            "in_flight",
+        ] {
+            let mut snapshot = runtime_snapshot::decode(&bytes, usize::MAX).unwrap();
+            let mut json = serde_json::to_value(&snapshot.operations).unwrap();
+            let flow = json["html_lines"]["entries"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap();
+            flow[field] = if field == "in_flight" {
+                serde_json::json!(true)
+            } else {
+                serde_json::json!(999_999)
+            };
+            snapshot.operations = serde_json::from_value(json).unwrap();
+            session
+                .start_vm_snapshot(101, &runtime_snapshot::encode(&snapshot).unwrap())
+                .unwrap();
+            let messages = drain(&mut session);
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| matches!(message, RuntimeMessage::CommandRejected(_))),
+                "{field}: {messages:#?}"
+            );
+            assert_eq!(session.epoch, before_epoch);
+            assert_eq!(session.operations.active_input().unwrap().wait, before_wait);
+        }
+        session.start_vm_snapshot(102, &bytes).unwrap();
+        drain(&mut session);
+        assert_ne!(session.epoch, before_epoch);
+        assert_eq!(session.operations.html_lines.len(), 1);
+        session
+            .operations
+            .html_lines
+            .validate_snapshot(session.vm.as_ref().unwrap(), session.epoch.0)
+            .unwrap();
+        let wait = session.operations.active_input().unwrap().wait.clone();
+        submit(
+            &mut session,
+            sequence,
+            RuntimeMessage::Input(FrontendInput {
+                wait_id: wait.wait_id,
+                token: wait.submission_token,
+                monotonic_time_ns: 1,
+                intent: InputIntent::CommitText("7".into()),
+                message_skip: false,
+            }),
         );
-        assert_eq!(session.epoch, before_epoch);
-        assert_eq!(session.operations.active_input().unwrap().wait, before_wait);
+        sequence += 1;
+        let messages = pump_html_execution(&mut session, &mut sequence);
+        assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+        assert_eq!((html_flag(&session, 0), html_flag(&session, 1)), (2, 2));
+        assert!(session.operations.html_lines.is_empty());
     }
-    session.start_vm_snapshot(102, &bytes).unwrap();
-    drain(&mut session);
-    assert_ne!(session.epoch, before_epoch);
-    assert_eq!(session.operations.html_lines.len(), 1);
-    session
-        .operations
-        .html_lines
-        .validate_snapshot(session.vm.as_ref().unwrap(), session.epoch.0)
-        .unwrap();
-    let wait = session.operations.active_input().unwrap().wait.clone();
-    submit(
-        &mut session,
-        sequence,
-        RuntimeMessage::Input(FrontendInput {
-            wait_id: wait.wait_id,
-            token: wait.submission_token,
-            monotonic_time_ns: 1,
-            intent: InputIntent::CommitText("7".into()),
-            message_skip: false,
-        }),
-    );
-    sequence += 1;
-    let messages = pump_html_execution(&mut session, &mut sequence);
-    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
-    assert_eq!((html_flag(&session, 0), html_flag(&session, 1)), (2, 2));
-    assert!(session.operations.html_lines.is_empty());
 }
 
 #[test]
 fn html_lines_reload_blocks_active_flow_and_cancellation_clears_it() {
-    let source = "@SYSTEM_TITLE\nFLAG:1 = HTML_STRINGLINES(\"abc\", HTML_WIDTH())\nWAIT\nRETURN\n@HTML_WIDTH\n#FUNCTION\nINPUT\nRETURNF 1\n";
-    let mut session = prepare_html_execution(source, Some(ProtocolVersion::new(2, 0)));
-    let (sequence, _) = start_html_execution(&mut session);
-    let before_epoch = session.epoch;
-    session
-        .reload_project(
-            100,
-            &ReloadProject {
-                base_revision: 1,
-                target_revision: 2,
-                changes: Vec::new(),
-            },
-        )
-        .unwrap();
-    let messages = drain(&mut session);
-    assert!(messages.iter().any(|message| matches!(message,
+    for source in [
+        "@SYSTEM_TITLE\nFLAG:1 = HTML_STRINGLINES(\"abc\", HTML_WIDTH())\nWAIT\nRETURN\n@HTML_WIDTH\n#FUNCTION\nINPUT\nRETURNF 1\n",
+        "@SYSTEM_TITLE\nRESULTS:9 = {HTML_STRINGLINES(\"abc\", HTML_WIDTH())}\nFLAG:1 = TOINT(STRFORM(RESULTS:9))\nWAIT\nRETURN\n@HTML_WIDTH\n#FUNCTION\nINPUT\nRETURNF 1\n",
+    ] {
+        let mut session = prepare_html_execution(source, Some(ProtocolVersion::new(2, 0)));
+        let (sequence, _) = start_html_execution(&mut session);
+        let before_epoch = session.epoch;
+        session
+            .reload_project(
+                100,
+                &ReloadProject {
+                    base_revision: 1,
+                    target_revision: 2,
+                    changes: Vec::new(),
+                },
+            )
+            .unwrap();
+        let messages = drain(&mut session);
+        assert!(messages.iter().any(|message| matches!(message,
         RuntimeMessage::CommandRejected(CommandRejected { message, .. }) if message.contains("ActiveBlocks"))));
-    assert_eq!(session.epoch, before_epoch);
-    assert_eq!(session.operations.html_lines.len(), 1);
-    submit(
-        &mut session,
-        sequence,
-        RuntimeMessage::ReturnToTitle(era_runtime_protocol::ReturnToTitleRequest {}),
-    );
-    session.drive(RuntimeDriveBudget::default()).unwrap();
-    drain(&mut session);
-    assert!(session.operations.html_lines.is_empty());
-    assert_ne!(session.epoch, before_epoch);
+        assert_eq!(session.epoch, before_epoch);
+        assert_eq!(session.operations.html_lines.len(), 1);
+        submit(
+            &mut session,
+            sequence,
+            RuntimeMessage::ReturnToTitle(era_runtime_protocol::ReturnToTitleRequest {}),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        drain(&mut session);
+        assert!(session.operations.html_lines.is_empty());
+        assert_ne!(session.epoch, before_epoch);
+    }
 }
 
 #[test]
@@ -757,70 +777,74 @@ fn html_lines_no_progress_fault_clears_flows_without_results_side_effects() {
 
 #[test]
 fn html_later_measurement_round_is_cancelled_and_old_reply_cannot_resume_it() {
-    let source = "@SYSTEM_TITLE\nSTR:0 '= HTML_SUBSTRING(\"abc\", 1)\nWAIT\nRETURN\n";
-    let (mut session, first) = start_html_query(
-        source,
-        HTML_SUBSTRING_OPERATION,
-        HTML_SUBSTRING_OPERATION_VERSION,
-    );
-    let payload = decode_canonical(first.payload.as_slice()).unwrap();
-    submit(
-        &mut session,
-        3,
-        RuntimeMessage::ServiceResponse(ServiceResponse {
-            request_id: first.request_id,
-            result: ServiceResult::Ready {
-                payload: ProtocolBytes::new(
-                    encode_canonical(&html_test_measurement(&payload, 9000)).unwrap(),
-                ),
-            },
-        }),
-    );
-    session.drive(RuntimeDriveBudget::default()).unwrap();
-    let second = drain(&mut session)
-        .into_iter()
-        .find_map(|message| match message {
-            RuntimeMessage::ServiceRequest(request)
-                if request.operation == HTML_SUBSTRING_OPERATION =>
-            {
-                Some(request)
-            }
-            _ => None,
-        })
-        .expect("second measurement under the original VM wait");
-    assert_ne!(first.request_id, second.request_id);
-    session.return_to_title(100).unwrap();
-    let cancelled = drain(&mut session);
-    assert!(
-        cancelled.iter().any(|message| matches!(message,
-        RuntimeMessage::CancelExternalRequest(request) if request.request_id == second.request_id))
-    );
-    let after_epoch = session.epoch;
-    let payload = decode_canonical(second.payload.as_slice()).unwrap();
-    // Even an attacker rebinding the old payload to the current envelope epoch has
-    // no pending request to complete. The genuine old-epoch envelope is rejected earlier.
-    session
-        .complete_service(
-            101,
-            ServiceResponse {
-                request_id: second.request_id,
+    for source in [
+        "@SYSTEM_TITLE\nSTR:0 '= HTML_SUBSTRING(\"abc\", 1)\nWAIT\nRETURN\n",
+        "@SYSTEM_TITLE\nRESULTS:9 = %HTML_SUBSTRING(\"abc\", 1)%\nSTR:0 '= STRFORM(RESULTS:9)\nWAIT\nRETURN\n",
+    ] {
+        let (mut session, first) = start_html_query(
+            source,
+            HTML_SUBSTRING_OPERATION,
+            HTML_SUBSTRING_OPERATION_VERSION,
+        );
+        let payload = decode_canonical(first.payload.as_slice()).unwrap();
+        submit(
+            &mut session,
+            3,
+            RuntimeMessage::ServiceResponse(ServiceResponse {
+                request_id: first.request_id,
                 result: ServiceResult::Ready {
                     payload: ProtocolBytes::new(
                         encode_canonical(&html_test_measurement(&payload, 9000)).unwrap(),
                     ),
                 },
-            },
-        )
-        .unwrap();
-    let messages = drain(&mut session);
-    assert!(messages.iter().any(|message| matches!(
-        message,
-        RuntimeMessage::CommandRejected(CommandRejected {
-            code: CommandErrorCode::StaleRequest,
-            ..
-        })
-    )));
-    assert_eq!(session.epoch, after_epoch);
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let second = drain(&mut session)
+            .into_iter()
+            .find_map(|message| match message {
+                RuntimeMessage::ServiceRequest(request)
+                    if request.operation == HTML_SUBSTRING_OPERATION =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            })
+            .expect("second measurement under the original VM wait");
+        assert_ne!(first.request_id, second.request_id);
+        session.return_to_title(100).unwrap();
+        let cancelled = drain(&mut session);
+        assert!(
+            cancelled.iter().any(|message| matches!(message,
+        RuntimeMessage::CancelExternalRequest(request) if request.request_id == second.request_id))
+        );
+        let after_epoch = session.epoch;
+        let payload = decode_canonical(second.payload.as_slice()).unwrap();
+        // Even an attacker rebinding the old payload to the current envelope epoch has
+        // no pending request to complete. The genuine old-epoch envelope is rejected earlier.
+        session
+            .complete_service(
+                101,
+                ServiceResponse {
+                    request_id: second.request_id,
+                    result: ServiceResult::Ready {
+                        payload: ProtocolBytes::new(
+                            encode_canonical(&html_test_measurement(&payload, 9000)).unwrap(),
+                        ),
+                    },
+                },
+            )
+            .unwrap();
+        let messages = drain(&mut session);
+        assert!(messages.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::CommandRejected(CommandRejected {
+                code: CommandErrorCode::StaleRequest,
+                ..
+            })
+        )));
+        assert_eq!(session.epoch, after_epoch);
+    }
 }
 
 #[test]
@@ -1420,20 +1444,35 @@ fn canvas_sampling_flushes_new_draws_before_query_and_returns_argb() {
         .rev()
         .find_map(|message| match message {
             RuntimeMessage::PresentationSnapshot(snapshot) => Some(&snapshot.resources),
-            RuntimeMessage::PresentationDelta(delta) => delta.operations.iter().find_map(|operation| match operation {
-                PresentationOperation::SetResources { resources } => Some(resources),
-                _ => None,
-            }),
+            RuntimeMessage::PresentationDelta(delta) => {
+                delta
+                    .operations
+                    .iter()
+                    .find_map(|operation| match operation {
+                        PresentationOperation::SetResources { resources } => Some(resources),
+                        _ => None,
+                    })
+            }
             _ => None,
         })
         .expect("current replay must precede the sample request");
-    let canvas = resources.canvases.iter().find(|canvas| canvas.canvas_id == query.canvas_id)
+    let canvas = resources
+        .canvases
+        .iter()
+        .find(|canvas| canvas.canvas_id == query.canvas_id)
         .expect("new canvas must be present even without a mounted display");
     assert_eq!(canvas.revision, query.canvas_revision);
-    assert!(canvas.commands.iter().any(|command| matches!(command,
-        era_runtime_protocol::CanvasReplayCommand::Clear { argb: 0xff11_2233, rectangle: None }
+    assert!(canvas.commands.iter().any(|command| matches!(
+        command,
+        era_runtime_protocol::CanvasReplayCommand::Clear {
+            argb: 0xff11_2233,
+            rectangle: None
+        }
     )));
-    assert_eq!(query.context.presentation_revision, session.presentation.revision());
+    assert_eq!(
+        query.context.presentation_revision,
+        session.presentation.revision()
+    );
     complete_projection_reply(
         &mut session,
         &request,
@@ -1565,12 +1604,26 @@ fn malformed_pointer_and_canvas_replies_fault_without_losing_the_host_wait() {
 #[test]
 fn snake_strformcheck_catches_later_html_parser_fault_after_service_completion() {
     let source = "@SYSTEM_TITLE\nRESULTS:0 = old-head\nRESULTS:1 = old-tail\nFLAG:0 = STRFORMCHECK(\"%BAD_HTML()%\")\nFLAG:1 = 1\nWAIT\nRETURN\n@BAD_HTML\n#FUNCTIONS\nRETURNF HTML_SUBSTRING(\"a</b>\", 100)\n";
-    let mut session = prepare_html_execution_with_profile(source, Some(ProtocolVersion::new(2, 0)), erabasic_compat::CompatibilityIdentity::for_profile(erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake));
+    let mut session = prepare_html_execution_with_profile(
+        source,
+        Some(ProtocolVersion::new(2, 0)),
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
     let (_, messages) = start_html_execution(&mut session);
     assert_eq!(session.phase(), RuntimePhase::WaitingInput);
     assert_eq!((html_flag(&session, 0), html_flag(&session, 1)), (0, 1));
-    assert!(messages.iter().any(|message| matches!(message, RuntimeMessage::ServiceRequest(_))));
-    assert!(!messages.iter().any(|message| matches!(message, RuntimeMessage::Fault(_))));
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::ServiceRequest(_)))
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_)))
+    );
     let vm = session.vm.as_ref().unwrap();
     assert_eq!(html_result(vm, 0), VmValue::String("old-head".into()));
     assert_eq!(html_result(vm, 1), VmValue::String("old-tail".into()));
@@ -1580,19 +1633,160 @@ fn snake_strformcheck_catches_later_html_parser_fault_after_service_completion()
 #[test]
 fn snake_strformcheck_cannot_catch_frontend_claimed_script_failure() {
     let source = "@SYSTEM_TITLE\nFLAG:0 = STRFORMCHECK(\"%MEASURE_HTML()%\")\nFLAG:1 = 1\nWAIT\nRETURN\n@MEASURE_HTML\n#FUNCTIONS\nRETURNF HTML_SUBSTRING(\"abc\", 100)\n";
-    let mut session = prepare_html_execution_with_profile(source, Some(ProtocolVersion::new(2, 0)), erabasic_compat::CompatibilityIdentity::for_profile(erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake));
-    submit(&mut session, 2, RuntimeMessage::Start(StartRequest { mode: StartMode::NewGame { seed: Some(123_456) } }));
+    let mut session = prepare_html_execution_with_profile(
+        source,
+        Some(ProtocolVersion::new(2, 0)),
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame {
+                seed: Some(123_456),
+            },
+        }),
+    );
     session.drive(RuntimeDriveBudget::default()).unwrap();
-    let request = drain(&mut session).into_iter().find_map(|message| match message { RuntimeMessage::ServiceRequest(request) => Some(request), _ => None }).expect("measurement request");
-    submit(&mut session, 3, RuntimeMessage::ServiceResponse(ServiceResponse {
-        request_id: request.request_id,
-        result: ServiceResult::Error { error: era_runtime_protocol::ServiceError {
-            code: "script.parse".into(), message: "frontend cannot declare ScriptInput".into(),
-        } },
-    }));
+    let request = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ServiceRequest(request) => Some(request),
+            _ => None,
+        })
+        .expect("measurement request");
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::ServiceResponse(ServiceResponse {
+            request_id: request.request_id,
+            result: ServiceResult::Error {
+                error: era_runtime_protocol::ServiceError {
+                    code: "script.parse".into(),
+                    message: "frontend cannot declare ScriptInput".into(),
+                },
+            },
+        }),
+    );
     session.drive(RuntimeDriveBudget::default()).unwrap();
     let messages = drain(&mut session);
     assert_eq!(session.phase(), RuntimePhase::Faulted);
     assert_eq!(html_flag(&session, 1), 0);
-    assert!(messages.iter().any(|message| matches!(message, RuntimeMessage::Fault(RuntimeFault { code: FaultCode::ServiceFailure, .. }))));
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::Fault(RuntimeFault {
+            code: FaultCode::ServiceFailure,
+            ..
+        })
+    )));
+}
+
+#[test]
+fn direct_html_host_failure_catches_and_abandons_only_its_live_flow_scope() {
+    let source = "@SYSTEM_TITLE\nRESULTS:0 '= \"{HTML_STRINGLINES(\\\"abc\\\", WIDTH())}\"\nFLAG:0 = STRFORMCHECK(RESULTS:0)\nFLAG:2 = 1\nWAIT\nRETURN\n@WIDTH\n#FUNCTION\nFLAG:1 += 1\nTHROW width-failed\nRETURNF 1\n";
+    let mut session = prepare_html_execution_with_profile(
+        source,
+        Some(ProtocolVersion::new(2, 0)),
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    let (_, messages) = start_html_execution(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+    assert_eq!(
+        (
+            html_flag(&session, 0),
+            html_flag(&session, 1),
+            html_flag(&session, 2)
+        ),
+        (0, 1, 1)
+    );
+    assert!(session.operations.html_lines.is_empty());
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_)))
+    );
+}
+
+#[test]
+fn direct_html_outer_scope_survives_inner_check_and_repeated_width_evaluation() {
+    let source = "@SYSTEM_TITLE\nRESULTS:0 '= \"{HTML_STRINGLINES(\\\"abc\\\", WIDTH())}\"\nFLAG:0 = STRFORMCHECK(RESULTS:0)\nWAIT\nRETURN\n@WIDTH\n#FUNCTION\nFLAG:1 += 1\nFLAG:2 = STRFORMCHECK(\"{FAIL()}\")\nRETURNF 1\n@FAIL\n#FUNCTION\nTHROW inner-failed\nRETURNF 0\n";
+    let mut session = prepare_html_execution_with_profile(
+        source,
+        Some(ProtocolVersion::new(2, 0)),
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    let (_, messages) = start_html_execution(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+    assert_eq!(html_flag(&session, 0), 1);
+    assert!(
+        html_flag(&session, 1) > 1,
+        "width must run again for each nonempty tail"
+    );
+    assert_eq!(html_flag(&session, 2), 0);
+    assert!(session.operations.html_lines.is_empty());
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_)))
+    );
+}
+
+#[test]
+fn direct_html_host_cannot_catch_frontend_claimed_script_failure() {
+    let source = "@SYSTEM_TITLE\nRESULTS:0 '= \"%HTML_SUBSTRING(\\\"abc\\\",100)%\"\nFLAG:0 = STRFORMCHECK(RESULTS:0)\nFLAG:1 = 1\nWAIT\nRETURN\n";
+    let mut session = prepare_html_execution_with_profile(
+        source,
+        Some(ProtocolVersion::new(2, 0)),
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame {
+                seed: Some(123_456),
+            },
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let request = drain(&mut session)
+        .into_iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ServiceRequest(request) => Some(request),
+            _ => None,
+        })
+        .expect("direct measurement request");
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::ServiceResponse(ServiceResponse {
+            request_id: request.request_id,
+            result: ServiceResult::Error {
+                error: era_runtime_protocol::ServiceError {
+                    code: "script.parse".into(),
+                    message: "untrusted frontend failure".into(),
+                },
+            },
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let messages = drain(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    assert_eq!(html_flag(&session, 1), 0);
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::Fault(RuntimeFault {
+            code: FaultCode::ServiceFailure,
+            ..
+        })
+    )));
+    assert!(session.operations.html_lines.is_empty());
 }

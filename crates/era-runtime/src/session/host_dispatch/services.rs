@@ -551,7 +551,7 @@ impl RuntimeSession {
             name.as_str(),
             "PRINT_ABL" | "PRINT_TALENT" | "PRINT_MARK" | "PRINT_EXP"
         ) {
-            let Ok(target) = u64::try_from(integer_argument_value(&request.arguments, 0)?) else {
+            let Ok(target) = u64::try_from(integer_argument_value(request, 0)?) else {
                 return complete_script_fault(
                     vm,
                     request,
@@ -578,7 +578,7 @@ impl RuntimeSession {
             return self.emit_presentation();
         }
         if name == "PRINT_PALAM" {
-            let Ok(target) = u64::try_from(integer_argument_value(&request.arguments, 0)?) else {
+            let Ok(target) = u64::try_from(integer_argument_value(request, 0)?) else {
                 return complete_script_fault(
                     vm,
                     request,
@@ -774,7 +774,7 @@ impl RuntimeSession {
                 },
             )
         } else if matches!(name.as_str(), "GETKEY" | "GETKEYTRIGGERED") {
-            let key = match request.arguments.first() {
+            let key = match request.argument(0) {
                 Some(VmValue::Integer(value)) => match u8::try_from(*value) {
                     Ok(value) => value,
                     Err(_) => {

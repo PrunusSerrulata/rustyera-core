@@ -1,12 +1,14 @@
 //! Bounded source-only type and shape analysis shared by runtime expressions.
 use super::{
     BinaryOp, BytecodeFunctionKind, BytecodeType, Expr, ExprKind, FormPart, FormattedString,
-    GenerationId, MAX_RUNTIME_FORM_BYTES, MAX_RUNTIME_FORM_NESTING, NativeServiceRegistry,
-    StepError, SymbolKey, UnaryOp, VmFaultCode, map_vm_error, methods, resource_limit, support,
-    unsupported,
+    GenerationId, MAX_RUNTIME_FORM_NESTING, NativeServiceRegistry, StepError, SymbolKey, UnaryOp,
+    VmFaultCode, map_vm_error, methods, resource_limit, support, unsupported,
 };
 use crate::state::user_calls::resolve_user_call;
 use erabasic_bytecode::{RuntimeExpressionShape, UserArgumentSpec, UserCallMode, UserCallSpec};
+
+#[cfg(test)]
+thread_local! { static TYPE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 fn bad_type(message: impl Into<String>) -> StepError {
     StepError::script(
@@ -34,6 +36,10 @@ pub(super) struct TypeAnalysis<'a> {
     natives: Option<&'a NativeServiceRegistry>,
     nodes: usize,
     limit: usize,
+    pub(super) reference_terms: bool,
+    pub(super) source_types: Vec<(erabasic_ast::Span, BytecodeType)>,
+    pub(super) bound_calls: Vec<(erabasic_ast::Span, super::call_plan::RuntimeBoundCall)>,
+    pub(super) expression_types: std::collections::BTreeMap<usize, BytecodeType>,
 }
 
 impl<'a> TypeAnalysis<'a> {
@@ -53,6 +59,10 @@ impl<'a> TypeAnalysis<'a> {
             natives,
             nodes: 0,
             limit,
+            reference_terms: false,
+            source_types: Vec::new(),
+            bound_calls: Vec::new(),
+            expression_types: std::collections::BTreeMap::new(),
         }
     }
 
@@ -72,6 +82,8 @@ impl<'a> TypeAnalysis<'a> {
             ));
         }
         self.nodes += 1;
+        #[cfg(test)]
+        TYPE_VISITS.with(|visits| visits.set(visits.get() + 1));
         Ok(())
     }
 
@@ -81,7 +93,7 @@ impl<'a> TypeAnalysis<'a> {
         depth: usize,
     ) -> Result<BytecodeType, StepError> {
         self.visit(depth)?;
-        match &expression.kind {
+        let result = match &expression.kind {
             ExprKind::Integer(_) => Ok(BytecodeType::Integer),
             ExprKind::String(_) => Ok(BytecodeType::String),
             ExprKind::Formatted(form) => {
@@ -126,24 +138,8 @@ impl<'a> TypeAnalysis<'a> {
                 Ok(BytecodeType::Integer)
             }
             ExprKind::Call { name, args } => {
-                let shapes = args
-                    .iter()
-                    .map(|argument| {
-                        argument
-                            .as_ref()
-                            .map(|expression| {
-                                let value_type = self.expression(expression, depth + 1)?;
-                                let variable = variable(self.program, self.function, expression);
-                                Ok(RuntimeExpressionShape {
-                                    value_type,
-                                    variable: variable.is_some(),
-                                    mutable: variable.is_some_and(|definition| definition.mutable),
-                                })
-                            })
-                            .transpose()
-                    })
-                    .collect::<Result<Vec<_>, StepError>>()?;
-                self.call(name, args, &shapes)
+                let shapes = self.arguments(args, depth + 1)?;
+                self.call(name, args, &shapes, expression.span)
             }
             ExprKind::Binary { op, left, right } => {
                 let left = self.expression(left, depth + 1)?;
@@ -163,7 +159,13 @@ impl<'a> TypeAnalysis<'a> {
                 Ok(then_type)
             }
             ExprKind::Error => Err(bad_type("runtime expression contains a parser error")),
+        }?;
+        self.source_types.push((expression.span, result));
+        if self.reference_terms {
+            self.expression_types
+                .insert(std::ptr::from_ref(expression) as usize, result);
         }
+        Ok(result)
     }
 
     pub(super) fn form(&mut self, form: &FormattedString, depth: usize) -> Result<(), StepError> {
@@ -252,10 +254,11 @@ impl<'a> TypeAnalysis<'a> {
     }
 
     fn call(
-        &self,
+        &mut self,
         name: &str,
         args: &[Option<Expr>],
         shapes: &[Option<RuntimeExpressionShape>],
+        span: erabasic_ast::Span,
     ) -> Result<BytecodeType, StepError> {
         if let Some(target) = self.program.function_by_name(name) {
             if target.kind != BytecodeFunctionKind::Method {
@@ -313,13 +316,28 @@ impl<'a> TypeAnalysis<'a> {
                 )))
             };
         }
-        self.normal_call(name, shapes)
+        if self
+            .program
+            .artifact
+            .runtime_host_authorizations
+            .iter()
+            .any(|family| family.name.eq_ignore_ascii_case(name))
+        {
+            super::host_calls::validate_source_tokens(self.program, self.function, name, args)?;
+            let bound = super::host_calls::bind(self.program, name, shapes)?;
+            let result = bound.import.result.expect("Host source result is scalar");
+            self.bound_calls
+                .push((span, super::call_plan::RuntimeBoundCall::Host(bound)));
+            return Ok(result);
+        }
+        self.normal_call(name, shapes, span)
     }
 
     fn normal_call(
-        &self,
+        &mut self,
         name: &str,
         shapes: &[Option<RuntimeExpressionShape>],
+        span: erabasic_ast::Span,
     ) -> Result<BytecodeType, StepError> {
         let types = shapes
             .iter()
@@ -333,6 +351,7 @@ impl<'a> TypeAnalysis<'a> {
             return Ok(result.bytecode_type());
         }
         if name.eq_ignore_ascii_case("EXISTMETH") {
+            super::native_binding::authorization(self.program, name)?;
             if types.len() != 1 {
                 return Err(bad_type("EXISTMETH expects one String"));
             }
@@ -363,6 +382,10 @@ impl<'a> TypeAnalysis<'a> {
             return Ok(BytecodeType::Integer);
         }
         if name.eq_ignore_ascii_case("STRFORM") || name.eq_ignore_ascii_case("STRFORMCHECK") {
+            let family = super::native_binding::authorization(self.program, name)?;
+            if let Some(natives) = self.natives {
+                super::native_binding::require_provider(natives, family)?;
+            }
             let checked = name.eq_ignore_ascii_case("STRFORMCHECK");
             if checked
                 && !self
@@ -386,61 +409,47 @@ impl<'a> TypeAnalysis<'a> {
                 BytecodeType::String
             });
         }
-        self.native_call(name, &types)
+        self.native_call(name, shapes, span)
     }
 
     fn native_call(
-        &self,
+        &mut self,
         name: &str,
-        types: &[Option<BytecodeType>],
+        shapes: &[Option<RuntimeExpressionShape>],
+        span: erabasic_ast::Span,
     ) -> Result<BytecodeType, StepError> {
-        if crate::structured::is_internal_column_native(name) {
-            return Err(support::permission_denied(
-                "STRFORM cannot invoke an internal column operation",
+        let bound = super::native_binding::bind(self.program, name, shapes, self.natives)?;
+        let result = bound.import.result.expect("scalar Native result");
+        self.bound_calls
+            .push((span, super::call_plan::RuntimeBoundCall::Native(bound)));
+        Ok(result)
+    }
+    pub(super) fn arguments(
+        &mut self,
+        args: &[Option<Expr>],
+        depth: usize,
+    ) -> Result<Vec<Option<RuntimeExpressionShape>>, StepError> {
+        if args.len() > 65_535 || args.len() > self.limit.saturating_sub(self.nodes) {
+            return Err(resource_limit(
+                "runtime Native source arguments exceed operand limit",
             ));
         }
-        let actual = types
-            .iter()
-            .copied()
-            .map(|kind| kind.ok_or_else(|| bad_type("builtin argument cannot be omitted")))
-            .collect::<Result<Vec<_>, _>>()?;
-        let import = self.program.artifact.native_imports.iter().find(|native| {
-            native.import.name.eq_ignore_ascii_case(name)
-                && native.import.parameters == actual
-                && matches!(
-                    native.import.result,
-                    Some(BytecodeType::Integer | BytecodeType::String)
-                )
-        });
-        if let Some(native) = import {
-            if let Some(natives) = self.natives {
-                require_native_provider(natives, &native.import)?;
-            }
-            return Ok(native.import.result.expect("scalar result selected"));
-        }
-        if self
-            .program
-            .artifact
-            .host_imports
-            .iter()
-            .any(|host| host.import.name.eq_ignore_ascii_case(name))
-        {
-            return Err(support::permission_denied(format!(
-                "STRFORM host callable {name} is unsupported in a template"
-            )));
-        }
-        if self
-            .program
-            .artifact
-            .native_imports
-            .iter()
-            .any(|native| native.import.name.eq_ignore_ascii_case(name))
-        {
-            return Err(bad_type(format!(
-                "STRFORM builtin {name} has incompatible argument types or arity"
-            )));
-        }
-        Err(missing(name))
+        args.iter()
+            .map(|argument| {
+                argument
+                    .as_ref()
+                    .map(|expression| {
+                        let value_type = self.expression(expression, depth)?;
+                        Ok(source_shape(
+                            self.program,
+                            self.function,
+                            expression,
+                            value_type,
+                        ))
+                    })
+                    .transpose()
+            })
+            .collect()
     }
 }
 
@@ -482,55 +491,6 @@ fn require_type(actual: Option<BytecodeType>, expected: BytecodeType) -> Result<
         ));
     }
     Ok(())
-}
-
-pub(super) fn require_native_provider(
-    natives: &NativeServiceRegistry,
-    import: &erabasic_bytecode::RuntimeImport,
-) -> Result<(), StepError> {
-    if !natives.contains(import.key) {
-        return Err(StepError::classified(
-            crate::FaultCategory::HostContract,
-            VmFaultCode::Native,
-            format!("runtime native provider {} is missing", import.name),
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn expression_type(
-    program: &crate::ProgramGeneration,
-    function: SymbolKey,
-    expression: &Expr,
-    depth: usize,
-) -> Result<BytecodeType, StepError> {
-    // Introspection returns only a type; this placeholder generation is never
-    // retained or executed. Runtime entry points pass their actual generation.
-    TypeAnalysis::new(
-        program,
-        function,
-        GenerationId::default(),
-        false,
-        MAX_RUNTIME_FORM_BYTES,
-        None,
-    )
-    .expression(expression, depth)
-}
-
-pub(super) fn argument_spec(
-    program: &crate::ProgramGeneration,
-    function: SymbolKey,
-    expression: Option<&Expr>,
-) -> Result<UserArgumentSpec, StepError> {
-    let Some(expression) = expression else {
-        return Ok(UserArgumentSpec::Omitted);
-    };
-    Ok(shape_spec(
-        program,
-        function,
-        expression,
-        expression_type(program, function, expression, 0)?,
-    ))
 }
 
 fn binary_result_type(
@@ -614,6 +574,20 @@ fn probe_literal_zero(expression: &Expr) -> bool {
     }
 }
 
+pub(super) fn source_shape(
+    program: &crate::ProgramGeneration,
+    function: SymbolKey,
+    expression: &Expr,
+    value_type: BytecodeType,
+) -> RuntimeExpressionShape {
+    let definition = variable(program, function, expression);
+    RuntimeExpressionShape {
+        value_type,
+        variable: definition.is_some(),
+        mutable: definition.is_some_and(|variable| variable.mutable),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,16 +600,24 @@ mod tests {
     use erabasic_parser::DefaultParserContext;
     use std::sync::Arc;
 
-    fn program() -> crate::ProgramGeneration {
+    fn program_source(source: &str) -> crate::ProgramGeneration {
         let mut options = AnalyzerOptions::analysis_mode();
         options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
             erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
         );
-        let analysis = analyze_project(AnalysisInput {
-            project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default()).data.unwrap(),
-            sources: vec![ProjectSource { relative_path: "typing.erb".into(), payload: SourcePayload::Utf8(
-                "@SYSTEM_TITLE\nRESULT = ABS(FLAG)\nRETURN\n@ECHO(ARG)\n#FUNCTION\nRETURNF ARG\n".into()) }],
-        }, &options, &ExtensionRegistry::default());
+        let analysis = analyze_project(
+            AnalysisInput {
+                project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+                    .data
+                    .unwrap(),
+                sources: vec![ProjectSource {
+                    relative_path: "typing.erb".into(),
+                    payload: SourcePayload::Utf8(source.into()),
+                }],
+            },
+            &options,
+            &ExtensionRegistry::default(),
+        );
         let compiled = compile_project(
             &analysis.project.expect("source analysis"),
             &CompilerOptions::default(),
@@ -643,6 +625,64 @@ mod tests {
             None,
         );
         crate::ProgramGeneration::new(Arc::new(compiled.artifact.expect("compiled source")))
+    }
+
+    fn program() -> crate::ProgramGeneration {
+        program_source(
+            "@SYSTEM_TITLE\nRESULT = ABS(FLAG)\nRETURN\n@ECHO(ARG)\n#FUNCTION\nRETURNF ARG\n",
+        )
+    }
+
+    #[test]
+    fn runtime_nested_native_and_user_calls_consume_one_root_type_analysis() {
+        struct NoHost;
+        impl crate::VmHost for NoHost {
+            fn call(&mut self, _: crate::HostCallRequest) -> crate::HostCallResult {
+                panic!("unexpected Host service")
+            }
+        }
+        for pattern in [0, 1, 2] {
+            let expression = (0..24).fold("1".to_owned(), |inner, index| {
+                let name = if pattern == 0 || pattern == 2 && index % 2 == 0 {
+                    "ABS"
+                } else {
+                    "ECHO"
+                };
+                format!("{name}({inner})")
+            });
+            let program = program_source(&format!(
+                "@SYSTEM_TITLE\nRESULTS '= STRFORM(\"{{{expression}}}\")\nRETURN\n@ECHO(ARG)\n#FUNCTION\nRETURNF ARG\n"
+            ));
+            let entry = program.function_by_name("SYSTEM_TITLE").unwrap().key;
+            let context = erabasic_compiler::runtime_native_validation_context(
+                &program.artifact,
+                &default_host_registry(),
+            );
+            let validated = erabasic_validator::validate_bytecode(
+                (*program.artifact).clone().into_unvalidated(),
+                &context,
+            )
+            .value
+            .unwrap();
+            let mut vm = crate::Vm::new(validated, crate::VmConfig::default());
+            let mut natives = NativeServiceRegistry::for_artifact(&program.artifact);
+            vm.spawn_entry(entry, Vec::new()).unwrap();
+            TYPE_VISITS.with(|visits| visits.set(0));
+            let report = vm.run_slice(&mut NoHost, &mut natives, crate::RunBudget::default());
+            assert!(
+                report
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, crate::VmEvent::FiberCompleted { .. })),
+                "{report:?}"
+            );
+            // Form + interpolation + 24 calls + one literal. No call or return retypes its actual tree.
+            assert_eq!(
+                TYPE_VISITS.with(std::cell::Cell::get),
+                27,
+                "pattern {pattern}"
+            );
+        }
     }
 
     #[test]

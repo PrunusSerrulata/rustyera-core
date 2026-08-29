@@ -121,7 +121,7 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 1,
-            CompatibilityProfileId::EmueraSkiaSnake => 4,
+            CompatibilityProfileId::EmueraSkiaSnake => 5,
         };
         Self {
             profile,

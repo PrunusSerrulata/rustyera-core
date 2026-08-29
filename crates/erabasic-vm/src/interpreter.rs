@@ -1,19 +1,17 @@
 use std::sync::Arc;
 
 use erabasic_bytecode::{
-    BytecodeFunctionKind, BytecodeStorage, BytecodeType, HostSnapshotCapability, ImportKind,
-    Opcode, SymbolKey, opcode,
+    BytecodeFunctionKind, BytecodeStorage, BytecodeType, ImportKind, Opcode, SymbolKey, opcode,
 };
 
 use crate::state::{
     EventDispatch, EventDispatchEntry, ForLoopState, ProgramGeneration, StructuredScopeKind,
 };
 use crate::{
-    Fiber, FiberId, FiberState, HostCallRequest, HostCallResult, HostReady, HostWaitStability,
-    ImmediateHostCall, ImmediateHostCallResult, NativeCallRequest, NativePlaceView, NativeReady,
-    NativeServiceRegistry, PlaceDescriptor, RunBudget, Vm, VmError, VmEvent, VmFault, VmFaultCode,
-    VmHost, VmRunReport, VmRunStop, VmValue, WaitingHost, bind_persistent_arguments, make_frame,
-    validate_arguments,
+    Fiber, FiberId, FiberState, HostReady, ImmediateHostCall, ImmediateHostCallResult,
+    NativeCallRequest, NativePlaceView, NativeReady, NativeServiceRegistry, PlaceDescriptor,
+    RunBudget, Vm, VmError, VmEvent, VmFault, VmFaultCode, VmHost, VmRunReport, VmRunStop, VmValue,
+    bind_persistent_arguments, make_frame, validate_arguments,
 };
 
 mod arithmetic;
@@ -24,11 +22,13 @@ pub(crate) mod dynamic_form;
 pub(crate) mod existvar;
 mod extended_ops;
 mod fastpaths;
+mod host_calls;
 mod lookup;
 mod native_ops;
 mod operand;
 mod recovery;
 mod scheduler;
+mod special_native;
 
 use character_ops::{character_series, execute_character_mutation, execute_character_query};
 use dynamic_form::{

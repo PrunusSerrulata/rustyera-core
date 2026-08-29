@@ -1,8 +1,7 @@
 //! Runtime expressions use the same place mutation primitive as compiled ++/--.
 use super::{
     BytecodeType, Expr, ExprKind, Fiber, MAX_RUNTIME_FORM_NESTING, RuntimeFormContinuation,
-    RuntimeFormTask, StepError, SymbolKey, Vm, VmFaultCode, VmValue, map_vm_error, methods,
-    resource_limit,
+    RuntimeFormTask, StepError, SymbolKey, Vm, VmFaultCode, VmValue, map_vm_error, resource_limit,
 };
 use erabasic_bytecode::BytecodeStorage;
 
@@ -51,15 +50,6 @@ pub(super) fn mutation_variable<'a>(
             "mutation index count exceeds variable rank",
         ));
     }
-    for index in indices {
-        if methods::expression_type(program, function, index, depth + 1)? != BytecodeType::Integer {
-            return Err(StepError::script(
-                crate::ScriptFaultKind::Argument,
-                VmFaultCode::TypeMismatch,
-                "mutation index must be an integer",
-            ));
-        }
-    }
     Ok((definition.key, indices))
 }
 
@@ -75,6 +65,14 @@ impl RuntimeFormContinuation {
             .get(&self.generation)
             .ok_or_else(|| invalid("mutation generation is missing"))?;
         let (variable, indices) = mutation_variable(program, self.function, operand, 0)?;
+        let plan = self
+            .current_call_plan
+            .ok_or_else(|| invalid("mutation lacks its source plan"))?;
+        for index in indices {
+            if self.planned_expression_type(plan, index)? != BytecodeType::Integer {
+                return Err(invalid("mutation index lost its analyzed integer type"));
+            }
+        }
         self.work.push(RuntimeFormTask::MutateVariable {
             variable,
             indices: indices.len(),

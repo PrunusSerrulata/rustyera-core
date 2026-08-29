@@ -11,6 +11,7 @@ erabasic-ast = { path = "../erabasic-ast" }
 erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-data = { path = "../erabasic-data" }
 erabasic-html = { path = "../erabasic-html" }
+erabasic-lexer = { path = "../erabasic-lexer" }
 erabasic-parser = { path = "../erabasic-parser" }
 erabasic-validator = { path = "../erabasic-validator" }
 regex.workspace = true

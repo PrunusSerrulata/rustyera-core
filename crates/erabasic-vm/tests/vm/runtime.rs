@@ -774,8 +774,11 @@ fn hot_reload_pins_old_stacks_and_migrates_compatible_state() {
             fiber_quantum: 1,
         },
     );
-    vm.prepare_hot_reload(&patch, &ValidationContext::for_artifact(&target))
-        .unwrap();
+    vm.prepare_hot_reload(
+        &patch,
+        &erabasic_compiler::runtime_native_validation_context(&target, &default_host_registry()),
+    )
+    .unwrap();
     vm.commit_hot_reload().unwrap();
     let new = vm.spawn_entry(entry, Vec::new()).unwrap();
     vm.run_slice(&mut host, &mut natives, RunBudget::default());
@@ -874,8 +877,14 @@ fn incompatible_hot_reload_is_rejected_atomically() {
         .unwrap();
     let original_id = vm.artifact_id();
     assert!(
-        vm.prepare_hot_reload(&patch, &ValidationContext::for_artifact(&target))
-            .is_err()
+        vm.prepare_hot_reload(
+            &patch,
+            &erabasic_compiler::runtime_native_validation_context(
+                &target,
+                &default_host_registry()
+            )
+        )
+        .is_err()
     );
     assert!(vm.pending_hot_reload().is_none());
     assert_eq!(vm.artifact_id(), original_id);
@@ -901,8 +910,11 @@ fn function_breakpoints_rebind_to_the_new_hot_reload_generation() {
         &[],
     )
     .unwrap();
-    vm.prepare_hot_reload(&patch, &ValidationContext::for_artifact(&target))
-        .unwrap();
+    vm.prepare_hot_reload(
+        &patch,
+        &erabasic_compiler::runtime_native_validation_context(&target, &default_host_registry()),
+    )
+    .unwrap();
     vm.commit_hot_reload().unwrap();
     vm.spawn_entry(entry, Vec::new()).unwrap();
     let mut host = ReadyHost::default();

@@ -1,10 +1,10 @@
 use super::{
-    ARITHMETIC_PROJECT_VERSION, DecodedProjectFile, EncodedSectionRef, FIXED_SECTION_COUNT,
-    LEGACY_PROJECT_VERSION, MANIFEST_SECTION_INDEX, MAXIMUM_DECODED_PAYLOAD_BYTES,
-    PREVIOUS_PROJECT_VERSION, PROFILED_PROJECT_VERSION, PROFILELESS_PROJECT_VERSION, PROJECT_MAGIC,
-    ProjectFileError, ProjectSourceIdentity, ProtocolBytes, StreamingConfigurationJournal,
-    TARGET_PARALLEL_SECTIONS, VERSION, apply_journal, decode_manifest_section, project_identity,
-    read_u32, read_u64,
+    ARITHMETIC_PROJECT_VERSION, CALL_PROJECT_VERSION, DecodedProjectFile, EncodedSectionRef,
+    FIXED_SECTION_COUNT, LEGACY_PROJECT_VERSION, MANIFEST_SECTION_INDEX,
+    MAXIMUM_DECODED_PAYLOAD_BYTES, PREVIOUS_PROJECT_VERSION, PROFILED_PROJECT_VERSION,
+    PROFILELESS_PROJECT_VERSION, PROJECT_MAGIC, ProjectFileError, ProjectSourceIdentity,
+    ProtocolBytes, StreamingConfigurationJournal, TARGET_PARALLEL_SECTIONS, VERSION, apply_journal,
+    decode_manifest_section, project_identity, read_u32, read_u64,
 };
 
 pub(super) const HEADER_BYTES: usize = PROJECT_MAGIC.len() + 1 + 8 + 32 + 32 + 4 + 4;
@@ -228,6 +228,7 @@ impl ProjectFileStreamDecoder {
                 | PROFILELESS_PROJECT_VERSION
                 | PROFILED_PROJECT_VERSION
                 | ARITHMETIC_PROJECT_VERSION
+                | CALL_PROJECT_VERSION
                 | VERSION
         ) {
             return Err(error(&format!(

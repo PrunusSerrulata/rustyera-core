@@ -1,4 +1,3 @@
-pub(super) use super::typing::{argument_spec, expression_type};
 #[allow(clippy::wildcard_imports)]
 use super::*;
 use crate::state::user_calls::{
@@ -8,11 +7,14 @@ use erabasic_bytecode::{MethodResult, UserArgumentSpec, UserCallMode, UserCallSp
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(super) struct RuntimeUserCall {
+    pub reference_bindings: bool,
+    pub plan: u64,
     pub call: ResolvedUserCall,
     pub specs: Vec<UserArgumentSpec>,
     pub arguments: Vec<Option<Expr>>,
     pub captured: Vec<Option<VmValue>>,
     pub next_slot: usize,
+    pub argument_checkpoint: Option<u64>,
 }
 
 pub(super) fn method_result(name: &str) -> Option<MethodResult> {
@@ -66,6 +68,9 @@ impl RuntimeFormContinuation {
             self.work.push(RuntimeFormTask::ExistsMethod);
         } else {
             self.work.push(RuntimeFormTask::ResolveMethod {
+                plan: self
+                    .current_call_plan
+                    .ok_or_else(|| invalid_state("method lacks its source plan"))?,
                 result: result.expect("method result was checked"),
                 fallback: arguments.get(1).cloned().flatten(),
                 arguments: arguments.get(2..).unwrap_or_default().to_vec(),
@@ -95,6 +100,9 @@ impl RuntimeFormContinuation {
         };
         self.values.push(VmValue::String(name.into()));
         self.work.push(RuntimeFormTask::ResolveMethod {
+            plan: self
+                .current_call_plan
+                .ok_or_else(|| invalid_state("method lacks its source plan"))?,
             result,
             fallback: None,
             arguments,
@@ -105,6 +113,7 @@ impl RuntimeFormContinuation {
     pub(super) fn resolve_method(
         &mut self,
         vm: &mut Vm,
+        plan: u64,
         result: MethodResult,
         fallback: Option<Expr>,
         arguments: Vec<Option<Expr>>,
@@ -117,14 +126,14 @@ impl RuntimeFormContinuation {
             .get(&self.generation)
             .ok_or_else(|| invalid_state("form generation is missing"))?;
         if let Some(fallback) = &fallback
-            && expression_type(program, self.function, fallback, 0)? != result.bytecode_type()
+            && self.planned_expression_type(plan, fallback)? != result.bytecode_type()
         {
             return Err(bad_type("dynamic method fallback has an incompatible type"));
         }
         // Parse/type/name checks cover the full syntactic list before selecting the retained prefix.
         let specs = arguments
             .iter()
-            .map(|argument| argument_spec(program, self.function, argument.as_ref()))
+            .map(|argument| self.planned_argument_spec(program, plan, argument.as_ref()))
             .collect::<Result<Vec<_>, _>>()?;
         let call = resolve_user_call(
             program,
@@ -139,7 +148,7 @@ impl RuntimeFormContinuation {
         )
         .map_err(map_vm_error)?;
         if let Some(call) = call {
-            self.queue_resolved_call(vm, call, specs, arguments);
+            self.queue_resolved_call(vm, call, specs, arguments)?;
         } else if let Some(fallback) = fallback {
             self.work.push(RuntimeFormTask::Evaluate(fallback));
         } else {
@@ -158,17 +167,23 @@ impl RuntimeFormContinuation {
         call: ResolvedUserCall,
         specs: Vec<UserArgumentSpec>,
         arguments: Vec<Option<Expr>>,
-    ) {
+    ) -> Result<(), StepError> {
         vm.queue_user_call_diagnostic(&call, specs.len());
         let retained = specs.len().min(call.bindings.len());
         self.work
             .push(RuntimeFormTask::MethodArgument(RuntimeUserCall {
+                reference_bindings: self.reference_bindings,
+                plan: self
+                    .current_call_plan
+                    .ok_or_else(|| invalid_state("user call lacks its source plan"))?,
                 call,
                 captured: vec![None; retained],
                 specs,
                 arguments,
                 next_slot: 0,
+                argument_checkpoint: None,
             }));
+        Ok(())
     }
 
     pub(super) fn advance_method_arguments(
@@ -217,6 +232,10 @@ impl RuntimeFormContinuation {
                 self.work.push(RuntimeFormTask::Evaluate(expression));
                 return Ok(());
             }
+        }
+        if let Some(checkpoint) = call.argument_checkpoint {
+            self.finish_call_text_argument_checkpoint(checkpoint)?;
+            call.argument_checkpoint = None;
         }
         let owner_stack_depth = owner_frame(fiber, self.frame)?.stack.len();
         vm.invoke_user_call(
@@ -325,6 +344,17 @@ impl RuntimeFormContinuation {
             || call.specs.len() != call.arguments.len()
             || call.captured.len() != retained
             || call.next_slot > call.specs.len()
+            || call.argument_checkpoint.is_some_and(|checkpoint| {
+                !matches!(
+                    self.checkpoints.last(),
+                    Some(state)
+                        if state.id == checkpoint
+                            && matches!(
+                                state.kind,
+                                super::checkpoints::FormatCheckpointKind::CallTextArguments(_)
+                            )
+                )
+            })
             || (awaiting_argument && call.next_slot >= retained)
             || resolved.as_ref() != Some(&call.call)
         {
@@ -361,7 +391,8 @@ impl RuntimeFormContinuation {
             }
             if slot >= call.next_slot
                 && !(slot == call.next_slot && awaiting_argument)
-                && argument_spec(program, self.function, argument)
+                && self
+                    .planned_argument_spec(program, call.plan, argument)
                     .map_err(|_| invalid_state("stored actual cannot be typed"))?
                     != *spec
             {
@@ -392,7 +423,8 @@ impl RuntimeFormContinuation {
         let Some(owner) = fiber.frames.iter().position(|frame| frame.id == self.frame) else {
             return false;
         };
-        if !self.checkpoints_valid()
+        if !self.valid_call_plans(vm)
+            || !self.checkpoints_valid()
             || self.checkpoints.iter().any(|checkpoint| {
                 checkpoint.owner_stack_depth > fiber.frames[owner].stack.len()
                     || checkpoint.owner_user_calls != fiber.frames[owner].user_calls.len()
@@ -401,9 +433,10 @@ impl RuntimeFormContinuation {
             return false;
         }
         if let Some(wait) = &self.awaiting_user_call {
-            if self
-                .validate_method_call(vm, fiber, &wait.call, false)
-                .is_err()
+            if !self.valid_method_sources(program, &wait.call)
+                || self
+                    .validate_method_call(vm, fiber, &wait.call, false)
+                    .is_err()
             {
                 return false;
             }
@@ -426,35 +459,51 @@ impl RuntimeFormContinuation {
             }
         }
         self.work.iter().all(|task| match task {
+            RuntimeFormTask::FinishNative {
+                site,
+                bound,
+                source,
+            } => self.valid_native_task(program, *site, bound, source),
             RuntimeFormTask::MethodArgument(call) => {
-                self.validate_method_call(vm, fiber, call, false).is_ok()
+                self.valid_method_sources(program, call)
+                    && self.validate_method_call(vm, fiber, call, false).is_ok()
             }
             RuntimeFormTask::CaptureMethodArgument(call) => {
-                self.validate_method_call(vm, fiber, call, true).is_ok()
+                self.valid_method_sources(program, call)
+                    && self.validate_method_call(vm, fiber, call, true).is_ok()
             }
             RuntimeFormTask::ResolveMethod {
+                plan,
                 result,
                 fallback,
                 arguments,
             } => {
                 fallback.as_ref().is_none_or(|value| {
-                    expression_type(program, self.function, value, 0).ok()
-                        == Some(result.bytecode_type())
-                }) && arguments
-                    .iter()
-                    .all(|value| argument_spec(program, self.function, value.as_ref()).is_ok())
+                    self.validate_planned_expression(program, *plan, value)
+                        && self.planned_expression_type(*plan, value).ok()
+                            == Some(result.bytecode_type())
+                }) && arguments.iter().all(|value| {
+                    value.as_ref().is_none_or(|expression| {
+                        self.validate_planned_expression(program, *plan, expression)
+                    }) && self
+                        .planned_argument_spec(program, *plan, value.as_ref())
+                        .is_ok()
+                })
             }
-            RuntimeFormTask::ExistVarFirst { source, mode } => {
-                expression_type(program, self.function, source, 0).ok()
-                    == Some(BytecodeType::String)
+            RuntimeFormTask::ExistVarFirst { plan, source, mode } => {
+                self.validate_planned_expression(program, *plan, source)
+                    && self.planned_expression_type(*plan, source).ok()
+                        == Some(BytecodeType::String)
                     && mode.as_ref().is_none_or(|mode| {
-                        expression_type(program, self.function, mode, 0).ok()
-                            == Some(BytecodeType::Integer)
+                        self.validate_planned_expression(program, *plan, mode)
+                            && self.planned_expression_type(*plan, mode).ok()
+                                == Some(BytecodeType::Integer)
                     })
             }
-            RuntimeFormTask::ExistVarMode { source } => {
-                expression_type(program, self.function, source, 0).ok()
-                    == Some(BytecodeType::String)
+            RuntimeFormTask::ExistVarMode { plan, source } => {
+                self.validate_planned_expression(program, *plan, source)
+                    && self.planned_expression_type(*plan, source).ok()
+                        == Some(BytecodeType::String)
             }
             RuntimeFormTask::MutateVariable {
                 variable,
@@ -468,17 +517,38 @@ impl RuntimeFormContinuation {
         }) && self.check_resources(vm).is_ok()
     }
 
+    fn valid_method_sources(
+        &self,
+        program: &crate::ProgramGeneration,
+        call: &RuntimeUserCall,
+    ) -> bool {
+        call.arguments
+            .iter()
+            .flatten()
+            .all(|expression| self.validate_planned_expression(program, call.plan, expression))
+    }
+
     pub(super) fn method_resources(&self) -> Option<(usize, usize)> {
         let mut slots = 0usize;
         let mut bytes = 0usize;
         let mut expressions = Vec::new();
         for task in &self.work {
             match task {
-                RuntimeFormTask::ExistVarFirst { source, mode } => {
+                RuntimeFormTask::FinishNative { bound, source, .. } => {
+                    slots = slots
+                        .checked_add(source.len())?
+                        .checked_add(bound.import.parameters.len())?
+                        .checked_add(bound.omitted_arguments.len())?;
+                    bytes = bytes
+                        .checked_add(bound.import.name.len())?
+                        .checked_add(bound.import.namespace.len())?;
+                    expressions.extend(source.iter().flatten());
+                }
+                RuntimeFormTask::ExistVarFirst { source, mode, .. } => {
                     expressions.push(source);
                     expressions.extend(mode.iter());
                 }
-                RuntimeFormTask::ExistVarMode { source } => expressions.push(source),
+                RuntimeFormTask::ExistVarMode { source, .. } => expressions.push(source),
                 RuntimeFormTask::MethodArgument(call)
                 | RuntimeFormTask::CaptureMethodArgument(call) => {
                     slots = slots
@@ -549,7 +619,7 @@ impl RuntimeFormContinuation {
     }
 }
 
-fn retained_expression_resources(expressions: Vec<&Expr>) -> Option<(usize, usize)> {
+pub(super) fn retained_expression_resources(expressions: Vec<&Expr>) -> Option<(usize, usize)> {
     enum Node<'a> {
         Expression(&'a Expr),
         Form(&'a FormattedString),

@@ -25,6 +25,8 @@ pub enum HostWaitStability {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostCallRequest {
+    /// Explicit omitted source slots, separate from a real Integer MIN value.
+    pub omitted_arguments: Vec<usize>,
     pub id: HostRequestId,
     pub fiber: FiberId,
     pub import: RuntimeImport,
@@ -120,6 +122,9 @@ pub trait VmHost {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeCallRequest {
+    /// Registry/transaction key. Dynamic physical import.key is deliberately separate.
+    pub service_key: SymbolKey,
+    pub omitted_arguments: Vec<usize>,
     pub import: RuntimeImport,
     pub arguments: Vec<VmValue>,
     /// Immutable snapshots of place arguments. Native services cannot dereference
@@ -128,6 +133,15 @@ pub struct NativeCallRequest {
     pub places: Vec<NativePlaceView>,
     /// Reference pseudo-variables used by legacy multi-result functions.
     pub implicit_places: BTreeMap<String, NativePlaceView>,
+}
+
+impl NativeCallRequest {
+    #[must_use]
+    pub fn argument(&self, index: usize) -> Option<&VmValue> {
+        (!self.omitted_arguments.contains(&index))
+            .then(|| self.arguments.get(index))
+            .flatten()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -264,93 +278,55 @@ impl NativeServiceRegistry {
         let random = Arc::new(Mutex::new(Sfmt19937::new(seed)));
         let structured = Arc::new(Mutex::new(StructuredState::default()));
         registry.random = Some(Arc::clone(&random));
-        for native in &artifact.native_imports {
-            let name = native.import.name.as_str();
+        let services = artifact
+            .native_imports
+            .iter()
+            .map(|native| (native.import.key, native.import.name.as_str()))
+            .chain(
+                artifact
+                    .runtime_native_authorizations
+                    .iter()
+                    .map(|family| (family.key, family.name.as_str())),
+            );
+        for (service_key, name) in services {
             if is_structured_name(name) {
                 registry.structured = Some(Arc::clone(&structured));
-                registry.structured_keys.insert(native.import.key);
+                registry.structured_keys.insert(service_key);
                 registry.register(
-                    native.import.key,
+                    service_key,
                     StructuredNative::new(name, Arc::clone(&structured)),
                 );
             } else if matches!(name, "format_integer" | "format_string" | "times")
                 || name.starts_with("control_")
             {
                 registry.register(
-                    native.import.key,
+                    service_key,
                     CompilerNative {
                         name: name.into(),
                         character_width_mode: registry.character_width_mode.clone(),
                     },
                 );
                 if compiler_native_path_memo_safe(name) {
-                    registry.path_memo_safe_keys.insert(native.import.key);
+                    registry.path_memo_safe_keys.insert(service_key);
                 }
             } else if matches!(name, "rand" | "randomize" | "initrand" | "dumprand") {
                 registry.register(
-                    native.import.key,
+                    service_key,
                     RandomNative {
                         name: name.into(),
                         state: Arc::clone(&random),
                     },
                 );
-            } else if matches!(
-                name,
-                "abs"
-                    | "sign"
-                    | "sqrt"
-                    | "cbrt"
-                    | "log"
-                    | "log10"
-                    | "exponent"
-                    | "power"
-                    | "getbit"
-                    | "bitcount"
-                    | "strlen"
-                    | "strlenu"
-                    | "strform"
-                    | "toint"
-                    | "isnumeric"
-                    | "unchecked_add"
-                    | "unchecked_sub"
-                    | "unchecked_mul"
-                    | "unchecked_neg"
-                    | "unicode"
-                    | "convert"
-                    | "color_fromrgb"
-                    | "color_fromname"
-                    | "max"
-                    | "min"
-                    | "limit"
-                    | "inrange"
-                    | "tostr"
-                    | "substring"
-                    | "substringu"
-                    | "strfind"
-                    | "strfindu"
-                    | "strcount"
-                    | "strlens"
-                    | "strlensu"
-                    | "getpalamlv"
-                    | "getexplv"
-                    | "replace"
-                    | "escape"
-                    | "unicodetostr"
-                    | "encodetouni"
-                    | "unicodebyte"
-                    | "charatu"
-                    | "tolower"
-                    | "toupper"
-            ) {
+            } else if core_native_name(name) {
                 registry.register(
-                    native.import.key,
+                    service_key,
                     CoreNative::new(
                         name.into(),
                         artifact.project_data.static_data.legacy_encoding,
                     )
                     .with_compatibility(&artifact.manifest.compatibility),
                 );
-                registry.path_memo_safe_keys.insert(native.import.key);
+                registry.path_memo_safe_keys.insert(service_key);
             }
         }
         registry
@@ -374,6 +350,16 @@ impl NativeServiceRegistry {
         key: SymbolKey,
         request: NativeCallRequest,
     ) -> Result<NativeReady, ExecutionFailure> {
+        if request.service_key != key
+            || request
+                .omitted_arguments
+                .iter()
+                .any(|index| *index >= request.arguments.len())
+        {
+            return Err(native_contract_failure(
+                "Native request service key differs from registry key",
+            ));
+        }
         self.services
             .get_mut(&key)
             .ok_or_else(|| {
@@ -671,4 +657,105 @@ fn native_script_failure(kind: ScriptFaultKind, message: impl Into<String>) -> E
 
 fn native_resource_failure(message: impl Into<String>) -> ExecutionFailure {
     ExecutionFailure::classified(FaultCategory::ResourceLimit, VmFaultCode::Native, message)
+}
+
+fn core_native_name(name: &str) -> bool {
+    matches!(
+        name,
+        "abs"
+            | "sign"
+            | "sqrt"
+            | "cbrt"
+            | "log"
+            | "log10"
+            | "exponent"
+            | "power"
+            | "getbit"
+            | "bitcount"
+            | "strlen"
+            | "strlenu"
+            | "strform"
+            | "toint"
+            | "isnumeric"
+            | "unchecked_add"
+            | "unchecked_sub"
+            | "unchecked_mul"
+            | "unchecked_neg"
+            | "unicode"
+            | "convert"
+            | "color_fromrgb"
+            | "color_fromname"
+            | "max"
+            | "min"
+            | "limit"
+            | "inrange"
+            | "tostr"
+            | "substring"
+            | "substringu"
+            | "strfind"
+            | "strfindu"
+            | "strcount"
+            | "strlens"
+            | "strlensu"
+            | "getpalamlv"
+            | "getexplv"
+            | "replace"
+            | "escape"
+            | "unicodetostr"
+            | "encodetouni"
+            | "unicodebyte"
+            | "charatu"
+            | "tolower"
+            | "toupper"
+    )
+}
+
+impl HostCallRequest {
+    /// Source-aware argument lookup; an explicit omission is not a literal MIN.
+    #[must_use]
+    pub fn argument(&self, index: usize) -> Option<&VmValue> {
+        if self.omitted_arguments.binary_search(&index).is_ok() {
+            None
+        } else {
+            self.arguments.get(index)
+        }
+    }
+}
+
+#[cfg(test)]
+mod source_presence_tests {
+    use super::*;
+    #[test]
+    fn direct_host_omission_does_not_remove_slots_or_hide_literal_minimum() {
+        let request = HostCallRequest {
+            id: crate::HostRequestId(1),
+            fiber: crate::FiberId(1),
+            import: erabasic_bytecode::RuntimeImport {
+                key: erabasic_bytecode::SymbolKey::default(),
+                namespace: "test".into(),
+                name: "source-presence".into(),
+                abi_version: 1,
+                parameters: vec![erabasic_bytecode::BytecodeType::Integer; 3],
+                result: None,
+            },
+            arguments: vec![
+                VmValue::Integer(i64::MIN),
+                VmValue::Integer(i64::MIN),
+                VmValue::Integer(9),
+            ],
+            omitted_arguments: vec![1],
+            origin: crate::VmExecutionOrigin {
+                generation: crate::GenerationId(1),
+                function: erabasic_bytecode::SymbolKey::default(),
+                function_name: "test".into(),
+                instruction: 0,
+                command: "source-presence".into(),
+                source: None,
+            },
+        };
+        assert_eq!(request.argument(0), Some(&VmValue::Integer(i64::MIN)));
+        assert_eq!(request.argument(1), None);
+        assert_eq!(request.argument(2), Some(&VmValue::Integer(9)));
+        assert_eq!(request.arguments.len(), 3);
+    }
 }

@@ -335,10 +335,66 @@ impl RuntimeVm {
         self.vm.set_runtime_calculated_string("DRAWLINESTR", &value);
     }
 
-    fn current_host_import(&self, key: SymbolKey) -> Option<&HostImport> {
-        let generation = self.vm.generations.get(&self.vm.current_generation)?;
-        let index = generation.host_import_index(key)?;
-        generation.artifact.host_imports.get(index)
+    fn waiting_host_import(
+        &self,
+        fiber_id: FiberId,
+        wait: &crate::state::WaitingHost,
+    ) -> Option<HostImport> {
+        let generation = self.vm.generations.get(&wait.origin.generation)?;
+        let import = if let Some(scope) = wait.form_scope {
+            if scope.fiber != fiber_id {
+                return None;
+            }
+            let fiber = self.vm.fibers.get(&fiber_id)?;
+            let frame = fiber
+                .frames
+                .last()
+                .filter(|frame| frame.id == scope.frame)?;
+            frame
+                .runtime_form
+                .as_ref()?
+                .waiting_host_import(scope, &wait.origin, generation)?
+        } else {
+            let index = generation.host_import_index(wait.import.key)?;
+            generation.artifact.host_imports.get(index)?.clone()
+        };
+        (import.import == wait.import && import.import.result == wait.result).then_some(import)
+    }
+
+    /// The origin is taken from the VM's actual waiting continuation, not the frontend request.
+    #[must_use]
+    pub fn host_request_scope(
+        &self,
+        request: crate::HostRequestId,
+    ) -> Option<crate::RuntimeHostScope> {
+        self.vm.fibers.iter().find_map(|(fiber, state)| {
+            let FiberState::WaitingHost(wait) = &state.state else {
+                return None;
+            };
+            if wait.request != request {
+                return None;
+            }
+            self.waiting_host_import(*fiber, wait)?;
+            wait.form_scope
+        })
+    }
+    #[must_use]
+    pub fn host_scope_is_live(&self, scope: crate::RuntimeHostScope) -> bool {
+        self.vm
+            .fibers
+            .get(&scope.fiber)
+            .and_then(|fiber| fiber.frames.iter().find(|frame| frame.id == scope.frame))
+            .and_then(|frame| frame.runtime_form.as_ref())
+            .is_some_and(|form| form.contains_host_scope(scope))
+    }
+    #[must_use]
+    pub fn host_scope_has_html_ticket(&self, scope: crate::RuntimeHostScope, ticket: &str) -> bool {
+        self.vm
+            .fibers
+            .get(&scope.fiber)
+            .and_then(|fiber| fiber.frames.iter().find(|frame| frame.id == scope.frame))
+            .and_then(|frame| frame.runtime_form.as_ref())
+            .is_some_and(|form| form.scope_has_html_ticket(scope, ticket))
     }
 
     #[must_use]
@@ -369,6 +425,22 @@ impl RuntimeVm {
     )> {
         let frame = self.vm.fibers.get(&fiber)?.frames.get(depth)?;
         Some((frame.id, frame.generation, frame.function))
+    }
+
+    /// Only runtime snapshot validation consumes this bounded ownership inventory.
+    #[must_use]
+    pub fn active_html_line_scopes(&self) -> Vec<(crate::RuntimeHostScope, String)> {
+        self.vm
+            .fibers
+            .iter()
+            .flat_map(|(id, fiber)| {
+                fiber
+                    .frames
+                    .iter()
+                    .filter_map(|frame| frame.runtime_form.as_ref())
+                    .flat_map(|form| form.html_scope_tickets(*id))
+            })
+            .collect()
     }
 
     /// Return the active dimensions for a named global, local, or bound
@@ -571,6 +643,64 @@ impl<H: VmHost> VmHost for CapturingRuntimeHost<'_, H> {
 }
 
 impl RuntimeVm {
+    fn deliver_captured_host(&mut self, request: HostCallRequest, events: &mut Vec<VmPortEvent>) {
+        let definition = self
+            .vm
+            .fibers
+            .get(&request.fiber)
+            .and_then(|fiber| match &fiber.state {
+                FiberState::WaitingHost(wait) if wait.request == request.id => {
+                    self.waiting_host_import(request.fiber, wait)
+                }
+                _ => None,
+            });
+        if let Some(import) = definition.filter(|definition| definition.import == request.import) {
+            events.push(VmPortEvent::HostCall(VmHostRequest {
+                id: request.id,
+                fiber: request.fiber,
+                import,
+                arguments: request.arguments,
+                omitted_arguments: request.omitted_arguments,
+                origin: request.origin,
+            }));
+        } else {
+            // Missing owner/grant is an invariant failure, never a name fallback
+            // or a silently dropped HostPending event.
+            let failure = crate::ExecutionFailure::classified(
+                crate::FaultCategory::InternalInvariant,
+                crate::VmFaultCode::Host,
+                "captured Host request lost its exact generation/owner authorization",
+            );
+            if let Ok((fiber, Some(fault))) = self.vm.fail_waiting_host(request.id, failure) {
+                events.push(VmPortEvent::FiberFaulted(fiber, fault));
+            } else {
+                // Internal failures are never catchable. A missing wait or
+                // an impossible recovery still reports the captured origin.
+                let fault = crate::VmFault {
+                    category: crate::FaultCategory::InternalInvariant,
+                    code: crate::VmFaultCode::Host,
+                    message: "captured Host request has no recoverable authorized owner".into(),
+                    fiber: request.fiber,
+                    generation: request.origin.generation,
+                    function: request.origin.function,
+                    function_name: request.origin.function_name,
+                    instruction: request.origin.instruction,
+                    command: request.origin.command,
+                    source: request.origin.source,
+                };
+                self.vm.abort_path_memo(request.fiber);
+                if let Some(fiber) = self.vm.fibers.get_mut(&request.fiber) {
+                    for frame in &fiber.frames {
+                        self.vm.active_function_memos.remove(&frame.id);
+                    }
+                    fiber.clear_runtime_forms();
+                    fiber.state = FiberState::Faulted(fault.clone());
+                }
+                events.push(VmPortEvent::FiberFaulted(request.fiber, fault));
+            }
+        }
+    }
+
     /// Drive with an optional immediate Host implementation. Unsupported calls still cross the
     /// ordinary caller-pumped port and retain all persistent wait/debug semantics.
     pub fn drive_with_immediate_host(
@@ -616,23 +746,8 @@ impl RuntimeVm {
                     notification,
                 }),
                 crate::VmEvent::HostPending { request, .. } => {
-                    if let Some(request) = host.captured.take(request)
-                        && let Some(definition) = self.current_host_import(request.import.key)
-                    {
-                        let import = HostImport {
-                            import: request.import,
-                            effect: definition.effect,
-                            capability: definition.capability,
-                            snapshot_capability: definition.snapshot_capability,
-                            contract: definition.contract,
-                        };
-                        events.push(VmPortEvent::HostCall(VmHostRequest {
-                            id: request.id,
-                            fiber: request.fiber,
-                            import,
-                            arguments: request.arguments,
-                            origin: request.origin,
-                        }));
+                    if let Some(request) = host.captured.take(request) {
+                        self.deliver_captured_host(request, &mut events);
                     }
                 }
                 crate::VmEvent::FiberYielded { fiber } => {
@@ -735,7 +850,7 @@ impl VmRuntimePort for RuntimeVm {
             })
             .ok_or(VmError::StaleHostRequest(request))?;
         let import = self
-            .current_host_import(wait.import.key)
+            .waiting_host_import(fiber_id, wait)
             .ok_or_else(|| VmError::InvalidState("waiting host import is missing".into()))?;
         match &completion {
             VmHostCompletion::Ready(ready) => {
@@ -749,6 +864,11 @@ impl VmRuntimePort for RuntimeVm {
                 )?;
             }
             VmHostCompletion::ReturnCurrent(_) => {
+                if wait.form_scope.is_some() {
+                    return Err(VmError::InvalidState(
+                        "direct Host expression cannot return its owner frame".into(),
+                    ));
+                }
                 if fiber.frames.len() <= 1 {
                     return Err(VmError::InvalidState(
                         "cannot return the root frame through a host completion".into(),
@@ -1126,6 +1246,7 @@ mod tests {
                 result: None,
             },
             arguments: vec![VmValue::Integer(i64::try_from(id).unwrap_or(i64::MAX))],
+            omitted_arguments: Vec::new(),
             origin: crate::VmExecutionOrigin {
                 generation: GenerationId(1),
                 function: SymbolKey([0; 16]),

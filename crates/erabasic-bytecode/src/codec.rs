@@ -18,6 +18,9 @@ const SOURCE_MAP: u16 = 7;
 const EVENT_GROUPS: u16 = 8;
 const CALL_COMPATIBILITY: u16 = 9;
 const RUNTIME_BUILTINS: u16 = 10;
+const RUNTIME_HOST_AUTHORIZATIONS: u16 = 13; // Root assigns final section/version.
+const RUNTIME_NATIVE_AUTHORIZATIONS: u16 = 12; // Root assigns final section/version.
+const RUNTIME_VARIABLES: u16 = 11; // Provisional section; root allocates the final format number.
 
 #[derive(Debug)]
 pub enum EncodeError {
@@ -82,6 +85,15 @@ pub fn encode_artifact(artifact: &BytecodeArtifact) -> Result<Vec<u8>, EncodeErr
         section(EVENT_GROUPS, &artifact.event_groups)?,
         section(CALL_COMPATIBILITY, &artifact.call_compatibility)?,
         section(RUNTIME_BUILTINS, &artifact.runtime_builtins)?,
+        section(RUNTIME_VARIABLES, &artifact.runtime_variables)?,
+        section(
+            RUNTIME_NATIVE_AUTHORIZATIONS,
+            &artifact.runtime_native_authorizations,
+        )?,
+        section(
+            RUNTIME_HOST_AUTHORIZATIONS,
+            &artifact.runtime_host_authorizations,
+        )?,
         section(SOURCE_MAP, &artifact.source_map)?,
     ];
     let mut output = Vec::new();
@@ -144,7 +156,7 @@ pub fn decode_artifact(
         if blake3::hash(payload).as_bytes() != expected {
             return Err(DecodeError::CorruptSection(kind));
         }
-        if !(MANIFEST..=RUNTIME_BUILTINS).contains(&kind) {
+        if !(MANIFEST..=RUNTIME_HOST_AUTHORIZATIONS).contains(&kind) {
             if required {
                 return Err(DecodeError::UnknownRequiredSection(kind));
             }
@@ -166,6 +178,9 @@ pub fn decode_artifact(
         manifest,
         call_compatibility: parse::<BytecodeCallCompatibility>(&sections, CALL_COMPATIBILITY)?,
         runtime_builtins: parse(&sections, RUNTIME_BUILTINS)?,
+        runtime_variables: parse(&sections, RUNTIME_VARIABLES)?,
+        runtime_native_authorizations: parse(&sections, RUNTIME_NATIVE_AUTHORIZATIONS)?,
+        runtime_host_authorizations: parse(&sections, RUNTIME_HOST_AUTHORIZATIONS)?,
         project_data: parse(&sections, PROJECT_DATA)?,
         globals: parse::<Vec<BytecodeGlobal>>(&sections, GLOBALS)?,
         native_imports: parse::<Vec<NativeImport>>(&sections, NATIVE_IMPORTS)?,

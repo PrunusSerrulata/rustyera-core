@@ -60,12 +60,12 @@ impl RuntimeSession {
             if self.message_skip
                 && (timed_value_input || untimed_value_input)
                 && matches!(
-                    request.arguments.get(can_skip_index),
+                    request.argument(can_skip_index),
                     Some(VmValue::Integer(value)) if *value != i64::MIN
                 )
             {
                 let mouse = matches!(
-                    request.arguments.get(mouse_index),
+                    request.argument(mouse_index),
                     Some(VmValue::Integer(value)) if *value != 0
                 );
                 let target = pending.result_name.as_deref().and_then(|result| {
@@ -108,7 +108,7 @@ impl RuntimeSession {
         }
         if name == "GETLINESTR" {
             *status = HostDispatchStatus::Handled;
-            let Some(VmValue::String(pattern)) = request.arguments.first() else {
+            let Some(VmValue::String(pattern)) = request.argument(0) else {
                 return self.fault(
                     FaultCode::VmFault,
                     "GETLINESTR expects a string pattern",
@@ -155,8 +155,7 @@ impl RuntimeSession {
             };
             let result = VmValue::Integer(i64::from(value));
             let writes = request
-                .arguments
-                .first()
+                .argument(0)
                 .and_then(vm_place)
                 .map(|target| {
                     vec![HostWrite {
@@ -257,10 +256,7 @@ impl RuntimeSession {
         }
         if name == "HTML_PRINT_ISLAND" {
             *status = HostDispatchStatus::Handled;
-            let markup = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
+            let markup = request.argument(0).map_or_else(String::new, display_value);
             let (mut document, warnings) =
                 match erabasic_html::parse_document_with_warnings(&markup) {
                     Ok(parsed) => parsed,
@@ -306,9 +302,9 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "BAR" | "BARL") {
             *status = HostDispatchStatus::Handled;
-            let value = integer_argument_value(&request.arguments, 0)?;
-            let maximum = integer_argument_value(&request.arguments, 1)?;
-            let length = integer_argument_value(&request.arguments, 2)?;
+            let value = integer_argument_value(request, 0)?;
+            let maximum = integer_argument_value(request, 1)?;
+            let length = integer_argument_value(request, 2)?;
             let replace = &vm.vm().artifact().project_data.static_data.replace;
             let bar = match make_bar(
                 value,
@@ -396,7 +392,7 @@ impl RuntimeSession {
             Ok(None) => {}
             Err(PresentationStatePreparationError::Alignment) => {
                 *status = HostDispatchStatus::Handled;
-                if matches!(request.arguments.first(), Some(VmValue::String(_))) {
+                if matches!(request.argument(0), Some(VmValue::String(_))) {
                     return complete_script_fault(
                         vm,
                         request,
@@ -436,7 +432,7 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "SETCOLORBYNAME" | "SETBGCOLORBYNAME") {
             *status = HostDispatchStatus::Handled;
-            let color_name = string_argument_value(&request.arguments, 0, &name)?;
+            let color_name = string_argument_value(request, 0, &name)?;
             let Some(color) = named_color(color_name) else {
                 return complete_script_fault(
                     vm,
@@ -465,7 +461,7 @@ impl RuntimeSession {
         }
         if name == "REDRAW" {
             *status = HostDispatchStatus::Handled;
-            let flags = integer_argument_value(&request.arguments, 0)?;
+            let flags = integer_argument_value(request, 0)?;
             self.presentation.set_redraw(flags & 1 != 0);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             self.emit_presentation()?;
@@ -507,12 +503,9 @@ impl RuntimeSession {
         }
         if name == "SETBGIMAGE" {
             *status = HostDispatchStatus::Handled;
-            let resource = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            let depth = request.arguments.get(1).map_or(0, integer_value_or_zero);
-            let opacity = request.arguments.get(2).map_or(255, integer_value_or_zero);
+            let resource = request.argument(0).map_or_else(String::new, display_value);
+            let depth = request.argument(1).map_or(0, integer_value_or_zero);
+            let opacity = request.argument(2).map_or(255, integer_value_or_zero);
             let exists = self
                 .project_snapshot
                 .as_ref()
@@ -526,10 +519,7 @@ impl RuntimeSession {
         }
         if name == "REMOVEBGIMAGE" {
             *status = HostDispatchStatus::Handled;
-            let resource = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
+            let resource = request.argument(0).map_or_else(String::new, display_value);
             if !self.presentation.remove_background(&resource) {
                 return complete_script_fault(
                     vm,
@@ -557,8 +547,8 @@ impl RuntimeSession {
             *status = HostDispatchStatus::Handled;
             let result = match name.as_str() {
                 "TOOLTIP_SETCOLOR" => {
-                    let foreground = integer_argument_value(&request.arguments, 0)?;
-                    let background = integer_argument_value(&request.arguments, 1)?;
+                    let foreground = integer_argument_value(request, 0)?;
+                    let background = integer_argument_value(request, 1)?;
                     if !(0..=0xff_ffff).contains(&foreground)
                         || !(0..=0xff_ffff).contains(&background)
                     {
@@ -570,35 +560,32 @@ impl RuntimeSession {
                 }
                 "TOOLTIP_SETDELAY" => self
                     .presentation
-                    .set_tooltip_delay(integer_argument_value(&request.arguments, 0)?),
+                    .set_tooltip_delay(integer_argument_value(request, 0)?),
                 "TOOLTIP_SETDURATION" => self
                     .presentation
-                    .set_tooltip_duration(integer_argument_value(&request.arguments, 0)?),
+                    .set_tooltip_duration(integer_argument_value(request, 0)?),
                 "TOOLTIP_SETFONT" => {
                     self.presentation.set_tooltip_font(
-                        request
-                            .arguments
-                            .first()
-                            .map_or_else(String::new, display_value),
+                        request.argument(0).map_or_else(String::new, display_value),
                     );
                     Ok(())
                 }
                 "TOOLTIP_SETFONTSIZE" => self
                     .presentation
-                    .set_tooltip_font_size(integer_argument_value(&request.arguments, 0)?),
+                    .set_tooltip_font_size(integer_argument_value(request, 0)?),
                 "TOOLTIP_CUSTOM" => {
                     self.presentation
-                        .set_tooltip_custom(integer_argument_value(&request.arguments, 0)? != 0);
+                        .set_tooltip_custom(integer_argument_value(request, 0)? != 0);
                     Ok(())
                 }
                 "TOOLTIP_FORMAT" => {
                     self.presentation
-                        .set_tooltip_format(integer_argument_value(&request.arguments, 0)?);
+                        .set_tooltip_format(integer_argument_value(request, 0)?);
                     Ok(())
                 }
                 "TOOLTIP_IMG" => {
                     self.presentation
-                        .set_tooltip_images(integer_argument_value(&request.arguments, 0)? != 0);
+                        .set_tooltip_images(integer_argument_value(request, 0)? != 0);
                     Ok(())
                 }
                 _ => {
@@ -622,29 +609,24 @@ impl RuntimeSession {
         }
         if name == "PRINT_IMG" {
             *status = HostDispatchStatus::Handled;
-            let resource = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
+            let resource = request.argument(0).map_or_else(String::new, display_value);
             let mut cursor = 1;
-            let hover = request.arguments.get(cursor).and_then(|value| match value {
+            let hover = request.argument(cursor).and_then(|value| match value {
                 VmValue::String(value) => Some(value.clone()).filter(|value| !value.is_empty()),
                 _ => None,
             });
             if request
-                .arguments
-                .get(cursor)
+                .argument(cursor)
                 .is_some_and(|value| matches!(value, VmValue::String(_)))
             {
                 cursor += 1;
             }
-            let mask = request.arguments.get(cursor).and_then(|value| match value {
+            let mask = request.argument(cursor).and_then(|value| match value {
                 VmValue::String(value) => Some(value.clone()).filter(|value| !value.is_empty()),
                 _ => None,
             });
             if request
-                .arguments
-                .get(cursor)
+                .argument(cursor)
                 .is_some_and(|value| matches!(value, VmValue::String(_)))
             {
                 cursor += 1;

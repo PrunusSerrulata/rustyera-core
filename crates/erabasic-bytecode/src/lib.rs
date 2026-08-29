@@ -43,7 +43,29 @@ pub use version::{
 /// Eight-byte marker at the beginning of every `.erbc` file.
 pub const BYTECODE_MAGIC: [u8; 8] = *b"RERABC\0\0";
 
+mod reference_terms;
+pub use reference_terms::*;
+
 mod runtime_symbols;
 pub use runtime_symbols::{
     RuntimeArgumentConstraint, RuntimeBuiltinSymbol, RuntimeCallableShape, RuntimeExpressionShape,
+    RuntimeReferenceSemantics, RuntimeVariableSymbol,
 };
+
+mod native_authorization;
+mod native_contracts;
+pub use native_authorization::{BoundRuntimeNative, RuntimeNativeAuthorization};
+pub use native_contracts::canonical_native_contract;
+
+mod native_source_shapes;
+mod source_binding;
+pub use native_source_shapes::{canonical_native_source_shapes, native_source_relations};
+pub use source_binding::{RuntimeSourceBinding, bind_runtime_source_arguments};
+
+mod host_authorization;
+mod host_source_shapes;
+pub use host_authorization::{
+    BoundRuntimeHost, RuntimeHostAuthorization, RuntimeHostLowering, RuntimeHostStage,
+    runtime_host_import,
+};
+pub use host_source_shapes::{canonical_host_source_shapes, host_source_place_ranks};

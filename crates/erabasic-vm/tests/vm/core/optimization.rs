@@ -2093,8 +2093,14 @@ fn snake_arithmetic_diagnostics_are_reissued_for_a_new_generation() {
     let mut generations = Vec::new();
     for pass in 0..3 {
         if pass == 2 {
-            vm.prepare_hot_reload(&patch, &ValidationContext::for_artifact(&target))
-                .unwrap();
+            vm.prepare_hot_reload(
+                &patch,
+                &erabasic_compiler::runtime_native_validation_context(
+                    &target,
+                    &default_host_registry(),
+                ),
+            )
+            .unwrap();
             vm.commit_hot_reload().unwrap();
         }
         vm.spawn_entry(entry, Vec::new()).unwrap();

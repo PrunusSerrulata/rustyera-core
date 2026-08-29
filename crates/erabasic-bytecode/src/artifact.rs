@@ -182,6 +182,9 @@ pub struct BytecodeArtifact {
     pub manifest: ArtifactManifest,
     pub call_compatibility: BytecodeCallCompatibility,
     pub runtime_builtins: Vec<crate::RuntimeBuiltinSymbol>,
+    pub runtime_variables: Vec<crate::RuntimeVariableSymbol>,
+    pub runtime_native_authorizations: Vec<crate::RuntimeNativeAuthorization>,
+    pub runtime_host_authorizations: Vec<crate::RuntimeHostAuthorization>,
     pub project_data: ProjectData,
     pub globals: Vec<BytecodeGlobal>,
     pub native_imports: Vec<NativeImport>,
@@ -197,6 +200,9 @@ impl BytecodeArtifact {
         sort_if_needed_by_key(&mut self.manifest.required_features, Clone::clone);
         self.manifest.required_features.dedup();
         sort_if_needed_by_key(&mut self.runtime_builtins, |symbol| symbol.name.clone());
+        sort_if_needed_by_key(&mut self.runtime_variables, |symbol| symbol.key);
+        sort_if_needed_by_key(&mut self.runtime_native_authorizations, |symbol| symbol.key);
+        sort_if_needed_by_key(&mut self.runtime_host_authorizations, |symbol| symbol.key);
         sort_if_needed_by_key(&mut self.globals, |global| global.key);
         sort_if_needed_by_key(&mut self.native_imports, |import| import.import.key);
         sort_if_needed_by_key(&mut self.host_imports, |import| import.import.key);
@@ -288,7 +294,13 @@ impl BytecodeArtifact {
                             || {
                                 canonical_digest(
                                     "rustyera.bytecode.identity.call-compatibility.v2",
-                                    &self.call_compatibility,
+                                    &(
+                                        &self.call_compatibility,
+                                        &self.runtime_builtins,
+                                        &self.runtime_variables,
+                                        &self.runtime_native_authorizations,
+                                        &self.runtime_host_authorizations,
+                                    ),
                                 )
                             },
                         )

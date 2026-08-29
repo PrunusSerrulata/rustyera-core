@@ -265,6 +265,7 @@ mod tests {
                 contract,
             },
             arguments,
+            omitted_arguments: Vec::new(),
             origin: VmExecutionOrigin {
                 generation: GenerationId(1),
                 function: SymbolKey::derive("test.function", b"TEST"),

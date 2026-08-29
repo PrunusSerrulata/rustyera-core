@@ -1452,3 +1452,106 @@ fn host_scalar_and_read_failures_only_preserve_explicit_script_sources() {
         RuntimeError::Internal(_)
     ));
 }
+
+#[test]
+fn direct_runtime_host_uses_existing_domain_errors_and_unsupported_boundary() {
+    for (expression, faulted) in [
+        ("{HOTKEY_STATE(0,0)}", false),
+        ("{GETMEMORYUSAGE()}", true),
+        ("{SPRITECREATE(\"x\",0,0,0,1,1,1,1)}", true),
+    ] {
+        let source = format!(
+            "@SYSTEM_TITLE\nRESULTS:0 '= \"{expression}\"\nFLAG:0 = STRFORMCHECK(RESULTS:0)\nFLAG:1 = 1\nWAIT\nRETURN\n"
+        );
+        let (session, _, messages) = run_immediate_query_project_with_profile(
+            &source,
+            erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+        );
+        let vm = session.vm.as_ref().unwrap();
+        assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 0);
+        if faulted {
+            assert_eq!(session.phase(), RuntimePhase::Faulted);
+            assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 0);
+            assert!(messages.iter().any(|message| matches!(
+                message,
+                RuntimeMessage::Fault(RuntimeFault {
+                    code: FaultCode::UnsupportedRuntimeFeature,
+                    ..
+                })
+            )));
+        } else {
+            assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+            assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+            assert!(
+                !messages
+                    .iter()
+                    .any(|message| matches!(message, RuntimeMessage::Fault(_)))
+            );
+        }
+    }
+}
+
+#[test]
+fn dynamic_varsize_uses_host_defaults_but_callstr_unique_restructure_dereferences_null() {
+    let source = "@SYSTEM_TITLE\nFLAG:10 = VARSIZE(\"FLAG\")\nRESULTS:10 '= \"{VARSIZE(\\\"FLAG\\\")}|{VARSIZE(\\\"FLAG\\\",0)}|{VARSIZE(\\\"FLAG\\\",,)}\"\nRESULTS:12 '= STRFORM(RESULTS:10)\nRESULTS:11 '= \"TAKE(VARSIZE(\\\"FLAG\\\",,))\"\nFLAG:0 = STRFORMCHECK(\"{CALLER()}\")\nWAIT\nRETURN\n@CALLER\n#FUNCTION\nFLAG:1 += 1\nTRYCCALLSTR RESULTS:11\nCATCH\nFLAG:2 = 1\nENDCATCH\nFLAG:3 = 1\nRETURNF 1\n@TAKE(ARG)\nFLAG:4 = 1\nRETURN\n";
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+    let vm = session.vm.as_ref().unwrap();
+    let length = read_runtime_integer(vm, "FLAG", &[10], None).unwrap();
+    let text = vm
+        .read_runtime_state(&[erabasic_vm::VmRuntimeRead {
+            variable: runtime_variable_key(vm, "RESULTS").unwrap(),
+            indices: vec![12],
+            character: None,
+        }])
+        .unwrap()
+        .remove(0);
+    assert_eq!(text, VmValue::String(format!("{length}|{length}|{length}")));
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 0);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+    for index in [2, 3, 4] {
+        assert_eq!(read_runtime_integer(vm, "FLAG", &[index], None).unwrap(), 0);
+    }
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_)))
+    );
+}
+
+#[test]
+fn varsize_dimension_narrowing_is_shared_by_static_and_dynamic_calls_in_both_profiles() {
+    let source = "@SYSTEM_TITLE\nFLAG:10 = VARSIZE(\"FLAG\")\nFLAG:11 = VARSIZE(\"FLAG\",4294967296)\nRESULTS:10 = {VARSIZE(\"FLAG\",4294967296)}|{VARSIZE(\"FLAG\",(-9223372036854775807 - 1))}\nRESULTS:12 '= STRFORM(RESULTS:10)\nWAIT\nRETURN\n";
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let (session, _, messages) = run_immediate_query_project_with_profile(
+            source,
+            erabasic_compat::CompatibilityIdentity::for_profile(profile),
+        );
+        assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+        let vm = session.vm.as_ref().unwrap();
+        let length = read_runtime_integer(vm, "FLAG", &[10], None).unwrap();
+        assert_eq!(
+            read_runtime_integer(vm, "FLAG", &[11], None).unwrap(),
+            length
+        );
+        let value = vm
+            .read_runtime_state(&[erabasic_vm::VmRuntimeRead {
+                variable: runtime_variable_key(vm, "RESULTS").unwrap(),
+                indices: vec![12],
+                character: None,
+            }])
+            .unwrap()
+            .remove(0);
+        assert_eq!(value, VmValue::String(format!("{length}|{length}")));
+    }
+}

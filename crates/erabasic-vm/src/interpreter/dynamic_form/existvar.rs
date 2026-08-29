@@ -16,7 +16,9 @@ impl RuntimeFormContinuation {
                 "validated EXISTVAR source missing",
             )
         })?;
+        let plan = self.current_call_site(source.span)?.plan;
         self.work.push(RuntimeFormTask::ExistVarFirst {
+            plan,
             source: source.clone(),
             mode: arguments.get(1).cloned().flatten(),
         });
@@ -26,6 +28,7 @@ impl RuntimeFormContinuation {
     pub(super) fn existvar_first(
         &mut self,
         vm: &Vm,
+        plan: u64,
         source: Expr,
         mode: Option<Expr>,
     ) -> Result<(), StepError> {
@@ -39,7 +42,8 @@ impl RuntimeFormContinuation {
             super::super::existvar::variable_name_flags(vm, self.generation, self.function, &name)?;
         self.values.push(VmValue::Integer(flags));
         if let Some(mode) = mode {
-            self.work.push(RuntimeFormTask::ExistVarMode { source });
+            self.work
+                .push(RuntimeFormTask::ExistVarMode { plan, source });
             self.work.push(RuntimeFormTask::Evaluate(mode));
         }
         Ok(())
@@ -78,12 +82,15 @@ impl RuntimeFormContinuation {
             .ok_or_else(|| resource_limit("probe identity exhausted"))?;
         self.checkpoints.push(FormatCheckpoint {
             id,
-            expression_probe: true,
+            kind: super::checkpoints::FormatCheckpointKind::ExpressionProbe,
+            reference_bindings: self.reference_bindings,
+            call_plan: self.current_call_plan,
             work_depth: self.work.len(),
             value_depth: self.values.len(),
             output_depth: self.outputs.len(),
             owner_stack_depth: owner.stack.len(),
             owner_user_calls: owner.user_calls.len(),
+            host_scope_frontier: self.next_host_scope,
         });
         self.work.push(RuntimeFormTask::FinishExpressionProbe(id));
         self.work.push(RuntimeFormTask::Evaluate(source));

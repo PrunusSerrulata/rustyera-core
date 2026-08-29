@@ -22,11 +22,7 @@ impl RuntimeSession {
         }
         if name == "PUTFORM" {
             *status = HostDispatchStatus::Handled;
-            let suffix = request
-                .arguments
-                .first()
-                .map(display_value)
-                .unwrap_or_default();
+            let suffix = request.argument(0).map(display_value).unwrap_or_default();
             let variable = runtime_variable_key(vm, "SAVEDATA_TEXT")?;
             let current = vm
                 .read_runtime_state(&[erabasic_vm::VmRuntimeRead {
@@ -53,8 +49,7 @@ impl RuntimeSession {
                 .map_or(20, |snapshot| snapshot.save_slot_count);
             let value = VmValue::Integer(i64::from(count));
             let writes = request
-                .arguments
-                .first()
+                .argument(0)
                 .and_then(vm_place)
                 .map(|target| {
                     vec![HostWrite {
@@ -130,7 +125,7 @@ impl RuntimeSession {
         }
         if name == "SAVEDATA" {
             *status = HostDispatchStatus::Handled;
-            let slot_value = integer_argument_value(&request.arguments, 0)?;
+            let slot_value = integer_argument_value(request, 0)?;
             if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
                 return complete_script_fault(
                     vm,
@@ -139,8 +134,8 @@ impl RuntimeSession {
                     format!("SAVEDATA argument 1 must be between 0 and {}", i32::MAX),
                 );
             }
-            let slot = save_slot_argument(&request.arguments, 0, "SAVEDATA")?;
-            let description = string_argument_value(&request.arguments, 1, "SAVEDATA")?;
+            let slot = save_slot_argument(request, 0, "SAVEDATA")?;
+            let description = string_argument_value(request, 1, "SAVEDATA")?;
             if description.contains(['\r', '\n']) {
                 return complete_script_fault(
                     vm,
@@ -180,7 +175,7 @@ impl RuntimeSession {
         }
         if name == "LOADDATA" {
             *status = HostDispatchStatus::Handled;
-            let slot_value = integer_argument_value(&request.arguments, 0)?;
+            let slot_value = integer_argument_value(request, 0)?;
             if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
                 return complete_script_fault(
                     vm,
@@ -189,7 +184,7 @@ impl RuntimeSession {
                     format!("LOADDATA argument 1 must be between 0 and {}", i32::MAX),
                 );
             }
-            let slot = save_slot_argument(&request.arguments, 0, "LOADDATA")?;
+            let slot = save_slot_argument(request, 0, "LOADDATA")?;
             return self.issue_host_storage(
                 vm,
                 request,
@@ -201,7 +196,7 @@ impl RuntimeSession {
         }
         if name == "DELDATA" {
             *status = HostDispatchStatus::Handled;
-            let slot_value = integer_argument_value(&request.arguments, 0)?;
+            let slot_value = integer_argument_value(request, 0)?;
             if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
                 return complete_script_fault(
                     vm,
@@ -210,7 +205,7 @@ impl RuntimeSession {
                     format!("DELDATA argument 1 must be between 0 and {}", i32::MAX),
                 );
             }
-            let slot = save_slot_argument(&request.arguments, 0, "DELDATA")?;
+            let slot = save_slot_argument(request, 0, "DELDATA")?;
             return self.issue_host_storage(
                 vm,
                 request,
@@ -272,15 +267,13 @@ impl RuntimeSession {
         }
         if name == "SAVECHARA" {
             *status = HostDispatchStatus::Handled;
-            let filename =
-                dat_filename(string_argument_value(&request.arguments, 0, "SAVECHARA")?)?;
-            let description = string_argument_value(&request.arguments, 1, "SAVECHARA")?;
+            let filename = dat_filename(string_argument_value(request, 0, "SAVECHARA")?)?;
+            let description = string_argument_value(request, 1, "SAVECHARA")?;
             let exported = vm.vm().export_era_state_for(EraSaveScope::Characters);
             let mut selected = Vec::new();
             let mut seen = std::collections::BTreeSet::new();
             for index in 2..request.arguments.len() {
-                let Ok(value) = usize::try_from(integer_argument_value(&request.arguments, index)?)
-                else {
+                let Ok(value) = usize::try_from(integer_argument_value(request, index)?) else {
                     return complete_script_fault(
                         vm,
                         request,
@@ -338,8 +331,7 @@ impl RuntimeSession {
         }
         if name == "LOADCHARA" {
             *status = HostDispatchStatus::Handled;
-            let filename =
-                dat_filename(string_argument_value(&request.arguments, 0, "LOADCHARA")?)?;
+            let filename = dat_filename(string_argument_value(request, 0, "LOADCHARA")?)?;
             let storage_path = format!("chara_{filename}.dat");
             return self.issue_host_storage(
                 vm,
@@ -355,7 +347,7 @@ impl RuntimeSession {
         }
         if name == "CHKDATA" {
             *status = HostDispatchStatus::Handled;
-            let slot_value = integer_argument_value(&request.arguments, 0)?;
+            let slot_value = integer_argument_value(request, 0)?;
             if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
                 return complete_script_fault(
                     vm,
@@ -364,7 +356,7 @@ impl RuntimeSession {
                     format!("CHKDATA argument 1 must be between 0 and {}", i32::MAX),
                 );
             }
-            let slot = save_slot_argument(&request.arguments, 0, "CHKDATA")?;
+            let slot = save_slot_argument(request, 0, "CHKDATA")?;
             return self.issue_host_storage(
                 vm,
                 request,
@@ -379,11 +371,7 @@ impl RuntimeSession {
         }
         if name == "CHKCHARADATA" {
             *status = HostDispatchStatus::Handled;
-            let filename = dat_filename(string_argument_value(
-                &request.arguments,
-                0,
-                "CHKCHARADATA",
-            )?)?;
+            let filename = dat_filename(string_argument_value(request, 0, "CHKCHARADATA")?)?;
             return self.issue_host_storage(
                 vm,
                 request,
@@ -398,11 +386,14 @@ impl RuntimeSession {
         }
         if name == "SAVETEXT" {
             *status = HostDispatchStatus::Handled;
-            let text = string_argument_value(&request.arguments, 0, "SAVETEXT")?;
+            let text = string_argument_value(request, 0, "SAVETEXT")?;
+            // These source getters run before path/IO fallback; a null is not a default.
+            for index in 2..request.arguments.len() {
+                let _ = integer_argument_value(request, index)?;
+            }
             let Ok((namespace, mut path)) = text_storage_target(
                 request
-                    .arguments
-                    .get(1)
+                    .argument(1)
                     .ok_or_else(|| RuntimeError::Internal("SAVETEXT target is missing".into()))?,
             ) else {
                 return commit_integer_result(vm, request.id, 0);
@@ -430,10 +421,12 @@ impl RuntimeSession {
         }
         if name == "LOADTEXT" {
             *status = HostDispatchStatus::Handled;
+            for index in 1..request.arguments.len() {
+                let _ = integer_argument_value(request, index)?;
+            }
             let Ok((namespace, path)) = text_storage_target(
                 request
-                    .arguments
-                    .first()
+                    .argument(0)
                     .ok_or_else(|| RuntimeError::Internal("LOADTEXT target is missing".into()))?,
             ) else {
                 return commit_completion(
@@ -481,8 +474,7 @@ impl RuntimeSession {
         }
         if name == "EXISTFILE" {
             *status = HostDispatchStatus::Handled;
-            let Ok(path) =
-                safe_relative_path(string_argument_value(&request.arguments, 0, "EXISTFILE")?)
+            let Ok(path) = safe_relative_path(string_argument_value(request, 0, "EXISTFILE")?)
             else {
                 return commit_integer_result(vm, request.id, 0);
             };
@@ -517,17 +509,17 @@ impl RuntimeSession {
         if name == "ENUMFILES" {
             *status = HostDispatchStatus::Handled;
             let Ok(directory) =
-                safe_relative_directory(string_argument_value(&request.arguments, 0, "ENUMFILES")?)
+                safe_relative_directory(string_argument_value(request, 0, "ENUMFILES")?)
             else {
                 return commit_integer_result(vm, request.id, -1);
             };
-            let pattern = request.arguments.get(1).and_then(|value| match value {
+            let pattern = request.argument(1).and_then(|value| match value {
                 VmValue::String(value) => Some(value.clone()),
                 _ => None,
             });
             let recursive =
-                matches!(request.arguments.get(2), Some(VmValue::Integer(value)) if *value != 0);
-            let target = request.arguments.get(3).and_then(|value| match value {
+                matches!(request.argument(2), Some(VmValue::Integer(value)) if *value != 0);
+            let target = request.argument(3).and_then(|value| match value {
                 VmValue::StringPlace(place) => Some(place.as_ref().clone()),
                 _ => None,
             });
@@ -570,8 +562,7 @@ impl RuntimeSession {
         if name == "FIND_CHARADATA" {
             *status = HostDispatchStatus::Handled;
             let pattern = request
-                .arguments
-                .first()
+                .argument(0)
                 .and_then(|value| match value {
                     VmValue::String(value) => Some(value.as_str()),
                     _ => None,
@@ -596,15 +587,14 @@ impl RuntimeSession {
         if name == "OUTPUTLOG" {
             *status = HostDispatchStatus::Handled;
             let filename = request
-                .arguments
-                .first()
+                .argument(0)
                 .and_then(|value| match value {
                     VmValue::String(value) if !value.is_empty() => Some(value.as_str()),
                     _ => None,
                 })
                 .unwrap_or("emuera.log");
             let path = safe_relative_path(filename)?;
-            let hide_info = matches!(request.arguments.get(1), Some(VmValue::Integer(1)));
+            let hide_info = matches!(request.argument(1), Some(VmValue::Integer(1)));
             let context = self.presentation_observation_context()?;
             return self.issue_host_service(
                 vm,

@@ -145,3 +145,15 @@ pub struct VmExecutionOrigin {
     pub command: String,
     pub source: Option<ResolvedSourceLocation>,
 }
+
+/// VM-owned occurrence of a direct Host expression. This identity is never supplied
+/// by a frontend; runtime uses it only to retain or discard its own staged resources.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeHostScope {
+    pub fiber: crate::FiberId,
+    pub frame: crate::FrameId,
+    pub generation: GenerationId,
+    pub function: erabasic_bytecode::SymbolKey,
+    pub instruction: u32,
+    pub occurrence: u64,
+}

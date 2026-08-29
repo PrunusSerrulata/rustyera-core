@@ -12,6 +12,9 @@ pub(super) fn valid_origin(
     artifact: &BytecodeArtifact,
     continuation: &RuntimeFormContinuation,
 ) -> bool {
+    if !continuation.valid_reference_argument_symbols(artifact) {
+        return false;
+    }
     let (generation, function_key, origin) = continuation.origin();
     if generation != frame.generation
         || function_key != frame.function

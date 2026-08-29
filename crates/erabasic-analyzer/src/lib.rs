@@ -17,6 +17,7 @@ mod integer;
 mod options;
 mod portability;
 mod project;
+mod reference_origin;
 mod symbols;
 
 pub use catalog::{

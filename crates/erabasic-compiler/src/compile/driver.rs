@@ -563,6 +563,10 @@ fn compile_project_inner(
         compatible_rand: project_ref.program.call_compatibility.compatible_rand,
         system_no_target: project_ref.program.call_compatibility.system_no_target,
     };
+    let runtime_variables = super::runtime_symbols::runtime_variable_symbols(
+        &project_ref.program.variables,
+        &variable_keys,
+    );
     let artifact_globals = globals(
         &project_ref.program.variables,
         &variable_keys,
@@ -716,6 +720,13 @@ fn compile_project_inner(
         }
     }
     let runtime_builtins = super::runtime_symbols::runtime_builtin_symbols(expression_signatures);
+    let runtime_native_authorizations =
+        super::runtime_symbols::runtime_native_authorizations(&runtime_builtins, host_registry);
+    let runtime_host_authorizations = super::runtime_symbols::runtime_host_authorizations(
+        &runtime_builtins,
+        host_registry,
+        &compatibility,
+    );
     let artifact = BytecodeArtifact {
         manifest: ArtifactManifest {
             compatibility,
@@ -723,6 +734,9 @@ fn compile_project_inner(
         },
         call_compatibility,
         runtime_builtins,
+        runtime_variables,
+        runtime_native_authorizations,
+        runtime_host_authorizations,
         project_data,
         globals: artifact_globals,
         native_imports,
@@ -739,7 +753,7 @@ fn compile_project_inner(
     // Compiler output has no identity to verify yet. Validate its structure in
     // place, then serialize the complete artifact only once to assign final IDs.
     // Untrusted decoded artifacts continue to use the validator's identity-checking path.
-    let validation_context = ValidationContext::for_artifact(&artifact);
+    let validation_context = super::runtime_native_validation_context(&artifact, host_registry);
     let validation = validate_compiler_output(artifact, &validation_context);
     finalizing_progress.checkpoint();
     if !validation.is_valid() {

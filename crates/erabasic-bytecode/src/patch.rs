@@ -15,6 +15,9 @@ pub struct BytecodePatch {
     pub target_manifest: ArtifactManifest,
     pub call_compatibility: Option<BytecodeCallCompatibility>,
     pub runtime_builtins: Option<Vec<crate::RuntimeBuiltinSymbol>>,
+    pub runtime_variables: Option<Vec<crate::RuntimeVariableSymbol>>,
+    pub runtime_native_authorizations: Option<Vec<crate::RuntimeNativeAuthorization>>,
+    pub runtime_host_authorizations: Option<Vec<crate::RuntimeHostAuthorization>>,
     pub project_data: Option<ProjectData>,
     pub globals: Option<Vec<BytecodeGlobal>>,
     pub native_imports: Option<Vec<NativeImport>>,
@@ -61,6 +64,14 @@ pub fn create_patch(base: &BytecodeArtifact, target: &BytecodeArtifact) -> Bytec
             .then(|| target.project_data.clone()),
         runtime_builtins: (base.runtime_builtins != target.runtime_builtins)
             .then(|| target.runtime_builtins.clone()),
+        runtime_variables: (base.runtime_variables != target.runtime_variables)
+            .then(|| target.runtime_variables.clone()),
+        runtime_native_authorizations: (base.runtime_native_authorizations
+            != target.runtime_native_authorizations)
+            .then(|| target.runtime_native_authorizations.clone()),
+        runtime_host_authorizations: (base.runtime_host_authorizations
+            != target.runtime_host_authorizations)
+            .then(|| target.runtime_host_authorizations.clone()),
         globals: (base.globals != target.globals).then(|| target.globals.clone()),
         native_imports: (base.native_imports != target.native_imports)
             .then(|| target.native_imports.clone()),
@@ -126,6 +137,18 @@ pub fn apply_patch(
             .runtime_builtins
             .clone()
             .unwrap_or_else(|| base.runtime_builtins.clone()),
+        runtime_variables: patch
+            .runtime_variables
+            .clone()
+            .unwrap_or_else(|| base.runtime_variables.clone()),
+        runtime_native_authorizations: patch
+            .runtime_native_authorizations
+            .clone()
+            .unwrap_or_else(|| base.runtime_native_authorizations.clone()),
+        runtime_host_authorizations: patch
+            .runtime_host_authorizations
+            .clone()
+            .unwrap_or_else(|| base.runtime_host_authorizations.clone()),
         globals: patch
             .globals
             .clone()

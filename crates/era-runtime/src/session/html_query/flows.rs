@@ -18,6 +18,7 @@ pub(crate) struct HtmlLineFlow {
     depth: usize,
     generation: GenerationId,
     function: erabasic_bytecode::SymbolKey,
+    form_scope: Option<erabasic_vm::RuntimeHostScope>,
     pub(super) tail: String,
     pub(super) count: u64,
     pub(super) budget: QueryBudget,
@@ -77,6 +78,7 @@ impl HtmlLineFlows {
                 depth,
                 generation,
                 function,
+                form_scope: vm.host_request_scope(request.id),
                 tail: source,
                 count: 0,
                 budget: QueryBudget::default(),
@@ -97,6 +99,7 @@ impl HtmlLineFlows {
         if flow.epoch != epoch
             || flow.fiber != request.fiber
             || flow.generation != request.origin.generation
+            || flow.form_scope != vm.host_request_scope(request.id)
             || flow.function != request.origin.function
             || !flow.live(vm)
             || vm.fiber_frame_count(request.fiber) != Some(flow.depth + 1)
@@ -187,12 +190,24 @@ impl HtmlLineFlows {
             }) || flow.epoch != epoch
                 || flow.in_flight
                 || !flow.live(vm)
+                || flow
+                    .form_scope
+                    .is_some_and(|scope| !vm.host_scope_has_html_ticket(scope, ticket))
             {
                 return Err(
                     "HTML flow snapshot has invalid owner, identity, epoch or progress".into(),
                 );
             }
             flow.validate().map_err(|error| error.to_string())?;
+        }
+        for (scope, ticket) in vm.active_html_line_scopes() {
+            if !self
+                .entries
+                .get(&ticket)
+                .is_some_and(|flow| flow.form_scope == Some(scope))
+            {
+                return Err("VM HTML scope has no matching runtime line flow".into());
+            }
         }
         Ok(())
     }
@@ -219,6 +234,9 @@ impl HtmlLineFlow {
     fn live(&self, vm: &RuntimeVm) -> bool {
         vm.host_frame_identity(self.fiber, self.depth)
             == Some((self.frame, self.generation, self.function))
+            && self
+                .form_scope
+                .is_none_or(|scope| vm.host_scope_is_live(scope))
     }
     fn validate(&self) -> Result<(), HtmlQueryError> {
         self.budget.validate()?;

@@ -241,6 +241,8 @@ fn rejected_data_table_rows_do_not_consume_ids() {
         .install_fresh_table("table".into(), DataTable::new())
         .unwrap();
     let request = NativeCallRequest {
+        service_key: SymbolKey([0; 16]),
+        omitted_arguments: Vec::new(),
         import: erabasic_bytecode::RuntimeImport {
             key: SymbolKey([0; 16]),
             namespace: "test".into(),
@@ -462,6 +464,8 @@ fn data_table_save_extensions_write_reference_xml_and_read_legacy_json() {
 
 fn column_request(name: &str, arguments: Vec<VmValue>) -> NativeCallRequest {
     NativeCallRequest {
+        service_key: SymbolKey([0; 16]),
+        omitted_arguments: Vec::new(),
         import: erabasic_bytecode::RuntimeImport {
             key: SymbolKey([0; 16]),
             namespace: "rustyera.vm".into(),

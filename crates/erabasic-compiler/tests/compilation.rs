@@ -12,7 +12,7 @@ use erabasic_compiler::{
     compile_project_with_artifact, compile_validated_project_with_artifact, default_host_registry,
 };
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
-use erabasic_validator::{ValidationContext, validate_bytecode};
+use erabasic_validator::validate_bytecode;
 
 fn analyze(text: &str) -> erabasic_analyzer::AnalyzedProject {
     let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
@@ -54,7 +54,7 @@ fn column_options_lower_to_validated_private_native_steps() {
     let artifact = report.artifact.expect("column options compile");
     let validation = validate_bytecode(
         artifact.clone().into_unvalidated(),
-        &ValidationContext::for_artifact(&artifact),
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
     );
     assert!(
         validation.diagnostics.is_empty(),
@@ -264,7 +264,10 @@ fn expression_methods_use_typed_lazy_bytecode_in_expressions_and_statements() {
     }
     let encoded = encode_artifact(&artifact).unwrap();
     let decoded = decode_artifact(&encoded, &DecodeLimits::default()).unwrap();
-    let validation = validate_bytecode(decoded, &ValidationContext::for_artifact(&artifact));
+    let validation = validate_bytecode(
+        decoded,
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
+    );
     assert!(validation.is_valid(), "{:?}", validation.diagnostics);
 }
 
@@ -531,7 +534,10 @@ fn host_operations_use_only_call_host_and_round_trip() {
     let bytes = encode_artifact(&artifact).expect("artifact should encode");
     let decoded =
         decode_artifact(&bytes, &DecodeLimits::default()).expect("artifact should decode");
-    let validation = validate_bytecode(decoded, &ValidationContext::for_artifact(&artifact));
+    let validation = validate_bytecode(
+        decoded,
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
+    );
     assert!(validation.is_valid(), "{:#?}", validation.diagnostics);
     assert_eq!(validation.value.unwrap().into_inner(), artifact);
 }
@@ -560,7 +566,7 @@ fn printdata_lowers_to_lazy_skip_random_selection_and_valid_stack_control() {
     );
     let validation = validate_bytecode(
         artifact.clone().into_unvalidated(),
-        &ValidationContext::for_artifact(&artifact),
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
     );
     assert!(validation.is_valid(), "{:#?}", validation.diagnostics);
 }
@@ -1402,7 +1408,7 @@ RETURNF 2
     let artifact = report.artifact.expect("HTML query lowering should compile");
     let validation = validate_bytecode(
         artifact.clone().into_unvalidated(),
-        &ValidationContext::for_artifact(&artifact),
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
     );
     assert!(
         validation.diagnostics.is_empty(),
@@ -1482,7 +1488,7 @@ fn dynamic_form_and_list_calls_share_lazy_slots_and_explicit_method_discard() {
     }
     let validation = validate_bytecode(
         artifact.clone().into_unvalidated(),
-        &ValidationContext::for_artifact(&artifact),
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
     );
     assert!(validation.is_valid(), "{:?}", validation.diagnostics);
 }
@@ -1543,7 +1549,7 @@ fn complete_call_text_six_modes_lower_one_string_with_local_catch_status() {
     }
     let validation = validate_bytecode(
         artifact.clone().into_unvalidated(),
-        &ValidationContext::for_artifact(&artifact),
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
     );
     assert!(validation.is_valid(), "{:?}", validation.diagnostics);
 }
@@ -1727,4 +1733,156 @@ fn changing_a_reference_formal_rebuilds_its_call_contract() {
     // Existing shared variable dependencies are deliberately unchanged by this task, so the
     // declaration change can invalidate more than the caller and target.
     assert!(warm.stats.compiled_functions >= 2);
+}
+
+#[test]
+fn dynamic_native_families_follow_registry_across_warm_compilation_and_validation() {
+    let project = analyze("@SYSTEM_TITLE\nRESULTS '= STRFORM(\"{ABS(-7)}\")\nRETURN\n");
+    let options = CompilerOptions::default();
+    let registry = default_host_registry();
+    let first = compile_project(&project, &options, &registry, None);
+    let artifact = first.artifact.as_ref().unwrap();
+    assert!(
+        !artifact
+            .native_imports
+            .iter()
+            .any(|native| native.import.name == "abs")
+    );
+    let family = artifact
+        .runtime_native_authorizations
+        .iter()
+        .find(|family| family.name == "abs")
+        .unwrap();
+    let accepted =
+        erabasic_compiler::runtime_native_validation_context(artifact, &default_host_registry());
+    let mut denied_context = accepted.clone();
+    denied_context
+        .runtime_native_authorizations
+        .remove(&family.key);
+    let denied = validate_bytecode(artifact.clone().into_unvalidated(), &denied_context);
+    assert!(denied.value.is_none());
+    assert!(
+        denied.diagnostics.iter().any(
+            |diagnostic| diagnostic.code == erabasic_validator::ValidationCode::HostAbiMismatch
+        )
+    );
+
+    let mut weakened = artifact.clone();
+    let family = weakened
+        .runtime_native_authorizations
+        .iter_mut()
+        .find(|family| family.name == "getvar")
+        .unwrap();
+    family.contract = erabasic_bytecode::canonical_native_contract("abs");
+    family.key = family.canonical_key();
+    weakened.refresh_ids().unwrap();
+    let report = validate_bytecode(
+        weakened.clone().into_unvalidated(),
+        &erabasic_compiler::runtime_native_validation_context(&weakened, &default_host_registry()),
+    );
+    assert!(
+        report.value.is_none(),
+        "trusted registry and canonical source contracts must reject artifact state-policy weakening"
+    );
+
+    let mut denied_registry = registry;
+    denied_registry.register_execution(
+        "ABS",
+        ExecutionBinding::Unsupported {
+            reason: "host withdrew dynamic grant".into(),
+        },
+    );
+    let second = compile_project(
+        &project,
+        &options,
+        &denied_registry,
+        Some(&first.incremental_state),
+    );
+    let target = second.artifact.as_ref().unwrap();
+    assert!(
+        !target
+            .runtime_native_authorizations
+            .iter()
+            .any(|family| family.name == "abs")
+    );
+    assert!(
+        target
+            .runtime_builtins
+            .iter()
+            .any(|symbol| symbol.name == "ABS")
+    );
+    assert_ne!(
+        artifact.manifest.program_version.execution_id,
+        target.manifest.program_version.execution_id
+    );
+    assert_eq!(
+        apply_patch(artifact, second.patch.as_ref().unwrap()).unwrap(),
+        *target
+    );
+}
+
+#[test]
+fn dynamic_host_grants_follow_registry_in_warm_cache_patch_and_container() {
+    let project = analyze("@SYSTEM_TITLE\nRESULTS '= STRFORM(\"{GETKEY(7)}\")\nRETURN\n");
+    let options = CompilerOptions::default();
+    let registry = default_host_registry();
+    let first = compile_project(&project, &options, &registry, None);
+    let artifact = first.artifact.as_ref().unwrap();
+    assert!(
+        !artifact
+            .host_imports
+            .iter()
+            .any(|host| host.import.name.eq_ignore_ascii_case("getkey"))
+    );
+    let family = artifact
+        .runtime_host_authorizations
+        .iter()
+        .find(|family| family.name == "getkey")
+        .unwrap();
+    let mut context = erabasic_compiler::runtime_native_validation_context(artifact, &registry);
+    context.runtime_host_authorizations.remove(&family.key);
+    let denied = validate_bytecode(artifact.clone().into_unvalidated(), &context);
+    assert!(denied.value.is_none());
+    assert!(
+        denied.diagnostics.iter().any(
+            |diagnostic| diagnostic.code == erabasic_validator::ValidationCode::HostAbiMismatch
+        )
+    );
+    let decoded = decode_artifact(
+        &encode_artifact(artifact).unwrap(),
+        &DecodeLimits::default(),
+    )
+    .unwrap()
+    .into_inner();
+    assert_eq!(&decoded, artifact);
+    let mut denied_registry = registry;
+    denied_registry.register_execution(
+        "GETKEY",
+        ExecutionBinding::Unsupported {
+            reason: "withdrawn runtime Host grant".into(),
+        },
+    );
+    let warm = compile_project(
+        &project,
+        &options,
+        &denied_registry,
+        Some(&first.incremental_state),
+    );
+    let target = warm.artifact.as_ref().unwrap();
+    let cold = compile_project(&project, &options, &denied_registry, None);
+    assert_eq!(cold.artifact.as_ref(), Some(target));
+    assert!(
+        !target
+            .runtime_host_authorizations
+            .iter()
+            .any(|family| family.name == "getkey")
+    );
+    assert_ne!(
+        artifact.manifest.program_version.execution_id,
+        target.manifest.program_version.execution_id
+    );
+    assert_eq!(
+        &apply_patch(artifact, warm.patch.as_ref().unwrap()).unwrap(),
+        target
+    );
 }

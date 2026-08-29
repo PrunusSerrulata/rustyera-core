@@ -1,4 +1,6 @@
+mod host_authorization;
 mod instructions;
+mod native_authorization;
 mod provenance;
 mod runtime_symbols;
 mod source_map;
@@ -29,6 +31,10 @@ pub struct ValidationContext {
     pub vm_abi: u32,
     pub supported_features: BTreeSet<String>,
     pub native_imports: BTreeMap<SymbolKey, NativeImport>,
+    pub runtime_native_authorizations:
+        BTreeMap<SymbolKey, erabasic_bytecode::RuntimeNativeAuthorization>,
+    pub runtime_host_authorizations:
+        BTreeMap<SymbolKey, erabasic_bytecode::RuntimeHostAuthorization>,
     pub host_imports: BTreeMap<SymbolKey, HostImport>,
     pub host_capabilities: BTreeSet<HostCapability>,
     pub limits: ValidationLimits,
@@ -45,6 +51,8 @@ impl Default for ValidationContext {
             vm_abi: VM_ABI_VERSION,
             supported_features: BTreeSet::new(),
             native_imports: BTreeMap::new(),
+            runtime_native_authorizations: BTreeMap::new(),
+            runtime_host_authorizations: BTreeMap::new(),
             host_imports: BTreeMap::new(),
             host_capabilities: BTreeSet::new(),
             limits: ValidationLimits::default(),
@@ -168,7 +176,15 @@ fn validate_artifact(
         validate_identities(&mut artifact, &mut diagnostics);
     }
     validate_symbols(&artifact, context, &mut diagnostics);
+    native_authorization::validate(&artifact, context, &mut diagnostics);
+    host_authorization::validate(&artifact, context, &mut diagnostics);
     if let Err(message) = runtime_symbols::validate_runtime_builtins(&artifact.runtime_builtins) {
+        diagnostics.push(ValidationDiagnostic::project(
+            ValidationCode::InvalidOperand,
+            message,
+        ));
+    }
+    if let Err(message) = runtime_symbols::validate_runtime_variables(&artifact) {
         diagnostics.push(ValidationDiagnostic::project(
             ValidationCode::InvalidOperand,
             message,

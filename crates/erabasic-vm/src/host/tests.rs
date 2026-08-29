@@ -346,6 +346,8 @@ fn random_native_implements_one_and_two_argument_ranges() {
         state: Arc::new(Mutex::new(Sfmt19937::new(1))),
     };
     let request = |arguments| NativeCallRequest {
+        service_key: SymbolKey([0; 16]),
+        omitted_arguments: Vec::new(),
         import: RuntimeImport {
             key: SymbolKey([0; 16]),
             namespace: "test".into(),
@@ -396,6 +398,8 @@ fn times_native_multiplies_rationally_and_truncates_toward_zero() {
     };
     let ready = native
         .call(NativeCallRequest {
+            service_key: SymbolKey([0; 16]),
+            omitted_arguments: Vec::new(),
             import: RuntimeImport {
                 key: SymbolKey([0; 16]),
                 namespace: "test".into(),
@@ -429,6 +433,8 @@ fn times_native_multiplies_rationally_and_truncates_toward_zero() {
 #[test]
 fn regex_string_natives_match_non_overlapping_reference_semantics() {
     let request = |name: &str, arguments: Vec<VmValue>| NativeCallRequest {
+        service_key: SymbolKey([0; 16]),
+        omitted_arguments: Vec::new(),
         import: RuntimeImport {
             key: SymbolKey([0; 16]),
             namespace: "test".into(),
@@ -498,6 +504,8 @@ fn regex_string_natives_match_non_overlapping_reference_semantics() {
 #[test]
 fn replace_native_uses_reference_regex_literal_and_array_modes() {
     let request = |arguments: Vec<VmValue>, places: Vec<NativePlaceView>| NativeCallRequest {
+        service_key: SymbolKey([0; 16]),
+        omitted_arguments: Vec::new(),
         import: RuntimeImport {
             key: SymbolKey([0; 16]),
             namespace: "test".into(),
@@ -595,6 +603,8 @@ fn replace_native_uses_reference_regex_literal_and_array_modes() {
 
 fn classified_native_request(name: &str, arguments: Vec<VmValue>) -> NativeCallRequest {
     NativeCallRequest {
+        service_key: SymbolKey::default(),
+        omitted_arguments: Vec::new(),
         import: RuntimeImport {
             key: SymbolKey::default(),
             namespace: "typed-test".into(),
@@ -749,13 +759,15 @@ fn native_registry_preserves_classification_and_never_promotes_legacy_messages()
     ] {
         let mut registry = NativeServiceRegistry::default();
         registry.register(key, FailingNative(expected.clone()));
-        let failure = registry
-            .call(key, classified_native_request("test", Vec::new()))
-            .unwrap_err();
+        let mut request = classified_native_request("test", Vec::new());
+        request.service_key = key;
+        let failure = registry.call(key, request).unwrap_err();
         assert_eq!(failure, expected);
     }
+    let mut request = classified_native_request("missing", Vec::new());
+    request.service_key = key;
     let failure = NativeServiceRegistry::default()
-        .call(key, classified_native_request("missing", Vec::new()))
+        .call(key, request)
         .unwrap_err();
     assert_eq!(failure.category, FaultCategory::HostContract);
 }
@@ -794,4 +806,29 @@ fn randdata_execution_distinguishes_invalid_state_from_missing_service() {
     assert_eq!(failure.category, FaultCategory::InternalInvariant);
     assert_eq!(failure.code, VmFaultCode::Native);
     assert_eq!(failure.message, "random native service is not registered");
+}
+
+#[test]
+fn native_registry_keeps_family_service_key_distinct_from_physical_import() {
+    struct Keys;
+    impl NativeService for Keys {
+        fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, ExecutionFailure> {
+            assert_ne!(request.service_key, request.import.key);
+            Ok(NativeReady::value(VmValue::Integer(7)))
+        }
+    }
+    let family_key = SymbolKey::derive("test", b"family");
+    let mut registry = NativeServiceRegistry::default();
+    registry.register(family_key, Keys);
+    let mut request = classified_native_request("abs", vec![VmValue::Integer(-7)]);
+    request.service_key = family_key;
+    assert_eq!(
+        registry.call(family_key, request.clone()).unwrap().value,
+        Some(VmValue::Integer(7))
+    );
+    request.service_key = request.import.key;
+    assert_eq!(
+        registry.call(family_key, request).unwrap_err().category,
+        FaultCategory::HostContract
+    );
 }

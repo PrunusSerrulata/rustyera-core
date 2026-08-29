@@ -244,6 +244,11 @@ impl Symbols {
         let id = VariableId(u32::try_from(self.variables.len()).expect("too many variables"));
         let key = self.key(schema.id.name());
         self.variables.push(Variable {
+            reference_semantics: crate::reference_origin::variable_semantics(
+                schema,
+                reference,
+                location.is_some(),
+            ),
             id,
             name: schema.id.name().to_owned(),
             value_type: semantic_type(schema.value_type),

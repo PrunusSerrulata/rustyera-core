@@ -8,7 +8,7 @@ pub(super) fn parse_runtime_form(
     function: SymbolKey,
     source: &str,
     node_limit: usize,
-) -> Result<(FormattedString, usize), StepError> {
+) -> Result<(FormattedString, super::call_plan::RuntimeCallPlan), StepError> {
     if source.len() > MAX_RUNTIME_FORM_BYTES {
         return Err(resource_limit(
             "STRFORM source exceeds the runtime parser limit",
@@ -40,8 +40,8 @@ pub(super) fn parse_runtime_form(
         )
     })?;
     resolve_named_indices(program, function, &mut formatted, 0)?;
-    let nodes = validate_form(vm, natives, generation, function, &formatted, node_limit)?;
-    Ok((formatted, nodes))
+    let plan = validate_form(vm, natives, generation, function, &formatted, node_limit)?;
+    Ok((formatted, plan))
 }
 
 fn resolve_named_indices(
@@ -176,7 +176,7 @@ fn validate_form(
     function: SymbolKey,
     formatted: &FormattedString,
     node_limit: usize,
-) -> Result<usize, StepError> {
+) -> Result<super::call_plan::RuntimeCallPlan, StepError> {
     let program = vm.generations.get(&generation).ok_or_else(|| {
         StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
     })?;
@@ -189,36 +189,10 @@ fn validate_form(
         Some(natives),
     );
     analysis.form(formatted, 0)?;
-    Ok(analysis.nodes())
-}
-
-pub(super) fn validate_runtime_expression(
-    vm: &Vm,
-    natives: &NativeServiceRegistry,
-    generation: GenerationId,
-    function: SymbolKey,
-    expression: &Expr,
-    node_limit: usize,
-) -> Result<(usize, erabasic_bytecode::UserArgumentSpec), StepError> {
-    let program = vm.generations.get(&generation).ok_or_else(|| {
-        StepError::new(
-            VmFaultCode::MissingSymbol,
-            "runtime expression generation is missing",
-        )
-    })?;
-    let mut analysis = super::typing::TypeAnalysis::new(
-        program,
-        function,
-        generation,
-        false,
-        node_limit,
-        Some(natives),
-    );
-    let kind = analysis.expression(expression, 0)?;
-    Ok((
-        analysis.nodes(),
-        super::typing::shape_spec(program, function, expression, kind),
-    ))
+    super::call_plan::RuntimeCallPlan::from_analysis(
+        super::call_plan::RuntimePlanSource::Form(formatted.clone()),
+        analysis,
+    )
 }
 
 pub(super) fn preflight_nesting(source: &str) -> Result<(), StepError> {

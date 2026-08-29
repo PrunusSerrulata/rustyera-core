@@ -151,7 +151,7 @@ impl RuntimeSession {
                     && name == "HTML__LINES_STEP"
                 {
                     // Source parsing occurs only after prepare_html_query validates this ticket.
-                    if let Some(VmValue::String(ticket)) = request.arguments.first() {
+                    if let Some(VmValue::String(ticket)) = request.argument(0) {
                         self.operations.html_lines.discard_failed_step(ticket);
                     }
                 }
@@ -687,13 +687,13 @@ fn encode_html_request(
 }
 
 fn integer(request: &VmHostRequest, index: usize) -> Result<i64, HtmlQueryError> {
-    match request.arguments.get(index) {
+    match request.argument(index) {
         Some(VmValue::Integer(value)) => Ok(*value),
         _ => Err(invalid_arguments()),
     }
 }
 fn string(request: &VmHostRequest, index: usize) -> Result<&str, HtmlQueryError> {
-    match request.arguments.get(index) {
+    match request.argument(index) {
         Some(VmValue::String(value)) => Ok(value),
         _ => Err(invalid_arguments()),
     }

@@ -279,16 +279,68 @@ pub(in super::super) fn apply_upcheck(
     Ok(lines)
 }
 
+/// Access to trusted source argument presence. Slice-only static callers keep their
+/// existing behavior; dynamic requests distinguish omission from a real Integer MIN.
+pub(in super::super) trait HostArgumentValues {
+    fn argument(&self, index: usize) -> Option<&VmValue>;
+    fn source_omitted(&self, _index: usize) -> bool {
+        false
+    }
+}
+impl HostArgumentValues for [VmValue] {
+    fn argument(&self, index: usize) -> Option<&VmValue> {
+        self.get(index)
+    }
+}
+impl HostArgumentValues for Vec<VmValue> {
+    fn argument(&self, index: usize) -> Option<&VmValue> {
+        self.get(index)
+    }
+}
+impl<const N: usize> HostArgumentValues for [VmValue; N] {
+    fn argument(&self, index: usize) -> Option<&VmValue> {
+        self.get(index)
+    }
+}
+impl HostArgumentValues for VmHostRequest {
+    fn argument(&self, index: usize) -> Option<&VmValue> {
+        VmHostRequest::argument(self, index)
+    }
+    fn source_omitted(&self, index: usize) -> bool {
+        self.omitted_arguments.binary_search(&index).is_ok()
+    }
+}
+fn missing_host_argument(
+    arguments: &(impl HostArgumentValues + ?Sized),
+    index: usize,
+    message: String,
+) -> RuntimeError {
+    if arguments.source_omitted(index) {
+        // Classified at the actual required getter; optional consumers use argument()
+        // and their operation-specific defaults instead of this failure constructor.
+        RuntimeError::Script {
+            kind: erabasic_vm::ScriptFaultKind::Operation,
+            message: format!(
+                "source argument {} is null at a required Host getter",
+                index + 1
+            ),
+        }
+    } else {
+        RuntimeError::Internal(message)
+    }
+}
+
 pub(in super::super) fn integer_argument_value(
-    arguments: &[VmValue],
+    arguments: &(impl HostArgumentValues + ?Sized),
     index: usize,
 ) -> Result<i64, RuntimeError> {
-    match arguments.get(index) {
+    match arguments.argument(index) {
         Some(VmValue::Integer(value)) => Ok(*value),
-        _ => Err(RuntimeError::Internal(format!(
-            "host argument {} must be integer",
-            index + 1
-        ))),
+        _ => Err(missing_host_argument(
+            arguments,
+            index,
+            format!("host argument {} must be integer", index + 1),
+        )),
     }
 }
 
@@ -317,7 +369,7 @@ pub(in super::super) fn vm_place(value: &VmValue) -> Option<PlaceDescriptor> {
 }
 
 pub(in super::super) fn i32_argument_value(
-    arguments: &[VmValue],
+    arguments: &(impl HostArgumentValues + ?Sized),
     index: usize,
 ) -> Result<i32, RuntimeError> {
     i32::try_from(integer_argument_value(arguments, index)?).map_err(|_| RuntimeError::Script {
@@ -401,21 +453,22 @@ pub(in super::super) fn integer_value_or_zero(value: &VmValue) -> i64 {
 }
 
 pub(in super::super) fn string_argument_value<'a>(
-    arguments: &'a [VmValue],
+    arguments: &'a (impl HostArgumentValues + ?Sized),
     index: usize,
     command: &str,
 ) -> Result<&'a str, RuntimeError> {
-    match arguments.get(index) {
+    match arguments.argument(index) {
         Some(VmValue::String(value)) => Ok(value),
-        _ => Err(RuntimeError::Internal(format!(
-            "{command} argument {} must be string",
-            index + 1
-        ))),
+        _ => Err(missing_host_argument(
+            arguments,
+            index,
+            format!("{command} argument {} must be string", index + 1),
+        )),
     }
 }
 
 pub(in super::super) fn save_slot_argument(
-    arguments: &[VmValue],
+    arguments: &(impl HostArgumentValues + ?Sized),
     index: usize,
     command: &str,
 ) -> Result<u32, RuntimeError> {

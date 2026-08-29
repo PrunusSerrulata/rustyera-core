@@ -13,7 +13,7 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         if name == "AWAIT" {
             *status = HostDispatchStatus::Handled;
-            let milliseconds = match request.arguments.first() {
+            let milliseconds = match request.argument(0) {
                 None | Some(VmValue::Integer(0)) => 0,
                 Some(VmValue::Integer(value @ 1..=10_000)) => *value,
                 Some(VmValue::Integer(_)) => {
@@ -76,7 +76,7 @@ impl RuntimeSession {
         }
         if name == "CHKFONT" {
             *status = HostDispatchStatus::Handled;
-            let font = string_argument_value(&request.arguments, 0, "CHKFONT")?;
+            let font = string_argument_value(request, 0, "CHKFONT")?;
             let available = self.available_fonts.contains(&font.to_lowercase());
             return commit_completion(
                 vm,
@@ -89,7 +89,7 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "GETCONFIG" | "GETCONFIGS") {
             *status = HostDispatchStatus::Handled;
-            let key = string_argument_value(&request.arguments, 0, &name)?;
+            let key = string_argument_value(request, 0, &name)?;
             let project = self
                 .project_snapshot
                 .as_ref()
@@ -214,7 +214,7 @@ impl RuntimeSession {
         if name == "VARSIZE" {
             *status = HostDispatchStatus::Handled;
             if let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) =
-                request.arguments.first()
+                request.argument(0)
             {
                 let dimensions =
                     vm.host_place_dimensions(request.fiber, place)
@@ -223,7 +223,7 @@ impl RuntimeSession {
                                 "VARSIZE variable reference is invalid: {error}"
                             ))
                         })?;
-                let Some(VmValue::IntegerPlace(result)) = request.arguments.get(1) else {
+                let Some(VmValue::IntegerPlace(result)) = request.argument(1) else {
                     return Err(RuntimeError::Internal(
                         "statement VARSIZE requires a RESULT output place".into(),
                     ));
@@ -251,7 +251,7 @@ impl RuntimeSession {
                     }),
                 );
             }
-            let variable = string_argument_value(&request.arguments, 0, "VARSIZE")?;
+            let variable = string_argument_value(request, 0, "VARSIZE")?;
             let Some(dimensions) = vm.variable_dimensions(request.fiber, variable) else {
                 return complete_script_fault(
                     vm,
@@ -261,12 +261,14 @@ impl RuntimeSession {
                 );
             };
             let dimension = request
-                .arguments
-                .get(1)
-                .map(|_| integer_argument_value(&request.arguments, 1))
+                .argument(1)
+                .map(|_| integer_argument_value(request, 1))
                 .transpose()?
                 .unwrap_or(0);
-            let Ok(dimension) = usize::try_from(dimension) else {
+            // Fixed VarsizeMethod narrows only this getter to a signed Int32.
+            // Preserve its low bits; do not apply this conversion to timer/input APIs.
+            let [b0, b1, b2, b3, ..] = dimension.to_le_bytes();
+            let Ok(dimension) = usize::try_from(i32::from_le_bytes([b0, b1, b2, b3])) else {
                 return complete_script_fault(
                     vm,
                     request,
@@ -293,11 +295,10 @@ impl RuntimeSession {
         }
         if name == "EXISTFUNCTION" {
             *status = HostDispatchStatus::Handled;
-            let function = string_argument_value(&request.arguments, 0, "EXISTFUNCTION")?;
+            let function = string_argument_value(request, 0, "EXISTFUNCTION")?;
             let insensitive = request
-                .arguments
-                .get(1)
-                .map(|_| integer_argument_value(&request.arguments, 1))
+                .argument(1)
+                .map(|_| integer_argument_value(request, 1))
                 .transpose()?
                 .unwrap_or(0)
                 != 0;
@@ -324,7 +325,7 @@ impl RuntimeSession {
         }
         if name == "EXISTVAR" {
             *status = HostDispatchStatus::Handled;
-            let variable = string_argument_value(&request.arguments, 0, "EXISTVAR")?;
+            let variable = string_argument_value(request, 0, "EXISTVAR")?;
             let value = vm
                 .vm()
                 .artifact()
@@ -380,8 +381,8 @@ impl RuntimeSession {
                 | "ENUMVARWITH"
         ) {
             *status = HostDispatchStatus::Handled;
-            let query = string_argument_value(&request.arguments, 0, &name)?;
-            let target = request.arguments.get(1).and_then(|value| match value {
+            let query = string_argument_value(request, 0, &name)?;
+            let target = request.argument(1).and_then(|value| match value {
                 VmValue::StringPlace(place) => Some(place.as_ref().clone()),
                 _ => None,
             });
@@ -454,7 +455,7 @@ impl RuntimeSession {
         }
         if name == "SETTEXTBOX" {
             *status = HostDispatchStatus::Handled;
-            string_argument_value(&request.arguments, 0, &name)?.clone_into(&mut self.text_box);
+            string_argument_value(request, 0, &name)?.clone_into(&mut self.text_box);
             commit_integer_result(vm, request.id, 1)?;
             return self.emit_projection_state();
         }
@@ -468,9 +469,9 @@ impl RuntimeSession {
             *status = HostDispatchStatus::Handled;
             self.text_box_layout = if name == "MOVETEXTBOX" {
                 TextBoxLayout {
-                    x: integer_argument_value(&request.arguments, 0)?,
-                    y: integer_argument_value(&request.arguments, 1)?,
-                    width: integer_argument_value(&request.arguments, 2)?,
+                    x: integer_argument_value(request, 0)?,
+                    y: integer_argument_value(request, 1)?,
+                    width: integer_argument_value(request, 2)?,
                 }
             } else {
                 TextBoxLayout::default()
@@ -486,7 +487,7 @@ impl RuntimeSession {
         }
         if name == "HOTKEY_STATE_INIT" {
             *status = HostDispatchStatus::Handled;
-            let raw_size = integer_argument_value(&request.arguments, 0)?;
+            let raw_size = integer_argument_value(request, 0)?;
             if raw_size < 0 {
                 return complete_script_fault(
                     vm,
@@ -504,7 +505,7 @@ impl RuntimeSession {
         }
         if name == "HOTKEY_STATE" {
             *status = HostDispatchStatus::Handled;
-            let Ok(index) = usize::try_from(integer_argument_value(&request.arguments, 0)?) else {
+            let Ok(index) = usize::try_from(integer_argument_value(request, 0)?) else {
                 return complete_script_fault(
                     vm,
                     request,
@@ -512,7 +513,15 @@ impl RuntimeSession {
                     "HOTKEY_STATE index must be non-negative",
                 );
             };
-            let value = integer_argument_value(&request.arguments, 1)?;
+            if request.arguments.len() < 2 {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Operation,
+                    "HOTKEY_STATE dereferenced its absent second source argument",
+                );
+            }
+            let value = integer_argument_value(request, 1)?;
             let Some(slot) = self.hotkey_state.get_mut(index) else {
                 return complete_script_fault(
                     vm,
@@ -527,23 +536,23 @@ impl RuntimeSession {
         }
         if name == "FLOWINPUT" {
             *status = HostDispatchStatus::Handled;
-            self.flow_input_default = integer_argument_value(&request.arguments, 0)?;
+            self.flow_input_default = integer_argument_value(request, 0)?;
             if request.arguments.len() > 1 {
-                self.flow_input_enabled = integer_argument_value(&request.arguments, 1)? != 0;
+                self.flow_input_enabled = integer_argument_value(request, 1)? != 0;
             }
             if request.arguments.len() > 2 {
-                self.flow_input_can_skip = integer_argument_value(&request.arguments, 2)? != 0;
+                self.flow_input_can_skip = integer_argument_value(request, 2)? != 0;
             }
             if request.arguments.len() > 3 {
-                self.flow_input_force_skip = integer_argument_value(&request.arguments, 3)? != 0;
+                self.flow_input_force_skip = integer_argument_value(request, 3)? != 0;
             }
             return commit_integer_result(vm, request.id, 0);
         }
         if name == "FLOWINPUTS" {
             *status = HostDispatchStatus::Handled;
-            self.flow_input_string = integer_argument_value(&request.arguments, 0)? != 0;
+            self.flow_input_string = integer_argument_value(request, 0)? != 0;
             if request.arguments.len() > 1 {
-                string_argument_value(&request.arguments, 1, &name)?
+                string_argument_value(request, 1, &name)?
                     .clone_into(&mut self.flow_input_default_string);
             }
             return commit_integer_result(vm, request.id, 0);
@@ -559,11 +568,10 @@ impl RuntimeSession {
         }
         if name == "HTML_TAGSPLIT" {
             *status = HostDispatchStatus::Handled;
-            let source = string_argument_value(&request.arguments, 0, &name)?;
-            let string_target = request.arguments.get(1).and_then(vm_place);
+            let source = string_argument_value(request, 0, &name)?;
+            let string_target = request.argument(1).and_then(vm_place);
             let integer_target = request
-                .arguments
-                .get(2)
+                .argument(2)
                 .and_then(vm_place)
                 .or_else(|| global_place(vm, "RESULT"));
             let Ok(values) = split_html_tags(source) else {
@@ -601,9 +609,9 @@ impl RuntimeSession {
         }
         if name == "BARSTR" {
             *status = HostDispatchStatus::Handled;
-            let value = integer_argument_value(&request.arguments, 0)?;
-            let maximum = integer_argument_value(&request.arguments, 1)?;
-            let length = integer_argument_value(&request.arguments, 2)?;
+            let value = integer_argument_value(request, 0)?;
+            let maximum = integer_argument_value(request, 1)?;
+            let length = integer_argument_value(request, 2)?;
             let replace = &vm.vm().artifact().project_data.static_data.replace;
             let bar = match format_bar_string(
                 value,
@@ -641,8 +649,8 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "MONEYSTR" | "TOSTR") {
             *status = HostDispatchStatus::Handled;
-            let value = integer_argument_value(&request.arguments, 0)?;
-            let format = match request.arguments.get(1) {
+            let value = integer_argument_value(request, 0)?;
+            let format = match request.argument(1) {
                 None => None,
                 Some(VmValue::String(format)) => Some(format.as_str()),
                 Some(_) => {
@@ -701,7 +709,7 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "TOFULL" | "TOHALF") {
             *status = HostDispatchStatus::Handled;
-            let value = string_argument_value(&request.arguments, 0, &name)?;
+            let value = string_argument_value(request, 0, &name)?;
             let converted = if name == "TOFULL" {
                 to_full_width(value)
             } else {
@@ -718,7 +726,7 @@ impl RuntimeSession {
         }
         if name == "CALLTRAIN" {
             *status = HostDispatchStatus::Handled;
-            let Ok(count) = usize::try_from(integer_argument_value(&request.arguments, 0)?) else {
+            let Ok(count) = usize::try_from(integer_argument_value(request, 0)?) else {
                 return complete_script_fault(
                     vm,
                     request,
@@ -789,7 +797,7 @@ impl RuntimeSession {
         }
         if name == "DOTRAIN" {
             *status = HostDispatchStatus::Handled;
-            let command = integer_argument_value(&request.arguments, 0)?;
+            let command = integer_argument_value(request, 0)?;
             let allowed_step = self.controller.allows_dotrain();
             let train_name_count = vm
                 .vm()
@@ -827,7 +835,7 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "BEGIN" | "FORCE_BEGIN") {
             *status = HostDispatchStatus::Handled;
-            let Some(VmValue::String(keyword)) = request.arguments.first() else {
+            let Some(VmValue::String(keyword)) = request.argument(0) else {
                 return self.fault(
                     FaultCode::VmFault,
                     "BEGIN expects a system keyword",

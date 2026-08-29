@@ -821,8 +821,14 @@ RETURNF 1
             },
         );
         assert_eq!(report.stop, erabasic_vm::VmRunStop::BudgetExhausted);
-        vm.prepare_hot_reload(&patch, &ValidationContext::for_artifact(&target))
-            .unwrap();
+        vm.prepare_hot_reload(
+            &patch,
+            &erabasic_compiler::runtime_native_validation_context(
+                &target,
+                &default_host_registry(),
+            ),
+        )
+        .unwrap();
         vm.commit_hot_reload().unwrap();
         let new = vm.spawn_entry(entry.key, Vec::new()).unwrap();
         let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
@@ -3770,11 +3776,10 @@ fn checked_form_does_not_catch_malformed_native_ready_value_or_write() {
         &method_options(true),
     );
     let key = artifact
-        .native_imports
+        .runtime_native_authorizations
         .iter()
-        .find(|native| native.import.name.eq_ignore_ascii_case("abs"))
+        .find(|family| family.name.eq_ignore_ascii_case("abs"))
         .unwrap()
-        .import
         .key;
     for wrong_type in [true, false] {
         let mut natives = NativeServiceRegistry::for_artifact(&artifact);
@@ -4021,11 +4026,10 @@ fn checked_native_failure_restores_checkpoint_and_failed_rollback_is_uncatchable
         &method_options(true),
     );
     let key = artifact
-        .native_imports
+        .runtime_native_authorizations
         .iter()
-        .find(|native| native.import.name.eq_ignore_ascii_case("abs"))
+        .find(|family| family.name.eq_ignore_ascii_case("abs"))
         .unwrap()
-        .import
         .key;
     for fail_restore in [false, true] {
         let state = Arc::new(AtomicU8::new(1));
@@ -4637,7 +4641,1161 @@ fn existvar_probe_node_budget_is_not_a_catchable_script_failure() {
     );
     let fault = take_fault(report);
     assert_eq!(fault.category, erabasic_vm::FaultCategory::ResourceLimit);
-    assert!(fault.message.contains("AST"), "{fault:?}");
+    assert_eq!(fault.code, VmFaultCode::ResourceLimit);
     assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(1));
     assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(0));
+}
+
+#[test]
+fn call_text_restructures_all_outer_actuals_before_any_ordinary_argument() {
+    for call in ["TAKE(SIDE(), FLAG:9999999)", "TAKE(7, FLAG:9999999)"] {
+        let source = format!(
+            "@SYSTEM_TITLE\nTRYCCALLSTR {}\nFLAG:0 = 99\nCATCH\nFLAG:1 = 1\nENDCATCH\nRETURN\n@TAKE(ARG)\nFLAG:2 = 1\nRETURN\n@SIDE\n#FUNCTION\nFLAG:8 += 1\nRETURNF 7\n",
+            serde_json::to_string(call).unwrap()
+        );
+        let artifact = compile_source_with_options(&source, &method_options(true));
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert!(
+            matches!(
+                take_fault(report).category,
+                erabasic_vm::FaultCategory::Script(_)
+            ),
+            "{call}"
+        );
+        for index in [0, 1, 2, 8] {
+            assert_method_watch(&vm, &artifact, "FLAG", index, VmValue::Integer(0));
+        }
+    }
+    // Snake ordinary division by zero reduces to zero and emits a diagnostic;
+    // it is not a binder/callee fault even when the outer actual is discarded.
+    let artifact = compile_source_with_options(
+        "@SYSTEM_TITLE\nTRYCCALLSTR \"TAKE(7, 1 / 0)\"\nFLAG:0 = 99\nCATCH\nFLAG:1 = 1\nENDCATCH\nRETURN\n@TAKE(ARG)\nFLAG:2 = ARG\nRETURN\n",
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert_eq!(report.events.iter().filter(|event| matches!(event, VmEvent::Diagnostic { code, .. } if code == "compat.arithmetic.divide_by_zero")).count(), 1);
+    for (index, value) in [(0, 99), (1, 0), (2, 7)] {
+        assert_method_watch(&vm, &artifact, "FLAG", index, VmValue::Integer(value));
+    }
+}
+
+#[test]
+fn call_text_unique_restructure_reads_outer_excess_but_not_converted_nested_excess() {
+    for (call, side_reads) in [
+        (r#"TAKE(7, REPLACE("a", "a", "b", SIDE()))"#, 1),
+        (r#"TAKE(DROP(7, REPLACE("a", "a", "b", SIDE())))"#, 0),
+        (r#"TAKES(REPLACE("a", "a", "b", SIDE()))"#, 2),
+        ("TAKES(STRFORM(ITEMNAME:SIDE()))", 2),
+    ] {
+        let source = format!(
+            "@SYSTEM_TITLE\nCALLSTR {}\nFLAG:9 = 1\nRETURN\n@TAKE(ARG)\nRETURN\n@TAKES(ARGS)\nRETURN\n@DROP(ARG)\n#FUNCTION\nRETURNF ARG\n@SIDE\n#FUNCTION\nFLAG:8 += 1\nRETURNF 0\n",
+            serde_json::to_string(call).unwrap()
+        );
+        let artifact = compile_source_with_options(&source, &method_options(true));
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{call}: {report:?}"
+        );
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+            "{call}: {report:?}"
+        );
+        assert_method_watch(&vm, &artifact, "FLAG", 8, VmValue::Integer(side_reads));
+        assert_method_watch(&vm, &artifact, "FLAG", 9, VmValue::Integer(1));
+    }
+}
+
+#[test]
+fn call_text_retained_constant_bounds_precede_later_index_restructure_and_are_try_catchable() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#DIM GRID, 2, 2
+TRYCCALLSTR "TAKE(GRID:999:STRLEN(REPLACE(\"a\", \"a\", \"b\", SIDE())))"
+FLAG:0 = 99
+CATCH
+FLAG:1 = 1
+ENDCATCH
+RETURN
+@TAKE(ARG)
+RETURN
+@SIDE
+#FUNCTION
+FLAG:8 += 1
+RETURNF 0
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "FLAG", 8, VmValue::Integer(0));
+    assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(0));
+    assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(1));
+}
+
+#[test]
+fn call_text_nested_ref_restructure_keeps_variable_root_and_child_effects() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#LOCALSIZE 2
+LOCAL:0 = 5
+CALLSTR "TAKE(USE(LOCAL:STRLEN(REPLACE(\"a\", \"a\", \"b\", SIDE()))))"
+RESULT:10 = LOCAL:0
+RETURN
+@TAKE(ARG)
+RESULT:11 = ARG
+RETURN
+@USE(ITEMS)
+#FUNCTION
+#DIM REF ITEMS
+ITEMS:0 = 9
+RETURNF ITEMS:0
+@SIDE
+#FUNCTION
+FLAG:8 += 1
+RETURNF 0
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "FLAG", 8, VmValue::Integer(1));
+    for index in [10, 11] {
+        assert_method_watch(&vm, &artifact, "RESULT", index, VmValue::Integer(9));
+    }
+}
+
+fn reject_form_snapshot_before_native_restore(
+    artifact: &BytecodeArtifact,
+    snapshot: VmSnapshot,
+    attack: &str,
+) {
+    let (mut rejected_natives, restore_count) = lease_snapshot_natives(artifact);
+    let mut rejected_host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    assert!(
+        Vm::restore_snapshot(
+            validated(artifact),
+            VmConfig::default(),
+            snapshot,
+            &mut rejected_host,
+            &mut rejected_natives
+        )
+        .is_err(),
+        "{attack}"
+    );
+    assert_eq!(
+        restore_count.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "{attack}"
+    );
+    assert!(rejected_host.rebound.is_empty(), "{attack}");
+}
+
+fn corrupt_native_form_snapshot(value: &mut serde_json::Value, fiber: FiberId, attack: &str) {
+    let work = value["fibers"][fiber.0.to_string()]["frames"][0]["runtime_form"]["work"]
+        .as_array_mut()
+        .unwrap();
+    let native = work
+        .iter_mut()
+        .find_map(|task| task.get_mut("FinishNative"))
+        .unwrap();
+    match attack {
+        "family_is_physical" => {
+            native["bound"]["service_key"] = native["bound"]["import"]["key"].clone();
+        }
+        "wrong_parameter" => {
+            native["bound"]["import"]["parameters"][0] =
+                serde_json::to_value(BytecodeType::String).unwrap();
+        }
+        "forged_source" => native["source"][0] = serde_json::Value::Null,
+        "forged_omission" => native["bound"]["omitted_arguments"] = serde_json::json!([0]),
+        _ => {}
+    }
+    let plans =
+        &mut value["fibers"][fiber.0.to_string()]["frames"][0]["runtime_form"]["call_plans"];
+    match attack {
+        "plan_missing" => *plans = serde_json::json!([]),
+        "plan_binding" => {
+            plans[0]["calls"][0][1]["Native"]["import"]["parameters"][0] =
+                serde_json::to_value(BytecodeType::String).unwrap();
+        }
+        "plan_types" => {
+            plans[0]["types"][0][1] = serde_json::to_value(BytecodeType::String).unwrap();
+        }
+        "plan_source" => plans[0]["source"] = serde_json::json!({"Arguments": []}),
+        _ => {}
+    }
+}
+
+const CALL_TEXT_RESTRUCTURE_WAIT_ERB: &str = r#"@SYSTEM_TITLE
+CALLSTR "TAKE(7, STRLEN(REPLACE(\"a\", \"a\", \"b\", WAITMODE())))"
+FLAG:9 = 1
+RETURN
+@TAKE(ARG)
+FLAG:0 = ARG
+RETURN
+@WAITMODE
+#FUNCTION
+FLAG:8 += 1
+INPUT
+RETURNF 0
+@IMPORTS
+#FUNCTION
+RESULTS '= REPLACE(ARGS, ARGS, ARGS, ARG)
+RESULT = STRLEN(ARGS)
+RETURNF ABS(ARG)
+"#;
+
+#[test]
+fn call_text_restructure_wait_snapshot_resumes_once_and_rejects_graph_corruption_before_native_restore()
+ {
+    use std::sync::atomic::Ordering;
+    let artifact =
+        compile_source_with_options(CALL_TEXT_RESTRUCTURE_WAIT_ERB, &method_options(true));
+    let (mut natives, _) = lease_snapshot_natives(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    let Some(FiberStatus::WaitingHost(request)) = vm.fiber_status(fiber) else {
+        panic!("expected unique-method restructuring wait");
+    };
+    let snapshot = vm.snapshot(&natives).unwrap();
+    let saved = serde_json::to_value(&snapshot).unwrap();
+    let pending =
+        &saved["fibers"][fiber.0.to_string()]["frames"][0]["runtime_form"]["reference_arguments"];
+    assert_eq!(pending["preparing"], true);
+    assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(0));
+    assert_method_watch(&vm, &artifact, "FLAG", 8, VmValue::Integer(1));
+    for attack in ["delete_graph", "bad_root", "bad_progress"] {
+        let mut corrupted = saved.clone();
+        let pending = &mut corrupted["fibers"][fiber.0.to_string()]["frames"][0]["runtime_form"]["reference_arguments"];
+        match attack {
+            "delete_graph" => *pending = serde_json::Value::Null,
+            "bad_root" => pending["graph"]["template"]["roots"][0] = serde_json::json!(u32::MAX),
+            "bad_progress" => {
+                let task = pending["tasks"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|task| task.get("CaptureChild").is_some())
+                    .unwrap();
+                task["CaptureChild"]["next"] = serde_json::json!(usize::MAX);
+            }
+            _ => unreachable!(),
+        }
+        let snapshot: VmSnapshot = serde_json::from_value(corrupted).unwrap();
+        reject_form_snapshot_before_native_restore(&artifact, snapshot, attack);
+    }
+    let (mut restored_natives, restore_count) = lease_snapshot_natives(&artifact);
+    let mut restored = Vm::restore_snapshot(
+        validated(&artifact),
+        VmConfig::default(),
+        snapshot,
+        &mut host,
+        &mut restored_natives,
+    )
+    .unwrap();
+    assert_eq!(restore_count.load(Ordering::SeqCst), 1);
+    restored.resume_host(request, HostReady::empty()).unwrap();
+    let report = restored.run_slice(
+        &mut ReadyHost::default(),
+        &mut restored_natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    for (index, expected) in [(0, 7), (8, 1), (9, 1)] {
+        assert_method_watch(
+            &restored,
+            &artifact,
+            "FLAG",
+            index,
+            VmValue::Integer(expected),
+        );
+    }
+}
+
+#[test]
+fn dynamic_native_text_only_scalar_defaults_omissions_and_variadic_calls() {
+    let template = r#"{ABS(-7)}|%REPLACE("aba", "a", "x")%|%SUBSTRING("abc")%|%SUBSTRING("abc",,2)%|{MAX(1,9,2,3,4)}|%STRFORM("literal")%"#;
+    let source = format!(
+        "@SYSTEM_TITLE\nRESULTS:10 '= STRFORM({})\nRETURN\n",
+        serde_json::to_string(template).unwrap()
+    );
+    let artifact = compile_source_with_options(&source, &method_options(true));
+    for name in ["abs", "replace", "substring", "max"] {
+        assert!(
+            !artifact
+                .native_imports
+                .iter()
+                .any(|entry| entry.import.name == name),
+            "{name} must occur only inside dynamic text"
+        );
+        assert!(
+            artifact
+                .runtime_native_authorizations
+                .iter()
+                .any(|family| family.name == name)
+        );
+    }
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(
+        &vm,
+        &artifact,
+        "RESULTS",
+        10,
+        VmValue::String("7|xbx|abc|ab|9|literal".into()),
+    );
+}
+
+#[test]
+fn dynamic_native_callstr_array_token_uses_authoritative_variable_place() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#DIM DYNAMIC_ITEMS, 3
+DYNAMIC_ITEMS:0 = 4
+DYNAMIC_ITEMS:1 = 5
+DYNAMIC_ITEMS:2 = 6
+CALLSTR "TAKE(SUMARRAY(DYNAMIC_ITEMS))"
+RETURN
+@TAKE(ARG)
+RESULT:10 = ARG
+RETURN
+"#,
+        &method_options(true),
+    );
+    assert!(
+        !artifact
+            .native_imports
+            .iter()
+            .any(|entry| entry.import.name == "sumarray")
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "RESULT", 10, VmValue::Integer(15));
+}
+
+#[test]
+fn dynamic_native_host_registry_denial_and_missing_provider_are_distinct() {
+    let source = "@SYSTEM_TITLE\nRESULT = STRFORMCHECK(\"{ABS(-7)}\")\nFLAG:0 = 1\nRETURN\n";
+    let analysis = analyze_project(
+        AnalysisInput {
+            project_data: project_data(),
+            sources: vec![ProjectSource {
+                relative_path: "main.erb".into(),
+                payload: SourcePayload::Utf8(source.into()),
+            }],
+        },
+        &method_options(true),
+        &ExtensionRegistry::default(),
+    );
+    let project = analysis.project.unwrap();
+    let mut registry = default_host_registry();
+    registry.register_execution(
+        "ABS",
+        erabasic_compiler::ExecutionBinding::Unsupported {
+            reason: "test denies dynamic ABS".into(),
+        },
+    );
+    let denied = compile_project(&project, &CompilerOptions::default(), &registry, None)
+        .artifact
+        .unwrap();
+    assert!(
+        denied
+            .runtime_builtins
+            .iter()
+            .any(|symbol| symbol.name == "ABS")
+    );
+    assert!(
+        !denied
+            .runtime_native_authorizations
+            .iter()
+            .any(|family| family.name == "abs")
+    );
+    let (vm, report) = run_entry(&denied, VmConfig::default());
+    assert_eq!(
+        take_fault(report).category,
+        erabasic_vm::FaultCategory::Permission
+    );
+    assert_method_watch(&vm, &denied, "FLAG", 0, VmValue::Integer(0));
+
+    let granted = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .unwrap();
+    let entry = granted
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&granted), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut NativeServiceRegistry::default(),
+        RunBudget::default(),
+    );
+    assert_eq!(
+        take_fault(report).category,
+        erabasic_vm::FaultCategory::HostContract
+    );
+    assert_method_watch(&vm, &granted, "FLAG", 0, VmValue::Integer(0));
+}
+
+#[test]
+fn checked_method_callstr_omitted_replace_mode_preserves_prior_side_effects() {
+    // Fixed Creator.Method.cs REPLACE unique restructure dereferences omitted mode;
+    // outer STRFORMCHECK catches this source-proved script error, not arbitrary CLR failures.
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:10 = STRFORMCHECK("{PROBE()}")
+FLAG:9 = 1
+RETURN
+@PROBE
+#FUNCTION
+FLAG:8 += 1
+CALLSTR "TAKES(REPLACE(\"a\", \"a\", \"b\",,))"
+FLAG:7 = 1
+RETURNF 1
+@TAKES(ARGS)
+FLAG:6 = 1
+RETURN
+"#,
+        &method_options(true),
+    );
+    assert!(
+        !artifact
+            .native_imports
+            .iter()
+            .any(|entry| entry.import.name == "replace")
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    for (name, index, expected) in [
+        ("RESULT", 10, 0),
+        ("FLAG", 8, 1),
+        ("FLAG", 9, 1),
+        ("FLAG", 7, 0),
+        ("FLAG", 6, 0),
+    ] {
+        assert_method_watch(&vm, &artifact, name, index, VmValue::Integer(expected));
+    }
+}
+
+#[test]
+fn dynamic_native_and_static_rand_share_one_stream() {
+    let dynamic = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULT:10 = RAND(1000000)
+RESULT:11 = TOINT(STRFORM("{RAND(1000000)}"))
+RETURN
+"#,
+        &method_options(true),
+    );
+    let ordinary = compile_source_with_options(
+        "@SYSTEM_TITLE\nRESULT:10 = RAND(1000000)\nRESULT:11 = RAND(1000000)\nRETURN\n",
+        &method_options(true),
+    );
+    let (actual, report) = run_entry(&dynamic, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    let (expected, report) = run_entry(&ordinary, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    let key = ordinary
+        .globals
+        .iter()
+        .find(|variable| variable.name == "RESULT")
+        .unwrap()
+        .key;
+    for index in [10, 11] {
+        let value = expected.read_variable(key, &[index], None).unwrap();
+        assert_method_watch(&actual, &dynamic, "RESULT", index, value);
+    }
+}
+
+#[test]
+fn dynamic_native_wait_snapshot_rejects_forged_family_before_restore() {
+    use std::sync::atomic::Ordering;
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+RESULTS:10 '= STRFORM("{ABS(WAITVALUE())}")
+RETURN
+@WAITVALUE
+#FUNCTION
+FLAG:8 += 1
+INPUT
+RETURNF -7
+@SNAPSHOT_COUNTER_IMPORT
+#FUNCTION
+RETURNF ABS(ARG)
+"#,
+        &method_options(true),
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let (mut natives, _) = lease_snapshot_natives(&artifact);
+    let mut host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    let Some(FiberStatus::WaitingHost(request)) = vm.fiber_status(fiber) else {
+        panic!("Native argument must suspend in user method INPUT");
+    };
+    let snapshot = vm.snapshot(&natives).unwrap();
+    let saved = serde_json::to_value(&snapshot).unwrap();
+    for attack in [
+        "family_is_physical",
+        "wrong_parameter",
+        "forged_source",
+        "forged_omission",
+        "plan_missing",
+        "plan_binding",
+        "plan_types",
+        "plan_source",
+    ] {
+        let mut value = saved.clone();
+        corrupt_native_form_snapshot(&mut value, fiber, attack);
+        let corrupt: VmSnapshot = serde_json::from_value(value).unwrap();
+        reject_form_snapshot_before_native_restore(&artifact, corrupt, attack);
+    }
+    let (mut restored_natives, restore_count) = lease_snapshot_natives(&artifact);
+    let mut restored = Vm::restore_snapshot(
+        validated(&artifact),
+        VmConfig::default(),
+        snapshot,
+        &mut host,
+        &mut restored_natives,
+    )
+    .unwrap();
+    assert_eq!(restore_count.load(Ordering::SeqCst), 1);
+    restored.resume_host(request, HostReady::empty()).unwrap();
+    let report = restored.run_slice(
+        &mut ReadyHost::default(),
+        &mut restored_natives,
+        RunBudget::default(),
+    );
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(
+        &restored,
+        &artifact,
+        "RESULTS",
+        10,
+        VmValue::String("7".into()),
+    );
+    assert_method_watch(&restored, &artifact, "FLAG", 8, VmValue::Integer(1));
+}
+
+#[test]
+fn dynamic_native_bad_source_arity_is_catchable_without_loosening_static_arity() {
+    for expression in [
+        r#"ABS("x")"#,
+        "ABS(1,2)",
+        "LIMIT(1)",
+        "POWER(1)",
+        "GETBIT(1)",
+        "STRLEN(7)",
+        "SUBSTRING(,1)",
+        "MAX(1,,)",
+    ] {
+        let template = format!("{{{expression}}}");
+        let source = format!(
+            "@SYSTEM_TITLE\nRESULT:10 = STRFORMCHECK({})\nFLAG:9 = 1\nRETURN\n",
+            serde_json::to_string(&template).unwrap()
+        );
+        let artifact = compile_source_with_options(&source, &method_options(true));
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+            "{report:?}"
+        );
+        assert_method_watch(&vm, &artifact, "RESULT", 10, VmValue::Integer(0));
+        assert_method_watch(&vm, &artifact, "FLAG", 9, VmValue::Integer(1));
+    }
+    let static_report = analyze_project(
+        AnalysisInput {
+            project_data: project_data(),
+            sources: vec![ProjectSource {
+                relative_path: "main.erb".into(),
+                payload: SourcePayload::Utf8("@SYSTEM_TITLE\nRESULT = ABS(1,2)\nRETURN\n".into()),
+            }],
+        },
+        &method_options(true),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        static_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2)
+    );
+}
+
+#[test]
+fn dynamic_core_omission_is_not_a_literal_minimum_integer() {
+    let text = r#"{STRFIND("abc","a",,)}|{STRFIND("abc","a",(-9223372036854775807 - 1))}|{ENCODETOUNI("ab",,)}"#;
+    let source = format!(
+        "@SYSTEM_TITLE\nRESULTS:10 '= STRFORM({})\nRETURN\n",
+        serde_json::to_string(text).unwrap()
+    );
+    let artifact = compile_source_with_options(&source, &method_options(true));
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(
+        &vm,
+        &artifact,
+        "RESULTS",
+        10,
+        VmValue::String("0|-1|97".into()),
+    );
+}
+
+#[test]
+fn original_dynamic_form_cannot_acquire_snake_checker_from_forged_artifact_tables() {
+    let mut original = compile_source_with_options(
+        "@SYSTEM_TITLE\nRESULTS '= STRFORM(\"{STRFORMCHECK(\\\"literal\\\")}\")\nRETURN\n",
+        &method_options(false),
+    );
+    let (_, denied) = run_entry(&original, VmConfig::default());
+    assert_eq!(
+        take_fault(denied).category,
+        erabasic_vm::FaultCategory::Permission
+    );
+    let snake = compile_source_with_options("@SYSTEM_TITLE\nRETURN\n", &method_options(true));
+    let family = snake
+        .runtime_native_authorizations
+        .iter()
+        .find(|family| family.name == "strformcheck")
+        .unwrap()
+        .clone();
+    let symbol = snake
+        .runtime_builtins
+        .iter()
+        .find(|symbol| symbol.name == "STRFORMCHECK")
+        .unwrap()
+        .clone();
+    original.runtime_builtins.push(symbol);
+    original.runtime_native_authorizations.push(family);
+    original.refresh_ids().unwrap();
+    let context =
+        erabasic_compiler::runtime_native_validation_context(&original, &default_host_registry());
+    let report = validate_bytecode(original.into_unvalidated(), &context);
+    assert!(report.value.is_none());
+    assert!(
+        report.diagnostics.iter().any(
+            |diagnostic| diagnostic.code == erabasic_validator::ValidationCode::HostAbiMismatch
+        )
+    );
+}
+
+#[test]
+fn dynamic_strjoin_omissions_preserve_slots_and_literal_minimum_is_not_omitted() {
+    for snake in [false, true] {
+        let artifact = compile_source_with_options(
+            r#"@SYSTEM_TITLE
+#DIMS ITEMS, 3
+ITEMS:0 '= "a"
+ITEMS:1 '= "b"
+ITEMS:2 '= "c"
+RESULTS:10 '= STRFORM("%STRJOIN(ITEMS,,1,2)%")
+RESULTS:11 '= STRFORM("%STRJOIN(ITEMS,,,1)%")
+RESULTS:12 '= STRFORM("%STRJOIN(ITEMS,,,)%")
+RETURN
+"#,
+            &method_options(snake),
+        );
+        let (vm, report) = run_entry(&artifact, VmConfig::default());
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+            "{report:?}"
+        );
+        for (slot, value) in [(10, "b,c"), (11, "a"), (12, "a,b,c")] {
+            assert_method_watch(
+                &vm,
+                &artifact,
+                "RESULTS",
+                slot,
+                VmValue::String(value.into()),
+            );
+        }
+    }
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#DIMS ITEMS, 3
+ITEMS:0 '= "a"
+RESULT:10 = STRFORMCHECK("%STRJOIN(ITEMS,,(-9223372036854775807 - 1),1)%")
+RESULT:11 = STRFORMCHECK("%STRJOIN(ITEMS,,,(-9223372036854775807 - 1))%")
+FLAG:9 = 1
+RETURN
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    for slot in [10, 11] {
+        assert_method_watch(&vm, &artifact, "RESULT", slot, VmValue::Integer(0));
+    }
+    assert_method_watch(&vm, &artifact, "FLAG", 9, VmValue::Integer(1));
+}
+
+#[test]
+fn dynamic_strjoin_omitted_delimiter_uses_callers_array_ref() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#DIMS ITEMS, 3
+ITEMS:0 '= "a"
+ITEMS:1 '= "b"
+ITEMS:2 '= "c"
+CALLSTR "TAKE(JOINREF(ITEMS))"
+RETURN
+@TAKE(ARGS)
+RESULTS:10 '= ARGS
+RETURN
+@JOINREF(VALUES)
+#FUNCTIONS
+#DIMS REF VALUES
+RETURNF STRFORM("%STRJOIN(VALUES,,1,1)%")
+"#,
+        &method_options(true),
+    );
+    let (vm, report) = run_entry(&artifact, VmConfig::default());
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberCompleted { .. })),
+        "{report:?}"
+    );
+    assert_method_watch(&vm, &artifact, "RESULTS", 10, VmValue::String("b".into()));
+}
+
+#[derive(Default)]
+struct DirectFormHost {
+    requests: Vec<HostCallRequest>,
+    transient: bool,
+}
+impl VmHost for DirectFormHost {
+    fn call(&mut self, request: HostCallRequest) -> HostCallResult {
+        assert!(request.import.name.eq_ignore_ascii_case("GETKEY"));
+        self.requests.push(request);
+        if self.transient {
+            HostCallResult::Pending {
+                stability: HostWaitStability::Transient,
+                rebind_payload: Vec::new(),
+            }
+        } else {
+            HostCallResult::Ready(HostReady {
+                value: Some(VmValue::Integer(42)),
+                writes: Vec::new(),
+            })
+        }
+    }
+}
+
+#[test]
+fn direct_runtime_host_without_static_import_uses_ready_and_single_completion_paths() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"{GETKEY(7)}\"\nRESULT = STRFORM(RESULTS:0) == \"42\"\nRETURN RESULT\n",
+    );
+    assert!(
+        !artifact
+            .host_imports
+            .iter()
+            .any(|import| import.import.name.eq_ignore_ascii_case("GETKEY"))
+    );
+    assert!(
+        artifact
+            .runtime_host_authorizations
+            .iter()
+            .any(|family| family.name == "getkey")
+    );
+    for transient in [false, true] {
+        let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        let fiber = vm
+            .spawn_entry(artifact.functions[0].key, Vec::new())
+            .unwrap();
+        let mut host = DirectFormHost {
+            requests: Vec::new(),
+            transient,
+        };
+        let mut report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+        assert_eq!(host.requests.len(), 1);
+        assert_eq!(host.requests[0].arguments, vec![VmValue::Integer(7)]);
+        assert!(host.requests[0].omitted_arguments.is_empty());
+        assert_eq!(
+            host.requests[0].origin.command.to_ascii_lowercase(),
+            "getkey"
+        );
+        if transient {
+            assert!(matches!(
+                vm.fiber_status(fiber),
+                Some(FiberStatus::WaitingHost(_))
+            ));
+            assert!(
+                vm.snapshot(&natives).is_err(),
+                "transient Host service is not a stable input"
+            );
+            let request = host.requests[0].id;
+            vm.resume_host(
+                request,
+                HostReady {
+                    value: Some(VmValue::Integer(42)),
+                    writes: Vec::new(),
+                },
+            )
+            .unwrap();
+            assert!(
+                vm.resume_host(
+                    request,
+                    HostReady {
+                        value: Some(VmValue::Integer(99)),
+                        writes: Vec::new()
+                    }
+                )
+                .is_err()
+            );
+            report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+        }
+        assert_eq!(report.stop, erabasic_vm::VmRunStop::Idle);
+        assert!(
+            report.events.iter().any(|event| matches!(
+                event,
+                VmEvent::FiberCompleted {
+                    fiber: completed,
+                    value: Some(VmValue::Integer(1))
+                } if *completed == fiber
+            )),
+            "{:#?}",
+            report.events
+        );
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{:#?}",
+            report.events
+        );
+        assert_eq!(
+            host.requests.len(),
+            1,
+            "resumption must not call Host twice"
+        );
+        assert_eq!(
+            vm.read_variable(named_key(&artifact, "RESULT"), &[0], None),
+            Ok(VmValue::Integer(1))
+        );
+    }
+}
+
+#[test]
+fn direct_host_authorization_is_not_inferred_from_catalog_or_forged_artifact() {
+    let mut artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"{GETKEY(7)}\"\nRESULT = STRFORM(RESULTS:0) == \"42\"\nRETURN RESULT\n",
+    );
+    let context =
+        erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry());
+    let family = artifact
+        .runtime_host_authorizations
+        .iter_mut()
+        .find(|family| family.name == "getkey")
+        .unwrap();
+    family.prototype.capability = erabasic_bytecode::HostCapability::Network;
+    family.key = family.canonical_key();
+    artifact.refresh_ids().unwrap();
+    assert!(
+        validate_bytecode(artifact.into_unvalidated(), &context)
+            .value
+            .is_none()
+    );
+}
+
+#[test]
+fn direct_host_budget_stops_before_issue_without_repeating_argument_effects() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"{GETKEY(SIDE())}\"\nRESULT = STRFORM(RESULTS:0) == \"42\"\nRETURN\n@SIDE\n#FUNCTION\nFLAG:0 += 1\nRETURNF 7\n",
+    );
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = DirectFormHost::default();
+    let paused = vm.run_slice(
+        &mut host,
+        &mut natives,
+        RunBudget {
+            maximum_host_calls: 0,
+            ..RunBudget::default()
+        },
+    );
+    assert!(host.requests.is_empty(), "{paused:#?}");
+    assert_eq!(
+        paused.stop,
+        erabasic_vm::VmRunStop::BudgetExhausted,
+        "{paused:#?}"
+    );
+    assert!(
+        matches!(vm.fiber_status(fiber), Some(FiberStatus::Runnable)),
+        "{paused:#?}"
+    );
+    assert_eq!(
+        vm.read_variable(named_key(&artifact, "FLAG"), &[0], None),
+        Ok(VmValue::Integer(1))
+    );
+    let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    completed_without_fault(&report, fiber);
+    assert_eq!(host.requests.len(), 1);
+    assert_eq!(
+        vm.read_variable(named_key(&artifact, "FLAG"), &[0], None),
+        Ok(VmValue::Integer(1))
+    );
+}
+
+#[test]
+fn direct_host_wrong_ready_type_or_write_is_not_script_catchable() {
+    struct WrongReady {
+        variable: SymbolKey,
+        wrong_type: bool,
+    }
+    impl VmHost for WrongReady {
+        fn call(&mut self, _: HostCallRequest) -> HostCallResult {
+            HostCallResult::Ready(if self.wrong_type {
+                HostReady {
+                    value: Some(VmValue::String("not-an-integer".into())),
+                    writes: Vec::new(),
+                }
+            } else {
+                HostReady {
+                    value: Some(VmValue::Integer(42)),
+                    writes: vec![
+                        erabasic_vm::HostWrite {
+                            target: erabasic_vm::PlaceDescriptor {
+                                variable: self.variable,
+                                indices: vec![8],
+                                ..Default::default()
+                            },
+                            value: VmValue::Integer(99),
+                        },
+                        erabasic_vm::HostWrite {
+                            target: erabasic_vm::PlaceDescriptor {
+                                variable: SymbolKey::derive("test", b"missing-host-write"),
+                                ..Default::default()
+                            },
+                            value: VmValue::Integer(2),
+                        },
+                    ],
+                }
+            })
+        }
+    }
+    let artifact = compile_source_with_options(
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"{GETKEY(7)}\"\nFLAG:0 = 73\nFLAG:8 = 17\nFLAG:0 = STRFORMCHECK(RESULTS:0)\nFLAG:1 = 1\nRETURN RESULT\n",
+        &method_options(true),
+    );
+    for wrong_type in [true, false] {
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+        vm.spawn_entry(artifact.functions[0].key, Vec::new())
+            .unwrap();
+        let mut host = WrongReady {
+            variable: named_key(&artifact, "FLAG"),
+            wrong_type,
+        };
+        let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+        assert_eq!(
+            take_fault(report).category,
+            erabasic_vm::FaultCategory::HostContract
+        );
+        assert_method_watch(&vm, &artifact, "FLAG", 0, VmValue::Integer(73));
+        assert_method_watch(&vm, &artifact, "FLAG", 1, VmValue::Integer(0));
+        assert_method_watch(&vm, &artifact, "FLAG", 8, VmValue::Integer(17));
+    }
+}
+
+#[test]
+fn direct_host_request_after_reload_uses_its_prior_generation_authorization() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"{GETKEY(7)}\"\nRESULT = STRFORM(RESULTS:0) == \"42\"\nRETURN RESULT\n",
+    );
+    let mut target = artifact.clone();
+    target
+        .runtime_host_authorizations
+        .retain(|family| family.name != "getkey");
+    target.refresh_ids().unwrap();
+    let mut runtime = RuntimeVm::new(validated(&artifact), VmConfig::default());
+    let fiber = runtime
+        .spawn_entry(artifact.functions[0].key, Vec::new())
+        .unwrap();
+    let old_generation = runtime.current_generation();
+    let report = runtime.drive(
+        RunBudget {
+            maximum_host_calls: 0,
+            ..RunBudget::default()
+        },
+        VmDriveMode::Normal,
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmPortEvent::HostCall(_)))
+    );
+    runtime.prepare_hot_reload(validated(&target)).unwrap();
+    runtime.commit_hot_reload().unwrap();
+    assert_ne!(runtime.current_generation(), old_generation);
+    let report = runtime.drive(RunBudget::default(), VmDriveMode::Normal);
+    let request = report
+        .events
+        .into_iter()
+        .find_map(|event| match event {
+            VmPortEvent::HostCall(request) => Some(request),
+            _ => None,
+        })
+        .expect("old frame must retain the grant missing from the current generation");
+    assert_eq!(request.origin.generation, old_generation);
+    assert_eq!(request.arguments, vec![VmValue::Integer(7)]);
+    assert!(runtime.host_request_scope(request.id).is_some());
+    let completion = runtime
+        .validate_host_completion(
+            request.id,
+            VmHostCompletion::Ready(HostReady {
+                value: Some(VmValue::Integer(42)),
+                writes: Vec::new(),
+            }),
+        )
+        .unwrap();
+    runtime.commit_host_completion(completion).unwrap();
+    runtime.drive(RunBudget::default(), VmDriveMode::Normal);
+    assert_eq!(
+        runtime.fiber_status(fiber),
+        Some(FiberStatus::Completed(Some(VmValue::Integer(1))))
+    );
 }
