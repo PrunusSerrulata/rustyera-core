@@ -381,6 +381,56 @@ class DriverTests(unittest.TestCase):
                 }
                 actual["presentation"][0]["text_background_eligible"] = True
 
+    def test_display_state_removes_only_the_exact_load_presentation_prefix(self):
+        request = {
+            "op": "run", "entry": "DISPLAY", "watch": [],
+            "observePresentation": True, "observeDisplayState": True,
+        }
+        case = {
+            "id": "display", "group": "DISPLAY_STATE", "targetBatch": 2,
+            "snakeTargetStatus": "requires_batch_2E_acceptance",
+            "requests": [{"request": request}],
+        }
+        actual = {
+            "ok": True, "termination": "completed", "output": ["eligible"],
+            "watches": {}, "diagnostics": [],
+            "presentation": [{"text_background_eligible": True}],
+            "displayState": {
+                "settings": {"text_line_background": None},
+                "resources": {"animation_timer_ms": 20},
+            },
+        }
+        loaded_line = {"textBackgroundEligible": False, "text": "setup"}
+        expected = {
+            "termination": "completed", "output": ["setup", "eligible"], "watches": {},
+            "presentation": {
+                "animationTimer": 20, "textBackground": None,
+                "lines": [loaded_line, {"textBackgroundEligible": True, "text": "eligible"}],
+            },
+        }
+        load = {
+            "result": {
+                "output": ["setup"],
+                "presentation": {"lines": [loaded_line]},
+            },
+        }
+        rust = {"steps": [{"request": request, "status": "executed", "result": actual}]}
+        oracle = [{"request": request, "response": {
+            "ok": True, "diagnostics": [], "result": expected,
+        }}]
+        compared = compare_case(case, oracle, rust, load)
+        self.assertEqual(compared["status"], "matched_observables")
+        self.assertEqual(compared["steps"][0]["displayStateComparison"],
+                         "exact_load_presentation_prefix_removed")
+        expected["presentation"]["lines"][0] = {
+            "textBackgroundEligible": True, "text": "changed setup",
+        }
+        changed = compare_case(case, oracle, rust, load)
+        self.assertEqual(changed["status"], "incomparable")
+        self.assertEqual(changed["steps"][0]["displayStateComparison"],
+                         "incomparable_load_presentation_prefix_changed")
+        self.assertNotIn("displayState", changed["steps"][0]["compared"])
+
     def test_diagnostics_and_errors_cannot_be_reported_as_matches(self):
         request = {"op": "eval", "source": "bad"}
         case = {"id": "bad", "group": "TOINT", "targetBatch": 2,

@@ -33,7 +33,7 @@ def same_json_value(actual, expected):
     return actual == expected
 
 
-def normalized_display_state(observation, oracle):
+def normalized_display_state(observation, oracle, line_projection=None):
     """Project the shared logical 2E state without comparing renderer-specific layout."""
     if oracle:
         presentation = observation.get("presentation")
@@ -41,7 +41,7 @@ def normalized_display_state(observation, oracle):
             raise ValueError("oracle display-state observation requires presentation")
         resources = {"animation_timer_ms": presentation.get("animationTimer")}
         settings = {"text_line_background": presentation.get("textBackground")}
-        lines = presentation.get("lines")
+        lines = presentation.get("lines") if line_projection is None else line_projection
         eligibility_key = "textBackgroundEligible"
     else:
         display_state = observation.get("displayState")
@@ -75,6 +75,24 @@ def normalized_display_state(observation, oracle):
         "textBackground": background,
         "lineTextBackgroundEligibility": eligibility,
     }
+
+
+def oracle_presentation_after_load(observation, load_response):
+    """Remove the exact loaded-history prefix that Rust's synthetic title never renders."""
+    presentation = observation.get("presentation")
+    if not isinstance(presentation, dict) or not isinstance(presentation.get("lines"), list):
+        raise ValueError("oracle display-state observation requires presentation lines")
+    lines = presentation["lines"]
+    if load_response is None:
+        return lines, "not_trimmed_without_load_observation"
+    load_presentation = load_response.get("result", {}).get("presentation")
+    if (not isinstance(load_presentation, dict)
+            or not isinstance(load_presentation.get("lines"), list)):
+        raise ValueError("oracle load response requires presentation lines")
+    prefix = load_presentation["lines"]
+    if len(lines) < len(prefix) or not same_json_value(lines[:len(prefix)], prefix):
+        return None, "incomparable_load_presentation_prefix_changed"
+    return lines[len(prefix):], "exact_load_presentation_prefix_removed"
 
 
 def validate_rust_evidence(evidence, oracle, fixture, seed, required_policy=None):
@@ -234,10 +252,17 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
             fields.append("executionOutcome")
             if request.get("watch"):
                 fields.append("watches")
+        display_state_comparison = None
+        display_state_incomparable = False
         if request.get("observeDisplayState"):
             actual["displayState"] = normalized_display_state(actual, False)
-            expected["displayState"] = normalized_display_state(expected, True)
-            fields.append("displayState")
+            oracle_lines, display_state_comparison = oracle_presentation_after_load(
+                expected, load_response)
+            display_state_incomparable = oracle_lines is None
+            if not display_state_incomparable:
+                expected["displayState"] = normalized_display_state(
+                    expected, True, oracle_lines)
+                fields.append("displayState")
         output_comparison = None
         output_incomparable = False
         if "output" in fields:
@@ -280,9 +305,12 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
             compared.append("diagnostics")
         result = {
             "step": index,
-            "status": "different" if differences else "incomparable" if diagnostic_incomparable or output_incomparable else "matched_observables",
+            "status": ("different" if differences else "incomparable"
+                       if diagnostic_incomparable or output_incomparable or display_state_incomparable
+                       else "matched_observables"),
             "compared": compared,
             "outputComparison": output_comparison,
+            "displayStateComparison": display_state_comparison,
             "setupDiagnostics": setup_diagnostics,
             "oracleRequestAccepted": response["ok"],
             "differences": differences,
