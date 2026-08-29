@@ -14,7 +14,7 @@
     "original": { "semantic_version": 1, "policy_version": 1 }
   },
   "evidenceStatus": "batch_2e_dynamic_observation_not_a_golden",
-  "loadExpect": { "ok": false, "result": { "termination": "compileError" } },
+  "loadExpect": { "ok": true, "result": { "termination": "error" } },
   "allowedOracles": ["original"],
   "cases": [
     {
