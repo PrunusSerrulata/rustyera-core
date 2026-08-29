@@ -81,6 +81,8 @@ class DriverTests(unittest.TestCase):
             driver.validate_load({"ok": True, "result": {"termination": "error"}})
         with self.assertRaises(AssertionError):
             driver.validate_load({"ok": False, "result": {}})
+        driver.validate_load({"ok": True, "result": {"termination": "error"}},
+                             {"ok": True, "result": {"termination": "error"}})
         driver.validate_load({"ok": True, "result": {"termination": "waitingInput"}},
                              {"result": {"termination": "waitingInput"}})
         case = {"id": "bounds", "targetBatch": 1, "snakeTargetStatus": "requires_batch_1_acceptance",

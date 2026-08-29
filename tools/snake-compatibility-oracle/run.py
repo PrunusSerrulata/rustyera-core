@@ -37,7 +37,10 @@ def subset(actual, expected, path="response"):
 
 def validate_load(response, expected=None):
     subset(response, {"ok": True})
-    if response.get("result", {}).get("termination") in {"error", "timeout", "instructionLimit", "quit"}:
+    termination = response.get("result", {}).get("termination")
+    expected_termination = (expected or {}).get("result", {}).get("termination")
+    if (termination in {"error", "timeout", "instructionLimit", "quit"}
+            and expected_termination != termination):
         raise AssertionError("oracle failed during fixture loading")
     if expected is not None:
         subset(response, expected)
