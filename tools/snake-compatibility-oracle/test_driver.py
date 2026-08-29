@@ -431,6 +431,46 @@ class DriverTests(unittest.TestCase):
                          "incomparable_load_presentation_prefix_changed")
         self.assertNotIn("displayState", changed["steps"][0]["compared"])
 
+    def test_fault_display_state_compares_committed_state_without_error_lines(self):
+        request = {
+            "op": "run", "entry": "FAULT", "watch": [],
+            "observePresentation": True, "observeDisplayState": True,
+        }
+        case = {
+            "id": "fault", "group": "DISPLAY_STATE", "targetBatch": 2,
+            "snakeTargetStatus": "requires_batch_2E_acceptance",
+            "requests": [{"request": request}],
+        }
+        actual = {
+            "ok": False, "termination": "faulted", "output": [], "watches": {},
+            "diagnostics": [{"code": "vm_fault"}], "presentation": [],
+            "displayState": {
+                "settings": {"text_line_background": None},
+                "resources": {"animation_timer_ms": 20},
+            },
+        }
+        expected = {
+            "termination": "error", "output": ["localized error"], "watches": {},
+            "presentation": {
+                "animationTimer": 20, "textBackground": None,
+                "lines": [{"textBackgroundEligible": True}],
+            },
+        }
+        rust = {"steps": [{"request": request, "status": "executed", "result": actual}]}
+        oracle = [{"request": request, "response": {
+            "ok": True, "diagnostics": [], "result": expected,
+        }}]
+        compared = compare_case(case, oracle, rust)
+        self.assertEqual(compared["status"], "incomparable")
+        self.assertEqual(compared["steps"][0]["differences"], [])
+        self.assertEqual(compared["steps"][0]["displayStateComparison"],
+                         "state_only_after_script_error")
+        self.assertEqual(compared["steps"][0]["rust"]["result"]["presentation"], [])
+        expected["presentation"]["animationTimer"] = 10
+        changed = compare_case(case, oracle, rust)
+        self.assertEqual(changed["status"], "different")
+        self.assertEqual(changed["steps"][0]["differences"][0]["field"], "displayState")
+
     def test_diagnostics_and_errors_cannot_be_reported_as_matches(self):
         request = {"op": "eval", "source": "bad"}
         case = {"id": "bad", "group": "TOINT", "targetBatch": 2,

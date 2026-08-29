@@ -33,7 +33,7 @@ def same_json_value(actual, expected):
     return actual == expected
 
 
-def normalized_display_state(observation, oracle, line_projection=None):
+def normalized_display_state(observation, oracle, line_projection=None, include_lines=True):
     """Project the shared logical 2E state without comparing renderer-specific layout."""
     if oracle:
         presentation = observation.get("presentation")
@@ -70,11 +70,13 @@ def normalized_display_state(observation, oracle, line_projection=None):
         if type(value) is not bool:
             raise ValueError("display-state line eligibility must be boolean")
         eligibility.append(value)
-    return {
+    result = {
         "animationTimer": timer,
         "textBackground": background,
-        "lineTextBackgroundEligibility": eligibility,
     }
+    if include_lines:
+        result["lineTextBackgroundEligibility"] = eligibility
+    return result
 
 
 def oracle_presentation_after_load(observation, load_response):
@@ -255,13 +257,19 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
         display_state_comparison = None
         display_state_incomparable = False
         if request.get("observeDisplayState"):
-            actual["displayState"] = normalized_display_state(actual, False)
-            oracle_lines, display_state_comparison = oracle_presentation_after_load(
-                expected, load_response)
-            display_state_incomparable = oracle_lines is None
+            compare_display_lines = actual.get("ok") and expected.get("ok")
+            actual["displayState"] = normalized_display_state(
+                actual, False, include_lines=compare_display_lines)
+            if compare_display_lines:
+                oracle_lines, display_state_comparison = oracle_presentation_after_load(
+                    expected, load_response)
+                display_state_incomparable = oracle_lines is None
+            else:
+                oracle_lines = None
+                display_state_comparison = "state_only_after_script_error"
             if not display_state_incomparable:
                 expected["displayState"] = normalized_display_state(
-                    expected, True, oracle_lines)
+                    expected, True, oracle_lines, include_lines=compare_display_lines)
                 fields.append("displayState")
         output_comparison = None
         output_incomparable = False
