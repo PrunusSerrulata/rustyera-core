@@ -1,0 +1,343 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1
+    },
+    "snake": {
+      "semantic_version": 5,
+      "policy_version": 5
+    }
+  },
+  "evidenceStatus": "source_derived_candidates_unexecuted_not_goldens",
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "allowedOracles": [
+    "original",
+    "snake"
+  ],
+  "cases": [
+    {
+      "id": "host-getcolor-no-anchor",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_HOST_GETCOLOR_NO_ANCHOR",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULTS:10"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Host",
+        "description": "Dynamic GETCOLOR reads current StringStyle.Color as RGB24; no static GETCOLOR call/import anchor exists anywhere in this project. Numeric color remains observation-derived.",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    },
+    {
+      "id": "host-varsize-default",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_HOST_VARSIZE_DEFAULT",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULTS:10"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Host",
+        "description": "VARSIZE one-argument ordinary getter selects dimension 0. Observe actual FLAG length; do not fix a guessed size.",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    },
+    {
+      "id": "host-varsize-null",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_HOST_VARSIZE_NULL",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULTS:10"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Host",
+        "description": "The two commas retain one explicit-null dimension; ordinary getter accepts null as dimension 0. A single trailing comma would not exercise this branch.",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    },
+    {
+      "id": "host-varsize-min",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_HOST_VARSIZE_MIN",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULTS:10"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Host",
+        "description": "The supplied literal MIN is present, not omitted. Both reference getters cast long to int, yielding low32=0 before GetLength; capture actual result and any Rust difference.",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    },
+    {
+      "id": "host-barstr-script-error",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_HOST_BARSTR_SCRIPT_ERROR",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULTS:10"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Host",
+        "description": "HOST_SIDE is evaluated before CreateBar sees max=0 and throws CodeEE. Candidate fault with FLAG:8=1 and no completion FLAG:9; not an accepted assertion.",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    },
+    {
+      "id": "host-invalid-arity",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_HOST_INVALID_ARITY",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULTS:10"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Host",
+        "description": "GETCOLOR accepts zero arguments. Runtime text with one argument should reject during expression construction/type checking before HOST_SIDE executes; phase/message remain actual observations.",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    },
+    {
+      "id": "host-invalid-type",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_HOST_INVALID_TYPE",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULTS:10"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Host",
+        "description": "BARSTR requires three integers; supplied String is a runtime text type error, not a malformed physical Host request. Preserve actual reference diagnostic.",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    },
+    {
+      "id": "host-html-empty-width",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_HOST_HTML_EMPTY_WIDTH",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULTS:10"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Host",
+        "description": "Both reference HtmlStringLines getters return 0 for empty source before WIDTH or HtmlSubString. Candidate RESULTS:10=\"0\", FLAG:8=0; this asserts no nonempty measurement capability.",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    },
+    {
+      "id": "native-strjoin-ref-omission",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_NATIVE_STRJOIN_REF_OMISSION",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULTS:10",
+              "RESULTS:11"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Native",
+        "description": "Independent existing Native family coverage: user method receives Integer array REF; absent delimiter and explicit null before start/count both default to comma. Candidate RESULTS:10 and :11=\"7,8\".",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    }
+  ]
+}

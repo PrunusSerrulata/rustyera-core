@@ -1,0 +1,511 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1
+    },
+    "snake": {
+      "semantic_version": 5,
+      "policy_version": 5
+    }
+  },
+  "evidenceStatus": "source_derived_candidates_unexecuted_not_goldens",
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "allowedOracles": [
+    "snake"
+  ],
+  "cases": [
+    {
+      "id": "restructure-outer-bounds",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_RESTRUCTURE_OUTER_BOUNDS",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:8",
+              "FLAG:9"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "termination": "faulted",
+        "watches": {
+          "FLAG:0": 0,
+          "FLAG:1": 0,
+          "FLAG:2": 0,
+          "FLAG:8": 0,
+          "FLAG:9": 0
+        }
+      }
+    },
+    {
+      "id": "restructure-excess-bounds",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_RESTRUCTURE_EXCESS_BOUNDS",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:8",
+              "FLAG:9"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "termination": "faulted",
+        "watches": {
+          "FLAG:0": 0,
+          "FLAG:1": 0,
+          "FLAG:2": 0,
+          "FLAG:8": 0,
+          "FLAG:9": 0
+        }
+      }
+    },
+    {
+      "id": "restructure-excess-divzero",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_RESTRUCTURE_EXCESS_DIVZERO",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:8",
+              "FLAG:9"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "termination": "completed",
+        "watches": {
+          "FLAG:0": 99,
+          "FLAG:1": 0,
+          "FLAG:2": 1,
+          "FLAG:8": 0,
+          "FLAG:9": 1
+        },
+        "diagnosticCodes": [
+          "compat.arithmetic.divide_by_zero"
+        ],
+        "basis": "2A fixed snake arithmetic policy; candidate only, reference diagnostic representation remains pending capture"
+      }
+    },
+    {
+      "id": "restructure-outer-unique",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_RESTRUCTURE_OUTER_UNIQUE",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:8",
+              "FLAG:9"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "termination": "completed",
+        "watches": {
+          "FLAG:0": 99,
+          "FLAG:1": 0,
+          "FLAG:2": 1,
+          "FLAG:8": 1,
+          "FLAG:9": 1
+        }
+      }
+    },
+    {
+      "id": "restructure-nested-extra",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_RESTRUCTURE_NESTED_EXTRA",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:8",
+              "FLAG:9"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "termination": "completed",
+        "watches": {
+          "FLAG:0": 99,
+          "FLAG:1": 0,
+          "FLAG:2": 1,
+          "FLAG:8": 0,
+          "FLAG:9": 1
+        }
+      }
+    },
+    {
+      "id": "restructure-retained-unique",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_RESTRUCTURE_RETAINED_UNIQUE",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:8",
+              "FLAG:9"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "termination": "completed",
+        "watches": {
+          "FLAG:0": 99,
+          "FLAG:1": 0,
+          "FLAG:2": 1,
+          "FLAG:8": 2,
+          "FLAG:9": 1
+        }
+      }
+    },
+    {
+      "id": "restructure-const-form",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_RESTRUCTURE_CONST_FORM",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:8",
+              "FLAG:9"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "termination": "completed",
+        "watches": {
+          "FLAG:0": 99,
+          "FLAG:1": 0,
+          "FLAG:2": 1,
+          "FLAG:8": 2,
+          "FLAG:9": 1
+        }
+      }
+    },
+    {
+      "id": "restructure-index-order",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_RESTRUCTURE_INDEX_ORDER",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:8",
+              "FLAG:9"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "termination": "faulted",
+        "watches": {
+          "FLAG:0": 0,
+          "FLAG:1": 0,
+          "FLAG:2": 0,
+          "FLAG:8": 1,
+          "FLAG:9": 0
+        }
+      }
+    },
+    {
+      "id": "restructure-ref-child",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_RESTRUCTURE_REF_CHILD",
+            "watch": [
+              "FLAG:2",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULT:10",
+              "RESULT:11"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "termination": "completed",
+        "watches": {
+          "FLAG:2": 1,
+          "FLAG:8": 1,
+          "FLAG:9": 1,
+          "RESULT:10": 9,
+          "RESULT:11": 9
+        }
+      }
+    },
+    {
+      "id": "restructure-omitted-check",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_RESTRUCTURE_OMITTED_CHECK",
+            "watch": [
+              "RESULT:10",
+              "FLAG:2",
+              "FLAG:7",
+              "FLAG:8",
+              "FLAG:9"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "termination": "completed",
+        "watches": {
+          "RESULT:10": 0,
+          "FLAG:2": 0,
+          "FLAG:7": 1,
+          "FLAG:8": 0,
+          "FLAG:9": 1
+        }
+      }
+    },
+    {
+      "id": "dynamic-native-no-static-import",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_DYNAMIC_NATIVE_NO_STATIC_IMPORT",
+            "watch": [
+              "RESULT:10",
+              "RESULT:12",
+              "RESULTS:10",
+              "FLAG:9"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "termination": "completed",
+        "watches": {
+          "RESULT:10": 7,
+          "RESULT:12": 9,
+          "RESULTS:10": "bcd",
+          "FLAG:9": 1
+        }
+      }
+    },
+    {
+      "id": "dynamic-native-type-error",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_DYNAMIC_NATIVE_TYPE_ERROR",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:8",
+              "FLAG:9"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dynamic-native-short-arity",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_restructure_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_DYNAMIC_NATIVE_SHORT_ARITY",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:8",
+              "FLAG:9"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

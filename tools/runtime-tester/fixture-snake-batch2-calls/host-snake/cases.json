@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1
+    },
+    "snake": {
+      "semantic_version": 5,
+      "policy_version": 5
+    }
+  },
+  "evidenceStatus": "source_derived_candidates_unexecuted_not_goldens",
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "allowedOracles": [
+    "snake"
+  ],
+  "cases": [
+    {
+      "id": "host-check-barstr",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_HOST_CHECK_BARSTR",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULT:10"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Host",
+        "description": "CHECK candidate returns 0, retains prior HOST_SIDE increment and continues. Script-domain error only; no HostContract/resource/cancellation capture is asserted.",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    },
+    {
+      "id": "host-check-varsize-normal-null",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_HOST_CHECK_VARSIZE_NORMAL_NULL",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULT:10",
+              "RESULTS:10"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Host",
+        "description": "CHECK ordinary expansion of absent and explicit-null VARSIZE dimension should succeed; subsequent ordinary STRFORM observes both lengths. Not CALLSTR UniqueRestructure.",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    },
+    {
+      "id": "host-check-calltext-varsize-null",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_dynamic_host_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_HOST_CHECK_CALLTEXT_VARSIZE_NULL",
+            "watch": [
+              "FLAG:0",
+              "FLAG:8",
+              "FLAG:9",
+              "RESULT:10",
+              "RESULT:11",
+              "FLAG:2"
+            ]
+          }
+        }
+      ],
+      "sourceDerivedCandidate": {
+        "status": "candidate_only_not_golden_not_executed",
+        "runtimeFamily": "Host",
+        "description": "Outer CHECK calls a user method, which executes CALLSTR. Fixed Varsize.UniqueRestructure dereferences null second argument before ConvertArg/IntoFunction; candidate CHECK=0, FLAG:8=1, FLAG:2=0, then FLAG:9=1. Capture actual reference exception and continuation; do not bless broad internal-error catches.",
+        "actualReferenceRejectionOrDifference": "Must be preserved and adjudicated; never replaced by this description."
+      }
+    }
+  ]
+}

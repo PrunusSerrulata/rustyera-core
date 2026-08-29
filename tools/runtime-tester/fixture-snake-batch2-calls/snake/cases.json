@@ -16,8 +16,8 @@
       "policy_version": 1
     },
     "snake": {
-      "semantic_version": 4,
-      "policy_version": 4
+      "semantic_version": 5,
+      "policy_version": 5
     }
   },
   "evidenceStatus": "source_derived_candidates_not_executed; pending probes are not golden",

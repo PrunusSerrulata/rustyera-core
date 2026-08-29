@@ -286,6 +286,7 @@ name = "erabasic-bytecode"
 version = "0.8.0"
 dependencies = [
  "blake3",
+ "erabasic-ast",
  "erabasic-compat",
  "erabasic-data",
  "erabasic-hir",
@@ -311,6 +312,7 @@ dependencies = [
  "erabasic-analyzer",
  "erabasic-ast",
  "erabasic-bytecode",
+ "erabasic-compat",
  "erabasic-data",
  "erabasic-hir",
  "erabasic-validator",
@@ -393,6 +395,7 @@ dependencies = [
  "erabasic-compat",
  "erabasic-data",
  "erabasic-html",
+ "erabasic-lexer",
  "erabasic-parser",
  "erabasic-validator",
  "quick-xml",
