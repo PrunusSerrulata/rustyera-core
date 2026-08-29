@@ -689,6 +689,7 @@ dependencies = [
  "erabasic-compiler",
  "erabasic-csv",
  "erabasic-data",
+ "erabasic-html",
  "erabasic-parser",
  "erabasic-validator",
  "erabasic-vm",
