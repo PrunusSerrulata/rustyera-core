@@ -1620,6 +1620,7 @@ mod tests {
             logical_line_start,
             line_end: true,
             alignment,
+            text_background_eligible: !text.trim().is_empty(),
             runs: vec![DisplayRun::Text {
                 text: text.into(),
                 style: TextStyle::default(),

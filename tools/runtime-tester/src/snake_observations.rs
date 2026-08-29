@@ -293,6 +293,7 @@ fn observe_step(
         "result": {"ok": matches!(termination, "completed" | "waitingInput"), "termination": termination,
             "value": value, "watches": watches, "output": output, "diagnostics": runtime.diagnostics,
             "hostLogs": runtime.host_logs, "presentation": lines, "observationBlocks": blocks, "inputEvidence": runtime.input_evidence,
+            "displayState": {"settings": runtime.settings, "resources": runtime.resources},
             "inputObservation": if inputs.is_empty() && runtime.await_pumps.is_empty() { "consumed" } else { "blocked" },
             "runtimePhase": runtime.session.phase(), "instructions": runtime.instructions}});
     if let Some(evidence) = &runtime.storage_evidence {

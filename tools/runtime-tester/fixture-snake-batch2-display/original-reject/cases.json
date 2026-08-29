@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": { "semantic_version": 1, "policy_version": 1 }
+  },
+  "evidenceStatus": "batch_2e_dynamic_observation_not_a_golden",
+  "loadExpect": { "ok": false, "result": { "termination": "compileError" } },
+  "allowedOracles": ["original"],
+  "cases": [
+    {
+      "id": "display-original-rejects-snake-forms",
+      "group": "DISPLAY_STATE",
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2E_candidate_not_validated",
+      "snakeTargetStatus": "original_profile_rejection",
+      "allowedOracles": ["original"],
+      "observation": true,
+      "expectationStatus": "compare_actual_rejection",
+      "requests": [{ "request": { "op": "run", "entry": "PROBE_ORIGINAL_REJECT", "watch": [] } }]
+    }
+  ]
+}

@@ -326,6 +326,61 @@ class DriverTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     compare_case(case, oracle, rust)
 
+    def test_display_state_compares_timer_background_and_line_eligibility(self):
+        request = {
+            "op": "run", "entry": "DISPLAY", "watch": [],
+            "observePresentation": True, "observeDisplayState": True,
+        }
+        case = {
+            "id": "display", "group": "DISPLAY_STATE", "targetBatch": 2,
+            "snakeTargetStatus": "requires_batch_2E_acceptance",
+            "requests": [{"request": request}],
+        }
+        actual = {
+            "ok": True, "termination": "completed", "output": ["eligible"],
+            "watches": {}, "diagnostics": [],
+            "presentation": [{"text_background_eligible": True}],
+            "displayState": {
+                "settings": {"text_line_background": {
+                    "red": 17, "green": 34, "blue": 51, "alpha": 127,
+                }},
+                "resources": {"animation_timer_ms": 20},
+            },
+        }
+        expected = {
+            "termination": "completed", "output": ["eligible"], "watches": {},
+            "presentation": {
+                "animationTimer": 20,
+                "textBackground": {"red": 17, "green": 34, "blue": 51, "alpha": 127},
+                "lines": [{"textBackgroundEligible": True}],
+            },
+        }
+        rust = {"steps": [{"request": request, "status": "executed", "result": actual}]}
+        oracle = [{"request": request, "response": {
+            "ok": True, "diagnostics": [], "result": expected,
+        }}]
+        self.assertEqual(compare_case(case, oracle, rust)["status"], "matched_observables")
+        for field, value in (
+            ("timer", 10),
+            ("background", None),
+            ("eligibility", False),
+        ):
+            with self.subTest(field=field):
+                if field == "timer":
+                    actual["displayState"]["resources"]["animation_timer_ms"] = value
+                elif field == "background":
+                    actual["displayState"]["settings"]["text_line_background"] = value
+                else:
+                    actual["presentation"][0]["text_background_eligible"] = value
+                compared = compare_case(case, oracle, rust)
+                self.assertEqual(compared["status"], "different")
+                self.assertEqual(compared["steps"][0]["differences"][0]["field"], "displayState")
+                actual["displayState"]["resources"]["animation_timer_ms"] = 20
+                actual["displayState"]["settings"]["text_line_background"] = {
+                    "red": 17, "green": 34, "blue": 51, "alpha": 127,
+                }
+                actual["presentation"][0]["text_background_eligible"] = True
+
     def test_diagnostics_and_errors_cannot_be_reported_as_matches(self):
         request = {"op": "eval", "source": "bad"}
         case = {"id": "bad", "group": "TOINT", "targetBatch": 2,

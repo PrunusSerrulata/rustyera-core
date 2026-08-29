@@ -33,6 +33,50 @@ def same_json_value(actual, expected):
     return actual == expected
 
 
+def normalized_display_state(observation, oracle):
+    """Project the shared logical 2E state without comparing renderer-specific layout."""
+    if oracle:
+        presentation = observation.get("presentation")
+        if not isinstance(presentation, dict):
+            raise ValueError("oracle display-state observation requires presentation")
+        resources = {"animation_timer_ms": presentation.get("animationTimer")}
+        settings = {"text_line_background": presentation.get("textBackground")}
+        lines = presentation.get("lines")
+        eligibility_key = "textBackgroundEligible"
+    else:
+        display_state = observation.get("displayState")
+        if not isinstance(display_state, dict):
+            raise ValueError("Rust display-state observation is missing")
+        resources = display_state.get("resources")
+        settings = display_state.get("settings")
+        lines = observation.get("presentation")
+        eligibility_key = "text_background_eligible"
+    if not isinstance(resources, dict) or not isinstance(settings, dict):
+        raise ValueError("display-state resources and settings must be objects")
+    if not isinstance(lines, list) or not all(isinstance(line, dict) for line in lines):
+        raise ValueError("display-state lines must be an array of objects")
+    timer = resources.get("animation_timer_ms")
+    background = settings.get("text_line_background")
+    if type(timer) is not int:
+        raise ValueError("display-state animation timer must be an integer")
+    if background is not None:
+        if not isinstance(background, dict) or set(background) != {"red", "green", "blue", "alpha"}:
+            raise ValueError("display-state text background must be RGBA or null")
+        if not all(type(background[channel]) is int for channel in background):
+            raise ValueError("display-state RGBA channels must be integers")
+    eligibility = []
+    for line in lines:
+        value = line.get(eligibility_key)
+        if type(value) is not bool:
+            raise ValueError("display-state line eligibility must be boolean")
+        eligibility.append(value)
+    return {
+        "animationTimer": timer,
+        "textBackground": background,
+        "lineTextBackgroundEligibility": eligibility,
+    }
+
+
 def validate_rust_evidence(evidence, oracle, fixture, seed, required_policy=None):
     if evidence.get("version") != 1:
         raise ValueError("unsupported Rust evidence version")
@@ -46,7 +90,7 @@ def validate_rust_evidence(evidence, oracle, fixture, seed, required_policy=None
     supported = (
         {(1, 1)}
         if oracle == "original"
-        else {(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7)}
+        else {(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)}
     )
     if versions not in supported:
         raise ValueError(f"unsupported Rust semantic/policy versions: {versions!r}")
@@ -55,7 +99,7 @@ def validate_rust_evidence(evidence, oracle, fixture, seed, required_policy=None
             raise ValueError(f"fixture requires Rust policy {key}={value!r}")
     expected = {
         "arithmetic": ("snake_saturating_i64_v1"
-                       if oracle == "snake" and versions in {(3, 3), (4, 4), (5, 5), (6, 6), (7, 7)} else "wrapping_i64_v1"),
+                       if oracle == "snake" and versions in {(3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)} else "wrapping_i64_v1"),
         "rng_algorithm": "sfmt19937",
         "rng_state_version": 1,
         "layout": "unicode_column_v1",
@@ -190,6 +234,10 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
             fields.append("executionOutcome")
             if request.get("watch"):
                 fields.append("watches")
+        if request.get("observeDisplayState"):
+            actual["displayState"] = normalized_display_state(actual, False)
+            expected["displayState"] = normalized_display_state(expected, True)
+            fields.append("displayState")
         output_comparison = None
         output_incomparable = False
         if "output" in fields:

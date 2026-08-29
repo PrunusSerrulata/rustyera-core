@@ -131,6 +131,7 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
         "METHODS" => "methods",
         "COLUMNS" => "columns",
         "FAULT_HOOKS" => "fault_hooks",
+        "DISPLAY_STATE" => "display_state",
         _ => return Err(format!("unknown fixture group {group}").into()),
     };
     let mut files = Vec::new();

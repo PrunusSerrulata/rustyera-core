@@ -16,7 +16,8 @@ use era_runtime_protocol::{
     GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest,
     GetKeyStateResponse, InputDeviceKind, InputModality, InputWait, ProjectLoadReport,
     RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeMessage, ServiceCapability, ServiceKind,
-    ServiceResponse, ServiceResult, StorageCapabilities, WaitChange,
+    PresentationOperation, PresentationSettings, ResourceReplay, ServiceResponse, ServiceResult,
+    StorageCapabilities, WaitChange,
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -31,6 +32,8 @@ pub(super) struct ObservationSession {
     pub(super) load: Option<ProjectLoadReport>,
     pub(super) wait: Option<InputWait>,
     pub(super) lines: Vec<DisplayLine>,
+    pub(super) settings: Option<PresentationSettings>,
+    pub(super) resources: ResourceReplay,
     pub(super) diagnostics: Vec<Value>,
     pub(super) setup_diagnostics: Vec<Value>,
     pub(super) host_logs: Vec<Value>,
@@ -78,6 +81,8 @@ impl ObservationSession {
             load: None,
             wait: None,
             lines: Vec::new(),
+            settings: None,
+            resources: ResourceReplay::default(),
             diagnostics: Vec::new(),
             setup_diagnostics: Vec::new(),
             host_logs: Vec::new(),
@@ -128,7 +133,7 @@ impl ObservationSession {
                 input_modalities: vec![InputModality::Keyboard],
                 rich_text: false,
                 html: false,
-                graphics: false,
+                graphics: request["observeDisplayState"].as_bool().unwrap_or(false),
                 audio: false,
                 video: false,
                 font_metrics: false,
@@ -166,6 +171,8 @@ impl ObservationSession {
         let mut snapshot = self.observed.lock().expect("observation snapshot lock");
         snapshot["phase"] = serde_json::to_value(self.session.phase())?;
         snapshot["lines"] = serde_json::to_value(&self.lines)?;
+        snapshot["presentationSettings"] = serde_json::to_value(&self.settings)?;
+        snapshot["resourceReplay"] = serde_json::to_value(&self.resources)?;
         snapshot["wait"] = serde_json::to_value(&self.wait)?;
         snapshot["diagnostics"] = json!(self.diagnostics);
         snapshot["setupDiagnostics"] = json!(self.setup_diagnostics);
@@ -290,8 +297,21 @@ impl ObservationSession {
                 RuntimeMessage::PresentationSnapshot(snapshot) => {
                     self.lines = snapshot.history.logical_lines;
                     self.wait = snapshot.input_wait;
+                    self.settings = Some(snapshot.settings);
+                    self.resources = snapshot.resources;
                 }
                 RuntimeMessage::PresentationDelta(delta) => {
+                    for operation in &delta.operations {
+                        match operation {
+                            PresentationOperation::SetSettings { settings } => {
+                                self.settings = Some(settings.clone());
+                            }
+                            PresentationOperation::SetResources { resources } => {
+                                self.resources.clone_from(resources);
+                            }
+                            _ => {}
+                        }
+                    }
                     crate::apply_presentation_delta(&mut self.lines, &delta.operations)
                 }
                 RuntimeMessage::WaitChanged(

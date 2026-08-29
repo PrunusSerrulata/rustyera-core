@@ -1816,3 +1816,112 @@ fn varsize_dimension_narrowing_is_shared_by_static_and_dynamic_calls_in_both_pro
         assert_eq!(value, VmValue::String(format!("{length}|{length}")));
     }
 }
+
+#[test]
+fn animation_timer_preserves_profile_forms_and_snake_command_result() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        "@SYSTEM_TITLE\nRESULT = 77\nSETANIMETIMER 1\nFLAG:0 = RESULT\nFLAG:1 = GETANIMETIMER()\nBITMAP_CACHE_ENABLE 1\nBITMAP_CACHE_ENABLE 0\nFLAG:2 = RESULT\nWAIT\nRETURN\n",
+        snake,
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 77);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 10);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[2], None).unwrap(), 77);
+    assert_eq!(
+        session
+            .project_snapshot
+            .as_ref()
+            .unwrap()
+            .resource_graph
+            .animation_timer(),
+        10
+    );
+    let notices = messages
+        .iter()
+        .filter_map(|message| match message {
+            RuntimeMessage::Diagnostic(diagnostic)
+                if diagnostic.code == "compat.bitmap_cache_enable_noop" =>
+            {
+                Some(diagnostic)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(notices.len(), 1, "{messages:#?}");
+    assert_eq!(notices[0].level, RuntimeLogLevel::Warning);
+    assert_eq!(notices[0].notification, DiagnosticNotification::LogOnly);
+    assert_eq!(
+        notices[0]
+            .context
+            .as_ref()
+            .and_then(|context| context.api.as_deref()),
+        Some("bitmap_cache_enable")
+    );
+
+    let (session, _, messages) = run_immediate_query_project(
+        "@SYSTEM_TITLE\nRESULT = SETANIMETIMER(1)\nFLAG:0 = RESULT\nWAIT\nRETURN\n",
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "FLAG", &[0], None).unwrap(),
+        1
+    );
+}
+
+#[test]
+fn snake_display_queries_and_whole_line_background_use_canonical_history() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        "@SYSTEM_TITLE\nPRINTL oldest\nPRINT pending\nRESULTS '= GETDISPLAYLINE(-1)\nTEXT_BGC_ON 1122867, 50\nWAIT\nRETURN\n",
+        snake,
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+    assert_eq!(
+        read_runtime_string(session.vm.as_ref().unwrap(), "RESULTS").unwrap(),
+        "pending"
+    );
+    let snapshot = session.presentation.snapshot();
+    assert_eq!(
+        snapshot.settings.text_line_background,
+        Some(era_runtime_protocol::Color {
+            red: 0x11,
+            green: 0x22,
+            blue: 0x33,
+            alpha: 127,
+        })
+    );
+    assert!(
+        snapshot
+            .history
+            .logical_lines
+            .iter()
+            .all(|line| line.text_background_eligible)
+    );
+}
+
+#[test]
+fn invalid_animation_timer_is_atomic() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        "@SYSTEM_TITLE\nSETANIMETIMER 20\nSETANIMETIMER 32768\nRETURN\n",
+        snake,
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted, "{messages:?}");
+    assert_eq!(
+        session
+            .project_snapshot
+            .as_ref()
+            .unwrap()
+            .resource_graph
+            .animation_timer(),
+        20
+    );
+}

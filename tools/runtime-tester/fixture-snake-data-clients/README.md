@@ -1,14 +1,16 @@
 # Snake data client integration fixture
 
-Authored for batch 1C; no execution is claimed. This is a self-contained small
-RustyEra fixture for the TUI, Browser/WASM and Tauri real-client runners. It has
-its own identity and does not change the separate COLUMNS oracle fixture.
+Authored for batch 1C and extended for batch 2E; no execution of the extension is
+claimed. This is a self-contained small RustyEra fixture for the TUI, Browser/WASM
+and Tauri real-client runners. It has its own identity and does not change the
+separate COLUMNS oracle fixture.
 
 The initial integer prompt follows `SNAKE_DATA_START`. Submit the visible input
 `1` to run ALS/ERD → computed GETMETH → original resource reads → Data overlay and
-recursive enumeration → MAP/XML/DT DEFAULT → GLOBAL save/mutate/load. A final
-integer prompt follows `SNAKE_DATA_READY`. The script emits distinct markers for
-every stage; only seeing READY is insufficient for acceptance.
+recursive enumeration → MAP/XML/DT DEFAULT → GLOBAL save/mutate/load → logical
+animation timer and whole-line text background. A final integer prompt follows
+`SNAKE_DATA_READY`. The script emits distinct markers for every stage; only seeing
+READY is insufficient for acceptance.
 
 Each runner must use its existing isolated project/OPFS copy. The original project
 and its five resource files are read-only inputs. String SAVETEXT writes Data,
@@ -16,6 +18,10 @@ not the original Resource. GLOBAL is created and consumed within the same run;
 ordinary FLAG:0 must remain 55 after the saved GLOBAL:0 value 7 is restored.
 The loaded table keeps its existing row and default 12; its saved MAP/XML also
 restore. A missing GLOBAL before the first save returns 0 without changing 66/55.
+The display stage must report timer `10` while preserving RESULT `77`; real GUI
+runners must additionally assert that the eligible marker row receives the
+half-alpha `#112233` background across the viewport while the adjacent blank row
+remains unpainted.
 
 Browser/Tauri runners retain their five-second full DOM/runtime snapshot watchdog
 and identical-snapshot failure rule. TUI observes stable waits through its real

@@ -34,6 +34,7 @@ fn query_test_line(
         logical_line_start,
         line_end: true,
         alignment,
+        text_background_eligible: !text.trim().is_empty(),
         runs: vec![DisplayRun::Text {
             text: text.into(),
             style: TextStyle::default(),
@@ -56,9 +57,9 @@ fn runtime_projection_queries_use_physical_and_logical_history_order() {
         .lines
         .push_back(query_test_line(3, false, LineAlignment::Right, "wrapped-b"));
 
-    assert_eq!(model.display_line(0), "oldest");
-    assert_eq!(model.display_line(1), "wrapped-a");
-    assert_eq!(model.display_line(2), "wrapped-b");
+    assert_eq!(model.display_line(0, false), "oldest");
+    assert_eq!(model.display_line(1, false), "wrapped-a");
+    assert_eq!(model.display_line(2, false), "wrapped-b");
     assert_eq!(
         model.printed_html_line(0),
         "<p align='center'><nobr>wrapped-a<br>wrapped-b</nobr></p>"
@@ -67,12 +68,12 @@ fn runtime_projection_queries_use_physical_and_logical_history_order() {
         model.printed_html_line(1),
         "<p align='left'><nobr>oldest</nobr></p>"
     );
-    assert_eq!(model.display_line(3), "");
+    assert_eq!(model.display_line(3, false), "");
     assert_eq!(model.printed_html_line(2), "");
 
     model.set_alignment(LineAlignment::Right);
     model.append_print_text("pending".into(), false, false);
-    assert_eq!(model.display_line(3), "pending");
+    assert_eq!(model.display_line(3, false), "pending");
     assert_eq!(
         model.printed_html_line(0),
         "<p align='right'><nobr>pending</nobr></p>"
@@ -81,6 +82,125 @@ fn runtime_projection_queries_use_physical_and_logical_history_order() {
         model.printed_html_line(1),
         "<p align='center'><nobr>wrapped-a<br>wrapped-b</nobr></p>"
     );
+    assert_eq!(model.display_line(-1, false), "");
+    assert_eq!(model.display_line(-1, true), "pending");
+    assert_eq!(model.display_line(-2, true), "wrapped-b");
+    assert_eq!(model.display_line(i64::MIN, true), "");
+
+    model.append_print_text(String::new(), false, true);
+    assert_eq!(model.display_line(-1, true), "pending");
+    model.delete_last_lines(1);
+    assert_eq!(model.display_line(-1, true), "wrapped-b");
+
+    model.settings.maximum_physical_lines = 2;
+    model.append_text("trim-a".into(), false);
+    model.append_text("trim-b".into(), false);
+    assert_eq!(model.display_line(-1, true), "trim-b");
+    assert_eq!(model.display_line(-2, true), "trim-a");
+    assert_eq!(model.display_line(-3, true), "");
+}
+
+#[test]
+fn whole_line_text_background_uses_stable_line_eligibility_and_settings_delta() {
+    let text = DisplayRun::Text {
+        text: "visible".into(),
+        style: TextStyle::default(),
+        system_text: None,
+    };
+    let whitespace = DisplayRun::Text {
+        text: " \t".into(),
+        style: TextStyle::default(),
+        system_text: None,
+    };
+    let html = DisplayRun::HtmlDocument {
+        document: erabasic_html::parse_document("<b>html</b>").unwrap(),
+    };
+    assert!(line_has_text_background(std::slice::from_ref(&text)));
+    assert!(!line_has_text_background(&[whitespace]));
+    assert!(line_has_text_background(&[DisplayRun::Button {
+        runs: vec![text],
+        token: InteractionToken { epoch: 1, id: 1 },
+        title: None,
+        hover_style: None,
+        value: ProtocolValue::Integer(1),
+        generation: 0,
+        enabled: true,
+    }]));
+    assert!(line_has_text_background(&[html]));
+    assert!(!line_has_text_background(&[DisplayRun::Image {
+        placement: MediaPlacement {
+            resource_id: "image".into(),
+            x: LogicalLength(0),
+            y: LogicalLength(0),
+            width: LogicalLength(1),
+            height: LogicalLength(1),
+            depth: 0,
+            opacity: RationalOpacity {
+                numerator: 1,
+                denominator: 1
+            },
+            revision: 1,
+            hover_resource_id: None,
+            mask_resource_id: None,
+            requested_width: None,
+            requested_height: None,
+            requested_y: None,
+        },
+        alt_text: Some("not styled text".into()),
+    }]));
+
+    let mut model = PresentationModel::default();
+    model.append_print_text("existing".into(), false, true);
+    let PresentationUpdate::Snapshot(snapshot) = model.next_update() else {
+        panic!("initial delivery must be a snapshot");
+    };
+    assert!(snapshot.history.logical_lines[0].text_background_eligible);
+    let color = Color {
+        red: 1,
+        green: 2,
+        blue: 3,
+        alpha: 127,
+    };
+    model.set_text_line_background(Some(color));
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("background toggle must be a delta");
+    };
+    assert!(delta.operations.iter().any(|operation| matches!(
+        operation,
+        PresentationOperation::SetSettings { settings }
+            if settings.text_line_background == Some(color)
+    )));
+}
+
+#[test]
+fn logical_animation_timer_is_projected_without_graphics_resources() {
+    let mut model = PresentationModel::default();
+    model.set_projection(false, false, false, false, false);
+    model.set_resource_replay(ResourceReplay {
+        animation_timer_ms: 10,
+        ..ResourceReplay::default()
+    });
+    let PresentationUpdate::Snapshot(snapshot) = model.next_update() else {
+        panic!("first delivery must establish a snapshot baseline");
+    };
+    assert_eq!(snapshot.resources.animation_timer_ms, 10);
+    assert!(snapshot.resources.sprites.is_empty());
+    assert!(snapshot.resources.canvases.is_empty());
+
+    model.set_resource_replay(ResourceReplay {
+        animation_timer_ms: 20,
+        ..ResourceReplay::default()
+    });
+    let PresentationUpdate::Delta(delta) = model.next_update() else {
+        panic!("timer update must be a delta");
+    };
+    assert!(delta.operations.iter().any(|operation| matches!(
+        operation,
+        PresentationOperation::SetResources { resources }
+            if resources.animation_timer_ms == 20
+                && resources.sprites.is_empty()
+                && resources.canvases.is_empty()
+    )));
 }
 
 fn rich_projected_runs() -> Vec<DisplayRun> {
